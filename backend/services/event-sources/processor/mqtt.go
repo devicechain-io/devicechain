@@ -6,9 +6,11 @@ package processor
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -26,10 +28,10 @@ const (
 	// source this is also the maximum number of messages that can be UNACKED and
 	// therefore redelivered after a crash — bounded loss became bounded REDELIVERY.
 	DECODE_CHANNEL_DEPTH = 100
-	// subscribeTimeout bounds the wait for a SUBACK at startup. Generous, because the
-	// only thing that expires it is a broker that has accepted the connection and then
-	// stopped answering — the point of the bound is that startup fails loudly rather
-	// than hanging for the life of the pod.
+	// subscribeTimeout bounds the wait for a SUBACK, on the first connection and on
+	// every reconnect. Generous, because the only thing that expires it is a broker that
+	// has accepted the connection and then stopped answering — the point of the bound is
+	// that the source fails loudly rather than hanging for the life of the pod.
 	subscribeTimeout = 30 * time.Second
 )
 
@@ -87,18 +89,47 @@ type MqttEventSource struct {
 	// before it is queued for decode; a false return sheds the message. nil
 	// disables metering (used by tests that exercise decoding in isolation).
 	allow RateGate
+
+	// fail ends the process for a cause found after startup: a broker that refuses
+	// this source's subscription on a reconnect. It must not block its caller, which is
+	// one of paho's callback goroutines. Required — see NewMqttEventSource.
+	fail func(error)
+	// ready carries the FIRST connection's subscribe result to ExecuteStart. Buffered,
+	// so onConnect never blocks on a Start that has already given up waiting.
+	ready chan error
+	// connections counts OnConnect calls. The first connection's result goes to ready;
+	// a later one uses the count to tell whether a newer connection has superseded it
+	// while its SUBSCRIBE was outstanding. See classifyResubscribe.
+	connections atomic.Uint64
+	// stopping is set before this source disconnects on purpose, so a re-subscribe that
+	// errors because WE closed the connection is dropped without a word. Belt and braces:
+	// paho's Disconnect fails an outstanding SUBSCRIBE with a token error, which
+	// classifyResubscribe already retries, and a fail that races Stop lands in a
+	// lifecycle that is already stopping and is ignored there. What the flag buys is that
+	// onConnect does not depend on either of those staying true.
+	stopping atomic.Bool
 }
+
+// errNoFailHook is what NewMqttEventSource returns for a nil fail. A source with no way
+// to end the process would have to treat a refused re-subscribe as a log line, which is
+// the silent connected-and-idle state this hook exists to rule out.
+var errNoFailHook = errors.New("an MQTT event source needs a way to end the process " +
+	"when a reconnect's subscription is refused; none was given")
 
 // Create a new MQTT event source based on the given configuration. tlsConfig is
 // non-nil when the broker terminates TLS on the MQTT gateway (ADR-025), in which
 // case the client dials ssl:// and verifies the server; nil dials plaintext.
 // username/password present the shared service credential when broker auth is on
-// (empty = anonymous).
+// (empty = anonymous). fail ends the process when a reconnect's subscription is
+// refused (see onConnect); it must return promptly, and nil is refused.
 func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Config, username, password string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
-	allow RateGate) (*MqttEventSource, error) {
+	allow RateGate, fail func(error)) (*MqttEventSource, error) {
+	if fail == nil {
+		return nil, errNoFailHook
+	}
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
 		return nil, err
@@ -113,6 +144,8 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 		username:   username,
 		password:   password,
 		Decoder:    decoder,
+		fail:       fail,
+		ready:      make(chan error, 1),
 	}
 
 	es.lifecycle = core.NewLifecycleManager("mqtt-event-source", es, core.NewNoOpLifecycleCallbacks())
@@ -257,14 +290,116 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	}
 }
 
-// Called on successful connection.
+// onConnect subscribes on EVERY connection, the first included. paho runs it on a
+// goroutine of its own each time a connection comes up.
+//
+// 🔴 SUBSCRIBING ONCE, IN START, WAS THE DEFECT. paho reconnects on its own after a
+// broker restart or a network drop, and it does so with a clean session (paho's default,
+// which this source keeps), so the broker holds no subscription for the new connection.
+// paho's ResumeSubs does not help: it re-sends only SUBSCRIBEs still in flight, not ones
+// already acknowledged. A source that subscribed once was therefore connected, reported
+// nothing wrong, and ingested nothing from the first reconnect until the pod restarted.
+//
+// 🔴 CONFIRMED, not merely awaited, on every connection. paho reports a refused
+// subscription (SUBACK 0x80) as a successful token with a nil Error(), so a wait that
+// only reads the token logs "subscribed" over a source that will never receive anything;
+// see SubscribeMqttConfirmed.
+//
+// What each outcome does:
+//   - The FIRST connection's result goes to ExecuteStart, which fails the start on any
+//     error — the behaviour this source has always had.
+//   - A later connection's error is classified by classifyResubscribe. A refusal, or a
+//     SUBACK that never came on a connection nothing has replaced, ends the process
+//     through fail. A connection that went away under the SUBSCRIBE is left to paho,
+//     which reconnects and calls this again.
 func (es *MqttEventSource) onConnect(client mqtt.Client) {
-	log.Info().Msg("MQTT event source connected successfully.")
+	generation := es.connections.Add(1)
+	err := messaging.SubscribeMqttConfirmed(client, es.Topic, 1, es.onMessage, subscribeTimeout)
+	if generation == 1 {
+		es.ready <- err
+		return
+	}
+	if err == nil {
+		log.Info().Str("source", es.Id).Str("topic", es.Topic).
+			Msg("MQTT event source reconnected and re-subscribed.")
+		return
+	}
+	if es.stopping.Load() {
+		// Stop disconnected us under the SUBSCRIBE. Not the broker's doing, and the
+		// process is already on its way down.
+		return
+	}
+	superseded := es.connections.Load() != generation
+	if classifyResubscribe(err, superseded) == resubscribeRetry {
+		log.Warn().Err(err).Str("source", es.Id).Str("topic", es.Topic).
+			Msg("MQTT event source lost its connection while re-subscribing; the client " +
+				"reconnects on its own and subscribes again on the next connection.")
+		return
+	}
+	es.fail(fmt.Errorf("MQTT event source %q reconnected to %s:%d but could not re-subscribe, "+
+		"so it would stay connected and ingest nothing: %w", es.Id, es.BrokerHost, es.BrokerPort, err))
 }
 
-// Called when connection is lost.
+// resubscribeAction is what onConnect does with a failed re-subscribe.
+type resubscribeAction int
+
+const (
+	// resubscribeRetry leaves it to paho, which reconnects and fires OnConnect again.
+	resubscribeRetry resubscribeAction = iota
+	// resubscribeFatal ends the process.
+	resubscribeFatal
+)
+
+// classifyResubscribe decides a failed re-subscribe from the ERROR and from whether a
+// newer connection has come up since the SUBSCRIBE was sent (superseded) — never from
+// the client's current connection status.
+//
+// 🔴 THE STATUS IS A RACE, WHICH IS WHY IT IS NOT CONSULTED. When a connection drops,
+// paho fails the outstanding SUBSCRIBE and starts reconnecting, and its first reconnect
+// attempt does not wait. So by the time this goroutine wakes with its error, paho may
+// already be connected again, and "is the connection open?" answers yes for a
+// connection that is not the one the SUBSCRIBE went out on. Read that way, a benign drop
+// would end the process — and with more than one replica sharing a client id on the
+// same broker, where each replica's connect evicts the other's, it would do so on every
+// eviction.
+//
+//   - A REFUSAL is fatal whatever else has happened. It is the broker's answer about
+//     this credential and this filter, and a newer connection will be given the same one.
+//     It is the same condition that fails the source at startup, so it gets the same
+//     result: the process ends, the pod restarts, the next start meets the same refusal
+//     and fails with the reason in its log — a visible crash loop rather than a pod that
+//     reports Ready and ingests nothing. Logging and retrying instead would need a retry
+//     loop paho does not provide, with no health signal to report it.
+//   - A MISSING SUBACK is fatal only if nothing has replaced the connection it was
+//     asked on: that broker took the connection and stopped answering, which is the
+//     condition subscribeTimeout exists to turn into a failure. If a newer connection
+//     has come up, that connection is subscribing for itself. That second case is
+//     DEFENSIVE, not a path paho v1.5.1 takes: on connection loss its internalConnLost
+//     runs cleanUpSubscribe before reconnecting, so a SUBSCRIBE outstanding on a lost
+//     connection ends as a token error (the default case below), not as a timeout. It
+//     is kept so that a paho that stops doing that retries rather than ending the
+//     process over a connection already replaced; only the classify table exercises it.
+//   - Anything else is paho's token error: the connection went away under the
+//     SUBSCRIBE. paho reconnects, and the next OnConnect subscribes again.
+func classifyResubscribe(err error, superseded bool) resubscribeAction {
+	switch {
+	case errors.Is(err, messaging.ErrSubscriptionRefused):
+		return resubscribeFatal
+	case errors.Is(err, messaging.ErrSubscriptionUnacknowledged):
+		if superseded {
+			return resubscribeRetry
+		}
+		return resubscribeFatal
+	default:
+		return resubscribeRetry
+	}
+}
+
+// Called when connection is lost. paho reconnects on its own and onConnect
+// re-subscribes; this is logged at Warn because ingest from this source stops until then.
 func (es *MqttEventSource) onConnectionLost(client mqtt.Client, err error) {
-	log.Info().Msg("MQTT event source connection lost.")
+	log.Warn().Err(err).Str("source", es.Id).
+		Msg("MQTT event source connection lost; reconnecting.")
 }
 
 // Initialize event source
@@ -292,13 +427,14 @@ func (es *MqttEventSource) ExecuteInitialize(ctx context.Context) error {
 		opts.SetPassword(es.password)
 	}
 	opts.SetDefaultPublishHandler(es.onMessage)
+	// Every connection subscribes, the first included; see onConnect.
 	opts.OnConnect = es.onConnect
 	opts.OnConnectionLost = es.onConnectionLost
+	// Built, not connected. The connection is made in ExecuteStart, AFTER the decode
+	// workers exist: the first connection subscribes at once, and a message delivered
+	// on it would otherwise find no channel to go to.
 	es.Client = mqtt.NewClient(opts)
-	if token := es.Client.Connect(); token.Wait() && token.Error() != nil {
-		return token.Error()
-	}
-	log.Info().Msg("MQTT event source initialized.")
+	log.Info().Str("source", es.Id).Msg("MQTT event source initialized; it connects when started.")
 	return nil
 }
 
@@ -321,17 +457,29 @@ func (es *MqttEventSource) initializeDecodeWorkers() {
 
 // Start event source (as called by lifecycle manager)
 func (es *MqttEventSource) ExecuteStart(ctx context.Context) error {
-	// Initialize pool of workers for decoding raw messages.
+	// Initialize pool of workers for decoding raw messages. First, so the channel
+	// exists before the first connection can deliver anything.
 	es.initializeDecodeWorkers()
 
-	// Create subscription to start receiving messages.
-	//
-	// 🔴 CONFIRMED, not merely awaited. This previously called token.Wait() and dropped
-	// the result, so a refused subscription logged that the source was subscribed and
-	// returned nil — an event source that starts cleanly, reports healthy and ingests
-	// nothing for the life of the process. Checking token.Error() is NOT enough to fix
-	// that; see SubscribeMqttConfirmed for why paho leaves it nil on a refusal.
-	if err := messaging.SubscribeMqttConfirmed(es.Client, es.Topic, 1, es.onMessage, subscribeTimeout); err != nil {
+	if token := es.Client.Connect(); token.Wait() && token.Error() != nil {
+		return token.Error()
+	}
+
+	// The first connection subscribes in onConnect, like every later one; wait for its
+	// confirmed result. It is bounded by subscribeTimeout, and a refusal or any other
+	// error fails the start, as it always has.
+	var err error
+	select {
+	case err = <-es.ready:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	if err != nil {
+		// Do not leave a live, auto-reconnecting client behind a start that failed: its
+		// next connection would subscribe again and report into a process that is
+		// already going down. stopping first, so that onConnect stays quiet about it.
+		es.stopping.Store(true)
+		es.Client.Disconnect(250)
 		return fmt.Errorf("this event source would ingest nothing: %w", err)
 	}
 	log.Info().Msg(fmt.Sprintf("MQTT event source subscribed to topic '%s'.", es.Topic))
@@ -350,6 +498,9 @@ func (es *MqttEventSource) ExecuteStop(ctx context.Context) error {
 	// close the channel the decode workers drain. Closing first would race a
 	// late-arriving message into a send-on-closed-channel panic.
 	if es.Client != nil {
+		// Before the disconnect: a re-subscribe in flight fails when we close the
+		// connection, and that is not something to end the process over.
+		es.stopping.Store(true)
 		if token := es.Client.Unsubscribe(es.Topic); token.Wait() && token.Error() != nil {
 			log.Warn().Err(token.Error()).Msg("MQTT event source failed to unsubscribe on stop.")
 		}

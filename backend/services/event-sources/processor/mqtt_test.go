@@ -47,7 +47,7 @@ func newTestMqttSource(t *testing.T, allow RateGate) (*MqttEventSource, *int) {
 		func(string, []byte) { receivedCount++ },
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
-		allow)
+		allow, func(err error) { t.Errorf("the source asked to end the process: %v", err) })
 	assert.NoError(t, err)
 	es.messages = make(chan rawMessage, 8)
 	return es, &receivedCount

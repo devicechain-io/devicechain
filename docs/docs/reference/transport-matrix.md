@@ -122,6 +122,13 @@ The platform can also act as a client on a broker you already run, to ingest fro
   taken from your broker and not yet published is gone if the process restarts. Raising QoS on
   your side does not change that, and the platform makes no durability claim about a broker it
   does not own.
+
+  After your broker restarts or the connection drops, the platform reconnects and subscribes
+  again on its own. A broker that **refuses** the subscription, whether at startup or after a
+  reconnect (an ACL change that denies the topic, for example), stops the **whole event-sources
+  service** with an error rather than leaving it connected and ingesting nothing. That includes
+  ingest from the platform broker and HTTP, not just this source, so the service restarts and
+  keeps failing until the broker grants the subscription again.
 - **Write ○ / Read ○** — this integration is ingest only. A command issued to a device that
   arrives this way behaves exactly as it does for HTTP above: published, `SENT`, then
   `TIMEOUT`.

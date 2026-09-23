@@ -123,6 +123,13 @@ La plataforma también puede actuar como cliente en un bróker que usted ya oper
   que la plataforma ya tomó de su bróker y aún no ha publicado se pierde si el proceso se reinicia.
   Subir el QoS en su lado no cambia eso, y la plataforma no reclama durabilidad sobre un bróker que
   no le pertenece.
+
+  Si su bróker se reinicia o la conexión se cae, la plataforma se reconecta y vuelve a suscribirse
+  por sí sola. Un bróker que **rechaza** la suscripción, ya sea al arrancar o tras una reconexión
+  (por ejemplo, un cambio de ACL que deniega el tema), detiene **todo el servicio event-sources**
+  con un error en lugar de dejarlo conectado sin ingerir nada. Eso incluye la ingesta desde el
+  bróker de la plataforma y por HTTP, no solo esta fuente, así que el servicio se reinicia y sigue
+  fallando hasta que el bróker vuelva a conceder la suscripción.
 - **Escritura ○ / Lectura ○** — esta integración es solo de ingesta. Un comando emitido a un
   dispositivo que llega por esta vía se comporta exactamente igual que en HTTP, más arriba:
   publicado, `SENT` y luego `TIMEOUT`.

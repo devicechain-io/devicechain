@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -17,6 +18,24 @@ import (
 // It is defined here because paho exports no constant for it, which is a large part of
 // why the check below is so easy to omit.
 const mqttSubackFailure byte = 0x80
+
+// ErrSubscriptionRefused is wrapped by SubscribeMqttConfirmed's error when the broker
+// ANSWERED and said no (SUBACK 0x80).
+//
+// ErrSubscriptionUnacknowledged is wrapped when the broker did not answer at all within
+// the timeout.
+//
+// They are sentinels because a caller that subscribes on every connection needs to tell
+// them apart from each other and from paho's own token errors, and the three call for
+// different responses. A refusal is the broker's considered answer and asking again gets
+// the same one. A missing SUBACK is a broker that took the connection and went quiet. A
+// token error is paho reporting that the connection went away under the SUBSCRIBE, which
+// with auto-reconnect on means another connection, and another OnConnect, is coming.
+// Matching on the message text would put that decision at the mercy of a reworded string.
+var (
+	ErrSubscriptionRefused        = errors.New("the broker refused the subscription")
+	ErrSubscriptionUnacknowledged = errors.New("the broker did not acknowledge the subscription")
+)
 
 // SubscribeMqttConfirmed subscribes and does not return until the broker has GRANTED
 // the subscription.
@@ -46,7 +65,7 @@ func SubscribeMqttConfirmed(client mqtt.Client, filter string, qos byte, cb mqtt
 	//subconfirm:ok this IS the confirmed wrapper; the granted-QoS read below is the check
 	token := client.Subscribe(filter, qos, cb)
 	if !token.WaitTimeout(timeout) {
-		return fmt.Errorf("the broker did not acknowledge the subscription to %q within %v", filter, timeout)
+		return fmt.Errorf("%w to %q within %v", ErrSubscriptionUnacknowledged, filter, timeout)
 	}
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("subscribing to %q: %w", filter, err)
@@ -62,10 +81,10 @@ func SubscribeMqttConfirmed(client mqtt.Client, filter string, qos byte, cb mqtt
 	}
 	for granted, code := range sub.Result() {
 		if code == mqttSubackFailure {
-			return fmt.Errorf("the broker REFUSED the subscription to %q (SUBACK 0x80). "+
+			return fmt.Errorf("%w to %q (SUBACK 0x80). "+
 				"The connection is fine and paho reports no error, so nothing else will "+
 				"report this: the credential is most likely not permitted to read that "+
-				"topic", granted)
+				"topic", ErrSubscriptionRefused, granted)
 		}
 	}
 	return nil

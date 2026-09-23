@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
@@ -274,7 +276,7 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 	}
 	if rechecks {
 		nats := infra.Nats
-		runner = recheckBroker{
+		runner = &recheckBroker{
 			drain:     runner,
 			reachable: func(ctx context.Context) bool { return systemAccountReachable(ctx, nats) },
 			recovered: restartForRecoveredBroker,
@@ -283,13 +285,22 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 
 	interval := Configuration.BrokerPresence.ReconcileInterval()
 	delay := presence.StartDelayFor(reason, demotionStartJitter())
+	launchDemoteLoop(runCtx, rt, runner, interval, delay)
+	brokerPresence = rt
+}
+
+// launchDemoteLoop runs the demote loop on its own goroutine, which closes rt.stopped when
+// the loop ends. It is separate from startPresenceDemotion so a test drives THIS launch —
+// the goroutine that restartForRecoveredBroker runs on, and the channel stopBrokerPresence
+// waits for — rather than a copy of it.
+func launchDemoteLoop(ctx context.Context, rt *presenceRuntime, runner presence.DemoteRunner,
+	interval, delay time.Duration) {
 	go func() {
 		// Closes rt.stopped so stopBrokerPresence's five-second wait does not fire on every
 		// disabled instance — the runtime is shaped the same whether the tap ran or not.
 		defer close(rt.stopped)
-		presence.RunDemoteLoop(runCtx, runner, interval, delay, time.Now, PresenceDemoteTaskMetrics)
+		presence.RunDemoteLoop(ctx, runner, interval, delay, time.Now, PresenceDemoteTaskMetrics)
 	}()
-	brokerPresence = rt
 }
 
 // recheckBroker turns the settle window from a DELAY into a QUESTION, for the one bail
@@ -318,13 +329,32 @@ type recheckBroker struct {
 	drain     presence.DemoteRunner
 	reachable func(context.Context) bool
 	recovered func()
+
+	// ended latches once recovered has fired. recovered only STARTS the process's exit —
+	// it returns while the readiness drain and teardown are still to run — so the loop
+	// keeps ticking until that teardown cancels it, and those ticks must do nothing.
+	ended atomic.Bool
 }
 
+// errRecoveredBroker is the pass result once the broker is back: a skip, not a success.
+var errRecoveredBroker = fmt.Errorf("the NATS system account is reachable again and this "+
+	"process is ending so the presence tap comes up normally: %w", core.ErrPassSkipped)
+
 // Run answers the question first and drains only if the answer is still "no".
-func (r recheckBroker) Run(ctx context.Context, now time.Time) error {
+//
+// 🔴 ONCE THE BROKER HAS BEEN SEEN BACK, EVERY LATER PASS IS A SKIP. The exit that
+// recovered starts is asynchronous, so passes can still run before shutdown cancels the
+// loop. Without the latch they would report a successful drain pass for a pod that has
+// stopped draining, fire recovered again, and — if the broker dipped once more — drain
+// the fleet from a process that is already going away.
+func (r *recheckBroker) Run(ctx context.Context, now time.Time) error {
+	if r.ended.Load() {
+		return errRecoveredBroker
+	}
 	if r.reachable(ctx) {
+		r.ended.Store(true)
 		r.recovered()
-		return nil
+		return errRecoveredBroker
 	}
 	if r.drain == nil {
 		// Skipped, not complete. There is no drain wired on this instance — the tap-off
@@ -336,27 +366,29 @@ func (r recheckBroker) Run(ctx context.Context, now time.Time) error {
 	return r.drain.Run(ctx, now)
 }
 
-// restartForRecoveredBroker ends this pod's tap-less run the way this codebase already
-// ends one elsewhere: by exiting so the kubelet starts a process that will dial the broker
-// normally (lwm2m-ingest does the same for a transport that dies under it).
+// restartForRecoveredBroker ends this pod's tap-less run by ending the process, so the
+// kubelet starts one that will dial the broker normally. It goes through failProcess —
+// Microservice.FailNow, off this goroutine — which is how lwm2m-ingest ends a run whose
+// transport died under it. It runs on the demote-loop goroutine, the one that closes
+// rt.stopped, which is why the off-goroutine half matters here; see failProcess.
 //
 // 🔑 IT IS NOT A RESTART LOOP, AND THE ASYMMETRY OF THE TWO WINDOWS IS WHAT GUARANTEES
 // THAT. The recheck window is strictly SHORTER than the startup window, so any broker the
 // recheck can reach is one the next startup dial — which is given more time, not less —
 // would also have reached. A broker flapping faster than the settle window can still
-// restart this pod repeatedly, but that is a broker outage, the exit is clean, and the
-// kubelet backs the restarts off; the alternative is the unbounded per-device event churn
-// above, which nothing backs off.
+// restart this pod repeatedly, but that is a broker outage, the exit runs the full
+// teardown and still reports non-zero, and the kubelet backs the restarts off; the
+// alternative is the unbounded per-device event churn above, which nothing backs off.
 //
 // It is deliberate that this kills a pod that is ingesting perfectly well. Presence is an
 // enrichment of ingest, so this is the one place that trade is inverted — and it is
 // inverted because the state being ended is not "a capability is missing", it is "this pod
 // is actively writing wrong presence for the whole fleet".
 func restartForRecoveredBroker() {
-	log.Fatal().Msg("The NATS system account is reachable again, but this pod's presence tap has been " +
-		"OFF since startup and cannot be re-established in place — so it has been releasing devices " +
-		"its peers immediately re-assert. Terminating so the pod is restarted and the tap comes up " +
-		"normally.")
+	failProcess(errors.New("the NATS system account is reachable again, but this pod's presence tap " +
+		"has been OFF since startup and cannot be re-established in place — so it has been releasing " +
+		"devices its peers immediately re-assert. Terminating so the pod is restarted and the tap " +
+		"comes up normally"))
 }
 
 // reasonIsInstanceWide reports whether a bail reason is evidence about the INSTANCE rather
