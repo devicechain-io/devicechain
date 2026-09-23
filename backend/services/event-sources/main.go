@@ -397,9 +397,11 @@ func buildEventSources() error {
 			// would dial ssl:// at a plaintext port, or fail verification), and keeps
 			// its own credentials. Per-source TLS for external brokers is a later
 			// concern, so this dials plaintext and anonymous.
+			// failProcess, because a broker that refuses this source's subscription on a
+			// reconnect is a post-startup failure; see the source's onConnect.
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, nil, "", "",
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				ingestGate)
+				ingestGate, failProcess)
 			if err != nil {
 				return err
 			}

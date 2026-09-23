@@ -43,16 +43,45 @@ func (r *recordingRunner) Run(_ context.Context, now time.Time) error {
 func TestARecoveredBrokerEndsTheRunInsteadOfDraining(t *testing.T) {
 	drain := &recordingRunner{}
 	recovered := 0
-	r := recheckBroker{
+	r := &recheckBroker{
 		drain:     drain,
 		reachable: func(context.Context) bool { return true },
 		recovered: func() { recovered++ },
 	}
 
-	require.NoError(t, r.Run(context.Background(), time.Now()))
+	// A SKIP, not a success: recovered only starts the exit, and a pass that released
+	// nothing must not move the drain's last-success timestamp.
+	assert.ErrorIs(t, r.Run(context.Background(), time.Now()), core.ErrPassSkipped)
 	assert.Equal(t, 0, drain.runs,
 		"a pod whose broker is back must not release a single device; its peers would re-assert every one")
 	assert.Equal(t, 1, recovered, "the tap-less run must be ended rather than continued")
+}
+
+// TestARecoveredBrokerLatchesTheRecheck. recovered only STARTS the exit — the readiness
+// drain and the teardown still have to run — so the loop can tick again before shutdown
+// cancels it. Those passes must neither end the process a second time nor, if the broker
+// has dipped again in the meantime, drain the fleet from a pod that is already going away.
+func TestARecoveredBrokerLatchesTheRecheck(t *testing.T) {
+	drain := &recordingRunner{}
+	recovered := 0
+	reachable := true
+	r := &recheckBroker{
+		drain:     drain,
+		reachable: func(context.Context) bool { return reachable },
+		recovered: func() { recovered++ },
+	}
+
+	assert.ErrorIs(t, r.Run(context.Background(), time.Now()), core.ErrPassSkipped)
+	require.Equal(t, 1, recovered)
+
+	reachable = false
+	assert.ErrorIs(t, r.Run(context.Background(), time.Now()), core.ErrPassSkipped,
+		"a pass after the broker was seen back must report a skip")
+	assert.Equal(t, 0, drain.runs, "a pod already ending its run drained the fleet on a later tick")
+
+	reachable = true
+	assert.ErrorIs(t, r.Run(context.Background(), time.Now()), core.ErrPassSkipped)
+	assert.Equal(t, 1, recovered, "the exit was started more than once")
 }
 
 // TestAStillUnreachableBrokerDrains is the counterweight, and it is the half that keeps
@@ -61,7 +90,7 @@ func TestARecoveredBrokerEndsTheRunInsteadOfDraining(t *testing.T) {
 func TestAStillUnreachableBrokerDrains(t *testing.T) {
 	drain := &recordingRunner{}
 	recovered := 0
-	r := recheckBroker{
+	r := &recheckBroker{
 		drain:     drain,
 		reachable: func(context.Context) bool { return false },
 		recovered: func() { recovered++ },
@@ -78,7 +107,7 @@ func TestAStillUnreachableBrokerDrains(t *testing.T) {
 // wrapper that swallowed the error would turn every unreachable tenant into silence.
 func TestTheDrainsErrorIsTheLoopsError(t *testing.T) {
 	boom := errors.New("listing tenants failed")
-	r := recheckBroker{
+	r := &recheckBroker{
 		drain:     &recordingRunner{err: boom},
 		reachable: func(context.Context) bool { return false },
 		recovered: func() { t.Fatal("recovered must not fire while the broker is unreachable") },
@@ -91,7 +120,7 @@ func TestTheDrainsErrorIsTheLoopsError(t *testing.T) {
 // silently left to a manual restart.
 func TestARecheckOnlyLoopHasNothingToDrain(t *testing.T) {
 	recovered := 0
-	r := recheckBroker{
+	r := &recheckBroker{
 		drain:     nil,
 		reachable: func(context.Context) bool { return false },
 		recovered: func() { recovered++ },
@@ -105,7 +134,7 @@ func TestARecheckOnlyLoopHasNothingToDrain(t *testing.T) {
 	assert.Equal(t, 0, recovered)
 
 	r.reachable = func(context.Context) bool { return true }
-	require.NoError(t, r.Run(context.Background(), time.Now()))
+	assert.ErrorIs(t, r.Run(context.Background(), time.Now()), core.ErrPassSkipped)
 	assert.Equal(t, 1, recovered, "the recheck must still end the run when there is nothing to drain")
 }
 
@@ -118,7 +147,7 @@ func TestARecheckOnlyLoopHasNothingToDrain(t *testing.T) {
 func TestTheRecheckRunsBeforeTheFirstPass(t *testing.T) {
 	drain := &recordingRunner{}
 	checked := make(chan struct{}, 4)
-	r := recheckBroker{
+	r := &recheckBroker{
 		drain: drain,
 		reachable: func(context.Context) bool {
 			select {

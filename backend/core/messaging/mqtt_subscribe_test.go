@@ -4,6 +4,7 @@
 package messaging_test
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -139,6 +140,14 @@ func TestSubscribeMqttConfirmedCatchesARefusal(t *testing.T) {
 		t.Errorf("the error does not name the refused filter, which is the one thing an "+
 			"operator needs from it: %v", err)
 	}
+	// A caller that re-subscribes on every connection decides what to do from THIS, so
+	// a refusal has to be recognisable as one and not as a missing SUBACK.
+	if !errors.Is(err, messaging.ErrSubscriptionRefused) {
+		t.Errorf("a refusal does not wrap ErrSubscriptionRefused: %v", err)
+	}
+	if errors.Is(err, messaging.ErrSubscriptionUnacknowledged) {
+		t.Errorf("a refusal reads as a missing SUBACK: %v", err)
+	}
 }
 
 // The counterweight. Rejecting a refusal is only useful while a GRANT still passes —
@@ -174,6 +183,12 @@ func TestSubscribeMqttConfirmedBoundsASilentBroker(t *testing.T) {
 	}
 	if cost := time.Since(started); cost > 5*time.Second {
 		t.Fatalf("the wait took %v: the timeout is not bounding anything", cost)
+	}
+	if !errors.Is(err, messaging.ErrSubscriptionUnacknowledged) {
+		t.Errorf("a missing SUBACK does not wrap ErrSubscriptionUnacknowledged: %v", err)
+	}
+	if errors.Is(err, messaging.ErrSubscriptionRefused) {
+		t.Errorf("a missing SUBACK reads as a refusal: %v", err)
 	}
 }
 
