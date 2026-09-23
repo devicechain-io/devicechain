@@ -537,8 +537,10 @@ func TestABootstrapMintsNoClusterOwnedCredential(t *testing.T) {
 			t.Errorf("a bootstrap minted the cluster's %s", field)
 		}
 	}
-	if set.RDBInstancePassword == "" || set.TSDBPassword == "" {
-		t.Errorf("a bootstrap minted no credential for its own instance: %+v", set)
+	if set.RDBInstancePassword == "" || set.TSDBPassword == "" || set.SuperuserPassword == "" {
+		t.Errorf("a bootstrap left one of its own instance's credentials unminted: instance login set=%t, "+
+			"event store set=%t, superuser seed set=%t",
+			set.RDBInstancePassword != "", set.TSDBPassword != "", set.SuperuserPassword != "")
 	}
 
 	c := fake.NewSimpleClientset()
@@ -564,9 +566,9 @@ func TestAnInstallMintsNoInstanceCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.RDBInstancePassword != "" || set.TSDBPassword != "" {
-		t.Errorf("an install minted an instance's credential: instance login set=%t, event store set=%t",
-			set.RDBInstancePassword != "", set.TSDBPassword != "")
+	if set.RDBInstancePassword != "" || set.TSDBPassword != "" || set.SuperuserPassword != "" {
+		t.Errorf("an install minted an instance's credential: instance login set=%t, event store set=%t, "+
+			"superuser seed set=%t", set.RDBInstancePassword != "", set.TSDBPassword != "", set.SuperuserPassword != "")
 	}
 	if set.RDBPassword == "" || set.RDBProvisionerPassword == "" || set.ObjectStoreSecret == "" || set.GrafanaAdminPassword == "" {
 		t.Errorf("an install left a cluster credential unminted: %+v", set)

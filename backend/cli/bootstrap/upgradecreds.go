@@ -31,8 +31,11 @@ type credentialPlacement struct {
 	Scope ownerKind
 	Into  func(*credentialSet) *string
 	// WhenAbsent, if set, replaces the "it is gone" refusal for a credential whose
-	// absence has a more likely cause than deletion.
-	WhenAbsent func(ctx context.Context, typed kubernetes.Interface, instance string) error
+	// absence has a more likely cause than deletion. It returns the refusal to make —
+	// or nil when the absence is LEGITIMATE, in which case the field stays blank and
+	// the upgrade goes on. Nil is an answer about one credential only, and only one
+	// that nothing the upgrade writes is composed from; see the superuser's placement.
+	WhenAbsent func(ctx context.Context, typed kubernetes.Interface, st *State) error
 }
 
 // credentialPlacements lists every credential this configuration has, and where.
@@ -73,7 +76,8 @@ func credentialPlacements(st *State) []credentialPlacement {
 			// instance built after logins but before instances had namespaces of their own
 			// keeps its login Secret in dc-system; telling its operator the data belongs to
 			// the shared owner would be false. Asked, then said.
-			WhenAbsent: func(ctx context.Context, typed kubernetes.Interface, instance string) error {
+			WhenAbsent: func(ctx context.Context, typed kubernetes.Interface, st *State) error {
+				instance := st.Instance
 				name := instanceRdbSecretName(instance)
 				if _, err := typed.CoreV1().Secrets(infraNamespace).Get(ctx, name, metav1.GetOptions{}); err == nil {
 					return fmt.Errorf("instance %q was built before each instance had a namespace of its own: "+
@@ -91,6 +95,25 @@ func credentialPlacements(st *State) []credentialPlacement {
 			Field: "TSDBPassword",
 			Ref:   mintedCredentialRef{InstanceNamespace(st.Instance), tsdbClusterName + "-app-credentials", secretKeyPassword},
 			Into:  func(s *credentialSet) *string { return &s.TSDBPassword },
+		},
+		{
+			Field: "SuperuserPassword",
+			Ref:   superuserSecretRef(st.Instance),
+			Into:  func(s *credentialSet) *string { return &s.SuperuserPassword },
+			// 🔴 THE ONE ABSENCE THAT IS NOT A REFUSAL, AND NOT A MINT EITHER. An instance
+			// built before dcctl generated the superuser's seed password never had this
+			// Secret: its superuser was seeded with the literal earlier releases published.
+			// Refusing would strand every such instance over a value the upgrade does not
+			// use — it is read only to seed an EMPTY identity table, and this one is
+			// seeded — and the chart's reference to it is optional for exactly this case.
+			// Minting one would be worse than either: a Secret claiming a password the
+			// superuser was never given, which every tool reading it would then trust.
+			// So the field stays blank, and the upgrade says what that means at the end
+			// (warnPreGeneratedSuperuser).
+			WhenAbsent: func(_ context.Context, _ kubernetes.Interface, st *State) error {
+				st.SuperuserSeed = superuserSeedAbsent
+				return nil
+			},
 		},
 	}
 
@@ -138,7 +161,10 @@ func credentialPlacements(st *State) []credentialPlacement {
 //
 // So there is no "mint if missing" branch here, and adding one would dissolve the
 // distinction this verb exists to draw. An absent credential is a refusal with a
-// sentence explaining which value is gone and what it was authenticating.
+// sentence explaining which value is gone and what it was authenticating — except
+// where its placement says the absence is legitimate, which is one credential: the
+// superuser's seed password, which a pre-existing instance never had and the upgrade
+// never uses. Even that is left blank, never minted.
 //
 // 🔑 REUSE STOPPED BEING A MINTING DECISION AND BECAME A READ. That is why this is
 // short: bootstrap's resolveCredentials has to decide, per credential, whether a
@@ -186,7 +212,10 @@ func readInstanceCredentials(ctx context.Context, typed kubernetes.Interface, st
 
 		default: // reuseAbsent
 			if p.WhenAbsent != nil {
-				return nil, p.WhenAbsent(ctx, typed, st.Instance)
+				if err := p.WhenAbsent(ctx, typed, st); err != nil {
+					return nil, err
+				}
+				continue // an absence the placement says is legitimate: left blank
 			}
 			return nil, fmt.Errorf(
 				"instance %q is running but Secret %s/%s — which holds its %s — is gone. An "+

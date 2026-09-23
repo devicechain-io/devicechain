@@ -27,6 +27,7 @@ func aWritableState() *State {
 			ObjectStoreUser:        "os-user",
 			ObjectStoreSecret:      "os-secret",
 			GrafanaAdminPassword:   "grafana-pw",
+			SuperuserPassword:      "superuser-pw",
 		},
 	}
 }

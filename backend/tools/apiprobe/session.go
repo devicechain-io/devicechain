@@ -11,9 +11,11 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
@@ -30,8 +32,28 @@ func (c *connection) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.server, "server", "localhost", "instance ingress host (and :port) the API is reachable on")
 	fs.StringVar(&c.scheme, "scheme", "http", "http or https (https skips certificate verification for a self-signed local cert)")
 	fs.StringVar(&c.tenant, "tenant", "apiprobe", "tenant token the probe entities are written under")
-	fs.StringVar(&c.adminEmail, "admin-email", "superuser@devicechain.local", "superuser identity that creates the probe tenant")
-	fs.StringVar(&c.adminPass, "admin-password", "devicechain", "superuser password")
+	fs.StringVar(&c.adminEmail, "admin-email", auth.DefaultSuperuserEmail, "superuser identity that creates the probe tenant")
+	// No default: every instance's superuser has its own generated password.
+	fs.StringVar(&c.adminPass, "admin-password", "", "superuser password (default $"+adminPasswordEnv+"; required by seed)")
+}
+
+// adminPasswordEnv supplies the superuser password without putting it on a command
+// line, where every process listing would show it.
+const adminPasswordEnv = "DC_ADMIN_PASSWORD"
+
+// adminPassword is the superuser password to sign in with: the flag, else the
+// environment. Empty is refused rather than sent — there is no default, because an
+// instance's superuser password is generated for it at bootstrap and kept in Secret
+// dci-<instance>/dci-<instance>-superuser (key password).
+func (c *connection) adminPassword() (string, error) {
+	if c.adminPass != "" {
+		return c.adminPass, nil
+	}
+	if pw := os.Getenv(adminPasswordEnv); pw != "" {
+		return pw, nil
+	}
+	return "", fmt.Errorf("no superuser password: pass --admin-password or set $%s. It is generated per "+
+		"instance and kept in Secret dci-<instance>/dci-<instance>-superuser, key password", adminPasswordEnv)
 }
 
 func (c *connection) base() string { return fmt.Sprintf("%s://%s", c.scheme, c.server) }
@@ -82,7 +104,11 @@ func (c *connection) provision(ctx context.Context) (*userclient.TenantSession, 
 	var cred Credential
 	httpc := c.httpClient()
 
-	admin := userclient.NewAdminSession(httpc, c.userURL(), c.adminEmail, c.adminPass)
+	adminPass, err := c.adminPassword()
+	if err != nil {
+		return nil, cred, failWith(exitSetup, "%w", err)
+	}
+	admin := userclient.NewAdminSession(httpc, c.userURL(), c.adminEmail, adminPass)
 	super, err := admin.Superuser(ctx)
 	if err != nil {
 		return nil, cred, failWith(exitSetup, "admin login at %s failed: %w", c.userURL(), err)

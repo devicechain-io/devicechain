@@ -24,7 +24,9 @@ public sealed class DeviceChainLiveSmoke : MonoBehaviour
     [Header("Cluster")]
     public string Origin = "http://localhost";
     public string Email = "superuser@devicechain.local";
-    public string Password = "devicechain";
+    // No default: every instance's superuser password is generated when it is bootstrapped.
+    // Read it with: kubectl -n dci-<id> get secret dci-<id>-superuser -o jsonpath='{.data.password}' | base64 -d
+    public string Password = "";
     public string Tenant = "sim-bp";
 
     [Header("Run")]
@@ -58,6 +60,12 @@ public sealed class DeviceChainLiveSmoke : MonoBehaviour
         _cts?.Cancel();
         _cts = new CancellationTokenSource();
         CancellationToken ct = _cts.Token;
+
+        if (string.IsNullOrEmpty(Password))
+        {
+            Debug.LogError("[DC] set Password first: it is generated per instance (see the Password field's comment)");
+            return;
+        }
 
         try
         {

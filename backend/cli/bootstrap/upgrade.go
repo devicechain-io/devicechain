@@ -180,6 +180,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		wouldDo("recompose the instance configuration document from this release's chart, " +
 			"keeping every credential the instance is running on")
 		wouldDo("upgrade the instance's Helm release")
+		warnPreGeneratedSuperuser(st)
 		return nil
 	}
 
@@ -282,6 +283,9 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	fmt.Println(color.WhiteString(
 		"\nEvery credential this instance was running on was kept. An upgrade reads them;\n" +
 			"it mints nothing, so nothing here rotated."))
+	// ...which, for an instance older than the generated superuser password, is also
+	// the one thing that must not be read as good news. See warnPreGeneratedSuperuser.
+	warnPreGeneratedSuperuser(st)
 	return nil
 }
 

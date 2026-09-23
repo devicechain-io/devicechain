@@ -859,22 +859,6 @@ func runStreamed(heading, label string, work func() error) error {
 	return nil
 }
 
-// stepSeedAdmin surfaces the bootstrap superuser credential. user-management
-// seeds a global superuser identity automatically on first start (ADR-033); this
-// step records the coordinates so the final report can show them.
-func stepSeedAdmin(ctx context.Context, st *State) error {
-	doing("recording bootstrap superuser credential")
-	// These mirror user-management's config defaults (config.ApplyDefaults): a
-	// global superuser identity with a well-known initial password that MUST be
-	// changed. The bootstrap is tenant-less (ADR-033) — the superuser signs in to
-	// the admin console and creates the first tenant there. A future enhancement
-	// can read a generated password from the chart values / a secret.
-	st.Values["superuserEmail"] = "superuser@devicechain.local"
-	st.Values["superuserPassword"] = "devicechain"
-	done()
-	return nil
-}
-
 // stepWaitReady blocks until every area's Deployment has rolled onto the template
 // this run rendered. The Helm step already blocks on readiness; this is an explicit
 // confirmation gate.
@@ -1051,13 +1035,15 @@ func stepReport(ctx context.Context, st *State) error {
 		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s://%s/", scheme, host))
 		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s://%s/api/<area>/graphql", scheme, host))
 	}
-	if st.Values["superuserEmail"] != "" {
-		fmt.Printf("  %s %s / %s  %s\n",
-			color.WhiteString("Superuser:"),
-			color.GreenString(st.Values["superuserEmail"]),
-			color.GreenString(st.Values["superuserPassword"]),
-			color.YellowString("(sign in to the admin console to create your first tenant — change this password immediately)"))
-	}
+	// The superuser: its email, where its seed password lives, and — once, when this
+	// run generated it — the password itself. The bootstrap is tenant-less (ADR-033):
+	// the superuser signs in to the admin console and creates the first tenant there.
+	//
+	// 🔴 READ FROM THE SETTLED CREDENTIALS, NEVER FROM st.Values. This block used to
+	// print a literal a step had copied into st.Values — the same password on every
+	// instance — and st.Values is a string map other steps range over. The password is
+	// kept out of it entirely.
+	printSuperuserReport(st)
 	if svc := st.Values["grafanaService"]; svc != "" {
 		// 🔴 THIS LINE USED TO PRINT THE PASSWORD, AND IT WAS WRONG THE MOMENT
 		// dcctl STARTED MINTING ONE. It said the login was `admin / devicechain`

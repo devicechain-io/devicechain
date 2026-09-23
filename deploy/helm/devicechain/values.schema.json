@@ -67,6 +67,10 @@
           "pattern": "^([0-9a-f]{64})?$",
           "description": "Required whenever existingSecret is set: the sha256 of the `instance` document inside that Secret, as 64 lowercase hex characters. The chart cannot read the Secret, so this is what the pod annotation carries; without it a config change would apply cleanly, roll no pods and report success. The shape is constrained because the value lands in an annotation: a blank or YAML-null string would render as a constant, and one carrying a colon or newline would corrupt the pod template."
         },
+        "superuserSecret": {
+          "type": "string",
+          "description": "Name of the Secret holding the superuser's seed password under key `password`, projected into user-management as DC_SUPERUSER_PASSWORD and read only to seed an empty identity table. Empty means dci-<id>-superuser, the Secret dcctl bootstrap generates per instance. There is no default password: an install made without dcctl must create this Secret before user-management first starts, or it refuses to seed the superuser."
+        },
         "config": { "type": "object" }
       }
     },

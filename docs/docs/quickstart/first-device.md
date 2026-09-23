@@ -56,8 +56,16 @@ substitute it throughout: on its own in the topics and paths, and after the `dci
 wherever a command names the namespace.
 
 When the bootstrap finishes it prints the namespace, the console URL, and the superuser
-credential. The default superuser is `superuser@devicechain.local` with the password
-`devicechain`.
+credential. The superuser is `superuser@devicechain.local`. There is no default password: the
+bootstrap generates one for this instance and prints it once, at the end of its output. To read
+it again later:
+
+```bash
+kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.data.password}' | base64 -d
+```
+
+That Secret keeps the password the superuser was **first** given. Change the password in the
+console and the Secret is not updated.
 
 Open the console at `http://localhost/` and sign in. It will be empty — there is no tenant
 yet, and every device belongs to one.

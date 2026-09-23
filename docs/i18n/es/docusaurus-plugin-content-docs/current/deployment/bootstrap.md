@@ -343,10 +343,7 @@ Los pasos de abajo son los que la ejecución va imprimiendo (`[8/11] Install ins
    endpoints— y después despliega el chart de Helm vía el SDK de Helm para Go, bloqueando
    hasta que las cargas de trabajo estén listas. Ese documento es lo que hace que la instancia
    esté viva, y lo que el paso 3 busca en cualquier ejecución posterior.
-9. **Sembrar la credencial de administración** (*Seed admin credential*) — la credencial
-   de superusuario la siembra el servicio user-management en el primer arranque; este paso
-   fija los valores que imprimirá el informe final.
-10. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
+9. **Esperar a que todo esté listo** (*Wait for readiness*) — sondea el Deployment de cada
     área habilitada hasta que haya terminado de desplegarse sobre la configuración que ha
     producido esta ejecución, como puerta de confirmación explícita en lugar de confiar en
     la espera del propio paso de Helm. Que haya réplicas disponibles no basta: cuando se
@@ -354,8 +351,9 @@ Los pasos de abajo son los que la ejecución va imprimiendo (`[8/11] Install ins
     espera además a que se observe la nueva plantilla, a que todas las réplicas se hayan
     recreado sobre ella y a que no quede ninguna réplica antigua en ejecución. `dcctl
     upgrade` usa la misma puerta por la misma razón.
-11. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, la
-    credencial de superusuario y cómo llegar a la instancia.
+10. **Informar de los datos de acceso** (*Report access info*) — imprime el namespace, el
+    correo del superusuario y dónde se guarda su contraseña (y la propia contraseña, una sola
+    vez, en la ejecución que la generó), y cómo llegar a la instancia.
 
 :::tip `Ctrl+C` detiene una ejecución de forma limpia
 Una ejecución interrumpida detiene la herramienta de infraestructura con elegancia —termina
@@ -638,8 +636,32 @@ no se confunda con un éxito real.
 ## Después del arranque inicial
 
 El comando imprime el namespace, la credencial de **superusuario**, y cómo
-llegar a la instancia a través del ingress del clúster. El superusuario se
-siembra con una contraseña por defecto —**cámbiala de inmediato**.
+llegar a la instancia a través del ingress del clúster. El superusuario es
+`superuser@devicechain.local`, y no hay contraseña por defecto: el arranque genera
+una para la instancia, la guarda en el Secret `dci-<instance>-superuser` del
+namespace de la instancia y la imprime una sola vez, al final de la ejecución que la
+generó. Para volver a leerla:
+
+```bash
+kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d
+```
+
+El servicio user-management lee esa contraseña una sola vez: para crear el
+superusuario la primera vez que arranca con la tabla de identidades vacía. A partir de
+ahí el Secret es un registro de la contraseña que el superusuario recibió al principio,
+y cambiar la contraseña en la consola no lo actualiza. Cuando un arranque **recupera**
+una instancia, el superusuario restaurado conserva la contraseña que tenía, y el informe
+indica que el nuevo Secret no la contiene.
+
+Las instancias creadas por una versión anterior no tienen ese Secret. Su superusuario
+se creó con la contraseña por defecto que publicaban esas versiones, y `dcctl upgrade`
+no la cambia; la actualización lo indica al terminar. Si esa contraseña no se ha
+cambiado desde entonces, cámbiala en la consola.
+
+Una instalación hecha solo con Helm, sin `dcctl`, debe crear ese Secret por su cuenta
+(clave `password`) antes de que user-management arranque por primera vez, o nombrar
+otro con el valor del chart `instance.superuserSecret`. Sin él, user-management se
+niega a crear el superusuario.
 
 La instancia incluye la **consola web**: el ingress la sirve en la raíz del host
 (`https://<host>/`) y enruta `https://<host>/api/<area>/graphql` a cada servicio

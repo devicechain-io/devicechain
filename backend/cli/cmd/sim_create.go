@@ -89,7 +89,6 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	server, _ := cmd.Flags().GetString("server")
 	instance, _ := cmd.Flags().GetString("instance")
 	adminEmail, _ := cmd.Flags().GetString("admin-email")
-	adminPassword, _ := cmd.Flags().GetString("admin-password")
 	tls, _ := cmd.Flags().GetBool("tls")
 	controlAddr, _ := cmd.Flags().GetString("control-addr")
 	ingress, _ := cmd.Flags().GetString("ingress")
@@ -126,6 +125,11 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 			return genErr
 		}
 		password = p
+	}
+
+	adminPassword, err := resolveAdminPassword(cmd, instance)
+	if err != nil {
+		return err
 	}
 
 	endpoints := sim.ResolveEndpoints(server, ingress, mqttBroker, tls)

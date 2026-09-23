@@ -5,6 +5,7 @@ package config
 
 import (
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,21 +25,41 @@ func aBcryptHash(t *testing.T) string {
 	return string(h)
 }
 
-// Loading an empty document defaults the superuser (ADR-033) so the documented
-// first login works (ADR-022 decision 1 defaulting via core.LoadConfiguration).
-// This is platform-breaking if it regresses.
+// Loading an empty document defaults the superuser's EMAIL (ADR-033), and only its
+// email: the password is not configuration (see AuthConfiguration.SuperuserEmail), so
+// there is no field a default could fill.
 func TestLoadDefaultsSuperuser(t *testing.T) {
 	cfg := &UserManagementConfiguration{}
 	err := core.LoadConfiguration([]byte(``), cfg)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "superuser@devicechain.local", cfg.Auth.SuperuserEmail)
-	assert.Equal(t, "devicechain", cfg.Auth.SuperuserPassword)
 	assert.Equal(t, 900, cfg.Auth.AccessTokenTtlSeconds)
 	assert.Equal(t, 604800, cfg.Auth.RefreshTokenTtlSeconds)
 	assert.Equal(t, 8, cfg.Auth.SigningKeyRetentionDays)
 	assert.Equal(t, 0, cfg.Auth.SigningKeyMaxAgeDays)
 	assert.NoError(t, cfg.Validate())
+}
+
+// 🔴 A DOCUMENT STILL CARRYING A SEED PASSWORD FAILS TO LOAD, and it must keep failing.
+// The key used to exist, with a literal default; it now has no field at all, so the
+// strict decoder rejects it as unknown. Declaring it RETIRED instead would strip it with
+// a warning and load — seeding the superuser from the environment while the operator
+// believes the password is the one they wrote here. The value is asserted not to appear
+// in the error, since that error is logged.
+func TestADocumentCarryingASuperuserPasswordIsRefused(t *testing.T) {
+	cfg := &UserManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"auth":{"superuserPassword":"an-operator-choice"}}`), cfg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "superuserPassword")
+	assert.NotContains(t, err.Error(), "an-operator-choice")
+	if r, ok := any(cfg).(core.ConfigRetirer); ok {
+		for k := range r.RetiredConfigKeys() {
+			assert.NotContains(t, strings.ToLower(k), "superuserpassword",
+				"the seed password must stay an unknown key, not a retired one")
+		}
+	}
 }
 
 // The constructor and the load path share one source of defaults.
@@ -56,7 +77,6 @@ func TestValidateRejectsNonPositiveRefreshTtl(t *testing.T) {
 			AccessTokenTtlSeconds:  900,
 			RefreshTokenTtlSeconds: -1,
 			SuperuserEmail:         "superuser@devicechain.local",
-			SuperuserPassword:      "devicechain",
 		},
 	}
 	assert.Error(t, cfg.Validate())

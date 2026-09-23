@@ -101,12 +101,20 @@ func (m *Manager) sessionIdentity(ctx context.Context, email string, epoch auth.
 	return id, nil
 }
 
+// ErrNoSuperuserSeedPassword is returned by Initialize when the identity table is empty
+// and no seed password was supplied, so there is nothing to seed the superuser with.
+var ErrNoSuperuserSeedPassword = errors.New("the identity table is empty and no superuser seed " +
+	"password was supplied, so the superuser cannot be seeded")
+
 // BootstrapConfig describes the superuser seeded on first startup (ADR-033). The
 // bootstrap is tenant-less: only the superuser identity is created, with no
 // scaffold tenant or membership — the superuser lands in the admin console and
 // creates the first tenant there.
 type BootstrapConfig struct {
 	// SuperuserEmail/SuperuserPassword identify the global superuser identity.
+	// SuperuserPassword is used ONLY when the identity table is empty, and seeding
+	// refuses when it is blank (ErrNoSuperuserSeedPassword); an instance whose
+	// superuser already exists may leave it blank.
 	SuperuserEmail    string
 	SuperuserPassword string
 
@@ -899,6 +907,14 @@ func (m *Manager) seed(ctx context.Context) error {
 		if n > 0 {
 			return nil
 		}
+		// 🔴 NO PASSWORD, NO SUPERUSER — and no stand-in either. This is the only point
+		// at which the seed password is needed, so it is the only point at which its
+		// absence is an error: an instance whose superuser already exists starts without
+		// one. A default here would be the same credential on every instance ever built,
+		// holding authority `*`, which is what this refusal replaced.
+		if m.bootstrap.SuperuserPassword == "" {
+			return ErrNoSuperuserSeedPassword
+		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(m.bootstrap.SuperuserPassword), bcrypt.DefaultCost)
 		if err != nil {
 			return err
@@ -908,8 +924,9 @@ func (m *Manager) seed(ctx context.Context) error {
 		if err := m.iam.SeedSuperuser(ctx, email, string(hash), all, all); err != nil {
 			return err
 		}
-		log.Warn().Str("email", email).
-			Msg("Seeded superuser (system role=superuser, authority=*) with the default password — CHANGE IT IMMEDIATELY.")
+		// The password is never logged, not even in part.
+		log.Info().Str("email", email).
+			Msg("Seeded superuser (system role=superuser, authority=*) from the supplied seed password.")
 		return nil
 	})
 }

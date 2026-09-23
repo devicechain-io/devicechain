@@ -223,6 +223,22 @@ spec:
             - name: GOMEMLIMIT
               value: {{ . | quote }}
             {{- end }}
+            {{- /* user-management's superuser SEED password, from the instance's own
+            Secret (devicechain.superuserSecret) — never from a config document, and
+            never a default. It is OPTIONAL on purpose: the value is needed only to seed
+            an EMPTY identity table, and the service refuses to start in exactly that
+            case when it is missing, naming this variable. An instance whose superuser
+            was seeded before dcctl generated the Secret has none, and must still start.
+            Not extraEnv: the chart owns this contract with the service, so a plain
+            install gets it without restating a secretKeyRef. */}}
+            {{- if eq $area "user-management" }}
+            - name: DC_SUPERUSER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devicechain.superuserSecret" $root | quote }}
+                  key: password
+                  optional: true
+            {{- end }}
             {{/* Per-area extra environment, passed through verbatim as core-v1
             EnvVar entries. This is how a Secret is projected into an env var:
             sparkplug-ingest reads each per-tenant broker password from the env var

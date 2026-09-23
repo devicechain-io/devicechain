@@ -9,9 +9,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/userclient"
 	nmmodel "github.com/devicechain-io/dc-notification-management/model"
 )
@@ -23,6 +25,10 @@ import (
 // single means the drill cannot look for the row in one place and the API in
 // another.
 const areaNotification = "notification-management"
+
+// adminPasswordEnv supplies the superuser password without putting it on a command
+// line, where every process listing would show it.
+const adminPasswordEnv = "DC_ADMIN_PASSWORD"
 
 // drillTenantTier is the tier the drill's tenant is packaged at (ADR-065). Every
 // tenant is created at an explicit tier — the server infers no default, by design
@@ -64,8 +70,9 @@ func runSeed(ctx context.Context, argv []string) error {
 	fs.StringVar(&o.server, "server", "localhost", "instance ingress host (and :port) the API is reachable on")
 	fs.StringVar(&o.scheme, "scheme", "http", "http or https (https skips certificate verification for a self-signed local cert)")
 	fs.StringVar(&o.instance, "instance", "", "instance id, recorded on the receipt (required)")
-	fs.StringVar(&o.adminEmail, "admin-email", "superuser@devicechain.local", "superuser identity that creates the drill tenant")
-	fs.StringVar(&o.adminPass, "admin-password", "devicechain", "superuser password")
+	fs.StringVar(&o.adminEmail, "admin-email", auth.DefaultSuperuserEmail, "superuser identity that creates the drill tenant")
+	// No default: every instance's superuser has its own generated password.
+	fs.StringVar(&o.adminPass, "admin-password", "", "superuser password (default $"+adminPasswordEnv+")")
 	fs.StringVar(&o.tenant, "tenant", "drdrill", "tenant token the drill secret is written under")
 	fs.StringVar(&o.channelName, "channel-token", "drdrill-channel", "notification-channel token the secret hangs off")
 	fs.StringVar(&o.receipt, "receipt", "", "path to write the receipt verify will read (required)")
@@ -74,6 +81,13 @@ func runSeed(ctx context.Context, argv []string) error {
 	}
 	if strings.TrimSpace(o.instance) == "" || strings.TrimSpace(o.receipt) == "" {
 		return failWith(exitSetup, "--instance and --receipt are both required")
+	}
+	if o.adminPass == "" {
+		o.adminPass = os.Getenv(adminPasswordEnv)
+	}
+	if o.adminPass == "" {
+		return failWith(exitSetup, "no superuser password: pass --admin-password or set $%s. It is generated "+
+			"per instance and kept in Secret dci-%s/dci-%s-superuser, key password", adminPasswordEnv, o.instance, o.instance)
 	}
 
 	base := fmt.Sprintf("%s://%s", o.scheme, o.server)

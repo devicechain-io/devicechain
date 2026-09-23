@@ -1588,7 +1588,8 @@ la contraseña de un usuario, desactivarlo o eliminarlo termina sus sesiones, y 
 instancia pasa a ser obligatoria en todos los perfiles. Eso son las tres primeras secciones de
 abajo. Las tres siguientes solo importan si vigila usted mismo las métricas de mensajes no
 entregados, depende de respuestas a comandos que no se pudieron registrar o abre conexiones
-WebSocket de GraphQL desde su propio código.
+WebSocket de GraphQL desde su propio código. Además, en toda instancia creada antes de
+esta versión hay que revisar la contraseña del superusuario (vea la última sección de abajo).
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1752,6 +1753,24 @@ El WebSocket que un servicio acepta en su endpoint GraphQL cambia de tres manera
     cuando el token caduca. Vuelva a iniciar sesión.
 - **Un servicio sin suscripciones ya no acepta ningún WebSocket.** La petición de upgrade se rechaza
   con HTTP 400. Antes, la conexión se abría y cada operación enviada por ella fallaba.
+
+#### El superusuario ya no tiene contraseña por defecto
+
+Las versiones anteriores creaban el superusuario de cada instancia, `superuser@devicechain.local`,
+con la misma contraseña publicada, `devicechain`. Ahora cada instancia nueva recibe una contraseña
+generada para ella: `dcctl bootstrap` la imprime una sola vez y la guarda en el Secret
+`dci-<instance>-superuser` del namespace de la instancia. Ya no hay valor por defecto. Si
+user-management arranca con la tabla de identidades vacía y sin contraseña en ese Secret, se niega a
+crear el superusuario.
+
+**La actualización no cambia la contraseña de un superusuario existente.** No puede saber si usted
+la cambió, así que no la toca, e imprime un aviso al terminar para cualquier instancia que no tenga
+contraseña generada. Si nunca cambió la contraseña en una instancia así, sigue siendo `devicechain`.
+Inicie sesión y cámbiela, o vuelva a crear la instancia para que se le genere una.
+
+`dcctl sim` y las herramientas de simulacro tampoco dan ya por supuesta la contraseña antigua.
+`dcctl sim` lee la generada del Secret de la instancia, y acepta `--admin-password` o
+`$DC_ADMIN_PASSWORD` para una instancia que no lo tiene.
 
 ### La transición única a la ingesta duradera
 

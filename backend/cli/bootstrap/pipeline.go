@@ -59,7 +59,8 @@ func IsUnpublishedImageVersion(tag string) bool {
 }
 
 // State threads data between pipeline steps. Values is populated as the
-// pipeline runs (generated passwords, endpoints, admin cred, etc.).
+// pipeline runs (generated broker credentials, endpoints, etc.). The superuser's
+// password is deliberately not among them — see printSuperuserReport.
 type State struct {
 	Instance    string
 	KubeContext string
@@ -168,6 +169,10 @@ type State struct {
 	// and written by the infrastructure step, which is the only ordering in which
 	// CloudNativePG builds the database role from the same value the services get.
 	Credentials *credentialSet
+	// SuperuserSeed says what this run knows about the superuser's seed password in
+	// Credentials — whether this run generated it, found it, or found none — which is
+	// what decides what the report may claim about it. See superuserSeedState.
+	SuperuserSeed superuserSeedState
 	// Evolving says this State describes an instance that already exists and is
 	// being moved, rather than one being built.
 	//
@@ -317,7 +322,6 @@ func NewDefaultPipeline() Pipeline {
 		{Name: "Render configuration", Run: stepRenderConfig},
 		{Name: "Apply infrastructure", Run: stepInfraApply},
 		{Name: "Install instance (Helm)", Run: stepHelmInstall},
-		{Name: "Seed admin credential", Run: stepSeedAdmin},
 		{Name: "Wait for readiness", Run: stepWaitReady},
 		{Name: "Report access info", Run: stepReport},
 	}}

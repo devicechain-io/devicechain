@@ -43,12 +43,20 @@ type AuthConfiguration struct {
 	SigningKeyMaxAgeDays    int
 	SigningKeyRetentionDays int
 
-	// Superuser seeded on first startup when no identity exists (ADR-033): a global
-	// email identity holding the `superuser` system role (authority `*`). The
-	// default password MUST be changed after first login; startup logs a warning.
-	// dcctl bootstrap supplies a generated password.
-	SuperuserEmail    string
-	SuperuserPassword string
+	// SuperuserEmail is the global superuser seeded on first startup when no identity
+	// exists (ADR-033): an email identity holding the `superuser` system role
+	// (authority `*`). Defaults to auth.DefaultSuperuserEmail.
+	//
+	// 🔴 ITS PASSWORD IS NOT CONFIGURATION, AND THERE IS NO FIELD FOR IT HERE. This
+	// document is delivered in a ConfigMap, and it used to carry the seed password with
+	// a literal default that was the same on every instance ever built. The password
+	// now arrives only through the SuperuserPasswordEnv environment variable, which the
+	// chart projects from a Secret dcctl generates per instance. A document that still
+	// carries `superuserPassword` FAILS TO LOAD as an unknown key, and that is the
+	// intended outcome: do not "fix" it by declaring the key retired. A retired key is
+	// stripped with a warning, which would quietly discard a password an operator
+	// believes they chose, and the superuser would then be seeded from a different one.
+	SuperuserEmail string
 
 	// SeedClients registers OAuth 2.1 clients at startup (idempotent upsert), so a
 	// deployment can provision a confidential client — e.g. Grafana SSO (ADR-047) —
@@ -169,6 +177,16 @@ func (c *UserManagementConfiguration) TenantPurgeTokenHold() time.Duration {
 	return time.Duration(c.TenantPurge.TokenHoldSeconds) * time.Second
 }
 
+// SuperuserPasswordEnv names the environment variable the superuser's SEED password is
+// read from. The chart projects it from the instance's superuser Secret, which dcctl
+// generates at bootstrap; see AuthConfiguration.SuperuserEmail for why it is not a key
+// in this document.
+//
+// It is read only to seed an empty identity table. Once the superuser exists it
+// changes its password through the API, and neither this variable nor the Secret
+// behind it is consulted again.
+const SuperuserPasswordEnv = "DC_SUPERUSER_PASSWORD"
+
 // Creates the default user management configuration
 func NewUserManagementConfiguration() *UserManagementConfiguration {
 	cfg := &UserManagementConfiguration{}
@@ -192,10 +210,7 @@ func (c *UserManagementConfiguration) ApplyDefaults() {
 		c.Auth.SigningKeyRetentionDays = 8 // > refresh-token lifetime (7 days)
 	}
 	if c.Auth.SuperuserEmail == "" {
-		c.Auth.SuperuserEmail = "superuser@devicechain.local"
-	}
-	if c.Auth.SuperuserPassword == "" {
-		c.Auth.SuperuserPassword = "devicechain"
+		c.Auth.SuperuserEmail = auth.DefaultSuperuserEmail
 	}
 	if c.TenantPurge.IntervalSeconds == 0 {
 		c.TenantPurge.IntervalSeconds = defaultTenantPurgeIntervalSeconds
@@ -303,14 +318,17 @@ var defaultTenantPurgeTokenHoldSeconds = int(natsauth.DefaultUserJWTTTL / time.S
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
 // the load closed on an invalid configuration (ADR-022 decision 1). It is
-// defense in depth: the bootstrap admin must be fully specified, and token TTLs
-// must be positive so a key-value store is never created with a zero TTL.
+// defense in depth: the bootstrap admin must be named, and token TTLs must be
+// positive so a key-value store is never created with a zero TTL.
+//
+// 🔴 THE SEED PASSWORD IS NOT CHECKED HERE, because it is not in this document and it
+// is not needed on every start. It is needed exactly once, to seed an EMPTY identity
+// table, and identity.Manager refuses to seed without one. Requiring it at load would
+// stop every instance whose superuser was seeded before dcctl generated the password —
+// those have no Secret to project, and nothing to use one for.
 func (c *UserManagementConfiguration) Validate() error {
 	if c.Auth.SuperuserEmail == "" {
 		return fmt.Errorf("auth.superuserEmail must not be empty")
-	}
-	if c.Auth.SuperuserPassword == "" {
-		return fmt.Errorf("auth.superuserPassword must not be empty")
 	}
 	if c.Auth.AccessTokenTtlSeconds <= 0 {
 		return fmt.Errorf("auth.accessTokenTtlSeconds must be positive (got %d)", c.Auth.AccessTokenTtlSeconds)

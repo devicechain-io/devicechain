@@ -83,6 +83,10 @@ type credentialSet struct {
 	ObjectStoreUser      string
 	ObjectStoreSecret    string
 	GrafanaAdminPassword string
+	// SuperuserPassword is the password user-management seeds the instance's global
+	// superuser with, on its first start against an empty identity table. It replaced
+	// a literal every earlier release seeded and published. See superuser.go.
+	SuperuserPassword string
 }
 
 // databaseBackupsEnabled reports whether this run provisions a backup destination.
@@ -275,6 +279,7 @@ func planInstanceSecrets(st *State, set *credentialSet, archive *ownedSecret) []
 				secretKeyPassword: set.RDBInstancePassword,
 			},
 		},
+		superuserSecret(st, set),
 		{
 			// The event store is the instance's, in the instance's namespace, and
 			// CloudNativePG reads a Cluster's credentials from its own namespace.
@@ -340,6 +345,12 @@ func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 //     archiver is handed them through a different object on a different schedule, so
 //     a new value opens a window in which the archiver cannot authenticate and the
 //     first visible symptom is that WAL stopped being shipped.
+//   - THE SUPERUSER'S SEED PASSWORD IS REUSED WHEN PRESENT, AND MINTED WHEN ABSENT.
+//     user-management reads it once, to seed an empty identity table, so a re-run
+//     that minted over it would leave the Secret naming a password the superuser was
+//     never given. A bootstrap re-run happens only before the instance's configuration
+//     document exists (stepRefuseRebuild), but the Secret is written earlier than that,
+//     and a value the report has not shown yet is still one to keep.
 //   - THE DASHBOARD PASSWORD IS REUSED WHEN PRESENT, AND MINTED WHEN ABSENT. A fresh
 //     value is not a rotation: Grafana reads it through admin.existingSecret as an
 //     environment variable, a changed Secret restarts nothing, and a Grafana whose
@@ -387,22 +398,26 @@ func resolveCredentials(
 		into  *string
 		ref   mintedCredentialRef
 		scope ownerKind
+		// recovered, when set, is told whether the value was read back rather than
+		// minted by this run.
+		recovered *bool
 	}
 	var databases []databaseCredential
 	var logins []loginCredential
+	var superuserRecovered bool
 	if plansCluster(st) {
 		databases = append(databases, databaseCredential{&set.RDBPassword, mintedCredentialRef{
 			infraNamespace, rdbClusterName + "-app-credentials", secretKeyPassword,
 		}, ownerCluster, rdbClusterName, live.Rdb.Exists})
 		logins = append(logins, loginCredential{&set.RDBProvisionerPassword, mintedCredentialRef{
 			infraNamespace, rdbProvisionerSecretName, secretKeyPassword,
-		}, ownerCluster})
+		}, ownerCluster, nil})
 		// Gated exactly as it is minted and placed: with monitoring off there is no
 		// Secret to read, and a cluster that turns it on later has none yet, so it mints.
 		if monitoringEnabled(st) {
 			logins = append(logins, loginCredential{&set.GrafanaAdminPassword, mintedCredentialRef{
 				monitoringNamespace, grafanaSecretName, keyGrafanaAdminPass,
-			}, ownerCluster})
+			}, ownerCluster, nil})
 		}
 	}
 	if plansInstance(st) {
@@ -411,7 +426,9 @@ func resolveCredentials(
 		}, ownerInstance, tsdbClusterName, live.Tsdb.Exists})
 		logins = append(logins, loginCredential{&set.RDBInstancePassword, mintedCredentialRef{
 			InstanceNamespace(st.Instance), instanceRdbSecretName(st.Instance), secretKeyPassword,
-		}, ownerInstance})
+		}, ownerInstance, nil})
+		logins = append(logins, loginCredential{&set.SuperuserPassword, superuserSecretRef(st.Instance),
+			ownerInstance, &superuserRecovered})
 	}
 
 	for _, c := range databases {
@@ -435,6 +452,15 @@ func resolveCredentials(
 		}
 		if found == reuseRecovered {
 			*c.into = reused
+		}
+		if c.recovered != nil {
+			*c.recovered = found == reuseRecovered
+		}
+	}
+	if plansInstance(st) {
+		st.SuperuserSeed = superuserSeedMinted
+		if superuserRecovered {
+			st.SuperuserSeed = superuserSeedRecovered
 		}
 	}
 
@@ -498,6 +524,9 @@ func mintNewCredentials(st *State) (*credentialSet, error) {
 			return nil, err
 		}
 		if set.TSDBPassword, err = mintPassword(); err != nil {
+			return nil, err
+		}
+		if set.SuperuserPassword, err = mintPassword(); err != nil {
 			return nil, err
 		}
 	}

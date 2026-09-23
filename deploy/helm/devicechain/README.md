@@ -32,6 +32,23 @@ and broker credentials and every later run consistent with each other.
 If you are driving Helm yourself rather than using `dcctl`, supply the document from a
 Secret you manage with `instance.existingSecret` (see below) and keep the key in it.
 
+**Create the superuser's password Secret too.** There is no default superuser password.
+user-management creates the instance's superuser (`superuser@devicechain.local`) the first
+time it starts with an empty identity table, and takes the password from key `password` of
+the Secret `dci-<instance.id>-superuser` in the instance's namespace. Set
+`instance.superuserSecret` to use a Secret with a different name. `dcctl bootstrap` generates
+that Secret. With plain Helm you create it yourself, once the chart has created the namespace
+(or beforehand, in a namespace you manage with `instance.createNamespace=false`):
+
+```bash
+kubectl -n dci-devicechain create secret generic dci-devicechain-superuser \
+  --from-literal=password="$(openssl rand -base64 32)"
+```
+
+Until the Secret exists, user-management refuses to create the superuser and restarts, and it
+picks the Secret up on its next start. The password is read only for that first creation.
+After that, change it in the console; changing the Secret does nothing.
+
 Take `<X.Y.Z>` from the [Releases
 page](https://github.com/devicechain-io/devicechain/releases) — the chart's OCI tag is
 the release version without the leading `v`, and `image.tag` keeps the `v`.

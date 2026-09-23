@@ -146,7 +146,16 @@ func runSimDestroy(cmd *cobra.Command, args []string) error {
 	}
 
 	adminEmail, _ := cmd.Flags().GetString("admin-email")
-	adminPassword, _ := cmd.Flags().GetString("admin-password")
+	// The sim was created on the instance its record names, so that is the instance
+	// whose superuser tears it down — not whatever --instance defaults to.
+	instance := rec.InstanceId
+	if instance == "" {
+		instance, _ = cmd.Flags().GetString("instance")
+	}
+	adminPassword, err := resolveAdminPassword(cmd, instance)
+	if err != nil {
+		return err
+	}
 
 	// Tear down against the SAME host the sim was created on: both the login base
 	// and the admin URL come from the record, so destroy is correct even when

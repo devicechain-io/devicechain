@@ -1201,7 +1201,17 @@ drill against an artifact that belongs to a cluster that no longer exists."
   # Through the ingress, as a tenant, into the deployed service — so the
   # ciphertext in the archive below is sealed by the real KEK, not manufactured by
   # the drill.
-  "$drdrill" seed --server "$api_server" --scheme "$api_scheme" \
+  #
+  # As the superuser, whose password the bootstrap above generated and kept in the
+  # instance's own Secret — there is no default to fall back to. Read here, BEFORE the
+  # disaster: nothing after the restore signs in as the superuser, and a recovered
+  # instance's Secret would hold a fresh seed its restored superuser was never given.
+  local admin_pw
+  admin_pw="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get secret "dci-${instance}-superuser" \
+    -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)" || true
+  [[ -n "$admin_pw" ]] || fail "Secret $(instance_namespace)/dci-${instance}-superuser holds no superuser password,
+so the drill cannot sign in to seed anything. The bootstrap above should have written it."
+  DC_ADMIN_PASSWORD="$admin_pw" "$drdrill" seed --server "$api_server" --scheme "$api_scheme" \
     --instance "$instance" --receipt "$receipt_file" ||
     fail "could not seed the drill secret; there is nothing to restore"
 
