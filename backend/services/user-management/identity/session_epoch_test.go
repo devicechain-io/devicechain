@@ -339,6 +339,79 @@ func TestDeletingAndRecreatingAnEmailDoesNotResurrectItsSessions(t *testing.T) {
 	require.NoError(t, err, "the new identity's own session must work")
 }
 
+// A DELETED identity — not re-created — ends every session, and the refusal is the
+// same invalid-token / invalid_grant answer as any other ended session. The store's
+// "record not found" must not leak through: an OAuth client that sees server_error
+// retries forever instead of re-authorizing, and the tenant paths would hand a raw
+// database error to the API instead of ErrInvalidToken.
+func TestDeletingAnIdentityEndsEverySessionAsAnInvalidGrant(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	idTok, pair := e.login(t, "pat@example.com", "pw-1")
+	oauth := e.oauthSession(t, idTok)
+	pendingCode, err := e.issueCode(t, idTok)
+	require.NoError(t, err, "control: before the delete the consent step issues a code")
+	_, control := e.login(t, "pat@example.com", "pw-1")
+	_, err = e.m.Refresh(ctx, control.RefreshToken)
+	require.NoError(t, err, "control: before the delete a refresh token works")
+	_, err = e.m.Memberships(ctx, idTok)
+	require.NoError(t, err, "control: before the delete the identity token lists memberships")
+
+	removed, err := e.admin.DeleteIdentity(ctx, "pat@example.com")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	require.ErrorIs(t, err, ErrInvalidToken, "a deleted identity's tenant refresh token")
+	_, err = e.m.SelectTenant(ctx, idTok, "acme")
+	require.ErrorIs(t, err, ErrInvalidToken, "a deleted identity's identity token at SelectTenant")
+	_, err = e.m.Memberships(ctx, idTok)
+	require.ErrorIs(t, err, ErrInvalidToken, "a deleted identity's identity token at Memberships")
+	_, err = e.issueCode(t, idTok)
+	require.ErrorIs(t, err, ErrInvalidToken, "the consent step issued a code for a deleted identity")
+	_, err = e.refreshOAuth(oauth.RefreshToken)
+	assertOAuthErrorCode(t, err, "invalid_grant")
+	_, err = e.redeem(pendingCode)
+	assertOAuthErrorCode(t, err, "invalid_grant")
+}
+
+// A row that is disabled WITHOUT its epoch changing is refused on every path too. The
+// admin mutation rotates the epoch as well, so through it the epoch comparison alone
+// would refuse; this row is disabled by a raw UPDATE — the way a pod from before the
+// epoch existed disables one during a rolling upgrade — so the ONLY thing that can
+// refuse it is the enabled check.
+func TestADisabledRowWithAnUnchangedEpochIsRefusedOnEveryPath(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	idTok, pair := e.login(t, "pat@example.com", "pw-1")
+	oauth := e.oauthSession(t, idTok)
+	pendingCode, err := e.issueCode(t, idTok)
+	require.NoError(t, err, "control: before the disable the consent step issues a code")
+	_, control := e.login(t, "pat@example.com", "pw-1")
+	_, err = e.m.Refresh(ctx, control.RefreshToken)
+	require.NoError(t, err, "control: before the disable a refresh token works")
+	before := e.rowEpoch(t, "pat@example.com")
+
+	require.NoError(t, e.db().Exec(
+		`UPDATE iam_identities SET enabled = ? WHERE email = ?`, false, "pat@example.com").Error)
+	require.Equal(t, before, e.rowEpoch(t, "pat@example.com"), "the raw disable must leave the epoch as it was")
+
+	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	require.ErrorIs(t, err, ErrInvalidToken, "a disabled identity's tenant refresh token rotated")
+	_, err = e.m.SelectTenant(ctx, idTok, "acme")
+	require.ErrorIs(t, err, ErrInvalidToken)
+	_, err = e.m.Memberships(ctx, idTok)
+	require.ErrorIs(t, err, ErrInvalidToken)
+	_, err = e.issueCode(t, idTok)
+	require.ErrorIs(t, err, ErrInvalidToken)
+	_, err = e.refreshOAuth(oauth.RefreshToken)
+	assertOAuthErrorCode(t, err, "invalid_grant")
+	_, err = e.redeem(pendingCode)
+	assertOAuthErrorCode(t, err, "invalid_grant")
+}
+
 // Disabling ends the sessions; re-enabling does not revive them, and enabling alone
 // does not change the epoch.
 func TestDisableThenEnableDoesNotReviveSessions(t *testing.T) {
@@ -400,7 +473,8 @@ func TestATokenWithNoEpochIsRefusedOnEveryPath(t *testing.T) {
 // 🔴 THE EMPTY-EQUALS-EMPTY HOLE. A row still holding the column default, the empty string (inserted
 // by a pod from before the column) and a token carrying no epoch compare EQUAL. Both
 // empty checks exist so that pair is refused — and a sign-in to such a row fails at
-// the mint, naming the cause, until an admin resets its password.
+// the mint (the log names the cause; the caller sees the uniform credentials error)
+// until an admin resets its password.
 func TestAnEmptyStoredEpochIsRefusedEvenAgainstAnEmptyTokenEpoch(t *testing.T) {
 	e := newSessionEnv(t)
 	ctx := context.Background()
@@ -415,9 +489,13 @@ func TestAnEmptyStoredEpochIsRefusedEvenAgainstAnEmptyTokenEpoch(t *testing.T) {
 	_, err = e.m.SelectTenant(ctx, e.forge(t, identityClaims("pat@example.com", ""), false), "acme")
 	require.ErrorIs(t, err, ErrInvalidToken)
 
+	// The password is RIGHT here, so the uniform error is the point: a distinct one
+	// would confirm the password to whoever sent it.
 	_, err = e.m.Login(ctx, "pat@example.com", "pw-1")
-	require.ErrorIs(t, err, auth.ErrNoSessionEpoch,
+	require.ErrorIs(t, err, ErrInvalidCredentials,
 		"a sign-in to a row with no epoch must fail at the mint, not hand out a token nothing accepts")
+	require.NotErrorIs(t, err, auth.ErrNoSessionEpoch,
+		"a sign-in with the right password to a row with no epoch told the caller the password was right")
 
 	// The documented remedy.
 	_, err = e.admin.SetPassword(ctx, "pat@example.com", "pw-2")

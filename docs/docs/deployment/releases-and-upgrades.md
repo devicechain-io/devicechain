@@ -1515,8 +1515,9 @@ What you will see at the upgrade:
 - **OAuth clients, including AI assistants connected through MCP, must authorize again.** Their
   refresh tokens are refused with `invalid_grant`.
 - A user created by a service that had not yet been replaced while the upgrade rolled out has no
-  session value and cannot sign in. The sign-in fails with an error saying so. Resetting that
-  user's password fixes it.
+  session value and cannot sign in. The sign-in fails as a wrong password would, and the
+  user-management log names the user and the cause. An administrator resetting that user's password
+  fixes it.
 
 What changes from then on:
 

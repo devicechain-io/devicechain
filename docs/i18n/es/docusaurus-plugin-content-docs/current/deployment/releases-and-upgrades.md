@@ -1610,8 +1610,9 @@ Lo que verá en la actualización:
 - **Los clientes OAuth, incluidos los asistentes de IA conectados por MCP, deben autorizarse de
   nuevo.** Sus tokens de actualización se rechazan con `invalid_grant`.
 - Un usuario creado por un servicio que aún no se había reemplazado mientras avanzaba la
-  actualización no tiene valor de sesión y no puede iniciar sesión. El inicio de sesión falla con un
-  error que lo indica. Restablecer la contraseña de ese usuario lo corrige.
+  actualización no tiene valor de sesión y no puede iniciar sesión. El inicio de sesión falla como
+  lo haría con una contraseña incorrecta, y el registro de user-management nombra al usuario y la
+  causa. Que un administrador restablezca la contraseña de ese usuario lo corrige.
 
 Lo que cambia a partir de entonces:
 

@@ -326,12 +326,16 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 	// credential, so it does not go through sessionIdentity: it STARTS a session under
 	// the identity's current epoch. A row with no epoch (inserted by a pod from before
 	// the column existed) is refused at the mint rather than handed a token no later
-	// step will accept; the log names the cause and the remedy.
+	// step will accept; the log names the cause and the remedy. The CALLER is told
+	// only ErrInvalidCredentials, the same as every other sign-in failure: this branch
+	// is reached only after the password matched, so a distinct error would tell
+	// whoever sent it that the password was right.
 	tok, err := issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString())
 	if err != nil {
 		if errors.Is(err, auth.ErrNoSessionEpoch) {
 			log.Error().Str("email", id.Email).
 				Msg("Identity has no session epoch, so no session can be started for it; an administrator must reset its password.")
+			return nil, ErrInvalidCredentials
 		}
 		return nil, err
 	}
