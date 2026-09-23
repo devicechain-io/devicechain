@@ -57,8 +57,8 @@ Cada servicio carga su configuración en un esquema tipado y **falla de forma ce
 
 Cada servicio expone dos endpoints HTTP para Kubernetes:
 
-- **`/healthz`** (liveness) — devuelve `200` mientras el proceso esté en ejecución.
-- **`/readyz`** (readiness) — devuelve `503` hasta que la autenticación del servicio esté activa, luego `200`.
+- **`/healthz`** (liveness) — devuelve `200` mientras el proceso pueda seguir haciendo su trabajo, y `503` una vez que su conexión con el broker de mensajería se ha cerrado de forma permanente sin que el servicio lo pidiera (por ejemplo, tras cambiar la credencial del broker con el pod en ejecución), de modo que Kubernetes lo reinicia y vuelve a conectarse con la credencial que se le entrega.
+- **`/readyz`** (readiness) — devuelve `503` hasta que la autenticación del servicio esté activa, luego `200`. Vuelve a devolver `503` mientras el servicio se apaga, y siempre que `/healthz` lo haga.
 
 Los servicios inician en un estado **no listo** y obtienen las claves de firma JWT desde `user-management` en segundo plano. Mientras no está listo, un servicio se retira de los endpoints de Service y sus consumidores de mensajes permanecen pausados — de modo que una breve interrupción de `user-management` degrada a un servicio en lugar de hacerlo fallar, y ninguna solicitud o mensaje se procesa jamás sin autenticación verificada.
 

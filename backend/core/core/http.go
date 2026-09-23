@@ -59,11 +59,22 @@ func (ms *Microservice) Mux() *http.ServeMux {
 // readiness gate was never wired should be pulled from Service endpoints, not treated
 // as healthy.
 //
-// Liveness and readiness are deliberately different questions. /healthz is 200 for as
-// long as the process runs — a live process that is not yet serving must be restarted
-// by nobody. /readyz reports 503 until the auth gate opens, and again once a SIGTERM
-// starts the drain, so a pod leaves its Service endpoints while it can still finish
-// the requests already in flight.
+// Liveness and readiness are deliberately different questions.
+//
+// /healthz answers "can this process still do its job without a restart?". It is 200
+// while the service is not yet serving — a live process waiting for its auth gate must
+// be restarted by nobody, or the probe itself causes a crash loop — and it turns 503
+// only once a component has called MarkNotLive, which a component does only for a
+// state that nothing but a restart can clear (a broker connection closed permanently
+// and not by this process is the first). The body is a generic "not live": this is the
+// GraphQL port, so the reason goes to the log MarkNotLive writes, not to the caller.
+//
+// /readyz reports 503 until the auth gate opens, and again once a SIGTERM starts the
+// drain, so a pod leaves its Service endpoints while it can still finish the requests
+// already in flight. It is also 503 whenever /healthz is: a process that cannot do its
+// job must not take traffic for the liveness window before its restart — and a pod
+// whose broker connection closed during startup would otherwise pass its startup probe
+// and join its Service endpoints mute.
 //
 // It must be called at most once per mux: ServeMux panics on a duplicate pattern, and
 // that panic is the enforcement — a second caller is a routing mistake, not a runtime
@@ -79,11 +90,15 @@ func (ms *Microservice) RegisterProbes(gate *ReadinessGate) {
 	mux.Handle("/metrics", ms.MetricsHandler())
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if ms.Live() != nil {
+			http.Error(w, "not live", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if gate != nil && gate.Ready() && !gate.Draining() {
+		if gate != nil && gate.Ready() && !gate.Draining() && ms.Live() == nil {
 			w.WriteHeader(http.StatusOK)
 			return
 		}

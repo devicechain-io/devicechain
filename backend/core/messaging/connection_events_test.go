@@ -181,15 +181,16 @@ func TestPermanentCloseIsLoggedAtError(t *testing.T) {
 //
 // ExecuteStop drains and ExecuteTerminate closes, so the ClosedHandler fires on
 // every graceful shutdown. Logging the terminal message there would put an ERROR
-// reading "the process must be restarted" into the logs of every service on every
-// rolling update, node drain and scale-down — roughly a dozen services times their
-// replicas per `helm upgrade`, all of them describing a healthy deploy. Any
-// error-rate alerting then fires on success, and the one message that means
-// "this pod is mute" is buried in the noise of the ones that do not.
+// saying the service is mute into the logs of every service on every rolling update,
+// node drain and scale-down — roughly a dozen services times their replicas per
+// `helm upgrade`, all of them describing a healthy deploy. Any error-rate alerting
+// then fires on success, and the one message that means "this pod is mute" is buried
+// in the noise of the ones that do not. (The same classification decides liveness;
+// liveness_test.go holds that half.)
 //
 // An earlier version of this suite asserted the error level using nmgr.nc.Close()
-// — which is precisely the call ExecuteTerminate makes — so it did not merely miss
-// this, it pinned the defect in place.
+// — the bare call ExecuteTerminate once made — so it did not merely miss this, it
+// pinned the defect in place.
 func TestShutdownCloseIsNotLoggedAtError(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -329,7 +330,7 @@ func TestReplicaClampIsNotReportedBeforeTheBrokerIsReachable(t *testing.T) {
 	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
 		t.Fatalf("ExecuteInitialize should not fail while retrying: %v", err)
 	}
-	t.Cleanup(func() { nmgr.shuttingDown.Store(true); nmgr.nc.Close() })
+	t.Cleanup(nmgr.closeConn)
 
 	if nmgr.nc.IsConnected() {
 		t.Fatal("the client connected to a port with nothing on it; this test proves nothing")

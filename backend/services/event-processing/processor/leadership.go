@@ -291,8 +291,9 @@ func (rp *ResolvedEventsProcessor) runTerms() {
 		if err != nil {
 			if rp.supCtx.Err() == nil {
 				// 🔴 END THE PROCESS, DO NOT MERELY RETURN. Nothing else here can notice
-				// that leadership has stopped: /healthz is unconditional, /readyz reports
-				// the auth gate, and neither reads this supervisor — so a bare return
+				// that leadership has stopped: /healthz reads only the liveness latch,
+				// which this supervisor does not trip, /readyz reports the auth gate, and
+				// neither reads this supervisor — so a bare return
 				// leaves a pod that is Ready, live-healthy and detecting nothing, for
 				// every tenant, until a human looks at a gauge. That is precisely the
 				// silently-dead singleton that buildTerm refuses to START as, and it must

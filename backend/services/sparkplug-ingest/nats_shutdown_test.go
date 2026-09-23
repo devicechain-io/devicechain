@@ -160,23 +160,23 @@ func TestOrderlyShutdownUnwindsLeadershipBeforeStoppingNats(t *testing.T) {
 // requireClosedAndTerminated asserts the orderly-shutdown end state: the broker connection
 // closed, and the Service actually TERMINATED rather than merely stopped.
 //
-// 🔴 IT WAITS FOR THE CLOSE, AND THAT IS NOT PADDING. Stop drains the connection, and
-// nats.go finishes a drain on a goroutine of its own. When Terminate's Close lands first,
-// that goroutine still moves the status to DRAINING_PUBS afterwards — changeConnStatus
-// does not check for CLOSED — and the status returns to CLOSED only when the drain calls
-// Close itself a moment later. So IsClosed can read false straight after a Terminate that
-// did close the connection — and when it does, the drain goes on to a five-second publish
-// flush against a socket that is already gone, and only closes once that times out. So the
-// status can read not-closed for about five seconds. Reading it once flaked roughly once in a
-// hundred runs; the wait below is set well past the flush timeout.
+// 🔴 IT READS THE CLOSE ONCE, WITHOUT WAITING, AND THAT IS NOW SOUND. The NATS manager's
+// Stop waits for its drain to finish, and the drain's own final Close is the last thing
+// the library's drain goroutine does, so once Stop has returned nothing moves the status
+// off CLOSED again. This used to need a fifteen-second wait: Stop returned with the drain
+// still running, Terminate's Close landed first, and the drain goroutine then moved the
+// status to DRAINING_PUBS over CLOSED and spent a five-second flush against a gone socket
+// before closing again — reading it once flaked about once in a hundred runs. That
+// reversal still exists on exactly one path, when the stop budget runs out and the
+// manager closes the connection under a live drain; these tests stop with
+// context.Background(), which has no deadline and never takes it.
 //
 // 🔴 AND BECAUSE A DRAIN CLOSES THE CONNECTION ON ITS OWN, "eventually closed" cannot tell
 // a terminated Service from one whose terminator was dropped. The second half does: a
 // Service that really terminated refuses to terminate again.
 func requireClosedAndTerminated(t *testing.T) {
 	t.Helper()
-	require.Eventually(t, func() bool { return NatsManager.Conn().IsClosed() },
-		15*time.Second, 5*time.Millisecond,
+	require.True(t, NatsManager.Conn().IsClosed(),
 		"orderly shutdown left the NATS connection open: Stop was skipped, so Terminate was "+
 			"refused from the Started state and never closed it")
 	require.ErrorContains(t, Svc.Terminate(context.Background()), "Terminated",

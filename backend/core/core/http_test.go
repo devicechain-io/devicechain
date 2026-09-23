@@ -31,24 +31,31 @@ type probeTarget struct {
 	whenUnready int
 	whenReady   int
 	whenDrained int
+	// whenNotLive is the answer once a component has called MarkNotLive, on a pod whose
+	// readiness gate is OPEN and not draining — so a 503 there comes from the liveness
+	// latch and nothing else.
+	whenNotLive int
 }
 
 var probeContract = []probeTarget{
-	// Liveness answers for the life of the process. It must NOT track readiness: a pod
-	// that reports unhealthy while it waits for its auth gate gets killed and restarted
-	// into the same wait, which is a crash loop caused by the probe rather than by the
-	// service.
-	{path: "/healthz", whenUnready: 200, whenReady: 200, whenDrained: 200},
+	// Liveness answers "can this process still do its job without a restart?". It must
+	// NOT track readiness: a pod that reports unhealthy while it waits for its auth gate
+	// gets killed and restarted into the same wait, which is a crash loop caused by the
+	// probe rather than by the service. It fails only once a component has declared a
+	// state nothing but a restart can clear, and then the kubelet restarts the pod.
+	{path: "/healthz", whenUnready: 200, whenReady: 200, whenDrained: 200, whenNotLive: 503},
 
 	// Readiness gates the data plane on auth being live, and flips back to 503 for the
 	// drain window a SIGTERM opens — that second transition is what lets a terminating
-	// pod leave its Service endpoints before it stops accepting connections.
-	{path: "/readyz", whenUnready: 503, whenReady: 200, whenDrained: 503},
+	// pod leave its Service endpoints before it stops accepting connections. A process
+	// that is not live is not ready either: it must not take traffic for the liveness
+	// window before its restart.
+	{path: "/readyz", whenUnready: 503, whenReady: 200, whenDrained: 503, whenNotLive: 503},
 
 	// Metrics are always scrapable. A scrape that started failing whenever a pod was
-	// draining would blind the dashboards for exactly the window an operator is
-	// watching them.
-	{path: "/metrics", whenUnready: 200, whenReady: 200, whenDrained: 200},
+	// draining — or had stopped being live — would blind the dashboards for exactly the
+	// window an operator is watching them.
+	{path: "/metrics", whenUnready: 200, whenReady: 200, whenDrained: 200, whenNotLive: 200},
 }
 
 func TestRegisterProbesServesTheChartsProbeContract(t *testing.T) {
@@ -80,6 +87,34 @@ func TestRegisterProbesServesTheChartsProbeContract(t *testing.T) {
 	for _, p := range probeContract {
 		if got := status(p.path); got != p.whenDrained {
 			t.Errorf("%s while draining = %d, want %d", p.path, got, p.whenDrained)
+		}
+	}
+
+	// The liveness latch is one-way, so it gets a Microservice of its own, with an OPEN
+	// gate that is not draining: every 503 below is the latch's doing.
+	dead := &Microservice{FunctionalArea: "probe-area-dead"}
+	dead.UseMetricsRegistry(prometheus.NewRegistry())
+	deadGate := NewReadinessGate()
+	deadGate.MarkReadyWithoutAuthSurface()
+	dead.RegisterProbes(deadGate)
+	dead.MarkNotLive(errors.New("broker connection closed permanently"))
+	deadStatus := func(path string) (int, string) {
+		rec := httptest.NewRecorder()
+		dead.Mux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec.Code, rec.Body.String()
+	}
+	for _, p := range probeContract {
+		got, body := deadStatus(p.path)
+		if got != p.whenNotLive {
+			t.Errorf("%s once not live = %d, want %d", p.path, got, p.whenNotLive)
+		}
+		// Port 8080 is the GraphQL port: the reason belongs in the log, not in a body any
+		// caller of the port can read.
+		if got == http.StatusServiceUnavailable && strings.Contains(body, "broker") {
+			t.Errorf("%s leaks the not-live reason in its body: %q", p.path, body)
+		}
+		if p.path == "/healthz" && !strings.Contains(body, "not live") {
+			t.Errorf("/healthz once not live has body %q, want the generic \"not live\"", body)
 		}
 	}
 }
