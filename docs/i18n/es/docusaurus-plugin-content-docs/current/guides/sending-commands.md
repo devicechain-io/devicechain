@@ -213,16 +213,17 @@ flota](./commanding-a-fleet.md). No es un bucle de esta mutación: fija la membr
 tal como estaba en el momento de dispararse, registra qué dispositivos fueron rechazados y
 por qué, y se cancela como una sola operación.
 
-## Cuatro operaciones que no son para ti {#operations-that-are-not-for-you}
+## Cinco operaciones que no son para ti {#operations-that-are-not-for-you}
 
-`markCommandSent`, `releaseHeldCommands` y `parkCommand` aparecen en este esquema pero están
-protegidas por autoridades de **nivel de sistema** (`command:claim`, `command:wake` y
-`command:park`) que un token de acceso de inquilino no lleva. Existen para transportes que
-son dueños de la conexión de un dispositivo — un dispositivo LwM2M drenando su acumulación
-por la sesión que acaba de abrir, un broker informando que un dispositivo regresó, o un
-transporte devolviendo un comando porque el dispositivo hacia el que se publicó resultó ser
-inalcanzable — y llamarlas desde una aplicación competiría con el barrido de entrega por el
-control de una actuación física.
+`markCommandSent`, `confirmCommandDispatch`, `releaseHeldCommands` y `parkCommand` aparecen en
+este esquema pero están protegidas por autoridades de **nivel de sistema** (`command:claim`
+para las dos primeras, `command:wake` y `command:park`) que un token de acceso de inquilino no
+lleva. Existen para transportes que son dueños de la conexión de un dispositivo — un
+dispositivo LwM2M drenando su acumulación por la sesión que acaba de abrir, un adaptador LwM2M
+confirmando que una entrega sigue vigente inmediatamente antes de llevarla a cabo, un broker
+informando que un dispositivo regresó, o un transporte devolviendo un comando porque el
+dispositivo hacia el que se publicó resultó ser inalcanzable — y llamarlas desde una
+aplicación competiría con el barrido de entrega por el control de una actuación física.
 
 `drainableCommands` es la lectura que esos transportes hacen primero, y está protegida por
 **`command:claim`** — la misma autoridad que `markCommandSent`, no una cuarta propia, porque

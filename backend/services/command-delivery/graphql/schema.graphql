@@ -476,6 +476,19 @@ type Mutation {
     # which is a benign race: there is no dispatch, so there is nothing to name and nothing
     # to deliver.
     markCommandSent(token: String!): String
+    # Confirm, immediately before actuating it, that a command a transport RECEIVED on the
+    # live delivery stream is still the dispatch the platform is holding. For a transport that
+    # delivers over its own session: a delivery can arrive late (redelivered after a timeout,
+    # or after a failover), by which time the platform may have re-armed or re-sent the
+    # command, and actuating the late copy would move the hardware a second time.
+    #
+    # `dispatchNonce` is the value carried in the delivery envelope. Returns a NEW dispatch
+    # nonce when the delivery is confirmed, and the caller must quote that new value when it
+    # reports the command's outcome — the command is now on the new dispatch, and an answer
+    # naming the old one is refused. Returns null when the delivery names a dispatch the
+    # command is no longer on (re-armed, re-sent, answered, cancelled, or its batch called
+    # off); the caller must then discard it without actuating.
+    confirmCommandDispatch(token: String!, dispatchNonce: String!): String
     # Hand back a command whose transport found the device UNREACHABLE, moving it
     # SENT -> PARKED so the record says it went nowhere. The platform decides to publish
     # from presence — is the device registered — but a queue-mode device can be registered

@@ -2203,6 +2203,36 @@ Si la credencial de la cuenta de sistema cambia, por ejemplo durante una rotaci�
 un pod cuya conexión el broker corta antes de que el propio pod se sustituya se reinicia una vez.
 Cuente con verlo como un reinicio en el recuento.
 
+#### Los comandos LwM2M se confirman inmediatamente antes de llegar al dispositivo
+
+Un comando entregado a un dispositivo LwM2M ahora se confirma con command-delivery inmediatamente
+antes de que el adaptador lo lleve a cabo. Una entrega que la plataforma ya rearmó o reenvió se
+descarta en lugar de llegar al dispositivo una segunda vez. Una entrega así puede aparecer tarde
+tras una caída o una conmutación por error, y antes de esta versión podía actuar sobre un
+dispositivo al que una entrega posterior ya había hecho actuar. Si no se puede contactar con
+command-delivery, los comandos LwM2M esperan y se reintentan. Nunca se envían sin confirmar.
+
+Lo que cambia y puedes ver:
+
+- **Cancelar un lote ahora también detiene los comandos LwM2M que se publicaron pero aún no habían
+  llegado a su dispositivo.** Registran `CANCELLED`. El resultado de la cancelación todavía los
+  cuenta como ya enviados, porque eso eran cuando se ejecutó la cancelación.
+- **Para un comando LwM2M, `sentTime` ahora registra cuándo se le envió realmente al
+  dispositivo.** Puede ser posterior a cuando el comando se publicó por primera vez.
+- **`lwm2m-ingest` se niega a arrancar sin `infrastructure.commandDelivery`** siempre que tenga
+  identidades de dispositivo que atender. El chart siempre lo define, así que solo afecta a una
+  configuración hecha a mano.
+- **Métricas.** `lwm2m-ingest` añade `commands_stale_dispatch_total` (entregas descartadas porque
+  la plataforma ya había avanzado: una actuación duplicada evitada, no un fallo) y
+  `command_live_claim_errors_total` (comandos no llevados a cabo porque command-delivery no pudo
+  confirmarlos). Se elimina `command_drain_dedup_total`.
+- **Durante la propia actualización,** un `lwm2m-ingest` nuevo no puede confirmar comandos con un
+  command-delivery que todavía está en la versión anterior. Un comando LwM2M emitido en esa
+  ventana puede retrasarse varios minutos. Si agota sus reintentos antes de que ambos servicios
+  estén actualizados, se rearma y se entrega en el siguiente despertar del dispositivo.
+
+No hay que hacer nada durante la actualización.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

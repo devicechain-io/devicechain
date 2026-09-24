@@ -179,13 +179,21 @@ Two limits are worth knowing, because both are deliberate:
   delivered live to whoever is connected at that instant, so a command that appears to have
   gone nowhere is indistinguishable from one that arrived and whose answer was lost. For
   those, the behaviour is unchanged.
-- **Re-arming accepts that a command may be carried out twice.** A command with no outcome
-  recorded is not the same thing as a command that was never carried out — the device may
-  have acted and the report of it lost. Re-arming is still the better answer, because the
-  alternative is a guaranteed `TIMEOUT` on a command the platform genuinely never delivered,
-  written against a device that did nothing wrong. Treat it as the same at-least-once
-  guarantee that applies to a hand-back: read a re-armed command as "it will be delivered",
-  not as "it had not been carried out".
+- **Re-arming accepts that a command may be carried out twice when its answer was lost.** A
+  command with no outcome recorded is not the same thing as a command that was never carried
+  out — the device may have acted and the report of it lost. Re-arming is still the better
+  answer, because the alternative is a guaranteed `TIMEOUT` on a command the platform
+  genuinely never delivered, written against a device that did nothing wrong. Treat it as the
+  same at-least-once guarantee that applies to a hand-back: read a re-armed command as "it
+  will be delivered", not as "it had not been carried out".
+
+A late *delivery* is a different matter, and it cannot cause a second actuation. After a long
+LwM2M outage the original delivery of a re-armed command can still turn up — redelivered after
+a failover, or picked up for the first time once the adapter is running again. Before an LwM2M
+command reaches a device, the adapter confirms with the platform that the delivery it is
+holding is still the command's current one, and a delivery the platform has since re-armed or
+re-sent is discarded instead of carried out. The confirmation moves the command's `sentTime`
+to the moment the device was actually sent it.
 
 ### How much backlog a tenant may hold {#held-command-ceiling}
 
@@ -327,6 +335,12 @@ devices act, the responses are discarded, and the record says the operation was 
 Cancelling a **single** command draws exactly the same line: `QUEUED`, `HELD` and `PARKED`
 are cancelled, and a `SENT` command is returned unchanged rather than being driven to
 `CANCELLED`. See [Cancel one](../guides/sending-commands.md#cancel-one).
+
+LwM2M devices get one more stop. The LwM2M adapter confirms each command with the platform
+immediately before it carries it out, so a batch command that was published but had not yet
+reached its device when the batch was cancelled is stopped there and records `CANCELLED`. The
+batch's cancel result still counts it as already sent, because that is what it was at the
+moment of the cancel.
 
 A batch cancel never refuses. A brake that declined to engage because part of the fleet had
 already moved would leave the rest of the fleet commanded, which is the worst available

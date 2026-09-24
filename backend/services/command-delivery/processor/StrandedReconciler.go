@@ -21,17 +21,30 @@ import (
 // learned about it, before this pass will treat it as stranded rather than in flight.
 //
 // 🔑 IT IS DERIVED, NOT CHOSEN, AND EVERY TERM IS SOMEONE ELSE'S NUMBER. The question it
-// answers is "could the platform still be working on this?", and the platform's own
-// retry budget is the only honest answer:
+// answers is "is the platform probably still working on this?", and the platform's own
+// retry budget is the best available answer:
 //
-//   - messaging.MaxDeliver * messaging.AckWait is the longest the broker can still be
-//     redelivering the dispatch — JetStream holds an unacked message for AckWait before
-//     handing it to someone else, MaxDeliver times over.
+//   - messaging.MaxDeliver * messaging.AckWait is the longest the broker can keep
+//     redelivering the dispatch ONCE IT HAS BEEN DELIVERED — JetStream holds an unacked
+//     message for AckWait before handing it to someone else, MaxDeliver times over.
 //   - config.MaxSweepIntervalSeconds adds the one sweep tick that can elapse before the
 //     platform next looks at the row at all.
 //
-// Anything inside that window is a command still being worked on, and parking it would
-// race the very machinery that is about to resolve it. Today the sum is 600s.
+// Today the sum is 600s.
+//
+// 🔴 IT IS A LATENCY BOUND, NOT A SAFETY BOUND, AND AN EARLIER VERSION OF THIS COMMENT
+// IMPLIED THE OPPOSITE. The first term covers redelivery only AFTER a first delivery,
+// because AckWait starts when a consumer pulls the message. An envelope that no consumer has
+// pulled yet — every LwM2M replica down, a gap between leadership terms, a stalled reader —
+// has no timer running at all, and can arrive after ANY grace. What makes that safe is not
+// this horizon but the transport: the LwM2M dispatcher confirms its dispatch with
+// ConfirmDispatch immediately before actuating, quoting the envelope's nonce, so a late
+// envelope for a row this pass has since re-armed names a nonce the row no longer carries and
+// is discarded instead of actuated. The confirmation also restamps sent_time, so a row being
+// actuated right now is not past this horizon. The grace therefore only decides how soon a
+// row is re-armed: shorter would re-arm rows that are probably still in flight (which the
+// confirmation then turns into a discarded delivery rather than a double actuation), longer
+// would leave genuinely stranded rows waiting.
 //
 // 🔴 THE SECOND TERM IS THE SWEEP'S CEILING, NOT ITS DEFAULT, AND THAT IS THE WHOLE
 // REASON THIS STILL HOLDS. The sweep cadence became operator-configurable; deriving this
@@ -45,7 +58,7 @@ import (
 // accept, at the cost of waiting longer than strictly necessary at the default. That trade
 // is the right way round: this is a FLOOR on a failure that is already minutes to hours
 // from its visible consequence, so being conservative costs a little latency on a rare
-// path, while being short races the messaging layer on every one.
+// path, while being short re-arms rows the messaging layer is still delivering.
 //
 // 🔴 THE POINT OF DERIVING IT IS THAT THE DRIFT WOULD OTHERWISE BE SILENT. Writing 600s
 // here as a literal would keep working — wrongly — after any of those three values
@@ -80,8 +93,9 @@ const (
 	//
 	// 🔑 THIS SERIES SHOULD BE FLAT AT ZERO, WHICH IS WHY IT IS WORTH COUNTING. Both
 	// writers that put a row into SENT (MarkSent and MarkSentByToken) stamp status,
-	// sent_time and dispatch_nonce in ONE update, so a SENT row without a nonce should
-	// not exist. A non-zero rate here means something reached SENT by another route, and
+	// sent_time and dispatch_nonce in ONE update, and the third (ConfirmDispatch) only
+	// replaces a nonce the row already carries, so a SENT row without a nonce should not
+	// exist. A non-zero rate here means something reached SENT by another route, and
 	// that is worth knowing about for reasons well beyond this pass.
 	skipNoNonce = "no_nonce"
 	// skipRaced: the park matched no row, so the command left SENT between the scan and

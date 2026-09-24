@@ -2066,6 +2066,35 @@ If the system-account credential changes, for example during a credential rotati
 connection the broker drops before the pod itself is replaced restarts once. Expect that to show as
 a restart count.
 
+#### LwM2M commands are confirmed immediately before they reach the device
+
+A command delivered to an LwM2M device is now confirmed with command-delivery immediately before
+the adapter carries it out. A delivery the platform has already re-armed or re-sent is discarded
+instead of reaching the device a second time. Such a delivery can turn up late after an outage or a
+failover, and before this release it could actuate a device that a later delivery had already
+actuated. If command-delivery cannot be reached, LwM2M commands wait and are retried. They are never
+sent unconfirmed.
+
+What changes that you can see:
+
+- **Cancelling a batch now also stops LwM2M commands that were published but had not yet reached
+  their device.** They record `CANCELLED`. The cancel result still counts them as already sent,
+  because that is what they were when the cancel ran.
+- **For an LwM2M command, `sentTime` now records when the device was actually sent it.** That can be
+  later than when the command was first published.
+- **`lwm2m-ingest` refuses to start without `infrastructure.commandDelivery`** whenever it has device
+  identities to serve. The chart always sets it, so only a hand-built configuration is affected.
+- **Metrics.** `lwm2m-ingest` adds `commands_stale_dispatch_total` (deliveries discarded because the
+  platform had already moved on: a duplicate actuation avoided, not a fault) and
+  `command_live_claim_errors_total` (commands not carried out because command-delivery could not
+  confirm them). `command_drain_dedup_total` is removed.
+- **During the upgrade itself,** a new `lwm2m-ingest` cannot confirm commands with a command-delivery
+  that is still on the previous version. An LwM2M command issued in that window can be delayed by
+  several minutes. If it runs out of retries before both services are upgraded, it is re-armed and
+  delivered on the device's next wake.
+
+Nothing needs doing at the upgrade.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

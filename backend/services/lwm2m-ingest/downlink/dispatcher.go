@@ -30,10 +30,12 @@ type deliveryEnvelope struct {
 	Name        string           `json:"name"`
 	Payload     *json.RawMessage `json:"payload,omitempty"`
 
-	// DispatchNonce names the claim this publish belongs to. It is quoted back when parking
-	// an undeliverable command, so a request still in redelivery cannot hand back a row that
-	// has since been re-claimed and actuated. Empty means the publisher stamped none, and
-	// parking is then declined rather than attempted on status alone (see park).
+	// DispatchNonce names the claim this publish belongs to. It is quoted back when
+	// confirming the dispatch before actuating (claimLive), so a late or redelivered copy
+	// cannot actuate a row that has since been re-armed or re-dispatched, and when parking an
+	// undeliverable command, so a request still in redelivery cannot hand back a row that has
+	// since been re-claimed and actuated. Empty means the publisher stamped none: the command
+	// is then not actuated, and parking is declined rather than attempted on status alone.
 	DispatchNonce string `json:"dispatchNonce,omitempty"`
 }
 
@@ -49,9 +51,9 @@ type responseEnvelope struct {
 
 	// DispatchNonce names the dispatch this outcome answers, and command-delivery REFUSES a
 	// response that carries none. This adapter answers on the device's behalf, so it quotes the
-	// nonce it was given: the delivery envelope's on the live path, and the one the claim
-	// returned on the wake-drain path, where there is no envelope and the claim is the only
-	// place the value exists.
+	// nonce its claim returned: the live confirmation's on the live path (NOT the envelope's,
+	// which the confirmation superseded), and the drain claim's on the wake-drain path, where
+	// there is no envelope at all.
 	DispatchNonce string `json:"dispatchNonce"`
 }
 
@@ -119,17 +121,22 @@ type drainFetcher interface {
 
 // commandClaimer is the WRITE half of the drain (*CommandClaimer satisfies it): it moves a
 // still-dispatchable command to SENT and reports whether THIS caller won it. It is a
-// separate, one-method seam beside drainFetcher for the same reason drainFetcher is one —
+// separate seam beside drainFetcher for the same reason drainFetcher is one —
 // so the claim-then-dispatch ordering below is unit-testable without a live command-delivery
 // or a minted service token, including its LOST and ERRORED branches, which are the two that
 // must not actuate and are therefore the two most easily faked past.
 //
-// nil disables claiming, which means a backlogged (HELD or PARKED) command is NOT dispatched
-// (see claim below) — fail-closed, and it applies to the WHOLE drainable set, not just the
-// held half, because an unclaimed dispatch is a duplicate actuation waiting for the next
-// sweep tick.
+// It also carries the LIVE-path claim (ClaimDispatch), which confirms a command received on the
+// delivery stream immediately before it actuates — see claimLive.
+//
+// nil disables claiming, which means NO command is dispatched at all — neither a backlogged
+// (HELD or PARKED) one (see claim) nor a live one (see claimLive). That is fail-closed on
+// purpose: an unclaimed dispatch is a duplicate actuation waiting to happen. The service
+// refuses to start without the command-delivery coordinate this is built from, so a nil
+// claimer is a test fixture, never a deployment.
 type commandClaimer interface {
 	Claim(ctx context.Context, tenant, commandToken string) (string, bool, error)
+	ClaimDispatch(ctx context.Context, tenant, commandToken, dispatchNonce string) (string, bool, error)
 }
 
 // commandParker is the HAND-BACK seam (*CommandParker satisfies it): it moves a command this
@@ -143,8 +150,9 @@ type commandClaimer interface {
 //
 // nil disables parking, which degrades to the behaviour before PARKED existed: the row stays
 // SENT and rides its TTL. That is a worse outcome, not an unsafe one, so unlike claiming this
-// seam fails OPEN — refusing to ack instead would wedge the consumer on an instance that
-// simply has no command-delivery endpoint configured.
+// seam fails OPEN. The service refuses to start without the command-delivery coordinate, so
+// in a deployment the parker is always wired; nil exists for the tests that construct a
+// dispatcher without one.
 type commandParker interface {
 	Park(ctx context.Context, tenant, commandToken, dispatchNonce string) (bool, error)
 }
@@ -169,11 +177,17 @@ type Metrics struct {
 	Poison        prometheus.Counter // ack-dropped: unparseable subject tenant or envelope
 	ResponseFails prometheus.Counter // a command response we could not publish after local retries (outcome lost to TTL)
 	// L4b wake-drain instruments (ADR-075). Drained/DrainErrors are the operationally interesting
-	// signals; DrainDropped/DrainDedup are load/health signals.
+	// signals; DrainDropped is a load/health signal.
 	Drained      prometheus.Counter // a held command dispatched to a device on its Register/Update wake
 	DrainErrors  prometheus.Counter // a wake-drain fetch that failed (retried on the device's next wake)
 	DrainDropped prometheus.Counter // a wake-drain trigger dropped because the device's shard was busy (next wake re-triggers)
-	DrainDedup   prometheus.Counter // a command skipped because it was already dispatched (drain/live overlap) — a re-actuation avoided
+	// Live-path confirmation outcomes, split for the reason the drain's claim outcomes are.
+	// StaleDispatch is BENIGN: a late or duplicate delivery the platform had already re-armed
+	// or re-sent, discarded rather than actuated — a duplicate actuation avoided. LiveClaimErrors
+	// is a FAULT: the confirmation could not be established (or the envelope named no dispatch),
+	// so a live command was not actuated and waits for redelivery.
+	StaleDispatch   prometheus.Counter
+	LiveClaimErrors prometheus.Counter
 	// Claim outcomes, split because they mean opposite things operationally. LOST is BENIGN —
 	// someone else owns that command and we correctly declined to actuate it twice. ERRORS is a
 	// FAULT: command-delivery could not be reached, so a claimable command went undispatched
@@ -212,22 +226,6 @@ const (
 	responsePublishAttempts = 3
 	// responsePublishBackoff paces the local response-publish retry.
 	responsePublishBackoff = 250 * time.Millisecond
-	// dedupeTTL bounds how long a just-dispatched (deviceToken, commandToken) suppresses a
-	// re-dispatch of the SAME command by the other path — a wake drain fetching a row the live
-	// stream is also delivering, or vice versa. It only needs to cover the window between an op
-	// issuing and its command-responses reply terminalizing the row (after which the drain no longer
-	// fetches it), so a modest TTL a few times the op timeout is ample.
-	//
-	// 🔑 IT CARRIES MUCH LESS WEIGHT THAN IT USED TO, AND THAT IS THE POINT OF PARKED. The drain
-	// once dispatched out of SENT with NO CLAIM, so this cache was the only thing between an
-	// ambiguous SENT row and a second physical actuation — a job it was never fit for, being
-	// per-pod and TTL-bounded. Every drained row is claimed now, so the exclusion is structural
-	// and this is back to being what it says it is below: an optimization.
-	dedupeTTL = 60 * time.Second
-	// dedupeMax caps the dedup set; beyond it the set is pruned/cleared. The dedup is a re-actuation
-	// OPTIMIZATION, not a correctness guarantee (seal-fate and the drain's claim already bound
-	// re-fire), so clearing under a pathological burst degrades to the documented at-least-once.
-	dedupeMax = 8192
 )
 
 // Dispatcher consumes device-commands and, for a command addressed to a device this adapter serves
@@ -252,7 +250,6 @@ type Dispatcher struct {
 	tenantDeleted func(tenant string) bool
 	workers       int
 	opTimeout     time.Duration
-	dedupe        *dedupe
 	// queuesPtr publishes the CURRENT leadership term's worker channels so Drain (called from the
 	// /rd handler goroutine, off the Run loop) can enqueue a wake-drain onto a device's shard. It is
 	// nil whenever this replica is not the serving leader (before Run, and after it returns), so a
@@ -348,7 +345,6 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		tenantDeleted: opts.TenantDeleted,
 		workers:       opts.Workers,
 		opTimeout:     opts.OpTimeout,
-		dedupe:        newDedupe(dedupeTTL, dedupeMax),
 		ready:         make(chan struct{}),
 	}
 }
@@ -627,13 +623,18 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 		d.dropNonLive(reach, w.msg)
 		return
 	}
-	// Drain/live dedup (L4b): this command may already have been dispatched by a wake drain that
-	// fetched its PARKED row moments ago (drain and live share this device's one worker, but a
-	// fetch can still overlap a stream delivery). Re-running it would re-actuate the device, so skip
-	// the op and ACK (seal-fate — it was actuated, must not redeliver).
-	if d.dedupe.recentlyDispatched(w.tenant, w.env.DeviceToken, w.env.Token) {
-		incr(d.metrics.DrainDedup, 1)
-		ackDrop(w.msg)
+	// Confirm the dispatch on its row BEFORE actuating: the live-path claim. See claimLive for
+	// why a live envelope cannot simply be trusted.
+	nonce, ok := d.claimLive(ctx, w)
+	if !ok {
+		return // claimLive has already settled (or deliberately not settled) the message
+	}
+	if ctx.Err() != nil {
+		// Evicted between the confirmation and the op. The op never ran, but the row is now on
+		// the NEW dispatch, so the redelivered envelope (which quotes the old one) will lose its
+		// own confirmation on the next leader. Hand the row back so the next wake drain delivers
+		// it; the message is left unacked, and its redelivery is then discarded as stale.
+		d.parkConfirmed(w, nonce)
 		return
 	}
 
@@ -645,14 +646,110 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 	// Either way the op is ISSUED, so the fate is sealed below: this message must NEVER redeliver
 	// (that would re-actuate a physical device). On a mid-op eviction the publish is skipped (the
 	// result is an unreliable artifact of losing the conn — a spurious FAILED) and the command rides
-	// SENT→TIMEOUT; only the PRE-op eviction check (top of dispatch) redelivers, where the op never ran.
+	// SENT→TIMEOUT. The PRE-op eviction checks (top of dispatch, and after the confirmation)
+	// are the only ones that leave the message for redelivery, and in both the op never ran.
+	//
+	// 🔴 The response quotes the CONFIRMED nonce, not the envelope's: the confirmation moved the
+	// row onto a new dispatch, and command-delivery matches an answer against the current one.
 	d.executeAndReport(ctx, conn, w.tenant, w.env.DeviceToken, w.env.Name, w.env.Token,
-		w.env.DispatchNonce, payload)
-	d.dedupe.mark(w.tenant, w.env.DeviceToken, w.env.Token)
+		nonce, payload)
 	// Seal fate: the CoAP op already ran, so ack whether or not the response published — a publish we
 	// could not land leaves the command to TIMEOUT, which is the correct terminal for a lost outcome
 	// and strictly safer than a second actuation.
 	ackDrop(w.msg)
+}
+
+// claimLive confirms a live command's dispatch with command-delivery immediately before it is
+// actuated, and reports the NEW dispatch nonce to quote in its response. ok=false means do not
+// actuate, and the message has already been dealt with as below.
+//
+// 🔴 WHY THE LIVE PATH CLAIMS. The delivery sweep claims a row and publishes it, and a
+// publish can reach this dispatcher LATE: redelivered after it waited out its ack deadline
+// queued behind a slow device, redelivered to a new leader after a failover, or pulled for
+// the first time long after it was published because no replica was reading — and an
+// envelope nobody has pulled has no ack timer running at all. In the meantime command-delivery
+// may have re-armed the row (the stranded-SENT pass parks it) and a wake drain may have
+// claimed and actuated it. Before this confirmation the live path actuated whatever arrived,
+// so that sequence moved the hardware twice. The confirmation is a conditional UPDATE on
+// (SENT, envelope nonce) that rotates the nonce, so the late envelope loses, and so does every
+// later redelivered copy of an envelope that was already confirmed once.
+//
+// Its outcomes, and what each does with the message:
+//   - WON: actuate, quoting the returned nonce.
+//   - LOST: the dispatch this envelope names is gone. Ack-drop and count StaleDispatch, then
+//     nudge a wake drain for the device: the usual cause is that the row was re-armed to
+//     PARKED, and a device that stays connected sends no wake of its own, so without the
+//     nudge that row would wait for a re-handshake. Drain is non-blocking and targets this
+//     worker's own shard, so calling it from here cannot deadlock.
+//   - ERROR: FAIL CLOSED. Count LiveClaimErrors and leave the message UNACKED, so it
+//     redelivers at the ack deadline — never Nak'd, which would spend the whole delivery
+//     budget in the instant of an outage. Actuating on a confirmation we could not obtain is
+//     the one outcome that cannot be taken back.
+//   - ERROR because the term was evicted: return unacked and uncounted, as claim does — it
+//     is the eviction, not command-delivery, and counting it would make every failover
+//     look like an outage.
+//   - NO NONCE in the envelope, or NO CLAIMER wired: refuse. An envelope with no nonce names
+//     no dispatch, so no confirmation can ever succeed and redelivering it only burns the
+//     budget; it is ack-dropped and counted as an error (a publisher fault). A nil claimer
+//     is a wiring fault; the command is left unacked and counted, like any other failure to
+//     establish ownership.
+//
+// ⚠️ AN ERROR CAN REORDER ONE DEVICE'S COMMANDS, AND THAT IS A KNOWN GAP RATHER THAN A
+// PROPERTY. The unacked message redelivers at the ack deadline; if command-delivery recovers
+// before then, a LATER command for the same device can arrive, be confirmed and actuate
+// first. Closing it needs a per-device gate that holds the device's later live commands until
+// the backlog has been drained in order, and that gate belongs with the dispatcher's
+// full-shard handling, which is where it is built.
+func (d *Dispatcher) claimLive(ctx context.Context, w work) (string, bool) {
+	if w.env.DispatchNonce == "" {
+		incr(d.metrics.LiveClaimErrors, 1)
+		log.Warn().Str("tenant", w.tenant).Str("command", w.env.Token).
+			Msg("Refusing an LwM2M command whose delivery names no dispatch; it cannot be confirmed, so it is not actuated.")
+		ackDrop(w.msg)
+		return "", false
+	}
+	if d.claimer == nil {
+		incr(d.metrics.LiveClaimErrors, 1)
+		log.Debug().Str("tenant", w.tenant).Str("command", w.env.Token).
+			Msg("Not actuating a live LwM2M command: no command claimer is wired, so its dispatch cannot be confirmed.")
+		return "", false
+	}
+	nonce, won, err := d.claimer.ClaimDispatch(ctx, w.tenant, w.env.Token, w.env.DispatchNonce)
+	if err != nil {
+		if ctx.Err() == nil {
+			incr(d.metrics.LiveClaimErrors, 1)
+			log.Debug().Err(err).Str("tenant", w.tenant).Str("command", w.env.Token).
+				Msg("Could not confirm a live LwM2M command's dispatch; not actuating it, leaving it unacked to retry on redelivery.")
+		}
+		return "", false
+	}
+	if !won {
+		incr(d.metrics.StaleDispatch, 1)
+		ackDrop(w.msg)
+		d.Drain(w.tenant, w.env.DeviceToken)
+		return "", false
+	}
+	return nonce, true
+}
+
+// parkConfirmedTimeout bounds the best-effort hand-back after an eviction. It runs on a context
+// detached from the evicted term's, which is already cancelled.
+const parkConfirmedTimeout = 5 * time.Second
+
+// parkConfirmed hands back a row this dispatcher confirmed but did not actuate because its term
+// was evicted in between. It quotes the CONFIRMED nonce — the envelope's no longer matches the
+// row. It is best effort: if it fails, the row stays SENT on a dispatch nobody holds and the
+// stranded-SENT pass re-arms it once its grace has passed.
+func (d *Dispatcher) parkConfirmed(w work, nonce string) {
+	if d.parker == nil {
+		return
+	}
+	parkCtx, cancel := context.WithTimeout(context.Background(), parkConfirmedTimeout)
+	defer cancel()
+	if _, err := d.parker.Park(parkCtx, w.tenant, w.env.Token, nonce); err != nil {
+		log.Debug().Err(err).Str("tenant", w.tenant).Str("command", w.env.Token).
+			Msg("Could not hand back a confirmed LwM2M command after losing leadership; the stranded-command pass will re-arm it.")
+	}
 }
 
 // drain pulls a waking device's backlogged commands (HELD or PARKED) from command-delivery and
@@ -685,15 +782,13 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 		if reach != ReachLive {
 			return // the device dropped mid-drain: the remaining rows are untouched, for the next wake
 		}
-		// Neither of the two skips below costs this wake a delivery, even though the page is now
-		// exactly maxDrainPerWake rows with no over-fetch: a row the live path just dispatched is
-		// SENT (not drainable, so it was never on the page), and a lost claim means someone else
-		// has already moved the row out of the dispatchable set. A skipped row is one that has
-		// left the backlog, not a slot taken from a row still awaiting delivery. See
+		// A lost claim below does not cost this wake a delivery, even though the page is now
+		// exactly maxDrainPerWake rows with no over-fetch: it means someone else has already
+		// moved the row out of the dispatchable set, so a skipped row is one that has left the
+		// backlog, not a slot taken from a row still awaiting delivery. (A row the live path just
+		// dispatched is SENT, which is not drainable, so it was never on the page.) See
 		// maxDrainPerWake in fetcher.go.
-		if d.dedupe.recentlyDispatched(job.tenant, job.deviceToken, c.Token) {
-			continue // already fired by the live path or a prior drain — do not re-actuate
-		}
+		//
 		// Take the command out of command-delivery's dispatchable set BEFORE actuating. A
 		// command we could not claim is one we must not fire.
 		nonce, won := d.claim(ctx, job.tenant, c)
@@ -701,7 +796,6 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 			continue
 		}
 		d.executeAndReport(ctx, conn, job.tenant, job.deviceToken, c.Name, c.Token, nonce, c.Payload)
-		d.dedupe.mark(job.tenant, job.deviceToken, c.Token)
 		incr(d.metrics.Drained, 1)
 	}
 }
@@ -718,10 +812,10 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 // the exclusion structural: whoever wins the conditional UPDATE actuates, everyone else
 // declines.
 //
-// 🔴 The in-memory dedupe is NOT this guarantee and must never be mistaken for it. It is
-// per-pod and TTL-bounded, so it says nothing about another replica or about this pod after a
-// restart — exactly the two situations a leadership change produces. It is defence in depth
-// against the drain/live overlap within one pod, no more.
+// 🔴 Nothing held in this pod's memory could be this guarantee: it would say nothing about
+// another replica or about this pod after a restart — exactly the two situations a leadership
+// change produces. (A per-pod recently-dispatched cache used to sit beside the claims; the
+// live-path confirmation made every route to a device claimed on its row, and it was removed.)
 //
 // 🔴 EVERY DRAINED ROW IS CLAIMED, WITH NO EXCEPTION, AND THE EXCEPTION THIS REPLACES WAS
 // THE PLATFORM'S ONLY UNCLAIMED DISPATCH. A SENT row used to return true here immediately,
@@ -729,7 +823,7 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 // there. The argument was sound and the premise was not: a SENT row could be a command that
 // went NOWHERE — published to a registered-but-sleeping device and ack-dropped by this very
 // dispatcher — so the drain was re-dispatching commands whose only protection against a
-// second actuation was the per-pod dedupe disclaimed two paragraphs above. Those rows are
+// second actuation was a per-pod cache of the kind disclaimed two paragraphs above. Those rows are
 // now PARKED, which is claimable, so the exclusion is structural for the whole backlog.
 //
 // 🔑 Both branches are LIVE, which neither was when this was first written: the presence
@@ -795,7 +889,7 @@ func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) (
 // function's. It never acks or redelivers anything itself.
 //
 // dispatchNonce names the dispatch being answered and is quoted straight into the response —
-// from the delivery envelope on the live path, from the claim on the drain path. It is not
+// from the live confirmation on the live path, from the claim on the drain path. It is not
 // re-derived or defaulted here: command-delivery refuses an answer that names no dispatch, and
 // an answer this adapter invented a name for would be worse than one it refused to send.
 func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant, deviceToken, name,
@@ -959,66 +1053,5 @@ func incr(c prometheus.Counter, n int) {
 func labelInc(v *prometheus.CounterVec, op string, n int) {
 	if v != nil && n > 0 {
 		v.WithLabelValues(op).Add(float64(n))
-	}
-}
-
-// dedupe is a small time-bounded set of recently-dispatched (deviceToken, commandToken) keys that
-// suppresses a re-dispatch of the same command by the OTHER path (a wake drain fetching a PARKED
-// row the live stream just delivered, or vice versa) — a re-actuation avoided. It is an
-// optimization, NOT a correctness guarantee: seal-fate, the fact that the drain only reads rows
-// still in drainStatuses, and the claim now taken before EVERY drained dispatch already bound
-// re-fire, so under a pathological burst the set may be cleared, degrading to the platform's
-// documented at-least-once actuation posture rather than growing without bound. Safe for
-// concurrent use (different devices dispatch on different shard workers).
-type dedupe struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
-	ttl  time.Duration
-	max  int
-}
-
-func newDedupe(ttl time.Duration, max int) *dedupe {
-	return &dedupe{seen: make(map[string]time.Time), ttl: ttl, max: max}
-}
-
-// dedupeKey includes the TENANT: device tokens AND command tokens are only per-tenant unique
-// (ADR-042), so two tenants can each legitimately have device "pump-1" carrying command "cmd-1".
-// Keying without the tenant would let one tenant's dispatch suppress the other's — the live path
-// would ack the second tenant's message without executing OR publishing, silently losing the command
-// (it stays SENT with no wake to drain it on an always-connected device). This is the ADR-044 "every
-// key adds tenant_id" shape.
-func dedupeKey(tenant, deviceToken, commandToken string) string {
-	return tenant + "\x00" + deviceToken + "\x00" + commandToken
-}
-
-// recentlyDispatched reports whether (tenant, deviceToken, commandToken) was marked within the TTL.
-func (d *dedupe) recentlyDispatched(tenant, deviceToken, commandToken string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	t, ok := d.seen[dedupeKey(tenant, deviceToken, commandToken)]
-	return ok && time.Since(t) < d.ttl
-}
-
-// mark records (tenant, deviceToken, commandToken) as dispatched now, pruning first if at capacity.
-func (d *dedupe) mark(tenant, deviceToken, commandToken string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.seen) >= d.max {
-		d.pruneLocked()
-	}
-	d.seen[dedupeKey(tenant, deviceToken, commandToken)] = time.Now()
-}
-
-// pruneLocked drops expired keys; if the set is still at capacity (a pathological burst of distinct
-// live commands within the TTL) it is cleared wholesale — the dedup is best-effort, so shedding it
-// degrades to at-least-once rather than leaking memory. The caller holds d.mu.
-func (d *dedupe) pruneLocked() {
-	for k, t := range d.seen {
-		if time.Since(t) >= d.ttl {
-			delete(d.seen, k)
-		}
-	}
-	if len(d.seen) >= d.max {
-		d.seen = make(map[string]time.Time)
 	}
 }

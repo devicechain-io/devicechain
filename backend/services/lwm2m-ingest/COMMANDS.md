@@ -97,7 +97,7 @@ Read/Write/Execute mapping as the live path, on the same per-device worker (so a
 or reorders the device's live commands).
 
 🔴 **Every drained row is CLAIMED before it actuates** (`downlink/claimer.go` → `markCommandSent`),
-and this — not the in-process dedup cache — is L4b's correctness guarantee. A drain that ran the
+and this is L4b's correctness guarantee. A drain that ran the
 CoAP op without claiming would leave a `HELD` row `HELD`, and `HELD` is not a resting place:
 `command-delivery`'s reconciler releases a hold back to `QUEUED` the moment the device reads as
 present, which *this very registration* makes true. The next delivery sweep then publishes it down
@@ -106,10 +106,42 @@ is a conditional UPDATE that reports whether *this* caller won it, so the exclus
 whoever wins actuates, everyone else declines. A claim that **errors** does not dispatch (fail
 closed — the row is still dispatchable and the device's next wake retries).
 
-The in-process dedup cache (60s, per-pod, `dedupeTTL`) still exists, but it is now only an
-**optimization** against the drain/live overlap inside one pod. It is per-pod and TTL-bounded, so it
-says nothing about another replica or about this pod after a restart — the two situations a
-leadership change produces. Do not read it as a re-actuation guarantee.
+### The live path is claimed too
+
+A command that arrives on the delivery stream for a **connected** device is **confirmed with
+`command-delivery` immediately before it actuates** (`downlink/claimer.go` →
+`confirmCommandDispatch`, called from `claimLive` in `dispatcher.go`), quoting the envelope's
+`dispatchNonce`. 🔴 **A live envelope can arrive late**: redelivered after it waited out its ack
+deadline behind a slow device, redelivered to a new leader, or pulled for the first time long after
+it was published because no replica was reading (an envelope nobody has pulled has no ack timer
+running at all). By then `command-delivery`'s stranded-`SENT` pass may have re-armed the row to
+`PARKED` and a wake drain may have carried it out. Before the confirmation the live path actuated
+whatever arrived, so that sequence moved the hardware twice.
+
+The confirmation is one conditional UPDATE on `(status = SENT, dispatch_nonce = N)` that **rotates
+the nonce** and restamps `sent_time`:
+
+- a late envelope names a dispatch the row is no longer on, loses, and is **discarded** (acked,
+  counted on `commands_stale_dispatch_total`), and a wake drain is nudged for the device — the
+  usual cause is a re-armed `PARKED` row, and a device that stays connected sends no wake of its own;
+- every redelivered copy of an envelope that was already confirmed loses the same way;
+- the response then quotes the **new** nonce — `command-delivery` matches an answer against the
+  row's current one;
+- a confirmation that **errors** fails closed: the command is not actuated, the message is left
+  unacked to redeliver at the ack deadline (`command_live_claim_errors_total`), never Nak'd;
+- a command whose **batch was called off** before it actuated is stopped here and lands on
+  `CANCELLED`.
+
+`status = SENT` is not redundant with the nonce: a park keeps the nonce, so a confirmation on the
+nonce alone would match a `PARKED` row and actuate a command the drain is also about to claim.
+
+⚠️ **A confirmation error can reorder one device's commands**: if `command-delivery` recovers before
+the unacked message redelivers, a later command for the same device can be confirmed and actuated
+first. The per-device gate that closes this belongs with the full-shard handling.
+
+There is no per-pod dedup cache any more. It used to sit beside the claims as an optimization; with
+every route to a device claimed on its row it guarded nothing, and it said nothing about another
+replica or about this pod after a restart in any case.
 
 **Oldest-first is achieved server-side.** The drain calls `command-delivery`'s dedicated
 `drainableCommands(deviceToken:, limit:)` query, which applies the status set, the expiry horizon,
@@ -122,9 +154,9 @@ This replaced a client-side workaround: the general `commands` query had no `ORD
 numeric `id` and truncate — a per-wake, per-device cost paid on every registration to route around a
 missing `ORDER BY`. Two things went with it. Expiry is now evaluated against the **database's**
 clock rather than the pod's, so a skewed replica can no longer drop a still-live command; and there
-is **no over-fetch**, which is safe because the two ways the drain loop skips a row (the per-pod
-dedup cache, a lost claim) both describe a row that has *already left* the drainable set — a skipped
-row is not a slot stolen from a row still awaiting delivery.
+is **no over-fetch**, which is safe because the one way the drain loop skips a row (a lost claim)
+describes a row that has *already left* the drainable set — a skipped row is not a slot stolen from
+a row still awaiting delivery.
 
 The 32-per-wake cap is the **device-edge flood governor**: a REACT `send-command` storm cannot slam
 a constrained radio with an unbounded burst the instant it wakes. A deeper backlog drains across
@@ -187,10 +219,12 @@ queue-mode case, which was systematic.)
 
 `commands_served_offline_total` (a served device had no live conn) is the queue-mode signal, not an
 error. The failure modes are split so an outage cannot hide inside ordinary contention:
-`command_park_errors_total` and `command_drain_claim_errors_total` mean `command-delivery` could not
-be reached (deliverable commands going undelivered), whereas `command_park_settled_total` and
-`command_drain_claims_lost_total` are the mechanism *working*. `command_park_skipped_total` should
-be flat zero on a configured instance.
+`command_park_errors_total`, `command_drain_claim_errors_total` and
+`command_live_claim_errors_total` mean `command-delivery` could not be reached (deliverable commands
+going undelivered), whereas `command_park_settled_total`, `command_drain_claims_lost_total` and
+`commands_stale_dispatch_total` are the mechanism *working* — the last is a duplicate actuation
+avoided. `command_park_skipped_total` should be flat zero on a configured instance.
+(`command_drain_dedup_total` is gone with the cache it counted.)
 
 ## Firmware update over the air (Object 5) — a runbook
 
@@ -246,9 +280,9 @@ so it is not rejected), but its SenML telemetry Observe is 4.06'd until the TLV 
 radios. `downlink.concurrency` (default 16) sets cross-device dispatch parallelism; a single device's
 commands always run in stream order regardless of the count.
 
-The wake-drain path is **fail-open on configuration**: if `infrastructure.commandDelivery` is not
-configured, draining is disabled entirely rather than refusing to serve — offline commands then ride
-their TTL instead of being delivered on a wake.
+`infrastructure.commandDelivery` is **required** whenever the adapter has identities to serve: every
+command, live or drained, is claimed with `command-delivery` before it actuates, so without the
+coordinate the adapter refuses to start rather than running a downlink that can deliver nothing.
 
 ---
 

@@ -182,9 +182,11 @@ type Command struct {
 	BatchId    sql.NullInt64
 	BatchToken sql.NullString
 
-	// DispatchNonce identifies the CURRENT dispatch attempt. Every write that moves a row
-	// into SENT — the sweep's claim and the wake drain's claim alike — stamps a fresh value,
-	// and the published delivery envelope carries it.
+	// DispatchNonce identifies the CURRENT dispatch attempt. Every write that puts a row into
+	// SENT, or keeps it there, stamps a fresh value: the sweep's claim (MarkSent), the wake
+	// drain's claim (MarkSentByToken), and the live transport's confirmation immediately
+	// before it actuates (ConfirmDispatch, which ROTATES the value on a row already SENT). The
+	// published delivery envelope carries the value the sweep stamped.
 	//
 	// 🔴 IT EXISTS TO MAKE PARKING AT-MOST-ONCE PER DISPATCH, AND WITHOUT IT PARKING WOULD
 	// RE-ARM A COMMAND THE DEVICE HAD ALREADY RUN. SENT used to be a one-way door: nothing
@@ -198,17 +200,14 @@ type Command struct {
 	//	   park predicated only on `status = 'SENT'` MATCHES the freshly-actuated row;
 	//	4. the next wake claims and actuates it a SECOND time.
 	//
-	// The transport's in-process dedup cannot cover this: its TTL is of the same order as
-	// AckWait, it is per-pod, and the amplifying case is a leadership failover — a cold cache
-	// and a whole-fleet re-register storm at the same moment.
+	// No per-pod cache can cover this: the amplifying case is a leadership failover, which is
+	// a cold cache and a whole-fleet re-register storm at the same moment. (The LwM2M
+	// transport used to carry such a cache; the live-path confirmation replaced it.)
 	//
-	// ⚠️ "of the same order", not "exactly", and the weakening is a correction. This comment
-	// used to claim the dedup TTL WAS AckWait. The two numbers are equal today, but nothing
-	// holds them together: the dedup TTL is sized from the op timeout (see dedupeTTL in the
-	// LwM2M dispatcher) and AckWait from worker-pipeline latency, so either can move without
-	// the other. Do not "restore" the exact claim by wiring one constant to the other either
-	// — that would fuse two independently motivated values so a change to one silently
-	// retunes the other. The argument below does not need the equality.
+	// 🔴 THE SAME VALUE IS WHAT MAKES A LATE LIVE DELIVERY HARMLESS. An envelope that arrives
+	// after the row was re-armed, or after an earlier copy of it was already confirmed, names
+	// a nonce the row no longer carries, so ConfirmDispatch refuses it and the transport
+	// discards it instead of actuating.
 	//
 	// Predicating the park on the nonce it
 	// was handed closes it by construction: the stale message names a dispatch that no longer

@@ -223,6 +223,38 @@ func (r *SchemaResolver) MarkCommandSent(ctx context.Context, args struct {
 	return &nonce, nil
 }
 
+// ConfirmCommandDispatch is the LIVE-path claim: a transport that received a published
+// command confirms, immediately before actuating it, that the envelope's dispatch is still the
+// row's current one. It answers with the NEW dispatch nonce the confirmation rotated to, and
+// null when the delivery is stale. See model.Api.ConfirmDispatch for the row-level argument.
+//
+// 🔑 IT IS GATED ON command:claim, THE AUTHORITY THE WAKE DRAIN ALREADY USES, NOT A NEW ONE.
+// It takes a dispatch into the transport's hands, which is exactly what command:claim
+// documents. It cannot move a row backwards or out of SENT, so it is weaker than parking, and
+// its only power over a row is to make a stale dispatch lose — which needs the live nonce.
+//
+// Like markCommandSent it returns the nonce rather than the row: the caller's decision to
+// actuate must rest on whether THIS call's conditional UPDATE matched.
+func (r *SchemaResolver) ConfirmCommandDispatch(ctx context.Context, args struct {
+	Token         string
+	DispatchNonce string
+}) (*string, error) {
+	if err := auth.Authorize(ctx, auth.CommandClaim); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	nonce, confirmed, err := api.ConfirmDispatch(ctx, args.Token, args.DispatchNonce)
+	if err != nil {
+		return nil, err
+	}
+	if !confirmed {
+		// null, never "": see MarkCommandSent.
+		return nil, nil
+	}
+	return &nonce, nil
+}
+
 // ReleaseHeldCommands returns a device's withheld commands to the delivery queue,
 // answering how many it released.
 //
