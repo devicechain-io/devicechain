@@ -113,7 +113,8 @@ present, which *this very registration* makes true. The next delivery sweep then
 the live path — for a command, a second **physical actuation**, not a duplicate log line. The claim
 is a conditional UPDATE that reports whether *this* caller won it, so the exclusion is structural:
 whoever wins actuates, everyone else declines. A claim that **errors** does not dispatch (fail
-closed — the row is still dispatchable and the device's next wake retries).
+closed — the row is still dispatchable, the turn stops at it, and the device's next turn retries it
+after `drainRetryDelay`, in order).
 
 ### The live path is claimed too
 
@@ -188,13 +189,16 @@ command for that device is parked too, and it comes down only when a drain turn 
 device's backlog empty with nothing still on its way into it (no park in flight, none awaiting
 redelivery, nothing settled since the turn began).
 
-The gate goes up, and the reason is the label on `commands_overflow_parked_total{reason}`, when:
+The gate goes up, and the reason is the label on `commands_overflow_parked_total{reason}`, when
+the following happens. The gate carries its LATEST cause, and a command parked behind it is counted
+under that cause, except that `offline` is used only when the command's own lookup found the device
+without a connection (so `commands_served_offline_total` never counts a connected device):
 
 | Reason | Cause |
 |---|---|
 | `full` | The device's shard queue (`workerQueueDepth`) was full. |
 | `offline` | The device had no live connection. |
-| `bind` | The device (re)connected, or a live delivery turned out to have been re-armed already (the stale-dispatch nudge). The gates are in memory and per leadership term, so a new leader cannot know what an old one parked, nor what the stranded-`SENT` pass re-armed: every device's first bind gates it until its backlog has been looked at. |
+| `bind` | The device (re)connected, or a live delivery turned out to have been re-armed already (the stale-dispatch nudge). The gates are in memory and per leadership term, so a new leader cannot know what an old one parked, nor what the stranded-`SENT` pass re-armed: every device's first bind gates it until its backlog has been looked at. A connected device still gated `offline` from before it reconnected is counted here too: it is waiting for its bind's drain, not for itself. |
 | `unconfirmed` | A live confirmation errored. That command is left unacked to redeliver, and the gate holds for its redelivery, which is then parked into its original place. |
 
 🔴 **This is what removed the head-of-line convoy.** The reader used to *block* on a full shard
@@ -221,10 +225,24 @@ Costs, stated:
 - A park that errors holds the device's gate for up to `MaxDeliver × AckWait` (the redelivery
   budget, overstated by up to one `AckWait` because the redelivery clock starts at the last
   delivery). If the broker gives up on the message, the gate stops waiting for it and the rest
-  of the backlog is delivered: **the one place per-device order can still break**, and it needs a
-  `command-delivery` outage longer than the whole budget.
+  of the backlog is delivered: **one of the two places per-device order can still break**, and it
+  needs a `command-delivery` outage longer than the whole budget.
+- **The other is a live confirmation that committed but whose answer was lost** (the service
+  client's 10s timeout, a dropped connection). To this adapter it is an error, so the device is
+  gated and the command left to redeliver — but the row is already `SENT` on a nonce the adapter
+  never learned. The redelivered envelope's park quotes the old nonce, matches nothing and settles
+  as "moved on", which is indistinguishable here from the command having been answered, cancelled
+  or expired, so the gate releases it. The drain then delivers the device's later commands while
+  this one sits in `SENT` until the stranded-`SENT` pass re-arms it, after its grace; it reaches
+  the device on a later bind, after them, or not at all if it expires first. Closing this needs
+  `command-delivery` to recognise a retried confirmation; it is not closed here.
 - A live command already in the shard queue when its device's gate went up is parked as it leaves
   the queue rather than dispatched, so it stays behind whatever gated the device.
+- Every park of a live command runs on the park pool, including the ones a shard worker decides on
+  (a command dequeued behind a gate, or one whose device dropped after it was queued): a park is a
+  `command-delivery` round trip, and on the worker it would hold every other device on the shard
+  for that long. The worker waits only when the pool is full, like the reader, and that wait is
+  counted on the same `command_overflow_blocked_total`.
 
 ### Expiry, and which terminal state a lapsed command gets
 
@@ -295,8 +313,8 @@ avoided. `command_park_skipped_total` should be flat zero on a configured instan
 
 `commands_overflow_parked_total{reason}` counts live commands parked instead of dispatched, split
 by the reasons in the gate table above; `full` rising is a slow device, `bind` spiking is a
-failover. `command_overflow_blocked_total` rising means the reader waited on the park pool, i.e.
-`command-delivery` is slow. `command_drain_turns_total` is a load signal.
+failover. `command_overflow_blocked_total` rising means the reader or a shard worker waited on the
+park pool, i.e. `command-delivery` is slow. `command_drain_turns_total` is a load signal.
 (`command_drain_dedup_total` is gone with the cache it counted.)
 
 ## Firmware update over the air (Object 5) — a runbook

@@ -69,7 +69,10 @@ const redeliveryBudget = time.Duration(messaging.MaxDeliver) * messaging.AckWait
 // actually queued, gated or backlogged.
 type gate struct {
 	gated bool
-	// reason is why the gate was set; later parks behind it are counted under the same reason.
+	// reason is the LATEST cause that set the gate, and later parks behind it are counted under it
+	// (see gatedParkReason). The latest, not the first: a device gated "offline" that reconnects is
+	// now gated because of its bind, and counting its live commands as "offline" would report a
+	// connected device as absent.
 	reason string
 	// queuedLive counts this device's live tasks still sitting in the shard channel. A drain must
 	// not run while one is there: it is OLDER than anything the gate parked since.
@@ -90,12 +93,27 @@ type gate struct {
 	notBefore time.Time
 }
 
-// set gates the device, keeping the reason that set it first, and moves the generation on.
+// set gates the device under reason (replacing any earlier one) and moves the generation on.
 func (g *gate) set(reason string) {
-	if !g.gated {
-		g.gated, g.reason = true, reason
-	}
+	g.gated, g.reason = true, reason
 	g.gen++
+}
+
+// gatedParkReason is the label for a live command parked only because its device's gate is up. It
+// is the gate's reason with one correction: "offline" is a claim about the device's connection, so
+// it is used only when this command's own lookup said so. A gate set by an offline park outlives
+// the absence — the conn table marks a reconnected device live a moment before its bind's wake
+// re-labels the gate, and a task that was queued while the device was live is parked on the gate
+// without any lookup at all — and a command for a connected device parked in that window is
+// waiting for the bind's drain, not for the device.
+func gatedParkReason(gateReason string, reach Reach) string {
+	switch {
+	case reach == ReachOffline:
+		return parkReasonOffline
+	case gateReason == parkReasonOffline:
+		return parkReasonBind
+	}
+	return gateReason
 }
 
 // prune forgets unsettled commands whose redelivery can no longer arrive.
@@ -128,6 +146,9 @@ type shardState struct {
 	nudge chan struct{} // capacity 1: "a drain turn may be runnable"
 	devs  map[deviceKey]*gate
 	ready []deviceKey // devices wanting a drain turn, oldest first; de-duplicated by gate.wanted
+	// overflow is the term's park pool, which the worker hands its own parks to (handOff). Set by
+	// Run; nil only for the tests that drive a shard's methods directly.
+	overflow chan<- overflowItem
 	// stopTimer cancels the pending deferred-turn timer, if any.
 	stopTimer func() bool
 }
@@ -189,7 +210,7 @@ func (s *shardState) admit(k deviceKey, reach Reach, t task) string {
 	case reach == ReachOffline:
 		reason = parkReasonOffline
 	case g.gated:
-		reason = g.reason
+		reason = gatedParkReason(g.reason, reach)
 	case len(s.ch) == cap(s.ch):
 		reason = parkReasonFull
 	}
@@ -216,6 +237,8 @@ func (s *shardState) beginPark(k deviceKey, reason string) {
 // must be PARKED rather than dispatched: the device was gated after the task was queued. Parking it
 // keeps the invariant whatever set the gate — a bind (an older backlog may be waiting) or an
 // unconfirmed command (which is older than this one) both need this task behind them, not in front.
+// The reason returned is the gate's; the caller corrects it with gatedParkReason, since only it can
+// look the device up.
 func (s *shardState) dequeue(k deviceKey) (reason string, park bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -246,9 +269,18 @@ const (
 
 // settlePark records how one of the device's parks ended.
 //
-//   - Done: the command is in the backlog. Wake a drain for it.
+//   - Done: the command is in the backlog, or its row had moved on. Wake a drain for it. This also
+//     releases a hold on the command (holdLocked), and that is one of the TWO places per-device order
+//     can break. "Moved on" is usually terminal — answered, cancelled, expired — or re-claimed by a
+//     drain, and releasing is right. But a live confirmation that COMMITTED on command-delivery and
+//     whose answer never arrived here (a timeout, a dropped connection) left the row SENT on a nonce
+//     this adapter never saw. The redelivered envelope quotes the old one, so its park matches
+//     nothing and settles here, the hold goes, and the drain serves the commands after it while it
+//     sits in SENT until command-delivery's stranded pass re-arms it; it reaches the device on a
+//     later bind, after them, or not at all if it expires first. Nothing in this
+//     adapter can tell that case from the benign ones: the park's answer is the same.
 //   - Errored: its redelivery will park it; hold the gate until then (or until the redelivery
-//     budget has run out, which is the one place per-device order can break: it takes a
+//     budget has run out, which is the other place per-device order can break: it takes a
 //     command-delivery outage longer than the whole budget).
 //   - Skipped: the command will not come back, and a later one must not overtake it silently. Hold
 //     the gate for the same budget. On a configured instance this does not happen.

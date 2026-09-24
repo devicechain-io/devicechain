@@ -2111,7 +2111,12 @@ What changes that you can see:
   turns with other devices' commands, until the backlog is empty.
 - **One device's commands still arrive in the order they were sent.** This now also holds when a
   command could not be confirmed with command-delivery and is retried: the commands after it wait
-  for it.
+  for it. Two cases can still deliver a command after the ones sent behind it, and both need
+  command-delivery to be failing. One is an outage that outlasts the command's retries. The other
+  is a confirmation that command-delivery recorded but whose answer never reached `lwm2m-ingest`,
+  for example because the request timed out. In both cases the command stays sent but not carried
+  out until the platform finds it stranded, and it is then delivered on the device's next
+  connection, after the later commands, or expires.
 - **After a failover, commands sent while devices reconnect are delivered a moment later.** Each
   device's waiting commands are delivered before any new one, so for that short window new
   commands are set aside too. Expect a brief rise in command-delivery traffic after a failover.

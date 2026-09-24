@@ -191,9 +191,10 @@ type Metrics struct {
 	// they mean different things: a slow device, queue mode working, a device reconnecting, and
 	// command-delivery failing to confirm. One number mixing them could not be read.
 	OverflowParked *prometheus.CounterVec
-	// OverflowBlocked counts the times the reader had to WAIT for the overflow pool: every park
-	// worker busy and its queue full. Parks take a command-delivery round trip, so this rises
-	// only while command-delivery is slow or down; it is the one place the reader still blocks.
+	// OverflowBlocked counts the times the reader, or a shard worker handing over a park, had to
+	// WAIT for the overflow pool: every park worker busy and its queue full. Parks take a
+	// command-delivery round trip, so this rises only while command-delivery is slow or down; it is
+	// the one place the reader still blocks.
 	OverflowBlocked prometheus.Counter
 	// Live-path confirmation outcomes, split for the reason the drain's claim outcomes are.
 	// StaleDispatch is BENIGN: a late or duplicate delivery the platform had already re-armed
@@ -246,10 +247,10 @@ const (
 	drainTurnMax = 4
 	// overflowWorkers is the park pool's size, and overflowDepth its queue. Each park is one
 	// command-delivery round trip, bounded by the service client's 10s request timeout. The pool
-	// fills only while command-delivery is slow; the reader then waits on it (counted on
-	// OverflowBlocked) rather than dropping or reordering. The bound on that wait is the convoy
-	// this leaves: while command-delivery is down, the reader moves at overflowWorkers parks per
-	// 10s timeout. A live command would not get through then either, since its confirmation needs
+	// fills only while command-delivery is slow; the reader, and a shard worker with a park to hand
+	// over, then wait on it (counted on OverflowBlocked) rather than dropping or reordering. The
+	// bound on that wait is the convoy this leaves: while command-delivery is down, the reader
+	// moves at overflowWorkers parks per 10s timeout. A live command would not get through then either, since its confirmation needs
 	// the same service.
 	overflowWorkers = 4
 	overflowDepth   = 64
@@ -466,6 +467,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := range shards {
 		shards[i] = newShardState()
+		shards[i].overflow = overflow
 		wg.Add(1)
 		go func(s *shardState) {
 			defer wg.Done()
@@ -555,8 +557,10 @@ func (d *Dispatcher) serveShard(ctx context.Context, s *shardState) {
 			key := deviceKey{t.live.tenant, t.deviceToken}
 			if reason, park := s.dequeue(key); park {
 				// The device was gated after this command was queued. It goes to the backlog
-				// behind whatever gated it, rather than past it.
-				d.parkTracked(ctx, s, key, *t.live, reason)
+				// behind whatever gated it, rather than past it — through the park pool, so a slow
+				// command-delivery does not hold this shard's other devices for a round trip.
+				_, reach := d.conns.Lookup(key.tenant, key.deviceToken)
+				d.parkFromWorker(ctx, s, key, *t.live, gatedParkReason(reason, reach))
 			} else {
 				d.process(ctx, t)
 			}
@@ -634,7 +638,16 @@ func (d *Dispatcher) route(ctx context.Context, shards []*shardState, overflow c
 	if reason == "" {
 		return true // queued live
 	}
-	it := overflowItem{shard: s, key: key, w: w, reason: reason}
+	// Evicted before it could be handed over: do NOT ack, so the message redelivers to the next
+	// leader rather than being dropped by a replica that is no longer serving. The gate state dies
+	// with the term.
+	return d.handOff(ctx, overflow, overflowItem{shard: s, key: key, w: w, reason: reason})
+}
+
+// handOff gives one park to the park pool, waiting (counted on OverflowBlocked) while every park
+// worker is busy and its queue is full. It reports false only when the term ended first, leaving
+// the message unacked.
+func (d *Dispatcher) handOff(ctx context.Context, overflow chan<- overflowItem, it overflowItem) bool {
 	select {
 	case overflow <- it:
 		return true
@@ -645,11 +658,22 @@ func (d *Dispatcher) route(ctx context.Context, shards []*shardState, overflow c
 	case overflow <- it:
 		return true
 	case <-ctx.Done():
-		// Evicted before we could hand it over: do NOT ack, so the message redelivers to the next
-		// leader rather than being dropped by a replica that is no longer serving. The gate state
-		// dies with the term.
 		return false
 	}
+}
+
+// parkFromWorker parks, through the park pool, a live command a shard worker has already counted
+// against its device's gate (dequeue or beginPark). The pool is where every park the dispatcher
+// makes for a live command runs: a park is a command-delivery round trip of up to the service
+// client's timeout, and on the worker it would hold every other device on the shard for that long
+// while command-delivery is slow. The worker still waits when the pool itself is full, like the
+// reader does. A shard with no pool (a test driving a shard directly) parks inline.
+func (d *Dispatcher) parkFromWorker(ctx context.Context, s *shardState, key deviceKey, w work, reason string) {
+	if s.overflow == nil {
+		d.parkTracked(ctx, s, key, w, reason)
+		return
+	}
+	d.handOff(ctx, s.overflow, overflowItem{shard: s, key: key, w: w, reason: reason})
 }
 
 // Drain gates a device and asks its shard for a drain turn, so the leader pulls that device's
@@ -789,7 +813,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 		if s := d.shardFor(w.env.DeviceToken); s != nil {
 			key := deviceKey{w.tenant, w.env.DeviceToken}
 			s.beginPark(key, parkReasonOffline)
-			d.parkTracked(ctx, s, key, w, parkReasonOffline)
+			d.parkFromWorker(ctx, s, key, w, parkReasonOffline)
 			return
 		}
 		d.park(ctx, w, parkReasonOffline)
@@ -880,9 +904,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 // confirmed and actuate first — a reorder, of exactly the kind a firmware write followed by its
 // execute cannot survive. So the error gates the device and holds the gate for this command's
 // redelivery (gate.go): the device's later commands are parked behind it, the redelivered copy
-// finds the device gated and is parked too, and a drain then serves them all oldest-first. The
-// one way order can still break is a command-delivery outage longer than the whole redelivery
-// budget, after which the broker gives up on the message and the gate stops waiting for it.
+// finds the device gated and is parked too, and a drain then serves them all oldest-first.
+//
+// Order can still break in TWO ways. One is a command-delivery outage longer than the whole
+// redelivery budget, after which the broker gives up on the message and the gate stops waiting
+// for it. The other is an error that was not a failure: the confirmation COMMITTED on
+// command-delivery and only its answer was lost (the service client's timeout, a dropped
+// connection). The row is then SENT on a nonce this adapter never learned, the redelivered
+// envelope's park matches nothing and settles as "moved on", the gate releases it, and the drain
+// serves the later commands while this one waits in SENT for command-delivery's stranded pass to
+// re-arm it after its grace; it is then delivered on the device's next bind, after them, or not at
+// all if it expires first. Nothing on this side can tell that settle from a benign one
+// (the command answered, cancelled or expired); closing it needs command-delivery to recognise a
+// retried confirmation.
 func (d *Dispatcher) claimLive(ctx context.Context, w work) (string, bool) {
 	if w.env.DispatchNonce == "" {
 		incr(d.metrics.LiveClaimErrors, 1)
@@ -1186,8 +1220,9 @@ func (d *Dispatcher) parkTracked(ctx context.Context, s *shardState, key deviceK
 
 // park hands a live command back to command-delivery (SENT -> PARKED) instead of dispatching it,
 // and then settles the message. reason says why (see the parkReason constants): its device was
-// offline, its shard queue was full, or its gate was up. It runs on a park-pool worker or on the
-// device's shard worker, never on the reader goroutine, because it makes a network call.
+// offline, its shard queue was full, or its gate was up. It runs on a park-pool worker, never on
+// the reader goroutine or a shard worker, because it makes a network call. (It runs inline only
+// where no term is running: a unit test calling dispatch directly.)
 //
 // 🔴 THE ACK DECISION IS THE WHOLE FUNCTION, AND EACH BRANCH IS DELIBERATE:
 //
@@ -1210,8 +1245,9 @@ func (d *Dispatcher) parkTracked(ctx context.Context, s *shardState, key deviceK
 // MaxDeliver × AckWait, on the order of minutes — the row waits in SENT for command-delivery's
 // stranded-SENT pass, which re-arms it to PARKED once its grace has passed. Until then it is
 // neither delivered nor cancellable, and the device's gate has stopped waiting for it, so it is
-// also the one place a device's commands can be delivered out of order. The exposure needs a
-// command-delivery outage spanning the whole budget.
+// also one of the two places a device's commands can be delivered out of order. The exposure needs
+// a command-delivery outage spanning the whole budget. (The other is a live confirmation whose
+// answer was lost after it committed: see settlePark in gate.go.)
 func (d *Dispatcher) park(ctx context.Context, w work, reason string) parkOutcome {
 	// 🔑 COUNTED WHERE THE MESSAGE SETTLES, NOT ON ENTRY. Counting at the top looks equivalent
 	// and is not: a park that errors is retried by redelivery, so one offline command would

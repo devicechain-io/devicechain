@@ -177,10 +177,33 @@ func TestGateSurvivesAParkThatLandsDuringTheTurn(t *testing.T) {
 	assert.False(t, present, "a quiet turn with an empty page lifts the gate and forgets the device")
 }
 
+// TestTheGateCarriesItsLatestCause: a device gated because its queue was full that then
+// reconnects is gated by its bind from that moment. Its next live command is counted under "bind"
+// — what it is waiting for now — not under the overflow that raised the gate first.
+func TestTheGateCarriesItsLatestCause(t *testing.T) {
+	s := newShardState()
+	k := deviceKey{"acme", "pump-1"}
+	s.beginPark(k, parkReasonFull)
+	s.wake(k)
+	assert.Equal(t, parkReasonBind, s.admit(k, ReachLive, task{deviceToken: k.deviceToken}))
+}
+
 // TestADrainTurnIsBounded: a device with a deep backlog shares a shard with another device whose
 // live command arrives during the first turn. That command runs after at most one turn's worth of
 // the backlog, not after all of it.
+//
+// It is REPEATED because the defect it guards against is a coin toss: a worker that selects over
+// its live queue and its nudge in one select picks between them at random when both are ready.
+// Measured with the defect in, a single run failed on 127 of 260 attempts, so one run lets it pass
+// about as often as not. Forty runs put a pass under it near one in 2^40, and each run takes
+// milliseconds.
 func TestADrainTurnIsBounded(t *testing.T) {
+	for i := range 40 {
+		t.Run(fmt.Sprintf("run %d", i), testADrainTurnIsBoundedOnce)
+	}
+}
+
+func testADrainTurnIsBoundedOnce(t *testing.T) {
 	h := newHarness(t, 1, nil)
 	h.look.set("pump-a", ReachLive)
 	h.look.set("pump-b", ReachLive)
@@ -311,7 +334,18 @@ func TestAnErroredParkHoldsTheGateUntilRedeliveryOrDeadline(t *testing.T) {
 		h.clk.Advance(time.Second)
 		h.waitOrder("c2")
 		assert.Equal(t, "SENT", h.store.status("c1"),
-			"c1 is left to command-delivery's stranded pass; this is the one place order can break")
+			"c1 is left to command-delivery's stranded pass; this is one of the two places order can break")
+
+		// And the gate LIFTS, once, rather than sticking. A deadline that has passed but is still
+		// counted as unsettled would keep the device gated with a turn wanted, and the shard would
+		// fetch from command-delivery as fast as it could, forever, while every later command for
+		// the device parked behind a gate nothing can lift.
+		require.Eventually(t, func() bool { return !h.gated("pump-1") }, time.Second, time.Millisecond,
+			"the gate must lift once the redelivery budget has run out")
+		fetches := h.store.fetchCount()
+		never(t, func() bool { return h.store.fetchCount() > fetches },
+			"a device whose backlog is drained takes no further turns")
+		assert.LessOrEqual(t, fetches, 2, "one turn served c2 and found the backlog drained")
 	})
 }
 
@@ -429,4 +463,120 @@ func TestADispatcherThatReadsMustBeAbleToDrain(t *testing.T) {
 			NewDispatcher(&chanReader{ch: make(chan messaging.Message)}, &fakePublisher{}, &switchLookup{}, &orderExecutor{},
 				nil, &fakeClaimer{}, Metrics{}, Options{ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 		})
+}
+
+// TestParkReasonFollowsTheDevicesCurrentCause: the park label and ServedOffline say what happened
+// to THIS command. A device gated "offline" that reconnects is gated by its bind from then on, so
+// its live commands are counted under "bind" and never as served-offline: a connected device must
+// not be reported as absent, and "bind" is the reading an operator expects after a failover.
+func TestParkReasonFollowsTheDevicesCurrentCause(t *testing.T) {
+	counts := func(h *harness) (offline, bind, servedOffline float64) {
+		return testutil.ToFloat64(h.m.OverflowParked.WithLabelValues(parkReasonOffline)),
+			testutil.ToFloat64(h.m.OverflowParked.WithLabelValues(parkReasonBind)),
+			testutil.ToFloat64(h.m.ServedOffline)
+	}
+	parkOffline := func(t *testing.T, h *harness, token string) {
+		t.Helper()
+		h.look.set("pump-1", ReachOffline)
+		h.send(token, "pump-1")
+		require.Eventually(t, func() bool { return h.store.status(token) == statusParked }, time.Second, time.Millisecond)
+	}
+
+	t.Run("a command during the bind's drain", func(t *testing.T) {
+		h := newHarness(t, 1, nil)
+		parkOffline(t, h, "c1")
+		h.look.set("pump-1", ReachLive)
+		holding, release := h.holdOps()
+		defer release()
+		h.d.Drain("acme", "pump-1")
+		require.Equal(t, "c1", recv(t, holding, "c1's drained op to start"))
+
+		h.send("c2", "pump-1")
+		require.Eventually(t, func() bool { return h.store.status("c2") == statusParked }, time.Second, time.Millisecond)
+		offline, bind, served := counts(h)
+		assert.Equal(t, []float64{1, 1, 1}, []float64{offline, bind, served},
+			"c1 was parked offline; c2, sent to a connected device during its bind drain, is a bind park")
+		release()
+		h.waitOrder("c1", "c2")
+	})
+
+	t.Run("a command after the reconnect, before its wake lands", func(t *testing.T) {
+		h := newHarness(t, 1, nil)
+		parkOffline(t, h, "c1")
+		h.look.set("pump-1", ReachLive) // the conn table says live; the wake has not run yet
+
+		h.send("c2", "pump-1")
+		// Not the row's status: once c2's park lands, the device (live) is drained on its own.
+		require.Eventually(t, func() bool {
+			offline, bind, _ := counts(h)
+			return offline+bind == 2
+		}, time.Second, time.Millisecond)
+		offline, bind, served := counts(h)
+		assert.Equal(t, []float64{1, 1, 1}, []float64{offline, bind, served},
+			"the device's own lookup said live, so the gate it is parked behind is its bind, not its absence")
+		h.d.Drain("acme", "pump-1")
+		h.waitOrder("c1", "c2")
+	})
+
+	// A live task queued before the device dropped is parked on the gate as it leaves the queue,
+	// with no lookup of its own on the way in. Its label is decided by the lookup at that moment.
+	for _, tc := range []struct {
+		name        string
+		reach       Reach
+		wantOffline float64
+		wantBind    float64
+	}{
+		{name: "queued, then gated offline, still offline", reach: ReachOffline, wantOffline: 2, wantBind: 0},
+		{name: "queued, then gated offline, back before its wake", reach: ReachLive, wantOffline: 1, wantBind: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, 1, nil)
+			h.look.set("pump-x", ReachLive)
+			h.look.set("pump-1", ReachLive)
+			holding, release := h.holdOps()
+			defer release()
+			h.send("x1", "pump-x")
+			require.Equal(t, "x1", recv(t, holding, "x1's op to start"))
+			h.send("d1", "pump-1")
+			require.Eventually(t, func() bool { return h.queuedLive() == 1 }, time.Second, time.Millisecond)
+			parkOffline(t, h, "d2")
+
+			h.look.set("pump-1", tc.reach)
+			release()
+			require.Eventually(t, func() bool { return h.store.status("d1") == statusParked || len(h.exec.order()) > 2 },
+				time.Second, time.Millisecond)
+			offline, bind, served := counts(h)
+			assert.Equal(t, []float64{tc.wantOffline, tc.wantBind, tc.wantOffline}, []float64{offline, bind, served})
+
+			h.look.set("pump-1", ReachLive)
+			h.d.Drain("acme", "pump-1")
+			h.waitOrder("x1", "d1", "d2")
+		})
+	}
+}
+
+// TestAWorkerParkDoesNotHoldItsShard: a device drops after its command was queued, so the shard
+// worker finds it offline and parks it. That park is a command-delivery round trip, and it goes to
+// the park pool: the next device's command on the same shard runs while it is still in flight,
+// instead of waiting out command-delivery's answer.
+func TestAWorkerParkDoesNotHoldItsShard(t *testing.T) {
+	hold := make(chan struct{})
+	h := newHarness(t, 1, func(h *harness) { h.store.parkHolds["a1"] = hold })
+	for _, d := range []string{"pump-x", "pump-a", "pump-b"} {
+		h.look.set(d, ReachLive)
+	}
+	holding, release := h.holdOps()
+	h.send("x1", "pump-x")
+	require.Equal(t, "x1", recv(t, holding, "x1's op to start"))
+	h.send("a1", "pump-a")
+	h.send("b1", "pump-b")
+	require.Eventually(t, func() bool { return h.queuedLive() == 2 }, time.Second, time.Millisecond)
+	h.look.set("pump-a", ReachOffline)
+	release()
+
+	h.waitOrder("x1", "b1")
+	assert.Equal(t, []string{"a1"}, h.store.parked(), "a1's park is still in flight while b1 runs")
+	close(hold)
+	require.Eventually(t, func() bool { return h.store.status("a1") == statusParked }, time.Second, time.Millisecond)
+	assert.Equal(t, 1.0, testutil.ToFloat64(h.m.ServedOffline))
 }

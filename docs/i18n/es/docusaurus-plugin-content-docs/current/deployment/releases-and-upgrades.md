@@ -2250,7 +2250,13 @@ Lo que cambia y puedes ver:
   vaciar la acumulación.
 - **Los comandos de un dispositivo siguen llegando en el orden en que se enviaron.** Esto ahora
   también se cumple cuando un comando no pudo confirmarse con command-delivery y se reintenta: los
-  comandos posteriores lo esperan.
+  comandos posteriores lo esperan. Dos casos todavía pueden entregar un comando después de los que
+  se enviaron detrás de él, y ambos requieren que command-delivery esté fallando. Uno es una
+  interrupción que dura más que los reintentos del comando. El otro es una confirmación que
+  command-delivery registró pero cuya respuesta nunca llegó a `lwm2m-ingest`, por ejemplo porque la
+  petición agotó su tiempo de espera. En ambos casos el comando queda enviado pero sin ejecutar
+  hasta que la plataforma lo detecta como varado, y entonces se entrega en la siguiente conexión
+  del dispositivo, después de los comandos posteriores, o caduca.
 - **Tras un relevo, los comandos enviados mientras los dispositivos se reconectan se entregan un
   momento después.** Los comandos pendientes de cada dispositivo se entregan antes que cualquiera
   nuevo, así que durante ese breve intervalo los nuevos también se apartan. Es de esperar un breve

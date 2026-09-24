@@ -427,7 +427,7 @@ func buildMetrics() {
 			"Live commands parked in command-delivery instead of dispatched, by reason (full: the device's dispatch queue was full; offline: no live connection; bind: its backlog was not yet drained after it connected; unconfirmed: a command ahead of it could not be confirmed). Delivered in order by a drain moments later.",
 			[]string{"reason"}),
 		OverflowBlocked: Microservice.NewCounter("command_overflow_blocked_total",
-			"Times the command reader had to wait for the park pool because every park worker was busy; rises only while command-delivery is slow or unreachable."),
+			"Times the command reader, or a dispatch worker handing over a park, had to wait for the park pool because every park worker was busy; rises only while command-delivery is slow or unreachable."),
 		// Live-path confirmation outcomes, split for the same reason as the claim outcomes below:
 		// a stale dispatch is the exclusion working, a claim error is command-delivery unreachable.
 		StaleDispatch: Microservice.NewCounter("commands_stale_dispatch_total",
