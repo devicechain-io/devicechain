@@ -309,8 +309,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
-	// The REACT dispatcher (ADR-051 slice 5b/5c): an INDEPENDENT durable consumer of the derived-event
-	// stream this service also produces, dispatching each detection's authored actions (raise-alarm and
+	// The REACT dispatcher (ADR-051 slice 5b/5c): a separate durable consumer of the derived-event
+	// stream this service also produces, consuming only while this replica holds the DETECT term (see
+	// newReactReader), dispatching each detection's authored actions (raise-alarm and
 	// send-command). It resolves each rule's action chain from the durable rule projection by id — the
 	// same projection DETECT rebuilds from — so an action edit takes effect without re-publishing events.
 	// Its raise-alarm sink is always wired (the sole alarm-raise path since 6d), so it always starts; see
@@ -377,7 +378,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// platform default when per-tenant overrides are not wired) — never unlimited.
 	connectorRate := buildEgressLimiter()
 
-	reader, err := nmgr.NewReader(streams.DerivedEvents, messaging.ReaderWithDeliverNew())
+	reader, err := newReactReader(nmgr)
 	if err != nil {
 		return err
 	}
@@ -394,6 +395,38 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
 		DeadLetters.NewSink(deadWriter), ReactMetrics)
 	return nil
+}
+
+// newReactReader is the REACT derived-events reader: term-gated on the DETECT lease and
+// releasing its buffer when the term is lost.
+//
+// 🔑 REACT IS GATED FOR THE CEILING, NOT FOR SINGLE-WRITER SAFETY. It holds no ordered
+// state, and every replica could dispatch correctly on its own. What it does hold is
+// connectorRate — the source-side outbound ceiling, which is in memory per process. With
+// every replica consuming, each replica charged its own copy of every tenant's ceiling, so a
+// warm standby doubled it. Gating on the DETECT lease makes the replica that detects the only
+// one that reacts, so the ceiling is charged once. During a lease handover both replicas can
+// dispatch for up to about five seconds (the old owner's Held overshoots the server-side
+// expiry by up to the JetStream API timeout; see termSlack in processor/leadership.go).
+//
+// The gate is DetectTermGate.Held — a method value on the pointer createNatsComponents
+// assigns before wireReactDispatcher runs, and late-bound through the TermGate's atomic, so
+// a reader built at process start gates correctly on every term acquired after it.
+//
+// ReaderWithReleaseOnPark gives the buffer up when the term is lost. DETECT keeps its
+// buffer across a flicker of Held because dropping it would reorder a single writer's input;
+// REACT has no order to protect, and a buffer it kept would be handed out on a later term
+// after the other replica had already dispatched it. It narrows that window rather than
+// closing it: ReaderWithReleaseOnPark names the subscription-buffered leftovers it cannot
+// reach, which is one more reason a connector call can reach its destination twice.
+//
+// REACT is deliberately NOT one of the processor's termReaders (bound and unbound per term).
+// Unbinding protects DETECT from a pull request served past the new leader's replay head,
+// which for DETECT is loss; for REACT the same event only delays a dispatch. Binding REACT
+// per term would also put its bind failures on the DETECT term-build fuse.
+func newReactReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error) {
+	return nmgr.NewReader(streams.DerivedEvents, messaging.ReaderWithDeliverNew(),
+		messaging.ReaderWithTermGate(DetectTermGate.Held), messaging.ReaderWithReleaseOnPark())
 }
 
 // buildEgressLimiter constructs the per-tenant SOURCE-side OUTBOUND egress cost-gate (ADR-060 SD-3).

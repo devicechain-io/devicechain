@@ -8,12 +8,17 @@
 // rule's bounded, declarative actions.
 //
 // REACT is deliberately separate from the DETECT single-writer engine: DETECT is a stateful,
-// replay-correct keyed-streaming loop; REACT is a queue-group-ready, at-least-once consumer whose
-// only durability requirement is that each action dispatch be idempotent under redelivery. That
-// idempotency is carried by a DETERMINISTIC token the downstream sink dedups on (command-delivery
-// is idempotent on the command token, ADR-051 slice 5b-1) — so a redelivered event, a DETECT replay
-// that re-publishes the same detection, and a retry after a transient failure all collapse
-// downstream rather than double-acting. The token is derived from the detection's dedup identity
+// replay-correct keyed-streaming loop; REACT is a stateless, at-least-once consumer whose only
+// durability requirement is that each action dispatch be idempotent under redelivery. (It still
+// consumes only on the replica holding the DETECT lease — for its per-process outbound ceiling, not
+// for ordering; see ConnectorRateGate.) That
+// idempotency is carried by a DETERMINISTIC token (command-delivery is idempotent on the command
+// token, ADR-051 slice 5b-1; the alarm fold is upsert-keyed) — so for commands and alarms a
+// redelivered event, a DETECT replay that re-publishes the same detection, and a retry after a
+// transient failure all collapse downstream rather than double-acting. Connector calls are the
+// exception: the outbound-connectors service forwards the token to the destination as an
+// idempotency key and does not deduplicate on it itself, so a connector call dispatched twice
+// reaches the destination twice unless the destination honours the key. The token is derived from the detection's dedup identity
 // plus the action's CONTENT, deliberately NOT its index in the action list: the rule is resolved
 // fresh per attempt, so an author reordering the chain between attempts would, under an index-keyed
 // token, re-send whichever action now sits at the old index under the old action's token. See
@@ -46,8 +51,10 @@ const (
 	// gone) — ack the event; there is nothing a redelivery would achieve.
 	Done Outcome = iota
 	// Retry: a failure the dispatcher cannot resolve now (the rule store or a sink was unreachable)
-	// — do NOT ack. The event redelivers; the deterministic idempotency tokens make the re-run safe,
-	// and the consumer's redelivery cap bounds a permanently-failing event.
+	// — do NOT ack. The event redelivers and every action is dispatched again. The deterministic
+	// idempotency tokens make that safe for commands (command-delivery dedups on them) and alarms
+	// (an upsert), but NOT for connector actions, whose token is only forwarded to the destination.
+	// The consumer's redelivery cap bounds a permanently-failing event.
 	Retry
 )
 
@@ -159,7 +166,8 @@ type AlarmSink interface {
 // the dedicated service consumes, so the heavy connector dep-tree and any credential handling stay out
 // of this replay-correct binary (ADR-060 §4). It carries the CEL payload template ALREADY RENDERED to
 // bytes (so the connectors service never imports cel — the determinism/supply-chain firewall) plus the
-// deterministic idempotency Token the connectors service dedups on under at-least-once redelivery.
+// deterministic idempotency Token, which the connectors service forwards to the destination for the
+// destination to deduplicate on. DeviceChain does not deduplicate connector dispatches itself.
 type ConnectorRequest struct {
 	Tenant       string
 	DeviceToken  string
@@ -167,7 +175,9 @@ type ConnectorRequest struct {
 	Edge         string
 	OccurredTime time.Time
 	// Token is the content-addressed idempotency key (idempotencyToken) — the SAME token family the
-	// command sink dedups on, so a redelivery/replay collapses downstream rather than re-executing.
+	// command sink dedups on. For a command that makes a redelivery/replay collapse downstream; for a
+	// connector it does not: outbound-connectors forwards the key to the destination and executes every
+	// dispatch it receives, so a redelivery/replay collapses only at a destination that honours the key.
 	Token string
 	// Payload is the rendered template output (the request body / message payload). Empty when the
 	// action declares no template — the connectors service then sends an empty body.
@@ -181,8 +191,9 @@ type ConnectorRequest struct {
 // ConnectorSink hands a rendered connector action to the outbound-connectors service (ADR-060),
 // implemented by publishing a connector-dispatch request onto the per-tenant NATS subject the service
 // consumes. Dispatch returns a non-nil error on any failure (a marshal or broker-write failure); the
-// dispatcher retries every error (the event redelivers, the idempotency Token makes the re-run safe),
-// so the sink need not classify. A nil ConnectorSink DISABLES connector dispatch: an httpCall/publish
+// dispatcher retries every error (the event redelivers and the request is published again, carrying
+// the same forwarded idempotency Token — nothing on the way deduplicates it), so the sink need not
+// classify. A nil ConnectorSink DISABLES connector dispatch: an httpCall/publish
 // action is then recognized-but-inert (RecordNotEnabled), exactly like a nil command/alarm sink.
 type ConnectorSink interface {
 	Dispatch(ctx context.Context, req ConnectorRequest) error
@@ -209,13 +220,15 @@ type ConnectorSink interface {
 // on the re-run (a bounded over-count, capped by the consumer's redelivery cap) — an accepted cost of
 // keeping the gate a pure per-attempt Allow rather than threading dispatch state.
 //
-// SCOPE: the gate (and its resolver cache) is PER-PROCESS. REACT deploys as the DETECT singleton
-// today (one process), so the configured per-tenant ceiling is the effective one. If REACT is later
-// scaled to a queue group (post-GA, ADR-052), N replicas would each hold their own bucket and the
-// effective source ceiling becomes N× the configured value — at which point this gate would need a
-// shared/among-replicas limiter (or a per-replica fraction) to keep matching the single sink-side
-// egress limiter it is sized against. Harmless at the singleton deploy; called out so the caveat is
-// not lost when scale-out lands.
+// SCOPE: the gate (and its resolver cache) is PER-PROCESS. REACT's reader is gated on the DETECT
+// lease (main.go, newReactReader), so only the replica that detects dispatches, and the gate is
+// charged on that one replica: the configured per-tenant ceiling is the effective one at any replica
+// count. During a lease handover both the old and the new owner can dispatch for up to about five
+// seconds, and each charges its own bucket in that window. If REACT is ever scaled out as a queue
+// group instead (post-GA, ADR-052), N replicas would each hold their own bucket and the effective
+// source ceiling would become N× the configured value — at which point this gate would need a
+// shared limiter (or a per-replica fraction) to keep matching the sink-side egress limiter it is
+// sized against.
 type ConnectorRateGate interface {
 	Allow(tenant string) bool
 }
@@ -253,12 +266,11 @@ type Metrics interface {
 }
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
-// idempotency lives entirely in the deterministic token the command sink dedups on (and the
-// upsert-keyed alarm) — so it would be safe to run as a queue group. It is not run that way today:
-// the DETECT loop is still a single writer over one partition ("singleton"), fenced by a stale-
-// checkpoint check at startup, and REACT rides the same deployment. That constraint has outlived
-// the slice this comment used to blame for it, so do not read the singleton as imminent — read it
-// as the current design, which REACT's idempotency does not depend on.
+// idempotency lives in the deterministic token the command sink dedups on (and the upsert-keyed
+// alarm) — so for commands and alarms it would be safe to run as a queue group. It is not run that
+// way: its reader consumes only on the replica holding the DETECT partition lease (main.go,
+// newReactReader), which is what keeps the per-process ConnectorRateGate charged once rather than
+// once per replica.
 // Each action kind has its own sink; a nil sink means that kind is DISABLED and
 // its actions are recognized-but-inert (RecordNotEnabled), so send-command and raise-alarm are
 // independently gateable.

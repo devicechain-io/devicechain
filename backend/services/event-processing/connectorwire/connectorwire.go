@@ -77,9 +77,12 @@ type ConnectorDispatchRequest struct {
 	Edge string `json:"edge,omitempty"`
 	// OccurredTime is the detection's event time (the logical time the action is about).
 	OccurredTime time.Time `json:"occurredTime"`
-	// IdempotencyKey is the deterministic, content-addressed token the connectors service dedups on so
-	// an at-least-once redelivery / DETECT replay collapses to ONE execution. It is opaque to the
-	// consumer (a hex SHA-256, ADR-042 grammar-safe) — the consumer only compares it, never recomputes.
+	// IdempotencyKey is the deterministic, content-addressed token for this dispatch: the same detection
+	// and action produce the same key on every redelivery and DETECT replay. The connectors service
+	// FORWARDS it to the destination (an HTTP header, a publish metadata field) for the destination to
+	// deduplicate on; DeviceChain does not deduplicate connector dispatches itself, so a dispatch
+	// delivered twice executes twice. It is opaque to the consumer (a hex SHA-256, ADR-042
+	// grammar-safe) — the consumer passes it on, never recomputes it.
 	IdempotencyKey string `json:"idempotencyKey"`
 	// Payload is the CEL payload template ALREADY RENDERED to a string by REACT (empty ⇒ no body). The
 	// connectors service never re-renders — it never imports cel (the determinism/supply-chain firewall,

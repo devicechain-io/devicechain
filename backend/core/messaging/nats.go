@@ -1180,6 +1180,9 @@ type natsReader struct {
 	// held, when set, is the leadership-term predicate this reader is gated on: no
 	// message is handed out unless it reports true. See ReaderWithTermGate.
 	held func() bool
+	// releaseOnPark makes a term-gated reader give up its fetch buffer when its gate
+	// closes and when it stops reading. See ReaderWithReleaseOnPark.
+	releaseOnPark bool
 	// reading enforces MessageReader's one-goroutine-at-a-time contract. pending and
 	// consecutiveTimeouts above are plain fields on purpose — a durable pull consumer
 	// is drained by ONE loop — and this is what makes that a CHECKED precondition
@@ -1233,8 +1236,8 @@ type natsReader struct {
 // already-created durable and crash-loop startup on a non-fresh cluster (see the
 // warning on consumerConfig). Changing such an option therefore rides a fresh bring-up
 // (down+up) or an explicit consumer migration — the pre-GA decisive cutover. An option
-// that shapes only how this client reads (ReaderWithTermGate, ReaderWithCapacity) touches
-// no durable config and can be adopted or dropped freely.
+// that shapes only how this client reads (ReaderWithTermGate, ReaderWithReleaseOnPark,
+// ReaderWithCapacity) touches no durable config and can be adopted or dropped freely.
 type ReaderOption func(*natsReader)
 
 // ReaderWithDeliverNew starts the durable at the stream tail (DeliverNewPolicy) on
@@ -1258,7 +1261,18 @@ const termGatePoll = 50 * time.Millisecond
 // ReaderWithTermGate makes this reader consume ONLY while a leadership term is
 // held, evaluating the predicate on every ReadMessage before a message is handed
 // out — including one already sitting in the fetch buffer, which is why the check
-// precedes the pending pop rather than wrapping the Fetch.
+// precedes the pending pop rather than wrapping the Fetch. It is checked again when a
+// Fetch returns, so a batch fetched across the moment the gate closed is not handed out
+// either: a closed gate hands out nothing later than one poll after it closed. One
+// consequence: a context cancelled while a Fetch is waiting now returns end-of-stream with
+// that batch still in the buffer, unacked, rather than handing its first message out; a
+// reader without ReaderWithReleaseOnPark leaves it for the broker to redeliver at AckWait.
+//
+// What the reader has buffered SURVIVES a park: when the gate reopens, the buffer is
+// handed out where it left off. That is DETECT's behaviour and it is deliberate — Held
+// can go false and back to true inside one term (a renewal that lands late re-opens the
+// window), and dropping the buffer there would reorder a single writer's input. A reader
+// with no ordered state to protect opts out of the buffer with ReaderWithReleaseOnPark.
 //
 // 🔴 THE PREDICATE IS LATE-BOUND ON PURPOSE. NewReader runs at service start, long
 // before any lease is acquired, so this takes a function rather than a value: the
@@ -1276,6 +1290,46 @@ const termGatePoll = 50 * time.Millisecond
 func ReaderWithTermGate(held func() bool) ReaderOption {
 	return func(r *natsReader) { r.held = held }
 }
+
+// ReaderWithReleaseOnPark makes a term-gated reader give up what it has buffered when its
+// gate closes: every message in the buffer is Nak'd (best effort, once) and the buffer is
+// dropped, so a replica that later regains the term never hands out a batch another
+// replica has since dispatched. It is also applied when the reader stops reading (an
+// end-of-stream return, which is how a cancelled context surfaces), so a clean stop hands
+// the batch to the successor at once instead of after AckWait. It has no effect without
+// ReaderWithTermGate.
+//
+// 🔴 IT IS OPT-IN, NOT A PROPERTY OF EVERY TERM-GATED READER. Held can go false and back
+// to true inside ONE term, and for a single writer (DETECT) dropping the buffer mid-term
+// would reorder its input; see ReaderWithTermGate. It is for a reader that holds no
+// ordered state, where the only cost of a dropped buffer is a redelivery.
+//
+// The Nak is the one this package otherwise refuses to give a consumer (see Message), and
+// it is safe here for a reason that does not generalize: it happens once per gate-close
+// edge, not once per failed attempt, so it costs each buffered message ONE delivery per
+// park — never the millisecond redelivery loop that makes a per-attempt Nak a MaxDeliver
+// fuse. On a real term loss that delivery is one the AckWait expiry would have spent
+// anyway. On a flicker (Held false and back inside one term) it is an EXTRA delivery the
+// buffer would otherwise not have cost, so a message caught in the buffer across enough
+// flickers could exhaust MaxDeliver; a flicker needs a renewal landing far behind the
+// lease TTL, so this is a bounded, rare cost, not a steady one. A message whose Nak does
+// not reach the broker is simply redelivered at AckWait.
+//
+// 🔴 WHAT IT DOES NOT RELEASE: messages a timed-out Fetch left in the SUBSCRIPTION's own
+// buffer (a pull request answered just after the client stopped waiting on it; see
+// holdFetched's leftovers). Those are not in the reader's buffer, so they are neither
+// Nak'd nor dropped, and the broker redelivers them to another replica at AckWait. A parked
+// reader makes no Fetch, so if this replica later regains the term its next Fetch hands
+// those first-delivery copies out first, and a message another replica has since
+// dispatched can be dispatched again. The window is a Fetch timing out at the instant the broker answers it,
+// followed by a term loss and a return; a caller that cannot tolerate a duplicate across
+// terms must deduplicate downstream.
+func ReaderWithReleaseOnPark() ReaderOption {
+	return func(r *natsReader) { r.releaseOnPark = true }
+}
+
+// releases reports whether this reader gives up its buffer at a park or a stop.
+func (r *natsReader) releases() bool { return r.releaseOnPark && r.held != nil }
 
 // BindTerm attaches the pull subscription for a new leadership term. It is the
 // counterpart of UnbindTerm, and the split between them is not cosmetic.
@@ -1758,7 +1812,8 @@ func (r *natsReader) rebindWithBackoff(ctx context.Context) error {
 // round trip. The message is NOT acked here (A3): its ack handle rides the
 // returned envelope so the consumer can Ack only after durably handling it. A
 // transient failure is retried by NOT acking, so AckWait paces redelivery (there
-// is deliberately no Nak — see Message). On shutdown (ctx cancelled or
+// is deliberately no Nak — see Message; the one exception is a reader built with
+// ReaderWithReleaseOnPark giving up its buffer). On shutdown (ctx cancelled or
 // subscription/connection closed) it returns io.EOF so the existing processor EOF
 // handling applies.
 //
@@ -1778,11 +1833,16 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 	// A capacity reader that stops reading gives its buffered messages' slots back, on
 	// every end-of-stream return rather than at each one: the messages stay unacked, so the
 	// broker redelivers them, and slots held for messages nobody will hand out would only
-	// starve whoever reads this reader next.
-	if r.capacity != nil {
+	// starve whoever reads this reader next. A reader built with ReaderWithReleaseOnPark
+	// also Naks them, so the redelivery is immediate rather than an AckWait away.
+	if r.capacity != nil || r.releases() {
 		defer func() {
 			if errors.Is(err, io.EOF) {
-				r.dropPending()
+				if r.releases() {
+					r.releasePending()
+				} else {
+					r.dropPending()
+				}
 			}
 		}()
 	}
@@ -1805,6 +1865,11 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		// someone else's. Parking rather than returning EOF is explained on
 		// ReaderWithTermGate.
 		if r.held != nil && !r.held() {
+			// A reader built with ReaderWithReleaseOnPark gives its buffer up at the first
+			// poll of a park; the buffer is then empty, so later polls do nothing.
+			if r.releases() && len(r.pending) > 0 {
+				r.releasePending()
+			}
 			select {
 			case <-ctx.Done():
 				return Message{}, io.EOF
@@ -1897,6 +1962,12 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			}
 			r.consecutiveTimeouts = 0
 			r.pending = msgs
+			// A Fetch can wait out its whole long-poll, so the term may have ended while it
+			// did. Re-evaluate the gate before handing any of the batch out, rather than
+			// handing out one message a full fetchTimeout after the gate closed.
+			if r.held != nil {
+				continue
+			}
 		}
 		nm := r.pending[0]
 		r.pending = r.pending[1:]
@@ -1942,8 +2013,18 @@ func (r *natsReader) holdFetched(msgs []*nats.Msg, acquired, leftovers int, fetc
 	}
 }
 
-// dropPending discards a capacity reader's buffered messages and returns their slots. The
-// messages are unacked, so the broker redelivers each once its AckWait runs out.
+// releasePending Naks every buffered message and then drops the buffer (see
+// ReaderWithReleaseOnPark). A Nak's error is ignored: a message whose Nak does not reach
+// the broker is still unacked, and is redelivered once its AckWait runs out.
+func (r *natsReader) releasePending() {
+	for _, nm := range r.pending {
+		_ = nm.Nak()
+	}
+	r.dropPending()
+}
+
+// dropPending discards a reader's buffered messages and returns any capacity slots they
+// held. The messages are unacked, so the broker redelivers each once its AckWait runs out.
 func (r *natsReader) dropPending() {
 	for _, sl := range r.pendingSlots {
 		sl.release()

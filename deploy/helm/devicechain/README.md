@@ -201,6 +201,10 @@ functionalAreas:
     replicas: 2
 ```
 
+Per-tenant rate ceilings are enforced by each replica separately: at `replicas: 2`,
+event-sources, outbound-connectors and ai-inference can admit up to twice a tenant's
+ceiling.
+
 Areas can also expose extra ports beyond the shared 8080 graphql port via
 `functionalAreas.<area>.extraPorts` (name ≤15 chars). event-sources ships with
 its HTTP device-ingest port by default:
@@ -290,6 +294,10 @@ For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
 `functionalAreas.<area>.replicas`); a `PodDisruptionBudget` is rendered for any area
 with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
 `rollingUpdate.maxSurge`.
+
+Per-tenant rate ceilings are enforced by each replica separately: at `replicas: 2`,
+event-sources, outbound-connectors and ai-inference can admit up to twice a tenant's
+ceiling.
 
 ## Bounding tenant egress (optional)
 

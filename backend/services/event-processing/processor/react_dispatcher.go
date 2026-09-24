@@ -17,13 +17,19 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ReactDispatcher is the REACT stage's consumer (ADR-051 slice 5b / ADR-054): an independent,
-// near-stateless durable consumer of the derived-event stream that dispatches each detection's
-// authored actions. It is deliberately SEPARATE from the DETECT single-writer processor — DETECT is
-// a stateful replay-correct loop; REACT is an at-least-once, queue-group-ready worker whose only
-// durability requirement is that each dispatch be idempotent under redelivery (carried by the
-// deterministic command token, slice 5b-1). It owns its own reader goroutine and lifecycle, wired in
-// main.go alongside the DETECT processor.
+// ReactDispatcher is the REACT stage's consumer (ADR-051 slice 5b / ADR-054): a near-stateless
+// durable consumer of the derived-event stream that dispatches each detection's authored actions. It
+// is deliberately SEPARATE from the DETECT single-writer processor — DETECT is a stateful
+// replay-correct loop; REACT is an at-least-once worker whose durability requirement is that each
+// dispatch be idempotent under redelivery (carried by the deterministic command token, slice 5b-1).
+// It owns its own reader goroutine and lifecycle, wired in main.go alongside the DETECT processor.
+//
+// It is NOT independent of DETECT's leadership, though: its reader consumes only while this replica
+// holds the DETECT partition lease (main.go, newReactReader). REACT needs no single writer; the gate
+// is there because its source-side outbound ceiling is kept in memory per process, and gating makes
+// the replica that detects the only one that reacts, so that ceiling is charged once. A standby's
+// dispatcher runs but parks, and Stop still returns promptly because a parked read unwinds on the
+// cancelled context.
 //
 // Failure handling is classification-free: any dispatch failure leaves the message unacked for
 // AckWait-paced redelivery (the dispatcher never acks a partially-dispatched event), and a persistently-failing event is
@@ -231,9 +237,10 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 	rd.metrics.recordDeadLettered()
 }
 
-// ack best-effort acks, logging a failed ack (a redelivery re-dispatches idempotently).
+// ack best-effort acks, logging a failed ack. A redelivery re-dispatches every action: commands
+// and alarms deduplicate on their token, connector calls do not (the key is only forwarded).
 func (rd *ReactDispatcher) ack(msg messaging.Message) {
 	if err := msg.Ack(); err != nil {
-		log.Warn().Err(err).Msg("Failed to ack a derived event; it will redeliver (idempotent).")
+		log.Warn().Err(err).Msg("Failed to ack a derived event; it will redeliver and dispatch its actions again.")
 	}
 }

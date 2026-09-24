@@ -38,6 +38,10 @@ Los techos de gobernanza de un inquilino provienen de su **[nivel (tier)](./tena
 
 Las anulaciones por inquilino son excepciones auditadas, no el mecanismo — el nivel lleva la respuesta empaquetada, y el valor por defecto de la plataforma es el piso que garantiza la regla de seguridad ante fallos. La misma cascada gobierna el derecho de uso de modelos de IA — una asignación de modelo por inquilino, y luego el modelo que el nivel del inquilino marca como su valor por defecto — de modo que "¿en qué nivel está este inquilino?" responde una pregunta consistente en los subsistemas de gobernanza y de IA. El branding del inquilino también sigue una cascada, pero sin ningún escalón de nivel: la anulación del inquilino, luego la configuración de sistema `branding.default` del operador, y luego el valor por defecto de fábrica.
 
+## Los techos son por réplica {#per-replica}
+
+Cada techo de tasa de esta página lo aplica por separado cada copia en ejecución del servicio que lo impone, sin coordinación entre copias. Si ejecuta dos réplicas de `event-sources`, `outbound-connectors` o `ai-inference` y se reparten el tráfico de un inquilino, ese inquilino puede ser admitido hasta al doble de su techo, y N réplicas permiten hasta N veces. La instalación por defecto ejecuta una réplica de cada uno, y ahí el techo es exacto. Hay dos techos que no se multiplican: el techo de comandos no entregados es un recuento que se lleva en la base de datos, y el techo de salida del motor de detección se consume solo en la réplica que detecta. Si escala un servicio, fije los techos del nivel para el número de réplicas que ejecuta.
+
 ## Verlo funcionar
 
 El volumen descartado se expone como una métrica operativa, de modo que un inquilino que ha alcanzado un techo — o una regla que ha empezado a emitir en exceso — es visible para un operador antes de convertirse en un ticket de soporte. La gobernanza está pensada para ser presión observable, no pérdida silenciosa.

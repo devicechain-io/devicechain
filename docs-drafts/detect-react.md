@@ -758,7 +758,7 @@ state — then takes the partition when it frees up. `ExecuteStart` returns with
 and hands the acquisition loop to `runTerms`
 (`backend/services/event-processing/processor/leadership.go`).
 
-Three things are worth knowing before turning it on:
+Worth knowing before turning it on:
 
 - **The standby is warm, not hot.** It holds no engine and no restored snapshot, so its takeover
   still pays the whole term build: restore, projection catch-up, three view builds, replay. What it
@@ -772,6 +772,22 @@ Three things are worth knowing before turning it on:
   the term (`errNoTermHeld`), because a replica that finds nothing to evict and a replica
   that evicted everything otherwise send the same reply, and the purge coordinator treats one clean
   reply from any responder as satisfying the whole partition.
+- **REACT consumes only on the lease holder too.** Its derived-events reader is term-gated on the
+  same `DetectTermGate` and releases (Naks and drops) its fetch buffer when the term is lost
+  (`newReactReader` in `backend/services/event-processing/main.go`,
+  `messaging.ReaderWithReleaseOnPark`). REACT needs no single writer; the gate exists because its
+  source-side outbound ceiling (`connectorRate`) is in memory per process, and without the gate a
+  standby took a share of the stream and charged a second copy of every tenant's ceiling. It is not
+  one of the processor's `termReaders`: a pull request served across a term edge only delays a
+  REACT dispatch, and binding it per term would put its bind failures on the term-build fuse. Two
+  costs: during a handover both replicas can dispatch for up to about 5 s (the old owner's `Held`
+  overshoots server expiry by up to the JetStream API timeout; see `termSlack`), and connector calls
+  made twice in that window reach the destination twice (the idempotency key is forwarded, never
+  deduplicated here); and after an unclean single-replica stop REACT waits for the dead pod's lease
+  to expire (TTL 30 s plus acquire backoff, about 35 s). The gate opens at acquire
+  (`rp.Gate.Enter(holder.Held)` in `beginTerm`), so REACT resumes then; DETECT resumes later, after
+  `termSlack` (the prior owner did not release, so `PriorOwnerReleasedCleanly` is false) and the
+  term build.
 
 **Metrics carry no per-tenant or per-rule label**, deliberately
 (`backend/services/event-processing/processor/metrics.go:15-16`, `:81-84`). The over-budget gauges are
