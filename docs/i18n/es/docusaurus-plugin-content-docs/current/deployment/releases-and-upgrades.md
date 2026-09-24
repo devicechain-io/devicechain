@@ -411,6 +411,10 @@ Configúrelo globalmente con `--set replicas=2`, o por área bajo
 configurada junto a ella; en cualquier otro caso el renderizado falla y explica por qué. Un
 `PodDisruptionBudget` se genera automáticamente para cualquier área con más de una réplica, de modo que
 los drenajes de nodo no puedan expulsar a todas las réplicas a la vez.
+
+Los techos de tasa los aplica cada réplica por separado, de modo que dos réplicas de `event-sources`,
+`outbound-connectors` o `ai-inference` pueden admitir hasta el doble del techo de un inquilino. Consulte
+[Gobernanza](../concepts/governance.md#per-replica).
 :::
 
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}
@@ -1599,7 +1603,9 @@ nombre. Si sus valores de outbound-connectors fijan `dispatchBacklog`, elimínel
 actualizar: el servicio ahora se niega a arrancar con él (vea «El servicio de conectores ya no
 acepta dispatchBacklog» más abajo). Si filtra los mensajes no entregados por tipo o por motivo, o
 tiene alertas sobre su stream, lea «Los mensajes abandonados en su último intento ahora se
-registran» más abajo: añade tres tipos, un motivo, un stream y dos alertas.
+registran» más abajo: añade tres tipos, un motivo, un stream y dos alertas. Si ejecuta una reserva
+en caliente de `event-processing`, lea «Con una reserva en caliente, solo la réplica que detecta
+despacha acciones».
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1902,6 +1908,25 @@ Qué cambia para usted:
 
 Durante la actualización escalonada, un abandono puede registrarse dos veces: una por un pod de la
 versión anterior y otra a partir del aviso del broker. Es el mismo fallo; no se perdió nada.
+
+#### Con una reserva en caliente, solo la réplica que detecta despacha acciones
+
+En un despliegue de `event-processing` con una reserva en caliente, la reserva se quedaba con una
+parte de las acciones de detección (comandos, alarmas y llamadas a conectores) y cargaba las llamadas
+a conectores contra su propia copia del techo de salida de cada inquilino, de modo que un inquilino
+podía llegar hasta el doble de ese techo. Ahora las acciones solo las despacha la réplica que tiene la
+partición de detección. Cuando la partición cambia de réplica, ambas pueden despachar durante unos
+cinco segundos como máximo, y una llamada a un conector hecha dos veces en ese intervalo llega dos
+veces a su destino.
+
+Con una réplica (el valor por defecto) nada cambia, salvo cuando el pod se detiene sin un apagado
+ordenado (una caída o una terminación por falta de memoria). La detección y las acciones pendientes
+de despachar se reanudan entonces cuando el reemplazo toma la partición, hasta unos 35 segundos
+después.
+
+Los techos de tasa de `event-sources`, `outbound-connectors` y `ai-inference` los aplica cada réplica
+por separado. Esto ahora está documentado en [Gobernanza](../concepts/governance.md#per-replica), y
+importa si ejecuta más de una réplica de esos servicios.
 
 ### La transición única a la ingesta duradera
 

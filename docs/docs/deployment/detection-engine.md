@@ -62,6 +62,12 @@ start and, on an eviction, the wait for a replacement to be scheduled. What it d
 the restart cost described in the next section — a standby holds no pre-loaded engine state, because
 loading it would mean reading a checkpoint the leader is still writing.
 
+That includes the actions detections trigger: a standby dispatches nothing, so a tenant's outbound
+ceiling at the engine is charged once, on the replica that detects. When the partition moves, the
+old and new replica can both dispatch for up to about five seconds, and a connector call made
+twice in that window reaches its destination twice: DeviceChain passes the idempotency key on to
+the destination and does not deduplicate connector calls itself.
+
 With a single replica there is no pod disruption budget, and draining its node stops detection until
 the pod is rescheduled. A standby is the way to avoid that.
 
@@ -69,6 +75,11 @@ the pod is rescheduled. A standby is the way to avoid that.
 
 A restart is routine, not an incident. On start the engine reloads its last checkpoint and replays
 the stream from that position, so it re-derives the state it had.
+
+If the engine's only pod stops without releasing its partition (a crash or an out-of-memory
+kill), detection and the actions waiting to be dispatched both resume when the replacement takes
+the partition, up to about 35 seconds later. A graceful restart releases the partition and does
+not wait.
 
 | | What happens |
 |---|---|

@@ -394,6 +394,10 @@ any strategy, and `event-processing` takes a second replica only as a warm stand
 `strategy: RollingUpdate` set alongside it — the render fails and says why otherwise. A
 `PodDisruptionBudget` is rendered automatically for any area with more than one replica, so
 node drains can't evict every replica at once.
+
+Rate ceilings are enforced by each replica separately, so two replicas of `event-sources`,
+`outbound-connectors` or `ai-inference` can admit up to twice a tenant's ceiling. See
+[Governance](../concepts/governance.md#per-replica).
 :::
 
 ### The v0.9.0 baseline squash {#v090-baseline-squash}
@@ -1504,7 +1508,8 @@ renamed. If your outbound-connectors values set `dispatchBacklog`, delete it bef
 service now refuses to start with it (see "The connectors service no longer accepts dispatchBacklog"
 below). If you filter dead letters by kind or reason, or alert on the dead-letter stream, read
 "Messages abandoned on their last attempt are now dead-lettered" below: it adds three kinds, a
-reason, a stream and two alerts.
+reason, a stream and two alerts. If you run a warm standby for `event-processing`, read "With a
+warm standby, only the replica running detection dispatches actions".
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1789,6 +1794,24 @@ What changes for you:
 
 During the rolling upgrade a give-up can be lettered twice, once by a pod of the old release and
 once from the broker's notice. The two are the same failure; nothing was lost.
+
+#### With a warm standby, only the replica running detection dispatches actions
+
+On an `event-processing` deployment with a warm standby, the standby used to take a share of
+detection actions (commands, alarms and connector calls) and charge the connector calls against
+its own copy of each tenant's outbound ceiling, so a tenant could reach up to twice that ceiling.
+Actions are now dispatched only by the replica that holds the detection partition. When the
+partition moves, both replicas can dispatch for up to about five seconds, and a connector call
+made twice in that window reaches its destination twice.
+
+With one replica (the default) nothing changes, except after the pod stops without a graceful
+shutdown (a crash or an out-of-memory kill). Detection and the actions waiting to be dispatched
+then resume when the replacement takes the partition, up to about 35 seconds later.
+
+Rate ceilings in `event-sources`, `outbound-connectors` and `ai-inference` are enforced by each
+replica separately. This is now documented under
+[Governance](../concepts/governance.md#per-replica), and matters if you run more than one replica
+of those services.
 
 ### The one-time durable-ingest cutover
 

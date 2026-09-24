@@ -55,7 +55,7 @@ Dos propiedades mantienen esto seguro:
 
 ## Gobernanza {#governance}
 
-Toda acción de salida está sujeta a **gobernanza por inquilino**, porque una llamada externa es más costosa — y más fácil de convertir en una inundación autoinfligida — que una llamada dentro del proceso. El volumen de salida se limita en tasa por inquilino en ambos extremos del salto: REACT descarta (sheds) las emisiones que exceden el presupuesto antes de despacharlas, y el servicio de conectores admite tráfico de destino dentro de un presupuesto acotado. Un inquilino sin límite configurado recae en un valor predeterminado de plataforma que **nunca es ilimitado**. El volumen descartado se expone como una métrica operativa para que un operador pueda detectar una regla que ha comenzado a sobreemitir.
+Toda acción de salida está sujeta a **gobernanza por inquilino**, porque una llamada externa es más costosa — y más fácil de convertir en una inundación autoinfligida — que una llamada dentro del proceso. El volumen de salida se limita en tasa por inquilino en ambos extremos del salto: REACT descarta (sheds) las emisiones que exceden el presupuesto antes de despacharlas, y el servicio de conectores admite tráfico de destino dentro de un presupuesto acotado. Un inquilino sin límite configurado recae en un valor predeterminado de plataforma que **nunca es ilimitado**. El volumen descartado se expone como una métrica operativa para que un operador pueda detectar una regla que ha comenzado a sobreemitir. Ambos extremos aplican el techo por réplica de su servicio; consulte [Los techos son por réplica](./governance.md#per-replica).
 
 ## Aislamiento y dependencias
 

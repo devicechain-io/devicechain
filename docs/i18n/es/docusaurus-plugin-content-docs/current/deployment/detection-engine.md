@@ -68,6 +68,13 @@ es el coste de reinicio descrito en la siguiente sección: un standby no mantien
 precargado, porque cargarlo significaría leer un punto de control que el líder todavía está
 escribiendo.
 
+Eso incluye las acciones que disparan las detecciones: un standby no despacha nada, de modo que el
+límite de salida de un inquilino en el motor se consume una sola vez, en la réplica que detecta.
+Cuando la partición cambia de réplica, la antigua y la nueva pueden despachar a la vez durante unos
+cinco segundos como máximo, y una llamada a un conector hecha dos veces en ese intervalo llega dos
+veces a su destino: DeviceChain transmite la clave de idempotencia al destino y no deduplica por sí
+mismo las llamadas a conectores.
+
 Con una sola réplica no hay presupuesto de interrupción de pods, y drenar su nodo detiene la
 detección hasta que el pod se reprograma. Un standby es la forma de evitarlo.
 
@@ -75,6 +82,10 @@ detección hasta que el pod se reprograma. Un standby es la forma de evitarlo.
 
 Un reinicio es rutina, no un incidente. Al arrancar, el motor recarga su último punto de control y
 reproduce el flujo desde esa posición, de modo que vuelve a derivar el estado que tenía.
+
+Si el único pod del motor se detiene sin liberar su partición (una caída o una terminación por falta
+de memoria), la detección y las acciones pendientes de despachar se reanudan cuando el reemplazo toma
+la partición, hasta unos 35 segundos después. Un reinicio ordenado libera la partición y no espera.
 
 | | Qué ocurre |
 |---|---|

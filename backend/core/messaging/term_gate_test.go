@@ -180,3 +180,146 @@ func TestUnbindTermParksTheReaderAndBindTermRestoresIt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, msg.Value)
 }
+
+// primeBuffer reads one message through a term-gated reader whose term is held, so the
+// rest of a three-message batch is left in its fetch buffer, and returns the reader's
+// internals. It refuses to continue with an empty buffer: every assertion that follows is
+// about what happens to buffered messages, and would hold vacuously without any.
+func primeBuffer(t *testing.T, nmgr *NatsManager, held *atomic.Bool, opts ...ReaderOption) (MessageReader, *natsReader) {
+	t.Helper()
+	opts = append([]ReaderOption{ReaderWithTermGate(held.Load)}, opts...)
+	reader, err := nmgr.NewReader(streams.InboundEvents, opts...)
+	require.NoError(t, err)
+	publishN(t, nmgr, streams.InboundEvents, 3)
+
+	held.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	first, err := reader.ReadMessage(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first.StreamSeq)
+	require.NoError(t, first.Ack())
+
+	nr := reader.(*natsReader)
+	require.Len(t, nr.pending, 2,
+		"the first read did not leave the other two messages in the fetch buffer, so this test "+
+			"cannot show what happens to a buffer")
+	return reader, nr
+}
+
+// parkBriefly closes the gate and makes one read that parks for well over two gate polls,
+// which is how a term that ends between two reads looks to the reader.
+func parkBriefly(t *testing.T, reader MessageReader, held *atomic.Bool) {
+	t.Helper()
+	held.Store(false)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*termGatePoll)
+	defer cancel()
+	_, err := reader.ReadMessage(ctx)
+	require.ErrorIs(t, err, io.EOF, "a read with the gate closed handed a message out")
+}
+
+// A reader built with ReaderWithReleaseOnPark gives its buffer up when its gate closes,
+// and gives it up by NAKING it: the broker hands the messages out again at once, not an
+// AckWait later.
+//
+// The two halves are asserted separately. The buffer being empty after the park is the
+// drop; the next read returning a REDELIVERY (NumDelivered 2) well inside AckWait is the
+// Nak. A release that only dropped would leave the broker waiting out the whole AckWait
+// before redelivering, and the bounded read below would come back empty.
+func TestReleaseOnParkNaksAndDrops(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	var held atomic.Bool
+	reader, nr := primeBuffer(t, nmgr, &held, ReaderWithReleaseOnPark())
+
+	parkBriefly(t, reader, &held)
+	require.Empty(t, nr.pending, "the buffer survived the park, so a replica that regains the term "+
+		"would hand out a batch another replica may have dispatched in the meantime")
+
+	held.Store(true)
+	// Far inside the AckWait the durable is configured with: only a Nak redelivers this fast.
+	require.Greater(t, nmgr.ackWait(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	msg, err := reader.ReadMessage(ctx)
+	require.NoError(t, err, "nothing was redelivered inside AckWait: the buffer was dropped without being Nak'd")
+	require.Contains(t, []uint64{2, 3}, msg.StreamSeq)
+	require.Equal(t, 2, msg.NumDelivered,
+		"the message handed out after the park was not a redelivery; the stale buffered copy came out")
+}
+
+// The same release happens when the reader stops reading, so a clean stop hands the batch
+// to whoever reads the durable next at once instead of an AckWait later. The read below is
+// made with a context that is already cancelled while the gate is OPEN, so only the
+// end-of-stream path — not the park — can be what releases the buffer.
+func TestReleaseOnParkReleasesWhenTheReaderStops(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	var held atomic.Bool
+	reader, nr := primeBuffer(t, nmgr, &held, ReaderWithReleaseOnPark())
+
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	_, err := reader.ReadMessage(stopped)
+	require.ErrorIs(t, err, io.EOF)
+	require.Empty(t, nr.pending, "a stopped reader kept its buffer")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	msg, err := reader.ReadMessage(ctx)
+	require.NoError(t, err, "nothing was redelivered inside AckWait: the stop dropped the buffer without Naking it")
+	require.Contains(t, []uint64{2, 3}, msg.StreamSeq)
+	require.Equal(t, 2, msg.NumDelivered)
+}
+
+// 🔴 THE GUARD FOR DETECT: a term-gated reader WITHOUT ReaderWithReleaseOnPark keeps its
+// buffer across a park and hands it out, first-delivery copies and all, once the gate
+// reopens. Held can flicker false and back inside one term, and a single writer that
+// dropped its buffer there would see its input reordered. Release is opt-in; this is what
+// fails if it ever becomes the default.
+func TestTermGatedReaderKeepsItsBufferWithoutRelease(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	var held atomic.Bool
+	reader, nr := primeBuffer(t, nmgr, &held)
+
+	parkBriefly(t, reader, &held)
+	require.Len(t, nr.pending, 2, "a reader without release-on-park lost its buffer across a park")
+
+	held.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	msg, err := reader.ReadMessage(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), msg.StreamSeq, "the buffer was not handed out in order after the park")
+	require.Equal(t, 1, msg.NumDelivered, "the buffered message was redelivered rather than handed out from the buffer")
+}
+
+// A Fetch waits up to its long-poll for messages, so a term can end while one is in
+// flight. The batch it brings back must not be handed out under a gate that closed while
+// it waited: the gate is re-checked when the Fetch returns.
+//
+// The gate here closes itself the moment the Fetch is under way. It is modelled as a
+// predicate that answers true exactly once — the check before the Fetch — and false ever
+// after, so every message that comes out of this read came out after the gate closed.
+func TestATermGatedReaderRechecksItsGateAfterAFetch(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	var calls atomic.Int32
+	once := func() bool { return calls.Add(1) == 1 }
+	reader, err := nmgr.NewReader(streams.InboundEvents, ReaderWithTermGate(once))
+	require.NoError(t, err)
+	publishN(t, nmgr, streams.InboundEvents, 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = reader.ReadMessage(ctx)
+	require.ErrorIs(t, err, io.EOF,
+		"a message fetched while the gate was closing was handed out after it had closed")
+	require.Len(t, reader.(*natsReader).pending, 3,
+		"the Fetch brought nothing back, so this test did not reach the post-Fetch check")
+}

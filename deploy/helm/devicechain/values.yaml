@@ -711,6 +711,9 @@ goMemLimit: ""
 # Replica count per area (override per area under functionalAreas.<area>.replicas).
 # Recommend >= 2 in production for true zero-downtime rollouts (a single replica
 # still has a brief gap while its one pod is replaced) and node-failure survival.
+# Per-tenant rate ceilings are enforced by each replica separately (ADR-023): at
+# replicas: 2, event-sources, outbound-connectors and ai-inference can admit up to
+# twice a tenant's ceiling. Size tier ceilings for the replica count you run.
 replicas: 1
 
 # Zero-downtime rolling-update strategy (methodology §10.1). maxUnavailable:0 keeps
@@ -1180,9 +1183,12 @@ functionalAreas:
     #   strategy: RollingUpdate
     #
     # The extra replicas are standbys, not writers. Exactly one replica holds the partition
-    # lease at a time; the others report Ready, serve GraphQL, park their stream readers, refuse
-    # their own checkpoints, and refuse to answer for the partition's tenant state — then take
-    # the partition when it frees up, without the pod cold start. Raising replicas WITHOUT
+    # lease at a time; the others report Ready, serve GraphQL, park their stream readers
+    # (including REACT, so actions are dispatched and their outbound ceiling is charged only on
+    # the replica that detects), refuse their own checkpoints, and refuse to answer for the
+    # partition's tenant state — then take the partition when it frees up, without the pod
+    # cold start. When the partition moves, the old and new replica can both dispatch for up
+    # to about five seconds. Raising replicas WITHOUT
     # moving off Recreate fails the render, because Recreate stops every pod before starting
     # any: the standby would be down exactly when it was needed.
     #

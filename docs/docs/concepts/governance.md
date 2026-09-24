@@ -38,6 +38,10 @@ A tenant's governance ceilings come from its **[tier](./tenant-tiers.md)** — t
 
 Per-tenant overrides are audited exceptions, not the mechanism — the tier carries the packaged answer, and the platform default is the floor the fail-safe rule guarantees. The same cascade governs AI model entitlement — a per-tenant model assignment, then the model the tenant's tier marks as its default — so "which tier is this tenant on?" answers one consistent question across the governance and AI subsystems. Tenant branding cascades too, but with no tier level in it: a tenant's override, then the operator's `branding.default` system setting, then the shipped default.
 
+## Ceilings are per replica {#per-replica}
+
+Every rate ceiling on this page is enforced by each running copy of the service that enforces it, with no coordination between copies. If you run two replicas of `event-sources`, `outbound-connectors` or `ai-inference` and they share a tenant's traffic, that tenant can be admitted at up to twice its ceiling, and N replicas allow up to N times. The default install runs one replica of each, and there the ceiling is exact. Two ceilings are not multiplied: the undelivered-command ceiling is a count kept in the database, and the detection engine's outbound ceiling is charged only on the replica that detects. If you scale a service out, set tier ceilings for the number of replicas you run.
+
 ## Seeing it work
 
 Shed volume is surfaced as an operational metric, so a tenant that has hit a ceiling — or a rule that has started to over-emit — is visible to an operator before it becomes a support ticket. Governance is meant to be observable pressure, not silent loss.

@@ -11,7 +11,7 @@
 // the signal carries, never the original measurement map.
 //
 // The determinism boundary holds: a guard is a pure per-message boolean with no side effects and
-// no state, so it is safe in REACT's at-least-once, queue-group-ready dispatcher (a redelivery
+// no state, so it is safe in REACT's at-least-once, stateless dispatcher (a redelivery
 // re-evaluates to the same bit). It never gates a raiseAlarm action's structural falling-edge
 // clear — that is the dispatcher's invariant (see react.Dispatcher), enforced there rather than
 // here, because only the dispatcher knows the edge.

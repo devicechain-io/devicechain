@@ -55,7 +55,7 @@ Two properties keep this safe:
 
 ## Governance {#governance}
 
-Every outbound action is subject to **per-tenant governance**, because an external call is more expensive — and easier to turn into a self-inflicted flood — than an in-process one. Outbound volume is rate-limited per tenant at both ends of the hop: REACT sheds over-budget emissions before they are dispatched, and the connector service admits sink traffic within a bounded budget. A tenant with no configured limit falls back to a platform default that is **never unlimited**. Shed volume is surfaced as an operational metric so an operator can see a rule that has started to over-emit.
+Every outbound action is subject to **per-tenant governance**, because an external call is more expensive — and easier to turn into a self-inflicted flood — than an in-process one. Outbound volume is rate-limited per tenant at both ends of the hop: REACT sheds over-budget emissions before they are dispatched, and the connector service admits sink traffic within a bounded budget. A tenant with no configured limit falls back to a platform default that is **never unlimited**. Shed volume is surfaced as an operational metric so an operator can see a rule that has started to over-emit. Both ends enforce the ceiling per replica of their service; see [Ceilings are per replica](./governance.md#per-replica).
 
 ## Isolation and dependencies
 
