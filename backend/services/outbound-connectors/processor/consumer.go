@@ -357,20 +357,24 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	}
 
 	// Per-tenant egress rate gate (ADR-060 SD-3), applied BEFORE the expensive secret-resolve + send.
-	// The worker blocks up to waitBudget for a token: a brief burst just over the tenant's rate is
-	// smoothed into pacing and admitted; a dispatch that cannot get a token within the budget is a
-	// tenant sustained over quota (a brief burst would have been admitted) and is SHED to the
-	// dead-letter subject. It never leaves a rate-shed message unacked, so rate-limiting can never churn the redelivery
-	// (poison) cap; and because reaching the budget means sustained-over-quota, a redelivery would not
-	// help either. The wait runs on ctx (a background context, per the worker) bounded by waitBudget,
-	// so it aborts on its own deadline; a shed consumes no token, so it does not deepen the deficit.
 	//
-	// This blocks a worker, so a flooding tenant can occupy workers for up to waitBudget each, adding a
-	// bounded (≤ waitBudget) delivery latency to other tenants whose dispatches wait behind them — a
-	// deliberate, bounded trade for not churning the poison cap. It self-limits: a tenant far over quota
-	// hits the budget and sheds fast (freeing the worker) rather than blocking the full budget, and the
-	// per-tenant bounded durable stream is the real buffer. The PRIMARY throttle is at the source
-	// (REACT charges the cost-gate at publish, C3b.3), so egress sheds should be the rare exception.
+	// IT METERS THE TIME REACT METERED. The dispatch carries triggeredAt, the time the triggering
+	// telemetry reached the platform, and core.MeteringTime — the one reader both ends share — picks
+	// it (capped at this message's broker time), or the broker time when it is missing, or now. A
+	// backlog that was within the tenant's ceiling when it happened therefore passes at drain speed
+	// here as it did at the source: charged at arrival it would land at one instant, and the workers
+	// would sit out the tenant's rate one token at a time while every other tenant queued behind them.
+	//
+	// The worker then waits up to waitBudget for a token: a dispatch whose token on that timeline is
+	// further off than the budget is a tenant over its ceiling on the timeline its telemetry arrived
+	// on, and it is SHED to the dead-letter subject. It never leaves a rate-shed message unacked, so
+	// rate-limiting can never churn the redelivery (poison) cap, and because the tenant is over quota
+	// a redelivery would not help either. A shed consumes no token, so it does not deepen the deficit.
+	//
+	// Head-of-line blocking is confined to a tenant that is over quota: only its dispatches wait, for
+	// up to waitBudget each, adding a bounded delivery latency to other tenants' dispatches queued
+	// behind them. It self-limits — a tenant far over quota is shed at once rather than waiting the
+	// full budget — and the per-tenant bounded durable stream is the real buffer.
 	if c.rate != nil {
 		// 🔴 THE WAIT ENDS IN TIME FOR THE SEND TO FINISH BEFORE THE BROKER REDELIVERS. The
 		// message's clock started when it was fetched (its AckDeadline), and after the wait come a
@@ -379,7 +383,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		// before that deadline. A message with no AckDeadline (not from a capacity reader) waits
 		// its budget as before.
 		//
-		// A deadline already spent needs no check of its own: the limiter's Wait refuses a
+		// A deadline already spent needs no check of its own: the limiter's WaitAt refuses a
 		// context that is already done, or one whose deadline its wait cannot cover, before it
 		// takes a token, so that case arrives below as a capped wait error like any other.
 		waitDeadline, capped := c.rateWaitDeadline(tctx, time.Now())
@@ -389,7 +393,9 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 		// rather than dead-lettering a message that was only waiting on rate. A budget timeout (not a
 		// shutdown) is a genuine sustained-over-quota shed.
 		waitCtx, cancel := context.WithDeadline(c.procCtx, waitDeadline)
-		err := c.rate.Wait(waitCtx, tenant)
+		at, clk := core.MeteringTime(req.TriggeredAt, msg.AppendTime)
+		c.metrics.recordClockFallback(clk)
+		err := c.rate.WaitAt(waitCtx, tenant, at)
 		cancel()
 		if err != nil {
 			if c.procCtx.Err() != nil {
@@ -405,12 +411,19 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 				c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, errTooLateToSend)
 				return
 			}
-			// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
-			// signal; a per-message warn would flood the log for exactly the sustained-over-quota
-			// tenant this fires on.
-			log.Debug().Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
-				Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
-			c.deadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited)
+			if errors.Is(err, core.ErrWaitBudget) {
+				// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
+				// signal; a per-message warn would flood the log for exactly the over-quota tenant
+				// this fires on.
+				log.Debug().Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
+					Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
+				c.deadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited)
+				return
+			}
+			// Anything else is not a verdict on the tenant's rate — a wait interrupted by its own
+			// deadline, or a limiter that refused outright — so it is disposed of as a transient
+			// failure rather than dead-lettered as a shed.
+			c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, err)
 			return
 		}
 	}

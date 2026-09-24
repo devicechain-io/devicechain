@@ -5,6 +5,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -77,6 +79,26 @@ type DerivedEvent struct {
 	// distinct from "value is 0.0", and omitted from the wire when absent. Like Severity it is an
 	// informational payload, NOT part of the dedup identity below.
 	Value *float64 `json:"value,omitempty"`
+	// TriggeredAt is the PLATFORM time of the input that caused this detection to be emitted: the
+	// lesser of the triggering resolved event's ProcessedTime and the broker time its message was
+	// stored at — for a watermark-fired detection (Absence, Duration, Session, Aggregate) the message
+	// that moved the frontier, and for an idle-advance firing the advance's own time. REACT's outbound
+	// gate and the outbound-connectors egress limiter both meter the detection's connector actions on
+	// it, so a backlog drained after a restart is charged on the timeline it happened on rather than
+	// all at once (see core.MeteringTime).
+	//
+	//   - It is NEVER device time. OccurredTime is written by the device and may be anything within
+	//     its tolerance; a rate limiter metered on a time the tenant chooses lets the tenant mint
+	//     tokens (core.TenantRateLimiter.AllowAt), so this is only ever a time the platform stamped.
+	//   - It is NEVER part of the dedup identity (DedupID) or the idempotency token. A replay
+	//     re-stamps it from the replayed message, which carries the same ProcessedTime and broker
+	//     time, so it is replay-stable in practice — but identity must not depend on that.
+	//   - It is not projected on GraphQL. It is carried on the wire for REACT, and a subscriber that
+	//     reads the raw feed sees it.
+	//
+	// Zero on an event published before it existed; REACT then falls back to the derived event's
+	// own broker time.
+	TriggeredAt time.Time `json:"triggeredAt,omitzero"`
 	// CAVEAT (dynamic thresholds): the dedup identity does NOT include the resolved threshold. For a
 	// rule whose bound comes from a device attribute (slice 4c-3), replay resolves against the CURRENT
 	// attribute value, not the value at original event time (see startAttributeView's non-determinism
@@ -86,6 +108,21 @@ type DerivedEvent struct {
 	// time — its (RuleID, Series, Kind, OccurredTime) has no prior counterpart downstream, so it is NOT
 	// collapsed. This is the accepted, device/rule-scoped divergence the upstream-embedded-bound fix
 	// (deferred) closes; static-threshold rules are unaffected.
+}
+
+// DedupID is the derived event's broker dedup id (its Nats-Msg-Id): "de." + hex(sha256(RuleID,
+// Tenant, Kind, Series, OccurredTime.UnixNano, Edge)) — the identity documented on DerivedEvent,
+// and nothing else. TriggeredAt, Severity and Value are excluded: they are payload, not identity,
+// and a replay that re-derived one of them differently must still collapse onto the original.
+//
+// It is what lets the derived-events stream's duplicate window store a detection DETECT
+// re-publishes after a restart exactly once, so REACT neither re-dispatches it nor charges the
+// tenant's outbound ceiling for it a second time.
+func (de DerivedEvent) DedupID() string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%d\x00%s",
+		de.RuleID, de.Tenant, de.Kind, de.Series, de.OccurredTime.UTC().UnixNano(), de.Edge)
+	return "de." + hex.EncodeToString(h.Sum(nil))
 }
 
 // RejectReason is a bounded label for a dropped detection (bounded cardinality per the
@@ -171,7 +208,13 @@ func (p *Publisher) SetFireRecorder(r FireRecorder) { p.recorder = r }
 // checkpoint past the producing message (deliver-before-checkpoint), so a replay re-derives
 // and re-emits the detection. A terminal drop (backstop reject, orphan rule, marshal
 // failure) returns nil: it is intentional and must not wedge the checkpoint loop.
-func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
+//
+// triggeredAt is stamped on the event as DerivedEvent.TriggeredAt. It is a parameter rather than
+// a field of core.Detection on purpose: the engine is replay-correct and never holds a
+// wall-derived value, so the processor, which knows which message caused the drain, supplies it.
+// The event is written with its DedupID, so a re-publish within the stream's duplicate window
+// is stored once.
+func (p *Publisher) Publish(ctx context.Context, det core.Detection, triggeredAt time.Time) error {
 	// ADR-057 two-edge model (6d-pre-2b): BOTH edges are now published — a Raised on the rising edge
 	// and a Resolved on the falling edge, discriminated by DerivedEvent.Edge and dedup-distinct even at
 	// a shared OccurredTime. The REACT dispatcher routes a Resolved to a clear (skipping send-command,
@@ -231,6 +274,7 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 		OccurredTime: det.At,
 		Severity:     string(sr.Compiled.Severity),
 		Edge:         wireEdge(det.Edge),
+		TriggeredAt:  triggeredAt,
 	}
 	// A value rides only on a RAISED edge: a Resolved reports the condition ceased, not a reading. The
 	// core never stamps a value on a falling edge today (resolve() emits none), but pinning it here
@@ -252,7 +296,7 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection) error {
 	// The writer derives the subject from the tenant in context (fail-closed on none), so the
 	// sink is exactly "{instance}.{sr.Tenant}.derived-events" — the backstop-validated tenant.
 	tctx := dccore.WithTenant(ctx, sr.Tenant)
-	if err := p.writer.WriteMessages(tctx, messaging.Message{Value: payload}); err != nil {
+	if err := p.writer.WriteMessages(tctx, messaging.Message{Value: payload, DedupID: de.DedupID()}); err != nil {
 		return fmt.Errorf("publish derived event for rule %q: %w", det.RuleID, err)
 	}
 	p.metrics.RecordDerivedPublished()

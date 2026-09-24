@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
@@ -205,6 +206,14 @@ type ReactMetrics struct {
 	// written is counted by the dead-letter sink itself, on the dead_letter_lost_total every
 	// producing service shares (deadletter.Producer).
 	deadLettered prometheus.Counter
+	// shedDeadLettered / shedUnlettered split every shed connector action on a Done dispatch
+	// into the ones written as individual dead letters and the ones over the letter budget,
+	// which are only summarised (see shedLetterer).
+	shedDeadLettered *prometheus.CounterVec
+	shedUnlettered   *prometheus.CounterVec
+	// clockFallback counts the derived events REACT metered on a fallback clock because they
+	// carried no usable trigger time (core.NewRateClockFallbacks).
+	clockFallback func(core.MeteringClock)
 }
 
 // NewReactMetrics registers the REACT counters under the service's Prometheus namespace. A nil
@@ -229,7 +238,44 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched)."),
 		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness."),
 		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024)."),
+		shedDeadLettered:    precreated(ms.NewCounterVec("react_connector_shed_dead_lettered_total", "Connector actions (httpCall/publish) shed at the source and recorded as an individual dead letter with reason shed, by action type.", []string{"action"})),
+		shedUnlettered:      precreated(ms.NewCounterVec("react_connector_shed_unlettered_total", "Connector actions (httpCall/publish) shed at the source past the tenant's or the service's dead-letter budget, so counted and summarised in one letter per tenant per minute rather than recorded individually, by action type.", []string{"action"})),
+		clockFallback:       core.NewRateClockFallbacks(ms),
 	}
+}
+
+// precreated creates the vec's children for both connector actions at 0, so an alert over the
+// series has something to read before the first increment.
+func precreated(v *prometheus.CounterVec) *prometheus.CounterVec {
+	for _, a := range []string{string(rules.ActionHTTPCall), string(rules.ActionPublish)} {
+		v.WithLabelValues(a)
+	}
+	return v
+}
+
+// recordShedDeadLettered records one shed connector action written as its own dead letter.
+func (m *ReactMetrics) recordShedDeadLettered(action string) {
+	if m == nil {
+		return
+	}
+	m.shedDeadLettered.WithLabelValues(action).Inc()
+}
+
+// recordShedUnlettered records one shed connector action over the letter budget.
+func (m *ReactMetrics) recordShedUnlettered(action string) {
+	if m == nil {
+		return
+	}
+	m.shedUnlettered.WithLabelValues(action).Inc()
+}
+
+// recordClockFallback records which clock one derived event was metered on; only a fallback
+// counts.
+func (m *ReactMetrics) recordClockFallback(c core.MeteringClock) {
+	if m == nil || m.clockFallback == nil {
+		return
+	}
+	m.clockFallback(c)
 }
 
 // RecordDispatched records one action successfully handed to its sink (react.Metrics).

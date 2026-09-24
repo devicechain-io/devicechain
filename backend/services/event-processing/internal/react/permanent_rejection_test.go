@@ -39,7 +39,7 @@ func TestPermanentRejectionIsDroppedNotRetried(t *testing.T) {
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, sink, nil, nil, nil, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("a permanently-rejected command must be DROPPED (Done), got %v; "+
 			"retrying it burns the whole redelivery budget on a verdict that cannot change", out)
 	}
@@ -63,7 +63,7 @@ func TestPermanentRejectionIsRecognizedThroughAWrap(t *testing.T) {
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, sink, nil, nil, nil, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("a WRAPPED permanent rejection must still be dropped, got %v", out)
 	}
 	if m.permanent["sendCommand"] != 1 {
@@ -97,7 +97,7 @@ func TestTransientSinkFailureStillRetries(t *testing.T) {
 			m := newFakeMetrics()
 			d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, sink, nil, nil, nil, m)
 
-			if out := d.Dispatch(context.Background(), evt()); out != Retry {
+			if out := d.Dispatch(context.Background(), evt()).Outcome; out != Retry {
 				t.Fatalf("want Retry, got %v; dropping a failure that is not a typed permanent "+
 					"rejection loses a real actuation", out)
 			}

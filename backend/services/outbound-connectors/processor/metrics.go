@@ -73,6 +73,9 @@ const actionUnknown = "unknown"
 // double-registration.
 type DispatchMetrics struct {
 	dispatched *prometheus.CounterVec
+	// clockFallback counts the dispatches the egress limiter metered on a fallback clock because
+	// they carried no usable trigger time (core.NewRateClockFallbacks).
+	clockFallback func(core.MeteringClock)
 }
 
 // NewDispatchMetrics registers the counters under the service's Prometheus namespace. A nil
@@ -92,7 +95,16 @@ func NewDispatchMetrics(ms *core.Microservice) *DispatchMetrics {
 		dispatched: ms.NewCounterVec("connector_dispatch_total",
 			"Outbound connector dispatch requests processed, by action and terminal outcome (bounded enums).",
 			[]string{"action", "outcome"}),
+		clockFallback: core.NewRateClockFallbacks(ms),
 	}
+}
+
+// recordClockFallback records which clock one dispatch was metered on; only a fallback counts.
+func (m *DispatchMetrics) recordClockFallback(c core.MeteringClock) {
+	if m == nil || m.clockFallback == nil {
+		return
+	}
+	m.clockFallback(c)
 }
 
 // recordOutcome records one message's terminal disposition. action is the connectorwire kind (or

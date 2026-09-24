@@ -49,7 +49,7 @@ func TestGuardGatesSendCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &fakeSink{}
 			d := NewDispatcher(fakeResolver{rule: guardedSendRule(`value > 100.0`), found: true}, sink, nil, nil, nil, newFakeMetrics())
-			if out := d.Dispatch(context.Background(), raisedEvt(tc.value)); out != Done {
+			if out := d.Dispatch(context.Background(), raisedEvt(tc.value)).Outcome; out != Done {
 				t.Fatalf("outcome = %v, want Done", out)
 			}
 			if len(sink.sent) != tc.wantSent {
@@ -66,7 +66,7 @@ func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 	// Rising edge, guard false (value 50 ≤ 100): no raise.
 	alarm := &fakeAlarmSink{}
 	d := NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, nil, newFakeMetrics())
-	if out := d.Dispatch(context.Background(), raisedEvt(f64(50))); out != Done {
+	if out := d.Dispatch(context.Background(), raisedEvt(f64(50))).Outcome; out != Done {
 		t.Fatalf("rising/guard-false: outcome = %v, want Done", out)
 	}
 	if len(alarm.raised) != 0 {
@@ -76,7 +76,7 @@ func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 	// Rising edge, guard true (value 150 > 100): raise.
 	alarm = &fakeAlarmSink{}
 	d = NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, nil, newFakeMetrics())
-	if out := d.Dispatch(context.Background(), raisedEvt(f64(150))); out != Done {
+	if out := d.Dispatch(context.Background(), raisedEvt(f64(150))).Outcome; out != Done {
 		t.Fatalf("rising/guard-true: outcome = %v, want Done", out)
 	}
 	if len(alarm.raised) != 1 || alarm.raised[0].Edge != runtime.EdgeRaised {
@@ -89,7 +89,7 @@ func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 	d = NewDispatcher(fakeResolver{rule: guardedAlarmRule(`value > 100.0`), found: true}, nil, alarm, nil, nil, newFakeMetrics())
 	resolved := raisedEvt(nil)
 	resolved.Edge = runtime.EdgeResolved
-	if out := d.Dispatch(context.Background(), resolved); out != Done {
+	if out := d.Dispatch(context.Background(), resolved).Outcome; out != Done {
 		t.Fatalf("falling: outcome = %v, want Done", out)
 	}
 	if len(alarm.raised) != 1 || alarm.raised[0].Edge != runtime.EdgeResolved {
@@ -101,7 +101,7 @@ func TestGuardGatesRaiseButNeverClear(t *testing.T) {
 func TestNoGuardIsUnconditional(t *testing.T) {
 	sink := &fakeSink{}
 	d := NewDispatcher(fakeResolver{rule: guardedSendRule(""), found: true}, sink, nil, nil, nil, newFakeMetrics())
-	if out := d.Dispatch(context.Background(), raisedEvt(f64(1))); out != Done {
+	if out := d.Dispatch(context.Background(), raisedEvt(f64(1))).Outcome; out != Done {
 		t.Fatalf("outcome = %v, want Done", out)
 	}
 	if len(sink.sent) != 1 {

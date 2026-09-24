@@ -134,11 +134,11 @@ func TestDropStaleAbsences(t *testing.T) {
 		[]runtime.RosterEntry{{Tenant: "acme", DeviceToken: "live", ProfileToken: "p1", ExpectedSince: testBase}},
 		[]runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: testBase}},
 	)
-	rp.pendingDets = []detectcore.Detection{
+	rp.pendingDets = pending([]detectcore.Detection{
 		{RuleID: id, Series: "live", Kind: detectcore.Absence},
 		{RuleID: id, Series: "gone", Kind: detectcore.Absence},
 		{RuleID: id, Series: "gone", Kind: detectcore.Threshold}, // non-absence: always kept
-	}
+	})
 	rp.dropSupersededDetections()
 
 	var liveAbs, thr, goneAbs bool
@@ -185,12 +185,12 @@ func TestDropSupersededFrontierDetections(t *testing.T) {
 		[]runtime.RosterEntry{{Tenant: "acme", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: testBase}},
 		[]runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p1", ActiveVersionToken: "p1@v2", PublishedAt: testBase}},
 	)
-	rp.pendingDets = []detectcore.Detection{
+	rp.pendingDets = pending([]detectcore.Detection{
 		{RuleID: v1, Series: "dev", Kind: detectcore.Duration},        // superseded frontier → DROP
 		{RuleID: v2, Series: "dev", Kind: detectcore.Duration},        // active version → keep
 		{RuleID: v1, Series: "dev", Kind: detectcore.Threshold},       // superseded but event-driven → keep
 		{RuleID: v1, Series: "unrostered", Kind: detectcore.Duration}, // unrostered → keep (fail toward not-dropping)
-	}
+	})
 	rp.dropSupersededDetections()
 
 	key := func(kind detectcore.RuleKind, rule, series string) string {

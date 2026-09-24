@@ -179,7 +179,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "Connector actions are being shed at the source for over-quota egress"
-            description: "REACT is dropping httpCall/publish actions at the source because a tenant is over its outbound egress quota (ADR-060 SD-3) for 15m — a source shed destroys the action (this counter is its only evidence). Expected governance back-pressure, but sustained shedding is likely a runaway/misconfigured rule or a per-tenant outbound limit set too low. Raise the tenant's outboundMessagesPerSecond/outboundBurst if legitimate."
+            description: "Sustained shedding means a tenant was over its outbound ceiling on the timeline its telemetry reached the platform. A catch-up after a restart no longer counts. Each shed action is dead-lettered with reason `shed` (kind `detection-action`) up to a per-tenant budget. Anything over the budget is counted on react_connector_shed_unlettered_total and summarised in one letter per tenant per minute. Inspect them with `dcctl dead-letters`. Detections re-published when the engine restarts are collapsed by the message bus within 30 minutes. A replay older than that can still shed and letter duplicates of actions already delivered. Raise outboundMessagesPerSecond / outboundBurst if the traffic is legitimate."
         - alert: DetectTenantOverStateBudget
           expr: |
             max(devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="{{ $ns }}"}) > 0

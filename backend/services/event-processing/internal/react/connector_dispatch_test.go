@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -51,7 +52,7 @@ func TestDispatchHTTPCall(t *testing.T) {
 	})
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, nil, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.got) != 1 {
@@ -86,7 +87,7 @@ func TestDispatchPublishRendersPayload(t *testing.T) {
 	rule := publishRule(rules.PublishAction{ConnectorRef: "kafka-main", PayloadTemplate: `'v=' + string(value)`})
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, nil, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.got) != 1 {
@@ -111,7 +112,7 @@ func TestDispatchHTTPCallNoBody(t *testing.T) {
 	sink := &fakeConnectorSink{}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: httpCallRule(rules.HTTPCallAction{URL: "https://x/y"}), found: true}, nil, nil, sink, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.got) != 1 || sink.got[0].Payload != "" {
@@ -127,7 +128,7 @@ func TestDispatchConnectorResolvedSkipped(t *testing.T) {
 	d := NewDispatcher(fakeResolver{rule: httpCallRule(rules.HTTPCallAction{URL: "https://x/y"}), found: true}, nil, nil, sink, nil, m)
 	ev := evt()
 	ev.Edge = runtime.EdgeResolved
-	if out := d.Dispatch(context.Background(), ev); out != Done {
+	if out := d.Dispatch(context.Background(), ev).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.got) != 0 {
@@ -143,7 +144,7 @@ func TestDispatchConnectorResolvedSkipped(t *testing.T) {
 func TestDispatchConnectorNotEnabled(t *testing.T) {
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: httpCallRule(rules.HTTPCallAction{URL: "https://x/y"}), found: true}, nil, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if m.notEnabled["httpCall"] != 1 {
@@ -157,7 +158,7 @@ func TestDispatchConnectorRetryOnSinkFailure(t *testing.T) {
 	sink := &fakeConnectorSink{fail: true}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: httpCallRule(rules.HTTPCallAction{URL: "https://x/y"}), found: true}, nil, nil, sink, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Retry {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Retry {
 		t.Fatalf("want Retry on sink failure, got %v", out)
 	}
 	if m.dispatched["httpCall"] != 0 {
@@ -173,7 +174,7 @@ func TestDispatchConnectorGuardBlocks(t *testing.T) {
 	rule := httpCallRule(rules.HTTPCallAction{URL: "https://x/y"})
 	rule.Actions[0].Guard = "hasValue" // evt() carries no value → guard false
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.got) != 0 {
@@ -194,7 +195,7 @@ func TestDispatchConnectorMalformedVariantDropped(t *testing.T) {
 		Actions: []rules.Action{{Type: rules.ActionHTTPCall}}}
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, nil, m)
 	// Must not panic; must drop.
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done (malformed action dropped), got %v", out)
 	}
 	if len(sink.got) != 0 {
@@ -213,7 +214,7 @@ type fakeGate struct {
 	charged []string
 }
 
-func (g *fakeGate) Allow(tenant string) bool {
+func (g *fakeGate) AllowAt(tenant string, _ time.Time) bool {
 	g.charged = append(g.charged, tenant)
 	return g.admit
 }
@@ -229,7 +230,7 @@ func TestDispatchConnectorSourceGateSheds(t *testing.T) {
 	rule := httpCallRule(rules.HTTPCallAction{URL: "https://x/y", BodyTemplate: `'{"s":"' + series + '"}'`})
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, gate, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("a source-shed connector action must be Done (ack-progress), got %v", out)
 	}
 	if len(sink.got) != 0 {
@@ -254,7 +255,7 @@ func TestDispatchConnectorSourceGateAdmits(t *testing.T) {
 	gate := &fakeGate{admit: true}
 	d := NewDispatcher(fakeResolver{rule: httpCallRule(rules.HTTPCallAction{URL: "https://x/y"}), found: true}, nil, nil, sink, gate, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.got) != 1 {
@@ -281,8 +282,12 @@ func TestDispatchConnectorSourceGateShedsPublish(t *testing.T) {
 	rule := publishRule(rules.PublishAction{ConnectorRef: "kafka-main", PayloadTemplate: `'v=' + string(value)`})
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, gate, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
-		t.Fatalf("want Done, got %v", out)
+	res := d.Dispatch(context.Background(), evt())
+	if res.Outcome != Done {
+		t.Fatalf("want Done, got %v", res.Outcome)
+	}
+	if len(res.Shed) != 1 || res.Shed[0].Kind != "publish" || res.Shed[0].Token == "" {
+		t.Fatalf("the shed must be reported as one publish with its token, got %+v", res.Shed)
 	}
 	if len(sink.got) != 0 {
 		t.Fatalf("an over-quota publish action must not reach the sink, got %d", len(sink.got))
@@ -312,7 +317,7 @@ func TestDispatchSourceShedDoesNotBlockSiblings(t *testing.T) {
 		}}
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, alarm, sink, gate, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done (shed sibling must not wedge the event), got %v", out)
 	}
 	if len(alarm.raised) != 1 {
@@ -336,7 +341,7 @@ func TestDispatchConnectorResolvedEdgeNotCharged(t *testing.T) {
 	d := NewDispatcher(fakeResolver{rule: httpCallRule(rules.HTTPCallAction{URL: "https://x/y"}), found: true}, nil, nil, sink, gate, m)
 	ev := evt()
 	ev.Edge = runtime.EdgeResolved
-	if out := d.Dispatch(context.Background(), ev); out != Done {
+	if out := d.Dispatch(context.Background(), ev).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(gate.charged) != 0 {
@@ -355,7 +360,7 @@ func TestDispatchConnectorGuardedOutNotCharged(t *testing.T) {
 	rule.Actions[0].Guard = "hasValue" // evt() carries no value → guard false
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, nil, sink, gate, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(gate.charged) != 0 {

@@ -73,7 +73,7 @@ func TestPublishStampsSeverity(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: withSev}})
 	w := &fakeWriter{}
 	p := NewPublisher(w, reg, newFakeMetrics())
-	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}); err != nil {
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}, time.Time{}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	var de DerivedEvent
@@ -89,7 +89,7 @@ func TestPublishStampsSeverity(t *testing.T) {
 	reg2 := NewRuleRegistry([]ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: noSev}})
 	w2 := &fakeWriter{}
 	p2 := NewPublisher(w2, reg2, newFakeMetrics())
-	if err := p2.Publish(context.Background(), core.Detection{RuleID: "acme/r2", Series: "d1", Kind: core.Threshold, At: time.Now()}); err != nil {
+	if err := p2.Publish(context.Background(), core.Detection{RuleID: "acme/r2", Series: "d1", Kind: core.Threshold, At: time.Now()}, time.Time{}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if strings.Contains(string(w2.writes[0].payload), "severity") {
@@ -107,7 +107,7 @@ func TestPublishStampsValue(t *testing.T) {
 	// Value-bearing: HasValue detection -> pointer set to the exact value.
 	w := &fakeWriter{}
 	p := NewPublisher(w, reg, newFakeMetrics())
-	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now(), Value: 42.5, HasValue: true}); err != nil {
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now(), Value: 42.5, HasValue: true}, time.Time{}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	var de DerivedEvent
@@ -121,7 +121,7 @@ func TestPublishStampsValue(t *testing.T) {
 	// A stamped 0.0 is still present (pointer non-nil) — distinct from a value-less fire.
 	w0 := &fakeWriter{}
 	p0 := NewPublisher(w0, reg, newFakeMetrics())
-	if err := p0.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now(), Value: 0, HasValue: true}); err != nil {
+	if err := p0.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now(), Value: 0, HasValue: true}, time.Time{}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	var de0 DerivedEvent
@@ -135,7 +135,7 @@ func TestPublishStampsValue(t *testing.T) {
 	// Value-less: HasValue=false -> omitted from the wire entirely.
 	w2 := &fakeWriter{}
 	p2 := NewPublisher(w2, reg, newFakeMetrics())
-	if err := p2.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}); err != nil {
+	if err := p2.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}, time.Time{}); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if strings.Contains(string(w2.writes[0].payload), "value") {
@@ -154,11 +154,11 @@ func TestPublishStampsEdge(t *testing.T) {
 	now := time.Now()
 
 	// A Raised stamps edge "raised".
-	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: now}); err != nil {
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: now}, time.Time{}); err != nil {
 		t.Fatalf("publish raised: %v", err)
 	}
 	// A Resolved for the same (rule, series, time) publishes too — stamped "resolved", value omitted.
-	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, Edge: core.EdgeResolved, At: now}); err != nil {
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, Edge: core.EdgeResolved, At: now}, time.Time{}); err != nil {
 		t.Fatalf("publish resolved: %v", err)
 	}
 	if len(w.writes) != 2 {
@@ -195,7 +195,7 @@ func TestPublishScopesToOwningTenant(t *testing.T) {
 	p := NewPublisher(w, reg, m)
 
 	at := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: at})
+	err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: at}, time.Time{})
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestPublishTenantBackstopRejectsMismatch(t *testing.T) {
 	m := newFakeMetrics()
 	p := NewPublisher(w, reg, m)
 
-	err := p.Publish(context.Background(), core.Detection{RuleID: "beta/r1", Series: "d1", Kind: core.Threshold, At: time.Now()})
+	err := p.Publish(context.Background(), core.Detection{RuleID: "beta/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}, time.Time{})
 	if err != nil {
 		t.Fatalf("backstop reject must not be a retryable error; got %v", err)
 	}
@@ -253,7 +253,7 @@ func TestPublishRejectsInvalidTenantGrammarTerminally(t *testing.T) {
 	m := newFakeMetrics()
 	p := NewPublisher(w, reg, m)
 
-	err := p.Publish(context.Background(), core.Detection{RuleID: "bad.tenant/r1", Series: "d1", Kind: core.Threshold, At: time.Now()})
+	err := p.Publish(context.Background(), core.Detection{RuleID: "bad.tenant/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}, time.Time{})
 	if err != nil {
 		t.Fatalf("an invalid-tenant rule must be a terminal drop, not a retryable error; got %v", err)
 	}
@@ -273,7 +273,7 @@ func TestPublishOrphanRuleDropped(t *testing.T) {
 	m := newFakeMetrics()
 	p := NewPublisher(w, reg, m)
 
-	err := p.Publish(context.Background(), core.Detection{RuleID: "acme/ghost", Series: "d1", Kind: core.Threshold, At: time.Now()})
+	err := p.Publish(context.Background(), core.Detection{RuleID: "acme/ghost", Series: "d1", Kind: core.Threshold, At: time.Now()}, time.Time{})
 	if err != nil {
 		t.Fatalf("orphan drop must not be a retryable error; got %v", err)
 	}
@@ -293,7 +293,7 @@ func TestPublishBrokerErrorIsRetryable(t *testing.T) {
 	m := newFakeMetrics()
 	p := NewPublisher(w, reg, m)
 
-	err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()})
+	err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: time.Now()}, time.Time{})
 	if err == nil {
 		t.Fatalf("a broker failure must return a retryable error")
 	}

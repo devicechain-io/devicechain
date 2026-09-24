@@ -475,7 +475,7 @@ func TestEvictionDropsTheTenantsBufferedDetectionsAndRetries(t *testing.T) {
 		}
 	}
 	// Loop-owned state, written before start() publishes it to the loop goroutine.
-	rp.pendingDets = []detectcore.Detection{det("acme", "d1"), det("acme", "d2"), det("globex", "d9")}
+	rp.pendingDets = pending([]detectcore.Detection{det("acme", "d1"), det("acme", "d2"), det("globex", "d9")})
 	rp.armRetries = map[armUpdate]struct{}{
 		{tenant: "acme", deviceToken: "d1"}:   {},
 		{tenant: "acme", deviceToken: "d2"}:   {},
@@ -862,7 +862,7 @@ func TestEvictionSweepsTheTenantsDeadLetters(t *testing.T) {
 		if err := rp.publisher.Publish(context.Background(), detectcore.Detection{
 			RuleID: id, Series: "d1", Kind: detectcore.Threshold,
 			Edge: detectcore.EdgeRaised, At: testBase,
-		}); err != nil {
+		}, time.Time{}); err != nil {
 			t.Fatalf("publishing an orphan detection for %q: %v", id, err)
 		}
 	}
@@ -990,10 +990,10 @@ func TestABufferedDetectionIsDroppedByOwnerNotOnlyByIdPrefix(t *testing.T) {
 		t.Fatal("test bug: the registry refused the mis-minted rule, so the case under test " +
 			"cannot arise")
 	}
-	rp.pendingDets = []detectcore.Detection{{
+	rp.pendingDets = pending([]detectcore.Detection{{
 		RuleID: misminted, Series: "acme-sensor-1", Kind: detectcore.Threshold,
 		Edge: detectcore.EdgeRaised, At: testBase,
-	}}
+	}})
 	rig.start(t)
 
 	if _, err := rig.evict(t, "acme"); err != nil {

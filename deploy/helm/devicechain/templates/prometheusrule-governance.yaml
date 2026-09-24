@@ -18,6 +18,14 @@ The second alert watches the bound on those invented names. HTTP ingest takes it
 from the request path before any credential is checked, so each name that user-management
 has not confirmed gets an allowance of its own only from a fixed set; past that set, every
 such name shares one. RateLimiterOverflowInUse fires while that shared allowance is in use.
+
+The last two watch the outbound ceiling's clock and its record. REACT and the connectors
+service meter a tenant's outbound actions on the time the triggering telemetry reached the
+platform, which the detection engine stamps; a dispatch without a usable stamp is metered on
+its broker time or on arrival and counted on <area>_rate_clock_fallback_total, and a
+sustained fallback means a catch-up can be shed as a flood again (RateMeteringClockFallback).
+An action REACT sheds is dead-lettered within a per-tenant and a global budget; past the
+budget it is only counted and summarised (ReactShedLettersOverBudget).
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -56,4 +64,27 @@ spec:
           annotations:
             summary: "HTTP ingest is receiving traffic for more unconfirmed tenant names than it keeps separate allowances for"
             description: "{{ "{{ $labels.job }}" }} has had more than 1024 unconfirmed tenant names active at once, so every further name shares one allowance. Almost always this means something is posting to many invented tenant paths on the HTTP ingest port. Legitimate tenants that have been confirmed, and every MQTT, NATS and LwM2M tenant, keep their own allowance. Find the source of the requests on the HTTP ingest port."
+        # `for` equals the window, never less than it: an increase that stops clears inside one
+        # window, and one that goes on for a full window is a tenant shedding faster than its
+        # letters are recorded, not a burst.
+        - alert: ReactShedLettersOverBudget
+          expr: sum by (job, action) (increase({__name__=~"devicechain_[a-z0-9]+_react_connector_shed_unlettered_total", namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Outbound connector actions shed at the source are being summarised rather than recorded one by one"
+            description: "For at least 10 minutes, {{ "{{ $labels.job }}" }} has shed {{ "{{ $labels.action }}" }} actions faster than its dead-letter budget records them, so the excess is counted and summarised in one dead letter per tenant per minute instead of recorded individually. A tenant is well over its outbound ceiling. Find it with `dcctl dead-letters` (reason shed) and check its rules, or raise its outboundMessagesPerSecond / outboundBurst if the traffic is legitimate."
+        # `for` is an hour: an upgrade drains the dispatches that were in flight before the
+        # engine stamped trigger times, and those fall back legitimately for minutes, not hours.
+        - alert: RateMeteringClockFallback
+          expr: sum by (job, source) (increase({__name__=~"devicechain_[a-z0-9]+_rate_clock_fallback_total", namespace="{{ $ns }}"}[30m])) > 0
+          for: 1h
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Outbound actions are being metered on a fallback clock"
+            description: "For at least an hour, {{ "{{ $labels.job }}" }} has metered outbound actions on the {{ "{{ $labels.source }}" }} clock because they carried no usable trigger time. The detection engine has stopped stamping trigger times, so actions are metered on broker or arrival time and a catch-up after a restart can be shed as a flood again. An upgrade's in-flight backlog clears well inside the hour. Check that event-processing and outbound-connectors run the same release."
 {{- end }}

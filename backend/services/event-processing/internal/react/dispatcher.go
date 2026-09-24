@@ -174,6 +174,10 @@ type ConnectorRequest struct {
 	RuleID       string
 	Edge         string
 	OccurredTime time.Time
+	// TriggeredAt is the time this dispatch was metered on at the source (runtime.DerivedEvent's
+	// TriggeredAt, normalized by the REACT consumer through core.MeteringTime). It rides the wire so
+	// the outbound-connectors egress limiter meters the SAME time rather than the dispatch's arrival.
+	TriggeredAt time.Time
 	// Token is the content-addressed idempotency key (idempotencyToken) — the SAME token family the
 	// command sink dedups on. For a command that makes a redelivery/replay collapse downstream; for a
 	// connector it does not: outbound-connectors forwards the key to the destination and executes every
@@ -201,24 +205,35 @@ type ConnectorSink interface {
 
 // ConnectorRateGate is the per-tenant OUTBOUND egress cost-gate charged at the SOURCE (ADR-060
 // SD-3). Before REACT publishes a connector-dispatch (httpCall/publish), the dispatcher charges the
-// tenant's outbound budget; a false result means over-quota, and the action is DROPPED (shed at the
-// source), NOT retried — so a runaway rule cannot flood the connector-dispatch stream and the
-// downstream outbound-connectors service. It is an IMMEDIATE, non-blocking test (a token-bucket
-// Allow), never a wait: REACT's at-least-once derived-event consumer must not block on egress. A shed
-// drops ONLY this connector action (ack-progress) — other actions of the same detection still fire,
-// and the event is acked, so a shed connector action does NOT wedge or redeliver the event. A nil
-// gate DISABLES source-charging (every connector dispatch is admitted); the outbound-connectors
-// egress limiter (C3b.2) still meters as the defense-in-depth backstop. *core.TenantRateLimiter
-// satisfies this (its Allow), kept as a narrow interface so this replay-correct package does not
-// depend on core's limiter type.
+// tenant's outbound budget; a false result means over-quota, and the action is SHED at the source,
+// NOT retried — so a runaway rule cannot flood the connector-dispatch stream and the downstream
+// outbound-connectors service. It is a non-blocking test, never a wait: REACT's at-least-once
+// derived-event consumer must not block on egress. A shed skips ONLY this connector action — other
+// actions of the same detection still fire, and the event is acked, so a shed connector action does
+// NOT wedge or redeliver the event. The shed is reported in Result.Shed, and the REACT consumer
+// dead-letters it within a budget. A nil gate DISABLES source-charging (every connector dispatch is
+// admitted); the outbound-connectors egress limiter still meters as the defense-in-depth backstop.
+// *core.TenantRateLimiter satisfies this, kept as a narrow interface so this replay-correct package
+// does not depend on core's limiter type.
+//
+// CLOCK. The gate meters on the derived event's TriggeredAt, not on arrival: REACT drains a backlog
+// back to back after a restart, rollout or failover, and charged at arrival a compliant tenant's
+// whole backlog lands at one instant — the burst passes and the rest is shed. TriggeredAt is a
+// PLATFORM time devices cannot write: DETECT stamps it from the triggering resolved event's
+// ProcessedTime and broker append time, and only event-sources, its adapter and device-state stamp
+// ProcessedTime, all with their own now(); broker grants confine a device to its own events topic.
+// The core limiter's mark bounds rewinds from clock skew between pods, replay and redelivery (the
+// times fed here are not monotonic). The mark does NOT protect a forgeable clock, so TriggeredAt
+// must never be derived from device data — OccurredTime would let a tenant mint tokens.
 //
 // DETERMINISM (ADR-056 boundary): charging a wall-clock rate limiter here is safe because REACT holds
 // NO replay-correct state — it is a separate, at-least-once, DECOUPLED consumer of the derived-event
 // stream (unlike the DETECT single-writer loop). A shed is a dropped SIDE EFFECT, never a mutation of
 // engine state, so it cannot diverge a replay. One consequence of at-least-once: if ANOTHER action of
 // the same detection fails and the whole event redelivers, this connector action re-charges the gate
-// on the re-run (a bounded over-count, capped by the consumer's redelivery cap) — an accepted cost of
-// keeping the gate a pure per-attempt Allow rather than threading dispatch state.
+// on the re-run, at the bucket's mark (a bounded over-count, capped by the consumer's redelivery cap)
+// — an accepted cost of keeping the gate a pure per-attempt test rather than threading dispatch
+// state.
 //
 // SCOPE: the gate (and its resolver cache) is PER-PROCESS. REACT's reader is gated on the DETECT
 // lease (main.go, newReactReader), so only the replica that detects dispatches, and the gate is
@@ -230,7 +245,22 @@ type ConnectorSink interface {
 // shared limiter (or a per-replica fraction) to keep matching the sink-side egress limiter it is
 // sized against.
 type ConnectorRateGate interface {
-	Allow(tenant string) bool
+	AllowAt(tenant string, at time.Time) bool
+}
+
+// ShedAction is one connector action the source gate shed: its kind ("httpCall" or "publish", the
+// metric enum) and its idempotency token, which is what distinguishes two shed actions of one event.
+type ShedAction struct {
+	Kind  string
+	Token string
+}
+
+// Result is the disposition of one derived event's dispatch: whether the consumer may ack it, and
+// the connector actions the source gate shed on this attempt. Shed is reported on a Retry too, but a
+// consumer records it only on Done — a Retry re-runs the whole event, sheds included.
+type Result struct {
+	Outcome Outcome
+	Shed    []ShedAction
 }
 
 // Metrics is the REACT observability sink (bounded cardinality — no per-tenant labels, the ADR-023
@@ -338,25 +368,28 @@ func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink
 //     is a one-shot side effect, so a Resolved must not re-send it (which would double-fire the LIVE
 //     send-command path, slice 5b). This is the load-bearing correctness point of enabling Resolved on
 //     the wire.
-func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Outcome {
+func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Result {
 	rule, found, err := d.resolver.Resolve(ctx, ev.RuleID)
 	if err != nil {
 		// Transient store failure — retry. Dropping the actions here would silently lose every
 		// side effect for a detection whenever the rule store hiccups.
-		return Retry
+		return Result{Outcome: Retry}
 	}
 	if !found {
 		// The rule was removed after the detection fired and before REACT resolved it. There is
 		// nothing to dispatch and a retry cannot bring it back — drop (count) and ack.
 		d.metrics.RecordOrphan()
-		return Done
+		return Result{Outcome: Done}
 	}
+	var res Result
 	for _, a := range rule.Actions {
-		if out := d.dispatchAction(ctx, ev, rule, a); out == Retry {
-			return Retry
+		if out := d.dispatchAction(ctx, ev, rule, a, &res); out == Retry {
+			res.Outcome = Retry
+			return res
 		}
 	}
-	return Done
+	res.Outcome = Done
+	return res
 }
 
 // dispatchAction dispatches one action for the event's edge (see Dispatch). A sink failure is a Retry
@@ -364,7 +397,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Outc
 // action with no effect on this edge (sendCommand on a Resolved), and an unknown action (unreachable
 // for a gate-validated rule) are all Done so the loop moves on. The rule is passed so a raiseAlarm
 // action can read the rule-level severity + watched metric it raises with.
-func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent, rule rules.Rule, a rules.Action) Outcome {
+func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent, rule rules.Rule, a rules.Action, res *Result) Outcome {
 	resolved := ev.Edge == runtime.EdgeResolved
 	switch a.Type {
 	case rules.ActionSendCommand:
@@ -533,18 +566,22 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			return Done
 		}
 		// SOURCE-side egress cost-gate (ADR-060 SD-3): charge the tenant's outbound budget immediately
-		// before the publish, so an over-quota tenant sheds at the source rather than flooding the
-		// connector-dispatch stream and the downstream service. A shed DROPS only this connector action
-		// (ack-progress) — it is NOT a Retry (a retry would loop the whole event and never drain under
-		// sustained overload) and NOT a dispatch (do not count it as one). It is charged AFTER the guard
+		// before the publish, on the event's trigger time (see ConnectorRateGate's CLOCK), so an
+		// over-quota tenant sheds at the source rather than flooding the connector-dispatch stream and
+		// the downstream service. A shed skips only this connector action (ack-progress) and is reported
+		// in res.Shed for the consumer to dead-letter — it is NOT a Retry (a retry would loop the whole
+		// event and never drain under sustained overload) and NOT a dispatch (do not count it as one).
+		// It is charged AFTER the guard
 		// (a guarded-out action is a non-effect, not an emission) and AFTER renderPayload (so only an
 		// action that would TRULY publish consumes a token — a deterministic render failure never burns
 		// budget, keeping the only over-count the bounded sibling-redelivery one documented on
 		// ConnectorRateGate), and only when a gate is configured (a nil gate leaves metering to the
 		// downstream egress limiter). renderPayload is a cached compile + a cost-gated CEL eval, so
 		// charging after it costs a bounded eval, not the network publish the shed actually avoids.
-		if d.connectorRate != nil && !d.connectorRate.Allow(ev.Tenant) {
+		token := idempotencyToken(ev, a)
+		if d.connectorRate != nil && !d.connectorRate.AllowAt(ev.Tenant, ev.TriggeredAt) {
 			d.metrics.RecordConnectorShed(kind)
+			res.Shed = append(res.Shed, ShedAction{Kind: kind, Token: token})
 			return Done
 		}
 		req := ConnectorRequest{
@@ -553,7 +590,8 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			RuleID:       ev.RuleID,
 			Edge:         edgeOrRaised(ev.Edge),
 			OccurredTime: ev.OccurredTime,
-			Token:        idempotencyToken(ev, a),
+			TriggeredAt:  ev.TriggeredAt,
+			Token:        token,
 			Payload:      payload,
 			Action:       a,
 		}

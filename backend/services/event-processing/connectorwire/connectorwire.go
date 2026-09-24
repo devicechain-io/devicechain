@@ -77,6 +77,12 @@ type ConnectorDispatchRequest struct {
 	Edge string `json:"edge,omitempty"`
 	// OccurredTime is the detection's event time (the logical time the action is about).
 	OccurredTime time.Time `json:"occurredTime"`
+	// TriggeredAt is the time REACT metered this dispatch on — the platform time the triggering
+	// telemetry reached the platform — so the connectors service's egress limiter meters the SAME
+	// time rather than the dispatch's arrival (core.MeteringTime reads it on both ends). A backlog
+	// that was compliant when it happened then passes both ends at drain speed. Zero on a request
+	// published before it existed; the consumer then falls back to the message's broker time.
+	TriggeredAt time.Time `json:"triggeredAt,omitzero"`
 	// IdempotencyKey is the deterministic, content-addressed token for this dispatch: the same detection
 	// and action produce the same key on every redelivery and DETECT replay. The connectors service
 	// FORWARDS it to the destination (an HTTP header, a publish metadata field) for the destination to

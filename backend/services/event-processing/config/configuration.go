@@ -86,17 +86,29 @@ const (
 	// DefaultOutboundMessagesPerSecond and DefaultOutboundBurst are the platform-default
 	// per-tenant OUTBOUND egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): before
 	// publishing a connector-dispatch (httpCall/publish), the dispatcher charges the tenant's
-	// outbound budget and DROPS the action when over quota, so a runaway rule sheds at the source
+	// outbound budget and SHEDS the action when over quota, so a runaway rule sheds at the source
 	// rather than flooding the connector-dispatch stream and the downstream outbound-connectors
-	// service. They deliberately MATCH outbound-connectors' egress defaults, so the source Allow-drop
-	// and the sink's bounded Wait meter the same rate — the source (immediate, no smoothing) sheds a
-	// sustained flood first, leaving the sink's egress Wait as the rare defense-in-depth backstop.
+	// service. They deliberately MATCH outbound-connectors' egress defaults, and both ends meter the
+	// same time — when the triggering telemetry reached the platform — so the source (no smoothing)
+	// sheds a sustained flood first, leaving the sink's bounded wait as the defense-in-depth backstop.
 	// Fail-safe per ADR-023: an unset (0) rate/burst defaults to these platform ceilings — NEVER
 	// unlimited; a negative configured value is rejected at Validate (0 means unset and is replaced
 	// by ApplyDefaults, so it is not itself rejected). Per-tenant overrides are
 	// fetched from user-management (the outboundMessagesPerSecond / outboundBurst governance fields).
 	DefaultOutboundMessagesPerSecond = 100
 	DefaultOutboundBurst             = 200
+
+	// DefaultShedLetterPerSecond / DefaultShedLetterBurst are the per-tenant budget for dead
+	// letters REACT writes about connector actions its source gate shed, and
+	// DefaultShedLetterGlobalPerSecond / DefaultShedLetterGlobalBurst the budget across every
+	// tenant. A shed past either budget is counted (react_connector_shed_unlettered_total) and
+	// summarised in one letter per tenant per minute instead of recorded individually: a tenant
+	// flooding its outbound ceiling must not turn the dead-letter stream into a second copy of the
+	// flood. The global budget bounds the synchronous letter writes on REACT's goroutine.
+	DefaultShedLetterPerSecond       = 1
+	DefaultShedLetterBurst           = 60
+	DefaultShedLetterGlobalPerSecond = 10
+	DefaultShedLetterGlobalBurst     = 100
 )
 
 // EventProcessingConfiguration is the typed configuration for the event-processing
@@ -166,6 +178,15 @@ type EventProcessingConfiguration struct {
 	// the floor used for every tenant when per-tenant overrides are not wired.
 	OutboundMessagesPerSecond float64
 	OutboundBurst             int
+
+	// ShedLetterPerSecond / ShedLetterBurst are the per-tenant budget, and ShedLetterGlobalPerSecond
+	// / ShedLetterGlobalBurst the all-tenant budget, for dead letters about connector actions REACT's
+	// source gate shed (see DefaultShedLetterPerSecond). Unset (0) defaults to the platform values;
+	// a negative, NaN or infinite value is rejected at Validate.
+	ShedLetterPerSecond       float64
+	ShedLetterBurst           int
+	ShedLetterGlobalPerSecond float64
+	ShedLetterGlobalBurst     int
 }
 
 // NewEventProcessingConfiguration creates the default configuration.
@@ -207,6 +228,18 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 	if c.OutboundBurst == 0 {
 		c.OutboundBurst = DefaultOutboundBurst
+	}
+	if c.ShedLetterPerSecond == 0 {
+		c.ShedLetterPerSecond = DefaultShedLetterPerSecond
+	}
+	if c.ShedLetterBurst == 0 {
+		c.ShedLetterBurst = DefaultShedLetterBurst
+	}
+	if c.ShedLetterGlobalPerSecond == 0 {
+		c.ShedLetterGlobalPerSecond = DefaultShedLetterGlobalPerSecond
+	}
+	if c.ShedLetterGlobalBurst == 0 {
+		c.ShedLetterGlobalBurst = DefaultShedLetterGlobalBurst
 	}
 }
 
@@ -285,6 +318,23 @@ func (c *EventProcessingConfiguration) Validate() error {
 	}
 	if c.OutboundBurst < 0 {
 		return fmt.Errorf("outboundBurst must not be negative, got %d", c.OutboundBurst)
+	}
+	// The shed-letter budgets follow the same convention (0 is unset and defaulted), and a rate
+	// must also be finite: NaN compares false against everything, so it would pass a sign check
+	// and reach a limiter that then admits nothing, or everything.
+	for _, r := range []struct {
+		key string
+		v   float64
+	}{{"shedLetterPerSecond", c.ShedLetterPerSecond}, {"shedLetterGlobalPerSecond", c.ShedLetterGlobalPerSecond}} {
+		if math.IsNaN(r.v) || math.IsInf(r.v, 0) || r.v < 0 {
+			return fmt.Errorf("%s must be a finite, non-negative number, got %g", r.key, r.v)
+		}
+	}
+	if c.ShedLetterBurst < 0 {
+		return fmt.Errorf("shedLetterBurst must not be negative, got %d", c.ShedLetterBurst)
+	}
+	if c.ShedLetterGlobalBurst < 0 {
+		return fmt.Errorf("shedLetterGlobalBurst must not be negative, got %d", c.ShedLetterGlobalBurst)
 	}
 	return nil
 }

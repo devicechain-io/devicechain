@@ -1511,7 +1511,8 @@ below). If you filter dead letters by kind or reason, or alert on the dead-lette
 reason, a stream and two alerts. If you run a warm standby for `event-processing`, read "With a
 warm standby, only the replica running detection dispatches actions". If you route or silence
 alerts by name, two new warnings are added: `RateLimiterOverflowInUse` and
-`TenantsMeteredAtPlatformDefault`.
+`TenantsMeteredAtPlatformDefault`. If you filter dead letters by reason, or route alerts by name,
+read "Outbound actions are no longer dropped when the detection engine catches up".
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1843,6 +1844,27 @@ when those times went backwards (a broker leader change between servers whose cl
 or when a tenant's ceiling changed mid-drain; such messages are now charged
 at the latest time the allowance has already seen, which can shed a little more but never admits
 more.
+
+#### Outbound actions are no longer dropped when the detection engine catches up
+
+After a restart, rollout or failover, the detection engine works through the telemetry that arrived
+while it was down. Outbound webhook and connector actions from that backlog used to be counted
+against the tenant's outbound rate as if they had all happened at once, so most of them were dropped
+with only a metric as a record. They are now metered, both where they are triggered and in the
+connectors service, on the time the telemetry reached the platform. A tenant within its limit loses
+nothing to a catch-up and is not slowed by it.
+
+An action that is still over the limit is recorded as a dead letter with reason `shed` and kind
+`detection-action`, up to about one letter a second per tenant (60 at once) and ten a second in
+total. Beyond that the actions are counted and summarised in one letter per tenant per minute. Four
+settings on `event-processing` tune the budget: `shedLetterPerSecond`, `shedLetterBurst`,
+`shedLetterGlobalPerSecond` and `shedLetterGlobalBurst`. Two warnings are added:
+`ReactShedLettersOverBudget` and `RateMeteringClockFallback`.
+
+Detections the engine re-publishes after a restart are now recognised by the message bus and stored
+once within a 30-minute window, so subscribers to the derived-events feed see fewer duplicates. Each
+derived event now carries a `triggeredAt` field. If you filter dead letters by reason, expect `shed`
+letters of kind `detection-action`. Nothing needs doing at the upgrade.
 
 ### The one-time durable-ingest cutover
 

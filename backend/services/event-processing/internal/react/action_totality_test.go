@@ -140,7 +140,7 @@ func TestMalformedSendCommandActionIsDroppedNotPanicked(t *testing.T) {
 		Actions: []rules.Action{{Type: rules.ActionSendCommand}}} // declared type, absent payload
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, sink, nil, nil, nil, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done (malformed action dropped), got %v", out)
 	}
 	if len(sink.sent) != 0 {

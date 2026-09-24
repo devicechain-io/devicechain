@@ -45,6 +45,9 @@ type ReactDispatcher struct {
 	// stamps this service as the letter's source and counts a lost letter on the process's
 	// dead_letter_lost_total.
 	dead *deadletter.Sink
+	// sheds dead-letters the connector actions the source gate shed, within a budget, and
+	// summarises the rest. It writes through dead, so a nil dead leaves it counting only.
+	sheds *shedLetterer
 
 	// newPacer builds the read pacer that bounds a run of failing reads and ends the
 	// process once they stop looking transient.
@@ -76,34 +79,50 @@ type ReactDispatcher struct {
 // m is built once in the initialize phase (see NewReactMetrics) and shared by every
 // dispatcher this service constructs, because that callback is connection-scoped and
 // the counters are not.
+//
+// sheds is the dead-letter budget for connector actions the source gate shed (see shedLetterer).
 func NewReactDispatcher(ms *core.Microservice, reader messaging.MessageReader,
 	resolver react.RuleResolver, commands react.CommandSink, alarms react.AlarmSink, connectors react.ConnectorSink,
-	connectorRate react.ConnectorRateGate, dead *deadletter.Sink, m *ReactMetrics) *ReactDispatcher {
+	connectorRate react.ConnectorRateGate, dead *deadletter.Sink, sheds ShedLetterBudget, m *ReactMetrics) *ReactDispatcher {
 	rd := &ReactDispatcher{
 		reader:     reader,
 		dispatcher: react.NewDispatcher(resolver, commands, alarms, connectors, connectorRate, m),
 		metrics:    m,
 		dead:       dead,
+		sheds:      newShedLetterer(dead, sheds, m),
 	}
 	rd.newPacer = func() *core.ReadPacer { return core.NewReadPacer(ms, "react dispatch") }
 	return rd
 }
 
-// Start launches the consumer goroutine. It is called after the NATS manager is started (the reader
-// is live) from main's afterMicroserviceStarted.
+// Start launches the consumer goroutine and the shed-letter summariser. It is called after the NATS
+// manager is started (the reader is live) from main's afterMicroserviceStarted.
 func (rd *ReactDispatcher) Start(ctx context.Context) error {
 	rd.procCtx, rd.procCancel = context.WithCancel(context.Background())
 	rd.wg.Add(1)
 	go rd.run()
+	if rd.sheds != nil {
+		rd.wg.Add(1)
+		go func() {
+			defer rd.wg.Done()
+			rd.sheds.run(rd.procCtx)
+		}()
+	}
 	return nil
 }
 
-// Stop cancels the consumer and waits for it to exit before the reader is torn down.
+// Stop cancels the consumer and the summariser, waits for both to exit, and then flushes the
+// over-budget shed counts once, so the window a stop cuts short is still summarised.
 func (rd *ReactDispatcher) Stop(ctx context.Context) error {
 	if rd.procCancel != nil {
 		rd.procCancel()
 	}
 	rd.wg.Wait()
+	if rd.sheds != nil {
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shedFlushTimeout)
+		rd.sheds.flush(fctx)
+		cancel()
+	}
 	return nil
 }
 
@@ -178,7 +197,23 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 		return
 	}
 
-	if rd.dispatcher.Dispatch(tctx, ev) == react.Done {
+	// Meter on ONE time, chosen by the one reader both ends of this outbound dimension share: the
+	// trigger time DETECT stamped, capped at this derived event's own broker time, or that broker
+	// time when there is no stamp (an event published before the stamp existed), or now. The
+	// normalized value is written back onto the event, so what the gate charges and what rides the
+	// wire to the outbound-connectors service are the same time.
+	at, clk := core.MeteringTime(ev.TriggeredAt, msg.AppendTime)
+	ev.TriggeredAt = at
+	rd.metrics.recordClockFallback(clk)
+
+	res := rd.dispatcher.Dispatch(tctx, ev)
+	if res.Outcome == react.Done {
+		// Letters only on Done: a Retry re-runs the whole event, sheds included, so a letter
+		// written now would record an attempt that did not stand. An event that never reaches
+		// Done is covered by the exhausted letter below.
+		if rd.sheds != nil && len(res.Shed) > 0 {
+			rd.sheds.letter(tctx, msg, ev, res.Shed)
+		}
 		rd.ack(msg)
 		return
 	}

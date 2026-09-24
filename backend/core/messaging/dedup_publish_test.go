@@ -66,3 +66,15 @@ func TestInboundEventsDeclaresADuplicateWindow(t *testing.T) {
 			"events that carry no alternate id", got)
 	}
 }
+
+// derived-events is deduped for the same reason inbound-events is: DETECT re-publishes
+// every detection past its last checkpoint after a restart, each carrying a Nats-Msg-Id
+// from its identity, and without a window REACT would dispatch — and charge the tenant's
+// outbound ceiling for — each one a second time. The floor is the bad-rollout restart the
+// window is sized to, as above.
+func TestDerivedEventsDeclaresADuplicateWindow(t *testing.T) {
+	if got := streams.DuplicateWindowSecondsFor(streams.DerivedEvents); got < 900 {
+		t.Errorf("derived-events duplicate window %ds is under 15 minutes: a DETECT replay after "+
+			"a bad rollout re-publishes detections the broker no longer recognises", got)
+	}
+}
