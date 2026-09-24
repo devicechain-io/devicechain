@@ -565,7 +565,9 @@ comentario `//` o `/* */`, una cadena entre comillas invertidas o un carácter e
 se rechaza con un error de sintaxis, y no se ejecuta nada. Usa `#` para los comentarios. También se
 rechaza una cadena de bloque cuyo `"""` de cierre sigue directamente a una barra invertida (el escape
 `\"""`). Ese escape es GraphQL válido, pero el servidor nunca lo ha leído como lo define la
-especificación, así que envía ese texto en una variable. La misma regla se aplica por WebSocket,
+especificación, así que envía ese texto en una variable. También se rechaza una cadena seguida
+directamente de una comilla, como `"x""y"`: GraphQL la lee como dos cadenas contiguas, y el servidor
+la leía como el comienzo de una cadena de bloque. Solo `"""` abre una cadena de bloque. La misma regla se aplica por WebSocket,
 donde una suscripción que el servidor no puede leer recibe el error de sintaxis en lugar del mensaje
 de que solo se aceptan suscripciones.
 

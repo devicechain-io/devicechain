@@ -1976,9 +1976,13 @@ following.
 - **A document written with `//` or `/* */` comments, backquoted strings, or single-quoted
   characters is now refused** with a syntax error, and nothing in it runs. Earlier releases accepted
   these, although they are not GraphQL. Use `#` for comments and `"` for strings.
-- **A block string ending in `\"""` is refused as well.** That escape is valid GraphQL, but earlier
-  releases never read it as the specification defines it: they closed the string at those three
-  quotes and read the rest of the document from there. Send such text in a variable.
+- **A block string whose closing `"""` directly follows a backslash is refused as well**, as in
+  `\"""`. That escape is valid GraphQL, but earlier releases never read it as the specification
+  defines it: they closed the string at those three quotes and read the rest of the document from
+  there. Send such text in a variable.
+- **A string directly followed by a quote, such as `"x""y"`, is refused.** GraphQL reads that as two
+  adjacent strings, which is never a valid value; earlier releases read it as the start of a block
+  string instead. Only `"""` opens a block string, and an empty string `""` is unaffected.
 - **Over a GraphQL WebSocket, a subscription the server cannot read now gets the syntax error**, not
   the message saying that only subscriptions are accepted. A document that names an operation it
   does not hold gets its own error too. Both are errors for that operation only; the connection

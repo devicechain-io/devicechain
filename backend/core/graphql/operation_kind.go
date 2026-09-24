@@ -109,13 +109,23 @@ func (l *opLexer) refuse(msg string) {
 	}
 }
 
+// stringThenQuoteReason refuses a NON-EMPTY string directly followed by a quote.
+// graphql-go opens a block string after ANY string token followed by `"` (its
+// ConsumeLiteral and consumeDescription check only the token kind), so it reads
+// `"x"""…` as a block string, while its normalising pass reads the string `"x"` and
+// then a new string. The specification reads two adjacent strings, which no parser
+// accepts where one value is expected, so refusing it costs a conformant document
+// nothing. Only `""` followed by `"` is the opening `"""` of a block string.
+const stringThenQuoteReason = `a string directly followed by a quote is not accepted; only """ opens a block string`
+
 // next advances to the next significant token, mirroring graphql-go's
 // ConsumeWhitespace: commas are insignificant, and `#` starts a comment that runs to
-// the end of the line. A string token immediately followed by `"` opens a block
+// the end of the line. The string `""` immediately followed by `"` opens a block
 // string, which graphql-go reads rune by rune (consumeTripleQuoteComment); it is
-// consumed here the same way and reported as a single string token. A refused lexeme
-// records the error and reads as the end of the document, so no loop can run past it
-// even if a caller skipped the error check.
+// consumed here the same way and reported as a single string token. Any other string
+// followed by `"` is refused (stringThenQuoteReason). A refused lexeme records the
+// error and reads as the end of the document, so no loop can run past it even if a
+// caller skipped the error check (TestOpLexerReadsARefusalAsTheEnd pins that).
 func (l *opLexer) next() {
 	for {
 		tok := l.sc.Scan()
@@ -136,6 +146,11 @@ func (l *opLexer) next() {
 			return
 		case scanner.String:
 			if l.sc.Peek() == '"' {
+				if l.sc.TokenText() != `""` {
+					l.refuse(stringThenQuoteReason)
+					l.tok, l.text = scanner.EOF, ""
+					return
+				}
 				l.skipBlockString()
 			}
 		}

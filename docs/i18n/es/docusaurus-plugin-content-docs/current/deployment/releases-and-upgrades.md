@@ -2109,10 +2109,14 @@ MCP nunca envían nada de lo siguiente.
   caracteres entre comillas simples ahora se rechaza** con un error de sintaxis, y no se ejecuta
   nada de él. Las versiones anteriores los aceptaban, aunque no son GraphQL. Use `#` para los
   comentarios y `"` para las cadenas.
-- **También se rechaza una cadena de bloque que termina en `\"""`.** Ese escape es GraphQL válido,
-  pero las versiones anteriores nunca lo leyeron como lo define la especificación: cerraban la cadena
-  en esas tres comillas y leían el resto del documento a partir de ahí. Envíe ese texto en una
-  variable.
+- **También se rechaza una cadena de bloque cuyo `"""` de cierre sigue directamente a una barra
+  invertida**, como en `\"""`. Ese escape es GraphQL válido, pero las versiones anteriores nunca lo
+  leyeron como lo define la especificación: cerraban la cadena en esas tres comillas y leían el resto
+  del documento a partir de ahí. Envíe ese texto en una variable.
+- **Se rechaza una cadena seguida directamente de una comilla, como `"x""y"`.** GraphQL lo lee como
+  dos cadenas contiguas, que nunca son un valor válido; las versiones anteriores lo leían en cambio
+  como el comienzo de una cadena de bloque. Solo `"""` abre una cadena de bloque, y la cadena vacía
+  `""` no se ve afectada.
 - **Por un WebSocket de GraphQL, una suscripción que el servidor no puede leer recibe ahora el error
   de sintaxis**, no el mensaje que dice que solo se aceptan suscripciones. Un documento que nombra
   una operación que no contiene también recibe su propio error. Ambos son errores solo de esa

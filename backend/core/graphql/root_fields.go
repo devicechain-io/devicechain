@@ -96,20 +96,29 @@ func selectOperation(ops []rootOperation, name string) (rootOperation, error) {
 // its lexer scans through (internal/common/norm). That pass rewrites string escapes
 // (`\u{…}` to `\U…`, a surrogate pair to `\U…`, a lone surrogate to `\u{…}`), and to
 // know where strings are it keeps its own small state machine: code, `#` comment,
-// string and block string. It knows nothing of the four lexemes where text/scanner's
-// state and a GraphQL reading part ways — `//` and `/* */` comments, backquoted raw
-// strings, `'c'` literals, and a block string whose closing `"""` follows a backslash
-// (which it reads as the escaped `\"""` and keeps going). Around any of them the two
-// layers disagree about whether a byte is inside a string, and the rewrites add and
-// remove braces there: a `/* " */` puts the normalising pass inside a "string" where
-// the lexer sees bare tokens, so `-\uDC00`, `-\u{aaaaaaaaa` and `-\u{41}` are each
-// rewritten into something else before graphql-go's lexer ever sees them.
+// string and block string. It knows nothing of the places where text/scanner's state
+// and a GraphQL reading part ways — `//` and `/* */` comments, backquoted raw strings,
+// `'c'` literals, a block string whose closing `"""` follows a backslash (which it reads
+// as the escaped `\"""` and keeps going), and a NON-EMPTY string directly followed by a
+// quote (which graphql-go's lexer opens as a block string, since it checks only that
+// the previous token was a string, while the normalising pass reads `"x"` and then a
+// new string). Around any of them the two layers disagree about whether a byte is
+// inside a string, and the rewrites add and remove braces there: a `/* " */` puts the
+// normalising pass inside a "string" where the lexer sees bare tokens, so `-\uDC00`,
+// `-\u{aaaaaaaaa` and `-\u{41}` are each rewritten into something else before
+// graphql-go's lexer ever sees them; `"x""` followed by a `#` comment holding `""" "`
+// does the same after the newline.
 //
-// So opLexer REFUSES all four, and with them gone the two layers agree, state for
-// state, at every byte: a `#` comment and a block string are read rune by rune on both
-// sides, and a string opens at the same quote. What is left are verdicts on single
-// escapes INSIDE a string, and none of them moves a token boundary, because a rewrite
-// consumes and emits only a backslash, `u`/`U`, hex digits and braces, never a quote:
+// So opLexer REFUSES all five. That list is what the two layers' state machines were
+// compared for — the normalising pass's four states against the tokens text/scanner
+// can return in graphql-go's mode — and not a count a test can prove complete: the
+// fifth was found only after the first four had been written down as the whole list.
+// FuzzRootFieldLimit and FuzzOperationType are what would find a sixth. With the five
+// gone, a string opens at the same quote on both sides, a block string opens only at
+// `"""` on both sides, and a `#` comment and a block string are read rune by rune on
+// both sides. What is left are verdicts on single escapes INSIDE a string, and none of
+// them moves a token boundary, because a rewrite consumes and emits only a backslash,
+// `u`/`U`, hex digits and braces, never a quote:
 //
 //   - `\u{41}` (braced): refused here (text/scanner calls it an invalid escape),
 //     accepted by graphql-go. A false refusal.

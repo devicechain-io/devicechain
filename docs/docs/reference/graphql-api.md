@@ -541,7 +541,9 @@ the rule applies over WebSocket as well as HTTP.
 backquoted string, or a single-quoted character is refused with a syntax error, and nothing runs.
 Use `#` for comments. A block string whose closing `"""` directly follows a backslash (the `\"""`
 escape) is refused too. That escape is valid GraphQL, but the server has never read it as the
-specification defines it, so send such text in a variable instead. The same rule applies over
+specification defines it, so send such text in a variable instead. So is a string directly followed
+by a quote, such as `"x""y"`: GraphQL reads it as two adjacent strings, and the server used to read it
+as the start of a block string. Only `"""` opens a block string. The same rule applies over
 WebSocket, where a subscription the server cannot read gets the syntax error rather than the
 subscriptions-only message.
 

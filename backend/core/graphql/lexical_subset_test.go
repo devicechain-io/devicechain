@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"testing"
+	"text/scanner"
 
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,16 @@ var refusedLexemes = []struct{ name, doc, reason string }{
 	{"comment quote with a lone surrogate", `/* " */ mutation { a: bump(s: [-\uDC00]) }`, "comment is not accepted"},
 	{"comment quote with an overlong braced escape", `/* " */ mutation { a: bump(s: [-\u{aaaaaaaaa]) }`, "comment is not accepted"},
 	{"comment quote with a braced escape", `/* " */ mutation { a: bump(a: -\u{41}) b: bump }`, "comment is not accepted"},
+	// A non-empty string directly followed by a quote: graphql-go's lexer opens a block
+	// string there, its normalising pass reads a string and then a new one.
+	{"string then a block string", `mutation { a: m(s: "x""" b: bump """) }`, "directly followed by a quote"},
+	{"string then a string", `mutation { a: m(s: "x""y") }`, "directly followed by a quote"},
+	{"description string then a quote", `"d""" x """ mutation { a: bump }`, "directly followed by a quote"},
+	// The document that showed it: the `#` comment's quotes leave the lexer in code
+	// and the normalising pass in a string after the newline.
+	{"string then a quote with a comment and a lone surrogate",
+		"mutation { z: bump(s: \"x\"\"a\" \"\"\") # \"\"\" \"\n a: bump(s: [-\\uDC00]) b: bump }",
+		"directly followed by a quote"},
 }
 
 // lexemeFuzzSeeds seed both fuzzers with the class the refused lexemes were found in:
@@ -56,6 +67,8 @@ var lexemeFuzzSeeds = []string{
 	`mutation { a: bump(l: [-"\u{41}", -{]) b: bump }`,
 	`mutation { a: bump(a: "😀") b: bump c: bump }`,
 	"# \"\n mutation { a: bump(a: \"\\uDC00\") b: bump }",
+	"mutation { z: bump(s: \"x\"\"a\" \"\"\") # \"\"\" \"\n a: bump(s: [-\\uDC00]) b: bump }",
+	"mutation { z: bump(s: \"x\" \"a\" \"\"\") # \"\"\" \"\n a: bump(s: [-\\uDC00]) b: bump }",
 }
 
 // 🔴 THE READER REFUSES EXACTLY THE LEXEMES WHERE graphql-go'S TWO LAYERS CAN DISAGREE,
@@ -93,6 +106,11 @@ func TestRefusedLexemesAreStillAcceptedInsideStringsAndComments(t *testing.T) {
 		`"""it's // a description""" mutation { a: bump }`,
 		`mutation { a: m(s: """a\"b \\ c""") }`,
 		`mutation { a: m(s: """""") }`,
+		// The only string a quote may directly follow is `""`, which with it is `"""`.
+		`mutation { a: m(s: "") }`,
+		`mutation { a: m(s: """x""") }`,
+		`mutation { a: m(s: """"x""") }`,
+		`"" mutation { a: bump }`,
 	} {
 		resp, calls := execCounting(func(ctx context.Context) *graphql.Response {
 			return schema.Exec(ctx, doc, "", nil)
@@ -117,4 +135,26 @@ func TestFuzzArbiterReachesTheMinusAnyPath(t *testing.T) {
 	assert.Equal(t, int32(2), calls, "graphql-go ran both root fields")
 	assert.NotNil(t, checkWork(doc, DefaultGraphQLMaxQueryLength, 1, 1), "and the limit counts both")
 	assert.Nil(t, checkWork(doc, DefaultGraphQLMaxQueryLength, 2, 2))
+}
+
+// 🔴 A REFUSED LEXEME READS AS THE END OF THE DOCUMENT, at the lexer itself and not
+// only through the reader's error check: a loop over next() that skipped the check
+// still stops there. Every refusal next() makes is covered, and the token after it
+// is never produced.
+func TestOpLexerReadsARefusalAsTheEnd(t *testing.T) {
+	for _, doc := range []string{
+		"a // x\n b",
+		"a /* x */ b",
+		"a `x` b",
+		"a 'x' b",
+		`a "x""y" b`,
+	} {
+		l := newOpLexer(doc)
+		require.Equal(t, "a", l.text, "%q", doc)
+		require.NoError(t, l.err, "%q", doc)
+		l.next()
+		assert.Error(t, l.err, "%q", doc)
+		assert.Equal(t, rune(scanner.EOF), l.tok, "%q: the refused lexeme must read as the end", doc)
+		assert.Empty(t, l.text, "%q", doc)
+	}
 }
