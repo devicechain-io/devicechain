@@ -264,7 +264,9 @@ La alerta siguiente informa de los casos que aun así se producen.
 
 ## Mensajes que agotaron sus intentos de entrega {#max-delivery-records}
 
-Tras cinco entregas sin confirmar, el broker deja de entregar un mensaje y publica un aviso. Un
+Tras cinco entregas sin confirmar, el broker deja de entregar un mensaje. Publica un aviso la
+siguiente vez que se lee del consumidor después de que venza la ventana de confirmación de la última
+entrega, así que, para un servicio caído, el aviso espera hasta que el servicio vuelve a funcionar. Un
 stream de la plataforma, `max-deliveries`, captura esos avisos, y cada servicio convierte los
 suyos en entradas de la cola de mensajes no entregados, con el motivo `no-outcome` (consúltelas
 con `dcctl dead-letters list`). El stream es una cola de trabajo: un aviso registrado se borra,

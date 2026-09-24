@@ -116,8 +116,10 @@ Treat a dead letter as something to investigate, not something that will drain o
 A message a service abandons on its last attempt — a pod stopped mid-handling, or a handler
 that ran past its window — is recorded too, with reason `no-outcome`. Such a letter never
 settles a command: the last attempt may have done its work and lost only its acknowledgement.
-For busy device streams the letter points at the original rather than copying it, and names
-where to find it until the stream ages it out. The record is written by the service that
+For high-volume streams (device events, commands and detection actions) the letter points at
+the original rather than copying it, and names where to find it until the stream ages it out; so
+does a letter whose message is too large to copy. A connector request's letter points at the
+connectors service's own dead-letter stream, which holds the full request. The record is written by the service that
 owned the message, the next time that service pulls from the stream — so while a service is
 down, its records arrive late rather than not at all.
 

@@ -1871,9 +1871,12 @@ Qué cambia para usted:
   eventos de dispositivos, de comandos y del plano de control. El tipo de un registro queda fijado
   ahora por el stream por el que llegó el mensaje. `dcctl dead-letters list --kind` los ofrece todos.
 - **Un motivo nuevo, `no-outcome`.** Nunca liquida un comando: el último intento pudo haber hecho su
-  trabajo y perder solo su acuse de recibo. En los streams de dispositivos con mucho tráfico el
-  registro no lleva copia del mensaje; su detalle indica dónde está el original hasta que el stream
-  lo descarte por antigüedad.
+  trabajo y perder solo su acuse de recibo. En los streams de mucho volumen (eventos de
+  dispositivos, comandos y acciones de detección) el registro no lleva copia del mensaje; su detalle
+  indica dónde está el original hasta que el stream lo descarte por antigüedad. Lo mismo vale para
+  un mensaje demasiado grande para copiarse, y el registro de una petición de conector apunta al
+  stream propio de mensajes no entregados del servicio de conectores, que guarda la petición
+  completa.
 - **Un stream nuevo, `max-deliveries`,** que crea cada servicio que lee de un stream. Reserva 8 MiB
   con el dimensionamiento por defecto y cabe en el volumen de JetStream existente; no hace falta
   redimensionar nada. Está vacío en régimen normal, y una alerta nueva, `MaxDeliveryRecordsWaiting`,
@@ -1884,8 +1887,9 @@ Qué cambia para usted:
   servicio de conectores. Es lo que hace que un abandono registrado a la vez por un servicio y por el
   aviso del broker quede una sola vez.
 - **`DeadLetterWriteLost` tiene una tercera causa:** un mensaje de esa cola en el que el almacén de
-  mensajes no entregados o la reconciliación de comandos agotó sus intentos, y que ahora caducará en
-  el stream sin almacenarse.
+  mensajes no entregados o la reconciliación de comandos agotó sus intentos, y que ahora puede caducar en
+  el stream sin haberse almacenado (su último intento pudo almacenarlo y perder solo el acuse de
+  recibo).
 
 Durante la actualización escalonada, un abandono puede registrarse dos veces: una por un pod de la
 versión anterior y otra a partir del aviso del broker. Es el mismo fallo; no se perdió nada.

@@ -130,9 +130,12 @@ vaciará por sí solo.
 Un mensaje que un servicio abandona en su último intento (un pod detenido a mitad del
 procesamiento, o un manejador que se pasó de su ventana) también queda registrado, con el motivo
 `no-outcome`. Ese registro nunca liquida un comando: el último intento pudo haber hecho su trabajo
-y perder solo su acuse de recibo. En los flujos de dispositivos con mucho tráfico, el registro
-apunta al original en lugar de copiarlo, e indica dónde encontrarlo hasta que el flujo lo descarte
-por antigüedad. Lo escribe el servicio dueño del mensaje la próxima vez que lee del flujo, así que,
+y perder solo su acuse de recibo. En los flujos de mucho volumen (eventos de
+dispositivos, comandos y acciones de detección), el registro apunta al original en lugar de
+copiarlo, e indica dónde encontrarlo hasta que el flujo lo descarte por antigüedad; lo mismo ocurre
+con un registro cuyo mensaje es demasiado grande para copiarse. El registro de una petición de
+conector apunta al flujo propio de mensajes no entregados del servicio de conectores, que guarda la
+petición completa. Lo escribe el servicio dueño del mensaje la próxima vez que lee del flujo, así que,
 mientras un servicio está caído, sus registros llegan tarde, pero llegan.
 
 Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:

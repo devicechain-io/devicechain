@@ -448,7 +448,7 @@ func NewProducer(ms *core.Microservice) *Producer {
 				"unreachable or refusing, or out of storage), or the service refused its own "+
 				"letter as malformed, which is a defect in the service, or a dead-letter reader "+
 				"(the store or the command writeback) ran out of deliveries on a letter, which then "+
-				"ages out of the stream unstored. The pod's LOST error log line says which."),
+				"ages out of the stream possibly unstored. The pod's LOST error log line says which."),
 	}
 }
 

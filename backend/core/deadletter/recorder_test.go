@@ -230,9 +230,13 @@ func TestHandledFinalDeliveryWritesOneLetter(t *testing.T) {
 	require.Empty(t, rig.held(streams.MaxDeliveries), "an acked message produced a max-delivery advisory")
 }
 
-// GUARD: kills "the arm writes with Write instead of WriteFor" and "dead-letters has no dedup
-// window". The arm overruns its window: the broker gives up, the recorder letters the delivery,
+// GUARD: kills "the arm writes with Write instead of WriteFor" (no dedup id, so a second
+// letter). The arm overruns its window: the broker gives up, the recorder letters the delivery,
 // and THEN the arm writes its own letter about the same delivery. Exactly one letter survives.
+//
+// It does NOT pin the stream's dedup window: the two writes here are seconds apart, and the
+// broker's own two-minute default dedups those too. The window is pinned by
+// TestDeadLetterStreamsCarryTheThirtyMinuteDedupWindow.
 func TestLateArmLetterDedupsAgainstTheRecorder(t *testing.T) {
 	rig := newRecorderRig(t, startBroker(t), streams.RaiseAlarm)
 	sink := rig.armSink()
@@ -375,4 +379,77 @@ func TestDeletedTenantIsNotLettered(t *testing.T) {
 	})
 	require.Empty(t, rig.letters())
 	require.Empty(t, rig.held(streams.MaxDeliveries), "the advisory was not acked")
+}
+
+// failingRecorder is an area's recorder built by hand around writers that refuse every write,
+// so the outcome of a failed letter can be driven without a broker. Only the fields record
+// reads are set: no tenant gate (nothing is deleted), a letter bound large enough for any
+// payload here.
+func failingRecorder(t *testing.T, area string) (*maxDeliveryRecorder, *prometheus.Registry, *fakeWriter, *fakeWriter) {
+	t.Helper()
+	p, reg := testProducer(t, area)
+	letters := &fakeWriter{failures: 1 << 20, err: errors.New("the broker is refusing writes")}
+	copies := &fakeWriter{failures: 1 << 20, err: errors.New("the broker is refusing writes")}
+	return &maxDeliveryRecorder{
+		producer:  p,
+		sink:      &Sink{writer: letters, source: p.source, onLoss: func(error) {}},
+		copies:    map[string]Writer{streams.ConnectorDispatchDead: copies},
+		maxLetter: 1 << 20,
+	}, reg, letters, copies
+}
+
+func abandoned(suffix string, final bool) messaging.MaxDelivery {
+	return messaging.MaxDelivery{
+		Suffix: suffix, Stream: messaging.StreamName("test", suffix), Consumer: "c",
+		StreamSeq: 7, Deliveries: messaging.MaxDeliver, At: time.Now(), Final: final,
+		Original: &nats.RawStreamMsg{Subject: messaging.ScopedSubject("test", "acme", suffix),
+			Data: []byte(`{"k":1}`), Header: nats.Header{}},
+	}
+}
+
+// GUARD: kills "the recorder's final write failure is never counted lost". On the capture
+// durable's LAST delivery of an advisory, a letter that cannot be written is a loss: an error
+// returned now would leave the advisory unacked on the work queue with nothing left to
+// redeliver it, and nothing would count it. So the outcome is "lost", the producer's
+// dead_letter_lost_total moves, and no error is returned (the advisory is acked). Both write
+// paths are driven — the letter itself, and connector-dispatch's verbatim copy, which is
+// written first.
+//
+// The counterweight is the same failure on an EARLIER delivery: there the error IS returned,
+// so the advisory is redelivered and the write tried again, and nothing is counted lost.
+func TestAFailedLetterIsLostOnlyOnTheFinalDelivery(t *testing.T) {
+	for _, suffix := range []string{streams.RaiseAlarm, streams.ConnectorDispatch} {
+		t.Run(suffix+"/final", func(t *testing.T) {
+			area := "rec-final-" + strings.ReplaceAll(suffix, ".", "-")
+			r, reg, letters, copies := failingRecorder(t, area)
+			outcome, err := r.record(context.Background(), abandoned(suffix, true))
+			require.NoError(t, err, "an error on the final delivery strands the advisory uncounted")
+			require.Equal(t, messaging.MaxDeliveryLost, outcome)
+			require.Equal(t, 1.0, lostCount(t, reg, area))
+			require.Equal(t, writeAttempts, letters.calls+copies.calls, "the write was not retried before giving up")
+		})
+		t.Run(suffix+"/not-final", func(t *testing.T) {
+			area := "rec-early-" + strings.ReplaceAll(suffix, ".", "-")
+			r, reg, _, _ := failingRecorder(t, area)
+			outcome, err := r.record(context.Background(), abandoned(suffix, false))
+			require.Error(t, err, "a failure before the final delivery must be retried by redelivery")
+			require.Empty(t, outcome)
+			require.Equal(t, 0.0, lostCount(t, reg, area), "a failure that will be retried is not a loss")
+		})
+	}
+}
+
+// GUARD: kills "dead-letters (or connector-dispatch.dead) has no 30-minute dedup window".
+// Without the declared window the broker falls back to its own two-minute default, which
+// still dedups two writes seconds apart — so TestLateArmLetterDedupsAgainstTheRecorder cannot
+// tell the difference. The window is what makes an arm's late letter and the recorder's land
+// once when they are MINUTES apart (the recorder waits for the next pull, and an area can be
+// down far longer than two minutes), so it is asserted on the streams as the broker holds them.
+func TestDeadLetterStreamsCarryTheThirtyMinuteDedupWindow(t *testing.T) {
+	rig := newRecorderRig(t, startBroker(t), streams.ConnectorDispatch)
+	for _, suffix := range []string{streams.DeadLetters, streams.ConnectorDispatchDead} {
+		info, err := rig.js.StreamInfo(messaging.StreamName("test", suffix))
+		require.NoError(t, err, "the recorder's build did not create %s", suffix)
+		require.Equal(t, 30*time.Minute, info.Config.Duplicates, "%s's dedup window", suffix)
+	}
 }

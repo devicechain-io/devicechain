@@ -154,24 +154,24 @@ variable "nats_jetstream_storage" {
     on control-plane streams that never hold more than a few MiB.
 
     The bound is now split hot/cold in backend/core/streams (see streams.All): 7 hot
-    streams at 1 GiB, 10 control-plane streams at 128 MiB, and the capture stream at
-    256 MiB reserve 8704Mi (8.5Gi). The MQTT gateway's own streams — which
-    nats-server creates UNBOUNDED, and which the platform bounds at startup so they
-    cannot eat the rest — add 384Mi. The KV buckets are bounded on the same principle
-    (see kv.All): 5 State buckets at 128Mi + 6 Cache buckets at 64Mi reserve a
-    further 1024Mi. Total reserved: 9.875Gi.
+    streams at 1 GiB, 10 control-plane streams at 128 MiB, the device-events capture
+    stream at 256 MiB and the max-delivery capture at 8 MiB reserve 8712Mi (8.51Gi).
+    The MQTT gateway's own streams — which nats-server creates UNBOUNDED, and which
+    the platform bounds at startup so they cannot eat the rest — add 384Mi. The KV
+    buckets are bounded on the same principle (see kv.All): 5 State buckets at 128Mi
+    + 6 Cache buckets at 64Mi reserve a further 1024Mi. Total reserved: 10120Mi (9.883Gi).
 
-    Why 16Gi and not 12Gi: at 12Gi the ceiling is 10Gi, leaving 128Mi unreserved —
+    Why 16Gi and not 12Gi: at 12Gi the ceiling is 10Gi, leaving 120Mi unreserved —
     BELOW the 512Mi headroom floor the budget test asserts. A PV sized to the margin
     has to be moved for every stream or bucket the platform adds, and the failure for
-    not doing so is the crashloop above rather than a test. 16Gi (→14Gi ceiling) leaves 4.125Gi, which is
+    not doing so is the crashloop above rather than a test. 16Gi (→14Gi ceiling) leaves 4216Mi (4.117Gi), which is
     room for the reservation to grow by about 40%. The extra 4Gi of disk is the
     cheapest part of this deployment; the alternative was a budget where every new
     bucket is a deploy-time landmine.
 
     NEVER shrink this independently of the stream bounds, and do NOT size the PV as
     (sum of stream ceilings) / 0.9 — the flooring above makes that formula unsafe.
-    A 9.875Gi sum / 0.9 rounds to an 11Gi PV, whose ceiling is floor(11 × 0.9) = 9Gi,
+    A 9.883Gi sum / 0.9 rounds to an 11Gi PV, whose ceiling is floor(11 × 0.9) = 9Gi,
     which is BELOW the sum and brings the crashloop back. Pick the smallest whole
     magnitude where floor(magnitude × 0.9) >= the sum, then leave real margin above
     it. Raise it for real ingest volume.

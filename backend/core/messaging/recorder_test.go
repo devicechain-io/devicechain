@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -383,4 +384,75 @@ func TestTheCaptureListsEveryOtherStreamOfItsInstance(t *testing.T) {
 	require.Equal(t, "inst_area_raise-alarm", durable)
 	_, _, ok = parseAdvisorySubject("$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.a.b.c")
 	require.False(t, ok)
+}
+
+// GUARD: kills "Final is never true". The record func is told, on each delivery of an
+// advisory, whether it is the capture durable's LAST: that is the one delivery on which an
+// error is no longer retried, so the func must turn a failure into a counted loss. Here the
+// func fails on every delivery it is not told is final — so the advisory is redelivered
+// MaxDeliver times, Final is false on the first MaxDeliver-1 and true on the MaxDeliver-th,
+// and the "lost" it returns then is counted and the advisory acked off the work queue.
+func TestTheCaptureDurablesLastDeliveryIsFinal(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	var mu sync.Mutex
+	var finals []bool
+	build := func(*NatsManager) (MaxDeliveryFunc, error) {
+		return func(_ context.Context, d MaxDelivery) (MaxDeliveryOutcome, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			finals = append(finals, d.Final)
+			if !d.Final {
+				return "", errors.New("the dead-letter stream is refusing writes")
+			}
+			return MaxDeliveryLost, nil
+		}, nil
+	}
+	seen := func() []bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(finals)
+	}
+	nmgr, readers := recorderRig(t, srv, uniqueArea("final"), build, streams.RaiseAlarm)
+	exhaust(t, nmgr, readers[0], streams.RaiseAlarm)
+	keepPulling(t, readers[0])
+
+	waitWithin(t, 20*time.Second, "every delivery of the advisory", func() bool {
+		return len(seen()) >= MaxDeliver
+	})
+	want := make([]bool, MaxDeliver)
+	want[MaxDeliver-1] = true
+	require.Equal(t, want, seen(), "Final must be false on every delivery but the MaxDeliver-th")
+	waitWithin(t, 3*time.Second, "the capture stream to empty", func() bool { return captureHeld(t, nmgr) == 0 })
+	stream := StreamName("test", streams.RaiseAlarm)
+	require.Equal(t, 1.0, testutil.ToFloat64(nmgr.metrics.maxDeliveryRecords.WithLabelValues(stream, "lost")))
+	time.Sleep(1500 * time.Millisecond)
+	require.Len(t, seen(), MaxDeliver, "the advisory was delivered again after its final delivery was acked")
+}
+
+// GUARD: kills "ExecuteStop does not stop the recorder". Stop must join the recorder — before
+// the readers unsubscribe and the connection drains, since it may be mid-letter — and leave
+// recorderCancel nil. A non-nil one is the retry guard's "a recorder is already running", so
+// the next start would silently skip building one.
+//
+// A Stop followed by a Start on the SAME manager cannot be driven here: Stop drains the
+// connection and nothing re-establishes it (see TestOncreateRunsOnEveryStart), and the
+// lifecycle refuses a start from Stopped. What is asserted instead is the state that start's
+// guard reads, and that the recorder goroutine has exited rather than running on into the drain.
+func TestStopJoinsTheRecorder(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	nmgr, _ := recorderRig(t, srv, uniqueArea("stop"), recordNothing, streams.RaiseAlarm)
+	require.NotNil(t, nmgr.recorderCancel)
+	require.NoError(t, nmgr.Stop(context.Background()))
+	require.Nil(t, nmgr.recorderCancel, "a later start would take the stopped recorder for a running one")
+	require.Nil(t, nmgr.recorder)
+	joined := make(chan struct{})
+	go func() {
+		nmgr.recorderWg.Wait()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("the recorder goroutine was still running after Stop returned")
+	}
 }

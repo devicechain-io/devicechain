@@ -257,8 +257,9 @@ get through.
 
 ## Messages that ran out of delivery attempts {#max-delivery-records}
 
-After five unacknowledged deliveries the broker stops handing a message out and publishes a
-notice. A platform stream, `max-deliveries`, captures those notices, and each service turns
+After five unacknowledged deliveries the broker stops handing a message out. It publishes a
+notice the next time the consumer is pulled after the last delivery's acknowledgement window has
+passed, so for a service that is down the notice waits until the service runs again. A platform stream, `max-deliveries`, captures those notices, and each service turns
 its own into dead letters with reason `no-outcome` (read them with `dcctl dead-letters list`).
 The stream is a work queue: a recorded notice is deleted, so on a healthy instance it is empty.
 The counter `devicechain_<area>_max_delivery_records_total{stream,outcome}` says what was done

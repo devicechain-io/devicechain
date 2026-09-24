@@ -626,7 +626,11 @@ var All = []Stream{
 	//  2. AN OLD POD CAN FLIP THE SUBJECT LIST BACK. Every area reconciles this stream's
 	//     subjects on start, so during a rollout a restarting old pod can drop a stream
 	//     newly declared here; that stream's advisories have no interest until a new pod
-	//     restarts.
+	//     restarts. The same flip applies to each area's recorder durable, whose filter is
+	//     reconciled to the starting pod's readers: an old pod of an area restarting
+	//     mid-rollout drops a newly added reader's advisory subject from it. Those
+	//     advisories are still captured and wait on this queue until a new pod of the area
+	//     restarts, so they are late, not lost (the alert over this stream sees the wait).
 	//  3. IT IS A WORK QUEUE, so an acked advisory leaves the stream and its message count
 	//     is the unrecorded backlog. That is what the MaxDeliveryRecordsWaiting alert
 	//     reads, and why nothing may read this stream's cursor gaps as unread loss.

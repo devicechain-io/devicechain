@@ -1762,8 +1762,11 @@ What changes for you:
   command and control-plane streams. The kind of a letter is now fixed by the stream the message
   arrived on. `dcctl dead-letters list --kind` offers all of them.
 - **A new reason, `no-outcome`.** It never settles a command: the last attempt may have done its
-  work and lost only its acknowledgement. For busy device streams the letter carries no copy of the
-  message; its detail names where the original is until the stream ages it out.
+  work and lost only its acknowledgement. For high-volume streams (device events, commands and
+  detection actions) the letter carries no copy of the message; its detail names where the
+  original is until the stream ages it out. The same holds for a message too large to copy, and a
+  connector request's letter points at the connectors service's own dead-letter stream, which
+  holds the full request.
 - **A new stream, `max-deliveries`,** created by every service that reads a stream. It reserves
   8 MiB at default sizing and fits the existing JetStream volume; nothing needs resizing. It is
   empty in steady state, and a new alert, `MaxDeliveryRecordsWaiting`, fires if notices wait on it
@@ -1773,7 +1776,8 @@ What changes for you:
   so does the connectors service's own dead-letter stream. It is what makes a give-up recorded both
   by a service and by the broker's notice land once.
 - **`DeadLetterWriteLost` has a third cause:** a dead letter that the dead-letter store or the
-  command writeback ran out of attempts on, which will now age out of the stream unstored.
+  command writeback ran out of attempts on, which may now age out of the stream without having
+  been stored (its last attempt may have stored it and lost only the acknowledgement).
 
 During the rolling upgrade a give-up can be lettered twice, once by a pod of the old release and
 once from the broker's notice. The two are the same failure; nothing was lost.

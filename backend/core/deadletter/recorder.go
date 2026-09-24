@@ -107,11 +107,14 @@ func (r *maxDeliveryRecorder) record(ctx context.Context, d messaging.MaxDeliver
 	if kind == streams.NotLettered {
 		// The dead-letter readers — the store and the command writeback — read a sink, and a
 		// letter about a letter would loop. The letter itself stays on its stream until it
-		// ages out, unstored or unsettled, so this IS a loss and is counted as one.
+		// ages out, and may never have been stored or settled, so it is counted as a loss. It
+		// MAY overstate one: the reader's last delivery may have committed and lost only its
+		// ack, which nothing here can see.
 		r.producer.Lost()
 		log.Error().Str("stream", d.Stream).Uint64("seq", d.StreamSeq).Str("durable", d.Consumer).
-			Msg("LOST: a dead-letter reader exhausted its deliveries on a letter; the letter will age out " +
-				"of the stream unstored/unsettled")
+			Msg("LOST: a dead-letter reader exhausted its deliveries on a letter; it may not have been " +
+				"stored/settled (its last delivery may have committed and lost only its ack), and it will " +
+				"age out of the stream")
 		return messaging.MaxDeliveryNotLettered, nil
 	}
 	tenant, ok := messaging.ParseTenantFromSubject(d.Original.Subject)
@@ -178,14 +181,12 @@ func (r *maxDeliveryRecorder) failed(d messaging.MaxDelivery, err error) (messag
 }
 
 // verbatimCopy is the byte-identical copy of an original for its declared copy stream: its
-// body and headers, less the original's own dedup id (the copy carries the letter's), plus
-// the reason header.
+// body and headers, plus the reason header, under the letter's dedup id. The original's own
+// Nats-Msg-Id is not stripped here: the NATS writer is the authority on it, setting it from
+// DedupID and never copying it from Headers, so the copy carries the letter's id.
 func verbatimCopy(orig *nats.RawStreamMsg, id string) messaging.Message {
 	headers := map[string]string{}
 	for k := range orig.Header {
-		if k == nats.MsgIdHdr {
-			continue
-		}
 		headers[k] = orig.Header.Get(k)
 	}
 	headers[HeaderDeadReason] = DeadReasonNoOutcome
