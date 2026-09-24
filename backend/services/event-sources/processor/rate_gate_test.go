@@ -128,6 +128,39 @@ func TestCaughtUpTrafficIsMeteredOnTheLiveLimiter(t *testing.T) {
 		"live traffic must share one bucket across transports when nothing is lagging")
 }
 
+// A broker's append time is stamped by the stream leader's wall clock, so it is not
+// monotonic: a leader change between servers whose clocks disagree steps it backwards.
+// Fed straight to the token bucket, the first stepped message rewinds the bucket's clock
+// and everything after re-accrues from the older point, so the tenant gets the stepped
+// span's worth of tokens a second time. Under the limiter's mark the older times are
+// charged at the latest time the bucket has seen, so the step costs over-shedding and
+// admits nothing extra.
+func TestBacklogLimiterSurvivesABackwardsAppendTime(t *testing.T) {
+	gate, _ := newTestGate()
+
+	base := time.Now().Add(-time.Hour) // well past BacklogThreshold: the backlog limiter
+	admitted := 0
+	for i := 0; i < 100; i++ { // 1 s at exactly the ceiling: compliant
+		if gate("gw", "acme", base.Add(time.Duration(i)*10*time.Millisecond), false) {
+			admitted++
+		}
+	}
+	require.Equal(t, 100, admitted, "the compliant second must be admitted in full")
+
+	stepped := base.Add(-9 * time.Second) // a leader change: 10 s behind the last append
+	for i := 0; i < 1000; i++ {           // then 1 s at 10x the ceiling
+		if gate("gw", "acme", stepped.Add(time.Duration(i)*time.Millisecond), false) {
+			admitted++
+		}
+	}
+
+	// The bucket's clock never leaves base .. base+1 s, so across both segments it admits
+	// at most one burst plus one second at the ceiling. Rewound, the stepped flood gets a
+	// second of its own on top: ~210.
+	require.LessOrEqual(t, admitted, testBurst+int(testCeiling)*1+1,
+		"a backwards append time must not re-accrue the ceiling")
+}
+
 // Tenants are metered independently on both timelines; one tenant's backlog must
 // not consume another's allowance.
 func TestBacklogMeteringIsPerTenant(t *testing.T) {

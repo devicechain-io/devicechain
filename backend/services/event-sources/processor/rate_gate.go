@@ -108,19 +108,23 @@ const BacklogThreshold = 5 * time.Second
 //
 // # Why two limiters rather than two clocks on one
 //
-// This separation is the correctness property, not an optimization. A token bucket
-// accrues from the last timestamp it saw, so a single bucket fed BOTH wall-clock
-// arrivals and hours-old send times re-accrues from a stale mark on every jump
-// forward to now — refilling to burst, which the following rewind then spends.
-// That mints roughly `burst` admissions per interleave, so a tenant ingesting over
-// HTTP while their capture backlog drains can pace live posts against the drain
-// and bypass their ceiling outright. It is not a bounded rounding error: the
-// minting scales with consumer lag, and on the single-bucket design this replaces,
-// one second of lag was enough to turn a 100/s ceiling into ~2000 admissions.
+// A single bucket fed BOTH wall-clock arrivals and hours-old send times cannot meter
+// either correctly. On the single-bucket design this replaced, the bucket's clock
+// rewound on every backlog message and re-accrued on every live one, minting roughly
+// `burst` admissions per interleave (one second of lag turned a 100/s ceiling into
+// ~2000 admissions). core.TenantRateLimiter now keeps each bucket's clock from going
+// backwards, so that interleave can no longer MINT — but it would still admit wrongly
+// in the other direction: once a live post has moved the bucket's clock to now, every
+// backlog message is charged at now too, and a compliant drain is shed as if it had
+// all arrived at once. A live post must not pace against a drain's timeline, nor a
+// drain against a live post's.
 //
-// Routing keeps each bucket on exactly ONE clock. The live bucket only ever sees
-// now; the backlog bucket only ever sees send times, which are monotonic in stream
-// order. Neither can rewind, so neither can mint.
+// Routing keeps each bucket on the clock it measures. The live bucket only ever sees
+// now; the backlog bucket only ever sees broker append times. Those are NOT monotonic:
+// the append time is stamped by the stream leader's wall clock, so it steps backwards
+// on a leader change between servers whose clocks disagree, or on an NTP step. A
+// backwards step costs over-shedding under the limiter's mark (the older times are
+// charged at the latest time the bucket has seen), never minting.
 //
 // The residual cost is that a tenant who is simultaneously live AND draining a
 // genuine backlog may be admitted up to twice their ceiling until the drain
@@ -140,12 +144,10 @@ func NewRateGate(live *core.TenantRateLimiter, backlog *core.TenantRateLimiter,
 		// ceiling, so a redelivery arrives precisely when there is no token left to pay
 		// with.
 		//
-		// It is also what keeps the backlog limiter's one-clock invariant true. Stream
-		// order is monotonic in send time, but DELIVERY order is not — a redelivery
-		// carries an older send time than messages already admitted. Feeding that back
-		// into the bucket rewinds its mark and lets the next forward jump re-accrue to
-		// burst, which is the same minting the live/backlog split exists to close.
-		// Exempting redeliveries removes the only way a backward timestamp can reach it.
+		// The exemption is about double-charging, not about the bucket's clock: a
+		// redelivery carries an older send time than messages already admitted, and the
+		// limiter charges it at the latest time the bucket has seen, so metering it would
+		// spend a token the tenant already paid and could never mint one.
 		if redelivery {
 			return true
 		}
