@@ -55,8 +55,9 @@ func wireConnectorKind(t rules.ActionType) (string, bool) {
 // Dispatch flattens the resolved action onto the wire and publishes one connector-dispatch request on
 // its tenant's subject. The writer derives the subject from the tenant in context (fail-closed on
 // none), so the request lands on exactly "{instance}.{tenant}.connector-dispatch". A marshal or write
-// failure is returned so the dispatcher retries (the event redelivers; the idempotency token makes the
-// re-run safe). An unmappable/malformed action is a programming error (the dispatcher only routes
+// failure is returned so the dispatcher retries (the event redelivers and every connector action on it
+// is published again; the idempotency token is forwarded to the destination, not deduplicated on the
+// way). An unmappable/malformed action is a programming error (the dispatcher only routes
 // httpCall/publish here); it is rejected fail-closed rather than published as a malformed request.
 func (c *connectorClient) Dispatch(ctx context.Context, req react.ConnectorRequest) error {
 	kind, ok := wireConnectorKind(req.Action.Type)

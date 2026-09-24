@@ -51,8 +51,10 @@ const (
 	// gone) — ack the event; there is nothing a redelivery would achieve.
 	Done Outcome = iota
 	// Retry: a failure the dispatcher cannot resolve now (the rule store or a sink was unreachable)
-	// — do NOT ack. The event redelivers; the deterministic idempotency tokens make the re-run safe,
-	// and the consumer's redelivery cap bounds a permanently-failing event.
+	// — do NOT ack. The event redelivers and every action is dispatched again. The deterministic
+	// idempotency tokens make that safe for commands (command-delivery dedups on them) and alarms
+	// (an upsert), but NOT for connector actions, whose token is only forwarded to the destination.
+	// The consumer's redelivery cap bounds a permanently-failing event.
 	Retry
 )
 
@@ -189,8 +191,9 @@ type ConnectorRequest struct {
 // ConnectorSink hands a rendered connector action to the outbound-connectors service (ADR-060),
 // implemented by publishing a connector-dispatch request onto the per-tenant NATS subject the service
 // consumes. Dispatch returns a non-nil error on any failure (a marshal or broker-write failure); the
-// dispatcher retries every error (the event redelivers, the idempotency Token makes the re-run safe),
-// so the sink need not classify. A nil ConnectorSink DISABLES connector dispatch: an httpCall/publish
+// dispatcher retries every error (the event redelivers and the request is published again, carrying
+// the same forwarded idempotency Token — nothing on the way deduplicates it), so the sink need not
+// classify. A nil ConnectorSink DISABLES connector dispatch: an httpCall/publish
 // action is then recognized-but-inert (RecordNotEnabled), exactly like a nil command/alarm sink.
 type ConnectorSink interface {
 	Dispatch(ctx context.Context, req ConnectorRequest) error

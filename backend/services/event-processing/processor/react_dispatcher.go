@@ -237,9 +237,10 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 	rd.metrics.recordDeadLettered()
 }
 
-// ack best-effort acks, logging a failed ack (a redelivery re-dispatches idempotently).
+// ack best-effort acks, logging a failed ack. A redelivery re-dispatches every action: commands
+// and alarms deduplicate on their token, connector calls do not (the key is only forwarded).
 func (rd *ReactDispatcher) ack(msg messaging.Message) {
 	if err := msg.Ack(); err != nil {
-		log.Warn().Err(err).Msg("Failed to ack a derived event; it will redeliver (idempotent).")
+		log.Warn().Err(err).Msg("Failed to ack a derived event; it will redeliver and dispatch its actions again.")
 	}
 }

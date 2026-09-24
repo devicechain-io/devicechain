@@ -84,8 +84,11 @@ Un reinicio es rutina, no un incidente. Al arrancar, el motor recarga su último
 reproduce el flujo desde esa posición, de modo que vuelve a derivar el estado que tenía.
 
 Si el único pod del motor se detiene sin liberar su partición (una caída o una terminación por falta
-de memoria), la detección y las acciones pendientes de despachar se reanudan cuando el reemplazo toma
-la partición, hasta unos 35 segundos después. Un reinicio ordenado libera la partición y no espera.
+de memoria), las acciones pendientes de despachar se reanudan cuando el reemplazo toma la partición,
+hasta unos 35 segundos después. La detección se reanuda más tarde todavía: el reemplazo espera
+primero un periodo de traspaso adicional, porque no puede distinguir un pod detenido de uno aislado
+que sigue en marcha, y después reproduce el flujo como se describe más abajo. Un reinicio ordenado
+libera la partición y se salta ambas esperas.
 
 | | Qué ocurre |
 |---|---|

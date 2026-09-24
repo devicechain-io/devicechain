@@ -646,10 +646,12 @@ func (c *DispatchConsumer) tenantIsDeleted(tenant string) bool {
 	return c.tenantDeleted != nil && c.tenantDeleted(tenant)
 }
 
-// ack best-effort acks; a failed ack redelivers, and the idempotency key makes the re-run safe.
+// ack best-effort acks; a failed ack redelivers, and the redelivery CALLS THE DESTINATION AGAIN.
+// This service forwards the idempotency key and does not deduplicate on it, so the re-run is safe
+// only where the destination deduplicates on that key.
 func (c *DispatchConsumer) ack(msg messaging.Message) {
 	if err := msg.Ack(); err != nil {
-		log.Warn().Err(err).Msg("Failed to ack a connector dispatch; it will redeliver (idempotent).")
+		log.Warn().Err(err).Msg("Failed to ack a connector dispatch; it will redeliver and reach its destination again.")
 	}
 }
 

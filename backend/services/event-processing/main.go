@@ -416,7 +416,9 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 // ReaderWithReleaseOnPark gives the buffer up when the term is lost. DETECT keeps its
 // buffer across a flicker of Held because dropping it would reorder a single writer's input;
 // REACT has no order to protect, and a buffer it kept would be handed out on a later term
-// after the other replica had already dispatched it.
+// after the other replica had already dispatched it. It narrows that window rather than
+// closing it: ReaderWithReleaseOnPark names the subscription-buffered leftovers it cannot
+// reach, which is one more reason a connector call can reach its destination twice.
 //
 // REACT is deliberately NOT one of the processor's termReaders (bound and unbound per term).
 // Unbinding protects DETECT from a pull request served past the new leader's replay head,

@@ -783,8 +783,11 @@ Worth knowing before turning it on:
   costs: during a handover both replicas can dispatch for up to about 5 s (the old owner's `Held`
   overshoots server expiry by up to the JetStream API timeout; see `termSlack`), and connector calls
   made twice in that window reach the destination twice (the idempotency key is forwarded, never
-  deduplicated here); and after an unclean single-replica stop REACT waits, with DETECT, for the
-  dead pod's lease to expire (TTL 30 s plus acquire backoff, about 35 s).
+  deduplicated here); and after an unclean single-replica stop REACT waits for the dead pod's lease
+  to expire (TTL 30 s plus acquire backoff, about 35 s). The gate opens at acquire
+  (`rp.Gate.Enter(holder.Held)` in `beginTerm`), so REACT resumes then; DETECT resumes later, after
+  `termSlack` (the prior owner did not release, so `PriorOwnerReleasedCleanly` is false) and the
+  term build.
 
 **Metrics carry no per-tenant or per-rule label**, deliberately
 (`backend/services/event-processing/processor/metrics.go:15-16`, `:81-84`). The over-budget gauges are

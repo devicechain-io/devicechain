@@ -222,30 +222,56 @@ func parkBriefly(t *testing.T, reader MessageReader, held *atomic.Bool) {
 // and gives it up by NAKING it: the broker hands the messages out again at once, not an
 // AckWait later.
 //
-// The two halves are asserted separately. The buffer being empty after the park is the
-// drop; the next read returning a REDELIVERY (NumDelivered 2) well inside AckWait is the
-// Nak. A release that only dropped would leave the broker waiting out the whole AckWait
-// before redelivering, and the bounded read below would come back empty.
+// 🔴 THE WHOLE PARK HAPPENS INSIDE ONE ReadMessage CALL, and that is the production shape.
+// A parked reader does not return: it polls the gate inside the same call until the gate
+// reopens, and its context is cancelled only at shutdown. So the release at the park is
+// the ONLY thing that drops the buffer on a term loss — the end-of-stream release never
+// runs. A test that ended its park with a context timeout would let the end-of-stream
+// release do the work and could not tell the two apart.
+//
+// What the call returns once the gate reopens tells the three cases apart: no release at
+// all hands out the buffered sequence 2 on its FIRST delivery; a release that dropped
+// without Naking leaves the broker waiting out the whole AckWait, so the bounded read comes
+// back empty; a release that Naked hands out a REDELIVERY (NumDelivered 2) at once.
 func TestReleaseOnParkNaksAndDrops(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
 
 	var held atomic.Bool
-	reader, nr := primeBuffer(t, nmgr, &held, ReaderWithReleaseOnPark())
+	reader, _ := primeBuffer(t, nmgr, &held, ReaderWithReleaseOnPark())
 
-	parkBriefly(t, reader, &held)
-	require.Empty(t, nr.pending, "the buffer survived the park, so a replica that regains the term "+
-		"would hand out a batch another replica may have dispatched in the meantime")
-
-	held.Store(true)
 	// Far inside the AckWait the durable is configured with: only a Nak redelivers this fast.
 	require.Greater(t, nmgr.ackWait(), 20*time.Second)
+
+	held.Store(false)
+	type result struct {
+		msg Message
+		err error
+	}
+	done := make(chan result, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	msg, err := reader.ReadMessage(ctx)
-	require.NoError(t, err, "nothing was redelivered inside AckWait: the buffer was dropped without being Nak'd")
-	require.Contains(t, []uint64{2, 3}, msg.StreamSeq)
-	require.Equal(t, 2, msg.NumDelivered,
+	go func() {
+		msg, err := reader.ReadMessage(ctx)
+		done <- result{msg, err}
+	}()
+
+	// Well over two gate polls, so the call has parked; then reopen the gate from here,
+	// with the call still in flight.
+	time.Sleep(6 * termGatePoll)
+	select {
+	case r := <-done:
+		t.Fatalf("the read returned while the gate was closed (err=%v): it did not park", r.err)
+	default:
+	}
+	held.Store(true)
+
+	r := <-done
+	require.NoError(t, r.err, "nothing was redelivered inside AckWait: the buffer was dropped without being Nak'd")
+	require.False(t, r.msg.StreamSeq == 2 && r.msg.NumDelivered == 1,
+		"the parked call handed out the copy it had buffered before its gate closed: the park did not release it")
+	require.Contains(t, []uint64{2, 3}, r.msg.StreamSeq)
+	require.Equal(t, 2, r.msg.NumDelivered,
 		"the message handed out after the park was not a redelivery; the stale buffered copy came out")
 }
 

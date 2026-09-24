@@ -1805,8 +1805,10 @@ partition moves, both replicas can dispatch for up to about five seconds, and a 
 made twice in that window reaches its destination twice.
 
 With one replica (the default) nothing changes, except after the pod stops without a graceful
-shutdown (a crash or an out-of-memory kill). Detection and the actions waiting to be dispatched
-then resume when the replacement takes the partition, up to about 35 seconds later.
+shutdown (a crash or an out-of-memory kill). The actions waiting to be dispatched then resume when
+the replacement takes the partition, up to about 35 seconds later, rather than as soon as the
+replacement starts. Detection resumes after a further handover wait and the replay, as it did
+before this release.
 
 Rate ceilings in `event-sources`, `outbound-connectors` and `ai-inference` are enforced by each
 replica separately. This is now documented under

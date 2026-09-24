@@ -1920,9 +1920,10 @@ cinco segundos como máximo, y una llamada a un conector hecha dos veces en ese 
 veces a su destino.
 
 Con una réplica (el valor por defecto) nada cambia, salvo cuando el pod se detiene sin un apagado
-ordenado (una caída o una terminación por falta de memoria). La detección y las acciones pendientes
-de despachar se reanudan entonces cuando el reemplazo toma la partición, hasta unos 35 segundos
-después.
+ordenado (una caída o una terminación por falta de memoria). Las acciones pendientes de despachar se
+reanudan entonces cuando el reemplazo toma la partición, hasta unos 35 segundos después, en lugar de
+en cuanto arranca el reemplazo. La detección se reanuda tras una espera de traspaso adicional y la
+reproducción, igual que antes de esta versión.
 
 Los techos de tasa de `event-sources`, `outbound-connectors` y `ai-inference` los aplica cada réplica
 por separado. Esto ahora está documentado en [Gobernanza](../concepts/governance.md#per-replica), y

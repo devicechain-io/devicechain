@@ -77,9 +77,11 @@ A restart is routine, not an incident. On start the engine reloads its last chec
 the stream from that position, so it re-derives the state it had.
 
 If the engine's only pod stops without releasing its partition (a crash or an out-of-memory
-kill), detection and the actions waiting to be dispatched both resume when the replacement takes
-the partition, up to about 35 seconds later. A graceful restart releases the partition and does
-not wait.
+kill), the actions waiting to be dispatched resume when the replacement takes the partition, up
+to about 35 seconds later. Detection resumes later still: the replacement first waits out a further
+handover period, because it cannot tell a stopped pod from one that is cut off but still running,
+and then replays as described below. A graceful restart releases the partition and skips both
+waits.
 
 | | What happens |
 |---|---|

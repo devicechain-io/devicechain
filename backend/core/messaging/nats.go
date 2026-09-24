@@ -1263,7 +1263,10 @@ const termGatePoll = 50 * time.Millisecond
 // out — including one already sitting in the fetch buffer, which is why the check
 // precedes the pending pop rather than wrapping the Fetch. It is checked again when a
 // Fetch returns, so a batch fetched across the moment the gate closed is not handed out
-// either: a closed gate hands out nothing later than one poll after it closed.
+// either: a closed gate hands out nothing later than one poll after it closed. One
+// consequence: a context cancelled while a Fetch is waiting now returns end-of-stream with
+// that batch still in the buffer, unacked, rather than handing its first message out; a
+// reader without ReaderWithReleaseOnPark leaves it for the broker to redeliver at AckWait.
 //
 // What the reader has buffered SURVIVES a park: when the gate reopens, the buffer is
 // handed out where it left off. That is DETECT's behaviour and it is deliberate — Held
@@ -1303,9 +1306,24 @@ func ReaderWithTermGate(held func() bool) ReaderOption {
 //
 // The Nak is the one this package otherwise refuses to give a consumer (see Message), and
 // it is safe here for a reason that does not generalize: it happens once per gate-close
-// edge, not once per failed attempt, so it moves each message's delivery count by one —
-// the same amount the AckWait expiry it replaces would — and cannot turn MaxDeliver into a
-// fuse. A message whose Nak does not reach the broker is simply redelivered at AckWait.
+// edge, not once per failed attempt, so it costs each buffered message ONE delivery per
+// park — never the millisecond redelivery loop that makes a per-attempt Nak a MaxDeliver
+// fuse. On a real term loss that delivery is one the AckWait expiry would have spent
+// anyway. On a flicker (Held false and back inside one term) it is an EXTRA delivery the
+// buffer would otherwise not have cost, so a message caught in the buffer across enough
+// flickers could exhaust MaxDeliver; a flicker needs a renewal landing far behind the
+// lease TTL, so this is a bounded, rare cost, not a steady one. A message whose Nak does
+// not reach the broker is simply redelivered at AckWait.
+//
+// 🔴 WHAT IT DOES NOT RELEASE: messages a timed-out Fetch left in the SUBSCRIPTION's own
+// buffer (a pull request answered just after the client stopped waiting on it; see
+// holdFetched's leftovers). Those are not in the reader's buffer, so they are neither
+// Nak'd nor dropped, and the broker redelivers them to another replica at AckWait. A parked
+// reader makes no Fetch, so if this replica later regains the term its next Fetch hands
+// those first-delivery copies out first, and a message another replica has since
+// dispatched can be dispatched again. The window is a Fetch timing out at the instant the broker answers it,
+// followed by a term loss and a return; a caller that cannot tolerate a duplicate across
+// terms must deduplicate downstream.
 func ReaderWithReleaseOnPark() ReaderOption {
 	return func(r *natsReader) { r.releaseOnPark = true }
 }

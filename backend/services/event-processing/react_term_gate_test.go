@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -200,9 +199,13 @@ func TestStandbyDoesNotSplitTheDurable(t *testing.T) {
 // dispatched.
 //
 // The reader is newReactReader — the function main calls. It reads one of three messages
-// (leaving two buffered), loses the term for longer than two gate polls, regains it, and
-// reads again. The stale copy is sequence 2 on its FIRST delivery; what may come out is a
-// redelivery of 2 or 3 (the broker hands a released message out again) or sequence 4.
+// (leaving two buffered), then makes ONE read that starts with the term lost and is still
+// in flight, parked, when the term comes back after more than two gate polls. That is how
+// the dispatcher's loop sees a term loss: a parked read does not return until the gate
+// reopens, so the release at the park is the only one that can run — a read ended by a
+// context timeout would be released by the end-of-stream path instead and show nothing
+// about the park. The stale copy is sequence 2 on its FIRST delivery; what may come out is
+// a redelivery of 2 or 3 (the broker hands a released message out again) or sequence 4.
 func TestReactReaderReleasesItsBufferOnTermLoss(t *testing.T) {
 	f := startReactFixture(t)
 	nmgr := f.newManager(t)
@@ -223,15 +226,27 @@ func TestReactReaderReleasesItsBufferOnTermLoss(t *testing.T) {
 		"the first read did not fetch all three, so nothing is buffered and this test shows nothing")
 
 	held.Store(false)
-	pctx, pcancel := context.WithTimeout(context.Background(), 3*termGatePollBound)
-	defer pcancel()
-	_, err = reader.ReadMessage(pctx)
-	require.ErrorIs(t, err, io.EOF, "a message was handed out while the term was not held")
-
-	held.Store(true)
 	f.publish(t, nmgr, 1)
-	next, err := reader.ReadMessage(ctx)
-	require.NoError(t, err)
+	type result struct {
+		msg messaging.Message
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		msg, err := reader.ReadMessage(ctx)
+		done <- result{msg, err}
+	}()
+	time.Sleep(3 * termGatePollBound)
+	select {
+	case r := <-done:
+		t.Fatalf("a read returned while the term was not held (err=%v)", r.err)
+	default:
+	}
+	held.Store(true)
+
+	r := <-done
+	require.NoError(t, r.err)
+	next := r.msg
 	require.False(t, next.StreamSeq == 2 && next.NumDelivered == 1,
 		"the reader handed out the copy it had buffered before losing the term")
 	if next.StreamSeq != 4 {
