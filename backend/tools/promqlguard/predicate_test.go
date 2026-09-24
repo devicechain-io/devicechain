@@ -109,10 +109,11 @@ func TestAlwaysFiringIsCaught(t *testing.T) {
 // kills above: every one of these is a rule shape this repository ships or would
 // legitimately ship, and a guard that flags the corpus is a guard nobody keeps.
 //
-// `(… or vector(0)) > 0` is the load-bearing one. It is not a near-miss of the defect,
-// it is its CORRECT form: without the `or vector(0)` an alert summing several services
-// goes absent rather than false the moment one stops being scraped, so a gate that
-// discouraged the idiom would cause the failure it exists to prevent.
+// `(… or vector(0)) > 0` is the one that matters most. It is not a near-miss of the
+// defect, it is its CORRECTLY PARENTHESISED form, and the chart still ships it. The
+// clause is inert for alerting — an empty result and a false one leave an alert in the
+// same state — but it is not wrong, and a guard that rejected a correct rule for
+// resembling the defect is a guard that gets switched off.
 func TestLegitimateAlertsPass(t *testing.T) {
 	exprs := []string{
 		// The corrected form of the defect.

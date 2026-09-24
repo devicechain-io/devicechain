@@ -36,8 +36,10 @@ spec:
           # how long the entries that filled the bucket take to expire.
           #
           # The parentheses around `or vector(0)` bind the comparison to the whole
-          # expression -- see DeadLetterStoreLosing in prometheusrule.yaml for what
-          # happens without them.
+          # expression. Without them `>` binds to `vector(0)` alone and the alert fires on
+          # every sample, which hack/check-prometheus-rules.sh refuses. The clause itself
+          # changes nothing an alert can do -- an empty result and a false one both leave
+          # it inactive -- which is why the dead-letter rules no longer carry it.
           expr: (sum(increase(devicechain_usermanagement_credential_checks_total{namespace="{{ $ns }}", outcome="store_full"}[10m])) or vector(0)) > 0
           labels:
             severity: critical

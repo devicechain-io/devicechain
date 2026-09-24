@@ -33,12 +33,13 @@
 // of those is the same tree to a parser.
 //
 // 🔴 THE COUNTERWEIGHTS MATTER AS MUCH AS THE KILLS. `(… or vector(0)) > 0` is not a
-// near-miss of the defect, it is the CORRECT form of it and it must pass: without the
-// `or vector(0)`, an alert summing several services goes ABSENT rather than false the
-// moment one of them stops being scraped, which is the failure this kind of alert
-// exists to catch. A gate that discouraged the idiom would cause what it prevents.
-// `absent()`, `unless`, `and on()` and a deliberate dead-man's `vector(1)` must pass
-// for the same reason — a guard that flags the whole corpus is a guard nobody keeps.
+// near-miss of the defect, it is the correctly parenthesised form of it and it must
+// pass. The clause is inert for alerting — an expression that returns nothing and one
+// that returns a false comparison leave an alert in the same state, inactive with its
+// `for` reset — so the chart's newer rules leave it out, but a rule that carries it is
+// not wrong. `absent()`, `unless`, `and on()` and a deliberate dead-man's `vector(1)`
+// must pass for the same reason — a guard that flags correct rules is a guard nobody
+// keeps.
 package promqlguard
 
 import (

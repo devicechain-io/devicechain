@@ -13,7 +13,7 @@ caught up loses nothing. The two per-durable series below are that record, sampl
 every service for the durables it reads (core/messaging/stream_metrics.go).
 
 🔑 SELECTED BY NAME, NOT LISTED — the same reasoning as DeadLetterWriteLost in
-prometheusrule.yaml. Every service that reads a stream exports these series under its
+prometheusrule-dead-letter.yaml. Every service that reads a stream exports these series under its
 own subsystem, so a regex over the name covers every reader with no list to keep.
 `[a-z0-9]+`, NOT `.+`: the area segment never contains `_` (its dashes are stripped),
 so the stricter form matches the one name core builds and nothing else.
@@ -124,7 +124,7 @@ spec:
           # seconds. `max`, not `sum`: every pod that ensures the stream samples the same count.
           #
           # 🔴 `[a-z0-9]+`, NOT `.+` -- the reasoning is on DeadLetterWriteLost in
-          # prometheusrule.yaml.
+          # prometheusrule-dead-letter.yaml.
           expr: max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_messages", stream=~".+max-deliveries", namespace="{{ $ns }}"}) > 0
           for: 15m
           labels:

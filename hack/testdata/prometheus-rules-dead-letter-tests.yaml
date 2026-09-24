@@ -1,0 +1,265 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the dead-letter alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# All three rules are critical, and all three watch counters that sit at zero on a
+# healthy instance for its whole life. That makes the quiet cases as important as the
+# firing ones: one of these rules has already shipped firing permanently on a counter at
+# zero (DeadLetterStoreLosing, written as `sum(rate(x)) or vector(0) > 0`, where `>`
+# bound to `vector(0)` alone). The flat-zero cases below are what would have caught
+# that, independently of the parse-tree check in hack/check-prometheus-rules.sh.
+#
+# DeadLetterWriteLost selects its counter BY NAME PATTERN rather than by a list of
+# services, so its cases are about the pattern: a counter from any one service fires it
+# alone, a namespace that is not this instance's does not, and an old pod still
+# exporting a pre-cutover per-path name beside the current one during an upgrade must
+# not stop it evaluating (a looser `.+` pattern selects both, and two series from one
+# pod then share a labelset once rate() drops the name, which is an evaluation error).
+#
+# THE SERIES, and what is known about them:
+#
+#   - devicechain_eventprocessing_react_events_poison_dropped_total -- a plain counter,
+#     registered at construction, so on a healthy instance it EXISTS and reads 0.
+#   - devicechain_usermanagement_dead_letters_unstored_total -- a plain counter, same.
+#   - devicechain_<area>_dead_letter_lost_total -- one per service that writes dead
+#     letters, built by the core dead-letter producer at construction, so each exists
+#     at 0.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml. Naming it below is not
+# optional: promtool with no rule_files loads no rules, and every expected alert then
+# reads as "the rule does not fire" rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # REACT gives up on derived events, steadily.
+  # ------------------------------------------------------------------
+  - name: sustained poison drops fire ReactPoisonDropping after its for window
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_react_events_poison_dropped_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-abcde", job="devicechain/event-processing"}'
+        values: '0 0 1+1x30'
+    alert_rule_test:
+      # Pending, not yet firing: `for: 10m` has not run.
+      - eval_time: 6m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ReactPoisonDropping
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "REACT is giving up on un-dispatchable derived events"
+              description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
+      # The other two rules read other counters and stay quiet.
+      - eval_time: 15m
+        alertname: DeadLetterStoreLosing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DeadLetterWriteLost
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A brief burst of poison drops -- three in three minutes, then nothing. The rate
+  # is above zero for less than the 10m `for`, so this never pages.
+  # ------------------------------------------------------------------
+  - name: a brief burst of poison drops shorter than the for window stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_react_events_poison_dropped_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-abcde", job="devicechain/event-processing"}'
+        values: '0 0 1 2 3 3x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The dead-letter store cannot write, steadily.
+  # ------------------------------------------------------------------
+  - name: sustained unstored dead letters fire DeadLetterStoreLosing after its for window
+    interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_dead_letters_unstored_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0 0 1+1x20'
+    alert_rule_test:
+      # Pending, not yet firing: `for: 5m` has not run.
+      - eval_time: 5m
+        alertname: DeadLetterStoreLosing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeadLetterStoreLosing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "the dead-letter store is losing records"
+              description: "Dead letters reached their final delivery attempt without being written to the store, so failures the platform recorded once are now recorded nowhere. The store's database is the thing to look at — the consumer rides out a blip in process and spends every delivery attempt before giving up, so this means an outage of minutes, not seconds. Look also at the consumer's backlog: what is lost here is a subset of what is late."
+      - eval_time: 10m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeadLetterWriteLost
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # One service loses letters. device-management here; the next case repeats it with
+  # a different service ALONE, so a selector narrowed to either one is caught.
+  # ------------------------------------------------------------------
+  - name: lost letters from device-management fire DeadLetterWriteLost
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_dead_letter_lost_total{namespace="dci-devicechain", pod="dc-device-management-5f6a-abcde", job="devicechain/device-management"}'
+        values: '0 0 1+1x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DeadLetterWriteLost
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeadLetterWriteLost
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            # Anchored, so the two cases below compare the same text rather than a
+            # second copy of it.
+            exp_annotations: &write_lost_annotations
+              summary: "work is being lost with no record of it"
+              description: "A service gave up on a message AND could not record it as a dead letter, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. There are three causes, and the pod's LOST error log line tells them apart. The write failed — the broker is unreachable, refusing, or out of storage, so look at JetStream. Or the service refused its own letter as malformed, which is a defect in that service. Or a dead-letter READER — the dead-letter store in user-management, or the command writeback in command-delivery — ran out of delivery attempts on a letter, which may now age out of the stream without having been stored or settled (its last attempt may have committed and lost only its acknowledgement, so this cause can overstate the loss); look at that service's database, where a stored letter settles the question, or its own logs. Note that a FULL dead-letter stream does not cause this — every stream discards oldest, so a full one silently evicts the earliest letters instead, which this alert cannot see."
+
+  - name: lost letters from user-management alone fire DeadLetterWriteLost
+    interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_dead_letter_lost_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0 0 1+1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DeadLetterWriteLost
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations: *write_lost_annotations
+      # A user-management counter, but not the store's: DeadLetterStoreLosing reads
+      # dead_letters_unstored_total and must not fire for a lost write.
+      - eval_time: 10m
+        alertname: DeadLetterStoreLosing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 AN UPGRADE IN FLIGHT. An old device-management pod still exports the per-path
+  # name from before every service shared one loss counter, beside the current name,
+  # and both are climbing. `[a-z0-9]+` selects only the current name; `.+` would select
+  # both, and once rate() drops __name__ the two share a labelset and the rule fails to
+  # evaluate -- which silences it exactly while letters are being lost.
+  # ------------------------------------------------------------------
+  - name: an old per-path loss counter beside the current one does not stop DeadLetterWriteLost evaluating
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_dead_letter_lost_total{namespace="dci-devicechain", pod="dc-device-management-5f6a-old01", job="devicechain/device-management"}'
+        values: '0 0 1+1x20'
+      - series: 'devicechain_devicemanagement_alarm_event_dead_letter_lost_total{namespace="dci-devicechain", pod="dc-device-management-5f6a-old01", job="devicechain/device-management"}'
+        values: '0 0 1+1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DeadLetterWriteLost
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations: *write_lost_annotations
+
+  # ------------------------------------------------------------------
+  # Another instance's namespace. Its losses are its own rule object's to report.
+  # ------------------------------------------------------------------
+  - name: another namespace's dead-letter counters are not this instance's problem
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_dead_letter_lost_total{namespace="dci-other", pod="dc-device-management-5f6a-abcde", job="other/device-management"}'
+        values: '0 0 1+1x20'
+      - series: 'devicechain_usermanagement_dead_letters_unstored_total{namespace="dci-other", pod="dc-user-management-7c9f-abcde", job="other/user-management"}'
+        values: '0 0 1+1x20'
+      - series: 'devicechain_eventprocessing_react_events_poison_dropped_total{namespace="dci-other", pod="dc-event-processing-6b7d-abcde", job="other/event-processing"}'
+        values: '0 0 1+1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DeadLetterWriteLost
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DeadLetterStoreLosing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A healthy instance: every counter exported, every counter at zero. The case the
+  # shipped always-firing DeadLetterStoreLosing failed -- a bare sum(rate(x)) returns
+  # a sample of 0 here, and an alert fires on any sample it is given.
+  # ------------------------------------------------------------------
+  - name: every dead-letter counter at zero raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_react_events_poison_dropped_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-abcde", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_usermanagement_dead_letters_unstored_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x30'
+      - series: 'devicechain_usermanagement_dead_letter_lost_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_dead_letter_lost_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-abcde", job="devicechain/event-processing"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeadLetterStoreLosing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DeadLetterStoreLosing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeadLetterWriteLost
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DeadLetterWriteLost
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Nothing scraped at all -- only an unrelated healthy series, so the evaluation
+  # has data to run over. No rule here may page on the ABSENCE of its counter: that
+  # is an idle or partly-deployed install. Reporting a service nobody is scraping is
+  # other rules' job: DetectHasNoLeader's absent() arm for event-processing, and
+  # TenantPurgeVisibilityLost for user-management. Other services have no such
+  # rule; a DeadLetterWriteLost that paged on absence would be the wrong fix for that.
+  # ------------------------------------------------------------------
+  - name: an idle cluster with no dead-letter series raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-abcde", job="devicechain/event-processing"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DeadLetterStoreLosing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DeadLetterWriteLost
+        exp_alerts: []

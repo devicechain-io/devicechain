@@ -85,7 +85,8 @@ func main() {
 			"promtool accepts it and every series in it is spelled correctly — the defect is in\n"+
 			"where the comparison binds. `>` binds tighter than `or`, so `a or vector(0) > 0`\n"+
 			"parses as `a or (vector(0) > 0)` and leaves a bare `a` with no comparison at all.\n"+
-			"Parenthesise what the comparison is meant to apply to: `(a or vector(0)) > 0`.\n",
+			"Parenthesise what the comparison is meant to apply to, `(a or vector(0)) > 0`, or\n"+
+			"drop the `or vector(0)`: an alert cannot tell an empty result from a false one.\n",
 			len(findings), checked)
 		os.Exit(1)
 	}
