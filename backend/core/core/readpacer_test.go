@@ -246,8 +246,17 @@ func TestAGiveUpThroughTheRealFailNowReportsTheStreamNotTheBudget(t *testing.T) 
 		runToStop(t, context.Background(), p, 100000)
 	}()
 
+	// Bounded, so a give-up that never reaches FailNow fails here with a message rather
+	// than hanging until the package timeout panics.
 	start := time.Now()
-	err := ms.waitForShutdown()
+	outcome := make(chan error, 1)
+	go func() { outcome <- ms.waitForShutdown() }()
+	var err error
+	select {
+	case err = <-outcome:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the give-up never ended the process: nothing reached FailNow within 10s")
+	}
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("the give-up ended the process with a nil outcome, which exits 0")

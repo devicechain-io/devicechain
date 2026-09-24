@@ -33,8 +33,8 @@ func TestCheckpointIntervalCeilingFollowsAckWait(t *testing.T) {
 			t.Errorf("ackWait %s, interval %d: refused, want accepted: %v", tc.ackWait, tc.secs, err)
 		}
 		if !tc.ok && err == nil {
-			t.Errorf("ackWait %s, interval %d: accepted, want refused — its held messages would outlive "+
-				"the acknowledgement window and be redelivered", tc.ackWait, tc.secs)
+			t.Errorf("ackWait %s, interval %d: accepted, want refused — it leaves the checkpoint too "+
+				"little of the acknowledgement window to acknowledge its held messages in", tc.ackWait, tc.secs)
 		}
 	}
 }

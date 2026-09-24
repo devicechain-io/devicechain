@@ -2041,9 +2041,10 @@ que ocupaba.
 
 `event-processing` ahora se niega a arrancar cuando `checkpointIntervalSeconds` es mayor que 30. El
 motor de detección confirma su entrada solo cuando guarda un punto de control, así que un intervalo
-más largo retenía cada mensaje de un flujo tranquilo más allá de la ventana de confirmación del
-bróker: cada uno se volvía a entregar y, tras cinco ventanas, se contaba como una entrega agotada,
-lo que dispara `ReplayCoveredDeliveriesExhausted` con un motor sano. El límite es un rechazo al
+cercano o superior a la ventana de confirmación de 60 segundos del bróker retenía los mensajes de
+un flujo tranquilo hasta que el bróker los volvía a entregar y, tras cinco ventanas, los contaba
+como entregas agotadas, lo que dispara `ReplayCoveredDeliveriesExhausted` con un motor sano. 30
+deja margen para el propio punto de control. El límite es un rechazo al
 arrancar y no una comprobación del chart, así que `helm upgrade` con un valor mayor tiene éxito y
 después el pod no arranca. Si sus valores lo fijan más alto, redúzcalo antes de actualizar. El valor
 predeterminado (10) no se ve afectado.
@@ -2061,7 +2062,9 @@ aviso:
 Un dispositivo que presenta una credencial incorrecta, desconocida, caducada o revocada sigue
 registrándose solo en depuración. Durante una caída del bróker, los avisos de muestreo se repiten en
 cada pasada, aproximadamente cada 30 segundos por flujo; un muestreo interrumpido por un apagado se
-queda en depuración.
+queda en depuración. Durante una caída del almacén de credenciales (la base de datos), el aviso de
+autenticación se repite una vez por cada intento de conexión de un dispositivo, así que una flota
+que se reconecta durante la caída registra un aviso por intento.
 
 ### La transición única a la ingesta duradera
 

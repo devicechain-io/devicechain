@@ -128,9 +128,10 @@ type EventProcessingConfiguration struct {
 
 	// CheckpointIntervalSeconds is the maximum wall-clock time between snapshot
 	// commits, so a quiet stream still checkpoints. Unset (0) defaults to 10s. It must
-	// be at most half of messaging.AckWait (30s today): the engine acknowledges its
-	// input only when it checkpoints, so a longer interval holds messages past the
-	// broker's acknowledgement window. See validateCheckpointInterval.
+	// be at most half of messaging.AckWait: the engine acknowledges its input only when
+	// it checkpoints, so an interval near or past the broker's acknowledgement window
+	// redelivers messages, and half leaves room for the checkpoint itself. See
+	// validateCheckpointInterval.
 	CheckpointIntervalSeconds int
 
 	// WatermarkLatenessSeconds is the event-time out-of-orderness tolerance: how far the
@@ -300,8 +301,9 @@ func validateCheckpointInterval(secs int, ackWait time.Duration) error {
 	}
 	if ceiling := checkpointIntervalCeiling(ackWait); secs > ceiling {
 		return fmt.Errorf("checkpointIntervalSeconds must be at most %d (half the broker's %s acknowledgement "+
-			"window), got %d: a longer interval holds messages past the window, so every one is redelivered and, "+
-			"after repeated windows, reported as an exhausted delivery", ceiling, ackWait, secs)
+			"window), got %d: messages are acknowledged only at a checkpoint, so an interval near or past the window "+
+			"redelivers them and, after repeated windows, reports them as exhausted deliveries; half the window "+
+			"leaves room for the checkpoint itself", ceiling, ackWait, secs)
 	}
 	return nil
 }

@@ -1915,10 +1915,10 @@ image, is about a third of its previous size.
 #### `checkpointIntervalSeconds` is capped at 30, and some silent failures now warn
 
 `event-processing` now refuses to start when `checkpointIntervalSeconds` is above 30. The
-detection engine acknowledges its input only when it checkpoints, so a longer interval held every
-message on a quiet stream past the broker's acknowledgement window: each was delivered again, and
-after five windows it was counted as an exhausted delivery, which raises
-`ReplayCoveredDeliveriesExhausted` on a healthy engine. The limit is a startup refusal rather than
+detection engine acknowledges its input only when it checkpoints, so an interval near or past the
+broker's 60-second acknowledgement window held messages on a quiet stream until the broker
+delivered them again, and after five windows counted them as exhausted deliveries, which raises
+`ReplayCoveredDeliveriesExhausted` on a healthy engine. 30 leaves room for the checkpoint itself. The limit is a startup refusal rather than
 a chart check, so `helm upgrade` with a larger value succeeds and the pod then fails to start. If
 your values set it higher, lower it before upgrading. The default (10) is unaffected.
 
@@ -1933,7 +1933,9 @@ Some failures that were silent at the default log level now log a warning:
 
 A device presenting a wrong, unknown, expired or revoked credential is still logged only at debug.
 During a broker outage the sampling warnings repeat on every sampling pass, about every 30 seconds
-per stream; a sample interrupted by shutdown stays at debug.
+per stream; a sample interrupted by shutdown stays at debug. During a credential-store (database)
+outage the authentication warning repeats once per device connect attempt, so a fleet reconnecting
+through the outage logs one warning per attempt.
 
 ### The one-time durable-ingest cutover
 
