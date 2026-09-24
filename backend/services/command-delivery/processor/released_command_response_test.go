@@ -127,7 +127,7 @@ func responseConsumer(api *model.Api, dead *deadRecorder, body []byte) *CommandD
 			ResponsesStaleNonce:    prometheus.NewCounter(prometheus.CounterOpts{Name: "stale_nonce_total"}),
 		},
 		CommandResponsesReader: &oneMessageReader{
-			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1", body, 1, nil, nil),
+			msg: responseMessage(body, 1, nil, nil),
 		},
 	}
 }
@@ -493,7 +493,7 @@ func TestTheWritebackDoesNotSettleACommandItsProducerDeclinedToSettle(t *testing
 			ResponsesNotAnswerable: prometheus.NewCounter(prometheus.CounterOpts{Name: "not_answerable_wb_total"}),
 		},
 		CommandResponsesReader: &oneMessageReader{
-			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
+			msg: responseMessage(
 				[]byte(`{"commandToken":"cmd-1","success":true}`), 1, nil, nil),
 		},
 	}

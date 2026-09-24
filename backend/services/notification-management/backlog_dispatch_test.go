@@ -16,6 +16,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-notification-management/processor"
@@ -85,6 +86,7 @@ func TestAlarmBacklogIsDispatchedOnce(t *testing.T) {
 		reader = r
 		return err
 	})
+	nmgr.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(ms)))
 	nmgr.SetAckWaitForTesting(t, 3*time.Second)
 	require.NoError(t, nmgr.Initialize(context.Background()))
 	require.NoError(t, nmgr.Start(context.Background()))

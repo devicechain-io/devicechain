@@ -85,6 +85,11 @@ type streamMetrics struct {
 	// yet handed out. Each pod counts its own messages, so the alert sums across pods.
 	heldPastAckWait *prometheus.CounterVec
 
+	// maxDeliveryRecords counts what the max-delivery recorder did with each advisory it
+	// handled, by the ORIGINAL message's stream and the outcome (recorder.go). Every replica
+	// of an area shares one recorder durable, so each advisory is counted by exactly one pod.
+	maxDeliveryRecords *prometheus.CounterVec
+
 	// warned tracks whether a stream is currently above the near-full threshold, so
 	// the warning fires once on the way up (and an info once on the way back down)
 	// rather than every sample. Accessed only from the single sampler goroutine.
@@ -169,6 +174,15 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"redelivered them. stage=worker: a handler was still working on one; stage=buffer: the "+
 				"reader dropped one it had fetched but not yet handed out.",
 			[]string{"durable", "stage"}),
+		maxDeliveryRecords: ms.NewCounterVec("max_delivery_records_total",
+			"Messages whose every delivery ran out, as recorded from the broker's max-delivery advisory, "+
+				"by the original's stream and what was done: lettered (a dead letter was written), gone "+
+				"(the stream no longer held it), unattributable (no tenant), tenant-deleted, not-lettered "+
+				"(a dead-letter reader's own give-up: counted as lost), lost (the letter could not be "+
+				"written), malformed (not a max-delivery advisory for one of this service's durables), "+
+				"replay-covered (not lettered: this service re-reads the stream from its own checkpoint, "+
+				"so the message is not lost, but that checkpoint has been failing).",
+			[]string{"stream", "outcome"}),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
@@ -201,6 +215,31 @@ func (m *streamMetrics) heldPastAckWaitFor(durable string) func(stage string) {
 		return nil
 	}
 	return func(stage string) { m.heldPastAckWait.WithLabelValues(durable, stage).Inc() }
+}
+
+// initMaxDeliveryRecords creates stream's max-delivery series at zero for every outcome the
+// recorder can count for it, so an increase() over one reads the first record rather than
+// missing it. replayCovered selects the replay-covered set (see replayCoveredOutcomes). A no-op
+// on a manager with no metrics (one assembled by hand in a unit test).
+func (m *streamMetrics) initMaxDeliveryRecords(stream string, replayCovered bool) {
+	if m == nil || m.maxDeliveryRecords == nil {
+		return
+	}
+	outcomes := maxDeliveryOutcomes
+	if replayCovered {
+		outcomes = replayCoveredOutcomes
+	}
+	for _, o := range outcomes {
+		m.maxDeliveryRecords.WithLabelValues(stream, string(o)).Add(0)
+	}
+}
+
+// countMaxDelivery counts one recorded advisory.
+func (m *streamMetrics) countMaxDelivery(stream string, outcome MaxDeliveryOutcome) {
+	if m == nil || m.maxDeliveryRecords == nil {
+		return
+	}
+	m.maxDeliveryRecords.WithLabelValues(stream, string(outcome)).Inc()
 }
 
 // sampleReplication records the replication triple for one stream or KV bucket.
@@ -394,7 +433,10 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 // Every reader is made by NewReader, which filters on StreamSubject(suffix) — the same
 // subject the stream captures — so every sequence in the stream is one the durable would
 // have been handed. A durable with a narrower filter would count every other subject's
-// messages as loss.
+// messages as loss — which is exactly what the max-delivery recorder's durable is: it filters
+// the shared capture stream to this area's advisory subjects. It stays out because it is not a
+// reader (startRecorder keeps it on nmgr.recorder, never in nmgr.readers), and
+// TestTheRecorderDurableIsNotSampledForUnreadLoss pins that from the scrape's side.
 func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamContext, info *nats.StreamInfo, d durableRef) {
 	ci, err := js.ConsumerInfo(d.stream, d.durable, nats.Context(ctx))
 	if err != nil {

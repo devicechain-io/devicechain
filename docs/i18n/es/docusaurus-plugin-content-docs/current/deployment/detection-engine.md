@@ -127,6 +127,24 @@ haberse limpiado. Trate un mensaje de esta cola como algo que investigar, no com
 vaciará por sí solo.
 :::
 
+Un mensaje que un servicio abandona en su último intento (un pod detenido a mitad del
+procesamiento, o un manejador que se pasó de su ventana) también queda registrado, con el motivo
+`no-outcome`. Ese registro nunca liquida un comando: el último intento pudo haber hecho su trabajo
+y perder solo su acuse de recibo. En los flujos de mucho volumen (eventos de
+dispositivos, comandos y acciones de detección), el registro apunta al original en lugar de
+copiarlo, e indica dónde encontrarlo hasta que el flujo lo descarte por antigüedad; lo mismo ocurre
+con un registro cuyo mensaje es demasiado grande para copiarse. El registro de una petición de
+conector apunta al flujo propio de mensajes no entregados del servicio de conectores, que guarda la
+petición completa. Lo escribe el servicio dueño del mensaje la próxima vez que lee del flujo, así que,
+mientras un servicio está caído, sus registros llegan tarde, pero llegan.
+
+La lectura de los eventos resueltos que hace el propio motor es la excepción. Confirma un evento
+solo después de que un punto de control lo incluya, y en cada arranque vuelve a leer el flujo desde
+su último punto de control, así que un evento que agotó sus intentos mientras el punto de control no
+se podía guardar no se pierde ni se envía a la cola de mensajes no entregados. En su lugar se
+cuenta, y la alerta `ReplayCoveredDeliveriesExhausted` informa de ello ([Mensajes que agotaron sus
+intentos de entrega](./observability.md#max-delivery-records)).
+
 Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:
 
 ```bash
@@ -426,7 +444,7 @@ exigiría recorrerlo entero en cada punto de control.
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
 | `ReactPoisonDropping` | No se están despachando acciones tras agotar sus reintentos: las alarmas y los comandos no están ocurriendo. Las detecciones se envían a la cola de mensajes no entregados para que pueda ver cuáles, pero nada las reprocesa. Trátelo como urgente. |
-| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker y el registro del servicio: una carta que el propio servicio se negó a escribir también termina aquí. |
+| `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker y el registro del servicio: una carta que el propio servicio se negó a escribir también termina aquí, igual que un mensaje de esa cola en el que el almacén de mensajes no entregados o la reconciliación de comandos agotó sus intentos. |
 | `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revise la base de datos del operador. |
 | `ReactConnectorEgressShedding` | El despacho de salida supera el límite de tasa del inquilino y se está descartando. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |

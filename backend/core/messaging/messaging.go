@@ -96,15 +96,89 @@ func TenantSubjectFilter(instanceId, tenant, suffix string) string {
 // own; a device-events CAPTURE stream captures the inbound telemetry shape,
 // "{instance}.*.devices.*.events", where the suffix names the stream but appears
 // nowhere in the subject.
+//
+// It PANICS for an advisory-shaped suffix, which captures a LIST of subjects outside the
+// instance's tree (see StreamSubjects) and so has no single pattern to return. Nothing
+// reads such a stream through a subject — only the max-delivery recorder reads it, by
+// exact filter — so a caller reaching here with one is a wiring defect.
 func StreamSubject(instanceId, suffix string) string {
 	switch streams.ShapeOf(suffix) {
 	case streams.ShapeTenantDevice:
 		return WildcardSubject(instanceId, suffix) + ".*"
 	case streams.ShapeDeviceEvents:
 		return DeviceEventsWildcard(instanceId)
+	case streams.ShapeAdvisory:
+		panic(fmt.Sprintf("messaging: %q is an advisory capture with no single subject; use StreamSubjects", suffix))
 	default:
 		return WildcardSubject(instanceId, suffix)
 	}
+}
+
+// StreamSubjects is the list of subjects a suffix's stream captures. For every shape but
+// one it is StreamSubject's single pattern. For the advisory shape it is one subject per
+// OTHER declared stream of this instance: the broker's max-delivery advisory for any
+// durable on that stream, "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.<stream>.*".
+//
+// Per stream rather than one wildcard, because the instance prefix sits INSIDE the stream
+// name token and a NATS wildcard matches only whole tokens: the only single pattern that
+// would do is every stream on the broker, which captures other instances' advisories into
+// this one's work queue.
+func StreamSubjects(instanceId, suffix string) []string {
+	if streams.ShapeOf(suffix) != streams.ShapeAdvisory {
+		return []string{StreamSubject(instanceId, suffix)}
+	}
+	out := make([]string, 0, len(streams.All))
+	for _, s := range streams.All {
+		if s.Shape == streams.ShapeAdvisory {
+			continue
+		}
+		out = append(out, AdvisorySubject(StreamName(instanceId, s.Suffix), "*"))
+	}
+	return out
+}
+
+// maxDeliveriesAdvisoryPrefix is where nats-server publishes a durable's max-delivery
+// advisory, followed by ".<stream>.<durable>".
+const maxDeliveriesAdvisoryPrefix = "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES"
+
+// AdvisorySubject is the subject of the broker's max-delivery advisory for one durable:
+// "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.<stream>.<durable>". Stream and durable names
+// are single tokens here (StreamName and DurableName sanitize the dots out), which is what
+// lets the subject be split back into the two.
+func AdvisorySubject(stream, durable string) string {
+	return maxDeliveriesAdvisoryPrefix + "." + stream + "." + durable
+}
+
+// Origin locates a CONSUMED message: which declared stream it came from, through which
+// durable, and at what sequence. The durable reader sets it on every message it hands out;
+// it is the zero Origin on produced and synthetic messages.
+//
+// 🔑 IT IS WHAT A DEAD LETTER ABOUT THE MESSAGE IS DERIVED FROM, and that is why it rides
+// the message instead of being passed alongside. A letter's kind is declared per stream
+// (core/streams), and its dedup id is (stream, durable, sequence): two writers of a letter
+// about one delivery — a service's own arm and the platform's max-delivery recorder — land
+// ONCE only if both derive those from the same place. The arm reads them here; the
+// recorder reads them from the broker's advisory, which names the same three.
+type Origin struct {
+	// Suffix is the declared stream suffix (core/streams).
+	Suffix string
+	// Stream and Consumer are the JetStream stream and durable names.
+	Stream   string
+	Consumer string
+	// Seq is the message's stream sequence, 0 when the broker metadata was unavailable.
+	Seq uint64
+}
+
+// Origin returns where a consumed message came from; see Origin.
+func (m Message) Origin() Origin {
+	return m.origin
+}
+
+// WithOrigin returns a copy of m carrying o. Readers set the origin directly; this is for a
+// test that builds a consumed message by hand and needs it to be attributable.
+func (m Message) WithOrigin(o Origin) Message {
+	m.origin = o
+	return m
 }
 
 // Message is a transport-neutral message envelope used by producers and
@@ -194,6 +268,8 @@ type Message struct {
 	Headers map[string]string
 
 	ack Acknowledger
+	// origin is where a consumed message came from; see Origin.
+	origin Origin
 	// slot is this message's claim on a capacity reader's pool (ReaderWithCapacity), and
 	// carries the time it was fetched. Nil for every message a capacity reader did not
 	// produce, which is what makes AckDeadline zero and Release a no-op on them.

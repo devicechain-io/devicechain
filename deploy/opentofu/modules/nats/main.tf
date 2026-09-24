@@ -83,8 +83,8 @@ variable "jetstream_storage" {
 
     This default is NOT a free choice — it must hold the platform's whole
     reservation. JetStream reserves each stream's MaxBytes UP FRONT at creation,
-    so the disk floor is the SUM of the ceilings, and today that sum is exactly
-    9.875Gi: 8.5Gi of platform streams, 384Mi of MQTT gateway stores, and 1024Mi of
+    so the disk floor is the SUM of the ceilings, and today that sum is
+    10120Mi (9.883Gi): 8712Mi of platform streams, 384Mi of MQTT gateway stores, and 1024Mi of
     KV buckets. The ceiling that has to hold it is max_file_store, which is 90% of
     this value FLOORED to a whole unit of its own magnitude.
 
@@ -92,7 +92,7 @@ variable "jetstream_storage" {
     times and each server holds one copy of the reservation, so the size does NOT
     scale with cluster_replicas.
 
-    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the 9.875Gi
+    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the 9.883Gi
     reserved, so a consumer using this module directly with its defaults would hit
     the "insufficient storage resources available" crashloop on the last services
     to create a stream. The root module always passes its own value explicitly, so
@@ -101,7 +101,7 @@ variable "jetstream_storage" {
 
     Raising this REQUIRES checking the reservation still fits, and lowering it
     REQUIRES lowering the stream bounds first. Do NOT derive the PV as
-    (sum of ceilings) / 0.9: the flooring makes that unsafe, since a 9.875Gi sum
+    (sum of ceilings) / 0.9: the flooring makes that unsafe, since a 9.883Gi sum
     yields an 11Gi PV whose ceiling is floor(11 × 0.9) = 9Gi — below the sum, and
     back to the crashloop. Pick the smallest whole magnitude where
     floor(magnitude × 0.9) >= the sum, and leave margin above it: at 12Gi the

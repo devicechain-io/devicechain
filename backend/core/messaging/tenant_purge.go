@@ -132,6 +132,12 @@ func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) 
 	// dead-letter stream is its own declared entry (streams.All carries it, built with
 	// DeadLetter), so deriving one here would purge it twice.
 	for _, suffix := range streams.Suffixes() {
+		// The advisory capture holds the BROKER'S notices, whose subjects carry no tenant:
+		// there is no tenant filter to purge it by, and nothing on it belongs to a tenant.
+		// What a notice points at is purged from its own stream in this same loop.
+		if streams.ShapeOf(suffix) == streams.ShapeAdvisory {
+			continue
+		}
 		stream := StreamName(instanceId, suffix)
 		filter := TenantSubjectFilter(instanceId, tenant, suffix)
 		n, err := purgeSubject(ctx, nc, stream, filter)

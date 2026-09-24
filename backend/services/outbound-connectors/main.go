@@ -51,7 +51,7 @@ var (
 	DispatchMetrics *processor.DispatchMetrics
 	// DeadLetters is this service's identity as a dead-letter producer: the source its index
 	// entries are stamped with and the dead_letter_lost_total a lost dispatch is counted on. Built
-	// once, in the initialize phase, for the reason the metrics are. See buildMetrics.
+	// by core/service (Svc.DeadLetters), which the max-delivery recorder shares. See buildMetrics.
 	DeadLetters *deadletter.Producer
 	Api         *model.Api
 )
@@ -99,7 +99,9 @@ func parseConfiguration() error {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	DispatchMetrics = processor.NewDispatchMetrics(Microservice)
-	DeadLetters = deadletter.NewProducer(Microservice)
+	// core/service built it: the platform's max-delivery recorder letters under it too,
+	// and a second NewProducer here would panic on the duplicate counter.
+	DeadLetters = Svc.DeadLetters
 }
 
 // createNatsComponents wires the durable connector-dispatch consumer and its dead-letter writer.

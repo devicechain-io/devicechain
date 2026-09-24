@@ -98,6 +98,7 @@ import (
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -207,6 +208,15 @@ type Managers struct {
 	Rdb     *rdb.RdbManager
 	Nats    *messaging.NatsManager
 	GraphQL *gqlcore.GraphQLManager
+
+	// DeadLetters is the service's identity as a dead-letter producer: the source every
+	// letter it writes is stamped with, and its one dead_letter_lost_total. It exists
+	// whenever the Spec asks for a broker, built by New, because every service with a
+	// broker reader has a max-delivery recorder writing letters under it (Initialize
+	// installs one) — so it is not a per-service choice to make, and a service that ALSO
+	// built its own would panic at startup on the duplicate counter. A service's own arms
+	// build their sinks from this one.
+	DeadLetters *deadletter.Producer
 }
 
 // Service is a microservice plus the managers it assembles.
@@ -230,7 +240,11 @@ type Service struct {
 // exist when a service can first name its Spec: the GraphQL providers carry an Api built
 // from the Rdb manager, and AfterRdb is what builds it.
 func New(ms *core.Microservice, spec Spec) *Service {
-	return &Service{Microservice: ms, spec: &spec}
+	svc := &Service{Microservice: ms, spec: &spec}
+	if spec.Nats != nil {
+		svc.DeadLetters = deadletter.NewProducer(ms)
+	}
+	return svc
 }
 
 // FromManagers wraps managers somebody else built, so they can be driven through the same
@@ -285,6 +299,10 @@ func (s *Service) Initialize(ctx context.Context) error {
 	if s.spec.Nats != nil {
 		s.Nats = messaging.NewNatsManager(s.Microservice, core.NewNoOpLifecycleCallbacks(),
 			s.spec.Nats.OnCreate)
+		// Every reader this service builds gets a durable record of the deliveries that run
+		// out on it with no outcome. It is installed here, not by the service, so that no
+		// service can leave it out; the broker manager refuses to start readers without it.
+		s.Nats.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(s.DeadLetters))
 		if err := s.Nats.Initialize(ctx); err != nil {
 			return fmt.Errorf("initializing the broker manager: %w", err)
 		}

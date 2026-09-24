@@ -32,6 +32,12 @@ server -- that is a second send nobody can take back, and nothing in the service
 success metrics looks wrong while it happens. reader_held_past_ack_wait_total is the
 only record of it.
 
+THE MAX-DELIVERY RECORD is the third. A message whose every delivery ran out is
+dead-lettered by the service that read it (core/messaging's recorder); the two rules at
+the end watch that record: notices waiting unrecorded on the capture stream, and
+exhaustions the recorder deliberately did NOT letter because the consumer re-reads the
+stream from its own checkpoint -- which lose nothing, but mean that checkpoint is failing.
+
 Same operator assumption and gating as the event-processing rules.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
@@ -110,4 +116,40 @@ spec:
           annotations:
             summary: "A service held a message past its acknowledgement window, so it was redelivered"
             description: "The reader for durable {{`{{ $labels.durable }}`}} held a message longer than the broker waits for an acknowledgement, so the broker handed it out again. stage=worker: a send was still running when that happened, so the message may have been sent twice -- look for a slow or unresponsive destination behind this service. stage=buffer: the reader dropped a message it had fetched but not yet handed to a worker, and the broker's redelivery is handled instead; nothing was sent twice, but the service is not keeping up."
+        - alert: MaxDeliveryRecordsWaiting
+          # The max-delivery capture is a WORK QUEUE: a recorder acks each advisory once it
+          # has dead-lettered (or deliberately skipped) the message it names, and the ack
+          # deletes it. So the stream's message count is exactly the abandoned deliveries no
+          # recorder has written down yet, and on a healthy instance it drains to zero within
+          # seconds. `max`, not `sum`: every pod that ensures the stream samples the same count.
+          #
+          # 🔴 `[a-z0-9]+`, NOT `.+` -- the reasoning is on DeadLetterWriteLost in
+          # prometheusrule.yaml.
+          expr: max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_messages", stream=~".+max-deliveries", namespace="{{ $ns }}"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Messages that ran out of delivery attempts are waiting to be recorded"
+            description: "{{`{{ $value }}`}} notice(s) of messages whose every delivery attempt ran out have been waiting on {{`{{ $labels.stream }}`}} for 15 minutes without being turned into dead letters. Each service records its own; one that is down or crash-looping records late, so first check that every service is running and look in its logs for errors from the max-delivery recorder. A notice that stays after every service is healthy names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream."
+        # A consumer declared REPLAY-COVERED ran out of deliveries. Such a consumer acks a
+        # message only once its own checkpoint covers it, and after a restart re-reads the
+        # stream from that checkpoint, so the broker giving up on a delivery loses nothing and
+        # is deliberately not dead-lettered (core/streams: Stream.ReplayCovered). What it DOES
+        # mean is that the consumer's checkpoint has not been saved for longer than the
+        # broker's whole redelivery budget -- typically its database is unreachable -- and
+        # this counter is the only place that shows up per stream.
+        #
+        # `sum`, not `max`: an area's replicas share one recorder durable, so each exhaustion
+        # is counted by exactly one pod. The series exist at 0 from the recorder's start, so
+        # increase() sees the first one. Selected by name like the rules above.
+        - alert: ReplayCoveredDeliveriesExhausted
+          expr: sum by (job, stream) (increase({__name__=~"devicechain_[a-z0-9]+_max_delivery_records_total", outcome="replay-covered", namespace="{{ $ns }}"}[15m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A consumer ran out of delivery attempts because it could not save its checkpoint"
+            description: "{{`{{ $value }}`}} message(s) on {{`{{ $labels.stream }}`}} ran out of delivery attempts to {{`{{ $labels.job }}`}} in the last 15 minutes. This consumer re-reads the stream from its own saved checkpoint, so nothing has been lost and no dead letter is written, but its checkpoint has not been saved for longer than the broker keeps redelivering: look for the service's database or broker connection failing. While it is running it keeps what it has read in memory and saves it when the checkpoint succeeds. If it restarts first, it re-reads the stream from the last saved checkpoint, and a message the stream has already discarded (JetStreamStreamNearFull) cannot be re-read."
 {{- end }}

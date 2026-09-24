@@ -262,6 +262,33 @@ La alerta siguiente informa de los casos que aun así se producen.
 | --- | --- | --- | --- |
 | `ReaderHeldMessagePastAckWait` | warning | Un manejador retuvo un mensaje más allá de su ventana de confirmación, así que se volvió a entregar. `stage=worker`: un envío tardó demasiado, así que el mensaje pudo enviarse dos veces. `stage=buffer`: un mensaje se descartó antes de entregarse, y se procesó su nueva entrega en su lugar. | Para `stage=worker`, busque un destino lento o que no responde detrás del servicio que indica la etiqueta `durable`. Para `stage=buffer`, el servicio no está al día con su stream. |
 
+## Mensajes que agotaron sus intentos de entrega {#max-delivery-records}
+
+Tras cinco entregas sin confirmar, el broker deja de entregar un mensaje. Publica un aviso la
+siguiente vez que se lee del consumidor después de que venza la ventana de confirmación de la última
+entrega, así que, para un servicio caído, el aviso espera hasta que el servicio vuelve a funcionar. Un
+stream de la plataforma, `max-deliveries`, captura esos avisos, y cada servicio convierte los
+suyos en entradas de la cola de mensajes no entregados, con el motivo `no-outcome` (consúltelas
+con `dcctl dead-letters list`). El stream es una cola de trabajo: un aviso registrado se borra,
+así que en una instancia sana está vacío. El contador
+`devicechain_<área>_max_delivery_records_total{stream,outcome}` dice qué se hizo con cada aviso.
+
+Hay un consumidor que es una excepción, y está declarado como tal: el motor de detección de
+`event-processing` lee `resolved-events` desde su propio punto de control guardado. Confirma un
+evento solo cuando un punto de control lo cubre, y tras un reinicio vuelve a leer el stream desde
+el último punto de control, así que un evento que agotó sus intentos de entrega no se ha perdido.
+Cuando su punto de control no se puede guardar (normalmente porque su base de datos no responde)
+durante más tiempo del que el broker sigue reentregando, todos los eventos de ese intervalo agotan
+sus intentos. Esos avisos no se convierten en mensajes no entregados, que informarían de cientos de
+pérdidas que no ocurrieron. Se cuentan con `outcome="replay-covered"`, y la alerta siguiente
+informa de ellos. Los demás servicios que leen `resolved-events` no tienen ese punto de control, y
+sus avisos se registran como mensajes no entregados como siempre.
+
+| Alerta | Qué significa | Qué hacer |
+| --- | --- | --- |
+| `MaxDeliveryRecordsWaiting` | Hay avisos de mensajes que agotaron sus intentos esperando desde hace 15 minutos sin convertirse en registros. | Compruebe que todos los servicios están en marcha: uno caído registra tarde. Si el aviso persiste con todo sano, nombra un consumidor que ya ningún servicio lee (un lector retirado en una actualización); no se registrará y puede borrarse del stream. |
+| `ReplayCoveredDeliveriesExhausted` | Un consumidor que lee su stream desde su propio punto de control agotó intentos de entrega en los últimos 15 minutos, porque el punto de control lleva sin guardarse más tiempo del que el broker sigue reentregando. Todavía no se ha perdido nada. | Corrija lo que impide al servicio que indica la etiqueta `job` guardar su punto de control, normalmente su conexión a la base de datos. Mientras el servicio sigue en marcha, guarda lo que ha leído en cuanto el punto de control se guarda. Si se reinicia antes, vuelve a leer el stream desde el último punto de control guardado, y los eventos que el stream ya haya descartado no se pueden volver a leer, así que vigile también `JetStreamStreamNearFull`. |
+
 ## Relacionado
 
 - **[Arrancar una instancia](./bootstrap.md#install)** — `dcctl install`, el comando que

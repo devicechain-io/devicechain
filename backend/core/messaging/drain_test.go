@@ -24,6 +24,7 @@ func startedManager(t *testing.T, srv *natsserver.Server, area string, oncreate 
 	}
 	nmgr := NewNatsManager(testMicroservice(t, srv, uniqueArea(area)), core.NewNoOpLifecycleCallbacks(), oncreate)
 	ctx := context.Background()
+	nmgr.RecordMaxDeliveries(recordNothing)
 	if err := nmgr.Initialize(ctx); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}

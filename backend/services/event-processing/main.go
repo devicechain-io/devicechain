@@ -89,8 +89,8 @@ var (
 	ReactMetrics  *processor.ReactMetrics
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
-	// letters are stamped with and the dead_letter_lost_total their losses count on. Built
-	// once, in the initialize phase, for the reason the metrics are. See buildMetrics.
+	// letters are stamped with and the dead_letter_lost_total their losses count on. Built by
+	// core/service (Svc.DeadLetters), which the max-delivery recorder shares. See buildMetrics.
 	DeadLetters *deadletter.Producer
 )
 
@@ -142,7 +142,9 @@ func parseConfiguration() error {
 func buildMetrics() {
 	DetectMetrics = processor.NewDetectMetrics(Microservice)
 	ReactMetrics = processor.NewReactMetrics(Microservice)
-	DeadLetters = deadletter.NewProducer(Microservice)
+	// core/service built it: the platform's max-delivery recorder letters under it too,
+	// and a second NewProducer here would panic on the duplicate counter.
+	DeadLetters = Svc.DeadLetters
 }
 
 func createNatsComponents(nmgr *messaging.NatsManager) error {

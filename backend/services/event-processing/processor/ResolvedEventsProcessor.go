@@ -130,6 +130,26 @@ type Config struct {
 //     by sequence also re-reads any message that exhausted MaxDeliver on the durable,
 //     so a checkpoint outage plus a crash cannot silently drop events.
 //
+// 🔴 A DECLARATION RESTS ON THIS. resolved-events names event-processing REPLAY-COVERED
+// (streams.Stream.ReplayCovered), so the platform's max-delivery recorder writes no dead
+// letter when this durable's deliveries run out — it counts them instead. That is true only
+// while this processor acks behind a committed checkpoint, applies every delivery on first
+// sight, and replays the stream by sequence on restart; replay_covers_exhausted_test.go
+// proves each against a real broker. A change that breaks any of the three must remove the
+// declaration, or an exhausted event is lost with no record anywhere.
+//
+// "Every delivery on first sight" holds only for ONE writer, so the declaration also rests
+// on the partition lease (messaging.Lease; see leadership.go): one replica consumes the
+// shared durable at a time. Its residual is a split brain, and it is not an exhaustion
+// loss. A zombie leader that still believes it holds the partition can pull from the shared
+// durable and apply messages whose checkpoint is then refused — by the ownership check in
+// checkpoint, or by SnapshotStore.Save as a backward move (ErrStaleCheckpoint). Those
+// messages stay unacked and redeliver to the real leader, which may already be past their
+// sequence and drop them as duplicates (seq <= engine.LastSeq). That loss exists with or
+// without exhaustion. Exhausting deliveries would further need the zombie to outlive
+// AckWait x MaxDeliver (5 minutes), and Holder.Held() goes false at the lease's LOCAL
+// deadline (last successful renew + DefaultLeaseTTL, 30s), which makes that unrealistic.
+//
 // Only after replay reaches the head does the live loop run, consuming the durable
 // reader. Redelivered duplicates (seq <= the replayed head) are dropped by the
 // engine's guard and acked; new events advance it.

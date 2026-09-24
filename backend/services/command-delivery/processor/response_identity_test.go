@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -158,6 +159,15 @@ func (d *deadRecorder) WriteMessages(ctx context.Context, msgs ...messaging.Mess
 	return nil
 }
 
+// responseMessage is a device's response as the command-responses durable reader hands it out:
+// on pump-1's subject, and attributable to its stream — the dead-letter arm derives the
+// letter's kind and dedup id from that origin.
+func responseMessage(body []byte, numDelivered int, headers map[string]string, ack messaging.Acknowledger) messaging.Message {
+	return messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1", body, numDelivered, headers, ack).
+		WithOrigin(messaging.Origin{Suffix: streams.CommandResponses, Stream: "inst-1_command-responses",
+			Consumer: "inst-1_command-delivery_command-responses", Seq: 11})
+}
+
 // responseProcessorAtCap builds a processor whose one message is on its final delivery.
 func responseProcessorAtCap(t *testing.T, api *fakeApi, dead *deadRecorder, numDelivered int) *CommandDeliveryProcessor {
 	t.Helper()
@@ -165,7 +175,7 @@ func responseProcessorAtCap(t *testing.T, api *fakeApi, dead *deadRecorder, numD
 		Api:  api,
 		dead: testDeadSink(dead),
 		CommandResponsesReader: &oneMessageReader{
-			msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
+			msg: responseMessage(
 				[]byte(`{"commandToken":"cmd-1","success":true}`), numDelivered, nil, nil),
 		},
 	}

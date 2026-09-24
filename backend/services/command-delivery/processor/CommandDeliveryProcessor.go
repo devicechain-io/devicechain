@@ -1234,18 +1234,15 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 	if cause != nil {
 		detail = cause.Error()
 	}
-	err := cproc.dead.Write(ctx, deadletter.Envelope{
-		Kind:        deadletter.KindCommandResponse,
-		Reason:      reason,
-		Summary:     summary,
-		Detail:      detail,
-		Attempts:    msg.NumDelivered,
-		Subject:     msg.Subject,
-		Sequence:    msg.StreamSeq,
-		Correlation: msg.CorrelationID(),
-		Reference:   command,
-		OccurredAt:  time.Now().UTC(),
-		Payload:     msg.Value,
+	// WriteFor fills the kind (command-responses' declared one), subject, sequence, attempts
+	// and correlation from msg, and the dedup id the max-delivery recorder shares.
+	err := cproc.dead.WriteFor(ctx, msg, deadletter.Envelope{
+		Reason:     reason,
+		Summary:    summary,
+		Detail:     detail,
+		Reference:  command,
+		OccurredAt: time.Now().UTC(),
+		Payload:    msg.Value,
 	})
 	if err != nil {
 		// The loss is already counted, on dead_letter_lost_total, by the sink — see

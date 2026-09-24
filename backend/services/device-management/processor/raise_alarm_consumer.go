@@ -327,19 +327,16 @@ func (rc *RaiseAlarmConsumer) deadLetter(msg messaging.Message, what string, cau
 	if cause != nil {
 		detail = cause.Error()
 	}
-	if err := rc.dead.Write(ctx, deadletter.Envelope{
-		Kind:   deadletter.KindDetectionAction,
+	// WriteFor fills the kind (raise-alarm's declared one), subject, sequence, attempts and
+	// correlation from msg, and the dedup id the max-delivery recorder shares.
+	if err := rc.dead.WriteFor(ctx, msg, deadletter.Envelope{
 		Reason: deadletter.ReasonExhausted,
 		Summary: "an alarm edge could not be applied after every delivery attempt, so an alarm " +
 			"that should have been raised or cleared was not",
-		Detail:      detail,
-		Attempts:    msg.NumDelivered,
-		Subject:     msg.Subject,
-		Sequence:    msg.StreamSeq,
-		Correlation: msg.CorrelationID(),
-		Reference:   what,
-		OccurredAt:  time.Now().UTC(),
-		Payload:     msg.Value,
+		Detail:     detail,
+		Reference:  what,
+		OccurredAt: time.Now().UTC(),
+		Payload:    msg.Value,
 	}); err != nil {
 		log.Error().Err(err).Str("what", what).
 			Msg("LOST raise-alarm edge: it could be neither applied nor dead-lettered.")

@@ -255,6 +255,31 @@ get through.
 | --- | --- | --- | --- |
 | `ReaderHeldMessagePastAckWait` | warning | A handler held a message past its acknowledgement window, so it was redelivered. `stage=worker`: a send ran long, so the message may have been sent twice. `stage=buffer`: a message was dropped before it was handed out, and its redelivery was handled instead. | For `stage=worker`, look for a slow or unresponsive destination behind the service named by the `durable` label. For `stage=buffer`, the service is not keeping up with its stream. |
 
+## Messages that ran out of delivery attempts {#max-delivery-records}
+
+After five unacknowledged deliveries the broker stops handing a message out. It publishes a
+notice the next time the consumer is pulled after the last delivery's acknowledgement window has
+passed, so for a service that is down the notice waits until the service runs again. A platform stream, `max-deliveries`, captures those notices, and each service turns
+its own into dead letters with reason `no-outcome` (read them with `dcctl dead-letters list`).
+The stream is a work queue: a recorded notice is deleted, so on a healthy instance it is empty.
+The counter `devicechain_<area>_max_delivery_records_total{stream,outcome}` says what was done
+with each notice.
+
+One consumer is an exception, and it is declared as one: the detection engine in
+`event-processing` reads `resolved-events` from its own saved checkpoint. It acknowledges an
+event only once a checkpoint covers it, and after a restart it reads the stream again from the
+last checkpoint, so an event whose delivery attempts ran out has not been lost. When its
+checkpoint cannot be saved (usually because its database is unreachable) for longer than the
+broker keeps redelivering, every event in that window runs out of attempts. Those notices are
+not turned into dead letters, which would report hundreds of losses that did not happen. They
+are counted with `outcome="replay-covered"`, and the alert below reports them. The other services
+that read `resolved-events` have no such checkpoint, and their notices are dead-lettered as usual.
+
+| Alert | What it means | What to do |
+| --- | --- | --- |
+| `MaxDeliveryRecordsWaiting` | Notices of messages that ran out of delivery attempts have waited 15 minutes without being recorded. | Check that every service is running: one that is down records late. If a notice stays once everything is healthy, it names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream. |
+| `ReplayCoveredDeliveriesExhausted` | A consumer that reads its stream from its own checkpoint ran out of delivery attempts in the last 15 minutes, because the checkpoint has not been saved for longer than the broker keeps redelivering. Nothing has been lost yet. | Fix whatever stops the service named by the `job` label from saving its checkpoint, usually its database connection. While the service runs, it saves what it has read once the checkpoint succeeds. If it restarts first, it reads the stream again from the last saved checkpoint, and events the stream has already discarded cannot be read again, so also watch `JetStreamStreamNearFull`. |
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command

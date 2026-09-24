@@ -1502,7 +1502,9 @@ many root fields and password checks it can carry. If you route or silence alert
 "A consumer that falls behind a full stream now raises an alert": `EventProcessingStreamNearFull` is
 renamed. If your outbound-connectors values set `dispatchBacklog`, delete it before upgrading: the
 service now refuses to start with it (see "The connectors service no longer accepts dispatchBacklog"
-below).
+below). If you filter dead letters by kind or reason, or alert on the dead-letter stream, read
+"Messages abandoned on their last attempt are now dead-lettered" below: it adds three kinds, a
+reason, a stream and two alerts.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1745,6 +1747,48 @@ before the window closes.
 A new alert, `ReaderHeldMessagePastAckWait`, fires if either service still holds a message past the
 window. [Messages held past their acknowledgement
 window](./observability.md#held-past-ack-wait) explains what each case means.
+
+#### Messages abandoned on their last attempt are now dead-lettered
+
+A message a service gave up on after handling it used to be the only kind that reached the
+dead-letter list. A message whose five delivery attempts all ran out with **no** outcome — a pod
+stopped mid-handling, or a handler that ran past its acknowledgement window — left no record
+anywhere, because nothing reached the code that writes the letter. The broker does notice, and
+now every service records those too, from the broker's own notice.
+
+What changes for you:
+
+- **Three new kinds**, `event`, `command` and `control-fact`, for messages on the device-event,
+  command and control-plane streams. The kind of a letter is now fixed by the stream the message
+  arrived on. `dcctl dead-letters list --kind` offers all of them.
+- **A new reason, `no-outcome`.** It never settles a command: the last attempt may have done its
+  work and lost only its acknowledgement. For high-volume streams (device events, commands and
+  detection actions) the letter carries no copy of the message; its detail names where the
+  original is until the stream ages it out. The same holds for a message too large to copy, and a
+  connector request's letter points at the connectors service's own dead-letter stream, which
+  holds the full request.
+- **A new stream, `max-deliveries`,** created by every service that reads a stream. It reserves
+  8 MiB at default sizing and fits the existing JetStream volume; nothing needs resizing. It is
+  empty in steady state, and a new alert, `MaxDeliveryRecordsWaiting`, fires if notices wait on it
+  unrecorded ([Messages that ran out of delivery
+  attempts](./observability.md#max-delivery-records)).
+- **The detection engine's give-ups are counted, not dead-lettered.** `event-processing` reads
+  `resolved-events` from its own saved checkpoint and reads the stream again after a restart, so
+  an event whose attempts ran out there has not been lost. When the engine cannot save its
+  checkpoint for longer than the broker keeps redelivering (usually a database outage), every
+  event in that window runs out of attempts, and a letter for each would report losses that did
+  not happen. They are counted with `outcome="replay-covered"` instead, and a new warning alert,
+  `ReplayCoveredDeliveriesExhausted`, reports them. The other services that read
+  `resolved-events` still dead-letter theirs.
+- **The dead-letter stream gains a 30-minute duplicate window,** applied in place on upgrade, and
+  so does the connectors service's own dead-letter stream. It is what makes a give-up recorded both
+  by a service and by the broker's notice land once.
+- **`DeadLetterWriteLost` has a third cause:** a dead letter that the dead-letter store or the
+  command writeback ran out of attempts on, which may now age out of the stream without having
+  been stored (its last attempt may have stored it and lost only the acknowledgement).
+
+During the rolling upgrade a give-up can be lettered twice, once by a pod of the old release and
+once from the broker's notice. The two are the same failure; nothing was lost.
 
 ### The one-time durable-ingest cutover
 

@@ -1597,7 +1597,9 @@ comprobaciones de contraseña. Si enruta o silencia alertas por su nombre, lea �
 queda atrás de un flujo lleno ahora genera una alerta»: `EventProcessingStreamNearFull` cambia de
 nombre. Si sus valores de outbound-connectors fijan `dispatchBacklog`, elimínelo antes de
 actualizar: el servicio ahora se niega a arrancar con él (vea «El servicio de conectores ya no
-acepta dispatchBacklog» más abajo).
+acepta dispatchBacklog» más abajo). Si filtra los mensajes no entregados por tipo o por motivo, o
+tiene alertas sobre su stream, lea «Los mensajes abandonados en su último intento ahora se
+registran» más abajo: añade tres tipos, un motivo, un stream y dos alertas.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1854,6 +1856,52 @@ ahora cada envío se corta con margen antes de que la ventana se cierre.
 Una alerta nueva, `ReaderHeldMessagePastAckWait`, se dispara si alguno de los dos servicios aún
 retiene un mensaje más allá de la ventana. [Mensajes retenidos más allá de su ventana de
 confirmación](./observability.md#held-past-ack-wait) explica qué significa cada caso.
+
+#### Los mensajes abandonados en su último intento ahora se registran
+
+Hasta ahora, solo llegaba a la lista de mensajes no entregados un mensaje que un servicio abandonaba
+después de procesarlo. Un mensaje cuyos cinco intentos de entrega se agotaban **sin** ningún
+resultado (un pod detenido a mitad del procesamiento, o un manejador que se pasó de su ventana de
+confirmación) no dejaba rastro, porque nada llegaba al código que escribe el registro. El broker sí
+lo advierte, y ahora cada servicio también registra esos casos a partir del propio aviso del broker.
+
+Qué cambia para usted:
+
+- **Tres tipos nuevos**, `event`, `command` y `control-fact`, para los mensajes de los streams de
+  eventos de dispositivos, de comandos y del plano de control. El tipo de un registro queda fijado
+  ahora por el stream por el que llegó el mensaje. `dcctl dead-letters list --kind` los ofrece todos.
+- **Un motivo nuevo, `no-outcome`.** Nunca liquida un comando: el último intento pudo haber hecho su
+  trabajo y perder solo su acuse de recibo. En los streams de mucho volumen (eventos de
+  dispositivos, comandos y acciones de detección) el registro no lleva copia del mensaje; su detalle
+  indica dónde está el original hasta que el stream lo descarte por antigüedad. Lo mismo vale para
+  un mensaje demasiado grande para copiarse, y el registro de una petición de conector apunta al
+  stream propio de mensajes no entregados del servicio de conectores, que guarda la petición
+  completa.
+- **Un stream nuevo, `max-deliveries`,** que crea cada servicio que lee de un stream. Reserva 8 MiB
+  con el dimensionamiento por defecto y cabe en el volumen de JetStream existente; no hace falta
+  redimensionar nada. Está vacío en régimen normal, y una alerta nueva, `MaxDeliveryRecordsWaiting`,
+  se dispara si hay avisos esperando sin registrar ([Mensajes que agotaron sus intentos de
+  entrega](./observability.md#max-delivery-records)).
+- **Los abandonos del motor de detección se cuentan, no se registran.** `event-processing` lee
+  `resolved-events` desde su propio punto de control guardado y vuelve a leer el stream tras un
+  reinicio, así que un evento que agotó ahí sus intentos no se ha perdido. Cuando el motor no puede
+  guardar su punto de control durante más tiempo del que el broker sigue reentregando (normalmente,
+  una caída de la base de datos), todos los eventos de ese intervalo agotan sus intentos, y un
+  registro por cada uno informaría de pérdidas que no ocurrieron. En su lugar se cuentan con
+  `outcome="replay-covered"`, y una alerta nueva de nivel warning,
+  `ReplayCoveredDeliveriesExhausted`, informa de ellos. Los demás servicios que leen
+  `resolved-events` siguen registrando los suyos.
+- **El stream de mensajes no entregados gana una ventana de duplicados de 30 minutos,** aplicada en
+  el sitio durante la actualización, y también el stream propio de mensajes no entregados del
+  servicio de conectores. Es lo que hace que un abandono registrado a la vez por un servicio y por el
+  aviso del broker quede una sola vez.
+- **`DeadLetterWriteLost` tiene una tercera causa:** un mensaje de esa cola en el que el almacén de
+  mensajes no entregados o la reconciliación de comandos agotó sus intentos, y que ahora puede caducar en
+  el stream sin haberse almacenado (su último intento pudo almacenarlo y perder solo el acuse de
+  recibo).
+
+Durante la actualización escalonada, un abandono puede registrarse dos veces: una por un pod de la
+versión anterior y otra a partir del aviso del broker. Es el mismo fallo; no se perdió nada.
 
 ### La transición única a la ingesta duradera
 
