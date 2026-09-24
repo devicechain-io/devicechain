@@ -18,8 +18,9 @@ import (
 
 // Connector is a tenant-scoped, versioned outbound-connector definition (ADR-060
 // Tier 2). It is the registered target a `publish` REACT action delivers through:
-// a {type, config} the service turns into a bounded single-message send (the Bento
-// output config is generated from it — the tenant never writes Bento YAML), plus an
+// a {type, config} the service turns into a bounded single-message send (connectorspec
+// parses it into a typed target — the tenant authors a small documented shape, never a
+// client configuration), plus an
 // optional write-only credential sealed in the ADR-059 secret store (never a column,
 // never returned across the API). It mirrors the ADR-039 versioned-resource pattern
 // (Dashboard): the mutable row is the DRAFT; publishing freezes it into an immutable
@@ -31,13 +32,13 @@ type Connector struct {
 	rdb.TokenReference
 	rdb.NamedEntity
 	// Type is the connector kind, one of the registered ConnectorType vocabulary
-	// (mqtt/kafka/aws_sns/aws_sqs/gcp_pubsub). It selects the Bento output the send
-	// runs through; validated against the vocabulary at write.
+	// (mqtt/kafka/aws_sns/aws_sqs/gcp_pubsub). It selects the client the send runs
+	// through; validated against the vocabulary at write.
 	Type string `gorm:"not null;size:64"`
 	// Config is the opaque, per-type connection configuration (broker URL, topic,
 	// region, …) stored as a JSON object. The backend validates it is a well-formed
-	// JSON object at write; the per-type field validation lives with each output
-	// generator (slices C4b/C4c). Credentials are NEVER stored here — they live in
+	// JSON object at write; the per-type field validation lives in connectorspec, which
+	// runs the same parser at write and at dispatch. Credentials are NEVER stored here — they live in
 	// the secret store under the connector's handle (see ConnectorSecretRef).
 	Config datatypes.JSON `gorm:"not null"`
 }

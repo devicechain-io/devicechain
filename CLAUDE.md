@@ -35,9 +35,11 @@ backend/
                               or by a natural-language "Describe" door that compiles via ai-inference (ADR-056)
     outbound-connectors/      dedicated REACT outbound sink (ADR-060): durable NATS consumer of the REACT
                               connector-dispatch stream → hand-rolled SSRF-hardened httpCall webhook +
-                              embedded-Bento (MIT warpstreamlabs/bento, kept out of the DETECT binary)
-                              publish to MQTT/Kafka/AWS-SNS/AWS-SQS over a versioned Connector entity,
-                              secret-authed (ADR-059) + per-tenant egress-governed (ADR-023)
+                              publish to MQTT (incl. ws/wss)/Kafka/AWS-SNS/AWS-SQS over a versioned
+                              Connector entity, through clients the service owns (paho, franz-go,
+                              aws-sdk-go-v2 from a literal config) that ALL dial through the core/egress
+                              guard — Kafka's advertised brokers included; secret-authed (ADR-059) +
+                              per-tenant egress-governed (ADR-023)
     ai-inference/             opt-in inference service (ADR-056): drafts a DETECT rule from natural language and
                               runs it through the SAME cel-go compiler (bounded compile/repair loop) — AI proposes,
                               compiler disposes, never in the replay-correct path. Operator-registered AIProviders
@@ -123,8 +125,8 @@ module, so the root-level forms do not do what they look like they do:
 - `go build ./...` from the root **fails outright** — `pattern ./...: directory prefix . does not
   contain modules listed in go.work or their selected dependencies`. So does `./backend/...`: a
   `./…` pattern has to start inside a module, and no single one spans the workspace. (`go build all` does
-  span them, but `all` in a workspace means every module *and every dependency*, so it builds the
-  whole Bento tree to tell you about your own code. Not the gate you want.)
+  span them, but `all` in a workspace means every module *and every dependency*, so it builds every
+  dependency tree in the workspace to tell you about your own code. Not the gate you want.)
 - `gofmt -l .` from the root **prints 8 files** — all under `_legacy/`, the archived pre-migration
   tree that is deliberately not maintained. A gate documented as "must print nothing" that never
   prints nothing teaches you to ignore it, or to reformat an archive you were told not to edit.
@@ -278,7 +280,7 @@ done
   ring with no well-defined interior then answers containment confidently and arbitrarily. Nothing
   about that answer looks wrong, which is why `core/geo/ring.go` exists to cover the hole. The shape
   to copy is `connectorspec.ErrUnsupportedType`: a connector type may be a valid, creatable
-  vocabulary member whose output generator has not shipped in this build, and dispatching one is a
+  vocabulary member whose publish client has not shipped in this build, and dispatching one is a
   **terminal, dead-lettered** outcome — recognized but not executable — never a silent drop.
 - **Multi-tenancy:** a single shared set of services serves all tenants; isolation is enforced at the
   storage (`tenant_id` predicate) and messaging (per-tenant subjects) layers, not by per-tenant pods.

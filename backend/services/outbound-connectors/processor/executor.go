@@ -39,42 +39,48 @@ type execOutcome struct {
 	err error
 }
 
+// Outcome is the classification's metric label (sent, retry, blocked, …). It is how code outside
+// this package — the service's own wiring tests — reads what Execute decided.
+func (o execOutcome) Outcome() string { return o.outcome }
+
 // Executor performs the bounded outbound send for one connector-dispatch request (ADR-060 §4). It
 // owns the credential resolution (fail-closed) and the shared SSRF hardening (core/httpsink); the
-// consumer owns the ack/leave-unacked/dead-letter lifecycle around it. It executes both httpCall (core/httpsink)
-// and publish (resolve the versioned Connector → generate the Bento output → bounded single-message
-// send via the publish sink, slice C4b).
+// consumer owns the ack/leave-unacked/dead-letter lifecycle around it. It executes both httpCall
+// (core/httpsink) and publish (resolve the versioned Connector → build its typed target → bounded
+// single-message send via the publish package). Both paths dial through ONE egress guard.
 type Executor struct {
 	secrets *SecretResolver
 	// connectors resolves a publish action's ConnectorRef to its latest published version (the
 	// dispatch-side read of the C4a entity). nil disables publish (a publish dispatch is then terminal
 	// unsupported) — used by httpCall-only tests.
 	connectors *model.Api
-	// client is the HTTP client for delivery; nil uses httpsink.DefaultClient. A field so a test can
-	// inject a client pointed at an httptest server. The per-send context deadline bounds each call.
+	// client is the HTTP client for delivery. NewExecutor builds it over the egress guard; it is a
+	// field so a test can wrap its transport. The per-send context deadline bounds each call.
 	client *http.Client
-	// send performs the bounded Bento single-message publish. A field so a test can inject a fake sink
-	// (the real one dials a broker); NewExecutor always sets it to publish.Send.
-	send func(ctx context.Context, outputYAML string, payload []byte, metadata map[string]string) error
+	// send performs the bounded single-message publish. NewExecutor builds it over the same egress
+	// guard as client; it is a field so a test can inject a fake sink.
+	send func(ctx context.Context, t connectorspec.Target, payload []byte, idempotencyKey string) error
 	// defaultTimeout bounds a send whose action specified no timeout.
 	defaultTimeout time.Duration
 }
 
 // NewExecutor builds the executor over a secret resolver, the connector store (for publish
-// resolution), the HTTP client tenant deliveries go out on, and the fallback send timeout.
+// resolution), the egress guard every tenant delivery dials through, and the fallback send timeout.
 // A nil connectors store disables publish execution.
 //
-// client carries the tenant-egress boundary: production passes one whose transport dials
-// through the configured egress guard. A nil client falls back to httpsink.DefaultClient,
-// whose own guard carries no allowances — so a missed wiring narrows the boundary rather
-// than removing it.
-func NewExecutor(resolver *SecretResolver, connectors *model.Api, client *http.Client, defaultTimeout time.Duration) *Executor {
+// The one guard builds BOTH delivery paths — the webhook HTTP client and the publish sender — so
+// the operator's allowed destinations reach every path or none. A nil guard is a guard with no
+// allowances: a missed wiring narrows the boundary rather than removing it.
+func NewExecutor(resolver *SecretResolver, connectors *model.Api, guard *egress.Guard, defaultTimeout time.Duration) *Executor {
+	if guard == nil {
+		guard = egress.NewGuard(nil)
+	}
 	return &Executor{
 		secrets:        resolver,
 		connectors:     connectors,
-		client:         client,
+		client:         &http.Client{Transport: guard.Transport()},
 		defaultTimeout: defaultTimeout,
-		send:           publish.Send,
+		send:           publish.NewSender(guard).Send,
 	}
 }
 
@@ -207,10 +213,11 @@ func sendContext(ctx context.Context, timeout time.Duration) (context.Context, c
 
 // executePublish delivers a Kind==publish dispatch through the versioned Connector its ConnectorRef
 // names (ADR-060 Tier 2): resolve the connector's latest PUBLISHED version (the draft is never
-// dispatched), resolve its optional credential, generate the Bento output config, and perform a
-// bounded single-message send. A dangling/unpublished ConnectorRef, an unsupported type, or a
-// malformed stored config is TERMINAL (a redelivery cannot fix it) → dead-lettered visibly. A
-// transient secret-store or send failure is RETRYABLE (bounded by the redelivery cap).
+// dispatched), resolve its optional credential, build its typed target, and perform a bounded
+// single-message send. A dangling/unpublished ConnectorRef, an unsupported type, or a malformed
+// stored config is TERMINAL (a redelivery cannot fix it) → dead-lettered visibly, and so is a
+// destination the egress guard refused. A transient secret-store or send failure is RETRYABLE
+// (bounded by the redelivery cap).
 func (e *Executor) executePublish(ctx context.Context, req *connectorwire.ConnectorDispatchRequest) execOutcome {
 	p := req.Publish // present: connectorwire.Validate required it for this kind
 	if e.connectors == nil {
@@ -255,31 +262,41 @@ func (e *Executor) executePublish(ctx context.Context, req *connectorwire.Connec
 		secret = resolved
 	}
 
-	// Generate the Bento output config from the published {type, config} + secret. connectorspec
-	// re-validates the stored config (defense in depth vs a forged/corrupt row). An unsupported type
-	// (a valid vocabulary member whose generator has not shipped) or a malformed config is terminal.
-	outputYAML, err := connectorspec.BuildOutput(version.Type, version.Config, secret)
+	// Build the typed target from the published {type, config} + secret. connectorspec re-validates
+	// the stored config with the same parser the write path runs (defense in depth vs a forged or
+	// pre-rule row): a unix socket, an unknown scheme or a second destination behind a comma is
+	// refused here and never dialed. An unsupported type (a valid vocabulary member whose client has
+	// not shipped) or a malformed config is terminal.
+	target, err := connectorspec.Build(version.Type, version.Config, secret)
 	if err != nil {
 		// Both are terminal, but keep the ops-board metric vocabulary honest (slice 8): an
-		// unsupported TYPE (a valid vocabulary member whose generator has not shipped) is
-		// outcomeUnsupported; a malformed/forged stored CONFIG of a supported type is outcomeInvalid.
+		// unsupported TYPE is outcomeUnsupported; a malformed/forged stored CONFIG of a supported
+		// type is outcomeInvalid.
 		outcome := outcomeInvalid
 		if errors.Is(err, connectorspec.ErrUnsupportedType) {
 			outcome = outcomeUnsupported
 		}
 		return execOutcome{outcome: outcome, retryable: false,
-			err: fmt.Errorf("build output for connector %q (type %q): %w", p.ConnectorRef, version.Type, err)}
+			err: fmt.Errorf("build target for connector %q (type %q): %w", p.ConnectorRef, version.Type, err)}
 	}
 
 	sendCtx, cancel := sendContext(ctx, e.effectiveSendTimeout(p.TimeoutMs))
 	defer cancel()
-	// The idempotency key rides as message metadata for outputs that can dedup on it; at-least-once
-	// redelivery is otherwise the contract (content-addressed idempotency upstream).
-	if err := e.send(sendCtx, outputYAML, []byte(req.Payload), map[string]string{"idempotency_key": req.IdempotencyKey}); err != nil {
-		// A terminal config/stream error (publish.ErrPublishConfig — a config that generated but Bento
-		// cannot build/run) is dead-lettered, not retried: a redelivery cannot fix it. Any other error
-		// is a transient DELIVERY failure (broker briefly down) → retry, bounded by the redelivery cap.
-		// The error is a delivery/connection error, not the payload or config (which are never logged).
+	// The idempotency key is FORWARDED where the protocol carries metadata (a Kafka header, an
+	// SNS/SQS attribute) so a downstream consumer can deduplicate on it; nothing here deduplicates.
+	// At-least-once redelivery is otherwise the contract.
+	if err := e.send(sendCtx, target, []byte(req.Payload), req.IdempotencyKey); err != nil {
+		// A destination the egress guard refused is TERMINAL, and it is checked FIRST: the address
+		// will not become public on redelivery, and an operator reading the letter needs "blocked",
+		// not "invalid" or "dead".
+		if errors.Is(err, egress.ErrBlocked) {
+			return execOutcome{outcome: outcomeBlocked, retryable: false,
+				err: fmt.Errorf("publish to connector %q: %w", p.ConnectorRef, err)}
+		}
+		// A terminal target error (publish.ErrPublishConfig — a target no client can be built for)
+		// is dead-lettered, not retried: a redelivery cannot fix it. Any other error is a transient
+		// DELIVERY failure (a broker briefly down) → retry, bounded by the redelivery cap. The error
+		// is a delivery/connection error, not the payload or credential (which are never logged).
 		if errors.Is(err, publish.ErrPublishConfig) {
 			return execOutcome{outcome: outcomeInvalid, retryable: false,
 				err: fmt.Errorf("publish to connector %q: %w", p.ConnectorRef, err)}

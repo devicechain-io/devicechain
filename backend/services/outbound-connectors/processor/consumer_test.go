@@ -23,14 +23,14 @@ import (
 // that never execute), with egress rate limiting OFF (nil limiter). ms is nil so metrics are
 // nil-safe no-ops.
 func newTestConsumer(dead messaging.MessageWriter, store *fakeSecretStore) *DispatchConsumer {
-	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(store), nil, loopbackGuard(), 5*time.Second)
 	return NewDispatchConsumer(&fakeReader{}, dead, nil, testProducer(), e, nil, 5*time.Second, nil, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
 // newTestConsumerWithRate builds a consumer with an egress rate limiter and wait budget, to exercise
 // the SD-3 rate gate.
 func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStore, rate *core.TenantRateLimiter, waitBudget time.Duration) *DispatchConsumer {
-	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(store), nil, loopbackGuard(), 5*time.Second)
 	return NewDispatchConsumer(&fakeReader{}, dead, nil, testProducer(), e, rate, waitBudget, nil, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
@@ -41,7 +41,7 @@ func newTestConsumerWithRate(dead messaging.MessageWriter, store *fakeSecretStor
 // plumbing as well as the branch: assigning the field by struct literal instead would leave
 // `tenantDeleted: tenantDeleted` deletable from NewDispatchConsumer with the whole suite still green.
 func newTestConsumerWithGate(dead messaging.MessageWriter, store *fakeSecretStore, tenantDeleted func(string) bool) *DispatchConsumer {
-	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(store), nil, loopbackGuard(), 5*time.Second)
 	return NewDispatchConsumer(&fakeReader{}, dead, nil, testProducer(), e, nil, 5*time.Second, tenantDeleted, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
@@ -441,7 +441,7 @@ func TestHandleDeletedTenantIsRefusedBeforeTheRateWait(t *testing.T) {
 
 	srv, hits := countingServer(t)
 	dead := &fakeWriter{}
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 5*time.Second)
 	c := NewDispatchConsumer(&fakeReader{}, dead, nil, testProducer(), e, rl, 40*time.Millisecond,
 		func(string) bool { return true }, 1, nil, core.NewReadPacer(nil, "test"))
 	ack := &fakeAck{}

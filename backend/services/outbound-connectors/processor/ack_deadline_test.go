@@ -154,8 +154,9 @@ func TestSendIsCappedByAckDeadline(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
 	t.Cleanup(srv.Close)
 
-	rec := &deadlineRecordingTransport{next: loopbackClient().Transport}
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, &http.Client{Transport: rec}, 5*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 5*time.Second)
+	rec := &deadlineRecordingTransport{next: e.client.Transport}
+	e.client = &http.Client{Transport: rec}
 	ctx := messaging.WithAckDeadline(core.WithTenant(context.Background(), "acme"), msg)
 
 	res := e.Execute(ctx, &connectorwire.ConnectorDispatchRequest{

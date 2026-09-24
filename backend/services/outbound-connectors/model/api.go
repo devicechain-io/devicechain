@@ -28,8 +28,8 @@ import (
 const maxConfigBytes = 64 << 10
 
 // ErrInvalidConfig is returned when a create/update carries a Config that is not a
-// well-formed JSON object. The document is otherwise stored opaquely (per-type field
-// validation lives with each output generator, slices C4b/C4c).
+// well-formed JSON object. The per-type shape is validated separately, at the same write,
+// by connectorspec.ValidateConfig (see validateRequest).
 var ErrInvalidConfig = errors.New("connector config must be a JSON object")
 
 // ErrConfigTooLarge is returned when a Config exceeds maxConfigBytes.
@@ -75,10 +75,11 @@ func configJSON(raw string) (datatypes.JSON, error) {
 
 // validateRequest validates a create/update request's type + config and returns the config
 // as a column value. The type must be in the registered vocabulary and the config a
-// well-formed JSON object; additionally, for a type whose Bento generator has shipped, the
-// per-type field shape is validated here (fail early at write, not only at dispatch). A
-// vocabulary type without a shipped generator yet is accepted as JSON-object-only and
-// dead-letters at dispatch until its generator lands (slice C4c) — never silently.
+// well-formed JSON object; additionally, for a type whose client has shipped, the per-type
+// shape — destinations included: schemes, one host:port per entry, no unix sockets — is
+// validated here by the same parser dispatch runs (fail early at write, not only at
+// dispatch). A vocabulary type without a shipped client (gcp_pubsub) is accepted as
+// JSON-object-only and dead-letters at dispatch as unsupported — never silently.
 func (api *Api) validateRequest(request *ConnectorCreateRequest) (datatypes.JSON, error) {
 	return api.validateTypeAndConfig(request.Type, request.Config)
 }

@@ -19,22 +19,23 @@
 //
 // It is not an egress firewall. It sees one address per dial and can say no; it cannot
 // see a protocol that redirects, re-resolves, or hands back a second address to connect
-// to. Three of DeviceChain's six outbound paths build their client inside an embedded
-// stream engine that exposes no dialer, and one of the three (Kafka) dials a second hop
-// at whatever address the broker advertises.
+// to. What bounds such a protocol is that EVERY connection it makes comes through this
+// guard, which is a property of the caller, not of this package.
 //
-// 🔴 The control for those three is a NetworkPolicy at the pod, which the chart renders
-// — but it is OFF by default (networkPolicy.enabled), so on a default install those three
-// paths are bounded by nothing at all. A caller who believes this package covers them
-// will be wrong, and so will one who assumes the chart does without having turned it on.
+// DeviceChain's tenant paths all have it: the webhook and httpCall senders and the mail
+// relay dial through Dialer or Transport, and the connectors service hands its MQTT
+// (including WebSocket), Kafka and SNS/SQS clients one dial function built on Dialer —
+// so a Kafka cluster's advertised brokers, the second hop no URL check could see, are
+// judged here like the seeds. A new tenant path that builds a client which dials for
+// itself (a proxy from the environment, an SDK's own transport) is outside this boundary
+// until it is handed this guard, whatever its configuration says.
 //
-// Two residuals survive even with it on, and they are worth knowing before trusting it:
-// a NetworkPolicy compares prefixes and cannot look inside an IPv6 address that CARRIES
-// an IPv4 one, so on a NAT64 or dual-stack cluster a broker at 64:ff9b::a9fe:a9fe reaches
-// the metadata service through the Bento paths while this package would refuse it. And
-// the policy is a CEILING over this package's allowed-destination configuration: an
-// address permitted here is still dropped by the network unless it is permitted there
-// too.
+// The chart's NetworkPolicy (networkPolicy.enabled, off by default) is a second layer,
+// not the boundary. Two things about it are worth knowing: a NetworkPolicy compares
+// prefixes and cannot look inside an IPv6 address that CARRIES an IPv4 one, which this
+// package can; and the policy is a CEILING over this package's allowed-destination
+// configuration — an address permitted here is still dropped by the network unless it is
+// permitted there too.
 package egress
 
 import (

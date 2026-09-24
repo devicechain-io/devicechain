@@ -1608,7 +1608,10 @@ en caliente de `event-processing`, lea «Con una reserva en caliente, solo la r�
 despacha acciones». Si enruta o silencia alertas por su nombre, se añaden dos avisos nuevos:
 `RateLimiterOverflowInUse` y `TenantsMeteredAtPlatformDefault`. Si filtra los mensajes no entregados
 por motivo, o enruta alertas por su nombre, lea «Las acciones de salida ya no se pierden cuando el
-motor de detección se pone al día».
+motor de detección se pone al día». Si un conector de un
+inquilino publica en un bróker o endpoint con dirección privada, incluidos MSK, Amazon MQ o un
+endpoint de interfaz de SNS/SQS, lea «Los conectores ya no pueden llegar a direcciones privadas, y
+el servicio de conectores tiene clientes nuevos» antes de actualizar.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1983,6 +1986,53 @@ y se almacenan una sola vez dentro de una ventana de 30 minutos, así que los su
 eventos derivados ven menos duplicados. Cada evento derivado lleva ahora un campo `triggeredAt`. Si
 filtra los mensajes no entregados por motivo, espere mensajes `shed` de tipo `detection-action`. No
 hace falta hacer nada en la actualización.
+
+#### Los conectores ya no pueden llegar a direcciones privadas, y el servicio de conectores tiene clientes nuevos
+
+Los conectores de MQTT, Kafka, SNS y SQS reciben ahora la misma comprobación en el momento de
+conectar que ya tenían los webhooks y los relés de correo. Se rechaza un destino que resuelve a una
+dirección de loopback, privada, NAT de operador (carrier-grade NAT), de enlace local o de metadatos
+de nube. El rechazo es **definitivo**: el despacho acaba en la cola de mensajes no entregados como
+`blocked` y no se reintenta. En Kafka esto cubre cada bróker que anuncia el clúster, no solo las
+direcciones que usted configuró. La comprobación se hace en el propio servicio, así que ya no
+depende de `networkPolicy.enabled` ni de que su clúster la aplique.
+
+Qué revisar antes de actualizar:
+
+- **Los destinos en direcciones privadas dejan de recibir.** Esto incluye:
+  - un bróker dentro del clúster o en una red emparejada;
+  - **los brókers de Amazon MSK**, que son privados por defecto;
+  - **Amazon MQ** usado para MQTT;
+  - **SNS y SQS alcanzados a través de un endpoint de interfaz de VPC con DNS privado activado**.
+    Con DNS privado, incluso los nombres predeterminados `sns.<región>.amazonaws.com` /
+    `sqs.<región>.amazonaws.com` resuelven a direcciones privadas, así que también se ven afectados
+    los conectores sin endpoint personalizado.
+
+  Permita cada dirección como su propio `/32` en
+  `instance.config.infrastructure.egress.allowedDestinations`. Un endpoint de interfaz tiene una
+  dirección por zona de disponibilidad, y cada una necesita su propia entrada. Una autorización se
+  aplica a todos los inquilinos y a todas las rutas de conectores y webhooks, no solo a la que usted
+  tiene en mente.
+- **Las URL de MQTT deben usar `tcp://`, `mqtt://`, `ssl://`, `tls://`, `mqtts://`, `ws://` o
+  `wss://`**, con un puerto explícito y un bróker por entrada. `tcps://`, `mqtt+ssl://` y `unix://`
+  ya no se aceptan. Se rechazan al guardar un conector, y un conector almacenado que use uno acaba
+  en la cola de mensajes no entregados como `invalid` cuando se dispara. Las direcciones de Kafka
+  deben ser `host:puerto`.
+- **Las variables de entorno de proxy** (`HTTPS_PROXY`, `ALL_PROXY`) ya no las usan los conectores,
+  y tampoco las variables `AWS_*` ni los archivos de configuración de AWS del pod.
+- **El cliente de Kafka cambió.**
+  - El identificador de cliente predeterminado es ahora `devicechain` (antes era `bento`). Fije
+    `clientId` en el conector si sus brókers aplican ACL o cuotas por identificador de cliente.
+  - Los registros sin clave se reparten ahora con particionado pegajoso (sticky partitioning).
+  - La versión del protocolo se negocia con el bróker en lugar de ser fija.
+  - La entrega no cambia: confirmación del líder, sin productor idempotente.
+- **Los mensajes de SQS se envían de uno en uno** (`SendMessage`), no por lotes. El permiso de IAM
+  es el mismo, `sqs:SendMessage`.
+
+Dos cosas mejoran como efecto secundario. Un bróker de Kafka que está inaccesible brevemente ahora
+se reintenta en lugar de acabar en la cola de mensajes no entregados como `invalid`. Y el binario
+del servicio de conectores, que es la mayor parte de su imagen, ocupa alrededor de un tercio de lo
+que ocupaba.
 
 ### La transición única a la ingesta duradera
 

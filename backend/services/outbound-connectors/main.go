@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -159,16 +158,11 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	tenantDeleted := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors")
 
-	resolver := processor.NewSecretResolver(SecretStore)
-	// The tenant-egress boundary, carrying whatever destinations the operator has
-	// explicitly allowed. A malformed CIDR fails startup rather than being skipped: a
-	// silently-dropped allowance would look configured and behave as though it were not.
-	egressGuard, err := egress.FromConfig(Microservice.InstanceConfiguration.Infrastructure.Egress)
+	executor, err := newExecutor(infra, processor.NewSecretResolver(SecretStore), Api,
+		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
 	if err != nil {
 		return err
 	}
-	executor := processor.NewExecutor(resolver, Api, &http.Client{Transport: egressGuard.Transport()},
-		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
 	// Its counters were built once in afterMicroserviceInitialized and are handed in,
 	// because a collector belongs to the process while everything this callback builds
 	// belongs to the connection, and a second registration of the same collector panics.
@@ -184,6 +178,21 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		tenantDeleted, Configuration.MaxConcurrentSends,
 		DispatchMetrics, core.NewReadPacer(Microservice, "connector dispatch"))
 	return nil
+}
+
+// newExecutor builds the dispatch executor over the instance's tenant-egress boundary. The
+// guard is built ONCE, here, and the executor builds both delivery paths from it — the
+// webhook HTTP client and the MQTT/Kafka/SNS/SQS sender — so the destinations the operator
+// allowed reach every path or none. A malformed CIDR fails startup rather than being
+// skipped: a silently-dropped allowance would look configured and behave as though it were
+// not. It is a function of its own so a test can prove the allowance reaches the publish
+// path through exactly this wiring.
+func newExecutor(infra mscfg.InfrastructureConfiguration, resolver *processor.SecretResolver, api *model.Api, sendTimeout time.Duration) (*processor.Executor, error) {
+	guard, err := egress.FromConfig(infra.Egress)
+	if err != nil {
+		return nil, err
+	}
+	return processor.NewExecutor(resolver, api, guard, sendTimeout), nil
 }
 
 // newDispatchReader builds the durable connector-dispatch reader the consumer drains. It is a

@@ -5,7 +5,6 @@ package processor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/devicechain-io/dc-outbound-connectors/publish"
 	"github.com/glebarez/sqlite"
@@ -43,24 +43,24 @@ func newPublishTestExecutor(t *testing.T) (*Executor, *model.Api, *capturedSend)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, store)
 
 	cap := &capturedSend{}
-	e := NewExecutor(NewSecretResolver(store), api, loopbackClient(), 10*time.Second)
+	e := NewExecutor(NewSecretResolver(store), api, loopbackGuard(), 10*time.Second)
 	e.send = cap.fn
 	return e, api, cap
 }
 
 type capturedSend struct {
-	called     bool
-	outputYAML string
-	payload    string
-	meta       map[string]string
-	err        error // when set, the fake send returns it (a transient sink failure)
+	called  bool
+	target  connectorspec.Target
+	payload string
+	key     string
+	err     error // when set, the fake send returns it (a transient sink failure)
 }
 
-func (c *capturedSend) fn(_ context.Context, outputYAML string, payload []byte, meta map[string]string) error {
+func (c *capturedSend) fn(_ context.Context, t connectorspec.Target, payload []byte, key string) error {
 	c.called = true
-	c.outputYAML = outputYAML
+	c.target = t
 	c.payload = string(payload)
-	c.meta = meta
+	c.key = key
 	return c.err
 }
 
@@ -99,14 +99,14 @@ func TestExecutePublishSuccess(t *testing.T) {
 	assert.Equal(t, outcomeSent, res.outcome)
 	require.True(t, cap.called)
 	assert.Equal(t, `{"temp":72}`, cap.payload)
-	assert.Equal(t, "idem-1", cap.meta["idempotency_key"])
+	assert.Equal(t, "idem-1", cap.key)
 
-	// The generated output carries the mqtt mapping + the resolved secret as the password.
-	var parsed map[string]map[string]any
-	require.NoError(t, json.Unmarshal([]byte(cap.outputYAML), &parsed))
-	assert.Equal(t, "alerts", parsed["mqtt"]["topic"])
-	assert.Equal(t, "u", parsed["mqtt"]["user"])
-	assert.Equal(t, "p4ss", parsed["mqtt"]["password"])
+	// The built target carries the mqtt mapping + the resolved secret as the password.
+	m, ok := cap.target.(connectorspec.MQTTTarget)
+	require.True(t, ok, "an mqtt connector sends to an MQTTTarget, got %T", cap.target)
+	assert.Equal(t, "alerts", m.Topic)
+	assert.Equal(t, "u", m.Username)
+	assert.Equal(t, "p4ss", m.Password)
 }
 
 // TestExecutePublishAnonymous sends with no password when the connector has no credential.
@@ -118,10 +118,9 @@ func TestExecutePublishAnonymous(t *testing.T) {
 	res := e.Execute(ctx, publishReq("anon"))
 	require.NoError(t, res.err)
 	assert.Equal(t, outcomeSent, res.outcome)
-	var parsed map[string]map[string]any
-	require.NoError(t, json.Unmarshal([]byte(cap.outputYAML), &parsed))
-	_, hasPass := parsed["mqtt"]["password"]
-	assert.False(t, hasPass, "an anonymous connector must send no password")
+	m, ok := cap.target.(connectorspec.MQTTTarget)
+	require.True(t, ok, "an mqtt connector sends to an MQTTTarget, got %T", cap.target)
+	assert.Empty(t, m.Password, "an anonymous connector must send no password")
 }
 
 // TestExecutePublishConnectorNotFound is terminal (a dangling ConnectorRef).
@@ -184,15 +183,15 @@ func TestExecutePublishSendFailureRetryable(t *testing.T) {
 // TestExecutePublishNoStoreUnsupported: an executor with no connector store treats publish
 // as terminal unsupported (httpCall-only deployment).
 func TestExecutePublishNoStoreUnsupported(t *testing.T) {
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 10*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 10*time.Second)
 	res := e.Execute(context.Background(), publishReq("x"))
 	assert.False(t, res.retryable)
 	assert.Equal(t, outcomeUnsupported, res.outcome)
 }
 
-// TestExecutePublishConfigErrorTerminal: a terminal config/stream error from the sink
-// (publish.ErrPublishConfig — a config that generated but Bento cannot run) is dead-lettered
-// as invalid, not retried.
+// TestExecutePublishConfigErrorTerminal: a terminal target error from the sink
+// (publish.ErrPublishConfig — a target no client can be built for) is dead-lettered as
+// invalid, not retried.
 func TestExecutePublishConfigErrorTerminal(t *testing.T) {
 	e, api, cap := newPublishTestExecutor(t)
 	ctx := core.WithTenant(context.Background(), "acme")

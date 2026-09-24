@@ -6,7 +6,9 @@ package processor
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,11 +22,10 @@ import (
 // evidence, and it is written as an end-to-end dispatch rather than a unit check on the
 // branch, because what matters is the DISPOSITION the consumer then applies.
 
-// blockedExecutor builds an executor whose client refuses everything the guard refuses —
-// the real guard, with no allowances, which is exactly production's configuration.
+// blockedExecutor builds an executor over the real guard with no allowances, which is
+// exactly production's default configuration.
 func blockedExecutor(store *fakeSecretStore) *Executor {
-	return NewExecutor(NewSecretResolver(store), nil,
-		&http.Client{Transport: egress.NewGuard(nil).Transport()}, 5*time.Second)
+	return NewExecutor(NewSecretResolver(store), nil, egress.NewGuard(nil), 5*time.Second)
 }
 
 // TestABlockedDestinationIsTerminalNotRetryable pins the classification. Left in the
@@ -62,8 +63,7 @@ func TestAnOrdinaryUnreachableEndpointIsStillRetryable(t *testing.T) {
 	// follows comes from the network rather than from the boundary, and the classification
 	// under test is the one for a real endpoint being down.
 	guard := egress.NewGuard([]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")})
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil,
-		&http.Client{Transport: guard.Transport()}, 200*time.Millisecond)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, guard, 200*time.Millisecond)
 
 	res := e.Execute(context.Background(), &connectorwire.ConnectorDispatchRequest{
 		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme", IdempotencyKey: "idem-2",
@@ -80,16 +80,35 @@ func TestAnOrdinaryUnreachableEndpointIsStillRetryable(t *testing.T) {
 	}
 }
 
-// The executor must use the client it was constructed with. A constructor that ignored it
-// would fall back to httpsink.DefaultClient — which is also guarded, so every test above
-// would still pass while the operator's configured allowances silently did nothing.
-func TestTheExecutorUsesTheClientItWasGiven(t *testing.T) {
-	guard := egress.NewGuard([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})
-	client := &http.Client{Transport: guard.Transport()}
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, client, 5*time.Second)
+// The executor must deliver through the guard it was constructed with. A constructor that
+// ignored it would fall back to a guard with no allowances — also refusing, so every test
+// above would still pass while the operator's configured allowances silently did nothing.
+// The evidence is the delivery itself: the same loopback endpoint is reached through a
+// guard that allows it and refused through one that does not.
+func TestTheExecutorUsesTheGuardItWasGiven(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	req := &connectorwire.ConnectorDispatchRequest{
+		Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme", IdempotencyKey: "idem-3",
+		Payload: `{}`, HTTPCall: &connectorwire.HTTPCallDispatch{URL: srv.URL},
+	}
 
-	if e.client != client {
-		t.Fatal("NewExecutor discarded the client, so the configured egress allowances would " +
-			"never reach a dispatch")
+	allowed := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil,
+		egress.NewGuard([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}), 5*time.Second)
+	res := allowed.Execute(context.Background(), req)
+	if res.outcome != outcomeSent || hits.Load() != 1 {
+		t.Fatalf("through a guard allowing loopback: outcome %q, %d request(s), err %v; want sent, 1",
+			res.outcome, hits.Load(), res.err)
+	}
+
+	refused := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, egress.NewGuard(nil), 5*time.Second)
+	res = refused.Execute(context.Background(), req)
+	if res.outcome != outcomeBlocked || hits.Load() != 1 {
+		t.Fatalf("through a guard with no allowances: outcome %q, %d request(s); want blocked, still 1",
+			res.outcome, hits.Load())
 	}
 }

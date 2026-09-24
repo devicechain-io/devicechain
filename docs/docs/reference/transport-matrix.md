@@ -233,7 +233,7 @@ connector is a one-way sink — so **Read** and **Subscribe** are `—` rather t
 | Connector | Read | Write | Subscribe | Notes |
 | --- | :---: | :---: | :---: | --- |
 | `httpCall` webhook | — | ● | — | `POST` only; a non-`POST` method is refused |
-| `publish` → MQTT | — | ● | — | QoS 0/1/2; username + secret; **no TLS settings** — see below |
+| `publish` → MQTT | — | ● | — | QoS 0/1/2; username + secret; `tcp`, `mqtt`, `ssl`, `tls`, `mqtts`, `ws`, `wss` URLs; **no TLS settings** — see below |
 | `publish` → Kafka | — | ● | — | TLS; SASL `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` |
 | `publish` → AWS SNS | — | ● | — | Static per-tenant credentials only |
 | `publish` → AWS SQS | — | ● | — | Static per-tenant credentials only |
@@ -241,22 +241,25 @@ connector is a one-way sink — so **Read** and **Subscribe** are `—` rather t
 
 The MQTT row's missing TLS is worth stating plainly next to Kafka's, which has a real `tls`
 toggle: the MQTT connector config has **no TLS fields of any kind**, and it rejects unknown keys,
-so there is nothing to author. TLS happens only implicitly, by giving the broker an `ssl://`
-URL — with no way to supply a CA, a client certificate, or a verification setting.
+so there is nothing to author. TLS happens only implicitly, by giving the broker an `ssl://`,
+`tls://`, `mqtts://` or `wss://` URL — verified against the public trust store and the host
+the URL names, with no way to supply a CA, a client certificate, or a verification setting.
 
 The two AWS connectors deliberately require a static access key and **will not** fall back to
 the ambient IAM identity of the pod they run in. Borrowing the platform's own cloud identity
 to make a tenant's call is precisely the confusion that separation exists to prevent.
 
+Every connector destination is checked when the connection is made, and one that resolves to a
+private or cloud-metadata address is refused — see
+[where a connector may send](../concepts/outbound-connectors.md#destinations).
+
 :::warning A Google Pub/Sub connector can be created and will never send
 `gcp_pubsub` is a valid connector type: the API accepts it, and the connector saves and
-publishes like any other. It has **no output generator**, so every dispatch to it fails
+publishes like any other. It has **no delivery implementation**, so every dispatch to it fails
 terminally and is dead-lettered — recognized but not executable, never silently dropped.
 
-The reason it is held back rather than shipped: Bento's Pub/Sub output authenticates through
-Application Default Credentials — the process-wide identity — with no per-connector credential
-field, so a tenant's credential could not be injected without every tenant sharing one
-identity. It ships when there is a way to give each connector its own.
+It has no delivery implementation in this release. When it ships it will authenticate with a
+credential stored on the connector, as the AWS connectors do, never with the pod's identity.
 :::
 
 Separately from connectors, [notification channels](../guides/notification-channels.md) reach

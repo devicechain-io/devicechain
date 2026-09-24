@@ -372,18 +372,30 @@ instance:
         # signing keys are regenerated — back up the rendered instance Secret.
         rootKey: ""
       egress:
-        # Destinations a TENANT-configured webhook, httpCall action or SMTP relay is
-        # allowed to reach even though the egress boundary would otherwise refuse them
-        # (ADR-023). The boundary refuses private, loopback, link-local, CGNAT and cloud
-        # metadata addresses at the moment the connection is dialled, on the resolved IP
-        # — which is the only place a DNS answer cannot change underneath the check.
+        # Destinations a TENANT-configured webhook, httpCall action, SMTP relay or
+        # MQTT/Kafka/SNS/SQS connector is allowed to reach even though the egress
+        # boundary would otherwise refuse them (ADR-023). The boundary refuses private,
+        # loopback, link-local, CGNAT and cloud metadata addresses at the moment the
+        # connection is dialled, on the resolved IP — which is the only place a DNS answer
+        # cannot change underneath the check. For Kafka that includes every broker the
+        # cluster advertises, not only the addresses a connector names.
         #
         # Empty (the default) means no exemptions: fail closed.
+        #
+        # 🔴 AN ALLOWANCE APPLIES TO EVERY TENANT AND EVERY PATH. There is no per-tenant or
+        # per-connector allowance: an address listed here is reachable by every tenant's
+        # webhooks and connectors alike, not only the one you have in mind.
         #
         # 🔴 Grant /32s. In Kubernetes the smallest CIDR that reaches ONE in-cluster
         # relay is often the whole Service CIDR, and granting that re-opens every private
         # address for every tenant — which is the entire boundary. The usual legitimate
-        # need is a single in-cluster SMTP relay, and a single address expresses it.
+        # needs are a single in-cluster SMTP relay or broker, and a single address
+        # expresses each. Destinations that are private by construction need the same
+        # treatment: Amazon MSK brokers, Amazon MQ, and SNS/SQS reached through an
+        # interface VPC endpoint with private DNS (which makes even the default regional
+        # names resolve privately). An interface endpoint has one address per
+        # availability zone, each needs its own /32, and those addresses can change when
+        # the endpoint is recreated.
         #
         # This cannot express a hostname. The check runs on the address at dial time and
         # a name is not available there; that is deliberate, because a name-based check
@@ -780,14 +792,16 @@ serviceAccount:
   name: ""
   automountToken: false
 
-# NetworkPolicy for the tenant-egress paths a Go dialer cannot reach.
+# NetworkPolicy for outbound-connectors: a SECOND, network-level layer over the tenant
+# egress boundary.
 #
-# Three of the six outbound paths — MQTT, Kafka and AWS SNS/SQS — are built inside an
-# embedded stream engine that exposes no dialer, so the address check that guards the two
-# HTTP paths and SMTP cannot be applied to them. And for Kafka no address check would
-# suffice even with a dialer: the client dials the bootstrap broker and then registers
-# whatever addresses that broker returns in its metadata, so the tenant's own broker picks
-# the second hop. Only the network layer sees that.
+# The boundary itself does not depend on this. Every tenant path — webhooks, httpCall,
+# SMTP, and the MQTT (including ws/wss), Kafka and AWS SNS/SQS connector clients — dials
+# through the service's egress guard, which refuses a private destination at connect time
+# on any cluster, whatever its CNI. For Kafka that includes every broker the cluster
+# advertises in metadata, because the guard is on the client's dialer and sees every
+# connection it makes. This policy is defence in depth: turn it on if your CNI enforces
+# policy and you want the pod bounded even against a defect in that guard.
 #
 # 🔴 OFF BY DEFAULT, AND READ THIS BEFORE TURNING IT ON.
 #
@@ -1339,8 +1353,9 @@ functionalAreas:
     # [..., event-processing, outbound-connectors]); it hard-depends on event-processing
     # (its dispatch producer). It keeps its own envelope-encrypted secret store (ADR-059)
     # for outbound credentials, so the instance root key (infrastructure.secrets) must be
-    # configured. Scales independently of DETECT (outbound I/O vs ingest). In slice C3 it
-    # executes httpCall; the Bento publish tier + versioned Connector entity land in C4.
+    # configured. Scales independently of DETECT (outbound I/O vs ingest). It executes
+    # httpCall webhooks and publish actions (MQTT, Kafka, SNS, SQS) through the versioned
+    # Connector entity, every connection dialled through the egress guard.
     config: {}
       # sendTimeoutMs: 10000        # fallback per-send timeout when an action specifies none
       # maxConcurrentSends: 32      # outbound concurrency ceiling (worker-pool width / back-pressure)

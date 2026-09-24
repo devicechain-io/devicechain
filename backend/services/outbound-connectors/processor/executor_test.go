@@ -17,7 +17,7 @@ import (
 )
 
 func newTestExecutor(store *fakeSecretStore) *Executor {
-	e := NewExecutor(NewSecretResolver(store), nil, loopbackClient(), 10*time.Second)
+	e := NewExecutor(NewSecretResolver(store), nil, loopbackGuard(), 10*time.Second)
 	return e
 }
 
@@ -165,8 +165,8 @@ func TestExecuteHTTPCallClampsForgedTimeout(t *testing.T) {
 	}
 }
 
-// TestExecutePublishUnsupported classifies a publish dispatch as terminal-unsupported in this build
-// (the Bento tier is slice C4).
+// TestExecutePublishUnsupported classifies a publish dispatch as terminal-unsupported when the
+// executor has no connector store to resolve it against.
 func TestExecutePublishUnsupported(t *testing.T) {
 	res := newTestExecutor(&fakeSecretStore{}).Execute(context.Background(),
 		&connectorwire.ConnectorDispatchRequest{Kind: connectorwire.ConnectorKindPublish, Tenant: "acme",
