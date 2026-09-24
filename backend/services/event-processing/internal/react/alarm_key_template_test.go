@@ -32,7 +32,7 @@ func dispatchAlarm(t *testing.T, rule rules.Rule, ev runtime.DerivedEvent) []Ala
 	t.Helper()
 	sink := &fakeAlarmSink{}
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, sink, nil, nil, newFakeMetrics())
-	if out := d.Dispatch(context.Background(), ev); out != Done {
+	if out := d.Dispatch(context.Background(), ev).Outcome; out != Done {
 		t.Fatalf("outcome = %v, want Done", out)
 	}
 	return sink.raised

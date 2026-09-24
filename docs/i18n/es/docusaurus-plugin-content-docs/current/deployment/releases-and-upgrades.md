@@ -1606,7 +1606,9 @@ tiene alertas sobre su stream, lea «Los mensajes abandonados en su último inte
 registran» más abajo: añade tres tipos, un motivo, un stream y dos alertas. Si ejecuta una reserva
 en caliente de `event-processing`, lea «Con una reserva en caliente, solo la réplica que detecta
 despacha acciones». Si enruta o silencia alertas por su nombre, se añaden dos avisos nuevos:
-`RateLimiterOverflowInUse` y `TenantsMeteredAtPlatformDefault`.
+`RateLimiterOverflowInUse` y `TenantsMeteredAtPlatformDefault`. Si filtra los mensajes no entregados
+por motivo, o enruta alertas por su nombre, lea «Las acciones de salida ya no se pierden cuando el
+motor de detección se pone al día».
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1958,6 +1960,29 @@ el techo cuando esas horas retrocedían (un cambio de líder del broker entre se
 no coinciden) o cuando el techo de un inquilino cambiaba a mitad del
 vaciado; esos mensajes se cargan ahora en la última hora que la asignación ya ha visto, lo que puede
 descartar algo más pero nunca admite más.
+
+#### Las acciones de salida ya no se pierden cuando el motor de detección se pone al día
+
+Tras un reinicio, un despliegue o una conmutación por error, el motor de detección procesa la
+telemetría que llegó mientras estaba caído. Las acciones de webhook y de conector de salida de ese
+atraso se cobraban antes contra la tasa de salida del inquilino como si hubieran ocurrido todas a la
+vez, así que la mayoría se descartaban y solo quedaba una métrica como registro. Ahora se miden,
+tanto donde se desencadenan como en el servicio de conectores, según el momento en que la telemetría
+llegó a la plataforma. Un inquilino dentro de su límite no pierde nada en una puesta al día ni se ve
+frenado por ella.
+
+Una acción que sigue por encima del límite se registra como mensaje no entregado con motivo `shed` y
+tipo `detection-action`, hasta aproximadamente un mensaje por segundo por inquilino (60 de golpe) y
+diez por segundo en total. Por encima de eso, las acciones se cuentan y se resumen en un mensaje por
+inquilino y minuto. Cuatro ajustes de `event-processing` regulan el presupuesto:
+`shedLetterPerSecond`, `shedLetterBurst`, `shedLetterGlobalPerSecond` y `shedLetterGlobalBurst`. Se
+añaden dos avisos: `ReactShedLettersOverBudget` y `RateMeteringClockFallback`.
+
+Las detecciones que el motor vuelve a publicar tras un reinicio las reconoce ahora el bus de mensajes
+y se almacenan una sola vez dentro de una ventana de 30 minutos, así que los suscriptores del flujo de
+eventos derivados ven menos duplicados. Cada evento derivado lleva ahora un campo `triggeredAt`. Si
+filtra los mensajes no entregados por motivo, espere mensajes `shed` de tipo `detection-action`. No
+hace falta hacer nada en la actualización.
 
 ### La transición única a la ingesta duradera
 

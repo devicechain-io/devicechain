@@ -1238,12 +1238,22 @@ functionalAreas:
     # effect commits (ack-on-checkpoint), so these bound write-amplification vs the
     # ack/redelivery latency on a crash.
     # --- REACT SOURCE-side outbound egress cost-gate (ADR-060 SD-3): REACT charges the tenant's
-    # outbound budget before publishing a connector-dispatch and DROPS over-quota httpCall/publish
-    # actions at the source (an immediate Allow, never a block), so a runaway rule cannot flood the
+    # outbound budget before publishing a connector-dispatch, metered on the time the triggering
+    # telemetry reached the platform (so a backlog drained after a restart is not mistaken for a
+    # flood; never a block). Over-quota httpCall/publish actions are shed at the source and
+    # dead-lettered with reason shed within a budget, so a runaway rule cannot flood the
     # connector-dispatch stream. Defaults MATCH outbound-connectors' egress ceiling (both ends meter
-    # the same dimension); per-tenant overrides come from user-management. Never unlimited. ---
+    # the same dimension on the same time); per-tenant overrides come from user-management. Never
+    # unlimited. ---
     # outboundMessagesPerSecond: 100  # platform-default source egress rate ceiling (0/unset ⇒ this default)
     # outboundBurst: 200              # platform-default source egress burst
+    # Dead letters for shed actions: a per-tenant budget and one across all tenants. A shed past
+    # either is counted (react_connector_shed_unlettered_total) and summarised in one letter per
+    # tenant per minute. 0/unset ⇒ the default; negative or non-finite fails startup.
+    # shedLetterPerSecond: 1          # per-tenant letters per second
+    # shedLetterBurst: 60             # per-tenant letters at once
+    # shedLetterGlobalPerSecond: 10   # letters per second across all tenants
+    # shedLetterGlobalBurst: 100      # letters at once across all tenants
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
     # GraphQL over the Model Context Protocol. Held back from the `default` profile
@@ -1334,7 +1344,7 @@ functionalAreas:
     config: {}
       # sendTimeoutMs: 10000        # fallback per-send timeout when an action specifies none
       # maxConcurrentSends: 32      # outbound concurrency ceiling (worker-pool width / back-pressure)
-      # --- per-tenant egress rate (ADR-060 SD-3); platform default, per-tenant overrides via user-management ---
+      # --- per-tenant egress rate (ADR-060 SD-3), metered on the same trigger time REACT metered; platform default, per-tenant overrides via user-management ---
       # outboundMessagesPerSecond: 100  # platform-default egress rate ceiling (never unlimited; below ingest)
       # outboundBurst: 200              # platform-default egress burst
       # egressWaitBudgetMs: 5000        # smoothing wait for a token before a shed (bounded < AckWait − max send)

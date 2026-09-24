@@ -71,6 +71,7 @@ func (c *connectorClient) Dispatch(ctx context.Context, req react.ConnectorReque
 		RuleID:         req.RuleID,
 		Edge:           req.Edge,
 		OccurredTime:   req.OccurredTime,
+		TriggeredAt:    req.TriggeredAt,
 		IdempotencyKey: req.Token,
 		Payload:        req.Payload,
 	}

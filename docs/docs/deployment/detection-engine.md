@@ -126,6 +126,15 @@ and a *resolve* that was not dispatched leaves an alarm active that should have 
 Treat a dead letter as something to investigate, not something that will drain on its own.
 :::
 
+An outbound action refused by the tenant's outbound rate is dead-lettered with reason `shed`, within
+a budget. That happens at once rather than after retries, because waiting does not bring a tenant
+back under its ceiling. The rate is metered on the time the triggering telemetry reached the
+platform, so a backlog the engine works through after a restart is charged as it happened rather
+than all at once. Past a per-tenant budget of about one letter a second (60 at once) and ten a
+second in total, shed actions are counted and summarised in one letter per tenant per minute.
+Detections the engine re-publishes after a restart are recognised by the message bus and stored
+once within a 30-minute window, so they are neither dispatched nor charged twice.
+
 A message a service abandons on its last attempt — a pod stopped mid-handling, or a handler
 that ran past its window — is recorded too, with reason `no-outcome`. Such a letter never
 settles a command: the last attempt may have done its work and lost only its acknowledgement.
@@ -343,8 +352,12 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `maxRulesPerTenant` | 500 | Per-tenant rule ceiling. **Measured and reported, not enforced** — see below. |
 | `maxLiveKeysPerTenant` | 1000000 | Per-tenant ceiling on live windows and timers. Also measured, not enforced. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Per-tenant ceiling on readings held inside open windows. Also measured, not enforced. |
-| `outboundMessagesPerSecond` | 100 | Per-tenant rate at which outbound connector actions are dispatched. |
+| `outboundMessagesPerSecond` | 100 | Per-tenant rate at which outbound connector actions are dispatched, metered on the time the triggering telemetry reached the platform. |
 | `outboundBurst` | 200 | Burst allowance for the above. |
+| `shedLetterPerSecond` | 1 | Per-tenant rate at which shed outbound actions are recorded as individual dead letters. |
+| `shedLetterBurst` | 60 | Burst allowance for the above. |
+| `shedLetterGlobalPerSecond` | 10 | The same, across every tenant. Shed actions past either budget are counted and summarised in one dead letter per tenant per minute. |
+| `shedLetterGlobalBurst` | 100 | Burst allowance for the above. |
 
 ### The rule-duration ceiling is enforced
 
@@ -418,7 +431,9 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `ReactPoisonDropping` | Actions are not being dispatched after exhausting their retries — alarms and commands are not happening. The detections are dead-lettered so you can see which, but nothing replays them. Treat as urgent. |
 | `DeadLetterWriteLost` | Something was given up on **and** could not be written to the dead-letter stream. Look at the broker, and at the service's log: a letter the service refused to write lands here too, and so does a dead letter that the dead-letter store or the command writeback ran out of attempts on. |
 | `DeadLetterStoreLosing` | Dead letters reached the stream but could not be written to the store, so they will age out of it unrecorded. Look at the operator database. |
-| `ReactConnectorEgressShedding` | Outbound dispatch is over the tenant's rate limit and is being shed. |
+| `ReactConnectorEgressShedding` | A tenant is over its outbound rate on the timeline its telemetry reached the platform, and its outbound actions are being shed. Each is dead-lettered with reason `shed`, within a budget; read them with `dcctl dead-letters`. A catch-up after a restart does not cause this. |
+| `ReactShedLettersOverBudget` | A tenant is shedding outbound actions faster than they are recorded one by one, so the excess is summarised in one dead letter per tenant per minute. |
+| `RateMeteringClockFallback` | Outbound actions have been metered on broker or arrival time for an hour because they carried no trigger time, so a catch-up can be shed as a flood again. Check that event-processing and outbound-connectors run the same release. A trigger time later than its message's broker time is counted separately, as source `capped`, and does not fire this: that is clock skew between the pod and the broker, not a missing time. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 
 :::warning A halted engine still reports healthy

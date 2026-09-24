@@ -675,6 +675,71 @@ Bento output YAML** before that config is parsed
 narrower than "materialized once" and is still worth having: never logged, never surfaced on the API,
 never on the wire beyond the authenticated outbound call itself.
 
+### 10d. REACT's metering clock
+
+REACT is a durable consumer, so after a restart, rollout or failover it drains every derived event
+that piled up while it was down, back to back. The outbound gate used to charge each connector
+action at **arrival**, so a compliant tenant's whole backlog landed at one instant: the burst went
+out and the rest was shed, acked and gone. Both ends of the outbound dimension now meter one time,
+chosen by one reader.
+
+**The stamp.** DETECT stamps `DerivedEvent.TriggeredAt`
+(`backend/services/event-processing/internal/runtime/derived.go`) as the platform time of the input
+that caused the emission: `triggerTime` (`processor/ResolvedEventsProcessor.go`) takes the lesser of
+the resolved event's `ProcessedTime` and the broker `AppendTime` of its message, whichever are
+non-zero. `drainDetections` stamps every detection drained after `applyResolved` with the time of
+**the message that moved the frontier** — so an Absence for a silent device, fired by another
+device's event, carries that event's time — and `idleAdvance` stamps its detections with the advance
+time. `det.At` and `OccurredTime` are never used: both are device time, and a limiter metered on a
+tenant-chosen time lets the tenant mint tokens. The stamp rides beside the detection in
+`pendingDetection` and is passed to `Publisher.Publish`; `core.Detection` never holds a wall-derived
+value, so the replay-correct engine is untouched. The stamp is not part of the dedup identity or the
+idempotency token.
+
+**The one reader.** `core.MeteringTime` (`backend/core/core/metering_time.go`) returns the stamp when
+it is non-zero and not after the carrying message's `AppendTime`, else that `AppendTime`, else the
+zero time (which every limiter reads as now). REACT's consumer (`handle` in
+`processor/react_dispatcher.go`) normalizes `ev.TriggeredAt` through it before `Dispatch`, so what
+the gate charges (`AllowAt` on the `ConnectorRateGate`) and what rides the wire
+(the `TriggeredAt` field of `ConnectorDispatchRequest`) are the same value; the outbound-connectors consumer runs
+the same function over the wire value and the dispatch message's own `AppendTime` and calls
+the limiter's `WaitAt`. Each fallback is counted on `<area>_rate_clock_fallback_total{source}`
+(`core.NewRateClockFallbacks`): `append` (no stamp), `capped` (a stamp later than the carrying
+message's `AppendTime`, charged at that `AppendTime`) and `now`. `RateMeteringClockFallback` fires
+when `append` or `now` has not stopped for an hour. It does not watch `capped`, because a steady
+`capped` count is clock skew, not a missing stamp: `idleAdvance` stamps the event-processing pod's
+wall clock and the stream leader stores the message a few milliseconds later by its own, so a pod
+clock running ahead of the broker's by more than that gap caps every idle-advance detection while
+the engine is stamping correctly. The same holds at the sink between the derived-events and
+connector-dispatch stream leaders.
+
+**Why that is safe to feed a limiter.** The times are not monotonic — two event-sources pods'
+clocks differ, a replay re-feeds old times, a redelivery arrives behind newer admissions. The core
+limiter's per-bucket mark (`admitTimeLocked` in `backend/core/core/tenant_rate_limiter.go`) charges
+every admission at `min(max(when, mark), now)` and retunes and creates buckets at that time too, so
+a rewind is charged at the mark and never mints. What the mark cannot bound is forgery, which is why
+the stamp is never device-derived. On the sink, `WaitAt` sheds iff the token's delay on the
+trigger timeline exceeds the wall-clock budget left, so a compliant backlog passes at drain speed and
+a flood is shed exactly as a live one would be (`TestTheSinkShedsAFloodAsLive`,
+`TestABacklogDrainDoesNotHoldOtherTenantsWorkers`).
+
+**Replays are not charged twice.** `DerivedEvent.DedupID` is a hash of the detection identity
+(rule, tenant, kind, series, occurred time, edge) and is written as the Nats-Msg-Id; the
+`derived-events` stream declares a 30-minute `DuplicateWindowSeconds`, so a DETECT replay inside it
+is stored once and REACT never sees the duplicate (`TestAReplayedDetectionIsStoredOnceAndNeverLettered`).
+A replay older than the window re-publishes; the duplicates are charged at the mark, may be shed,
+and are lettered like any other shed.
+
+**What a shed leaves behind.** `Dispatch` returns a `Result` whose `Shed` lists every shed action by
+kind and idempotency token. On a Done outcome only — a Retry re-runs the event, sheds included — the
+`shedLetterer` (`processor/shed_letters.go`) writes each with the dead-letter sink's `WriteForPart`, reason
+`shed`, keyed on the token so two sheds of one event are two letters and neither collides with the
+whole-message id the exhausted arm and the max-delivery recorder share. Letters are budgeted per
+tenant (a core limiter over a static ceiling, `shedLetterPerSecond`/`shedLetterBurst`) and globally
+(`shedLetterGlobalPerSecond`/`shedLetterGlobalBurst`); a shed over either is counted on
+`react_connector_shed_unlettered_total` and folded into one summary letter per tenant per minute,
+flushed again on `Stop`.
+
 ## 11. Delivery semantics — the question an operator actually asks
 
 **The telemetry path is at-least-once end to end, and outbound-connectors is the only REACT-side

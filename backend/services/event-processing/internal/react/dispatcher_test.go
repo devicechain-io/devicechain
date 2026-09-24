@@ -94,7 +94,7 @@ func TestDispatchSendCommand(t *testing.T) {
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", `{"mode":"eco"}`), found: true}, sink, nil, nil, nil, m)
 
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.sent) != 1 {
@@ -150,7 +150,7 @@ func TestDispatchOrphanRule(t *testing.T) {
 	sink := &fakeSink{}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{found: false}, sink, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("orphan must be Done, got %v", out)
 	}
 	if len(sink.sent) != 0 || m.orphan != 1 {
@@ -161,7 +161,7 @@ func TestDispatchOrphanRule(t *testing.T) {
 // TestDispatchResolverErrorRetries proves a transient store failure is a Retry (no drop).
 func TestDispatchResolverErrorRetries(t *testing.T) {
 	d := NewDispatcher(fakeResolver{err: errors.New("db down")}, &fakeSink{}, nil, nil, nil, newFakeMetrics())
-	if out := d.Dispatch(context.Background(), evt()); out != Retry {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Retry {
 		t.Fatalf("a resolver error must Retry, got %v", out)
 	}
 }
@@ -171,7 +171,7 @@ func TestDispatchSinkErrorRetries(t *testing.T) {
 	sink := &fakeSink{failFirst: 1}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, sink, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Retry {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Retry {
 		t.Fatalf("a sink error must Retry, got %v", out)
 	}
 	if m.dispatched["sendCommand"] != 0 {
@@ -179,7 +179,7 @@ func TestDispatchSinkErrorRetries(t *testing.T) {
 	}
 	// A retry (redelivery) succeeds and dispatches with the SAME token.
 	first := ""
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("retry should succeed, got %v", out)
 	}
 	first = sink.sent[0].Token
@@ -204,7 +204,7 @@ func TestDispatchRaiseAlarmNotEnabled(t *testing.T) {
 	sink := &fakeSink{}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, sink, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("raiseAlarm-only rule must be Done, got %v", out)
 	}
 	if len(sink.sent) != 0 || m.notEnabled["raiseAlarm"] != 1 {
@@ -219,7 +219,7 @@ func TestDispatchRaiseAlarmEnabled(t *testing.T) {
 	alarms := &fakeAlarmSink{}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, alarms, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(alarms.raised) != 1 {
@@ -290,7 +290,7 @@ func TestDispatchResolvedEdgeClearsAlarm(t *testing.T) {
 	alarms := &fakeAlarmSink{}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule("over-temp"), found: true}, nil, alarms, nil, nil, m)
-	if out := d.Dispatch(context.Background(), resolvedEvt()); out != Done {
+	if out := d.Dispatch(context.Background(), resolvedEvt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(alarms.raised) != 1 {
@@ -319,7 +319,7 @@ func TestDispatchContributorStableAcrossVersions(t *testing.T) {
 		ev := runtime.DerivedEvent{RuleID: composedID, Tenant: "acme", Kind: "threshold", Series: "device-1",
 			Edge: edge, OccurredTime: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)}
 		d := NewDispatcher(fakeResolver{rule: rule, found: true}, nil, alarms, nil, nil, newFakeMetrics())
-		if out := d.Dispatch(context.Background(), ev); out != Done {
+		if out := d.Dispatch(context.Background(), ev).Outcome; out != Done {
 			t.Fatalf("want Done, got %v", out)
 		}
 		return alarms.raised[0]
@@ -341,7 +341,7 @@ func TestDispatchResolvedEdgeSkipsSendCommand(t *testing.T) {
 	sink := &fakeSink{}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", `{"mode":"eco"}`), found: true}, sink, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), resolvedEvt()); out != Done {
+	if out := d.Dispatch(context.Background(), resolvedEvt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if len(sink.sent) != 0 {
@@ -357,7 +357,7 @@ func TestDispatchResolvedEdgeSkipsSendCommand(t *testing.T) {
 func TestDispatchResolvedRaiseAlarmNotEnabled(t *testing.T) {
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), resolvedEvt()); out != Done {
+	if out := d.Dispatch(context.Background(), resolvedEvt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if m.notEnabled["clearAlarm"] != 1 {
@@ -368,7 +368,7 @@ func TestDispatchResolvedRaiseAlarmNotEnabled(t *testing.T) {
 // TestDispatchRaiseAlarmSinkErrorRetries proves a raise-alarm publish failure is a Retry.
 func TestDispatchRaiseAlarmSinkErrorRetries(t *testing.T) {
 	d := NewDispatcher(fakeResolver{rule: raiseAlarmRule(""), found: true}, nil, &fakeAlarmSink{fail: true}, nil, nil, newFakeMetrics())
-	if out := d.Dispatch(context.Background(), evt()); out != Retry {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Retry {
 		t.Fatalf("a raise-alarm failure must Retry, got %v", out)
 	}
 }
@@ -378,7 +378,7 @@ func TestDispatchRaiseAlarmSinkErrorRetries(t *testing.T) {
 func TestDispatchSendCommandDisabled(t *testing.T) {
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: sendCmdRule("setMode", ""), found: true}, nil, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("want Done, got %v", out)
 	}
 	if m.notEnabled["sendCommand"] != 1 || m.dispatched["sendCommand"] != 0 {
@@ -401,11 +401,11 @@ func TestDispatchMultiActionPartialRetry(t *testing.T) {
 	failing := &failOnCallSink{failCall: 2}
 	m := newFakeMetrics()
 	d := NewDispatcher(fakeResolver{rule: rule, found: true}, failing, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()); out != Retry {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Retry {
 		t.Fatalf("a failed 2nd action must Retry the whole event, got %v", out)
 	}
 	// Redelivery: action 0 re-sends (same token), action 1 now succeeds.
-	if out := d.Dispatch(context.Background(), evt()); out != Done {
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("redelivery should complete, got %v", out)
 	}
 	actionA := rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "a"}}

@@ -398,7 +398,12 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
 		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
-		DeadLetters.NewSink(deadWriter), ReactMetrics)
+		DeadLetters.NewSink(deadWriter), processor.ShedLetterBudget{
+			PerTenantPerSecond: Configuration.ShedLetterPerSecond,
+			PerTenantBurst:     Configuration.ShedLetterBurst,
+			GlobalPerSecond:    Configuration.ShedLetterGlobalPerSecond,
+			GlobalBurst:        Configuration.ShedLetterGlobalBurst,
+		}, ReactMetrics)
 	return nil
 }
 
@@ -440,8 +445,9 @@ func newReactReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error
 // SEPARATE, narrower scope than the command:write token the send-command sink uses) and cached,
 // failing open to the platform default; otherwise every tenant is metered at the platform default.
 // Either way the ceiling is a real limit — never unlimited — since ApplyDefaults/Validate guarantee a
-// positive platform default. Mirrors outbound-connectors' buildEgressLimiter; the source Allow-drop
-// here and that service's bounded egress Wait charge the SAME outbound dimension at both ends.
+// positive platform default. Mirrors outbound-connectors' buildEgressLimiter; the source shed
+// here and that service's bounded egress wait charge the SAME outbound dimension, on the SAME
+// trigger time (core.MeteringTime), at both ends.
 //
 // unresolved counts admissions made at the platform default for want of a tenant's own ceiling
 // (governance.NewUnresolvedAdmissions). It is built once per process, in buildMetrics, because

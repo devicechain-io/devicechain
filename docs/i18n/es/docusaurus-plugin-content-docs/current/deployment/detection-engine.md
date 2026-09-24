@@ -141,6 +141,16 @@ haberse limpiado. Trate un mensaje de esta cola como algo que investigar, no com
 vaciará por sí solo.
 :::
 
+Una acción de salida que la tasa de salida del inquilino rechaza se envía a la cola de mensajes no
+entregados con motivo `shed`, dentro de un presupuesto. Ocurre de inmediato y no tras reintentos,
+porque esperar no devuelve a un inquilino por debajo de su techo. La tasa se mide según el momento en
+que la telemetría que desencadenó la acción llegó a la plataforma, de modo que un atraso que el motor
+procesa tras un reinicio se cobra como ocurrió y no todo de golpe. Por encima de un presupuesto por
+inquilino de aproximadamente un mensaje por segundo (60 de golpe) y diez por segundo en total, las
+acciones descartadas se cuentan y se resumen en un mensaje por inquilino y minuto. Las detecciones
+que el motor vuelve a publicar tras un reinicio las reconoce el bus de mensajes y se almacenan una
+sola vez dentro de una ventana de 30 minutos, así que no se despachan ni se cobran dos veces.
+
 Un mensaje que un servicio abandona en su último intento (un pod detenido a mitad del
 procesamiento, o un manejador que se pasó de su ventana) también queda registrado, con el motivo
 `no-outcome`. Ese registro nunca liquida un comando: el último intento pudo haber hecho su trabajo
@@ -380,8 +390,12 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `maxRulesPerTenant` | 500 | Techo de reglas por inquilino. **Se mide y se reporta, no se aplica**; vea más abajo. |
 | `maxLiveKeysPerTenant` | 1000000 | Techo por inquilino de ventanas y temporizadores vivos. También se mide, no se aplica. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Techo por inquilino de lecturas retenidas dentro de las ventanas abiertas. También se mide, no se aplica. |
-| `outboundMessagesPerSecond` | 100 | Tasa por inquilino a la que se despachan las acciones de conector de salida. |
+| `outboundMessagesPerSecond` | 100 | Tasa por inquilino a la que se despachan las acciones de conector de salida, medida según el momento en que la telemetría que las desencadenó llegó a la plataforma. |
 | `outboundBurst` | 200 | Margen de ráfaga para lo anterior. |
+| `shedLetterPerSecond` | 1 | Tasa por inquilino a la que las acciones de salida descartadas se registran como mensajes no entregados individuales. |
+| `shedLetterBurst` | 60 | Margen de ráfaga para lo anterior. |
+| `shedLetterGlobalPerSecond` | 10 | Lo mismo, para todos los inquilinos. Las acciones descartadas por encima de cualquiera de los dos presupuestos se cuentan y se resumen en un mensaje no entregado por inquilino y minuto. |
+| `shedLetterGlobalBurst` | 100 | Margen de ráfaga para lo anterior. |
 
 ### El techo de duración de regla sí se aplica
 
@@ -460,7 +474,9 @@ exigiría recorrerlo entero en cada punto de control.
 | `ReactPoisonDropping` | No se están despachando acciones tras agotar sus reintentos: las alarmas y los comandos no están ocurriendo. Las detecciones se envían a la cola de mensajes no entregados para que pueda ver cuáles, pero nada las reprocesa. Trátelo como urgente. |
 | `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker y el registro del servicio: una carta que el propio servicio se negó a escribir también termina aquí, igual que un mensaje de esa cola en el que el almacén de mensajes no entregados o la reconciliación de comandos agotó sus intentos. |
 | `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revise la base de datos del operador. |
-| `ReactConnectorEgressShedding` | El despacho de salida supera el límite de tasa del inquilino y se está descartando. |
+| `ReactConnectorEgressShedding` | Un inquilino supera su tasa de salida en la línea de tiempo en que su telemetría llegó a la plataforma, y sus acciones de salida se están descartando. Cada una se envía a la cola de mensajes no entregados con motivo `shed`, dentro de un presupuesto; léalas con `dcctl dead-letters`. Una puesta al día tras un reinicio no causa esta alerta. |
+| `ReactShedLettersOverBudget` | Un inquilino descarta acciones de salida más rápido de lo que se registran una a una, así que el exceso se resume en un mensaje no entregado por inquilino y minuto. |
+| `RateMeteringClockFallback` | Durante una hora, las acciones de salida se han medido según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día puede volver a descartarse como una inundación. Compruebe que event-processing y outbound-connectors ejecutan la misma versión. Una hora de desencadenamiento posterior a la hora del bróker de su mensaje se cuenta aparte, con el origen `capped`, y no dispara este aviso: es un desfase de reloj entre el pod y el bróker, no una hora que falte. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 
 :::warning Un motor detenido sigue informando que está sano

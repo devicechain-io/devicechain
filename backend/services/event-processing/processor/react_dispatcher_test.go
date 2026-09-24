@@ -263,7 +263,7 @@ func reactDispatcherWithRegistry(resolver react.RuleResolver, sink react.Command
 func constructedReactDispatcher(ms *core.Microservice, resolver react.RuleResolver,
 	sink react.CommandSink, dead deadletter.Writer) *ReactDispatcher {
 	rd := NewReactDispatcher(ms, nil, resolver, sink, nil, nil, nil,
-		deadletter.NewProducer(ms).NewSink(dead), NewReactMetrics(ms))
+		deadletter.NewProducer(ms).NewSink(dead), testShedBudget, NewReactMetrics(ms))
 	rd.procCtx = context.Background()
 	return rd
 }

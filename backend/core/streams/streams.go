@@ -519,7 +519,21 @@ var All = []Stream{
 
 	// One message per detection, and a subscribe-able product in its own right
 	// (ADR-037): clients live-subscribe by tenant like any other event feed.
-	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
+	//
+	// The dedup window is what makes a DETECT replay cheap. After a restart DETECT replays
+	// resolved-events from its last checkpoint and re-publishes every detection it had
+	// already published past it; each carries a Nats-Msg-Id derived from the detection's
+	// identity (runtime.DerivedEvent.DedupID), so the broker stores it once. Without the
+	// window every re-published detection reached REACT again and charged the tenant's
+	// outbound ceiling a second time — shedding, and dead-lettering, actions whose originals
+	// had already been delivered. It is sized like inbound-events' to a bad rollout; a replay
+	// older than it re-publishes duplicates. A sendCommand duplicate is still collapsed by its
+	// idempotency key at the command sink. A connector duplicate is NOT: REACT's outbound gate
+	// charges it again, and if admitted it is SENT again. outbound-connectors forwards the
+	// idempotency key to the destination but does not deduplicate on it, so collapsing it is
+	// the destination's job.
+	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: 1800,
+		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
 	// SHARED/SERVER, DOUBLE/LONG) is upserted or deleted, so a DYNAMIC detection

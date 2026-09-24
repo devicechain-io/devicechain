@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
@@ -406,7 +407,7 @@ type ResolvedEventsProcessor struct {
 	// else reads or writes them.
 	engine         *detectcore.Engine
 	pendingAcks    []messaging.Message
-	pendingDets    []detectcore.Detection
+	pendingDets    []pendingDetection
 	lastCheckpoint time.Time
 	// lastBudgetSample is the wall-clock time of the most recent per-tenant state-budget
 	// measurement (slice 6c). The budget is sampled from the ticker on its OWN cadence, decoupled
@@ -1695,7 +1696,7 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// the engine so the counter is the only place the number lives — a store-and-forward fleet whose
 	// windowed rules stop firing shows up as a rising detect_late_samples_total instead of silence.
 	rp.metrics.recordLateSamples(rp.engine.DrainLateSamples())
-	rp.drainDetections()
+	rp.drainDetections(triggerTime(msg, event))
 	if rp.engine.LastSeq() > prev || descoped {
 		rp.dirty = true
 		rp.metrics.recordApplied()
@@ -1704,16 +1705,58 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	return false
 }
 
+// pendingDetection is a drained detection awaiting publish, with the platform time of the input
+// that caused it to be emitted (runtime.DerivedEvent.TriggeredAt). The time rides beside the
+// detection rather than inside it because core.Detection is the replay-correct engine's output and
+// must never hold a wall-derived value.
+type pendingDetection struct {
+	detectcore.Detection
+	triggeredAt time.Time
+}
+
+// triggerTime is the platform time of the resolved event msg carries: the lesser of the event's
+// ProcessedTime (stamped by the ingest path when it decoded the event) and msg.AppendTime (the
+// broker time the resolved event was stored), taking whichever are non-zero, or zero when neither
+// is. The lesser, because each is a platform clock and either may run ahead of the other; the
+// earlier one is the closer bound on when the telemetry reached the platform.
+//
+// 🔴 NEVER the event's OccurredTime, and never a detection's At: both are DEVICE time, and REACT's
+// outbound gate meters on this value — a tenant that chooses the time it is metered on can mint
+// tokens (core.TenantRateLimiter.AllowAt).
+func triggerTime(msg messaging.Message, ev *dmmodel.ResolvedEvent) time.Time {
+	processed := time.Time{}
+	if ev != nil {
+		processed = ev.ProcessedTime
+	}
+	switch {
+	case processed.IsZero():
+		return msg.AppendTime
+	case msg.AppendTime.IsZero() || processed.Before(msg.AppendTime):
+		return processed
+	default:
+		return msg.AppendTime
+	}
+}
+
 // drainDetections moves the engine's emitted detections into the pending-detections buffer,
 // which the next checkpoint publishes BEFORE it commits/acks past the producing message
 // (deliver-before-checkpoint, see checkpoint). Draining marks the loop dirty so a checkpoint
 // is guaranteed to fire and flush them even if the engine's serializable state did not
 // otherwise change (e.g. a pure Threshold rule that emits without retaining state).
-func (rp *ResolvedEventsProcessor) drainDetections() {
-	if dets := rp.engine.Drain(); len(dets) > 0 {
-		rp.pendingDets = append(rp.pendingDets, dets...)
+//
+// Every drained detection is stamped with triggeredAt: the time of the message that moved the
+// frontier (applyResolved), or the advance's own time (idleAdvance). A watermark-fired detection
+// — one series' Absence fired by another series' event — is therefore stamped with the message
+// that fired it, which is the input that caused the emission, not the silent series' last event.
+func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time) int {
+	dets := rp.engine.Drain()
+	for _, d := range dets {
+		rp.pendingDets = append(rp.pendingDets, pendingDetection{Detection: d, triggeredAt: triggeredAt})
+	}
+	if len(dets) > 0 {
 		rp.dirty = true
 	}
+	return len(dets)
 }
 
 // consumerBacklog reports the resolved-events durable consumer's UNDELIVERED (pending) and
@@ -1833,9 +1876,8 @@ func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Tim
 		return
 	}
 	changed := rp.engine.Advance(now)
-	if dets := rp.engine.Drain(); len(dets) > 0 {
-		rp.pendingDets = append(rp.pendingDets, dets...)
-		rp.metrics.recordIdleAdvance(len(dets))
+	if n := rp.drainDetections(now); n > 0 {
+		rp.metrics.recordIdleAdvance(n)
 	}
 	if changed {
 		rp.dirty = true
@@ -2534,7 +2576,7 @@ func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
 	rp.dropSupersededDetections()
 	i := 0
 	for i < len(rp.pendingDets) {
-		if err := rp.publisher.Publish(ctx, rp.pendingDets[i]); err != nil {
+		if err := rp.publisher.Publish(ctx, rp.pendingDets[i].Detection, rp.pendingDets[i].triggeredAt); err != nil {
 			log.Error().Err(err).Msg("Failed to publish a derived event; deferring checkpoint (will retry).")
 			rp.pendingDets = rp.pendingDets[i:]
 			return false

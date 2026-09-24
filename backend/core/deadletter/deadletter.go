@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -584,10 +585,36 @@ func (s *Sink) Write(ctx context.Context, e Envelope) error {
 // kind), a message with no Origin (not from a durable reader, so there is nothing to derive
 // from), and a message from a stream declared streams.NotLettered.
 func (s *Sink) WriteFor(ctx context.Context, msg messaging.Message, e Envelope) error {
+	return s.writeFor(ctx, msg, e, nil)
+}
+
+// WriteForPart is WriteFor for a consumed message that yields several INDEPENDENT letters —
+// REACT sheds two connector actions of one derived event, say, and each is its own record.
+// Everything WriteFor fills is filled the same way, and its refusals are identical; the one
+// difference is the dedup id, OriginID(msg)+".part."+part ("" when OriginID is ""). So two
+// parts of one message are two letters, a redelivery of the same part collapses onto the
+// first, and neither collides with the plain OriginID the max-delivery recorder and an
+// in-handler arm share — a part letter never suppresses the letter about the whole message,
+// nor is suppressed by it.
+//
+// 🔴 AN EMPTY part, OR ONE CONTAINING WHITESPACE, IS REFUSED and counted as a loss, like
+// every other refusal here. An empty part would publish the id "<origin>.part." for every
+// part, collapsing distinct letters into one — a silent loss on the dedup window rather than
+// a harmless duplicate.
+func (s *Sink) WriteForPart(ctx context.Context, msg messaging.Message, part string, e Envelope) error {
+	return s.writeFor(ctx, msg, e, &part)
+}
+
+// writeFor is the one derivation behind WriteFor and WriteForPart. part is nil for a letter
+// about the whole message.
+func (s *Sink) writeFor(ctx context.Context, msg messaging.Message, e Envelope, part *string) error {
 	o := msg.Origin()
 	var refusal error
 	kind := streams.DeadLetterKindFor(o.Suffix)
 	switch {
+	case part != nil && (*part == "" || strings.IndexFunc(*part, unicode.IsSpace) >= 0):
+		refusal = fmt.Errorf("the letter part %q is empty or contains whitespace, so it cannot tell "+
+			"one part of the message from another", *part)
 	case e.Kind != "":
 		refusal = fmt.Errorf("the envelope presets kind %q; WriteFor derives it from the stream", e.Kind)
 	case kind == "":
@@ -607,7 +634,11 @@ func (s *Sink) WriteFor(ctx context.Context, msg messaging.Message, e Envelope) 
 	e.Sequence = o.Seq
 	e.Attempts = msg.NumDelivered
 	e.Correlation = msg.CorrelationID()
-	return s.write(ctx, e, OriginID(msg))
+	id := OriginID(msg)
+	if part != nil && id != "" {
+		id += ".part." + *part
+	}
+	return s.write(ctx, e, id)
 }
 
 // OriginID is the dedup id of a letter about msg: "mdl.<stream>.<consumer>.<seq>" from its

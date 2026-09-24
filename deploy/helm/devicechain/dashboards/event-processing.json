@@ -894,7 +894,7 @@
    "id": 17,
    "type": "timeseries",
    "title": "Dispatch faults",
-   "description": "Recognized-but-inert actions, derived events whose rule was gone, events dropped after the redelivery cap (the closest thing to a dead-letter signal), and connector actions shed at the source for being over a tenant's outbound egress quota (ADR-060 SD-3). Poison-dropped rising is a REACT-sink outage; egress-shed rising is a tenant over its outbound quota (a source shed destroys the action with the shed counter as its only evidence).",
+   "description": "Recognized-but-inert actions, derived events whose rule was gone, events dropped after the redelivery cap, and connector actions shed at the source for being over a tenant's outbound egress quota on the timeline its telemetry reached the platform (ADR-060 SD-3). Poison-dropped rising is a REACT-sink outage; egress-shed rising is a tenant over its outbound quota. Each shed is dead-lettered with reason shed within a budget (shed-lettered); past the budget it is counted and summarised once per tenant per minute (shed-unlettered). A clock fallback is a dispatch metered on broker or arrival time because it carried no trigger time, in REACT or in the connectors service: sustained, a catch-up can be shed as a flood again.",
    "gridPos": {
     "h": 8,
     "w": 12,
@@ -941,6 +941,42 @@
      },
      "expr": "sum by (action) (rate(devicechain_eventprocessing_react_connector_egress_shed_total{namespace=\"$namespace\"}[5m]))",
      "legendFormat": "egress-shed: {{action}}"
+    },
+    {
+     "refId": "E",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (action) (rate(devicechain_eventprocessing_react_connector_shed_dead_lettered_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "shed-lettered: {{action}}"
+    },
+    {
+     "refId": "F",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (action) (rate(devicechain_eventprocessing_react_connector_shed_unlettered_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "shed-unlettered: {{action}}"
+    },
+    {
+     "refId": "G",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (source) (rate(devicechain_eventprocessing_rate_clock_fallback_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "REACT clock fallback: {{source}}"
+    },
+    {
+     "refId": "H",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (source) (rate(devicechain_outboundconnectors_rate_clock_fallback_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "connectors clock fallback: {{source}}"
     }
    ],
    "fieldConfig": {
