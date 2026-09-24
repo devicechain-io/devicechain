@@ -2084,10 +2084,10 @@ What changes that you can see:
   later than when the command was first published.
 - **`lwm2m-ingest` refuses to start without `infrastructure.commandDelivery`** whenever it has device
   identities to serve. The chart always sets it, so only a hand-built configuration is affected.
-- **Metrics.** `lwm2m-ingest` adds `commands_stale_dispatch_total` (deliveries discarded because the
+- **Metrics.** `lwm2m-ingest` adds `devicechain_lwm2mingest_commands_stale_dispatch_total` (deliveries discarded because the
   platform had already moved on: a duplicate actuation avoided, not a fault) and
-  `command_live_claim_errors_total` (commands not carried out because command-delivery could not
-  confirm them). `command_drain_dedup_total` is removed.
+  `devicechain_lwm2mingest_command_live_claim_errors_total` (commands not carried out because command-delivery could not
+  confirm them). `devicechain_lwm2mingest_command_drain_dedup_total` is removed.
 - **During the upgrade itself,** a new `lwm2m-ingest` cannot confirm commands with a command-delivery
   that is still on the previous version. An LwM2M command issued in that window can be delayed by
   several minutes. If it runs out of retries before both services are upgraded, it is re-armed and

@@ -1659,23 +1659,22 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 // envelope's dispatch (ConfirmDispatch) before actuating it, so neither route to a
 // device rests on a per-pod cache.
 //
-// 🔴 BE PRECISE ABOUT WHAT THE CLAIM DOES AND DOES NOT CLOSE. It is structural
-// against a LATER sweep tick: once the row leaves the dispatchable set, no
-// subsequent PendingCommands read can return it. It is NOT structural against the
-// tick already in flight. The sweep SELECTs its batch and then publishes each row
-// in a loop, re-checking nothing in between, so a claim that lands after that
-// SELECT does not stop the publish that follows it — and the sweep's own MarkSent
-// then matches zero rows and is treated as a benign race. What stands between the
-// two dispatches in that window is the live transport's ConfirmDispatch: the
-// published envelope names a nonce the row is no longer on once another claim has
-// moved it, so the late copy is refused rather than actuated.
+// 🔴 BE PRECISE ABOUT WHAT THE CLAIM DOES AND DOES NOT CLOSE. Two dispatchers can never
+// both win the SAME claim: the sweep (deliverCommand) and this drain each run one
+// conditional UPDATE predicated on a claimable status, and the sweep builds and publishes
+// its envelope only AFTER its own claim returns true. A sweep that SELECTed a row the drain
+// then claimed finds its MarkSent matching zero rows, counts a lost claim and publishes
+// nothing. There is no window between the sweep's SELECT and its publish for a second copy
+// to escape through.
 //
-// 🔑 THE SWEEP NOW CLAIMS BEFORE IT PUBLISHES, which is what closes the LATER-tick
-// half of this properly rather than by the two paths happening to select disjoint
-// sets — they no longer do, since the presence gate produces held rows and the
-// reconciler returns them to QUEUED. What remains open is only the in-flight tick
-// described above, and it is narrow: both dispatchers claim first, so the loser
-// declines; the residue is a publish already in progress when the claim lands.
+// What the claim does NOT close is a row claimed TWICE over time. A claim ends when
+// something takes the row back out of SENT — a park (ParkClaim) or the stranded-SENT pass —
+// and the row is then claimable again, while the envelope from the first claim may still be
+// undelivered or in redelivery. That older envelope names the first claim's nonce. What
+// keeps it from actuating the device a second time is the live transport's
+// ConfirmDispatch: the row no longer carries that nonce, so the late copy is refused rather
+// than actuated. A transport that actuated envelopes without confirming them would reopen
+// exactly this.
 //
 // It reports whether THIS call performed the transition. RowsAffected==0 means
 // the row was not dispatchable — already sent by the sweep, already answered, or

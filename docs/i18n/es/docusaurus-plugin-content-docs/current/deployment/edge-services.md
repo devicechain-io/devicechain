@@ -615,6 +615,8 @@ rasparla.
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta. |
 | `shadows_reconstructed_total` | Presencia reconstruida tras un cambio de liderazgo. Un pico es la huella de un relevo. |
 | `commands_failed_total` / `commands_not_served_total` | Comandos descendentes que no llegaron a destino. |
+| `command_live_claim_errors_total` | Comandos **no llevados a cabo** porque command-delivery no pudo confirmarlos. Cada comando se confirma con command-delivery inmediatamente antes de llegar al dispositivo, y sin esa confirmación nunca se envía. Una tasa sostenida significa que ningún comando LwM2M está llegando a su dispositivo: **es la señal sobre la que alertar.** Los comandos se reintentan, no se pierden. |
+| `commands_stale_dispatch_total` | Entregas descartadas porque la plataforma ya había rearmado o reenviado el comando. **No es un fallo**: cada una es una actuación duplicada que no ocurrió. Es de esperar que suba tras una caída o un relevo. |
 
 **Agente de borde** (`devicechain_edge_`):
 

@@ -2222,10 +2222,10 @@ Lo que cambia y puedes ver:
 - **`lwm2m-ingest` se niega a arrancar sin `infrastructure.commandDelivery`** siempre que tenga
   identidades de dispositivo que atender. El chart siempre lo define, así que solo afecta a una
   configuración hecha a mano.
-- **Métricas.** `lwm2m-ingest` añade `commands_stale_dispatch_total` (entregas descartadas porque
+- **Métricas.** `lwm2m-ingest` añade `devicechain_lwm2mingest_commands_stale_dispatch_total` (entregas descartadas porque
   la plataforma ya había avanzado: una actuación duplicada evitada, no un fallo) y
-  `command_live_claim_errors_total` (comandos no llevados a cabo porque command-delivery no pudo
-  confirmarlos). Se elimina `command_drain_dedup_total`.
+  `devicechain_lwm2mingest_command_live_claim_errors_total` (comandos no llevados a cabo porque command-delivery no pudo
+  confirmarlos). Se elimina `devicechain_lwm2mingest_command_drain_dedup_total`.
 - **Durante la propia actualización,** un `lwm2m-ingest` nuevo no puede confirmar comandos con un
   command-delivery que todavía está en la versión anterior. Un comando LwM2M emitido en esa
   ventana puede retrasarse varios minutos. Si agota sus reintentos antes de que ambos servicios

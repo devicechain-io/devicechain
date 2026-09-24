@@ -740,6 +740,13 @@ const parkConfirmedTimeout = 5 * time.Second
 // was evicted in between. It quotes the CONFIRMED nonce — the envelope's no longer matches the
 // row. It is best effort: if it fails, the row stays SENT on a dispatch nobody holds and the
 // stranded-SENT pass re-arms it once its grace has passed.
+//
+// 🔑 IT CAN DELAY THE HANDOFF BY UP TO parkConfirmedTimeout. It runs synchronously on the
+// evicted term's shard worker; Run waits for its workers before returning, and the term's
+// unwind in main.go waits for Run (dispatcherDone) before it releases the lease. So a slow or
+// unreachable command-delivery holds the lease this long past the eviction before the next
+// leader can take it. It is a rare path (an eviction landing between a confirmation and its op),
+// and the bound is what keeps it a delay rather than a stall.
 func (d *Dispatcher) parkConfirmed(w work, nonce string) {
 	if d.parker == nil {
 		return

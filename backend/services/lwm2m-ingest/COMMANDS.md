@@ -139,6 +139,12 @@ nonce alone would match a `PARKED` row and actuate a command the drain is also a
 the unacked message redelivers, a later command for the same device can be confirmed and actuated
 first. The per-device gate that closes this belongs with the full-shard handling.
 
+⚠️ **The confirmation's latency cost is UNMEASURED.** Every live command now makes one extra
+`command-delivery` GraphQL round trip, plus one `UPDATE`, before its CoAP op — and it runs serially
+on the device's shard worker, so it also delays the commands queued behind it on that shard. No
+number is claimed here because none has been taken; it belongs to the next measurement pass
+(per-command confirm latency, and shard throughput with and without it).
+
 There is no per-pod dedup cache any more. It used to sit beside the claims as an optimization; with
 every route to a device claimed on its row it guarded nothing, and it said nothing about another
 replica or about this pod after a restart in any case.

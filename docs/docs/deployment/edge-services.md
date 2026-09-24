@@ -569,6 +569,8 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling. |
 | `shadows_reconstructed_total` | Presence rebuilt after a leadership change. A spike is the fingerprint of a failover. |
 | `commands_failed_total` / `commands_not_served_total` | Downlink commands that did not land. |
+| `command_live_claim_errors_total` | Commands **not carried out** because command-delivery could not confirm them. Each command is confirmed with command-delivery immediately before it reaches the device, and without that confirmation it is never sent. A sustained rate means no LwM2M command is reaching its device: **this is the one to alert on.** The commands are retried, not lost. |
+| `commands_stale_dispatch_total` | Deliveries discarded because the platform had already re-armed or re-sent the command. **Not a fault**: each one is a duplicate actuation that did not happen. Expect it to rise after an outage or a failover. |
 
 **Edge agent** (`devicechain_edge_`):
 
