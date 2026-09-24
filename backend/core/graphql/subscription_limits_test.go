@@ -221,7 +221,6 @@ func TestSubscriptionRejectsQueriesAndMutations(t *testing.T) {
 		{"mutation", "mutation { doIt }", ""},
 		{"selected-mutation", "subscription S { ticks } mutation M { doIt }", "M"},
 		{"mutation-after-a-comment", "# subscription { ticks }\nmutation { doIt }", ""},
-		{"unclassifiable", "query { hello", ""},
 	}
 	for _, tc := range refused {
 		writeMsg(t, conn, namedSubscribeMsg(tc.id, tc.query, tc.operationName))
@@ -241,6 +240,81 @@ func TestSubscriptionRejectsQueriesAndMutations(t *testing.T) {
 	assert.Equal(t, "sub", msg.ID)
 	assert.Equal(t, 1.0, nextData(t, msg)["ticks"])
 	assert.Equal(t, int64(0), res.mutations.Load())
+}
+
+// A document the gate cannot read is refused with the reader's own syntax error, not
+// the subscriptions-only message: that message tells the client to send the operation
+// over HTTP, which is false advice for a subscription carrying a `//` comment. The
+// refusal is an `error` frame for that operation alone; the socket stays open and the
+// next subscription on it streams.
+func TestSubscriptionRefusesAnUnreadableDocumentWithItsSyntaxError(t *testing.T) {
+	_, res, url := serveLimits(t, nil)
+	conn := dialInit(t, url, nil)
+
+	unreadable := []struct{ id, query, operationName, reason string }{
+		{"go-comment", "// x\nsubscription { ticks }", "", "comment is not accepted"},
+		{"escaped-block-quote", `subscription { ticks } """x\"""`, "", `closing """ follows a backslash`},
+		{"unterminated", "query { hello", "", "syntax error"},
+		// graphql-go requires at least one selection; the old top-level walk did not.
+		{"empty-selection", "subscription { }", "", "syntax error"},
+		{"no-such-operation", "subscription S { ticks }", "T", `no operation is named "T"`},
+	}
+	for _, tc := range unreadable {
+		writeMsg(t, conn, namedSubscribeMsg(tc.id, tc.query, tc.operationName))
+		msg := readMsg(t, conn)
+		require.Equal(t, tc.id, msg.ID, "%s: frame for the wrong operation", tc.id)
+		require.Equal(t, msgError, msg.Type, "%s: got %s %s", tc.id, msg.Type, msg.Payload)
+		msgs := errorMessages(t, msg)
+		require.Len(t, msgs, 1, "%s", tc.id)
+		assert.NotEqual(t, refusedOperationMessage, msgs[0], "%s", tc.id)
+		assert.Contains(t, msgs[0], tc.reason, "%s", tc.id)
+	}
+	assert.Equal(t, int64(0), res.queries.Load())
+	assert.Equal(t, int64(0), res.live.Load(), "a refused document started a stream")
+
+	writeMsg(t, conn, subscribeMsg("sub", "subscription { ticks }", nil))
+	msg := readMsg(t, conn)
+	require.Equal(t, msgNext, msg.Type, "got %s %s", msg.Type, msg.Payload)
+	assert.Equal(t, "sub", msg.ID)
+}
+
+// 🔴 THE GATE CHECKS THE LENGTH BEFORE IT READS. A WebSocket frame may be far larger
+// than the query-length ceiling, and the gate is the first thing to read the document,
+// so a gate that parsed first would walk a frame-sized document that the ceiling
+// exists to refuse unread. A document over the ceiling that is otherwise a valid
+// subscription is refused by the gate itself — an `error` frame, not the `next`
+// carrying the error that Schema.Subscribe's own check would produce — and starts no
+// stream. The schema is built by MustParseSchema, so the ceiling is the one a service
+// resolves from its environment.
+func TestSubscriptionGateChecksTheLengthFirst(t *testing.T) {
+	t.Setenv(EnvGraphQLMaxQueryLength, "64")
+	_, res, url := serveLimits(t, nil)
+	conn := dialInit(t, url, nil)
+
+	doc := "subscription { ticks } #"
+	doc += strings.Repeat("x", 65-len(doc))
+	require.Len(t, doc, 65)
+	writeMsg(t, conn, subscribeMsg("long", doc, nil))
+	msg := readMsg(t, conn)
+	require.Equal(t, msgError, msg.Type, "got %s %s", msg.Type, msg.Payload)
+	assert.Equal(t, []string{"query length 65 exceeds the maximum allowed query length of 64 bytes"},
+		errorMessages(t, msg))
+	assert.Equal(t, int64(0), res.live.Load())
+
+	// The counterweight: the same subscription within the ceiling streams.
+	writeMsg(t, conn, subscribeMsg("short", doc[:64], nil))
+	msg = readMsg(t, conn)
+	require.Equal(t, msgNext, msg.Type, "got %s %s", msg.Type, msg.Payload)
+}
+
+// The gate reads with the ceiling the served schema carries, and every served schema
+// is built by MustParseSchema. A zero there would refuse every subscription — closed,
+// but an outage — so the handler the GraphQL server really builds is read for its
+// value.
+func TestServedSubscriptionHandlerCarriesTheQueryLengthCeiling(t *testing.T) {
+	gql, _, _ := startDrainServer(t, 0)
+	require.NotNil(t, gql.subscriptions)
+	assert.Equal(t, DefaultGraphQLMaxQueryLength, gql.subscriptions.Schema.maxQueryLength)
 }
 
 // Once the server has decided to end a connection, a pump whose operation then ends

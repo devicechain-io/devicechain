@@ -1616,6 +1616,11 @@ Si sus valores fijan `checkpointIntervalSeconds` de `event-processing` por encim
 antes de actualizar (vea «`checkpointIntervalSeconds` tiene un máximo de 30, y algunos fallos
 silenciosos ahora avisan»).
 
+el servicio de conectores tiene clientes nuevos» antes de actualizar. Si escribe documentos de
+GraphQL a mano, lea «Los documentos de GraphQL deben usar los comentarios y las cadenas propios de
+GraphQL»: los comentarios al estilo de Go, las cadenas entre comillas invertidas y los caracteres
+entre comillas simples ahora se rechazan.
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2093,6 +2098,27 @@ la alerta o por sus etiquetas siguen funcionando.
   expresión que no devuelve nada y una que devuelve una comparación falsa dejan la alerta en el
   mismo estado, así que la cláusula no cambiaba nada. Ambas alertas se disparan y se resuelven
   exactamente igual que antes.
+
+#### Los documentos de GraphQL deben usar los comentarios y las cadenas propios de GraphQL
+
+No hay que hacer nada en la actualización salvo que su propio código o sus scripts escriban
+documentos de GraphQL a mano. La consola, la aplicación de paneles, los SDK, `dcctl` y el servidor
+MCP nunca envían nada de lo siguiente.
+
+- **Un documento escrito con comentarios `//` o `/* */`, cadenas entre comillas invertidas o
+  caracteres entre comillas simples ahora se rechaza** con un error de sintaxis, y no se ejecuta
+  nada de él. Las versiones anteriores los aceptaban, aunque no son GraphQL. Use `#` para los
+  comentarios y `"` para las cadenas.
+- **También se rechaza una cadena de bloque que termina en `\"""`.** Ese escape es GraphQL válido,
+  pero las versiones anteriores nunca lo leyeron como lo define la especificación: cerraban la cadena
+  en esas tres comillas y leían el resto del documento a partir de ahí. Envíe ese texto en una
+  variable.
+- **Por un WebSocket de GraphQL, una suscripción que el servidor no puede leer recibe ahora el error
+  de sintaxis**, no el mensaje que dice que solo se aceptan suscripciones. Un documento que nombra
+  una operación que no contiene también recibe su propio error. Ambos son errores solo de esa
+  operación; la conexión sigue abierta.
+
+[Límites de las solicitudes](../reference/graphql-api.md#request-limits) tiene los detalles.
 
 ### La transición única a la ingesta duradera
 

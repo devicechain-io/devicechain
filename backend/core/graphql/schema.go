@@ -121,18 +121,20 @@ const workLimitCode = "TOO_MANY_ROOT_FIELDS"
 
 // checkWork is the limit itself.
 //
-// 🔴 THE LENGTH CEILING IS CHECKED FIRST, BEFORE ANYTHING IS READ. graphql-go applies
-// its own MaxQueryLength inside Exec — which runs AFTER this. Reading first would let an
-// unauthenticated caller make this function walk a body-sized (4 MiB) document that the
-// old code refused by length alone: a new amplifier added by the fix for an old one. The
-// message matches graphql-go's own so a client sees one wording either way.
+// 🔴 THE LENGTH CEILING IS CHECKED FIRST, BEFORE ANYTHING IS READ (readDocument does
+// both, in that order). graphql-go applies its own MaxQueryLength inside Exec — which
+// runs AFTER this. Reading first would let an unauthenticated caller make this function
+// walk a body-sized (4 MiB) document that the old code refused by length alone: a new
+// amplifier added by the fix for an old one. The message matches graphql-go's own so a
+// client sees one wording either way.
 //
 // 🔴 THE FIELDS ARE COUNTED BY A READER THAT TOKENISES EXACTLY AS graphql-go DOES
 // (readRootFields), not by a general GraphQL parser. The count is only a limit if it
 // counts what graphql-go then executes, and a conformant parser reads some documents
 // differently from graphql-go's text/scanner-based lexer — comments, raw strings and
-// block-string escapes are all read differently — which is enough to hide any number
-// of extra root fields from the count. readRootFields says how and why.
+// block-string escapes are read differently — which is enough to hide any number of
+// extra root fields from the count. Those lexemes are refused by the reader outright;
+// readRootFields says how and why.
 //
 // Every operation in the document is counted, not only the one operationName selects.
 // That is the simpler rule and the fail-closed one: a document cannot carry an
@@ -143,12 +145,9 @@ const workLimitCode = "TOO_MANY_ROOT_FIELDS"
 // them too, and where it would not, refusing is the direction that cannot run an
 // uncounted document.
 func checkWork(query string, maxLen, maxQueryRoots, maxMutationRoots int) *gqlerrors.QueryError {
-	if len(query) > maxLen {
-		return gqlerrors.Errorf("query length %d exceeds the maximum allowed query length of %d bytes", len(query), maxLen)
-	}
-	ops, fragments, err := readRootFields(query)
-	if err != nil {
-		return gqlerrors.Errorf("the document could not be parsed: %s", err.Error())
+	ops, fragments, qerr := readDocument(query, maxLen)
+	if qerr != nil {
+		return qerr
 	}
 	for _, op := range ops {
 		var limit int
