@@ -49,7 +49,10 @@ func (ms *Microservice) MarkNotLive(reason error) {
 	if !ms.notLive.CompareAndSwap(nil, &livenessFailure{reason: reason}) {
 		return
 	}
-	log.Error().Err(reason).Msg("This process can no longer do its job and only a restart can clear it; " +
+	// The area names which service this is. In production the pod already says so; the
+	// field matters where several Microservices share one log stream, as a test binary's
+	// managers do, and a record that names no owner can only be attributed by timing.
+	log.Error().Str("area", ms.FunctionalArea).Err(reason).Msg("This process can no longer do its job and only a restart can clear it; " +
 		"the liveness probe (/healthz) now fails so Kubernetes restarts the pod.")
 }
 

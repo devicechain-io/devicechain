@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -42,7 +43,7 @@ func TestBrokerOutageIsLogged(t *testing.T) {
 	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
 		t.Fatalf("connecting to the embedded broker: %v", err)
 	}
-	t.Cleanup(func() { nmgr.nc.Close() })
+	t.Cleanup(func() { terminateAndWait(t, logs, nmgr) })
 	if !nmgr.nc.IsConnected() {
 		t.Fatal("not connected after ExecuteInitialize; the outage below would prove nothing")
 	}
@@ -51,7 +52,7 @@ func TestBrokerOutageIsLogged(t *testing.T) {
 	srv.WaitForShutdown()
 
 	waitFor(t, "a disconnect log", func() bool {
-		return findLog(logs, "Disconnected from NATS") != nil
+		return ownLog(logs, nmgr, "Disconnected from NATS") != nil
 	})
 
 	// The disconnect must name the broker it lost.
@@ -62,7 +63,7 @@ func TestBrokerOutageIsLogged(t *testing.T) {
 	// forever. It reads a remembered value instead, and this asserts the remembering
 	// works. Read off the record, not out of the buffer: ExecuteInitialize logs the
 	// same URL on the way in, so a whole-buffer match would pass with the field gone.
-	if got, _ := findLog(logs, "Disconnected from NATS")["server"].(string); !strings.Contains(got, strconv.Itoa(port)) {
+	if got, _ := ownLog(logs, nmgr, "Disconnected from NATS")["server"].(string); !strings.Contains(got, strconv.Itoa(port)) {
 		t.Errorf("the disconnect record's server field is %q and does not name the broker "+
 			"that was lost; on a cluster that is the field that says WHICH node went away", got)
 	}
@@ -70,7 +71,7 @@ func TestBrokerOutageIsLogged(t *testing.T) {
 	// The counterweight. A handler that logged on every event — or a test matching
 	// a substring loose enough to hit anything — would pass the assertion above
 	// while telling an operator nothing. A live-but-idle connection must be silent.
-	if strings.Contains(logs.String(), "CLOSED permanently") {
+	if ownLog(logs, nmgr, "CLOSED permanently") != nil {
 		t.Error("a recoverable disconnect logged the TERMINAL closed message: those two " +
 			"say opposite things about whether the service comes back on its own, and " +
 			"conflating them makes the loud one meaningless")
@@ -92,12 +93,12 @@ func TestReconnectIsLogged(t *testing.T) {
 	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
 		t.Fatalf("connecting to the embedded broker: %v", err)
 	}
-	t.Cleanup(func() { nmgr.nc.Close() })
+	t.Cleanup(func() { terminateAndWait(t, logs, nmgr) })
 
 	srv.Shutdown()
 	srv.WaitForShutdown()
 	waitFor(t, "a disconnect log", func() bool {
-		return strings.Contains(logs.String(), "Disconnected from NATS")
+		return ownLog(logs, nmgr, "Disconnected from NATS") != nil
 	})
 
 	// Same port, so the client's reconnect loop finds it again.
@@ -105,7 +106,7 @@ func TestReconnectIsLogged(t *testing.T) {
 	defer revived.Shutdown()
 
 	waitFor(t, "a reconnect log", func() bool {
-		return findLog(logs, "Reconnected to NATS") != nil
+		return ownLog(logs, nmgr, "Reconnected to NATS") != nil
 	})
 
 	// Read the field OFF THE RECONNECT RECORD, not out of the whole buffer.
@@ -116,7 +117,7 @@ func TestReconnectIsLogged(t *testing.T) {
 	// in, and that line contains the port too. The assertion was satisfied by a log
 	// written before the thing it was checking had happened. Found by mutation; it
 	// would not have been found any other way.
-	rec := findLog(logs, "Reconnected to NATS")
+	rec := ownLog(logs, nmgr, "Reconnected to NATS")
 	if got, _ := rec["server"].(string); !strings.Contains(got, strconv.Itoa(port)) {
 		t.Errorf("the reconnect record's server field is %q, which does not name the "+
 			"server the client landed on: without it there is no way to tell failover "+
@@ -164,20 +165,20 @@ func TestPermanentCloseIsLoggedAtError(t *testing.T) {
 	nmgr.nc.Close()
 
 	waitFor(t, "a closed log", func() bool {
-		return findLog(logs, "CLOSED permanently") != nil
+		return ownLog(logs, nmgr, "CLOSED permanently") != nil
 	})
 	// The handler goes on to call MarkNotLive, which logs a SECOND error line. Wait for
 	// it too: returning after the first line let the second land in the NEXT test's
 	// capture, where TestShutdownCloseIsNotLoggedAtError read it as its own graceful
 	// shutdown logging at error level.
 	waitFor(t, "the liveness log", func() bool {
-		return findLog(logs, "only a restart can clear it") != nil
+		return ownLog(logs, nmgr, "only a restart can clear it") != nil
 	})
 	// The level is read off THAT record rather than searched for in the buffer: any
 	// unrelated error logged during the test would otherwise satisfy it. A terminal
 	// condition logged at warn sits in the same bucket as the recoverable
 	// disconnects and is lost among them, which is the whole point of checking.
-	if lvl, _ := findLog(logs, "CLOSED permanently")["level"].(string); lvl != "error" {
+	if lvl, _ := ownLog(logs, nmgr, "CLOSED permanently")["level"].(string); lvl != "error" {
 		t.Errorf("the permanent-close message was logged at %q, want error: it is the one "+
 			"connection event that does not heal itself, so it must not share a level "+
 			"with the two that do", lvl)
@@ -213,15 +214,15 @@ func TestShutdownCloseIsNotLoggedAtError(t *testing.T) {
 	}
 
 	waitFor(t, "a shutdown-close log", func() bool {
-		return findLog(logs, "closed during shutdown") != nil
+		return ownLog(logs, nmgr, "closed during shutdown") != nil
 	})
-	if rec := findLog(logs, "CLOSED permanently"); rec != nil {
+	if rec := ownLog(logs, nmgr, "CLOSED permanently"); rec != nil {
 		t.Errorf("a deliberate shutdown logged the terminal not-as-part-of-a-shutdown "+
 			"message: %v", rec["message"])
 	}
-	for _, line := range strings.Split(logs.String(), "\n") {
-		if strings.Contains(line, `"level":"error"`) {
-			t.Errorf("a graceful shutdown logged at error level: %s", line)
+	for _, rec := range ownLogs(logs, nmgr) {
+		if lvl, _ := rec["level"].(string); lvl == "error" {
+			t.Errorf("a graceful shutdown logged at error level: %v", rec["message"])
 		}
 	}
 }
@@ -289,10 +290,70 @@ func managerFor(t *testing.T, srv *natsserver.Server) *NatsManager {
 	return &NatsManager{
 		Microservice: &core.Microservice{
 			InstanceId:            "test",
-			FunctionalArea:        "area",
+			FunctionalArea:        areaFor(t),
 			InstanceConfiguration: *cfg,
 		},
 	}
+}
+
+// areaFor gives each test's manager an area of its own.
+//
+// The log sink is shared by the whole test binary, and a NATS client runs its
+// connection callbacks on a goroutine of its own, so a manager can still be logging
+// after the test that made it has returned. Its ClosedHandler writes two records, and a
+// test that waits for the first can hand the second to the NEXT test's capture. That
+// read-by-timing is what made TestShutdownCloseIsNotLoggedAtError fail on a line that
+// another test's manager wrote. Scoping every read to the reader's own area makes the
+// attribution a fact rather than a race: ownLog and ownLogs never see a neighbour.
+func areaFor(t *testing.T) string {
+	return "t-" + strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		}
+		return '-'
+	}, t.Name())
+}
+
+// ownLogs returns the captured records written for nmgr's area, decoded.
+func ownLogs(logs *dctest.LogSink, nmgr *NatsManager) []map[string]any {
+	var out []map[string]any
+	for _, line := range strings.Split(logs.String(), "\n") {
+		var rec map[string]any
+		if line == "" || json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		if area, _ := rec["area"].(string); area == nmgr.Microservice.FunctionalArea {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// ownLog is findLog restricted to nmgr's own records.
+func ownLog(logs *dctest.LogSink, nmgr *NatsManager, want string) map[string]any {
+	for _, rec := range ownLogs(logs, nmgr) {
+		if msg, _ := rec["message"].(string); strings.Contains(msg, want) {
+			return rec
+		}
+	}
+	return nil
+}
+
+// terminateAndWait ends a test's connection the way a shutdown does, and waits for the
+// handler's record before the test's capture stops. A bare Close here is an UNREQUESTED
+// close, which writes two ERROR records after the test has returned.
+func terminateAndWait(t *testing.T, logs *dctest.LogSink, nmgr *NatsManager) {
+	t.Helper()
+	if err := nmgr.ExecuteTerminate(context.Background()); err != nil {
+		t.Errorf("terminate: %v", err)
+		return
+	}
+	waitFor(t, "the shutdown-close log", func() bool {
+		return ownLog(logs, nmgr, "closed during shutdown") != nil
+	})
 }
 
 // waitFor polls until cond holds, failing with what was being waited on. The NATS
