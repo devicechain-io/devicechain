@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	// WORKER_COUNT is the number of notification dispatchers running in parallel.
+	// WORKER_COUNT is the number of notification dispatchers running in parallel. It is also
+	// the alarm-events reader's capacity (messaging.ReaderWithCapacity, in main): the reader
+	// holds no more alarms than there are dispatchers to start them, so none waits in a queue
+	// while the broker's redelivery clock runs.
 	WORKER_COUNT = 5
-	// MESSAGE_BACKLOG_SIZE bounds how many read alarm events wait to be dispatched.
-	MESSAGE_BACKLOG_SIZE = 100
 )
 
 // NotificationProcessor is a durable, load-balanced consumer of the alarm-events
@@ -164,7 +165,10 @@ func (np *NotificationProcessor) ExecuteInitialize(ctx context.Context) error {
 
 // initializeWorkers starts the pool of dispatch workers.
 func (np *NotificationProcessor) initializeWorkers() {
-	np.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
+	// One place per dispatcher and no more: the reader already holds at most WORKER_COUNT
+	// alarms, so a deeper channel would never fill — and a deeper one in front of a reader
+	// WITHOUT capacity is how a burst came to sit past AckWait and be paged twice.
+	np.messages = make(chan messaging.Message, WORKER_COUNT)
 	for w := 1; w <= WORKER_COUNT; w++ {
 		np.workerWG.Add(1)
 		// Workers run on a background context (not the cancelable read context) so
@@ -216,10 +220,12 @@ func (np *NotificationProcessor) handOff(ctx context.Context, msg messaging.Mess
 }
 
 // processMessages is the worker loop: it drains the messages channel and dispatches
-// each alarm event. The A3 ack contract rides on each messaging.Message.
+// each alarm event. The A3 ack contract rides on each messaging.Message, and
+// messaging.Process returns the message's reader slot when the dispatch returns, whichever
+// disposition it took — including leaving it unacked for redelivery.
 func (np *NotificationProcessor) processMessages(ctx context.Context) {
 	for msg := range np.messages {
-		np.dispatchOne(ctx, msg)
+		messaging.Process(msg, func(m messaging.Message) { np.dispatchOne(ctx, m) })
 	}
 	log.Debug().Msg("Notification dispatcher received shutdown signal.")
 }
@@ -263,7 +269,11 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	// aspirational. The PolicyNotifier's in-line retry (attempts × timeout) is still the
 	// primary reliability window and redelivery rides AckWait (~5 min across MaxDeliver,
 	// ADR-030); the sink is what survives an outage longer than that. See notifier.go.
-	if err := np.Notifier.Notify(msgctx, event); err != nil {
+	//
+	// The context carries the message's AckDeadline — when the broker will redeliver it —
+	// so the Notifier bounds the dispatch against the clock that actually started at fetch,
+	// not against a fresh AckWait counted from now.
+	if err := np.Notifier.Notify(messaging.WithAckDeadline(msgctx, msg), event); err != nil {
 		// 🔴 ONE ERROR IS PERMANENT AND MUST NOT SPEND THE RETRY BUDGET: the tenant has been
 		// deleted and this area's ADR-077 erasure fence refuses its writes. It reaches here
 		// as an ordinary error, which everything below would read as transient — five

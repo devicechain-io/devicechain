@@ -39,8 +39,10 @@ import (
 //     state write — must carry its own. It must also bound the WHOLE call against
 //     messaging.AckWait, not just each step: a Notify that outlives AckWait is handed to
 //     a second worker while the first is still sending, and whatever the first had
-//     already delivered is delivered again. PolicyNotifier does this with
-//     processor.dispatchBudget; anything else implementing this interface owns the same
+//     already delivered is delivered again. The broker's clock started when the message
+//     was fetched, and ctx carries when it runs out (messaging.AckDeadlineFrom), so the
+//     bound is measured from there. PolicyNotifier does this with processor.dispatchBudget
+//     capped at that deadline; anything else implementing this interface owns the same
 //     obligation.
 //
 // Error contract: a returned error is treated as TRANSIENT by the processor and the

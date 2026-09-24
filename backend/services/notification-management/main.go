@@ -116,7 +116,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// streamMaxAge still drops unseen events — "briefly down" is safe, a week is not.)
 	// N.B created this durable with the default DeliverAll; the policy change rides a
 	// fresh bring-up, per the pre-GA decisive-cutover convention.
-	aevents, err := nmgr.NewReader(streams.AlarmEvents, messaging.ReaderWithDeliverNew())
+	aevents, err := newAlarmEventsReader(nmgr)
 	if err != nil {
 		return err
 	}
@@ -139,6 +139,21 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
 		core.NewNoOpLifecycleCallbacks(), Notifier, DeadLetters.NewSink(deadWriter), NotifyMetrics)
 	return NotificationProcessor.Initialize(context.Background())
+}
+
+// newAlarmEventsReader builds the durable alarm-events reader the notification processor
+// drains. It is a function of its own so the test that reproduces a burst queued behind slow
+// channels builds the reader exactly as this service does, rather than a copy of it.
+//
+// 🔴 IT FETCHES ONLY WHAT A DISPATCH WORKER CAN START. The broker's redelivery clock starts at
+// fetch, and a dispatch is a send to an SMTP relay or a webhook that can take seconds. A reader
+// that fetched a full batch in front of the pool held the tail of a burst past that clock, the
+// broker redelivered it while the first copy was still queued, and both copies paged somebody.
+// With one slot per worker nothing waits in a queue, and each alarm carries the time its clock
+// started so the dispatch budget is measured from there (PolicyNotifier.dispatch).
+func newAlarmEventsReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error) {
+	return nmgr.NewReader(streams.AlarmEvents, messaging.ReaderWithDeliverNew(),
+		messaging.ReaderWithCapacity(processor.WORKER_COUNT))
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.

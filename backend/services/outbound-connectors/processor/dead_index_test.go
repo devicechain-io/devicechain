@@ -51,7 +51,7 @@ func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float6
 // on this service's own subject AND in the platform's dead-letter list.
 func newIndexingConsumer(dead, index messaging.MessageWriter) *DispatchConsumer {
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
-	return NewDispatchConsumer(&fakeReader{}, dead, index, testProducer(), e, nil, 5*time.Second, nil, 1, 1, nil, core.NewReadPacer(nil, "test"))
+	return NewDispatchConsumer(&fakeReader{}, dead, index, testProducer(), e, nil, 5*time.Second, nil, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
 func indexEnvelope(t *testing.T, w *fakeWriter) deadletter.Envelope {
@@ -321,7 +321,7 @@ func TestAFinalDeliveryThatCannotBeDeadLetteredIsCountedAsLost(t *testing.T) {
 	dead := &fakeWriter{fail: context.DeadlineExceeded}
 	index := &fakeWriter{}
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
-	c := NewDispatchConsumer(&fakeReader{}, dead, index, producer, e, nil, 5*time.Second, nil, 1, 1,
+	c := NewDispatchConsumer(&fakeReader{}, dead, index, producer, e, nil, 5*time.Second, nil, 1,
 		nil, core.NewReadPacer(nil, "test"))
 	acked := &countingAcker{}
 	msg := messaging.NewConsumedMessage(
@@ -352,7 +352,7 @@ func TestABelowTheCapWriteFailureIsNotCountedAsLost(t *testing.T) {
 	producer, reg := registeredProducer()
 	dead := &fakeWriter{fail: context.DeadlineExceeded}
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
-	c := NewDispatchConsumer(&fakeReader{}, dead, nil, producer, e, nil, 5*time.Second, nil, 1, 1,
+	c := NewDispatchConsumer(&fakeReader{}, dead, nil, producer, e, nil, 5*time.Second, nil, 1,
 		nil, core.NewReadPacer(nil, "test"))
 	msg := messaging.NewConsumedMessage(
 		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
@@ -372,7 +372,7 @@ func TestAFailedIndexWriteIsNotCountedAsLost(t *testing.T) {
 	index := &fakeWriter{fail: context.DeadlineExceeded}
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
 	c := NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, index, producer, e, nil, 5*time.Second, nil,
-		1, 1, nil, core.NewReadPacer(nil, "test"))
+		1, nil, core.NewReadPacer(nil, "test"))
 	msg := messaging.NewConsumedMessage(
 		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
 		[]byte(`{}`), messaging.MaxDeliver, nil, &countingAcker{})
@@ -393,6 +393,6 @@ func TestAConsumerCannotBeBuiltWithoutADeadLetterProducer(t *testing.T) {
 			t.Fatal("NewDispatchConsumer accepted a nil dead-letter producer")
 		}
 	}()
-	NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, nil, nil, nil, nil, 0, nil, 1, 1, nil,
+	NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, nil, nil, nil, nil, 0, nil, 1, nil,
 		core.NewReadPacer(nil, "test"))
 }

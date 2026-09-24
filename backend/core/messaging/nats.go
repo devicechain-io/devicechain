@@ -35,9 +35,12 @@ const (
 	// the request-reply round trip across many messages so consume throughput is
 	// not capped at ~one RTT per message (ADR-022 review B1). Messages are then
 	// handed to the caller one per ReadMessage from an internal buffer. The whole
-	// batch starts its AckWait timer at fetch, so fetchBatch is kept well below
-	// AckWait * throughput (and within the processors' MESSAGE_BACKLOG channel)
-	// so the tail of a batch is not redelivered while still in the pipeline.
+	// batch starts its AckWait timer at fetch, so a plain reader relies on its
+	// consumer clearing a batch well inside AckWait — true of the fast, in-process
+	// handlers that read full batches, and NOT true of a consumer whose workers make
+	// slow external sends. Those read through ReaderWithCapacity instead, which asks
+	// for no more than its free worker slots (at most fetchBatch) so nothing it
+	// fetches waits in a queue while the broker's clock runs (capacity.go).
 	fetchBatch = 64
 
 	// AckWait is how long JetStream waits for an ack before redelivering a
@@ -226,6 +229,49 @@ type NatsManager struct {
 	// already flipped — so reading it there yields an empty string every time,
 	// which is exactly the field an operator needs to know WHICH server was lost.
 	connectedServer atomic.Value
+
+	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
+	// where ackWait() answers the AckWait constant. Read it through ackWait(), never
+	// directly: the durable's configured AckWait and the AckDeadline a capacity reader
+	// stamps on each message must be the SAME number, and ackWait() is the one place
+	// both read it from.
+	ackWaitOverride time.Duration
+}
+
+// SetAckWaitForTesting sets the AckWait this manager configures on the durables it
+// creates AND measures AckDeadline from — one value, read by both. Production never
+// calls it; AckWait stays a const, for the reasons its own comment gives.
+//
+// It exists because the defect a capacity reader closes — a message held in the
+// process past the broker's redelivery clock — takes AckWait to reproduce, and a
+// sixty-second clock per test case is a test nobody runs.
+//
+// 🔴 IT PANICS IF ANY READER ALREADY EXISTS. A durable's AckWait is frozen on the
+// server at creation, so changing the value afterwards would leave the broker timing
+// one number while the readers measure another — exactly the disagreement the single
+// accessor exists to rule out.
+//
+// It takes a test's T for its Helper method alone, through an interface of that one method,
+// so production code in this package does not import the testing package — which would
+// link it into every service binary.
+func (nmgr *NatsManager) SetAckWaitForTesting(tb interface{ Helper() }, d time.Duration) {
+	tb.Helper()
+	if len(nmgr.readers) > 0 {
+		panic("messaging: SetAckWaitForTesting after a reader was created; a durable's AckWait is frozen at creation")
+	}
+	if d <= 0 {
+		panic("messaging: SetAckWaitForTesting needs a positive duration")
+	}
+	nmgr.ackWaitOverride = d
+}
+
+// ackWait is the AckWait this manager's durables are configured with and its capacity
+// readers measure AckDeadline from: the test override when one is set, else AckWait.
+func (nmgr *NatsManager) ackWait() time.Duration {
+	if nmgr.ackWaitOverride > 0 {
+		return nmgr.ackWaitOverride
+	}
+	return AckWait
 }
 
 // NewNatsManager creates a new NATS manager. oncreate is invoked on Start to
@@ -1111,14 +1157,30 @@ type natsReader struct {
 	// BindTerm clears it, so a process-scoped reader (one that never unbinds) is
 	// unaffected.
 	unbound bool
+
+	// slots is what ReaderWithCapacity asked for; 0 means a plain reader. capacity is the
+	// pool NewReader builds from it (nil for a plain reader, which is how every capacity
+	// branch below is skipped). pendingSlots runs parallel to pending — one slot per
+	// buffered message — and is empty for a plain reader. See capacity.go.
+	slots        int
+	capacity     *capacity
+	pendingSlots []*slot
+	// leftoverSince is the fetch time of the oldest pull request that could still deliver
+	// into this subscription's buffer: the start of the last Fetch that found the buffer
+	// empty. A message already buffered when a Fetch starts was produced by an EARLIER
+	// request, whose clock started no later than this, so it is stamped with it rather than
+	// with the new request's time. Capacity readers only; read-loop goroutine only.
+	leftoverSince time.Time
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
 // affect the FIRST creation of a given durable: the consumer config is frozen on the
 // server, so an option that changes consumerConfig will make AddConsumer reject an
 // already-created durable and crash-loop startup on a non-fresh cluster (see the
-// warning on consumerConfig). Changing an option therefore rides a fresh bring-up
-// (down+up) or an explicit consumer migration — the pre-GA decisive cutover.
+// warning on consumerConfig). Changing such an option therefore rides a fresh bring-up
+// (down+up) or an explicit consumer migration — the pre-GA decisive cutover. An option
+// that shapes only how this client reads (ReaderWithTermGate, ReaderWithCapacity) touches
+// no durable config and can be adopted or dropped freely.
 type ReaderOption func(*natsReader)
 
 // ReaderWithDeliverNew starts the durable at the stream tail (DeliverNewPolicy) on
@@ -1239,7 +1301,7 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 	cfg := &nats.ConsumerConfig{
 		Durable:       r.durable,
 		AckPolicy:     nats.AckExplicitPolicy,
-		AckWait:       AckWait,
+		AckWait:       r.nmgr.ackWait(),
 		MaxDeliver:    MaxDeliver,
 		MaxAckPending: readerMaxAckPending,
 		FilterSubject: r.subject,
@@ -1361,19 +1423,23 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	for _, opt := range opts {
 		opt(r)
 	}
+	if r.slots > 0 {
+		r.capacity = newCapacity(r.slots, nmgr.ackWait(), nmgr.metrics.heldPastAckWaitFor(r.durable))
+	}
 	if err := r.bind(); err != nil {
 		return nil, err
 	}
 	nmgr.streamMu.Lock()
 	nmgr.readers = append(nmgr.readers, r)
 	nmgr.streamMu.Unlock()
-	// The unread series exist at 0 from here, before the first sample — see initDurable.
+	// The per-durable series exist at 0 from here, before the first sample or count — see
+	// initDurable.
 	// metrics is nil only on a manager built as a struct literal rather than by
 	// NewNatsManager, which is how tests outside this package attach a bare reader; such
 	// a manager has no sampler either (runStreamMetrics would dereference the same nil),
 	// so there is no series to initialise and nothing that would ever update one.
 	if nmgr.metrics != nil {
-		nmgr.metrics.initDurable(r.stream, r.durable)
+		nmgr.metrics.initDurable(r.stream, r.durable, r.capacity != nil)
 	}
 	log.Info().Str("durable", r.durable).Str("subject", r.subject).Msg("Added new NATS reader")
 	return r, nil
@@ -1619,7 +1685,12 @@ func (r *natsReader) rebindWithBackoff(ctx context.Context) error {
 // is deliberately no Nak — see Message). On shutdown (ctx cancelled or
 // subscription/connection closed) it returns io.EOF so the existing processor EOF
 // handling applies.
-func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
+//
+// A capacity reader (ReaderWithCapacity) differs in three places, and only there: it
+// fetches no more than its free slots and blocks while none is free; it stamps each
+// message with the time its broker clock started (Message.AckDeadline); and it never
+// hands out a buffered message whose AckWait has already run out.
+func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 	// Enforce the one-goroutine contract stated on MessageReader.ReadMessage: refuse
 	// an overlapping call rather than racing pending and consecutiveTimeouts, which
 	// can hand the same message out twice or drop a whole fetched batch. See the
@@ -1628,6 +1699,17 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 		return Message{}, fmt.Errorf("%w: durable %q", ErrConcurrentRead, r.durable)
 	}
 	defer r.reading.Store(false)
+	// A capacity reader that stops reading gives its buffered messages' slots back, on
+	// every end-of-stream return rather than at each one: the messages stay unacked, so the
+	// broker redelivers them, and slots held for messages nobody will hand out would only
+	// starve whoever reads this reader next.
+	if r.capacity != nil {
+		defer func() {
+			if errors.Is(err, io.EOF) {
+				r.dropPending()
+			}
+		}()
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return Message{}, io.EOF
@@ -1667,7 +1749,28 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 				}
 				continue
 			}
-			msgs, err := sub.Fetch(fetchBatch, nats.MaxWait(fetchTimeout))
+			batch := fetchBatch
+			var fetchedAt time.Time
+			leftovers := 0
+			if r.capacity != nil {
+				// Fetch only what a worker can start (capacity.go). Blocking here is the
+				// back-pressure: every slot is held by a message in a worker or in the buffer.
+				n, ok := r.capacity.acquire(ctx, fetchBatch)
+				if !ok {
+					return Message{}, io.EOF
+				}
+				batch = n
+				fetchedAt = time.Now()
+				if p, _, perr := sub.Pending(); perr == nil && p > 0 {
+					leftovers = p
+				} else {
+					r.leftoverSince = fetchedAt
+				}
+			}
+			msgs, err := sub.Fetch(batch, nats.MaxWait(fetchTimeout))
+			if r.capacity != nil {
+				r.holdFetched(msgs, batch, leftovers, fetchedAt)
+			}
 			if err != nil {
 				if errors.Is(err, nats.ErrTimeout) {
 					// An empty fetch. A run of them can also mean the consumer was
@@ -1721,12 +1824,55 @@ func (r *natsReader) ReadMessage(ctx context.Context) (Message, error) {
 		}
 		nm := r.pending[0]
 		r.pending = r.pending[1:]
+		var sl *slot
+		if r.capacity != nil {
+			sl = r.pendingSlots[0]
+			r.pendingSlots = r.pendingSlots[1:]
+			if !sl.handOut() {
+				continue // its AckWait has run out: the broker is redelivering it
+			}
+		}
 		seq, deliv, appended := msgMeta(nm)
 		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), natsAck{nm: nm})
 		msg.StreamSeq = seq
 		msg.AppendTime = appended
+		msg.slot = sl
 		return msg, nil
 	}
+}
+
+// holdFetched gives each message a capacity reader just fetched a slot of its own, stamped
+// with the time its broker clock started, and returns the slots the fetch did not fill.
+//
+// Fetch never returns more than it was asked for, so every result is covered by a slot
+// acquired for it. The first min(leftovers, len(msgs)) results were already sitting in the
+// subscription's buffer when this Fetch started — delivered to an EARLIER pull request that
+// the client had stopped waiting on — so their clocks started no later than leftoverSince,
+// and that is what they are stamped with. Stamping them with this request's time would
+// credit them budget the broker is not giving them.
+func (r *natsReader) holdFetched(msgs []*nats.Msg, acquired, leftovers int, fetchedAt time.Time) {
+	r.capacity.put(acquired - len(msgs))
+	since := r.leftoverSince
+	if since.IsZero() {
+		since = fetchedAt
+	}
+	for i := range msgs {
+		stamp := fetchedAt
+		if i < leftovers {
+			stamp = since
+		}
+		r.pendingSlots = append(r.pendingSlots, r.capacity.hold(stamp))
+	}
+}
+
+// dropPending discards a capacity reader's buffered messages and returns their slots. The
+// messages are unacked, so the broker redelivers each once its AckWait runs out.
+func (r *natsReader) dropPending() {
+	for _, sl := range r.pendingSlots {
+		sl.release()
+	}
+	r.pending = nil
+	r.pendingSlots = nil
 }
 
 // SubscribeLive opens an ephemeral, tenant-scoped fan-out subscription over a

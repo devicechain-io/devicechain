@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -19,14 +20,25 @@ import (
 // delivery (see deadLetter).
 const deadLetterWriteBackoff = 100 * time.Millisecond
 
+// sendMargin is the headroom one dispatch leaves between the end of its send and the moment the
+// broker redelivers the message (its AckDeadline): time for the ack, or the dead-letter write, to
+// land before a second worker is handed the same dispatch.
+const sendMargin = 5 * time.Second
+
+// maxSend is the longest any single outbound send may run: the executor clamps every send timeout,
+// authored or configured, to this shared ceiling (effectiveSendTimeout).
+const maxSend = time.Duration(connectorwire.MaxTimeoutMs) * time.Millisecond
+
 // DispatchConsumer is the outbound-connectors service's durable consumer of the connector-dispatch
 // stream (ADR-060 §4 / slice C3). It mirrors the notification-management dispatch model: a single
 // read loop hands each message to a bounded worker pool, and the worker that dispatches a message is
 // the one that acks (success/poison/refused for a deleted tenant), leaves it unacked (transient,
 // redeliver after AckWait), or dead-letters it (cap exhausted / terminal). The pool width is the
-// outbound concurrency ceiling — SD-2's back-pressure:
-// once every worker is busy on a slow target, the loop stops pulling and unacked work stays durable
-// on the (per-tenant bounded) stream rather than growing an in-memory queue.
+// outbound concurrency ceiling — SD-2's back-pressure — and it is also the reader's capacity
+// (messaging.ReaderWithCapacity, in main): the reader fetches only as many dispatches as there are
+// free workers, so once every worker is busy on a slow target nothing more is pulled, and unacked
+// work stays durable on the (per-tenant bounded) stream rather than aging in an in-memory queue
+// while the broker's redelivery clock runs.
 //
 // Idempotency rides in each message (the content-addressed key), so an at-least-once redelivery or a
 // DETECT replay collapses downstream to one execution (an endpoint honoring X-DC-Idempotency-Key);
@@ -76,8 +88,6 @@ type DispatchConsumer struct {
 	// into a give-up neither earned, and would race besides.
 	readPacer *core.ReadPacer
 
-	backlog int
-
 	procCtx    context.Context
 	procCancel context.CancelFunc
 	messages   chan messaging.Message
@@ -90,8 +100,9 @@ type DispatchConsumer struct {
 // NewDispatchConsumer builds the consumer over its dispatch reader, its dead-letter writer, and the
 // executor. rate is the per-tenant egress limiter (nil disables egress rate limiting); waitBudget is
 // how long a worker blocks for a token before shedding. tenantDeleted is the ADR-077 lifecycle gate
-// (nil disables the refusal). workers is the outbound concurrency ceiling; backlog is the
-// reader→worker hand-off buffer. Nil metrics (unit tests) run the consumer unmeasured (every
+// (nil disables the refusal). workers is the outbound concurrency ceiling, and should equal the
+// capacity the reader was built with; the reader→worker hand-off holds one message per worker and
+// no more. Nil metrics (unit tests) run the consumer unmeasured (every
 // recorder is nil-safe). deadLetters is the service's dead-letter producer, built once in the
 // initialize phase; it is required.
 //
@@ -110,7 +121,7 @@ type DispatchConsumer struct {
 func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageWriter,
 	deadIndex deadletter.Writer, deadLetters *deadletter.Producer, executor *Executor,
 	rate *core.TenantRateLimiter, waitBudget time.Duration,
-	tenantDeleted func(string) bool, workers, backlog int, metrics *DispatchMetrics,
+	tenantDeleted func(string) bool, workers int, metrics *DispatchMetrics,
 	readPacer *core.ReadPacer) *DispatchConsumer {
 	// 🔴 A NIL PACER IS REFUSED RATHER THAN DEFAULTED, and an earlier version of this defaulted it.
 	// Defaulting looks harmless — the substitute still paces and still ends the loop — but it
@@ -154,7 +165,6 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 		waitBudget:    waitBudget,
 		tenantDeleted: tenantDeleted,
 		readPacer:     readPacer,
-		backlog:       backlog,
 		workers:       workers,
 		// A non-nil default so a shutdown-aware wait (deadLetter's retry backoff) never dereferences a
 		// nil context before Start runs; Start replaces it with the cancelable process context.
@@ -166,15 +176,20 @@ func NewDispatchConsumer(reader messaging.MessageReader, dead messaging.MessageW
 // (the reader is live) from main's afterMicroserviceStarted.
 func (c *DispatchConsumer) Start(ctx context.Context) error {
 	c.procCtx, c.procCancel = context.WithCancel(context.Background())
-	c.messages = make(chan messaging.Message, c.backlog)
+	// One place per worker and no more: the capacity reader already holds at most `workers`
+	// dispatches, so a deeper channel would never fill — and a deeper one in front of a reader
+	// WITHOUT capacity is how a burst came to sit past AckWait and be sent twice.
+	c.messages = make(chan messaging.Message, c.workers)
 	for i := 0; i < c.workers; i++ {
 		c.workerWG.Add(1)
 		go func() {
 			defer c.workerWG.Done()
 			// Workers run on a background context so that on shutdown they drain the buffered
 			// messages to completion (ack or leave-unacked) rather than aborting an in-flight send.
+			// messaging.Process returns the message's reader slot when handle returns, whichever
+			// disposition it took.
 			for msg := range c.messages {
-				c.handle(context.Background(), msg)
+				messaging.Process(msg, func(m messaging.Message) { c.handle(context.Background(), m) })
 			}
 		}()
 	}
@@ -235,6 +250,10 @@ func (c *DispatchConsumer) handOff(ctx context.Context, msg messaging.Message) b
 // until the cap), or dead-letter (cap exhausted / terminal).
 func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
+	// The message's AckDeadline rides the context down to the executor, which caps the send at it
+	// (sendContext). It is a value, not a deadline, so the dead-letter writes on tctx are not cut
+	// short by it.
+	tctx = messaging.WithAckDeadline(tctx, msg)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping connector dispatch with no parseable tenant in subject %q", msg.Subject)
@@ -353,18 +372,37 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	// per-tenant bounded durable stream is the real buffer. The PRIMARY throttle is at the source
 	// (REACT charges the cost-gate at publish, C3b.3), so egress sheds should be the rare exception.
 	if c.rate != nil {
+		// 🔴 THE WAIT ENDS IN TIME FOR THE SEND TO FINISH BEFORE THE BROKER REDELIVERS. The
+		// message's clock started when it was fetched (its AckDeadline), and after the wait come a
+		// secret resolve and a send, each with its own ceiling. So the wait may run to the earlier
+		// of its own budget and the latest moment those can still start and finish sendMargin
+		// before that deadline. A message with no AckDeadline (not from a capacity reader) waits
+		// its budget as before.
+		//
+		// A deadline already spent needs no check of its own: the limiter's Wait refuses a
+		// context that is already done, or one whose deadline its wait cannot cover, before it
+		// takes a token, so that case arrives below as a capped wait error like any other.
+		waitDeadline, capped := c.rateWaitDeadline(tctx, time.Now())
 		// Derive the wait from procCtx (cancelled on Stop) so a rolling-update drain aborts an
 		// in-progress rate wait rather than blocking Stop for the budget: a wait interrupted by
 		// shutdown ABANDONS the message unacked (it redelivers after restart for a fresh admission),
 		// rather than dead-lettering a message that was only waiting on rate. A budget timeout (not a
 		// shutdown) is a genuine sustained-over-quota shed.
-		waitCtx, cancel := context.WithTimeout(c.procCtx, c.waitBudget)
+		waitCtx, cancel := context.WithDeadline(c.procCtx, waitDeadline)
 		err := c.rate.Wait(waitCtx, tenant)
 		cancel()
 		if err != nil {
 			if c.procCtx.Err() != nil {
 				log.Info().Str("rule", req.RuleID).Str("tenant", tenant).
 					Msg("Abandoning connector dispatch rate-wait on shutdown; it will redeliver on restart.")
+				return
+			}
+			if capped {
+				// The wait was cut short by the redelivery clock, not by the budget, so this is not
+				// evidence of a tenant sustained over quota: the broker will redeliver this dispatch
+				// before a send could finish, and starting one would be a duplicate in the making.
+				// It is disposed of exactly as a transient send failure is.
+				c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, errTooLateToSend)
 				return
 			}
 			// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
@@ -385,17 +423,7 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 	case res.retryable:
 		// Transient: redeliver until the cap, then dead-letter so a permanently-failing send cannot
 		// redeliver forever (SD-2).
-		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
-				Msg("Connector dispatch dead-lettered after the redelivery cap.")
-			c.deadLetter(tctx, msg, req.RuleID, action, outcomeDead)
-			return
-		}
-		// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery — an
-		// immediate nak would burn MaxDeliver in ~1.4ms inside an outage (ADR-030).
-		log.Warn().Err(res.err).Str("rule", req.RuleID).Str("tenant", tenant).Int("attempt", msg.NumDelivered).
-			Msg("Connector dispatch failed; leaving unacked for redelivery.")
-		c.metrics.recordOutcome(action, outcomeRetry)
+		c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, res.err)
 	default:
 		// Terminal (unsupported kind / malformed config that bypassed the publish gate): a redelivery
 		// cannot help, so dead-letter it visibly rather than churn the cap or silently drop it.
@@ -403,6 +431,43 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 			Msg("Connector dispatch is terminally undeliverable; dead-lettering.")
 		c.deadLetter(tctx, msg, req.RuleID, action, res.outcome)
 	}
+}
+
+// errTooLateToSend is the cause recorded for a dispatch whose rate wait was cut short by its
+// message's redelivery deadline: a send started then could not finish before the broker
+// redelivered the message.
+var errTooLateToSend = errors.New("cannot send before the message's redelivery deadline")
+
+// retryOrDeadLetter disposes of a dispatch that did not go out but might on a later delivery — a
+// transient send failure, or a rate wait cut short by the redelivery deadline. It is the ONE place
+// this consumer decides "this is the final delivery, so letter it": below the cap the message is
+// left UNACKED (not nak'd) so AckWait paces its redelivery — an immediate nak would burn MaxDeliver
+// in ~1.4ms inside an outage (ADR-030); at the cap no redelivery follows, so it is dead-lettered
+// rather than stranded.
+func (c *DispatchConsumer) retryOrDeadLetter(tctx context.Context, msg messaging.Message, rule, tenant, action string, cause error) {
+	if msg.NumDelivered >= messaging.MaxDeliver {
+		log.Error().Err(cause).Str("rule", rule).Str("tenant", tenant).Int("attempts", msg.NumDelivered).
+			Msg("Connector dispatch dead-lettered on its final delivery.")
+		c.deadLetter(tctx, msg, rule, action, outcomeDead)
+		return
+	}
+	log.Warn().Err(cause).Str("rule", rule).Str("tenant", tenant).Int("attempt", msg.NumDelivered).
+		Msg("Connector dispatch did not go out; leaving it unacked for redelivery.")
+	c.metrics.recordOutcome(action, outcomeRetry)
+}
+
+// rateWaitDeadline is when a dispatch's egress rate wait must give up: now + waitBudget, or — when
+// that is later — the latest moment a secret resolve and a send, each at its ceiling, can still
+// start and finish sendMargin before the message's AckDeadline. capped reports that the AckDeadline
+// set it. A context with no AckDeadline gets the budget alone.
+func (c *DispatchConsumer) rateWaitDeadline(ctx context.Context, now time.Time) (deadline time.Time, capped bool) {
+	deadline = now.Add(c.waitBudget)
+	if ackDeadline, ok := messaging.AckDeadlineFrom(ctx); ok {
+		if latest := ackDeadline.Add(-(sendMargin + secretResolveTimeout + maxSend)); latest.Before(deadline) {
+			return latest, true
+		}
+	}
+	return deadline, false
 }
 
 // deadLetterWriteAttempts bounds the in-process retries of the dead-letter write on the final

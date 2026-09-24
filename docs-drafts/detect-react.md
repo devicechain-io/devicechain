@@ -634,17 +634,24 @@ it importing `internal/rules`. The firewall is real but it is one directory up: 
 out of the connector binary. The payload is already rendered to a string by REACT, so the connectors
 service never links CEL either way.
 
-The consumer is a bounded worker pool (`backend/services/outbound-connectors/processor/consumer.go:39-66`)
-fed through a small hand-off channel, and the pacing is "one fetch batch at a time", not a hard stop:
-the channel is buffered at `DispatchBacklog`, which defaults to 8 (`consumer.go:101`,
-`backend/services/outbound-connectors/config/configuration.go:30-37`), so the read loop pulls eight
-more messages past saturation before it blocks. Small is the point — a large backlog would put two
-fetch batches under the `AckWait` clock at once, and a slow-but-succeeding send could be redelivered
-underneath its own worker.
+The consumer is a bounded worker pool (`backend/services/outbound-connectors/processor/consumer.go`),
+and its reader fetches only what that pool can start: `newDispatchReader`
+(`backend/services/outbound-connectors/main.go`) builds it with
+`messaging.ReaderWithCapacity(MaxConcurrentSends)`, one slot per worker
+(`backend/core/messaging/capacity.go`). A fetch asks for no more than the free slots; each message
+holds its slot until its disposition (`messaging.Process` releases it when the worker returns, `Ack`
+releases it after the ack) or until its `AckWait` runs out, whichever is first. The hand-off channel
+is one place per worker and there is no `dispatchBacklog` any more. This is what keeps a burst from
+aging in the process: the broker's `AckWait` clock starts at fetch, and a reader that fetched a full
+64-message batch in front of the pool used to hold the tail past it, so the broker redelivered it
+while the first copy was still queued and both were sent.
 
-Timeouts are sized so that two worker waves fit inside that ack window (`configuration.go:57-66`).
-The arithmetic is right and **nothing enforces it**: it is stated as an operator note, and `Validate`
-requires only that the concurrency be positive (`:145-147`). See §14.
+Each message also carries its fetch time as `Message.AckDeadline`, and the dispatch is bounded from
+it rather than from when a worker picked it up. The rate wait ends early enough for a secret resolve
+and a maximum-length send to finish `sendMargin` before that deadline (`rateWaitDeadline`), and the
+send itself is capped to end `sendMargin` before it (`sendContext` in `processor/executor.go`). The
+budget for one dispatch is one message's clock — `waitBudget + secretResolve + maxSend + sendMargin`
+= 8 + 5 + 20 + 5 = 38s < 60s — and `TestOneDispatchFitsAckWait` pins it against the constants.
 
 Two hardening measures in the embedded-Bento path are worth naming because neither is obvious:
 **environment interpolation is disabled** (`backend/services/outbound-connectors/publish/bento.go:71-77`)
@@ -865,13 +872,12 @@ Ordered by what they cost.
    never wired to readiness, so the pod keeps serving green health endpoints. The *startup* path
    guards this exact hazard by name (`ResolvedEventsProcessor.go:474-480`); the runtime path reaches
    the same state and does not.
-8. **`MaxConcurrentSends` is ungated and silently breaks the ack budget.** The wait-budget ceiling is
-   sized against a two-worker-wave model that assumes concurrency near its default of 32
-   (`backend/services/outbound-connectors/config/configuration.go:57-66`), and that assumption is
-   recorded as a note to the operator. `Validate` only requires the value be positive (`:145-147`).
-   Set it to 4 and a fetch batch takes sixteen waves instead of two, each up to the wait budget plus
-   the 20s send ceiling — far past the 60s `AckWait` the bound was derived from, so messages
-   redeliver underneath the workers still sending them.
+8. ~~**`MaxConcurrentSends` is ungated and silently breaks the ack budget.**~~ — **CLOSED.** The
+   wait-budget ceiling was sized against a two-worker-wave model that assumed concurrency near its
+   default, and a lower `MaxConcurrentSends` stretched a 64-message fetch batch over many waves,
+   past `AckWait`. The dispatch reader now fetches only as many messages as there are free workers
+   (§10c), so no message waits behind a wave at all, and the budget is one message's own clock,
+   independent of the pool width.
 9. ~~**The chart's replica guard has a hole**~~ — **CLOSED.** The condition fired only on `Recreate`
    with more than one replica, so a rolling-update strategy with three replicas rendered and
    deployed cleanly. It is now two guards

@@ -240,6 +240,21 @@ loss the consumer moves past while every pod of the reading service is restartin
 uncounted. A service with no running pods reports neither series, so neither alert can fire for
 it; the near-full warning and your pod-health alerts cover that case.
 
+## Messages held past their acknowledgement window {#held-past-ack-wait}
+
+The broker gives a service a fixed window to acknowledge each message it hands out. A
+message still unacknowledged when the window closes is handed out again, and the service
+handles it as though it were new. For the two services whose work is a slow send to
+somewhere outside the platform — alarm notifications and outbound connectors — that can mean
+a second page or a second webhook call. Both read only as many messages as they have workers
+free to start, so nothing waits in a queue while the window runs, and each send is cut off
+with time to spare before the window closes. The alert below reports the cases that still
+get through.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `ReaderHeldMessagePastAckWait` | warning | A handler held a message past its acknowledgement window, so it was redelivered. `stage=worker`: a send ran long, so the message may have been sent twice. `stage=buffer`: a message was dropped before it was handed out, and its redelivery was handled instead. | For `stage=worker`, look for a slow or unresponsive destination behind the service named by the `durable` label. For `stage=buffer`, the service is not keeping up with its stream. |
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command

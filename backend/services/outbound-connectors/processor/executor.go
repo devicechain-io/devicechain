@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/httpsink"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
@@ -136,7 +137,7 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		secret = resolved
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, e.effectiveSendTimeout(h.TimeoutMs))
+	sendCtx, cancel := sendContext(ctx, e.effectiveSendTimeout(h.TimeoutMs))
 	defer cancel()
 
 	err := httpsink.Send(sendCtx, e.client, httpsink.Request{
@@ -184,6 +185,24 @@ func (e *Executor) effectiveSendTimeout(authoredMs int) time.Duration {
 		effMs = maxMs
 	}
 	return time.Duration(effMs) * time.Millisecond
+}
+
+// sendContext bounds one outbound send: its timeout, further capped to end sendMargin before the
+// message's AckDeadline when ctx carries one (messaging.AckDeadlineFrom). A send still running when
+// the broker redelivers its message is a send a second worker is about to make again; ending it
+// with room to spare turns that duplicate into an ordinary retry.
+//
+// It caps only the send. The dead-letter writes the consumer makes after a failed send run on the
+// caller's context, which carries the AckDeadline as a value and no deadline, so a letter is never
+// cut short by the send's budget.
+func sendContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(timeout)
+	if ackDeadline, ok := messaging.AckDeadlineFrom(ctx); ok {
+		if capped := ackDeadline.Add(-sendMargin); capped.Before(deadline) {
+			deadline = capped
+		}
+	}
+	return context.WithDeadline(ctx, deadline)
 }
 
 // executePublish delivers a Kind==publish dispatch through the versioned Connector its ConnectorRef
@@ -252,7 +271,7 @@ func (e *Executor) executePublish(ctx context.Context, req *connectorwire.Connec
 			err: fmt.Errorf("build output for connector %q (type %q): %w", p.ConnectorRef, version.Type, err)}
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, e.effectiveSendTimeout(p.TimeoutMs))
+	sendCtx, cancel := sendContext(ctx, e.effectiveSendTimeout(p.TimeoutMs))
 	defer cancel()
 	// The idempotency key rides as message metadata for outputs that can dedup on it; at-least-once
 	// redelivery is otherwise the contract (content-addressed idempotency upstream).

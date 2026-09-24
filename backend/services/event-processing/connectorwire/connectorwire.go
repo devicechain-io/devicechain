@@ -37,11 +37,14 @@ const (
 // rejects a larger value at publish and the executor re-clamps it at dispatch (defense-in-depth
 // against a forged/corrupt stored config that bypassed the gate), and the two can never disagree.
 //
-// It is kept safely BELOW the messaging layer's consumer AckWait (60s): a fetched batch of messages
-// all start their AckWait timer at fetch, so a per-send timeout at or near AckWait would let a
+// It is kept safely BELOW the messaging layer's consumer AckWait (60s): the broker redelivers a
+// message AckWait after it was fetched, so a per-send timeout at or near AckWait would let a
 // slow-but-succeeding send be redelivered underneath the worker — a duplicate outbound call plus a
-// NumDelivered climb that would spuriously dead-letter a healthy endpoint. At 20s a full fetch batch
-// clears the bounded worker pool well within AckWait, leaving margin.
+// NumDelivered climb that would spuriously dead-letter a healthy endpoint. The bound is ONE message's
+// clock, not a batch's: the outbound-connectors consumer fetches only what its workers can start, so a
+// dispatch's rate wait, secret resolve, send (at this ceiling) and margin must together fit inside
+// AckWait. outbound-connectors' TestOneDispatchFitsAckWait pins that sum, and its sends are capped
+// against each message's own redelivery deadline besides.
 const MaxTimeoutMs = 20_000
 
 // ConnectorDispatchRequest is the message event-processing's REACT dispatcher publishes to the
