@@ -289,6 +289,19 @@ sus avisos se registran como mensajes no entregados como siempre.
 | `MaxDeliveryRecordsWaiting` | Hay avisos de mensajes que agotaron sus intentos esperando desde hace 15 minutos sin convertirse en registros. | Compruebe que todos los servicios están en marcha: uno caído registra tarde. Si el aviso persiste con todo sano, nombra un consumidor que ya ningún servicio lee (un lector retirado en una actualización); no se registrará y puede borrarse del stream. |
 | `ReplayCoveredDeliveriesExhausted` | Un consumidor que lee su stream desde su propio punto de control agotó intentos de entrega en los últimos 15 minutos, porque el punto de control lleva sin guardarse más tiempo del que el broker sigue reentregando. Todavía no se ha perdido nada. | Corrija lo que impide al servicio que indica la etiqueta `job` guardar su punto de control, normalmente su conexión a la base de datos. Mientras el servicio sigue en marcha, guarda lo que ha leído en cuanto el punto de control se guarda. Si se reinicia antes, vuelve a leer el stream desde el último punto de control guardado, y los eventos que el stream ya haya descartado no se pueden volver a leer, así que vigile también `JetStreamStreamNearFull`. |
 
+## Inquilinos medidos con el valor por defecto de la plataforma {#tenant-ceilings}
+
+Cada servicio que aplica un techo por inquilino lee el techo de cada inquilino desde
+user-management. Mientras no tiene respuesta, mide al inquilino con el valor por defecto de la
+plataforma, y el endpoint de ingesta HTTP da a los nombres de inquilino que no puede confirmar un
+conjunto acotado de asignaciones. [Gobernanza](../concepts/governance.md#unresolved-ceilings)
+explica ambos casos.
+
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `TenantsMeteredAtPlatformDefault` | warning | Durante 15 minutos, el servicio indicado por la etiqueta `job` ha seguido midiendo a los inquilinos con su valor por defecto de la plataforma porque user-management no era accesible o fallaba. Un inquilino cuyo techo está por encima del valor por defecto se descarta antes de tiempo, y uno cuyo techo está por debajo se admite por encima de su techo. | Compruebe que user-management está en ejecución y que el servicio puede contactar con él. |
+| `RateLimiterOverflowInUse` | warning | Durante 10 minutos, la ingesta HTTP ha admitido peticiones para nombres de inquilino que no pudo confirmar a través de la única asignación que todos comparten. Llegan muchos nombres sin confirmar, lo que suele indicar peticiones que nombran inquilinos inventados. | Revise quién envía peticiones de ingesta HTTP. Consulte [nombres de inquilino que no se pueden confirmar](../concepts/governance.md#unconfirmed-tenants). |
+
 ## Relacionado
 
 - **[Arrancar una instancia](./bootstrap.md#install)** — `dcctl install`, el comando que

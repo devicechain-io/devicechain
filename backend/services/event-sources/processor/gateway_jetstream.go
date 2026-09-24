@@ -293,7 +293,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// the tenant-deleted refusal stopped being consulted on redeliveries, so a tenant
 	// deleted between delivery 1 and a retry had that retry admitted. The exemption
 	// belongs to the metering layer, which is the only layer it is true of.
-	if es.allow != nil && !es.allow(es.Id, tenant, msg.AppendTime, msg.NumDelivered > 1) {
+	if es.allow != nil && !es.allow(es.Id, tenant, msg.AppendTime, msg.NumDelivered > 1, OriginAuthenticated) {
 		ackDrop(msg, "refused at the tenant ingest gate")
 		return
 	}

@@ -23,6 +23,24 @@ The load-bearing safety property, stated exactly:
 
 There is no configuration state, and no failure mode, in which a tenant becomes ungoverned. A tenant with no explicit limit gets the platform-default ceiling; a limit set to zero means the same, not "no limit". Fail-*open* governance — where a typo or an absent row quietly removes a ceiling — is exactly the failure this design forbids, and it is the same fail-closed posture the [tenant data scope](./multi-tenancy.md#isolation) takes on the correctness side.
 
+### Before a tenant's ceiling is known {#unresolved-ceilings}
+
+A service learns a tenant's ceilings from the control plane and caches them. Until it has read them (the first time it sees a tenant after it starts, or for as long as the control plane is unreachable), it meters that tenant at its **platform default**. That default is still a ceiling, never unlimited, but for a tenant whose tier sets a lower one it admits more than the tier allows until the read succeeds. A tenant whose ceilings were already read keeps its last-known values through an outage.
+
+Each enforcing service counts the traffic it admitted this way on `devicechain_<service>_governance_unresolved_admissions_total`, labelled by dimension and cause:
+
+- `unreachable`: the control plane could not be asked;
+- `unknown-tenant`: it answered that no such tenant exists;
+- `pending`: no answer yet.
+
+The `TenantsMeteredAtPlatformDefault` alert fires only when `unreachable` keeps rising for 15 minutes.
+
+### Tenant names that cannot be confirmed {#unconfirmed-tenants}
+
+The HTTP ingest endpoint takes the tenant from the request path, before any device credential is checked. A tenant name arriving there gets an allowance of its own only if the control plane has confirmed it, or from a fixed set of 1024. Past that set, all such names share one allowance at the platform default, and the `RateLimiterOverflowInUse` alert fires. MQTT, NATS and LwM2M traffic comes from a source that is authenticated or that the operator chose to trust: the platform broker authenticates each device, LwM2M checks the device's key, and an external MQTT broker source is trusted because the operator configured it. That traffic always gets its own allowance.
+
+The set bounds the service's memory, not the total admitted across invented names: up to 1024 times the platform default can be admitted across them.
+
 ## Where limits live
 
 Governance limits are **operator and tenant configuration**, not client input:

@@ -1509,7 +1509,9 @@ service now refuses to start with it (see "The connectors service no longer acce
 below). If you filter dead letters by kind or reason, or alert on the dead-letter stream, read
 "Messages abandoned on their last attempt are now dead-lettered" below: it adds three kinds, a
 reason, a stream and two alerts. If you run a warm standby for `event-processing`, read "With a
-warm standby, only the replica running detection dispatches actions".
+warm standby, only the replica running detection dispatches actions". If you route or silence
+alerts by name, two new warnings are added: `RateLimiterOverflowInUse` and
+`TenantsMeteredAtPlatformDefault`.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1814,6 +1816,33 @@ Rate ceilings in `event-sources`, `outbound-connectors` and `ai-inference` are e
 replica separately. This is now documented under
 [Governance](../concepts/governance.md#per-replica), and matters if you run more than one replica
 of those services.
+
+#### Invented tenant names on HTTP ingest no longer grow memory, and two new alerts
+
+The HTTP ingest endpoint used to create a separate rate allowance for every tenant name in a
+request path, confirmed or not, so a stream of invented names could grow `event-sources`' memory
+without bound. Names the control plane has not confirmed now share a fixed set of 1024 allowances,
+and past that one shared allowance at the platform default. Tenants arriving over MQTT, NATS or
+LwM2M are unaffected ([Tenant names that cannot be
+confirmed](../concepts/governance.md#unconfirmed-tenants)).
+
+Two warnings are added:
+
+- `RateLimiterOverflowInUse` fires when the shared allowance is in use.
+- `TenantsMeteredAtPlatformDefault` fires when a service has been unable to read tenants' ceilings
+  from user-management for 15 minutes and is metering them at its platform default ([Before a
+  tenant's ceiling is known](../concepts/governance.md#unresolved-ceilings)).
+
+Each service now exports
+`…_governance_unresolved_admissions_total{dimension,cause}`, and `event-sources` also exports
+`…_ratelimit_overflow_admissions_total`.
+
+A tenant's allowance is also now metered on one clock that never runs backwards. A service
+draining a backlog on the time each message was sent could previously admit more than the ceiling
+when those times went backwards (a broker leader change between servers whose clocks disagree)
+or when a tenant's ceiling changed mid-drain; such messages are now charged
+at the latest time the allowance has already seen, which can shed a little more but never admits
+more.
 
 ### The one-time durable-ingest cutover
 

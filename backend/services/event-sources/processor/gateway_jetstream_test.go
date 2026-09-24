@@ -101,12 +101,12 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			h.mu.Unlock()
 			return h.failedErr
 		},
-		func(src string, tenant string, sentAt time.Time, redelivery bool) bool {
+		func(src string, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
 			h.mu.Lock()
 			h.redeliveries = append(h.redeliveries, redelivery)
 			h.mu.Unlock()
 			if h.gate != nil {
-				return h.gate(src, tenant, sentAt, redelivery)
+				return h.gate(src, tenant, sentAt, redelivery, origin)
 			}
 			// 🔴 THE STUB HONOURS THE REDELIVERY EXEMPTION, because the real gate does.
 			// allowResult models an exhausted rate ceiling, and the real meter admits a
@@ -451,8 +451,8 @@ func (r *blockingReader) HandleResponse(error) {}
 func backlogHarness(t *testing.T, rps float64, burst int) *captureHarness {
 	t.Helper()
 	h := newCaptureHarness(t)
-	limiter := core.NewTenantRateLimiter(func(string) (float64, int) { return rps, burst })
-	h.gate = func(_ string, tenant string, sentAt time.Time, redelivery bool) bool {
+	limiter := core.NewTenantRateLimiter(core.StaticCeiling(rps, burst))
+	h.gate = func(_ string, tenant string, sentAt time.Time, redelivery bool, _ Origin) bool {
 		return limiter.AllowAt(tenant, sentAt)
 	}
 	return h
@@ -651,8 +651,8 @@ func TestADeletedTenantsRedeliveryIsStillRefused(t *testing.T) {
 	h := newCaptureHarness(t)
 	h.gate = RefuseDeletedTenants(
 		func(tenant string) bool { return true }, // this tenant has been deleted
-		NewRateGate(core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }),
-			core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }), nil),
+		NewRateGate(core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
+			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)), nil),
 		nil)
 
 	ack := &recordingAck{}
@@ -672,8 +672,8 @@ func TestALiveTenantsRedeliveryIsStillAdmitted(t *testing.T) {
 	h := newCaptureHarness(t)
 	h.gate = RefuseDeletedTenants(
 		func(tenant string) bool { return false }, // live
-		NewRateGate(core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }),
-			core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 }), nil),
+		NewRateGate(core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
+			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)), nil),
 		nil)
 
 	ack := &recordingAck{}

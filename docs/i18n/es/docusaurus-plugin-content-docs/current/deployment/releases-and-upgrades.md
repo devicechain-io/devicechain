@@ -1605,7 +1605,8 @@ acepta dispatchBacklog» más abajo). Si filtra los mensajes no entregados por t
 tiene alertas sobre su stream, lea «Los mensajes abandonados en su último intento ahora se
 registran» más abajo: añade tres tipos, un motivo, un stream y dos alertas. Si ejecuta una reserva
 en caliente de `event-processing`, lea «Con una reserva en caliente, solo la réplica que detecta
-despacha acciones».
+despacha acciones». Si enruta o silencia alertas por su nombre, se añaden dos avisos nuevos:
+`RateLimiterOverflowInUse` y `TenantsMeteredAtPlatformDefault`.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1928,6 +1929,35 @@ reproducción, igual que antes de esta versión.
 Los techos de tasa de `event-sources`, `outbound-connectors` y `ai-inference` los aplica cada réplica
 por separado. Esto ahora está documentado en [Gobernanza](../concepts/governance.md#per-replica), y
 importa si ejecuta más de una réplica de esos servicios.
+
+#### Los nombres de inquilino inventados en la ingesta HTTP ya no hacen crecer la memoria, y dos alertas nuevas
+
+El endpoint de ingesta HTTP creaba una asignación de frecuencia separada para cada nombre de
+inquilino que llegaba en la ruta de una petición, estuviera confirmado o no, así que un flujo de
+nombres inventados podía hacer crecer la memoria de `event-sources` sin límite. Los nombres que el
+plano de control no ha confirmado comparten ahora un conjunto fijo de 1024 asignaciones y, pasado
+ese conjunto, una única asignación compartida con el valor por defecto de la plataforma. Los
+inquilinos que llegan por MQTT, NATS o LwM2M no se ven afectados ([Nombres de inquilino que no se
+pueden confirmar](../concepts/governance.md#unconfirmed-tenants)).
+
+Se añaden dos avisos:
+
+- `RateLimiterOverflowInUse` se dispara cuando la asignación compartida está en uso.
+- `TenantsMeteredAtPlatformDefault` se dispara cuando un servicio lleva 15 minutos sin poder leer
+  los techos de los inquilinos desde user-management y los está midiendo con su valor por defecto de
+  la plataforma ([Antes de conocer el techo de un
+  inquilino](../concepts/governance.md#unresolved-ceilings)).
+
+Cada servicio exporta ahora
+`…_governance_unresolved_admissions_total{dimension,cause}`, y `event-sources` exporta además
+`…_ratelimit_overflow_admissions_total`.
+
+Además, la asignación de un inquilino se mide ahora con un único reloj que nunca retrocede. Un
+servicio que vaciaba un atraso según la hora de envío de cada mensaje podía admitir antes más que
+el techo cuando esas horas retrocedían (un cambio de líder del broker entre servidores cuyos relojes
+no coinciden) o cuando el techo de un inquilino cambiaba a mitad del
+vaciado; esos mensajes se cargan ahora en la última hora que la asignación ya ha visto, lo que puede
+descartar algo más pero nunca admite más.
 
 ### La transición única a la ingesta duradera
 

@@ -23,6 +23,24 @@ La propiedad de seguridad fundamental, enunciada con exactitud:
 
 No existe estado de configuración, ni modo de fallo, en el que un inquilino quede sin gobernanza. Un inquilino sin límite explícito recibe el techo por defecto de la plataforma; un límite fijado en cero significa lo mismo, no "sin límite". Una gobernanza que falla en *abierto* — donde un error tipográfico o una fila ausente elimina silenciosamente un techo — es exactamente el fallo que este diseño prohíbe, y es la misma postura de fallo cerrado que adopta el [alcance de datos del inquilino](./multi-tenancy.md#isolation) en el lado de la corrección.
 
+### Antes de conocer el techo de un inquilino {#unresolved-ceilings}
+
+Un servicio obtiene los techos de un inquilino del plano de control y los guarda en caché. Hasta que los ha leído (la primera vez que ve a un inquilino después de arrancar, o mientras el plano de control no sea alcanzable), mide a ese inquilino con su **valor por defecto de la plataforma**. Ese valor sigue siendo un techo, nunca ilimitado, pero para un inquilino cuyo nivel fija uno más bajo admite más de lo que el nivel permite hasta que la lectura tiene éxito. Un inquilino cuyos techos ya se leyeron conserva sus últimos valores conocidos durante una caída.
+
+Cada servicio que aplica límites cuenta el tráfico que admitió de esta forma en `devicechain_<service>_governance_unresolved_admissions_total`, etiquetado por dimensión y causa:
+
+- `unreachable`: no se pudo consultar al plano de control;
+- `unknown-tenant`: respondió que no existe tal inquilino;
+- `pending`: todavía no hay respuesta.
+
+La alerta `TenantsMeteredAtPlatformDefault` se dispara solo cuando `unreachable` sigue subiendo durante 15 minutos.
+
+### Nombres de inquilino que no se pueden confirmar {#unconfirmed-tenants}
+
+El endpoint de ingesta HTTP toma el inquilino de la ruta de la petición, antes de comprobar cualquier credencial de dispositivo. Un nombre de inquilino que llega por ahí obtiene una asignación propia solo si el plano de control lo ha confirmado, o de un conjunto fijo de 1024. Pasado ese conjunto, todos esos nombres comparten una única asignación con el valor por defecto de la plataforma, y se dispara la alerta `RateLimiterOverflowInUse`. El tráfico MQTT, NATS y LwM2M procede de un origen autenticado o en el que el operador decidió confiar: el broker de la plataforma autentica cada dispositivo, LwM2M comprueba la clave del dispositivo, y un broker MQTT externo es de confianza porque el operador lo configuró. Ese tráfico siempre obtiene su propia asignación.
+
+El conjunto acota la memoria del servicio, no el total admitido entre nombres inventados: entre ellos se puede admitir hasta 1024 veces el valor por defecto de la plataforma.
+
 ## Dónde viven los límites
 
 Los límites de gobernanza son **configuración del operador y del inquilino**, no entrada del cliente:

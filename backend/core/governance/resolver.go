@@ -5,10 +5,14 @@ package governance
 
 import (
 	"context"
+	"errors"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
+	core "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/time/rate"
 )
@@ -81,6 +85,10 @@ type tenantResolver[V any] struct {
 type cacheEntry[V any] struct {
 	val  V
 	have bool
+	// cause is why the latest refresh failed (CeilingUnreachable or
+	// CeilingUnknownTenant), classified once in recordFailureLocked. resolveOK reports
+	// it only for an entry with no value: a tenant with a last-known value is resolved.
+	cause core.CeilingSource
 	// nextRefreshAt is when this tenant may be refreshed again: the fetch time plus
 	// the TTL after a success, plus the negative TTL after a failure. Storing the
 	// deadline rather than the fetch time is what lets one field carry both, so a
@@ -191,19 +199,25 @@ func (r *tenantResolver[V]) resolve(tenant string) V {
 	return v
 }
 
-// resolveOK is resolve plus whether a REAL fetched value backed it — a cache hit (even
-// a stale one being refreshed) — versus the default served on a miss. A caller for
-// which the default is itself a live answer (a rate ceiling: the platform default is a
-// real limit) ignores the bool via resolve. A caller that must not ACT on a tenant it
-// has not yet learned about — shedding: you do not preferentially shed a tenant whose
-// priority is still the fail-safe default only because it has never been fetched, since
-// that fail-safe is a bronze band and could shed a gold tenant during a cold-cache
-// window — uses the bool to hold off until the value is known.
+// resolveOK is resolve plus where the value came from. It is the ONE reader of that
+// fact: the rate limiter's ceiling Source and the shed resolver's "resolved" bool are
+// both this answer.
 //
-// A tenant whose refresh FAILED reports false and serves the default, exactly like one
-// never seen: the negative entry caches the ATTEMPT, never a value, so a caller that
-// holds off on unresolved tenants keeps holding off.
-func (r *tenantResolver[V]) resolveOK(tenant string) (V, bool) {
+//   - core.CeilingResolved: a REAL fetched value backs it — a cache hit, including a
+//     stale one being refreshed and one whose latest refresh failed.
+//   - the negative entry's cause (core.CeilingUnreachable or core.CeilingUnknownTenant):
+//     the latest fetch for a tenant with no value failed, and the default is served.
+//   - core.CeilingPending otherwise: nothing has answered yet — a cold miss, or a
+//     refresh the rate or concurrency bound refused to start.
+//
+// A caller for which the default is itself a live answer (a rate ceiling: the platform
+// default is a real limit) serves it whatever the source and uses the source only to
+// account for it. A caller that must not ACT on a tenant it has not yet learned about —
+// shedding: you do not preferentially shed a tenant whose priority is still the
+// fail-safe default only because it has never been fetched, since that fail-safe is a
+// bronze band and could shed a gold tenant during a cold-cache window — holds off until
+// the source is core.CeilingResolved.
+func (r *tenantResolver[V]) resolveOK(tenant string) (V, core.CeilingSource) {
 	r.mu.Lock()
 	e, ok := r.cache[tenant]
 	if !ok || !r.now().Before(e.nextRefreshAt) {
@@ -211,10 +225,13 @@ func (r *tenantResolver[V]) resolveOK(tenant string) (V, bool) {
 	}
 	r.mu.Unlock()
 
-	if ok && e.have {
-		return e.val, true
+	switch {
+	case ok && e.have:
+		return e.val, core.CeilingResolved
+	case ok:
+		return r.def, e.cause
 	}
-	return r.def, false
+	return r.def, core.CeilingPending
 }
 
 // triggerRefreshLocked starts at most one background refresh per tenant (deduped by
@@ -266,7 +283,7 @@ func (r *tenantResolver[V]) refresh(tenant string, sem chan struct{}) {
 	val, err := r.fetch(ctx, tenant)
 	if err != nil {
 		r.mu.Lock()
-		r.recordFailureLocked(tenant, r.now())
+		r.recordFailureLocked(tenant, r.now(), err)
 		r.mu.Unlock()
 		log.Warn().Err(err).Str("tenant", tenant).Str("setting", r.label).
 			Msg("Failed to refresh per-tenant setting; keeping last-known (or platform default)")
@@ -288,7 +305,8 @@ func (r *tenantResolver[V]) refresh(tenant string, sem chan struct{}) {
 }
 
 // recordFailureLocked holds a failed tenant off for negativeTTL without disturbing any
-// value it already has. The caller must hold r.mu.
+// value it already has, and records why it failed (failureCause). The caller must hold
+// r.mu.
 //
 // A tenant that has never resolved gets an entry carrying no value, which resolveOK
 // still reads as "unresolved". That map half is keyed by input the platform does not
@@ -297,10 +315,12 @@ func (r *tenantResolver[V]) refresh(tenant string, sem chan struct{}) {
 // recorded and those tenants simply re-trigger refreshes, which the rate bound in
 // triggerRefreshLocked still holds down; trading the hold-off for a bounded map is the
 // right way round, because the map is the only one of the two an attacker could grow.
-func (r *tenantResolver[V]) recordFailureLocked(tenant string, now time.Time) {
+func (r *tenantResolver[V]) recordFailureLocked(tenant string, now time.Time, err error) {
 	next := now.Add(r.negativeTTL)
+	cause := failureCause(err)
 	if e, ok := r.cache[tenant]; ok {
 		e.nextRefreshAt = next
+		e.cause = cause
 		r.cache[tenant] = e
 		return
 	}
@@ -322,6 +342,19 @@ func (r *tenantResolver[V]) recordFailureLocked(tenant string, now time.Time) {
 	if r.negatives >= maxNegativeEntries {
 		return
 	}
-	r.cache[tenant] = cacheEntry[V]{nextRefreshAt: next}
+	r.cache[tenant] = cacheEntry[V]{nextRefreshAt: next, cause: cause}
 	r.negatives++
+}
+
+// failureCause classifies a failed fetch once: the authority answered that the tenant
+// does not exist (a GraphQL error carrying CodeUnknownTenant), or it could not be asked
+// at all — transport, a non-2xx status, a token mint, a decode, or any other GraphQL
+// error. Only the first is "no such tenant"; everything else is the authority being
+// unreachable, which is the case an operator must be told about.
+func failureCause(err error) core.CeilingSource {
+	var gqlErr *svcclient.GraphQLError
+	if errors.As(err, &gqlErr) && slices.Contains(gqlErr.Codes, CodeUnknownTenant) {
+		return core.CeilingUnknownTenant
+	}
+	return core.CeilingUnreachable
 }

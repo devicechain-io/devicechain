@@ -130,7 +130,7 @@ func TestLifecycleResolverAppliesTheUnusualStates(t *testing.T) {
 		f := &fixedLifecycle{state: c.state}
 		r := lifecycleWith(f.fetch)
 		r.Deleted("acme") // trigger the out-of-band refresh; nothing is fetched until asked
-		require.Eventuallyf(t, func() bool { _, cached := r.resolveOK("acme"); return cached },
+		require.Eventuallyf(t, func() bool { _, cached := resolvedOK(r.tenantResolver, "acme"); return cached },
 			time.Second, 5*time.Millisecond, "state %q should have reached the cache", c.state)
 		assert.Equalf(t, c.want, r.Deleted("acme"), "resolver reading of state %q", c.state)
 	}

@@ -26,6 +26,8 @@ import (
 	"context"
 	"math"
 	"time"
+
+	core "github.com/devicechain-io/dc-microservice/core"
 )
 
 // Limits is a tenant's effective ceiling for one governance dimension.
@@ -121,7 +123,7 @@ func floorLimits(l Limits) Limits {
 // rate- and concurrency-bounded, fail-open to the platform default — the default is itself a
 // limit, so "fail open" never means "unlimited"). This type is the Limits-shaped face
 // of that cache: it adapts the dimension Fetcher to the generic fetch signature and
-// unpacks the cached Limits into the (rate, burst) pair the limiter wants.
+// serves the cached Limits as the core.TenantCeiling the limiter wants (Ceiling).
 type TenantLimitResolver struct {
 	*tenantResolver[Limits]
 }
@@ -146,9 +148,11 @@ func NewTenantLimitResolver(fetch Fetcher, def Limits, dimension string) *Tenant
 	}
 }
 
-// Resolve returns the tenant's effective (ratePerSecond, burst) without blocking —
-// the hot-path function handed to core.TenantRateLimiter.
-func (r *TenantLimitResolver) Resolve(tenant string) (float64, int) {
-	l := r.resolve(tenant)
-	return l.MessagesPerSecond, l.Burst
+// Ceiling returns the tenant's effective ceiling without blocking — the hot-path
+// core.TenantCeilingResolver handed to core.TenantRateLimiter. Its Source is where the
+// value came from (see resolveOK): core.CeilingResolved for a fetched value, and
+// otherwise why the platform default is being served, which the limiter counts.
+func (r *TenantLimitResolver) Ceiling(tenant string) core.TenantCeiling {
+	l, src := r.resolveOK(tenant)
+	return core.TenantCeiling{RatePerSecond: l.MessagesPerSecond, Burst: l.Burst, Source: src}
 }

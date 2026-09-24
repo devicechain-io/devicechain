@@ -48,7 +48,33 @@ import (
 // Passing it in lets each layer answer for itself: the metering layer exempts a
 // redelivery, the lifecycle layer does not, and a layer added later has to make
 // its own decision rather than inherit one made for a different reason.
-type RateGate func(source string, tenant string, sentAt time.Time, redelivery bool) bool
+//
+// origin says whether the tenant string came from a credential the platform checked.
+// It is a parameter for the same reason redelivery is: the transport knows, and the
+// gate — ONE gate for every transport — decides what that means.
+type RateGate func(source string, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool
+
+// Origin says whether a message's tenant was established by a credential the platform
+// checked. It decides only which bucket the message is metered in; every origin is
+// metered, and every origin passes the lifecycle refusal.
+type Origin uint8
+
+const (
+	// OriginAuthenticated: the tenant came from a source the platform or its operator
+	// vouches for — the capture stream, which the platform broker writes only for a
+	// device whose connection the auth callout bound to that tenant, or an MQTT broker
+	// source the operator configured, whose topic tree the operator chose to trust. Such
+	// a tenant always gets its own allowance.
+	OriginAuthenticated Origin = iota + 1
+	// OriginUntrusted: the tenant is a string the sender chose before any credential was
+	// checked — the HTTP ingest path segment. Such a name gets an allowance of its own
+	// only once the ceiling authority has confirmed it exists, or from a fixed pool;
+	// past the pool it shares one allowance (core.TenantRateLimiter.AllowUntrusted).
+	//
+	// The zero Origin is neither constant and is treated as untrusted, so a transport
+	// that forgets to say is bounded, never unbounded.
+	OriginUntrusted
+)
 
 // RefuseDeletedTenants composes the ADR-077 lifecycle refusal in front of an ingest
 // gate, so a tenant an operator has deleted stops ingesting on every transport at once.
@@ -78,7 +104,7 @@ func RefuseDeletedTenants(tenantDeleted func(string) bool, next RateGate, onRefu
 	if tenantDeleted == nil {
 		return next // gate unconfigured; see governance.NewTenantLifecycleGate
 	}
-	return func(source string, tenant string, sentAt time.Time, redelivery bool) bool {
+	return func(source string, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
 		// Deliberately NOT exempt on a redelivery. Metering is exempt because the
 		// message already paid on delivery 1; this refusal is about whether the
 		// tenant may be written to AT ALL, and that answer can have changed since.
@@ -88,7 +114,7 @@ func RefuseDeletedTenants(tenantDeleted func(string) bool, next RateGate, onRefu
 			}
 			return false
 		}
-		return next(source, tenant, sentAt, redelivery)
+		return next(source, tenant, sentAt, redelivery, origin)
 	}
 }
 
@@ -106,21 +132,30 @@ const BacklogThreshold = 5 * time.Second
 // message to the one that meters the clock it belongs to. onShed, when non-nil,
 // is called for each shed message so the caller can account for it.
 //
+// A message whose origin is not OriginAuthenticated is admitted through
+// live.AllowUntrusted: always live (an untrusted transport has no durable backlog
+// behind it), and in a bounded pool of allowances unless its tenant is confirmed. It
+// never reaches the backlog limiter.
+//
 // # Why two limiters rather than two clocks on one
 //
-// This separation is the correctness property, not an optimization. A token bucket
-// accrues from the last timestamp it saw, so a single bucket fed BOTH wall-clock
-// arrivals and hours-old send times re-accrues from a stale mark on every jump
-// forward to now — refilling to burst, which the following rewind then spends.
-// That mints roughly `burst` admissions per interleave, so a tenant ingesting over
-// HTTP while their capture backlog drains can pace live posts against the drain
-// and bypass their ceiling outright. It is not a bounded rounding error: the
-// minting scales with consumer lag, and on the single-bucket design this replaces,
-// one second of lag was enough to turn a 100/s ceiling into ~2000 admissions.
+// A single bucket fed BOTH wall-clock arrivals and hours-old send times cannot meter
+// either correctly. On the single-bucket design this replaced, the bucket's clock
+// rewound on every backlog message and re-accrued on every live one, minting roughly
+// `burst` admissions per interleave (one second of lag turned a 100/s ceiling into
+// ~2000 admissions). core.TenantRateLimiter now keeps each bucket's clock from going
+// backwards, so that interleave can no longer MINT — but it would still admit wrongly
+// in the other direction: once a live post has moved the bucket's clock to now, every
+// backlog message is charged at now too, and a compliant drain is shed as if it had
+// all arrived at once. A live post must not pace against a drain's timeline, nor a
+// drain against a live post's.
 //
-// Routing keeps each bucket on exactly ONE clock. The live bucket only ever sees
-// now; the backlog bucket only ever sees send times, which are monotonic in stream
-// order. Neither can rewind, so neither can mint.
+// Routing keeps each bucket on the clock it measures. The live bucket only ever sees
+// now; the backlog bucket only ever sees broker append times. Those are NOT monotonic:
+// the append time is stamped by the stream leader's wall clock, so it steps backwards
+// on a leader change between servers whose clocks disagree, or on an NTP step. A
+// backwards step costs over-shedding under the limiter's mark (the older times are
+// charged at the latest time the bucket has seen), never minting.
 //
 // The residual cost is that a tenant who is simultaneously live AND draining a
 // genuine backlog may be admitted up to twice their ceiling until the drain
@@ -128,7 +163,7 @@ const BacklogThreshold = 5 * time.Second
 // platform already carries from running N replicas with independent limiters.
 func NewRateGate(live *core.TenantRateLimiter, backlog *core.TenantRateLimiter,
 	onShed func(source string, tenant string)) RateGate {
-	return func(source string, tenant string, sentAt time.Time, redelivery bool) bool {
+	return func(source string, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
 		// A redelivery already paid for its admission on delivery 1 — the broker is
 		// re-offering it because the publish failed and the settler deliberately left
 		// it unacked, not because the tenant sent anything new.
@@ -140,20 +175,23 @@ func NewRateGate(live *core.TenantRateLimiter, backlog *core.TenantRateLimiter,
 		// ceiling, so a redelivery arrives precisely when there is no token left to pay
 		// with.
 		//
-		// It is also what keeps the backlog limiter's one-clock invariant true. Stream
-		// order is monotonic in send time, but DELIVERY order is not — a redelivery
-		// carries an older send time than messages already admitted. Feeding that back
-		// into the bucket rewinds its mark and lets the next forward jump re-accrue to
-		// burst, which is the same minting the live/backlog split exists to close.
-		// Exempting redeliveries removes the only way a backward timestamp can reach it.
+		// The exemption is about double-charging, not about the bucket's clock: a
+		// redelivery carries an older send time than messages already admitted, and the
+		// limiter charges it at the latest time the bucket has seen, so metering it would
+		// spend a token the tenant already paid and could never mint one.
 		if redelivery {
 			return true
 		}
-		limiter, when := live, time.Time{}
-		if !sentAt.IsZero() && time.Since(sentAt) > BacklogThreshold {
-			limiter, when = backlog, sentAt
+		var admitted bool
+		switch {
+		case origin != OriginAuthenticated:
+			admitted = live.AllowUntrusted(tenant)
+		case !sentAt.IsZero() && time.Since(sentAt) > BacklogThreshold:
+			admitted = backlog.AllowAt(tenant, sentAt)
+		default:
+			admitted = live.AllowAt(tenant, time.Time{})
 		}
-		if limiter.AllowAt(tenant, when) {
+		if admitted {
 			return true
 		}
 		if onShed != nil {

@@ -132,9 +132,13 @@ var (
 	ingestMetrics   adapter.IngestMetrics
 	obsMetrics      observe.Metrics
 	limiterMetrics  adapter.IngestLimiterMetrics
-	downlinkMetrics downlink.Metrics
-	leaderGauge     prometheus.Gauge
-	servingGauge    prometheus.Gauge
+	// limiterUnresolved counts messages admitted at the platform default for want of the
+	// tenant's own ceiling. Built once with the other metrics because the limiter itself
+	// is rebuilt per term, and a counter registered per term would panic on the second.
+	limiterUnresolved func(core.CeilingSource)
+	downlinkMetrics   downlink.Metrics
+	leaderGauge       prometheus.Gauge
+	servingGauge      prometheus.Gauge
 
 	Lease *messaging.DistributedLease
 
@@ -379,6 +383,7 @@ func buildMetrics() {
 		SamplesShed: Microservice.NewCounter("ingest_samples_shed_total",
 			"Decoded measurement samples shed at the per-tenant ingest sample-rate ceiling."),
 	}
+	limiterUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Ingest)
 
 	// Downlink command dispatch (ADR-075 L4a). The op label is a BOUNDED set (read/write/execute/
 	// other), never the raw operator-authored command name (ADR-023 cardinality). No tenant/device
@@ -532,7 +537,7 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// gates the decoded sample volume. Fail-safe (fail-open to the positive platform default) and
 	// label-free. Wired into both the /rd handlers and the Notify manager so one limiter meters the
 	// whole device-facing surface.
-	limiter := buildIngestLimiter(client, infra, Configuration.IngestRateLimit)
+	limiter := buildIngestLimiter(client, infra, Configuration.IngestRateLimit, limiterUnresolved)
 	obsManager := observe.NewManager(ingester, limiter, obsMetrics, observe.Options{})
 
 	// The downlink command conn table (ADR-075 L4a): the /rd handler records each device's live
@@ -628,23 +633,27 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 // real limit — ApplyDefaults guarantees the platform default is positive, and a zero bucket
 // admits nothing. It mirrors event-sources' buildRateLimiter, minus the two-clock backlog split:
 // the device-facing LwM2M path has no durable capture backlog to drain.
+//
+// Every LwM2M tenant is PSK-authenticated before it reaches the limiter, so it always gets an
+// allowance of its own; unresolved counts the messages admitted at the platform default for
+// want of the tenant's own ceiling (see governance.NewUnresolvedAdmissions).
 func buildIngestLimiter(client *svcclient.Client, infra mscfg.InfrastructureConfiguration,
-	cfg config.IngestRateLimit) *adapter.IngestLimiter {
+	cfg config.IngestRateLimit, unresolved func(core.CeilingSource)) *adapter.IngestLimiter {
 	def := governance.Limits{MessagesPerSecond: cfg.MessagesPerSecond, Burst: cfg.Burst}
-	var resolve func(string) (float64, int)
+	var resolve core.TenantCeilingResolver
 	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("user-management endpoint not configured — per-tenant LwM2M ingest overrides disabled; metering every tenant at the platform default.")
-		resolve = func(string) (float64, int) { return def.MessagesPerSecond, def.Burst }
+		resolve = core.StaticCeiling(def.MessagesPerSecond, def.Burst)
 	} else {
 		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
-		resolve = governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest).Resolve
+		resolve = governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest).Ceiling
 		log.Info().Str("userManagement", umURL).
 			Msg("Per-tenant LwM2M ingest overrides enabled (ADR-023, fail-open to platform default).")
 	}
 	// The sample budget is the message ceiling scaled by DefaultSamplesPerMessage, with its burst
 	// floored at decode.MaxSamplesPerNotify — the SAME symbol the decoder caps a single Notify at,
 	// so a compliant batch always fits the bucket and is shed only on sustained rate.
-	return adapter.NewIngestLimiter(resolve, adapter.DefaultSamplesPerMessage, decode.MaxSamplesPerNotify, limiterMetrics)
+	return adapter.NewIngestLimiter(resolve, adapter.DefaultSamplesPerMessage, decode.MaxSamplesPerNotify, limiterMetrics, unresolved)
 }
 
 // assertedActiveReader is the device-state read the reconstruction pass needs (*adapter.Reconciler

@@ -6,6 +6,7 @@ package governance
 import (
 	"context"
 
+	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
@@ -45,7 +46,8 @@ func NewShedPriorityResolver(client *svcclient.Client, umURL string) *ShedPriori
 // which fetchShedPriority resolves to the default and CACHES — reads true and is shed
 // normally.
 func (r *ShedPriorityResolver) Resolve(tenant string) (int, bool) {
-	return r.resolveOK(tenant)
+	prio, src := r.resolveOK(tenant)
+	return prio, src == core.CeilingResolved
 }
 
 // fetchShedPriority reads the scalar shedPriority from tenantGovernance. It does NOT

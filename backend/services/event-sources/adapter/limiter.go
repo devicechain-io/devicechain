@@ -73,26 +73,35 @@ type IngestLimiterMetrics struct {
 
 // NewIngestLimiter builds the two-stage limiter over a single ceiling resolver (so one cache
 // / one authority query per TTL serves both buckets, and an override change retunes both).
-// resolve returns a tenant's (messagesPerSecond, burst) — typically
-// governance.TenantLimitResolver.Resolve, or a flat platform-default closure when no
-// authority is configured. It MUST fail safe (a missing/unusable override → the positive
-// platform default), because a non-positive ceiling yields a bucket that admits nothing.
+// resolve returns a tenant's message ceiling — typically governance.TenantLimitResolver.Ceiling,
+// or core.StaticCeiling when no authority is configured. It MUST fail safe (a
+// missing/unusable override → the positive platform default), because a non-positive ceiling
+// yields a bucket that admits nothing.
+//
+// unresolved, when non-nil, is counted for each MESSAGE admitted at the platform default for
+// want of the tenant's own ceiling (core.WithUnresolvedAdmissions). It rides on the message
+// stage only: the sample stage sees the same messages again after decode, so counting there
+// too would count one message twice.
 //
 // samplesPerMessage scales the message ceiling into the sample ceiling (see
 // DefaultSamplesPerMessage). sampleBurstFloor floors the sample bucket's burst so a single
 // decoded batch no larger than the floor always fits — the caller passes its per-message
 // sample cap here (the SAME symbol it truncates decode at), so AllowN sheds on sustained
 // RATE and never permanently on a single compliant batch striking the burst edge.
-func NewIngestLimiter(resolve func(tenant string) (float64, int), samplesPerMessage float64,
-	sampleBurstFloor int, metrics IngestLimiterMetrics) *IngestLimiter {
+func NewIngestLimiter(resolve core.TenantCeilingResolver, samplesPerMessage float64,
+	sampleBurstFloor int, metrics IngestLimiterMetrics, unresolved func(core.CeilingSource)) *IngestLimiter {
 	if samplesPerMessage <= 0 {
 		samplesPerMessage = DefaultSamplesPerMessage
 	}
+	var messageOpts []core.TenantRateLimiterOption
+	if unresolved != nil {
+		messageOpts = append(messageOpts, core.WithUnresolvedAdmissions(unresolved))
+	}
 	return &IngestLimiter{
-		message: core.NewTenantRateLimiter(resolve),
-		sample: core.NewTenantRateLimiter(func(tenant string) (float64, int) {
-			rps, burst := resolve(tenant)
-			sampleBurst := satMulInt(burst, samplesPerMessage)
+		message: core.NewTenantRateLimiter(resolve, messageOpts...),
+		sample: core.NewTenantRateLimiter(func(tenant string) core.TenantCeiling {
+			c := resolve(tenant)
+			sampleBurst := satMulInt(c.Burst, samplesPerMessage)
 			if sampleBurst < sampleBurstFloor {
 				sampleBurst = sampleBurstFloor
 			}
@@ -103,7 +112,7 @@ func NewIngestLimiter(resolve func(tenant string) (float64, int), samplesPerMess
 				// never a silent black-hole.
 				sampleBurst = 1
 			}
-			return rps * samplesPerMessage, sampleBurst
+			return core.TenantCeiling{RatePerSecond: c.RatePerSecond * samplesPerMessage, Burst: sampleBurst, Source: c.Source}
 		}),
 		metrics: metrics,
 	}

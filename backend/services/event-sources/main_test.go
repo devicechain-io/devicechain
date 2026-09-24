@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-event-sources/config"
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 // withFloor sets the package Configuration to a manual floor for the duration of a
@@ -24,6 +25,9 @@ const (
 	bestEffortPriority = 10
 )
 
+// pairOf unpacks a ceiling into (rate, burst).
+func pairOf(c core.TenantCeiling) (float64, int) { return c.RatePerSecond, c.Burst }
+
 // resolved wraps a priority as a resolved (cache-hit) shed-priority func.
 func resolved(p int) func(string) (int, bool) { return func(string) (int, bool) { return p, true } }
 
@@ -31,11 +35,11 @@ func resolved(p int) func(string) (int, bool) { return func(string) (int, bool) 
 // tenant's ceiling is returned untouched at EVERY level. A mutation that sheds gold
 // fails here (and in the core ShedFactor test).
 func TestShedAdjustedGoldNeverShed(t *testing.T) {
-	base := func(string) (float64, int) { return 1000, 2000 }
+	base := core.StaticCeiling(1000, 2000)
 	prio := resolved(goldPriority)
 	for level := 0; level <= 3; level++ {
 		withFloor(t, level)
-		rps, burst := shedAdjusted(base, prio)("acme")
+		rps, burst := pairOf(shedAdjusted(base, prio)("acme"))
 		if rps != 1000 || burst != 2000 {
 			t.Errorf("gold at floor %d = (%v, %d), want the ceiling untouched (1000, 2000)", level, rps, burst)
 		}
@@ -47,11 +51,11 @@ func TestShedAdjustedGoldNeverShed(t *testing.T) {
 // is admitted at its base ceiling even at the deepest floor — never shed on the
 // fail-safe bronze default, which could shed a gold tenant during the cold window.
 func TestShedAdjustedDoesNotShedUnresolved(t *testing.T) {
-	base := func(string) (float64, int) { return 1000, 2000 }
+	base := core.StaticCeiling(1000, 2000)
 	unresolved := func(string) (int, bool) { return bestEffortPriority, false } // false = not resolved
 	for level := 1; level <= 3; level++ {
 		withFloor(t, level)
-		rps, burst := shedAdjusted(base, unresolved)("acme")
+		rps, burst := pairOf(shedAdjusted(base, unresolved)("acme"))
 		if rps != 1000 || burst != 2000 {
 			t.Errorf("unresolved tenant at floor %d = (%v, %d), want base untouched — an unclassified tenant must not be shed", level, rps, burst)
 		}
@@ -63,11 +67,11 @@ func TestShedAdjustedDoesNotShedUnresolved(t *testing.T) {
 // nothing until an operator sets a floor.
 func TestShedAdjustedLevel0IsAZeroCostFastPath(t *testing.T) {
 	withFloor(t, 0)
-	base := func(string) (float64, int) { return 1000, 2000 }
+	base := core.StaticCeiling(1000, 2000)
 	called := false
 	prio := func(string) (int, bool) { called = true; return bronzePriority, true }
 
-	rps, burst := shedAdjusted(base, prio)("acme")
+	rps, burst := pairOf(shedAdjusted(base, prio)("acme"))
 	if rps != 1000 || burst != 2000 {
 		t.Errorf("floor 0 = (%v, %d), want base untouched", rps, burst)
 	}
@@ -80,20 +84,20 @@ func TestShedAdjustedLevel0IsAZeroCostFastPath(t *testing.T) {
 // from L1, bronze only from L2, and the reduced ceiling is a real throttle (rps below
 // the base). This is the behavior the L3 gate proves live.
 func TestShedAdjustedShedsLowerTiers(t *testing.T) {
-	base := func(string) (float64, int) { return 1000, 2000 }
+	base := core.StaticCeiling(1000, 2000)
 
 	// best-effort is shed at L1 already.
 	withFloor(t, 1)
-	if rps, _ := shedAdjusted(base, resolved(bestEffortPriority))("x"); rps >= 1000 {
+	if rps, _ := pairOf(shedAdjusted(base, resolved(bestEffortPriority))("x")); rps >= 1000 {
 		t.Errorf("best-effort at floor 1 rps = %v, want throttled below 1000", rps)
 	}
 	// bronze is NOT shed at L1 (it rides until L2).
-	if rps, _ := shedAdjusted(base, resolved(bronzePriority))("x"); rps != 1000 {
+	if rps, _ := pairOf(shedAdjusted(base, resolved(bronzePriority))("x")); rps != 1000 {
 		t.Errorf("bronze at floor 1 rps = %v, want the ceiling untouched (bronze sheds from L2)", rps)
 	}
 	// bronze IS shed at L2.
 	withFloor(t, 2)
-	if rps, _ := shedAdjusted(base, resolved(bronzePriority))("x"); rps >= 1000 {
+	if rps, _ := pairOf(shedAdjusted(base, resolved(bronzePriority))("x")); rps >= 1000 {
 		t.Errorf("bronze at floor 2 rps = %v, want throttled below 1000", rps)
 	}
 }

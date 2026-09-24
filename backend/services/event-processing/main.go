@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-event-processing/processor"
 	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -87,6 +88,9 @@ var (
 	// component the NATS manager's oncreate callback builds. See buildMetrics.
 	DetectMetrics *processor.DetectMetrics
 	ReactMetrics  *processor.ReactMetrics
+	// EgressUnresolved counts REACT connector admissions metered at the platform default
+	// for want of the tenant's own outbound ceiling. Built once, in buildMetrics.
+	EgressUnresolved func(core.CeilingSource)
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
 	// letters are stamped with and the dead_letter_lost_total their losses count on. Built by
@@ -142,6 +146,7 @@ func parseConfiguration() error {
 func buildMetrics() {
 	DetectMetrics = processor.NewDetectMetrics(Microservice)
 	ReactMetrics = processor.NewReactMetrics(Microservice)
+	EgressUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Outbound)
 	// core/service built it: the platform's max-delivery recorder letters under it too,
 	// and a second NewProducer here would panic on the duplicate counter.
 	DeadLetters = Svc.DeadLetters
@@ -376,7 +381,7 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// budget before publishing a connector-dispatch, dropping over-quota actions at the source so a
 	// runaway rule cannot flood the connector-dispatch stream. Always non-nil (fail-open to the
 	// platform default when per-tenant overrides are not wired) — never unlimited.
-	connectorRate := buildEgressLimiter()
+	connectorRate := buildEgressLimiter(Configuration, Microservice.InstanceConfiguration.Infrastructure, EgressUnresolved)
 
 	reader, err := newReactReader(nmgr)
 	if err != nil {
@@ -437,23 +442,28 @@ func newReactReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error
 // Either way the ceiling is a real limit — never unlimited — since ApplyDefaults/Validate guarantee a
 // positive platform default. Mirrors outbound-connectors' buildEgressLimiter; the source Allow-drop
 // here and that service's bounded egress Wait charge the SAME outbound dimension at both ends.
-func buildEgressLimiter() *core.TenantRateLimiter {
+//
+// unresolved counts admissions made at the platform default for want of a tenant's own ceiling
+// (governance.NewUnresolvedAdmissions). It is built once per process, in buildMetrics, because
+// this limiter is rebuilt on every NATS start and a collector registered twice panics. Every
+// tenant here comes from the platform's own derived-events stream, so it always gets an
+// allowance of its own.
+func buildEgressLimiter(cfg *config.EventProcessingConfiguration, infra mscfg.InfrastructureConfiguration,
+	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
-		MessagesPerSecond: Configuration.OutboundMessagesPerSecond,
-		Burst:             Configuration.OutboundBurst,
+		MessagesPerSecond: cfg.OutboundMessagesPerSecond,
+		Burst:             cfg.OutboundBurst,
 	}
-	infra := Microservice.InstanceConfiguration.Infrastructure
+	counted := core.WithUnresolvedAdmissions(unresolved)
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default (ADR-060 SD-3).")
-		return core.NewTenantRateLimiter(func(string) (float64, int) {
-			return def.MessagesPerSecond, def.Burst
-		})
+		return core.NewTenantRateLimiter(core.StaticCeiling(def.MessagesPerSecond, def.Burst), counted)
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Outbound)
 	log.Info().Str("userManagement", umURL).Msg("REACT source-side per-tenant outbound overrides enabled (fail-open to platform default, ADR-060 SD-3).")
-	return core.NewTenantRateLimiter(resolver.Resolve)
+	return core.NewTenantRateLimiter(resolver.Ceiling, counted)
 }
 
 // buildFenceSetSeam constructs the ADR-078 fence-set fetch seam onto device-management's frozen

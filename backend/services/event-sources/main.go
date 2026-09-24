@@ -43,19 +43,20 @@ var (
 	// after they were sent, on the SEND timeline rather than on arrival (ADR-030 I4).
 	//
 	// It is a second limiter rather than a second clock on the first one, and that
-	// separation is load-bearing rather than tidiness. A token bucket accrues from
-	// the last timestamp it saw, so feeding ONE bucket both wall-clock arrivals and
-	// hours-old send times makes every jump forward to now re-accrue from a stale
-	// mark and refill to burst, which the following rewind then spends. That is not
-	// a bounded rounding error: it mints roughly `burst` admissions per interleave,
-	// so a tenant ingesting over HTTP while their capture backlog drains can pace
-	// live posts against the drain and bypass their ceiling entirely. Measured on
-	// the shared-bucket design this replaces, one second of consumer lag was enough
-	// to turn a 100/s ceiling into ~2000 admissions.
+	// separation is load-bearing rather than tidiness. On the shared-bucket design this
+	// replaces, feeding ONE bucket both wall-clock arrivals and hours-old send times
+	// rewound its clock on every backlog message and re-accrued it on every live one,
+	// minting roughly `burst` admissions per interleave (one second of consumer lag
+	// turned a 100/s ceiling into ~2000 admissions). core.TenantRateLimiter now keeps
+	// each bucket's clock from going backwards, so that interleave can no longer mint —
+	// but one bucket still could not meter both correctly: once a live post has moved
+	// its clock to now, every backlog message is charged at now too, and a compliant
+	// drain would be shed as if it had all arrived at once.
 	//
-	// Keeping each bucket on exactly ONE clock removes the whole category: the live
-	// bucket only ever sees now, the backlog bucket only ever sees send times (which
-	// are monotonic in stream order), so neither can rewind and neither can mint.
+	// So each bucket meters the clock it belongs to: the live bucket only ever sees
+	// now, the backlog bucket only ever sees broker append times. Those are not
+	// monotonic (a stream leader change between servers whose clocks disagree steps
+	// them backwards); a backwards step costs over-shedding, never minting.
 	//
 	// The cost is that a tenant who is simultaneously live AND draining a real
 	// backlog can be admitted up to twice their ceiling for the duration of the
@@ -226,12 +227,15 @@ func contentionLevel() int { return Configuration.Contention.ManualFloor }
 // Level 0 (the resting default, contention off) is a fast path: base is returned
 // untouched and the shed priority is never resolved, so the whole mechanism is
 // zero-cost until an operator sets a floor.
-func shedAdjusted(base func(string) (float64, int), shedPriority func(string) (int, bool)) func(string) (float64, int) {
-	return func(tenant string) (float64, int) {
-		rps, burst := base(tenant)
+//
+// The base ceiling's Source is carried through untouched: shedding changes how much a
+// tenant may send, never whether its ceiling was known.
+func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (int, bool)) core.TenantCeilingResolver {
+	return func(tenant string) core.TenantCeiling {
+		c := base(tenant)
 		level := contentionLevel()
 		if level <= 0 {
-			return rps, burst
+			return c
 		}
 		prio, resolved := shedPriority(tenant)
 		if !resolved {
@@ -244,11 +248,11 @@ func shedAdjusted(base func(string) (float64, int), shedPriority func(string) (i
 			// base ADR-023 ceiling — still metered, never unlimited — until its priority
 			// is known (within the 60s TTL). This is the one place the fail-safe direction
 			// is "don't shed the unknown" rather than "shed the unknown as bronze".
-			return rps, burst
+			return c
 		}
 		class := governance.ShedClassOf(prio)
-		l := governance.Limits{MessagesPerSecond: rps, Burst: burst}.Shed(governance.ShedFactor(class, level))
-		return l.MessagesPerSecond, l.Burst
+		l := governance.Limits{MessagesPerSecond: c.RatePerSecond, Burst: c.Burst}.Shed(governance.ShedFactor(class, level))
+		return core.TenantCeiling{RatePerSecond: l.MessagesPerSecond, Burst: l.Burst, Source: c.Source}
 	}
 }
 
@@ -259,7 +263,14 @@ func shedAdjusted(base func(string) (float64, int), shedPriority func(string) (i
 // tenant is metered at the platform default and resolves to the fail-safe shed band.
 // Either way the ceiling is a real limit — never unlimited — since ApplyDefaults
 // guarantees positive platform defaults.
+//
+// Both limiters report admissions metered at the platform default for want of a
+// tenant's own ceiling to ONE counter (a message reaches exactly one of them), and the
+// live limiter — the only one HTTP ingest's unconfirmed tenant names reach — reports
+// admissions its shared overflow allowance served.
 func buildRateLimiter() {
+	unresolved := core.WithUnresolvedAdmissions(governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
+	overflow := core.WithOverflowAdmissions(governance.NewOverflowAdmissions(Microservice))
 	def := governance.Limits{
 		MessagesPerSecond: Configuration.IngestRateLimit.MessagesPerSecond,
 		Burst:             Configuration.IngestRateLimit.Burst,
@@ -267,7 +278,7 @@ func buildRateLimiter() {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant ingest overrides disabled; metering every tenant at the platform default.")
-		flat := func(string) (float64, int) { return def.MessagesPerSecond, def.Burst }
+		flat := core.StaticCeiling(def.MessagesPerSecond, def.Burst)
 		// No user-management ⇒ no shed priorities to differentiate tenants; everyone
 		// resolves to the fail-safe bronze band. Still honor the floor on the LIVE
 		// limiter so a drill in a no-UM dev instance behaves, but nothing here reads a
@@ -277,8 +288,8 @@ func buildRateLimiter() {
 		// transiently down, so the default is the real answer here — unlike the
 		// UM-backed path, where an unfetched tenant is genuinely unresolved).
 		shedPrio := func(string) (int, bool) { return governance.DefaultShedPriority, true }
-		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio))
-		BacklogRateLimiter = core.NewTenantRateLimiter(flat)
+		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
+		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
@@ -296,8 +307,8 @@ func buildRateLimiter() {
 	// shedding the backlog would retroactively discard already-accepted, already-durable
 	// data — a violation of that invariant AND of ADR-030's durability promise. So the
 	// backlog drains un-shed: contention shapes new ingress, never recovery of committed data.
-	RateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Resolve, ShedPriorityResolver.Resolve))
-	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Resolve)
+	RateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved, overflow)
+	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Ceiling, unresolved)
 	log.Info().Str("userManagement", umURL).Int("contentionFloor", contentionLevel()).
 		Msg("Per-tenant ingest overrides + ADR-063 shed priorities enabled (fail-open to platform default).")
 }

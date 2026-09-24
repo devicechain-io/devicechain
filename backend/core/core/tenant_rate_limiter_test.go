@@ -13,8 +13,8 @@ import (
 )
 
 // constLimit is a resolver that returns the same ceiling for every tenant.
-func constLimit(rps float64, burst int) func(string) (float64, int) {
-	return func(string) (float64, int) { return rps, burst }
+func constLimit(rps float64, burst int) TenantCeilingResolver {
+	return StaticCeiling(rps, burst)
 }
 
 // A tenant may burst up to its burst size, then is denied once the bucket is
@@ -112,11 +112,11 @@ func TestTenantRateLimiter_PerTenantIsolation(t *testing.T) {
 // The resolver's per-tenant ceiling is honored: different tenants get different
 // burst allowances from the same limiter.
 func TestTenantRateLimiter_PerTenantOverride(t *testing.T) {
-	l := NewTenantRateLimiter(func(tenant string) (float64, int) {
+	l := NewTenantRateLimiter(func(tenant string) TenantCeiling {
 		if tenant == "vip" {
-			return 1, 5 // higher burst for the vip tenant
+			return TenantCeiling{RatePerSecond: 1, Burst: 5} // higher burst for the vip tenant
 		}
-		return 1, 1 // platform default for everyone else
+		return TenantCeiling{RatePerSecond: 1, Burst: 1} // platform default for everyone else
 	})
 	now := time.Unix(0, 0)
 	l.now = func() time.Time { return now }
@@ -138,7 +138,7 @@ func TestTenantRateLimiter_PerTenantOverride(t *testing.T) {
 // instant tokens), rather than requiring the limiter to be recreated.
 func TestTenantRateLimiter_RetuneOnChange(t *testing.T) {
 	burst := 1
-	l := NewTenantRateLimiter(func(string) (float64, int) { return 1, burst }) // 1 token/sec
+	l := NewTenantRateLimiter(func(string) TenantCeiling { return TenantCeiling{RatePerSecond: 1, Burst: burst} }) // 1 token/sec
 	now := time.Unix(0, 0)
 	l.now = func() time.Time { return now }
 
@@ -214,7 +214,7 @@ func TestTenantRateLimiter_ConcurrentAllow(t *testing.T) {
 // replaying a durable backlog admits what the tenant actually sent rather than
 // what its own drain rate looks like (ADR-030 I4).
 func TestAllowAtMetersOnSendTimeNotArrivalTime(t *testing.T) {
-	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+	l := NewTenantRateLimiter(StaticCeiling(100, 10))
 
 	// An hour-old backlog the tenant sent at exactly its ceiling, arriving at once.
 	base := time.Now().Add(-time.Hour)
@@ -233,7 +233,7 @@ func TestAllowAtMetersOnSendTimeNotArrivalTime(t *testing.T) {
 // ceiling. A tenant who genuinely sent above it is shed by the same amount the
 // live path would shed, so being replayed buys nothing.
 func TestAllowAtStillShedsTrafficSentAboveTheCeiling(t *testing.T) {
-	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+	l := NewTenantRateLimiter(StaticCeiling(100, 10))
 
 	base := time.Now().Add(-time.Hour)
 	admitted := 0
@@ -250,7 +250,7 @@ func TestAllowAtStillShedsTrafficSentAboveTheCeiling(t *testing.T) {
 // A zero send time means "now", so a caller with no send time to offer degrades
 // to the live behaviour rather than to unmetered.
 func TestAllowAtTreatsAZeroSendTimeAsNow(t *testing.T) {
-	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+	l := NewTenantRateLimiter(StaticCeiling(100, 10))
 
 	admitted := 0
 	for i := 0; i < 500; i++ {
@@ -273,7 +273,7 @@ func TestAllowAtTreatsAZeroSendTimeAsNow(t *testing.T) {
 // caught. Only a spread makes the clamp observable: unclamped, these 500 messages
 // accrue eight minutes of tokens and all pass.
 func TestAllowAtClampsAFutureSendTimeToNow(t *testing.T) {
-	l := NewTenantRateLimiter(func(string) (float64, int) { return 100, 10 })
+	l := NewTenantRateLimiter(StaticCeiling(100, 10))
 
 	future := time.Now().Add(24 * time.Hour)
 	admitted := 0

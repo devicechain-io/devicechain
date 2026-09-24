@@ -1,0 +1,59 @@
+{{/*
+Alerting rules for per-tenant governance ceilings.
+
+WHY THIS GROUP EXISTS. Every service that enforces a per-tenant ceiling (ingest,
+outbound, AI inference) reads each tenant's ceiling from user-management and caches it.
+Until it has read one -- the first time it sees a tenant after it starts, or for as long
+as user-management cannot be asked -- it meters that tenant at its PLATFORM DEFAULT. The
+default is still a ceiling, never unlimited, so nothing fails and nothing is shed that
+would not have been; but for a tenant whose tier sets a LOWER ceiling it admits more than
+the tier allows, and no request reports it. Each service counts those admissions by cause
+on <area>_governance_unresolved_admissions_total, and TenantsMeteredAtPlatformDefault
+pages only on the cause an operator can act on: user-management unreachable or failing.
+The other causes -- a tenant name user-management does not know, and a name nothing has
+answered for yet -- are exactly what a spray of invented names produces, so paging on them
+would hand whoever sends the spray a permanently firing alert.
+
+The second alert watches the bound on those invented names. HTTP ingest takes its tenant
+from the request path before any credential is checked, so each name that user-management
+has not confirmed gets an allowance of its own only from a fixed set; past that set, every
+such name shares one. RateLimiterOverflowInUse fires while that shared allowance is in use.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: governance
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.governance
+      rules:
+        # `for` MUST exceed the 10m window. A restart empties every service's ceiling
+        # cache, and the first reads after it race the first admissions -- and a
+        # user-management that restarts alongside it is briefly unreachable. That blip
+        # raises the counter for a minute or two and then stops; with `for` longer than
+        # the window, the increase has fallen back to zero before the alert could fire.
+        - alert: TenantsMeteredAtPlatformDefault
+          expr: sum by (job, dimension) (increase({__name__=~"devicechain_[a-z0-9]+_governance_unresolved_admissions_total", cause="unreachable", namespace="{{ $ns }}"}[10m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A service cannot read tenant ceilings from user-management and is metering tenants at the platform default"
+            description: "For at least 15 minutes, {{ "{{ $labels.job }}" }} has admitted {{ "{{ $labels.dimension }}" }} traffic for tenants whose ceilings it could not read because user-management was unreachable or failing, so it metered them at its platform default. For a tenant whose tier sets a lower ceiling, that admits more than the tier allows. Check user-management's health and this service's logs for 'Failed to refresh per-tenant setting'. Tenants whose ceilings were read before the problem started keep their last-known values. Traffic for tenant names user-management does not know is counted separately (cause=unknown-tenant) and does not fire this alert."
+        - alert: RateLimiterOverflowInUse
+          expr: sum by (job) (increase({__name__=~"devicechain_[a-z0-9]+_ratelimit_overflow_admissions_total", namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "HTTP ingest is receiving traffic for more unconfirmed tenant names than it keeps separate allowances for"
+            description: "{{ "{{ $labels.job }}" }} has had more than 1024 unconfirmed tenant names active at once, so every further name shares one allowance. Almost always this means something is posting to many invented tenant paths on the HTTP ingest port. Legitimate tenants that have been confirmed, and every MQTT, NATS and LwM2M tenant, keep their own allowance. Find the source of the requests on the HTTP ingest port."
+{{- end }}

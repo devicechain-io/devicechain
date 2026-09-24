@@ -253,7 +253,7 @@ func TestHandleMalformedTenantDropped(t *testing.T) {
 func TestHandleRateAdmitSends(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
 	defer srv.Close()
-	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 1000, 1000 })
+	rl := core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000))
 	dead := &fakeWriter{}
 	c := newTestConsumerWithRate(dead, &fakeSecretStore{}, rl, 5*time.Second)
 	ack := &fakeAck{}
@@ -276,7 +276,7 @@ func TestHandleRateAdmitSends(t *testing.T) {
 // dialed).
 func TestHandleRateShedDeadLetters(t *testing.T) {
 	// 1 burst token, next token ~1000s away; drain the burst so the dispatch under test cannot get one.
-	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	rl := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_ = rl.Wait(ctx, "acme")
 	cancel()
@@ -403,7 +403,7 @@ func TestTheLifecycleGateIsAskedAboutTheSubjectTenant(t *testing.T) {
 // timing: the limiter here has no token to give, so if the rate gate ran first this would dead-letter.
 func TestHandleDeletedTenantIsRefusedBeforeTheRateWait(t *testing.T) {
 	// 1 burst token, next token ~1000s away; drain the burst so the dispatch under test cannot get one.
-	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	rl := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_ = rl.Wait(ctx, "acme")
 	cancel()
@@ -433,7 +433,7 @@ func TestHandleDeletedTenantIsRefusedBeforeTheRateWait(t *testing.T) {
 // dead-letter path: below the redelivery cap, a dead-letter WRITE failure leaves the message unacked
 // for a later (AckWait-paced) retry rather than stranding the shed message.
 func TestHandleRateShedBelowCapLeftUnackedOnDeadLetterWriteFailure(t *testing.T) {
-	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	rl := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_ = rl.Wait(ctx, "acme")
 	cancel()
