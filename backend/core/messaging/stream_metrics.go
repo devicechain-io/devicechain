@@ -426,7 +426,10 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 // Every reader is made by NewReader, which filters on StreamSubject(suffix) — the same
 // subject the stream captures — so every sequence in the stream is one the durable would
 // have been handed. A durable with a narrower filter would count every other subject's
-// messages as loss.
+// messages as loss — which is exactly what the max-delivery recorder's durable is: it filters
+// the shared capture stream to this area's advisory subjects. It stays out because it is not a
+// reader (startRecorder keeps it on nmgr.recorder, never in nmgr.readers), and
+// TestTheRecorderDurableIsNotSampledForUnreadLoss pins that from the scrape's side.
 func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamContext, info *nats.StreamInfo, d durableRef) {
 	ci, err := js.ConsumerInfo(d.stream, d.durable, nats.Context(ctx))
 	if err != nil {

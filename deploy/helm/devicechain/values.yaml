@@ -144,7 +144,7 @@ instance:
         # bound for a given stream). One hot stream, the device-events capture stream,
         # additionally caps itself below that bound (256 MiB), and so does one cold
         # stream, the max-delivery capture (8 MiB), so the platform streams reserve
-        # 8712 MiB (8.51 GiB) rather than 9.26. The MQTT gateway's own streams, bounded
+        # 8712 MiB (8.51 GiB) rather than 9.375. The MQTT gateway's own streams, bounded
         # at startup because nats-server creates them unlimited, add 384 MiB for
         # 8.883 GiB total. The KV buckets (device caches, locks, refresh tokens,
         # OAuth codes, sign-in attempt counts) are bounded too — 5 State buckets at
