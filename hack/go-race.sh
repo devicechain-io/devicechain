@@ -71,7 +71,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #   .../command-delivery             3        10    17       65s ->  178s
 #   .../event-sources                9        13    19       72s ->  166s
 #   .../lwm2m-ingest                12        15    39       44s ->  112s
-#   .../outbound-connectors          2         8    31      (see below)
+#   .../outbound-connectors          2         8    31       73s ->  250s
 #   ---- in the set above; below, measured and not taken ---------------
 #   .../event-processing            14        21    22      101s ->  647s
 #   .../device-management            7         3    11       82s
@@ -83,19 +83,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # (Whole-job durations on ubuntu-latest, every figure from a real run of this
 # workflow, each set against its own merge base — the runners are noisy enough
 # that a baseline from a different hour is not comparable. outbound-connectors
-# has no runner figure yet: it joined the set in the change that removed its
-# stream engine, and was measured only on a workstation, where its tests went
-# from 28s to 40s under -race with a warm build cache. Replace that row's note
-# with the job durations from the first CI run that carries it. Re-measure the
-# surface with:
+# joined the set in the same change that replaced its stream engine with
+# clients the service owns, so its row mixes two effects: the race step is 99s
+# of the +177s, and most of the rest is build and vet growth from those
+# clients (build 5s -> 38s, vet 1s -> 28s). Re-measure the surface with:
 #   grep -rhE '^[[:space:]]*go (func|[a-zA-Z_])' <module> --include='*.go' )
 #
-# The first four in the set cost +411s of runner time between them, and roughly none
-# of it on the critical path: they are separate matrix entries, and the whole
-# workflow's slowest job is `subscriptions` at ~323s, which the longest of these
-# (core, at 315s) still sits under. Measured end to end, the `ci` run went from
-# 6m08s to 7m15s. 🔑 That margin is now thin, so the next module added here is
-# likely to start extending the run rather than hiding behind `subscriptions`.
+# None of this is on the critical path today. The workflow's slowest job is
+# `integration` (446-620s in the two runs that measured outbound-connectors),
+# with core's `go` job close behind at 549-564s: its go test step alone is ~205s
+# and its race step ~275s, so core is the module to watch. End to end, the `ci` run took
+# 12m11s before outbound-connectors joined the set and 12m09s after, so adding
+# it did not move the run. 🔑 The margin under `integration` is what the next
+# module added here spends: one that pushes core's job past it extends the run.
 #
 # 🔴 EVENT-PROCESSING IS THE ONE THIS COULD NOT AFFORD, AND IT IS NOT BECAUSE
 # THE MODULE IS WRONG — it has the most concurrency of any service here, and it
