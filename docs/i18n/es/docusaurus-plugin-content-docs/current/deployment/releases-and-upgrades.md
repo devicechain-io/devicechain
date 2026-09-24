@@ -2233,6 +2233,37 @@ Lo que cambia y puedes ver:
 
 No hay que hacer nada durante la actualización.
 
+#### Un dispositivo LwM2M lento ya no retrasa los comandos de los demás
+
+Cuando un dispositivo LwM2M tarda en responder y sus comandos se acumulan, los siguientes comandos
+para él ahora se apartan en command-delivery y se entregan en orden momentos después. Antes de esta
+versión detenían todo el adaptador: los comandos de todos los demás dispositivos LwM2M esperaban
+detrás del lento. Los comandos para un dispositivo sin conexión se apartan de la misma manera, sin
+ocupar el espacio que necesitan los dispositivos conectados.
+
+Lo que cambia y puedes ver:
+
+- **Un dispositivo conectado recibe el resto de una acumulación larga sin reconectarse.** Sus
+  comandos pendientes se entregaban de 32 en 32 por despertar, y el resto esperaba a que el
+  dispositivo despertara de nuevo, cosa que un dispositivo que permanece conectado nunca hace.
+  Ahora se entregan unos pocos cada vez, alternando con los comandos de otros dispositivos, hasta
+  vaciar la acumulación.
+- **Los comandos de un dispositivo siguen llegando en el orden en que se enviaron.** Esto ahora
+  también se cumple cuando un comando no pudo confirmarse con command-delivery y se reintenta: los
+  comandos posteriores lo esperan.
+- **Tras un relevo, los comandos enviados mientras los dispositivos se reconectan se entregan un
+  momento después.** Los comandos pendientes de cada dispositivo se entregan antes que cualquiera
+  nuevo, así que durante ese breve intervalo los nuevos también se apartan. Es de esperar un breve
+  aumento del tráfico hacia command-delivery tras un relevo.
+- **Métricas.** `lwm2m-ingest` añade `devicechain_lwm2mingest_commands_overflow_parked_total`, con
+  una etiqueta `reason` (`full`, `offline`, `bind`, `unconfirmed`),
+  `devicechain_lwm2mingest_command_overflow_blocked_total` (el adaptador esperó porque command-delivery
+  estaba lento) y `devicechain_lwm2mingest_command_drain_turns_total`. Se elimina
+  `devicechain_lwm2mingest_command_drain_dropped_total`: la petición de un dispositivo de sus
+  comandos pendientes ya no se descarta cuando el adaptador está ocupado.
+
+No hay que hacer nada durante la actualización.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
