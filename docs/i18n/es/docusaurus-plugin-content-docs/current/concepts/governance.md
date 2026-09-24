@@ -37,7 +37,7 @@ La alerta `TenantsMeteredAtPlatformDefault` se dispara solo cuando `unreachable`
 
 ### Nombres de inquilino que no se pueden confirmar {#unconfirmed-tenants}
 
-El endpoint de ingesta HTTP toma el inquilino de la ruta de la petición, antes de comprobar cualquier credencial de dispositivo. Un nombre de inquilino que llega por ahí obtiene una asignación propia solo si el plano de control lo ha confirmado, o de un conjunto fijo de 1024. Pasado ese conjunto, todos esos nombres comparten una única asignación con el valor por defecto de la plataforma, y se dispara la alerta `RateLimiterOverflowInUse`. El tráfico MQTT, NATS y LwM2M está autenticado por el broker o por la clave del dispositivo, y siempre obtiene su propia asignación.
+El endpoint de ingesta HTTP toma el inquilino de la ruta de la petición, antes de comprobar cualquier credencial de dispositivo. Un nombre de inquilino que llega por ahí obtiene una asignación propia solo si el plano de control lo ha confirmado, o de un conjunto fijo de 1024. Pasado ese conjunto, todos esos nombres comparten una única asignación con el valor por defecto de la plataforma, y se dispara la alerta `RateLimiterOverflowInUse`. El tráfico MQTT, NATS y LwM2M procede de un origen autenticado o en el que el operador decidió confiar: el broker de la plataforma autentica cada dispositivo, LwM2M comprueba la clave del dispositivo, y un broker MQTT externo es de confianza porque el operador lo configuró. Ese tráfico siempre obtiene su propia asignación.
 
 El conjunto acota la memoria del servicio, no el total admitido entre nombres inventados: entre ellos se puede admitir hasta 1024 veces el valor por defecto de la plataforma.
 

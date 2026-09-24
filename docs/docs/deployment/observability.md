@@ -280,6 +280,18 @@ that read `resolved-events` have no such checkpoint, and their notices are dead-
 | `MaxDeliveryRecordsWaiting` | Notices of messages that ran out of delivery attempts have waited 15 minutes without being recorded. | Check that every service is running: one that is down records late. If a notice stays once everything is healthy, it names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream. |
 | `ReplayCoveredDeliveriesExhausted` | A consumer that reads its stream from its own checkpoint ran out of delivery attempts in the last 15 minutes, because the checkpoint has not been saved for longer than the broker keeps redelivering. Nothing has been lost yet. | Fix whatever stops the service named by the `job` label from saving its checkpoint, usually its database connection. While the service runs, it saves what it has read once the checkpoint succeeds. If it restarts first, it reads the stream again from the last saved checkpoint, and events the stream has already discarded cannot be read again, so also watch `JetStreamStreamNearFull`. |
 
+## Tenants metered at the platform default {#tenant-ceilings}
+
+Every service that enforces a per-tenant ceiling reads each tenant's ceiling from
+user-management. Until it has an answer it meters the tenant at the platform default, and the
+HTTP ingest endpoint gives tenant names it cannot confirm a bounded set of allowances.
+[Governance](../concepts/governance.md#unresolved-ceilings) explains both.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `TenantsMeteredAtPlatformDefault` | warning | For 15 minutes, the service named by the `job` label has kept metering tenants at its platform default because user-management was unreachable or failing. A tenant whose ceiling is above the default is shed early, and one whose ceiling is below it is admitted past its ceiling. | Check that user-management is running and that the service can reach it. |
+| `RateLimiterOverflowInUse` | warning | For 10 minutes, HTTP ingest has been admitting requests for tenant names it could not confirm through the one allowance they all share. Many unconfirmed names are arriving, which usually means requests naming invented tenants. | Look at who is sending HTTP ingest requests. See [tenant names that cannot be confirmed](../concepts/governance.md#unconfirmed-tenants). |
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command

@@ -37,7 +37,7 @@ The `TenantsMeteredAtPlatformDefault` alert fires only when `unreachable` keeps 
 
 ### Tenant names that cannot be confirmed {#unconfirmed-tenants}
 
-The HTTP ingest endpoint takes the tenant from the request path, before any device credential is checked. A tenant name arriving there gets an allowance of its own only if the control plane has confirmed it, or from a fixed set of 1024. Past that set, all such names share one allowance at the platform default, and the `RateLimiterOverflowInUse` alert fires. MQTT, NATS and LwM2M traffic is authenticated by the broker or the device's key, and always gets its own allowance.
+The HTTP ingest endpoint takes the tenant from the request path, before any device credential is checked. A tenant name arriving there gets an allowance of its own only if the control plane has confirmed it, or from a fixed set of 1024. Past that set, all such names share one allowance at the platform default, and the `RateLimiterOverflowInUse` alert fires. MQTT, NATS and LwM2M traffic comes from a source that is authenticated or that the operator chose to trust: the platform broker authenticates each device, LwM2M checks the device's key, and an external MQTT broker source is trusted because the operator configured it. That traffic always gets its own allowance.
 
 The set bounds the service's memory, not the total admitted across invented names: up to 1024 times the platform default can be admitted across them.
 

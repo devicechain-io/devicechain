@@ -1834,13 +1834,13 @@ Two warnings are added:
   tenant's ceiling is known](../concepts/governance.md#unresolved-ceilings)).
 
 Each service now exports
-`…_governance_unresolved_admissions_total{dimension,cause}` and
+`…_governance_unresolved_admissions_total{dimension,cause}`, and `event-sources` also exports
 `…_ratelimit_overflow_admissions_total`.
 
 A tenant's allowance is also now metered on one clock that never runs backwards. A service
 draining a backlog on the time each message was sent could previously admit more than the ceiling
-when those times went backwards (a broker leader change between servers whose clocks disagree, a
-redelivered message) or when a tenant's ceiling changed mid-drain; such messages are now charged
+when those times went backwards (a broker leader change between servers whose clocks disagree)
+or when a tenant's ceiling changed mid-drain; such messages are now charged
 at the latest time the allowance has already seen, which can shed a little more but never admits
 more.
 

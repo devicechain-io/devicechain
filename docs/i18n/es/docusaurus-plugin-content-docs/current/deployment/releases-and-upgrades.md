@@ -1949,13 +1949,13 @@ Se añaden dos avisos:
   inquilino](../concepts/governance.md#unresolved-ceilings)).
 
 Cada servicio exporta ahora
-`…_governance_unresolved_admissions_total{dimension,cause}` y
+`…_governance_unresolved_admissions_total{dimension,cause}`, y `event-sources` exporta además
 `…_ratelimit_overflow_admissions_total`.
 
 Además, la asignación de un inquilino se mide ahora con un único reloj que nunca retrocede. Un
 servicio que vaciaba un atraso según la hora de envío de cada mensaje podía admitir antes más que
 el techo cuando esas horas retrocedían (un cambio de líder del broker entre servidores cuyos relojes
-no coinciden, un mensaje reentregado) o cuando el techo de un inquilino cambiaba a mitad del
+no coinciden) o cuando el techo de un inquilino cambiaba a mitad del
 vaciado; esos mensajes se cargan ahora en la última hora que la asignación ya ha visto, lo que puede
 descartar algo más pero nunca admite más.
 

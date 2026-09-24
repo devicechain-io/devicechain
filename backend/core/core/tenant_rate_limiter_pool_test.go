@@ -367,3 +367,33 @@ func BenchmarkSweep(b *testing.B) {
 		l.mu.Unlock()
 	}
 }
+
+// A confirmed bucket stays confirmed. An untrusted request naming a tenant that already
+// has a bucket from an authenticated origin, while the authority cannot confirm the name
+// (static, pending, unreachable, unknown), charges that bucket and does not demote it into
+// the pool: a demotion would count it against the pool's cap and push genuinely invented
+// names to the shared overflow early.
+func TestUntrustedCallNeverDemotesAConfirmedBucket(t *testing.T) {
+	for _, src := range []CeilingSource{CeilingStatic, CeilingPending, CeilingUnreachable, CeilingUnknownTenant} {
+		t.Run(fmt.Sprint(src), func(t *testing.T) {
+			now := time.Unix(1_000_000, 0)
+			l := NewTenantRateLimiter(sourced(1, 3, func(string) CeilingSource { return src }))
+			l.now = func() time.Time { return now }
+			l.maxPooled = 1
+
+			if !l.Allow("acme") {
+				t.Fatal("an authenticated admission on a fresh bucket must pass")
+			}
+			l.AllowUntrusted("acme")
+			if c, p, o := l.BucketCounts(); c != 1 || p != 0 || o {
+				t.Fatalf("after an untrusted call for a confirmed tenant BucketCounts = (%d, %d, %v), want (1, 0, false)", c, p, o)
+			}
+			if !l.AllowUntrusted("invented-1") {
+				t.Error("the pool's one slot was taken: an invented name was sent to the overflow")
+			}
+			if c, p, o := l.BucketCounts(); c != 1 || p != 1 || o {
+				t.Errorf("BucketCounts = (%d, %d, %v), want (1, 1, false)", c, p, o)
+			}
+		})
+	}
+}

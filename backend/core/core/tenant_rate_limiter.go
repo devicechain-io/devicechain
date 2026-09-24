@@ -408,7 +408,13 @@ func (l *TenantRateLimiter) WaitAt(ctx context.Context, tenant string, when time
 	}
 	delay := r.DelayFrom(at)
 	if deadline, ok := ctx.Deadline(); ok && delay > deadline.Sub(now) {
+		// The shed still moves the mark. ReserveN never refuses (the reservation may run
+		// arbitrarily far into the future), so it has already advanced the limiter's own
+		// clock to `at`, and CancelAt leaves it there. A mark left behind that clock lets a
+		// later, older `when` be charged below it; x/time/rate then rewinds and credits the
+		// same interval twice, minting tokens.
 		r.CancelAt(at)
+		b.mark = at
 		l.mu.Unlock()
 		return ErrWaitBudget
 	}

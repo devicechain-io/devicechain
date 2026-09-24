@@ -331,3 +331,63 @@ func TestWaitAtCancelRestoresOnTheTriggerTimeline(t *testing.T) {
 		t.Errorf("after a cancelled wait, %d admissions found tokens on the drained timeline; want 0", minted)
 	}
 }
+
+// budgetCtx is a context with a fixed deadline on the limiter's frozen clock that is never
+// Done, so WaitAt's budget decision depends only on that deadline.
+func budgetCtx(deadline time.Time) context.Context {
+	return &deadlineSignal{Context: context.Background(), deadline: deadline, read: make(chan struct{})}
+}
+
+// The budget is the wall-clock time left before the deadline, measured from NOW, never
+// from the event's trigger time. A flood produced a minute ago is still shed as it would
+// have been live: one burst plus what the rate provides over its own span and the budget.
+// Measured from `when`, the minute that has passed since would be added to every event's
+// budget and this whole flood admitted.
+func TestWaitAtBudgetIsMeasuredFromNowForAPastFlood(t *testing.T) {
+	const rps, burst = 100, 10
+	now := time.Now()
+	l := frozenAt(now, rps, burst)
+
+	admitted := 0
+	for i := 0; i < 1000; i++ {
+		when := now.Add(-61*time.Second + time.Duration(i)*time.Millisecond)
+		if l.WaitAt(budgetCtx(now.Add(5*time.Second)), "acme", when) == nil {
+			admitted++
+		}
+	}
+	want := burst + rps*6 // the 1 s span plus the 5 s budget
+	if admitted < want-2 || admitted > want+2 {
+		t.Errorf("a past flood admitted %d; want %d ± 2", admitted, want)
+	}
+}
+
+// A shed still moves the mark. ReserveN never refuses, so a shed has already advanced the
+// limiter's own clock to its admission time; a mark left behind it lets the next, older
+// `when` be charged below that clock, and every such pair credits the same interval twice.
+// Alternating a shed at T1+50ms with an admission at T1 must admit no more than T1 alone
+// could: one burst plus the rate over the 50 ms gap and the budget.
+func TestWaitAtShedAdvancesTheMark(t *testing.T) {
+	const rps, burst = 10, 10
+	now := time.Now()
+	l := frozenAt(now, rps, burst)
+	t1 := now.Add(-60 * time.Second)
+	t2 := t1.Add(50 * time.Millisecond)
+
+	admitted := 0
+	for i := 0; i < 200; i++ {
+		if l.WaitAt(budgetCtx(now.Add(5*time.Second)), "acme", t1) == nil {
+			admitted++
+		}
+	}
+	for i := 0; i < 1000; i++ {
+		if err := l.WaitAt(budgetCtx(now.Add(time.Millisecond)), "acme", t2); !errors.Is(err, ErrWaitBudget) {
+			t.Fatalf("shed %d at T2 answered %v; want ErrWaitBudget", i, err)
+		}
+		if l.WaitAt(budgetCtx(now.Add(5*time.Second)), "acme", t1) == nil {
+			admitted++
+		}
+	}
+	if limit := burst + rps*5 + 1; admitted > limit {
+		t.Errorf("alternating sheds and older admissions admitted %d; at most %d are available", admitted, limit)
+	}
+}
