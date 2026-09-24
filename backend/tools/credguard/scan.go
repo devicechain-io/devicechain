@@ -55,6 +55,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -95,6 +96,11 @@ const OwnerDir = "backend/core/credential"
 // Exemption allows ONE watched member inside one named function of one directory, for
 // a reason that is not a guessable credential check. Dir is matched as a trailing run
 // of path components, so it is written from a stable root ("backend/core/natsauth").
+//
+// Func is the function's name, or Recv.Method for a method (the receiver's type name,
+// without its pointer or type parameters). The receiver is part of the key so that an
+// exemption for a function Open does not also admit a method (*T).Open in the same
+// package, nor one T's method admit another type's method of the same name.
 type Exemption struct {
 	Dir    string
 	Func   string
@@ -106,7 +112,9 @@ type Exemption struct {
 // are refused (ParseExemptions), so the key identifies one entry.
 func (e Exemption) String() string { return e.Dir + "." + e.Func + "@" + e.Member }
 
-// ParseExemption parses "dir.func@member=reason", where member is a Watched label.
+// ParseExemption parses "dir.func@member=reason", where member is a Watched label and
+// func is "Name" or "Recv.Method". Dir runs to the first "." after its last "/", so
+// its final path component cannot itself contain a dot.
 func ParseExemption(s string) (Exemption, error) {
 	key, reason, ok := strings.Cut(s, "=")
 	if !ok || strings.TrimSpace(reason) == "" {
@@ -125,11 +133,49 @@ func ParseExemption(s string) (Exemption, error) {
 		return Exemption{}, fmt.Errorf("exemption %q names %q, which is not a watched member (%s)",
 			key, member, strings.Join(labels, ", "))
 	}
-	i := strings.LastIndex(fnKey, ".")
-	if i <= 0 || i == len(fnKey)-1 {
+	slash := strings.LastIndex(fnKey, "/")
+	dot := strings.Index(fnKey[slash+1:], ".")
+	if dot <= 0 {
 		return Exemption{}, fmt.Errorf("exemption %q is not dir.func@member", key)
 	}
-	return Exemption{Dir: fnKey[:i], Func: fnKey[i+1:], Member: member, Reason: reason}, nil
+	dot += slash + 1
+	dir, fn := fnKey[:dot], fnKey[dot+1:]
+	parts := strings.Split(fn, ".")
+	if len(parts) > 2 || slices.Contains(parts, "") {
+		return Exemption{}, fmt.Errorf("exemption %q is not dir.func@member or dir.Recv.Method@member", key)
+	}
+	return Exemption{Dir: dir, Func: fn, Member: member, Reason: reason}, nil
+}
+
+// funcKey is the name an exemption uses for a declaration: Name for a function,
+// Recv.Method for a method, with the receiver's pointer and type parameters dropped.
+func funcKey(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return fd.Name.Name
+	}
+	t := fd.Recv.List[0].Type
+	for {
+		switch x := t.(type) {
+		case *ast.StarExpr:
+			t = x.X
+			continue
+		case *ast.ParenExpr:
+			t = x.X
+			continue
+		case *ast.IndexExpr:
+			t = x.X
+			continue
+		case *ast.IndexListExpr:
+			t = x.X
+			continue
+		}
+		break
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name + "." + fd.Name.Name
+	}
+	// Not a receiver shape Go accepts; a key no exemption can name, so it is reported.
+	return "?." + fd.Name.Name
 }
 
 // ParseExemptions parses every entry and refuses a DUPLICATE key. Two identical
@@ -292,7 +338,7 @@ func scanFile(fset *token.FileSet, file *ast.File, dir string, exemptions []Exem
 		// the match, ONLY for the member the exemption names.
 		fn := ""
 		if fd, ok := decl.(*ast.FuncDecl); ok {
-			fn = fd.Name.Name
+			fn = funcKey(fd)
 		}
 		ast.Inspect(decl, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)

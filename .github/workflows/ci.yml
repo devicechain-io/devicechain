@@ -666,9 +666,10 @@ jobs:
       # guessable check (the real run prints every exemption with its reason). The
       # self-test plants evasion shapes (import alias, line split, function-value alias,
       # dot-import, lookalike directories, a compare of another member inside an exempted
-      # function, a stale exemption, ...) and requires each to be named by file and line,
-      # requires legitimate arrangements to pass, and requires an empty tree, a duplicate
-      # exemption and one naming no member to exit 2. It prints its own counts.
+      # function, a same-named method, a stale exemption, ...) and requires each to be
+      # named by file and line, requires legitimate arrangements to pass, and requires the
+      # inputs it cannot use (an empty tree, a duplicate or malformed exemption) to exit 2.
+      # It prints its own counts.
       - name: credential-compare guard self-test
         run: hack/check-credential-compare.sh --self-test
 

@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"time"
@@ -98,8 +99,14 @@ func evaluateCredential(cred *DeviceCredential, presented *PresentedCredential, 
 		if presented.Secret == nil {
 			return ErrCredentialSecretMismatch
 		}
-		// Constant-time compare to avoid leaking the secret via timing.
-		if subtle.ConstantTimeCompare([]byte(*presented.Secret), []byte(cred.CredentialValue.String)) != 1 {
+		// Compare fixed-width SHA-256 digests in constant time, so the check leaks
+		// neither the stored secret's content nor its LENGTH: ConstantTimeCompare
+		// returns at once when its inputs differ in length, and the MQTT auth callout
+		// answers the device, so a plaintext compare would let a timing
+		// measurement recover the length.
+		got := sha256.Sum256([]byte(*presented.Secret))
+		want := sha256.Sum256([]byte(cred.CredentialValue.String))
+		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			return ErrCredentialSecretMismatch
 		}
 	}
