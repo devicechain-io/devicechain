@@ -53,6 +53,10 @@ func TestTheRecorderDurableIsNotSampledForUnreadLoss(t *testing.T) {
 		defer cancel()
 		_ = nmgr.Stop(stopCtx)
 	})
+	// The recorder runs only once the manager has started, and Start also launches the
+	// background sampler. That sampler's state is single-goroutine by contract, so stop it
+	// and wait for it to exit: from here on this test's own passes are the only ones.
+	stopBackgroundSampler(t, nmgr)
 	nmgr.sampleNow(ctx) // the baseline every durable's counter is differenced against
 
 	// Another area's advisory, captured and never taken by this area's filter.
@@ -96,4 +100,16 @@ func TestTheRecorderDurableIsNotSampledForUnreadLoss(t *testing.T) {
 	for _, d := range nmgr.trackedDurables() {
 		require.NotEqual(t, recorder, d.durable, "the recorder's durable is among the sampled readers")
 	}
+}
+
+// stopBackgroundSampler ends the sampler goroutine Start launched and waits for it, so a test
+// that drives sampleNow itself is the sampler's only caller. The cancel stays set: a later
+// Stop calling it again is harmless.
+func stopBackgroundSampler(t *testing.T, nmgr *NatsManager) {
+	t.Helper()
+	if nmgr.samplerCancel == nil {
+		t.Fatal("no background sampler is running; Start did not launch one")
+	}
+	nmgr.samplerCancel()
+	nmgr.samplerWg.Wait()
 }
