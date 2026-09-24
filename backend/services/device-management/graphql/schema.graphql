@@ -1413,6 +1413,8 @@ input ProvisioningProfileCreateRequest {
     token: String!
     name: String
     description: String
+    # Both are refused when empty or whitespace-only: a blank secret is no proof of
+    # anything. A padded value is stored exactly as sent.
     provisionKey: String!
     provisionSecret: String!
     strategy: String!

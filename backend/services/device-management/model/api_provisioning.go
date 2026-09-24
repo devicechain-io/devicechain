@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -40,6 +41,13 @@ var (
 	// ErrProvisioningDeviceNotPreProvisioned means the device does not exist and the
 	// profile's CHECK_PRE_PROVISIONED strategy forbids creating it.
 	ErrProvisioningDeviceNotPreProvisioned = errors.New("device is not pre-provisioned and the profile does not allow new devices")
+	// ErrProvisioningSecretEmpty means an empty or blank provision secret was supplied
+	// on create. An empty secret is no proof of anything, so it is rejected at write
+	// time rather than persisted as a profile anyone holding the key can use.
+	ErrProvisioningSecretEmpty = errors.New("provision secret must not be empty")
+	// ErrProvisioningKeyEmpty means an empty or blank provision key was supplied on
+	// create. The key is how a device names the profile it is registering against.
+	ErrProvisioningKeyEmpty = errors.New("provision key must not be empty")
 )
 
 // provisionableCredentialType reports whether provisioning can mint a credential
@@ -52,6 +60,15 @@ func provisionableCredentialType(ctype string) bool {
 
 // Create a new provisioning profile.
 func (api *Api) CreateProvisioningProfile(ctx context.Context, request *ProvisioningProfileCreateRequest) (*ProvisioningProfile, error) {
+	// A blank key or secret is refused, not stored. TrimSpace DECIDES here and does not
+	// transform: a padded value is stored exactly as sent. The update path already
+	// refuses a blank value (OptionalString.ApplyToRequired), by the same rule.
+	if strings.TrimSpace(request.ProvisionKey) == "" {
+		return nil, ErrProvisioningKeyEmpty
+	}
+	if strings.TrimSpace(request.ProvisionSecret) == "" {
+		return nil, ErrProvisioningSecretEmpty
+	}
 	if !ProvisioningStrategy(request.Strategy).Valid() {
 		return nil, fmt.Errorf("invalid provisioning strategy: %s", request.Strategy)
 	}
@@ -262,6 +279,13 @@ func evaluateProvisioningProfile(profile *ProvisioningProfile, presentedSecret s
 	}
 	if profile.ExpiresAt.Valid && !now.Before(profile.ExpiresAt.Time) {
 		return ErrProvisioningExpired
+	}
+	// An empty stored secret is never a valid proof: a constant-time compare of
+	// "" == "" would otherwise match an empty presented secret.
+	// CreateProvisioningProfile and the update path both refuse a blank secret, so this
+	// only guards rows written before those checks.
+	if profile.ProvisionSecret == "" {
+		return ErrProvisioningSecretMismatch
 	}
 	// Constant-time compare to avoid leaking the secret via timing.
 	if subtle.ConstantTimeCompare([]byte(presentedSecret), []byte(profile.ProvisionSecret)) != 1 {
