@@ -9,9 +9,9 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,9 +88,10 @@ func TestMQTTBoundary(t *testing.T) {
 	assert.Len(t, broker.messages(), 1)
 }
 
-// Any blocked broker in a multi-broker connector makes the whole dispatch blocked, even
+// A refused broker makes the whole dispatch blocked the moment the client tries it, even
 // when a later broker is allowed and reachable: the connector names a destination the
-// tenant may not reach, and trying the others would only hide that.
+// tenant may not reach, and trying the others would only hide that. (A refused broker the
+// client never tries — because an earlier one delivered — is never judged.)
 func TestAnyBlockedMQTTBrokerIsTerminal(t *testing.T) {
 	broker, ln := startBroker(t, "127.0.0.1:0")
 	err := NewSender(guardAllowing("127.0.0.1/32")).Send(sendCtx(t, 5*time.Second),
@@ -163,17 +165,10 @@ func TestMQTTOverWebSocketIsGuarded(t *testing.T) {
 // TLS verifies the broker against the host the connector names. The body runs in a child
 // process whose system root pool is the test CA (SSL_CERT_FILE is read once per process).
 func TestMQTTTLSUsesAuthoredHostname(t *testing.T) {
-	const name = "TestMQTTTLSUsesAuthoredHostname"
-	if os.Getenv(childEnv) != name {
-		ca := newTestCA(t)
-		caFile := writeTemp(t, "ca.pem", ca.pem)
-		keyDir := t.TempDir()
-		// The child needs the same CA's key to issue leaves; hand it over as files.
-		writeCA(t, ca, keyDir)
-		runInChild(t, name, "SSL_CERT_FILE="+caFile, "DC_TEST_CA_DIR="+keyDir)
+	ca := childWithCA(t, "TestMQTTTLSUsesAuthoredHostname")
+	if ca == nil {
 		return
 	}
-	ca := readCA(t, os.Getenv("DC_TEST_CA_DIR"))
 	s := NewSender(guardAllowing("127.0.0.0/8", "::1/128"))
 
 	for _, scheme := range []string{"ssl", "tls", "mqtts"} {
@@ -387,4 +382,116 @@ func TestAttemptTally(t *testing.T) {
 	if _, all := run("10.0.0.1:1", "192.0.2.1:1"); all {
 		t.Error("one refused and one permitted address is not blocked")
 	}
+}
+
+// oversizedCONNACK is a CONNACK fixed header whose Remaining Length claims 200 MiB, with no
+// body after it.
+func oversizedCONNACK() []byte {
+	n := 200 << 20
+	hdr := []byte{0x20}
+	for {
+		b := byte(n % 128)
+		n /= 128
+		if n > 0 {
+			b |= 0x80
+		}
+		hdr = append(hdr, b)
+		if n == 0 {
+			return hdr
+		}
+	}
+}
+
+// The frame cap holds over WebSocket too. The WebSocket read limit bounds one WebSocket
+// MESSAGE, and a message of a few bytes can carry an MQTT header announcing 200 MiB; only
+// the MQTT frame cap stops the client allocating it.
+func TestAnOversizedMQTTFrameOverWebSocketIsRefusedBeforeAllocation(t *testing.T) {
+	up := websocket.Upgrader{Subprotocols: []string{"mqtt"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		if _, _, err := c.ReadMessage(); err != nil { // CONNECT
+			return
+		}
+		if c.WriteMessage(websocket.BinaryMessage, oversizedCONNACK()) != nil {
+			return
+		}
+		_, _, _ = c.ReadMessage() // hold the connection until the client goes away
+	}))
+	t.Cleanup(srv.Close)
+	u := "ws://127.0.0.1:" + mustURL(t, srv.URL).Port() + "/mqtt"
+
+	var err error
+	grew := heapGrowth(func() {
+		err = NewSender(guardAllowing("127.0.0.1/32")).Send(sendCtx(t, 3*time.Second),
+			mqttTarget(t, u), []byte("x"), "k")
+	})
+	require.Error(t, err)
+	assert.Less(t, grew, uint64(10<<20), "the send allocated %d bytes", grew)
+}
+
+// A connection the dial handed out is closed when the SEND ends, whatever the client above
+// it does: here nobody calls Close, and the destination still sees the connection end.
+func TestADialedConnectionClosesWhenTheSendEnds(t *testing.T) {
+	ended := make(chan struct{})
+	ln := listen(t, "tcp", "127.0.0.1:0", func(c net.Conn) {
+		_, _ = io.Copy(io.Discard, c)
+		close(ended)
+	})
+	s := NewSender(guardAllowing("127.0.0.1/32"))
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	log := &dialLog{ctx: ctx, cancel: cancel}
+	// The client's own context never ends; only the send's does.
+	conn, err := s.dial(log)(context.Background(), "tcp", "127.0.0.1:"+ln.port())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() }) // after the assertions, so a failure does not hang the listener
+
+	cancel(nil)
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the destination still holds the connection after the send ended")
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = conn.Read(make([]byte, 1))
+	assert.ErrorIs(t, err, net.ErrClosed)
+	_, err = conn.Write([]byte("x"))
+	assert.ErrorIs(t, err, net.ErrClosed)
+}
+
+// The connect timeout is the time left in the send — never paho's 30 s default, which
+// would outlive the send — and a send with no time left is not started.
+func TestMQTTConnectTimeoutIsTheTimeLeft(t *testing.T) {
+	s := NewSender(nil)
+	const budget = 3 * time.Second
+	ctx, cancel := context.WithCancelCause(sendCtx(t, budget))
+	defer cancel(nil)
+	log := &dialLog{ctx: ctx, cancel: cancel}
+	opts, err := s.mqttOptions(ctx, log, mqttTarget(t, "tcp://127.0.0.1:1"))
+	require.NoError(t, err)
+	assert.LessOrEqual(t, opts.ConnectTimeout, budget)
+	assert.Greater(t, opts.ConnectTimeout, budget-time.Second)
+	assert.False(t, opts.AutoReconnect)
+	assert.False(t, opts.ConnectRetry)
+	assert.NotNil(t, opts.CustomOpenConnectionFn, "every connection comes from the guarded open function")
+
+	spent, cancelSpent := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+	defer cancelSpent()
+	_, err = s.mqttOptions(spent, log, mqttTarget(t, "tcp://127.0.0.1:1"))
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+// Send refuses a context with no deadline: the deadline is what bounds the connect as well
+// as the delivery, so without one a stalled destination would hold the worker forever.
+func TestSendRequiresADeadline(t *testing.T) {
+	_, ln := startBroker(t, "127.0.0.1:0")
+	err := NewSender(guardAllowing("127.0.0.1/32")).Send(context.Background(),
+		mqttTarget(t, "tcp://127.0.0.1:"+ln.port()), []byte("x"), "k")
+	require.ErrorIs(t, err, ErrPublishConfig)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(0), ln.accepts.Load())
 }

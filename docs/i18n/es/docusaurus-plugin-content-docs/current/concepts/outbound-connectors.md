@@ -67,7 +67,12 @@ Kafka, SNS y SQS:
 - **Las URL de bróker MQTT** deben usar `tcp://`, `mqtt://`, `ssl://`, `tls://`, `mqtts://`, `ws://`
   o `wss://`, con un puerto explícito y un bróker por entrada. Cualquier otro esquema — incluido
   `unix://` — se rechaza al guardar el conector, y otra vez si se despacha un conector almacenado que
-  lo use. Si se rechaza cualquier bróker de la lista de un conector, todo el despacho es `blocked`.
+  lo use.
+- **Un despacho es `blocked` en cuanto se rechaza cualquier dirección que intenta** — y una dirección
+  solo se juzga cuando se intenta. Con una lista de brókeres, el resultado puede depender de a cuál
+  llega primero el cliente: un cliente MQTT que se conecta a un primer bróker permitido entrega, y solo
+  encuentra uno rechazado cuando el primero está caído; un cliente Kafka elige su primera semilla al
+  azar. Liste solo destinos permitidos.
 - **Las direcciones de Kafka** son `host:puerto`. También se comprueba cada bróker que el clúster
   **anuncia** en sus metadatos, no solo las direcciones que configuró.
 - **Los endpoints personalizados de SNS y SQS** se comprueban como cualquier otro destino. Sin uno,
@@ -86,7 +91,8 @@ entrada. Una autorización se aplica a **todos los inquilinos y a todos los cone
 solo a aquel para el que se añadió.
 
 Un resultado `blocked` solo le dice a un inquilino que el destino resolvió a una dirección rechazada —
-lo mismo que dice el rechazo de un webhook. No revela nada más sobre la red.
+lo mismo que dice el rechazo de un webhook. La dirección rechazada queda registrada en el mensaje
+muerto, que los operadores pueden leer y los inquilinos no.
 
 ## Gobernanza {#governance}
 

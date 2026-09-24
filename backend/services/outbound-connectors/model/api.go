@@ -28,8 +28,8 @@ import (
 const maxConfigBytes = 64 << 10
 
 // ErrInvalidConfig is returned when a create/update carries a Config that is not a
-// well-formed JSON object. The document is otherwise stored opaquely (per-type field
-// validation lives with each output generator, slices C4b/C4c).
+// well-formed JSON object. The per-type shape is validated separately, at the same write,
+// by connectorspec.ValidateConfig (see validateRequest).
 var ErrInvalidConfig = errors.New("connector config must be a JSON object")
 
 // ErrConfigTooLarge is returned when a Config exceeds maxConfigBytes.

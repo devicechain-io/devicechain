@@ -187,12 +187,10 @@ func TestAnOversizedAWSBodyIsRefused(t *testing.T) {
 			assert.Less(t, grew, uint64(24<<20), "the send allocated %d bytes", grew)
 			if name == "plain" {
 				// Two caps stand here: the connection's (every byte off the wire, headers
-				// included) and the body's. Over plain HTTP the connection's trips first.
-				capped := false
-				for _, c := range []error{errAWSBodyCap, errInboundCap} {
-					capped = capped || errors.Is(err, c) || strings.Contains(err.Error(), c.Error())
-				}
-				assert.True(t, capped, "want a size cap, got %v", err)
+				// included) and the body's. The body's is the smaller, so it is the one that
+				// fires on an oversized response.
+				assert.True(t, errors.Is(err, errAWSBodyCap) || strings.Contains(err.Error(), errAWSBodyCap.Error()),
+					"want the body cap, got %v", err)
 			}
 		})
 	}
@@ -200,6 +198,8 @@ func TestAnOversizedAWSBodyIsRefused(t *testing.T) {
 
 // The body cap admits exactly the cap and refuses one byte past it.
 func TestCappedBody(t *testing.T) {
+	require.Less(t, maxAWSResponseBytes, maxInboundBytesPerConn,
+		"the body cap must fire before the connection's, or it bounds nothing")
 	read := func(n int) error {
 		b := &cappedBody{rc: io.NopCloser(bytes.NewReader(make([]byte, n))), left: 8}
 		_, err := io.ReadAll(b)

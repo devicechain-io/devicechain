@@ -280,7 +280,7 @@ done
   ring with no well-defined interior then answers containment confidently and arbitrarily. Nothing
   about that answer looks wrong, which is why `core/geo/ring.go` exists to cover the hole. The shape
   to copy is `connectorspec.ErrUnsupportedType`: a connector type may be a valid, creatable
-  vocabulary member whose output generator has not shipped in this build, and dispatching one is a
+  vocabulary member whose publish client has not shipped in this build, and dispatching one is a
   **terminal, dead-lettered** outcome — recognized but not executable — never a silent drop.
 - **Multi-tenancy:** a single shared set of services serves all tenants; isolation is enforced at the
   storage (`tenant_id` predicate) and messaging (per-tenant subjects) layers, not by per-tenant pods.

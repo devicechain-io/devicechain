@@ -5,8 +5,8 @@ go 1.26.6
 require (
 	github.com/aws/aws-sdk-go-v2 v1.46.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.3
-	github.com/aws/aws-sdk-go-v2/service/sns v1.27.0
-	github.com/aws/aws-sdk-go-v2/service/sqs v1.29.7
+	github.com/aws/aws-sdk-go-v2/service/sns v1.46.0
+	github.com/aws/aws-sdk-go-v2/service/sqs v1.51.0
 	github.com/devicechain-io/dc-event-processing v0.0.1
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -18,9 +18,9 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
-	github.com/twmb/franz-go v1.18.1
-	github.com/twmb/franz-go/pkg/kfake v0.0.0-20250121001354-6ea03e3a3810
-	github.com/twmb/franz-go/pkg/kmsg v1.9.0
+	github.com/twmb/franz-go v1.21.7
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260915001422-21ef8a4103bb
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	golang.org/x/net v0.57.0
 	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.2

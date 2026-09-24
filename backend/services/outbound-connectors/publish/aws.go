@@ -22,7 +22,11 @@ import (
 // maxAWSResponseBytes caps one AWS response body. A Publish or SendMessage answer is a few
 // hundred bytes; an endpoint override pointing somewhere hostile could otherwise stream
 // without end into the SDK's decoder.
-const maxAWSResponseBytes = 1 << 20
+//
+// It is deliberately well below maxInboundBytesPerConn, the cap on everything the
+// connection receives: the body cap is the one that fires on an oversized response, with
+// its own error, and the connection's stays the backstop for headers and TLS records.
+const maxAWSResponseBytes = 256 << 10
 
 var errAWSBodyCap = errors.New("publish: the AWS endpoint sent a response larger than a send can need")
 

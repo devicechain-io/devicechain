@@ -33,7 +33,7 @@ import (
 // type may be a valid, creatable vocabulary member whose client has not shipped yet
 // (gcp_pubsub). The dispatch executor maps it to a terminal, dead-lettered outcome —
 // recognized but not executable — never a silent drop.
-var ErrUnsupportedType = errors.New("connector type has no output generator in this build")
+var ErrUnsupportedType = errors.New("connector type has no publish client in this build")
 
 // Target is a fully-validated publish destination plus its credential. It is sealed:
 // exactly MQTTTarget, KafkaTarget, SNSTarget and SQSTarget implement it, and the publish

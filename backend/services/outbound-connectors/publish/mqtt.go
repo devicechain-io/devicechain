@@ -30,18 +30,33 @@ const maxInboundPacket = 64 << 10
 var errOversizedPacket = errors.New("publish: the broker announced an MQTT packet larger than a publisher can receive")
 
 // sendMQTT publishes one message and disconnects.
+func (s *Sender) sendMQTT(ctx context.Context, log *dialLog, t connectorspec.MQTTTarget, payload []byte) error {
+	opts, err := s.mqttOptions(ctx, log, t)
+	if err != nil {
+		return err
+	}
+	client := mqtt.NewClient(opts)
+	if err := waitToken(ctx, client.Connect()); err != nil {
+		return err
+	}
+	defer client.Disconnect(0)
+	return waitToken(ctx, client.Publish(t.Topic, t.QoS, false, payload))
+}
+
+// mqttOptions is the complete client configuration for one send, returned whole so a test
+// can pin it.
 //
 // The client is configured never to reach anywhere on its own: no reconnect, no connect
 // retry, and every connection comes from openFn, which dials through the guarded dial.
 // paho's SetDialer is deliberately NOT used — its WebSocket path and its ALL_PROXY
 // handling for tcp:// both bypass the dialer it is given.
-func (s *Sender) sendMQTT(ctx context.Context, log *dialLog, t connectorspec.MQTTTarget, payload []byte) error {
+func (s *Sender) mqttOptions(ctx context.Context, log *dialLog, t connectorspec.MQTTTarget) (*mqtt.ClientOptions, error) {
 	deadline, _ := ctx.Deadline()
 	opts := mqtt.NewClientOptions()
 	opts.Servers = append([]*url.URL(nil), t.Brokers...)
 	clientID, err := mqttClientID(t.ClientID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	opts.SetClientID(clientID)
 	if t.Username != "" {
@@ -57,21 +72,15 @@ func (s *Sender) sendMQTT(ctx context.Context, log *dialLog, t connectorspec.MQT
 	opts.SetWriteTimeout(5 * time.Second)
 	opts.SetCustomOpenConnectionFn(s.mqttOpen(ctx, log))
 
-	// The connect timeout is the time left in the send, computed right before Connect. It is
-	// never 0 (to paho, a deadline of now) and never the 30 s default, which would outlive
-	// the send and the message's redelivery clock.
+	// The connect timeout is the time left in the send, computed right before the client is
+	// built. It is never 0 (to paho, a deadline of now) and never the 30 s default, which
+	// would outlive the send and the message's redelivery clock.
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
-		return context.DeadlineExceeded
+		return nil, context.DeadlineExceeded
 	}
 	opts.SetConnectTimeout(remaining)
-
-	client := mqtt.NewClient(opts)
-	if err := waitToken(ctx, client.Connect()); err != nil {
-		return err
-	}
-	defer client.Disconnect(0)
-	return waitToken(ctx, client.Publish(t.Topic, t.QoS, false, payload))
+	return opts, nil
 }
 
 // waitToken waits for a paho token or the send's end, whichever is first.

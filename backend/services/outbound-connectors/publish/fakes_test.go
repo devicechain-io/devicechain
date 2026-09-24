@@ -278,8 +278,9 @@ func readCA(t *testing.T, dir string) *testCA {
 	return &testCA{cert: cert, key: key}
 }
 
-// leaf issues a server certificate for the given DNS name and 127.0.0.1.
-func (ca *testCA) leaf(t *testing.T, dnsName string) tls.Certificate {
+// leaf issues a server certificate for dnsName and any further names; a name that parses
+// as an IP address is issued as an IP SAN.
+func (ca *testCA) leaf(t *testing.T, dnsName string, more ...string) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -293,6 +294,13 @@ func (ca *testCA) leaf(t *testing.T, dnsName string) tls.Certificate {
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	for _, n := range more {
+		if ip := net.ParseIP(n); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		} else {
+			tmpl.DNSNames = append(tmpl.DNSNames, n)
+		}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
@@ -414,4 +422,46 @@ func mqttTarget(t *testing.T, urls ...string) connectorspec.MQTTTarget {
 		m.Brokers = append(m.Brokers, mustURL(t, u))
 	}
 	return m
+}
+
+// tlsListener serves TLS with cert and counts the handshakes that COMPLETED — a client that
+// refused the certificate never gets there. serve (optional) runs over the TLS stream.
+type tlsListener struct {
+	*countingListener
+	completed atomic.Int32
+}
+
+func listenTLS(t *testing.T, cfg *tls.Config, serve func(net.Conn)) *tlsListener {
+	t.Helper()
+	l := &tlsListener{}
+	l.countingListener = listen(t, "tcp", "127.0.0.1:0", func(c net.Conn) {
+		tc := tls.Server(c, cfg)
+		if tc.Handshake() != nil {
+			return
+		}
+		l.completed.Add(1)
+		if serve != nil {
+			serve(tc)
+		} else {
+			_, _ = io.Copy(io.Discard, tc)
+		}
+	})
+	return l
+}
+
+// childWithCA runs the named test's body in a child process whose system root pool is a
+// fresh throwaway CA (SSL_CERT_FILE is read once per process). It returns the CA in the
+// child, and nil in the parent, which must then return.
+func childWithCA(t *testing.T, name string) *testCA {
+	t.Helper()
+	if os.Getenv(childEnv) != name {
+		ca := newTestCA(t)
+		caFile := writeTemp(t, "ca.pem", ca.pem)
+		keyDir := t.TempDir()
+		// The child needs the same CA's key to issue leaves; hand it over as files.
+		writeCA(t, ca, keyDir)
+		runInChild(t, name, "SSL_CERT_FILE="+caFile, "DC_TEST_CA_DIR="+keyDir)
+		return nil
+	}
+	return readCA(t, os.Getenv("DC_TEST_CA_DIR"))
 }

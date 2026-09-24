@@ -66,7 +66,11 @@ given. The check applies the same way to webhooks, MQTT, Kafka, SNS and SQS:
 - **MQTT broker URLs** must use `tcp://`, `mqtt://`, `ssl://`, `tls://`, `mqtts://`, `ws://` or
   `wss://`, with an explicit port and one broker per entry. Any other scheme — `unix://` included —
   is refused when the connector is saved, and again if a stored connector with one is dispatched.
-  If any broker in a connector's list is refused, the whole dispatch is `blocked`.
+- **A dispatch is `blocked` as soon as any address it tries is refused** — and an address is only
+  judged when it is tried. With a list of brokers, the outcome can therefore depend on which one
+  the client reaches first: an MQTT client that connects to an allowed first broker delivers, and
+  meets a refused one only when the first is down; a Kafka client picks its first seed at random.
+  List only destinations that are allowed.
 - **Kafka** addresses are `host:port`. Every broker the cluster **advertises** in its metadata is
   checked too, not only the addresses you configured.
 - **SNS and SQS** endpoint overrides are checked like any other destination. Without an override the
@@ -84,7 +88,8 @@ address per availability zone, and each needs its own entry. An allowance applie
 and every connector and webhook**, not only the one it was added for.
 
 A `blocked` outcome tells a tenant only that the destination resolved to a refused address — the
-same thing a webhook refusal says. It reveals nothing else about the network.
+same thing a webhook refusal says. The refused address itself is recorded in the dead letter, which
+operators can read and tenants cannot.
 
 ## Governance {#governance}
 

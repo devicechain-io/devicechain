@@ -5,6 +5,7 @@ package publish
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"io"
 	"net"
@@ -210,4 +211,72 @@ func TestKafkaOptsPinParity(t *testing.T) {
 	require.NoError(t, err)
 	defer named.Close()
 	assert.Equal(t, []any{"acme", true}, named.OptValues(kgo.ClientID))
+}
+
+// TLS verifies EVERY broker against the host it was dialed by — the seed as authored, and
+// each broker by the host the cluster advertised — because TLS is all that stands between
+// a SASL credential and whoever answers the connection. The body runs in a child process
+// whose system root pool is a throwaway CA.
+func TestKafkaTLSVerifiesEveryBroker(t *testing.T) {
+	ca := childWithCA(t, "TestKafkaTLSVerifiesEveryBroker")
+	if ca == nil {
+		return
+	}
+	s := NewSender(guardAllowing("127.0.0.0/8", "::1/128"))
+	tlsTarget := func(seed string) connectorspec.KafkaTarget {
+		k := kafkaTarget(seed)
+		k.TLS = true
+		return k
+	}
+
+	// Delivery. The seed is authored as "localhost"; the cluster advertises itself as
+	// 127.0.0.1, so the produce connection is verified against the IP. One certificate
+	// carries both names.
+	sni := &sniRecorder{}
+	c, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "t"),
+		kfake.TLS(sni.config(ca.leaf(t, "localhost", "127.0.0.1"))))
+	require.NoError(t, err)
+	t.Cleanup(c.Close)
+	_, port, err := net.SplitHostPort(c.ListenAddrs()[0])
+	require.NoError(t, err)
+	require.NoError(t, s.Send(sendCtx(t, 10*time.Second), tlsTarget("localhost:"+port), []byte("tls"), "k"))
+	// The seed presented its authored name; the advertised broker, an IP, presents none.
+	assert.Contains(t, sni.seen(), "localhost")
+	assert.Contains(t, sni.seen(), "", "the produce went over TLS to the advertised broker")
+
+	// A SEED whose certificate names another host, from the same trusted CA, is refused
+	// during the handshake: no handshake completes.
+	wrongSeed := listenTLS(t, &tls.Config{Certificates: []tls.Certificate{ca.leaf(t, "other.test")}}, nil)
+	err = s.Send(sendCtx(t, 2*time.Second), tlsTarget("localhost:"+wrongSeed.port()), []byte("x"), "k")
+	require.Error(t, err)
+	assert.False(t, isBlocked(err))
+	assert.GreaterOrEqual(t, wrongSeed.accepts.Load(), int32(1), "the seed was reached")
+	assert.Equal(t, int32(0), wrongSeed.completed.Load(), "a seed with another host's certificate must fail verification")
+
+	// An ADVERTISED broker whose certificate names another host is refused the same way,
+	// after a seed that verifies correctly advertised it.
+	wrongBroker := listenTLS(t, &tls.Config{Certificates: []tls.Certificate{ca.leaf(t, "other.test")}}, nil)
+	brokerPort, err := strconv.Atoi(wrongBroker.port())
+	require.NoError(t, err)
+	goodSeed := listenTLS(t, &tls.Config{Certificates: []tls.Certificate{ca.leaf(t, "localhost")}},
+		serveAdvertisingSeed("localhost", int32(brokerPort)))
+	err = s.Send(sendCtx(t, 2*time.Second), tlsTarget("localhost:"+goodSeed.port()), []byte("x"), "k")
+	require.Error(t, err)
+	assert.False(t, isBlocked(err))
+	assert.GreaterOrEqual(t, goodSeed.completed.Load(), int32(1), "the anchor: the correct seed verified and advertised the broker")
+	assert.GreaterOrEqual(t, wrongBroker.accepts.Load(), int32(1), "the advertised broker was dialed")
+	assert.Equal(t, int32(0), wrongBroker.completed.Load(), "an advertised broker with another host's certificate must fail verification")
+}
+
+// A SASL mechanism connectorspec does not admit is a terminal target error, never a
+// connection without authentication. Reachable only past Build, so the target is built by
+// hand.
+func TestAnUnknownKafkaSASLMechanismIsRefused(t *testing.T) {
+	ln := listen(t, "tcp", "127.0.0.1:0", nil)
+	target := kafkaTarget("127.0.0.1:" + ln.port())
+	target.SASL = &connectorspec.KafkaSASL{Mechanism: "GSSAPI", User: "u", Password: "p"}
+	err := NewSender(guardAllowing("127.0.0.1/32")).Send(sendCtx(t, 2*time.Second), target, []byte("x"), "k")
+	require.ErrorIs(t, err, ErrPublishConfig)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(0), ln.accepts.Load(), "nothing may connect unauthenticated")
 }
