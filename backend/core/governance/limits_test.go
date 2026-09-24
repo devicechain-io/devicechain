@@ -44,12 +44,12 @@ func TestResolve_DefaultThenOverride(t *testing.T) {
 	f := &fakeFetcher{result: Limits{MessagesPerSecond: 5, Burst: 10}}
 	r := NewTenantLimitResolver(f, platformDefault, "test")
 
-	rps, burst := r.Resolve("acme")
+	rps, burst := pair(r.Ceiling("acme"))
 	assert.Equal(t, float64(1000), rps, "uncached tenant serves the platform default")
 	assert.Equal(t, 2000, burst)
 
 	assert.Eventually(t, func() bool {
-		rps, burst := r.Resolve("acme")
+		rps, burst := pair(r.Ceiling("acme"))
 		return rps == 5 && burst == 10
 	}, time.Second, 5*time.Millisecond, "override should populate the cache")
 }
@@ -60,14 +60,14 @@ func TestResolve_FailOpenToDefault(t *testing.T) {
 	f := &fakeFetcher{err: errors.New("user-management unreachable")}
 	r := NewTenantLimitResolver(f, platformDefault, "test")
 
-	rps, burst := r.Resolve("acme")
+	rps, burst := pair(r.Ceiling("acme"))
 	assert.Equal(t, float64(1000), rps)
 	assert.Equal(t, 2000, burst)
 
 	// Give the background refresh a chance to run and fail; the value must not
 	// change (and must never be zero/unmetered).
 	assert.Eventually(t, func() bool { return f.callCount() >= 1 }, time.Second, 5*time.Millisecond)
-	rps, burst = r.Resolve("acme")
+	rps, burst = pair(r.Ceiling("acme"))
 	assert.Equal(t, float64(1000), rps, "still the platform default after a failed refresh")
 	assert.Equal(t, 2000, burst)
 }
@@ -82,12 +82,12 @@ func TestResolve_DedupesInflight(t *testing.T) {
 	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	for i := 0; i < 20; i++ {
-		r.Resolve("acme")
+		pair(r.Ceiling("acme"))
 	}
 	close(release)
 
 	assert.Eventually(t, func() bool {
-		rps, _ := r.Resolve("acme")
+		rps, _ := pair(r.Ceiling("acme"))
 		return rps == 5
 	}, time.Second, 5*time.Millisecond)
 	assert.Equal(t, 1, f.callCount(), "20 rapid resolves must trigger exactly one fetch")
@@ -102,15 +102,15 @@ func TestResolve_StaleRefresh(t *testing.T) {
 	r.now = func() time.Time { return now }
 
 	// Populate the cache.
-	r.Resolve("acme")
+	pair(r.Ceiling("acme"))
 	assert.Eventually(t, func() bool {
-		rps, _ := r.Resolve("acme")
+		rps, _ := pair(r.Ceiling("acme"))
 		return rps == 5
 	}, time.Second, 5*time.Millisecond)
 	callsAfterFirst := f.callCount()
 
 	// A fresh entry serves without another fetch.
-	r.Resolve("acme")
+	pair(r.Ceiling("acme"))
 	assert.Equal(t, callsAfterFirst, f.callCount(), "fresh cache entry must not refetch")
 
 	// Advance past the TTL and change the upstream value; the stale entry refreshes.
@@ -118,9 +118,9 @@ func TestResolve_StaleRefresh(t *testing.T) {
 	f.mu.Lock()
 	f.result = Limits{MessagesPerSecond: 7, Burst: 14}
 	f.mu.Unlock()
-	r.Resolve("acme") // serves stale (5) and triggers refresh
+	pair(r.Ceiling("acme")) // serves stale (5) and triggers refresh
 	assert.Eventually(t, func() bool {
-		rps, _ := r.Resolve("acme")
+		rps, _ := pair(r.Ceiling("acme"))
 		return rps == 7
 	}, time.Second, 5*time.Millisecond, "stale entry should refresh to the new value")
 }
@@ -136,7 +136,7 @@ func TestResolve_CapsConcurrentRefreshes(t *testing.T) {
 	// Resolve many distinct tenants while every fetch is blocked; each is uncached
 	// so each wants a refresh, but the cap bounds how many actually launch.
 	for i := 0; i < 100; i++ {
-		r.Resolve(tenantName(i))
+		r.Ceiling(tenantName(i))
 	}
 	// Concurrent (blocked) fetches must not exceed the cap.
 	assert.Eventually(t, func() bool { return f.callCount() == maxConcurrentRefreshes }, time.Second, 5*time.Millisecond)
@@ -209,7 +209,7 @@ func TestNewTenantLimitResolver_FloorsNonPositiveDefault(t *testing.T) {
 			// for an unresolved tenant — the cold-cache and fail-open reading.
 			f := &blockingFetcher{gate: make(chan struct{})}
 			r := NewTenantLimitResolver(f, tc.def, "test")
-			rps, burst := r.Resolve("acme")
+			rps, burst := pair(r.Ceiling("acme"))
 			assert.Equal(t, tc.want.MessagesPerSecond, rps)
 			assert.Equal(t, tc.want.Burst, burst)
 			assert.Positive(t, rps, "a served ceiling must admit something")

@@ -7,6 +7,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -16,8 +17,8 @@ import (
 // mirroring the platform-default closure the limiter uses when no authority is configured. A
 // near-zero rate keeps tokens from refilling within a sub-millisecond test, so admission is
 // governed by the burst alone.
-func flatResolve(burst int) func(string) (float64, int) {
-	return func(string) (float64, int) { return 1e-9, burst }
+func flatResolve(burst int) core.TenantCeilingResolver {
+	return core.StaticCeiling(1e-9, burst)
 }
 
 func counter() prometheus.Counter {
@@ -32,7 +33,7 @@ func counterValue(c prometheus.Counter) float64 {
 func TestIngestLimiter_MessageStageShedsAndCounts(t *testing.T) {
 	shed := counter()
 	l := NewIngestLimiter(flatResolve(2), DefaultSamplesPerMessage, 256,
-		IngestLimiterMetrics{MessagesShed: shed})
+		IngestLimiterMetrics{MessagesShed: shed}, nil)
 
 	assert.True(t, l.AllowMessage("acme"), "1st within burst 2")
 	assert.True(t, l.AllowMessage("acme"), "2nd within burst 2")
@@ -49,7 +50,7 @@ func TestIngestLimiter_MessageStageShedsAndCounts(t *testing.T) {
 func TestIngestLimiter_SampleStageChargesCountAndCounts(t *testing.T) {
 	shed := counter()
 	// Sample burst = satMul(burst 4, factor 25) = 100 (>= floor 50), so ~100 sample tokens.
-	l := NewIngestLimiter(flatResolve(4), 25, 50, IngestLimiterMetrics{SamplesShed: shed})
+	l := NewIngestLimiter(flatResolve(4), 25, 50, IngestLimiterMetrics{SamplesShed: shed}, nil)
 
 	assert.True(t, l.AllowSamples("acme", 60), "60 of ~100 sample tokens")
 	assert.True(t, l.AllowSamples("acme", 40), "next 40 drains the bucket")
@@ -68,8 +69,8 @@ func TestIngestLimiter_SampleStageChargesCountAndCounts(t *testing.T) {
 func TestIngestLimiter_SampleBurstFlooredAtCap(t *testing.T) {
 	// Tiny message burst 1, factor 1 → satMul = 1. Without a floor the sample burst is 1, so a
 	// 200-sample batch could never be admitted. Floored at 256 it fits.
-	floored := NewIngestLimiter(flatResolve(1), 1, 256, IngestLimiterMetrics{})
-	unfloored := NewIngestLimiter(flatResolve(1), 1, 0, IngestLimiterMetrics{})
+	floored := NewIngestLimiter(flatResolve(1), 1, 256, IngestLimiterMetrics{}, nil)
+	unfloored := NewIngestLimiter(flatResolve(1), 1, 0, IngestLimiterMetrics{}, nil)
 
 	assert.True(t, floored.AllowSamples("acme", 200), "200 <= floored burst 256 admits")
 	assert.False(t, unfloored.AllowSamples("acme", 200), "200 > unfloored burst 1 is shed forever")
@@ -86,7 +87,7 @@ func TestSatMulInt_Saturates(t *testing.T) {
 	assert.Equal(t, 0, satMulInt(4, 0))
 
 	// End to end: a max-burst override must still admit a real batch (not a negative bucket).
-	l := NewIngestLimiter(flatResolve(math.MaxInt), 25, 256, IngestLimiterMetrics{})
+	l := NewIngestLimiter(flatResolve(math.MaxInt), 25, 256, IngestLimiterMetrics{}, nil)
 	assert.True(t, l.AllowSamples("acme", 1000), "a saturated sample burst still admits")
 }
 
@@ -96,8 +97,8 @@ func TestSatMulInt_Saturates(t *testing.T) {
 // other test; this one reddens on that mistake.
 func TestIngestLimiter_SampleCeilingTracksResolver(t *testing.T) {
 	curBurst := 1
-	resolve := func(string) (float64, int) { return 1e-9, curBurst }
-	l := NewIngestLimiter(resolve, 1, 1, IngestLimiterMetrics{}) // factor 1, floor 1
+	resolve := func(string) core.TenantCeiling { return core.TenantCeiling{RatePerSecond: 1e-9, Burst: curBurst} }
+	l := NewIngestLimiter(resolve, 1, 1, IngestLimiterMetrics{}, nil) // factor 1, floor 1
 
 	// At burst 1 the sample bucket can never fit a 5-sample batch.
 	assert.False(t, l.AllowSamples("acme", 5), "burst 1: a 5-sample batch is shed")
@@ -113,13 +114,13 @@ func TestIngestLimiter_SampleCeilingTracksResolver(t *testing.T) {
 func TestIngestLimiter_ZeroFloorStillAdmitsOne(t *testing.T) {
 	// resolve burst 0 (governance never returns this, but an adopter's flat closure might) with a
 	// non-positive floor: satMul(0,25)=0, floor 0 → the guard raises the sample burst to 1.
-	l := NewIngestLimiter(func(string) (float64, int) { return 1e-9, 0 }, 25, 0, IngestLimiterMetrics{})
+	l := NewIngestLimiter(core.StaticCeiling(1e-9, 0), 25, 0, IngestLimiterMetrics{}, nil)
 	assert.True(t, l.AllowSamples("acme", 1), "a zero-derived sample burst must still admit a single sample")
 }
 
 // A nil-metrics limiter is fully usable (tests / inert deployments) — no panic on shed.
 func TestIngestLimiter_NilMetricsSafe(t *testing.T) {
-	l := NewIngestLimiter(flatResolve(1), DefaultSamplesPerMessage, 256, IngestLimiterMetrics{})
+	l := NewIngestLimiter(flatResolve(1), DefaultSamplesPerMessage, 256, IngestLimiterMetrics{}, nil)
 	assert.True(t, l.AllowMessage("acme"))
 	assert.False(t, l.AllowMessage("acme"), "shed with nil MessagesShed does not panic")
 	assert.False(t, l.AllowSamples("acme", 1_000_000), "shed with nil SamplesShed does not panic")

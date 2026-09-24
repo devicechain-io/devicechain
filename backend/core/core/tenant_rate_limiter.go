@@ -6,9 +6,11 @@ package core
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 )
 
@@ -21,7 +23,96 @@ const (
 	// defaultRateLimiterSweepInterval bounds how often idle-eviction scans the
 	// tenant map, so a hot Allow path does not walk every entry on every call.
 	defaultRateLimiterSweepInterval = time.Minute
+	// maxUntrustedBuckets bounds how many buckets AllowUntrusted keeps for tenant names
+	// the platform has not confirmed. It equals governance.maxNegativeEntries, the bound
+	// the ceiling resolver already puts on its own record of unconfirmed names; at
+	// roughly 400 B a bucket it is about 400 KB per limiter. It is not configuration:
+	// it bounds memory against invented names, and there is no deployment for which a
+	// larger unbounded-input structure is the right answer.
+	maxUntrustedBuckets = 1024
 )
+
+// CeilingSource says where a tenant's ceiling came from. The ZERO VALUE, CeilingPending,
+// is counted and (for an untrusted admission) pooled, so a resolver that forgets to say
+// fails toward bounded-and-visible without paging anyone.
+type CeilingSource uint8
+
+const (
+	// CeilingPending: an authority is configured but has not answered for this tenant
+	// yet (a cold miss, or a refresh the resolver's own budget or concurrency cap
+	// refused to start). The platform default is being served.
+	CeilingPending CeilingSource = iota
+	// CeilingResolved: the authority answered for this tenant, so it exists. A stale
+	// value, or one whose latest refresh failed, is still resolved.
+	CeilingResolved
+	// CeilingStatic: no authority is configured, so the platform default IS the answer.
+	CeilingStatic
+	// CeilingUnreachable: the last fetch failed on transport, a non-2xx status, a token
+	// mint or a decode, so the platform default is being served for want of an answer.
+	CeilingUnreachable
+	// CeilingUnknownTenant: the authority answered that no such tenant exists.
+	CeilingUnknownTenant
+)
+
+// String is the metric label value for a source.
+func (s CeilingSource) String() string {
+	switch s {
+	case CeilingPending:
+		return "pending"
+	case CeilingResolved:
+		return "resolved"
+	case CeilingStatic:
+		return "static"
+	case CeilingUnreachable:
+		return "unreachable"
+	case CeilingUnknownTenant:
+		return "unknown-tenant"
+	}
+	return fmt.Sprintf("CeilingSource(%d)", uint8(s))
+}
+
+// unresolved reports whether an admission on this source is metered at the platform
+// default for want of the tenant's own ceiling, which is what WithUnresolvedAdmissions
+// counts. Static is not: with no authority configured the default is the real answer.
+func (s CeilingSource) unresolved() bool {
+	return s == CeilingPending || s == CeilingUnreachable || s == CeilingUnknownTenant
+}
+
+// TenantCeiling is one tenant's resolved ceiling and where it came from. RatePerSecond is
+// the sustained rate (events/sec) and Burst the largest instantaneous batch before the
+// sustained rate applies.
+type TenantCeiling struct {
+	RatePerSecond float64
+	Burst         int
+	Source        CeilingSource
+}
+
+// TenantCeilingResolver supplies a tenant's ceiling on the hot path.
+type TenantCeilingResolver func(tenant string) TenantCeiling
+
+// StaticCeiling is the resolver for a service with no ceiling authority configured:
+// every tenant gets the same ceiling, and it is the real answer (CeilingStatic), so
+// nothing is counted as unresolved.
+func StaticCeiling(ratePerSecond float64, burst int) TenantCeilingResolver {
+	c := TenantCeiling{RatePerSecond: ratePerSecond, Burst: burst, Source: CeilingStatic}
+	return func(string) TenantCeiling { return c }
+}
+
+// TenantRateLimiterOption configures a TenantRateLimiter at construction.
+type TenantRateLimiterOption func(*TenantRateLimiter)
+
+// WithUnresolvedAdmissions is called once per ADMITTED decision whose Source is Pending,
+// Unreachable or UnknownTenant (AllowN counts 1; Wait and WaitAt count on success only).
+// A denied call, and one whose Source is Resolved or Static, is not counted.
+func WithUnresolvedAdmissions(count func(CeilingSource)) TenantRateLimiterOption {
+	return func(l *TenantRateLimiter) { l.unresolved = count }
+}
+
+// WithOverflowAdmissions counts every admission served by the shared overflow bucket
+// (see AllowUntrusted).
+func WithOverflowAdmissions(c prometheus.Counter) TenantRateLimiterOption {
+	return func(l *TenantRateLimiter) { l.overflowAdmissions = c }
+}
 
 // TenantRateLimiter enforces an independent token-bucket rate limit per tenant.
 // Each tenant gets its own bucket, created lazily on first use, so one tenant's
@@ -36,16 +127,39 @@ const (
 // limiter: an existing bucket is retuned in place when its resolved ceiling
 // changes. The resolver is called on the hot path, so it must be fast and
 // non-blocking — resolve from an in-memory cache and refresh out of band.
+//
+// # Confirmed and unconfirmed tenant names
+//
+// Every entry point except AllowUntrusted is an AUTHENTICATED admission: the tenant
+// came from a credential the platform checked (a broker session, a device key, a
+// service token, the platform's own stream), so it gets a bucket of its own whatever
+// its ceiling's Source says. AllowUntrusted is for a tenant string the platform has
+// not authenticated, which today is only event-sources' HTTP path segment. Such a
+// name gets its own bucket only when the authority has confirmed it; otherwise it
+// takes one of a fixed pool of maxUntrustedBuckets, and past that it shares a single
+// overflow bucket. So invented names bound the limiter's memory, and they never take
+// an authenticated tenant's allowance away.
 type TenantRateLimiter struct {
-	resolve func(tenant string) (ratePerSecond float64, burst int)
+	resolve TenantCeilingResolver
 
 	idleTTL       time.Duration
 	sweepInterval time.Duration
 	now           func() time.Time
+	// maxPooled is maxUntrustedBuckets outside tests.
+	maxPooled int
+
+	unresolved         func(CeilingSource)
+	overflowAdmissions prometheus.Counter
 
 	mu        sync.Mutex
 	buckets   map[string]*tenantBucket
 	lastSweep time.Time
+	// pooled counts the unconfirmed buckets in the map.
+	pooled int
+	// overflow is the one bucket every unconfirmed name past the pool shares. It is an
+	// ordinary bucket (same mark, same retune-at-admission-time) kept outside the map;
+	// nil while nothing needs it.
+	overflow *tenantBucket
 }
 
 // tenantBucket is one tenant's limiter, the last wall-clock time it was touched
@@ -55,24 +169,30 @@ type tenantBucket struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time // wall; drives the idle sweep only
 	mark     time.Time // the latest admission time this bucket was charged or retuned at
+	// confirmed is false only for a bucket AllowUntrusted created for a name the
+	// authority has not confirmed; such a bucket holds one of the pool's slots.
+	confirmed bool
 }
 
 // NewTenantRateLimiter creates a limiter whose per-tenant ceiling is supplied by
-// resolve, called with the tenant on each admission to obtain its sustained rate
-// (events/sec) and burst (the largest instantaneous batch before the sustained
-// rate applies). resolve is expected to return positive values — a non-positive
-// rate or burst yields a bucket that admits nothing, so the fail-safe defaulting
-// to a platform rate belongs in resolve (or the layer behind it), never here.
-// resolve runs on the hot path under no lock of its own here, so it must be fast
-// and non-blocking (serve from cache; refresh out of band).
-func NewTenantRateLimiter(resolve func(tenant string) (ratePerSecond float64, burst int)) *TenantRateLimiter {
-	return &TenantRateLimiter{
+// resolve, called with the tenant on each admission. resolve is expected to return
+// a positive rate and burst — a non-positive one yields a bucket that admits nothing,
+// so the fail-safe defaulting to a platform rate belongs in resolve (or the layer
+// behind it), never here. resolve runs on the hot path outside this limiter's lock,
+// so it must be fast and non-blocking (serve from cache; refresh out of band).
+func NewTenantRateLimiter(resolve TenantCeilingResolver, opts ...TenantRateLimiterOption) *TenantRateLimiter {
+	l := &TenantRateLimiter{
 		resolve:       resolve,
 		idleTTL:       defaultRateLimiterIdleTTL,
 		sweepInterval: defaultRateLimiterSweepInterval,
 		now:           time.Now,
+		maxPooled:     maxUntrustedBuckets,
 		buckets:       make(map[string]*tenantBucket),
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 // Allow reports whether an event for the given tenant may proceed now, consuming
@@ -114,15 +234,63 @@ func (l *TenantRateLimiter) AllowNAt(tenant string, when time.Time, n int) bool 
 	if n <= 0 {
 		return true
 	}
-	rps, burst := l.resolve(tenant)
+	c := l.resolve(tenant)
 
 	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	b, at := l.tuneBucketLocked(tenant, rate.Limit(rps), burst, when, l.now())
+	b, at := l.bucketLocked(tenant, c, when, l.now(), false)
 	ok := b.limiter.AllowN(at, n)
 	b.mark = at
+	l.mu.Unlock()
+
+	l.counted(c.Source, ok)
 	return ok
+}
+
+// AllowUntrusted admits one event NOW for a tenant string the platform has not
+// authenticated (today: only event-sources' HTTP path segment). Such a name gets a
+// bucket of its own only if the authority has resolved it, if a bucket already exists
+// for it, or while fewer than maxUntrustedBuckets pooled buckets exist; past that it
+// shares one overflow bucket.
+//
+// The pool bounds MEMORY, not the aggregate admitted across invented names: each pooled
+// name is metered at the platform default in its own right.
+func (l *TenantRateLimiter) AllowUntrusted(tenant string) bool {
+	c := l.resolve(tenant)
+
+	l.mu.Lock()
+	now := l.now()
+	b, at := l.bucketLocked(tenant, c, time.Time{}, now, true)
+	ok := b.limiter.AllowN(at, 1)
+	b.mark = at
+	servedByOverflow := b == l.overflow
+	l.mu.Unlock()
+
+	if ok && servedByOverflow && l.overflowAdmissions != nil {
+		l.overflowAdmissions.Inc()
+	}
+	l.counted(c.Source, ok)
+	return ok
+}
+
+// BucketCounts reports the confirmed buckets, the pooled (unconfirmed) buckets, and
+// whether the overflow bucket is live.
+func (l *TenantRateLimiter) BucketCounts() (confirmed, pooled int, overflow bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, b := range l.buckets {
+		if b.confirmed {
+			confirmed++
+		}
+	}
+	return confirmed, l.pooled, l.overflow != nil
+}
+
+// counted reports one decision to WithUnresolvedAdmissions: an admitted one metered at
+// the platform default for want of the tenant's own ceiling.
+func (l *TenantRateLimiter) counted(src CeilingSource, admitted bool) {
+	if admitted && l.unresolved != nil && src.unresolved() {
+		l.unresolved(src)
+	}
 }
 
 // AllowAt reports whether a message the tenant SENT at time `when` may proceed,
@@ -228,15 +396,15 @@ func (l *TenantRateLimiter) WaitAt(ctx context.Context, tenant string, when time
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	rps, burst := l.resolve(tenant)
+	c := l.resolve(tenant)
 
 	l.mu.Lock()
 	now := l.now()
-	b, at := l.tuneBucketLocked(tenant, rate.Limit(rps), burst, when, now)
+	b, at := l.bucketLocked(tenant, c, when, now, false)
 	r := b.limiter.ReserveN(at, 1)
 	if !r.OK() {
 		l.mu.Unlock()
-		return fmt.Errorf("tenant rate limit: a burst of %d admits nothing", burst)
+		return fmt.Errorf("tenant rate limit: a burst of %d admits nothing", c.Burst)
 	}
 	delay := r.DelayFrom(at)
 	if deadline, ok := ctx.Deadline(); ok && delay > deadline.Sub(now) {
@@ -249,12 +417,14 @@ func (l *TenantRateLimiter) WaitAt(ctx context.Context, tenant string, when time
 
 	wait := at.Add(delay).Sub(now)
 	if wait <= 0 {
+		l.counted(c.Source, true)
 		return nil
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
+		l.counted(c.Source, true)
 		return nil
 	case <-ctx.Done():
 		// Return the token at the bucket's current mark, NEVER r.Cancel(): that is
@@ -293,31 +463,70 @@ func admitTimeLocked(b *tenantBucket, when, now time.Time) time.Time {
 	return at
 }
 
-// tuneBucketLocked returns the tenant's bucket and the time this admission is charged at
-// (admitTimeLocked), creating the bucket (at limit/burst) or retuning an existing one in
-// place when its resolved ceiling has changed, and stamps lastSeen = now. It also runs the
-// amortized idle sweep. The caller must hold l.mu, charge at the returned time, and then
-// set b.mark to it.
+// bucketLocked returns the bucket this admission is charged to and the time it is
+// charged at (admitTimeLocked), creating, promoting or retuning the bucket as needed,
+// and stamps lastSeen = now. It also runs the amortized idle sweep. The caller must hold
+// l.mu, charge at the returned time, and then set b.mark to it.
+//
+// untrusted says the tenant name did not come from an authenticated origin
+// (AllowUntrusted). An authenticated admission always gets a confirmed bucket of its
+// own, promoting a pooled one in place, whatever c.Source says. An untrusted one gets
+// its own bucket only for a name the authority has resolved; otherwise a pooled bucket
+// while the pool has room, and the shared overflow bucket after that.
+//
+// A bucket created for a resolved untrusted name while the overflow is live starts at
+// the overflow's level rather than full, so rotating to a name the authority happens to
+// know is not a way out of the shared allowance. An authenticated creation never does:
+// an MQTT tenant that is cold after a restart must not inherit a level an HTTP spray
+// drained.
 //
 // 🔴 A retune happens AT THE ADMISSION TIME, never at now. SetLimitAt/SetBurstAt advance the
 // limiter to the time they are given; retuned at now while the bucket drains a backlog on
 // send times, every retune jumps its clock forward and refills it to burst, which the next
 // (older) admission then spends — measured at 12000 admissions against a budget of 6199 for
-// a ceiling that flips once a second. A fresh limiter needs no call: it accrues from a zero
-// last-event time and so starts full at whatever time it is first charged. The bucket keeps
-// its accumulated tokens across a retune.
-func (l *TenantRateLimiter) tuneBucketLocked(tenant string, limit rate.Limit, burst int, when, now time.Time) (*tenantBucket, time.Time) {
+// a ceiling that flips once a second. A fresh limiter needs no call: it starts full at
+// whatever time it is first charged. The bucket keeps its accumulated tokens across a
+// retune, and SetBurstAt caps at the OLD burst before replacing it, so promoting a pooled
+// bucket to a larger ceiling mints nothing.
+func (l *TenantRateLimiter) bucketLocked(tenant string, c TenantCeiling, when, now time.Time, untrusted bool) (*tenantBucket, time.Time) {
 	l.sweepLocked(now)
 
+	limit, burst := rate.Limit(c.RatePerSecond), c.Burst
+	confirm := !untrusted || c.Source == CeilingResolved
+	seed := false
+
 	b := l.buckets[tenant]
-	if b == nil {
+	switch {
+	case b != nil:
+		if !b.confirmed && confirm {
+			b.confirmed = true
+			l.pooled--
+		}
+	case confirm:
+		b = &tenantBucket{limiter: rate.NewLimiter(limit, burst), confirmed: true}
+		l.buckets[tenant] = b
+		seed = untrusted && l.overflow != nil
+	case l.pooled < l.maxPooled:
 		b = &tenantBucket{limiter: rate.NewLimiter(limit, burst)}
 		l.buckets[tenant] = b
+		l.pooled++
+	default:
+		if l.overflow == nil {
+			l.overflow = &tenantBucket{limiter: rate.NewLimiter(limit, burst)}
+		}
+		b = l.overflow
 	}
+
 	at := admitTimeLocked(b, when, now)
 	if b.limiter.Limit() != limit || b.limiter.Burst() != burst {
 		b.limiter.SetLimitAt(at, limit)
 		b.limiter.SetBurstAt(at, burst)
+		b.mark = at
+	}
+	if seed {
+		k := int(math.Floor(l.overflow.limiter.TokensAt(at)))
+		k = min(max(k, 0), burst)
+		b.limiter.AllowN(at, burst-k)
 		b.mark = at
 	}
 	b.lastSeen = now
@@ -335,6 +544,14 @@ func (l *TenantRateLimiter) sweepLocked(now time.Time) {
 	for tenant, b := range l.buckets {
 		if now.Sub(b.lastSeen) >= l.idleTTL {
 			delete(l.buckets, tenant)
+			if !b.confirmed {
+				l.pooled--
+			}
 		}
+	}
+	if l.overflow != nil && now.Sub(l.overflow.lastSeen) >= l.idleTTL {
+		// Nothing has needed the shared allowance for a TTL; dropping it also ends the
+		// window in which a newly confirmed untrusted name is seeded from its level.
+		l.overflow = nil
 	}
 }

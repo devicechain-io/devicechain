@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-event-sources/presence"
+	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -108,7 +109,7 @@ func startBrokerPresence(ctx context.Context) {
 		return
 	}
 
-	tap := presence.NewTap(Microservice.InstanceId, source, presenceEmitter(), presence.Gate(ingestGate), presenceMetrics())
+	tap := presence.NewTap(Microservice.InstanceId, source, presenceEmitter(), presenceGate(), presenceMetrics())
 	stopTap, err := tap.Subscribe(conn)
 	if err != nil {
 		conn.Close()
@@ -269,7 +270,7 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 		reader := presence.NewGraphQLProjectionReader(client, dsURL)
 
 		runner = presence.NewDemoter(GatewaySourceId,
-			presence.NewPublisher(GatewaySourceId, presenceEmitter(), presence.Gate(ingestGate), presenceMetrics()),
+			presence.NewPublisher(GatewaySourceId, presenceEmitter(), presenceGate(), presenceMetrics()),
 			presence.NewGraphQLTenantLister(client, umURL, Microservice.InstanceId),
 			reader, presence.NewRateWaiter(),
 			presence.DemoterMetrics{Released: PresenceReleasedCounter, Remaining: PresenceStillAssertedGauge})
@@ -914,4 +915,13 @@ func initializePresenceMetrics() {
 	CommandWakeReleasedCounter = Microservice.NewCounter(
 		"command_wake_released_total",
 		"Withheld commands returned to the delivery queue because their device reconnected")
+}
+
+// presenceGate is the ingest gate as the presence tap and publisher see it. Presence
+// transitions come from the platform broker's own connection advisories (and, for a
+// release, from user-management's tenant list), so their tenant is authenticated.
+func presenceGate() presence.Gate {
+	return func(source, tenant string, sentAt time.Time, redelivery bool) bool {
+		return ingestGate(source, tenant, sentAt, redelivery, processor.OriginAuthenticated)
+	}
 }

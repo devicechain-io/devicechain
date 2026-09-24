@@ -207,18 +207,24 @@ func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, varia
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
-			Message string `json:"message"`
+			Message    string `json:"message"`
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("svcclient: decode response: %w", err)
 	}
 	if len(envelope.Errors) > 0 {
-		msgs := make([]string, 0, len(envelope.Errors))
+		gqlErr := &GraphQLError{URL: baseURL, Messages: make([]string, 0, len(envelope.Errors))}
 		for _, e := range envelope.Errors {
-			msgs = append(msgs, e.Message)
+			gqlErr.Messages = append(gqlErr.Messages, e.Message)
+			if e.Extensions.Code != "" {
+				gqlErr.Codes = append(gqlErr.Codes, e.Extensions.Code)
+			}
 		}
-		return fmt.Errorf("svcclient: %s: %s", baseURL, strings.Join(msgs, "; "))
+		return gqlErr
 	}
 	if out != nil && len(envelope.Data) > 0 {
 		if err := json.Unmarshal(envelope.Data, out); err != nil {
@@ -226,6 +232,21 @@ func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, varia
 		}
 	}
 	return nil
+}
+
+// GraphQLError is Query's answer when the target served a GraphQL response carrying a
+// non-empty "errors" array: the peer was reached and answered, and the answer was a
+// refusal. Codes holds each error's extensions.code where it set one, which is how a
+// caller tells one refusal from another without matching message text — governance
+// reads it to tell "no such tenant" from "could not ask".
+type GraphQLError struct {
+	URL      string
+	Messages []string
+	Codes    []string
+}
+
+func (e *GraphQLError) Error() string {
+	return fmt.Sprintf("svcclient: %s: %s", e.URL, strings.Join(e.Messages, "; "))
 }
 
 // serviceToken returns a valid cached token, or mints a fresh one. A still-valid

@@ -5,12 +5,14 @@ package graphql
 
 import (
 	"context"
+	"errors"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
+	"gorm.io/gorm"
 )
 
 // TenantResolver resolves the Tenant GraphQL type: the control-plane tenant the
@@ -263,6 +265,13 @@ func (r *SchemaResolver) TenantGovernance(ctx context.Context) (*TenantGovernanc
 		return nil, core.ErrNoTenant
 	}
 	t, err := r.getIdentityManager(ctx).CurrentTenant(ctx, tenant)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// Said by CODE, not by message: an enforcing service reading this over a service
+		// token tells "no such tenant" (a name nobody registered, say one invented on an
+		// HTTP ingest path) from "could not ask" (user-management failing), and only the
+		// second is an outage it must report.
+		return nil, &governance.UnknownTenantError{Tenant: tenant}
+	}
 	if err != nil {
 		return nil, err
 	}

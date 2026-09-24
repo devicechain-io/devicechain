@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-ai-inference/model"
 	"github.com/devicechain-io/dc-ai-inference/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -95,29 +96,42 @@ func buildInferenceResolver() *inference.Resolver {
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	var facts inference.TenantFactsReader
-	var rate inference.RateGate
+	var client *svcclient.Client
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — a tenant's external-routing consent and tier cannot be read; the NL-authoring inference path is unavailable (fail-closed, ADR-056/065). The ai:admin provider smoke test is unaffected.")
 		facts = inference.NewDeniedTenantFactsReader("service-to-service auth is not configured")
-		// Per-tenant overrides are unreadable, so meter every tenant at the platform
-		// default. The gate is still wired: the default is itself a limit.
-		rate = core.NewTenantRateLimiter(func(string) (float64, int) { return def.MessagesPerSecond, def.Burst })
 	} else {
 		// One service-token client backs both reads: the tenant facts (consent + tier)
 		// and the rate overrides come from the same tenantGovernance query under the same
 		// least-privilege tenant:read.
-		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
+		client = svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
 		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 		facts = inference.NewServiceTenantFactsReader(client, umURL)
-		resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.AIInference)
-		rate = core.NewTenantRateLimiter(resolver.Resolve)
 		log.Info().Str("userManagement", umURL).
 			Float64("requestsPerMinute", Configuration.InferenceRequestsPerMinute).
 			Int("burst", Configuration.InferenceBurst).
 			Msg("External-routing consent, tenant tier + per-tenant inference rate read from user-management tenantGovernance (fail-closed, ADR-056/065).")
 	}
 
+	rate := buildRateLimiter(def, infra, client, governance.NewUnresolvedAdmissions(Microservice, governance.AIInference))
 	return inference.NewResolver(Api, facts, rate, bounds, nil)
+}
+
+// buildRateLimiter is the per-tenant inference rate gate. With client nil (no service auth
+// or user-management configured) every tenant is metered at the platform default — the gate
+// is still wired, since the default is itself a limit. Otherwise per-tenant overrides are read
+// from user-management's tenantGovernance, failing open to the default. unresolved counts the
+// admissions made at the default for want of a tenant's own ceiling. A tenant here comes from
+// an authenticated caller's token, so it always gets an allowance of its own.
+func buildRateLimiter(def governance.Limits, infra mscfg.InfrastructureConfiguration, client *svcclient.Client,
+	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
+	counted := core.WithUnresolvedAdmissions(unresolved)
+	if client == nil {
+		return core.NewTenantRateLimiter(core.StaticCeiling(def.MessagesPerSecond, def.Burst), counted)
+	}
+	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.AIInference)
+	return core.NewTenantRateLimiter(resolver.Ceiling, counted)
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.

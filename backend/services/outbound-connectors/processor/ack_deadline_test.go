@@ -220,7 +220,7 @@ func TestRateWaitIsCappedByAckDeadline(t *testing.T) {
 // in force it is a shed and is dead-lettered; capped, it is left for redelivery. The instrument is
 // therefore the dead-letter subject, which must stay empty.
 func TestRateWaitCutByAckDeadlineIsNotAShed(t *testing.T) {
-	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	rl := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
 	drain, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_ = rl.Wait(drain, "acme")
 	cancel()
@@ -251,7 +251,7 @@ func TestRateWaitCutByAckDeadlineIsNotAShed(t *testing.T) {
 // the dead-letter subject (one letter, reason "dead" — not "rate_limited", since the tenant was not
 // shown to be over quota) and the broker's own count of unacked messages, which must fall to zero.
 func TestRateWaitCutByAckDeadlineOnFinalDeliveryIsDeadLettered(t *testing.T) {
-	rl := core.NewTenantRateLimiter(func(string) (float64, int) { return 0.001, 1 })
+	rl := core.NewTenantRateLimiter(core.StaticCeiling(0.001, 1))
 	drain, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	_ = rl.Wait(drain, "acme")
 	cancel()

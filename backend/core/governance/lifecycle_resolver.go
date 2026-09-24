@@ -127,7 +127,7 @@ func NewTenantLifecycleGate(umCfg config.UserManagementConfiguration, serviceSec
 // comparing against the wrong constant.
 //
 // It deliberately uses resolve rather than resolveOK. The shed resolver needs the
-// "was this actually fetched?" bool because its default is a bronze band that would shed
+// "was this actually fetched?" answer because its default is a bronze band that would shed
 // a gold tenant during a cold-cache window — acting on the default there is a real,
 // wrong action. Here the default is the null action: "not deleted" means "carry on
 // exactly as before this gate existed", so there is nothing for a caller to hold off on.

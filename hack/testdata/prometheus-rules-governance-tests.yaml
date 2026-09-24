@@ -1,0 +1,201 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the governance alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# TenantsMeteredAtPlatformDefault watches ONE cause of a counter that moves for three.
+# The cases worth writing down are mostly the quiet ones: a restart's cold-cache blip, and
+# a spray of invented tenant names -- which raises the unknown-tenant and pending causes
+# as steeply as anyone likes -- must never page. Only admissions metered at the default
+# because user-management could not be asked (cause="unreachable"), sustained past the
+# pending period, mean something an operator can fix.
+#
+# RateLimiterOverflowInUse watches the one allowance that every unconfirmed HTTP tenant
+# name past the pool shares.
+#
+# THE SERIES, and what is known about them:
+#
+#   - devicechain_<area>_governance_unresolved_admissions_total{dimension, cause} -- a
+#     CounterVec every enforcing service registers with all three causes created at 0, so
+#     on a healthy instance those series EXIST and read 0.
+#   - devicechain_<area>_ratelimit_overflow_admissions_total -- an unlabelled counter,
+#     exported at 0 by event-sources.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml. Naming it below is not
+# optional: promtool with no rule_files loads no rules, and every expected alert then
+# reads as "the rule does not fire" rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # A restart: the cache is cold and user-management answers late, so a handful of
+  # admissions are counted unreachable in the first minute -- and then none. The 15m
+  # pending period outlasts the 10m window, so it never fires.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="unreachable"}'
+        values: '0 5x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # user-management stays unreachable: admissions at the default keep being counted. It
+  # is pending through the 15m period and firing after it.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="unreachable"}'
+        values: '0+3x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/event-sources
+              dimension: ingest
+            exp_annotations:
+              summary: "A service cannot read tenant ceilings from user-management and is metering tenants at the platform default"
+              description: "For at least 15 minutes, devicechain/event-sources has admitted ingest traffic for tenants whose ceilings it could not read because user-management was unreachable or failing, so it metered them at its platform default. For a tenant whose tier sets a lower ceiling, that admits more than the tier allows. Check user-management's health and this service's logs for 'Failed to refresh per-tenant setting'. Tenants whose ceilings were read before the problem started keep their last-known values. Traffic for tenant names user-management does not know is counted separately (cause=unknown-tenant) and does not fire this alert."
+
+  # ------------------------------------------------------------------
+  # 🔴 THE ATTACKER'S SERIES. A spray of invented names raises unknown-tenant and pending
+  # as steeply as the sender likes, for as long as it likes, while user-management is
+  # healthy. Nothing pages: paging here would give whoever sends the spray a switch that
+  # holds a warning on forever.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="unreachable"}'
+        values: '0x60'
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="unknown-tenant"}'
+        values: '0+5000x60'
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="pending"}'
+        values: '0+20000x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A spray DURING an outage: the attacker's causes rise, and so does unreachable. The
+  # spray does not mask the outage.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", dimension="outbound", cause="unreachable"}'
+        values: '0+2x60'
+      - series: 'devicechain_outboundconnectors_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", dimension="outbound", cause="unknown-tenant"}'
+        values: '0+5000x60'
+      - series: 'devicechain_outboundconnectors_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", dimension="outbound", cause="pending"}'
+        values: '0+20000x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/outbound-connectors
+              dimension: outbound
+            exp_annotations:
+              summary: "A service cannot read tenant ceilings from user-management and is metering tenants at the platform default"
+              description: "For at least 15 minutes, devicechain/outbound-connectors has admitted outbound traffic for tenants whose ceilings it could not read because user-management was unreachable or failing, so it metered them at its platform default. For a tenant whose tier sets a lower ceiling, that admits more than the tier allows. Check user-management's health and this service's logs for 'Failed to refresh per-tenant setting'. Tenants whose ceilings were read before the problem started keep their last-known values. Traffic for tenant names user-management does not know is counted separately (cause=unknown-tenant) and does not fire this alert."
+
+  # ------------------------------------------------------------------
+  # A healthy instance: every series exported and flat at zero. And an instance where no
+  # service exports them at all. Both quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="unreachable"}'
+        values: '0x60'
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="unknown-tenant"}'
+        values: '0x60'
+      - series: 'devicechain_eventsources_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", dimension="ingest", cause="pending"}'
+        values: '0x60'
+      - series: 'devicechain_eventsources_ratelimit_overflow_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: RateLimiterOverflowInUse
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="dci-devicechain", job="devicechain/event-sources"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: RateLimiterOverflowInUse
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Recovery: user-management comes back, the counter goes flat, and the alert clears
+  # once the window no longer holds an increase.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_aiinference_governance_unresolved_admissions_total{namespace="dci-devicechain", pod="dc-ai-inference-6a1c-klmno", job="devicechain/ai-inference", dimension="ai-inference", cause="unreachable"}'
+        values: '0+3x30 90x30'
+    alert_rule_test:
+      - eval_time: 28m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/ai-inference
+              dimension: ai-inference
+            exp_annotations:
+              summary: "A service cannot read tenant ceilings from user-management and is metering tenants at the platform default"
+              description: "For at least 15 minutes, devicechain/ai-inference has admitted ai-inference traffic for tenants whose ceilings it could not read because user-management was unreachable or failing, so it metered them at its platform default. For a tenant whose tier sets a lower ceiling, that admits more than the tier allows. Check user-management's health and this service's logs for 'Failed to refresh per-tenant setting'. Tenants whose ceilings were read before the problem started keep their last-known values. Traffic for tenant names user-management does not know is counted separately (cause=unknown-tenant) and does not fire this alert."
+      - eval_time: 41m
+        alertname: TenantsMeteredAtPlatformDefault
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The shared overflow allowance: in use for twenty minutes, it fires.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_ratelimit_overflow_admissions_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources"}'
+        values: '0x5 0+10x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RateLimiterOverflowInUse
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: RateLimiterOverflowInUse
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/event-sources
+            exp_annotations:
+              summary: "HTTP ingest is receiving traffic for more unconfirmed tenant names than it keeps separate allowances for"
+              description: "devicechain/event-sources has had more than 1024 unconfirmed tenant names active at once, so every further name shares one allowance. Almost always this means something is posting to many invented tenant paths on the HTTP ingest port. Legitimate tenants that have been confirmed, and every MQTT, NATS and LwM2M tenant, keep their own allowance. Find the source of the requests on the HTTP ingest port."

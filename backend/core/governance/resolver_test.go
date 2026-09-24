@@ -79,7 +79,7 @@ func TestRefreshRate_BoundedRegardlessOfTenantCardinality(t *testing.T) {
 	// once every refresh they triggered has completed.
 	flood := func(round int) {
 		for i := 0; i < 2000; i++ {
-			v, ok := r.resolveOK(fmt.Sprintf("round%d-tenant%d", round, i))
+			v, ok := resolvedOK(r, fmt.Sprintf("round%d-tenant%d", round, i))
 			assert.Equal(t, 7, v, "an unresolvable tenant serves the default")
 			assert.False(t, ok, "an unresolvable tenant is never reported as resolved")
 		}
@@ -118,7 +118,7 @@ func TestFailedRefresh_HoldsOffUntilNegativeTTL(t *testing.T) {
 	// the inflight dedupe.
 	for round := 0; round < 5; round++ {
 		for i := 0; i < 40; i++ {
-			v, ok := r.resolveOK("ghost")
+			v, ok := resolvedOK(r, "ghost")
 			assert.Equal(t, 7, v)
 			assert.False(t, ok)
 		}
@@ -158,7 +158,7 @@ func TestFailedRefresh_KeepsLastKnownValue(t *testing.T) {
 
 	r.resolve("acme")
 	drain(t, r)
-	v, ok := r.resolveOK("acme")
+	v, ok := resolvedOK(r, "acme")
 	require.Equal(t, 42, v)
 	require.True(t, ok)
 
@@ -166,7 +166,7 @@ func TestFailedRefresh_KeepsLastKnownValue(t *testing.T) {
 	clk.advance(time.Minute)
 	r.resolve("acme")
 	drain(t, r)
-	v, ok = r.resolveOK("acme")
+	v, ok = resolvedOK(r, "acme")
 	assert.Equal(t, 42, v, "a failed refresh keeps the last-known value")
 	assert.True(t, ok, "and it stays resolved")
 	assert.Equal(t, int64(2), calls.Load())
@@ -193,7 +193,7 @@ func TestNegativeEntries_AreBounded(t *testing.T) {
 	r.mu.Lock()
 	r.cache["real"] = cacheEntry[int]{val: 42, have: true, nextRefreshAt: clk.now().Add(time.Hour)}
 	for i := 0; i < maxNegativeEntries+500; i++ {
-		r.recordFailureLocked(fmt.Sprintf("ghost%d", i), clk.now())
+		r.recordFailureLocked(fmt.Sprintf("ghost%d", i), clk.now(), errors.New("boom"))
 	}
 	negatives := r.negatives
 	cached := len(r.cache)
@@ -208,7 +208,7 @@ func TestNegativeEntries_AreBounded(t *testing.T) {
 	// wedging the cap permanently.
 	clk.advance(11 * time.Second)
 	r.mu.Lock()
-	r.recordFailureLocked("ghost-after-expiry", clk.now())
+	r.recordFailureLocked("ghost-after-expiry", clk.now(), errors.New("boom"))
 	_, recorded := r.cache["ghost-after-expiry"]
 	negatives = r.negatives
 	r.mu.Unlock()
@@ -262,7 +262,7 @@ func TestFailedThenResolved_ReleasesItsNegativeSlot(t *testing.T) {
 		assert.True(t, entry.have, "and is now a resolved entry")
 	}
 
-	v, ok := r.resolveOK("blipped0")
+	v, ok := resolvedOK(r, "blipped0")
 	assert.Equal(t, 42, v)
 	assert.True(t, ok)
 }
@@ -284,14 +284,14 @@ func TestEvictionSweep_KeepsStaleResolvedEntries(t *testing.T) {
 	}
 	// Fill the bounded half so the next record has to sweep.
 	for i := 0; i < maxNegativeEntries; i++ {
-		r.recordFailureLocked(fmt.Sprintf("ghost%d", i), clk.now())
+		r.recordFailureLocked(fmt.Sprintf("ghost%d", i), clk.now(), errors.New("boom"))
 	}
 	r.mu.Unlock()
 
 	// Let every recorded hold-off expire, then force a sweep.
 	clk.advance(11 * time.Second)
 	r.mu.Lock()
-	r.recordFailureLocked("one-more-ghost", clk.now())
+	r.recordFailureLocked("one-more-ghost", clk.now(), errors.New("boom"))
 	entry, present := r.cache["stale-but-known"]
 	swept := len(r.cache)
 	r.mu.Unlock()
@@ -301,7 +301,7 @@ func TestEvictionSweep_KeepsStaleResolvedEntries(t *testing.T) {
 	assert.Equal(t, 42, entry.val, "with its last-known value intact")
 	assert.Less(t, swept, maxNegativeEntries, "and the sweep did reclaim the expired hold-offs")
 
-	v, ok := r.resolveOK("stale-but-known")
+	v, ok := resolvedOK(r, "stale-but-known")
 	assert.Equal(t, 42, v, "so it still serves its last-known value")
 	assert.True(t, ok, "and still reads as resolved")
 }

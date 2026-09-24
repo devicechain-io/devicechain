@@ -59,13 +59,13 @@ func TestRetuneMidDrainDoesNotMint(t *testing.T) {
 	const burst = 100
 	base := time.Unix(1_000_000, 0)
 	calls := 0
-	l := NewTenantRateLimiter(func(string) (float64, int) {
+	l := NewTenantRateLimiter(func(string) TenantCeiling {
 		// 200 messages per second of send time; the ceiling flips once per second.
 		calls++
 		if (calls/200)%2 == 0 {
-			return 100, burst
+			return TenantCeiling{RatePerSecond: 100, Burst: burst}
 		}
-		return 101, burst
+		return TenantCeiling{RatePerSecond: 101, Burst: burst}
 	})
 	now := base.Add(time.Hour)
 	l.now = func() time.Time { return now }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
@@ -49,6 +50,9 @@ var (
 	// DispatchMetrics is built ONCE, in the initialize phase, and shared by every
 	// DispatchConsumer the NATS manager's oncreate callback builds. See buildMetrics.
 	DispatchMetrics *processor.DispatchMetrics
+	// EgressUnresolved counts egress admissions metered at the platform default for want of
+	// the tenant's own outbound ceiling. Built once, in buildMetrics.
+	EgressUnresolved func(core.CeilingSource)
 	// DeadLetters is this service's identity as a dead-letter producer: the source its index
 	// entries are stamped with and the dead_letter_lost_total a lost dispatch is counted on. Built
 	// by core/service (Svc.DeadLetters), which the max-delivery recorder shares. See buildMetrics.
@@ -99,6 +103,7 @@ func parseConfiguration() error {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	DispatchMetrics = processor.NewDispatchMetrics(Microservice)
+	EgressUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Outbound)
 	// core/service built it: the platform's max-delivery recorder letters under it too,
 	// and a second NewProducer here would panic on the duplicate counter.
 	DeadLetters = Svc.DeadLetters
@@ -202,23 +207,27 @@ func newDispatchReader(nmgr *messaging.NatsManager, cfg *config.OutboundConnecto
 // every tenant is metered at the platform default. Either way the ceiling is a real limit — never
 // unlimited — since ApplyDefaults/Validate guarantee positive platform defaults. Mirrors
 // event-sources' ingest buildRateLimiter (the ingest and outbound dimensions are independent).
-func buildEgressLimiter() *core.TenantRateLimiter {
+//
+// unresolved counts admissions made at the platform default for want of a tenant's own ceiling
+// (governance.NewUnresolvedAdmissions), built once per process in buildMetrics. Every tenant here
+// comes from the platform's own connector-dispatch stream, so it always gets an allowance of its
+// own.
+func buildEgressLimiter(cfg *config.OutboundConnectorsConfiguration, infra mscfg.InfrastructureConfiguration,
+	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
-		MessagesPerSecond: Configuration.OutboundMessagesPerSecond,
-		Burst:             Configuration.OutboundBurst,
+		MessagesPerSecond: cfg.OutboundMessagesPerSecond,
+		Burst:             cfg.OutboundBurst,
 	}
-	infra := Microservice.InstanceConfiguration.Infrastructure
+	counted := core.WithUnresolvedAdmissions(unresolved)
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default.")
-		return core.NewTenantRateLimiter(func(string) (float64, int) {
-			return def.MessagesPerSecond, def.Burst
-		})
+		return core.NewTenantRateLimiter(core.StaticCeiling(def.MessagesPerSecond, def.Burst), counted)
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Outbound)
 	log.Info().Str("userManagement", umURL).Msg("Per-tenant outbound overrides enabled (fail-open to platform default).")
-	return core.NewTenantRateLimiter(resolver.Resolve)
+	return core.NewTenantRateLimiter(resolver.Ceiling, counted)
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
@@ -268,7 +277,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 			// The per-tenant outbound egress limiter (ADR-060 SD-3). Fail-open to the
 			// platform default when per-tenant overrides are not wired (never unlimited).
-			RateLimiter = buildEgressLimiter()
+			RateLimiter = buildEgressLimiter(Configuration, Microservice.InstanceConfiguration.Infrastructure, EgressUnresolved)
 
 			// The connector store (ADR-060 C4a). createNatsComponents binds it into the
 			// executor (publish resolves a ConnectorRef to its latest published version),

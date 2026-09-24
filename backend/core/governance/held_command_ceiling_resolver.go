@@ -78,7 +78,7 @@ func NewHeldCommandCeilingResolver(client *svcclient.Client, umURL string, def i
 // hot-path function command-delivery calls before parking a command.
 //
 // It uses resolve rather than resolveOK, unlike ShedPriorityResolver. The shed
-// resolver needs the "was this actually fetched?" bool because its default is a bronze
+// resolver needs the "was this actually fetched?" answer because its default is a bronze
 // band, so acting on it during a cold-cache window is a real, wrong action (shedding a
 // gold tenant). Here the default is a live ceiling in its own right — the same reading
 // TenantLimitResolver takes of a rate default — so there is nothing for a caller to
