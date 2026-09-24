@@ -163,7 +163,8 @@ const (
 	// request (slice C2b).
 	ActionHTTPCall ActionType = "httpCall"
 	// ActionPublish sends a CEL-shaped payload to a registered, versioned Connector (ADR-060
-	// Tier 2: the embedded-Bento breadth multiplier — MQTT/Kafka/SNS/SQS/Pub-Sub). The action
+	// Tier 2: MQTT/Kafka/SNS/SQS, each delivered by a client on the platform egress guard's
+	// dial; Pub/Sub is in the vocabulary with no client yet). The action
 	// references the connector by token; the connector carries the transport type, target, and
 	// secret handle, so credentials never live in the rule/graph. Execution + the Connector
 	// resource are owned by outbound-connectors (ADR-060 §4).

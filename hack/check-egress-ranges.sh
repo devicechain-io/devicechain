@@ -6,12 +6,14 @@
 # that the rest of the policy is what it was when somebody last looked at it.
 #
 # WHY THIS EXISTS. The tenant-egress boundary is enforced in two places that cannot see
-# each other: core/egress refuses a destination in the dialer for the three paths that
-# have a dialer, and the chart's NetworkPolicy bounds the three that do not (MQTT, Kafka
-# and AWS SNS/SQS are built inside embedded Bento, which exposes no dialer seam). One is
-# Go, the other is a Helm template, and nothing at compile time or render time relates
-# them. The drift is silent and always widening: add a range to ranges.go, the Go paths
-# refuse it, the Bento paths keep reaching it, every test on both sides stays green.
+# each other: core/egress refuses a destination in the dialer of every tenant path —
+# webhooks, httpCall, SMTP, and the MQTT, Kafka and SNS/SQS connector clients — and the
+# chart's NetworkPolicy, when enabled, refuses it again at the pod as a second layer. One
+# is Go, the other is a Helm template, and nothing at compile time or render time relates
+# them. The drift is silent: add a range to ranges.go and the dialer refuses it while the
+# network layer an operator turned on for defence in depth does not, every test on both
+# sides green. (Before the connector clients were owned, three of those paths had no
+# dialer at all and the policy was their ONLY bound, which is how this check began.)
 #
 #   hack/check-egress-ranges.sh              # compare, fail on drift
 #   hack/check-egress-ranges.sh --self-test  # prove the checks can fail, then compare
@@ -333,8 +335,8 @@ compare() {
     echo >&2
     diff -u "$go_file" "$chart_file" | tail -n +3 >&2 || true
     echo >&2
-    echo "Both halves of the boundary have to name the same address space, or the three Bento" >&2
-    echo "egress paths and the three Go ones are protected differently and nothing says so." >&2
+    echo "Both layers of the boundary have to name the same address space, or the dialer and" >&2
+    echo "the network refuse different destinations and nothing says so." >&2
     echo "The chart's half is written in the body of templates/networkpolicy.yaml." >&2
     return 1
   fi

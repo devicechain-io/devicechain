@@ -118,10 +118,10 @@ func TestDispatchBacklogIsSentOnce(t *testing.T) {
 
 	// The executor goes out through an egress guard that allows loopback and nothing else, so the
 	// test uses the same dial path production does.
-	client := &http.Client{Transport: egress.NewGuard([]netip.Prefix{
+	guard := egress.NewGuard([]netip.Prefix{
 		netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128"),
-	}).Transport()}
-	executor := processor.NewExecutor(processor.NewSecretResolver(nil), nil, client,
+	})
+	executor := processor.NewExecutor(processor.NewSecretResolver(nil), nil, guard,
 		time.Duration(cfg.SendTimeoutMs)*time.Millisecond)
 	consumer := newTestDispatchConsumer(reader, dead, deadletter.NewProducer(ms), executor, cfg)
 	require.NoError(t, consumer.Start(context.Background()))

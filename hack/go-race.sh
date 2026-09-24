@@ -12,7 +12,7 @@
 # 🔴 WHY A SCRIPT AND NOT `run: go test -race ./...` BEHIND AN `if:`.
 #
 # The race step rides the per-module `go` matrix, so it is asked about every
-# workspace module and runs on four. A step that skips renders in the GitHub
+# workspace module and runs on the few in the race set. A step that skips renders in the GitHub
 # UI as the same green tick as a step that ran, which makes "this module was race
 # checked" and "this module was never race checked" indistinguishable at exactly
 # the moment somebody wants to know. So the step is UNCONDITIONAL and the verdict
@@ -59,16 +59,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The detector reports on accesses that actually happen — it is not a static
 # analysis — so a module that ships plenty of concurrency but whose tests never
 # start a second goroutine cannot produce a report however long it is
-# instrumented for. event-management (6 production goroutines, 0 in tests),
-# notification-management (4/0) and outbound-connectors (6/0) are all in that
-# position, and outbound-connectors would be the most expensive module in the
-# workspace to instrument because of its Bento dependency tree.
+# instrumented for. event-management (6 production goroutines, 0 in tests) and
+# notification-management (4/0) are in that position. outbound-connectors was
+# too, and was also the most expensive module to instrument because of the
+# embedded stream engine it then carried; both reasons are gone — its publish
+# tests now stand up brokers, WebSocket and TLS servers and drive the connection
+# teardown concurrently, and the engine was replaced by clients the service owns.
 #
 #   module                    go(prod)  go(test)  sync   `go` job: base -> race
 #   backend/core                    18        66    53      179s ->  315s
 #   .../command-delivery             3        10    17       65s ->  178s
 #   .../event-sources                9        13    19       72s ->  166s
 #   .../lwm2m-ingest                12        15    39       44s ->  112s
+#   .../outbound-connectors          2         8    31      (see below)
 #   ---- in the set above; below, measured and not taken ---------------
 #   .../event-processing            14        21    22      101s ->  647s
 #   .../device-management            7         3    11       82s
@@ -79,11 +82,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #
 # (Whole-job durations on ubuntu-latest, every figure from a real run of this
 # workflow, each set against its own merge base — the runners are noisy enough
-# that a baseline from a different hour is not comparable. Re-measure the
+# that a baseline from a different hour is not comparable. outbound-connectors
+# has no runner figure yet: it joined the set in the change that removed its
+# stream engine, and was measured only on a workstation, where its tests went
+# from 28s to 40s under -race with a warm build cache. Replace that row's note
+# with the job durations from the first CI run that carries it. Re-measure the
 # surface with:
 #   grep -rhE '^[[:space:]]*go (func|[a-zA-Z_])' <module> --include='*.go' )
 #
-# The four in the set cost +411s of runner time between them, and roughly none
+# The first four in the set cost +411s of runner time between them, and roughly none
 # of it on the critical path: they are separate matrix entries, and the whole
 # workflow's slowest job is `subscriptions` at ~323s, which the longest of these
 # (core, at 315s) still sits under. Measured end to end, the `ci` run went from
@@ -114,6 +121,7 @@ backend/core
 backend/services/command-delivery
 backend/services/event-sources
 backend/services/lwm2m-ingest
+backend/services/outbound-connectors
 EOF
 }
 

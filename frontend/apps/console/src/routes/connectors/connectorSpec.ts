@@ -202,7 +202,7 @@ function splitList(raw: string): string[] {
 }
 
 // serializeConfig assembles the connector `config` JSON from the form state,
-// following each field's kind. Empty optional fields are omitted so Bento's own
+// following each field's kind. Empty optional fields are omitted so the service's
 // defaults apply (the Go structs use omitempty). Returns a compact JSON string.
 export function serializeConfig(spec: ConnectorTypeSpec, state: ConfigFormState): string {
   const out: Record<string, unknown> = {};

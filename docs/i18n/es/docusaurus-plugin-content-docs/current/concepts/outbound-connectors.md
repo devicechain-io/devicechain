@@ -53,6 +53,41 @@ Dos propiedades mantienen esto seguro:
 - **Disparar y olvidar (fire-and-forget), con forma exacta.** Una acción de salida no bloquea la regla esperando una respuesta. Los payloads se moldean únicamente con CEL — no hay scripting arbitrario en la ruta de entrega — de modo que lo que una regla puede enviar está acotado y es revisable.
 - **Idempotente por construcción.** Cada despacho lleva una **clave de idempotencia** direccionada por contenido derivada del disparo, de modo que si una detección se reprocesa (replayed) o una entrega se reintenta, el receptor puede reconocer y descartar el duplicado — una reentrega nunca significa un doble envío.
 
+## A dónde puede enviar un conector {#destinations}
+
+Cada conexión que hace un conector se comprueba en el momento en que se establece, sobre la dirección
+a la que realmente resolvió el destino. Un destino que resuelve a una dirección de **loopback,
+privada, NAT de operador (carrier-grade NAT), de enlace local (link-local) o de metadatos de nube se
+rechaza**, sea cual sea el nombre que se le dio. La comprobación se aplica igual a webhooks, MQTT,
+Kafka, SNS y SQS:
+
+- **El rechazo es definitivo.** Un despacho rechazado acaba en la cola de mensajes muertos con el
+  resultado `blocked` y no se reintenta, porque esperar no convierte una dirección en pública. Un
+  destino que simplemente está caído es distinto: es un fallo ordinario y se reintenta.
+- **Las URL de bróker MQTT** deben usar `tcp://`, `mqtt://`, `ssl://`, `tls://`, `mqtts://`, `ws://`
+  o `wss://`, con un puerto explícito y un bróker por entrada. Cualquier otro esquema — incluido
+  `unix://` — se rechaza al guardar el conector, y otra vez si se despacha un conector almacenado que
+  lo use. Si se rechaza cualquier bróker de la lista de un conector, todo el despacho es `blocked`.
+- **Las direcciones de Kafka** son `host:puerto`. También se comprueba cada bróker que el clúster
+  **anuncia** en sus metadatos, no solo las direcciones que configuró.
+- **Los endpoints personalizados de SNS y SQS** se comprueban como cualquier otro destino. Sin uno,
+  el conector habla con el endpoint regional de AWS, que también se comprueba.
+- **No se consulta el entorno del propio servicio.** No se usan las variables de proxy
+  (`HTTPS_PROXY`, `ALL_PROXY`, …), ni las variables `AWS_*`, ni los archivos de configuración de AWS,
+  ni la identidad de nube del pod. Un conector llega exactamente al destino que nombra, con la
+  credencial que lleva.
+
+Para que los conectores lleguen a un destino privado — un bróker dentro del clúster, **Amazon MSK**,
+**Amazon MQ**, o SNS/SQS a través de un **endpoint de interfaz de VPC con DNS privado** (que hace que
+incluso los nombres regionales predeterminados resuelvan a direcciones privadas) — un operador lista
+cada dirección como su propio `/32` en `instance.config.infrastructure.egress.allowedDestinations`.
+Un endpoint de interfaz tiene una dirección por zona de disponibilidad, y cada una necesita su propia
+entrada. Una autorización se aplica a **todos los inquilinos y a todos los conectores y webhooks**, no
+solo a aquel para el que se añadió.
+
+Un resultado `blocked` solo le dice a un inquilino que el destino resolvió a una dirección rechazada —
+lo mismo que dice el rechazo de un webhook. No revela nada más sobre la red.
+
 ## Gobernanza {#governance}
 
 Toda acción de salida está sujeta a **gobernanza por inquilino**, porque una llamada externa es más costosa — y más fácil de convertir en una inundación autoinfligida — que una llamada dentro del proceso. El volumen de salida se limita en tasa por inquilino en ambos extremos del salto: REACT descarta (sheds) las emisiones que exceden el presupuesto antes de despacharlas, y el servicio de conectores admite tráfico de destino dentro de un presupuesto acotado. Un inquilino sin límite configurado recae en un valor predeterminado de plataforma que **nunca es ilimitado**. REACT y el servicio de conectores miden las acciones de salida de un inquilino según el momento en que la telemetría que las desencadenó llegó a la plataforma, de modo que un atraso de detecciones que se procesa tras un reinicio o una conmutación por error no se confunde con una inundación ni se frena al techo del inquilino. Una acción que sigue por encima del presupuesto se registra como una carta muerta con motivo `shed`: se registra, no se reintenta. Por encima de un presupuesto por inquilino de aproximadamente una carta por segundo, las acciones descartadas se cuentan y se resumen en una carta por inquilino y minuto. Ambos extremos aplican el techo por réplica de su servicio; consulte [Los techos son por réplica](./governance.md#per-replica).

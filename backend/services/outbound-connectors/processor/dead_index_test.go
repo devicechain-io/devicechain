@@ -51,7 +51,7 @@ func gatheredCounter(t *testing.T, reg *prometheus.Registry, name string) float6
 // newIndexingConsumer builds a consumer wired to both terminal writers, so a give-up can be observed
 // on this service's own subject AND in the platform's dead-letter list.
 func newIndexingConsumer(dead, index messaging.MessageWriter) *DispatchConsumer {
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 5*time.Second)
 	return NewDispatchConsumer(&fakeReader{}, dead, index, testProducer(), e, nil, 5*time.Second, nil, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
@@ -341,7 +341,7 @@ func TestAFinalDeliveryThatCannotBeDeadLetteredIsCountedAsLost(t *testing.T) {
 	producer, reg := registeredProducer()
 	dead := &fakeWriter{fail: context.DeadlineExceeded}
 	index := &fakeWriter{}
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 5*time.Second)
 	c := NewDispatchConsumer(&fakeReader{}, dead, index, producer, e, nil, 5*time.Second, nil, 1,
 		nil, core.NewReadPacer(nil, "test"))
 	acked := &countingAcker{}
@@ -372,7 +372,7 @@ func TestAFinalDeliveryThatCannotBeDeadLetteredIsCountedAsLost(t *testing.T) {
 func TestABelowTheCapWriteFailureIsNotCountedAsLost(t *testing.T) {
 	producer, reg := registeredProducer()
 	dead := &fakeWriter{fail: context.DeadlineExceeded}
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 5*time.Second)
 	c := NewDispatchConsumer(&fakeReader{}, dead, nil, producer, e, nil, 5*time.Second, nil, 1,
 		nil, core.NewReadPacer(nil, "test"))
 	msg := messaging.NewConsumedMessage(
@@ -391,7 +391,7 @@ func TestABelowTheCapWriteFailureIsNotCountedAsLost(t *testing.T) {
 func TestAFailedIndexWriteIsNotCountedAsLost(t *testing.T) {
 	producer, reg := registeredProducer()
 	index := &fakeWriter{fail: context.DeadlineExceeded}
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 5*time.Second)
 	c := NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, index, producer, e, nil, 5*time.Second, nil,
 		1, nil, core.NewReadPacer(nil, "test"))
 	msg := withDispatchOrigin(messaging.NewConsumedMessage(

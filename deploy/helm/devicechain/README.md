@@ -302,21 +302,28 @@ ceiling.
 ## Bounding tenant egress (optional)
 
 A tenant configures its own delivery destinations — a webhook URL, an SMTP relay, an MQTT
-or Kafka broker, an SNS topic. DeviceChain refuses a destination that resolves to a
-private, loopback, link-local, carrier-NAT or cloud-metadata address, and it does so at
-the moment the connection is dialled rather than when the URL is saved, because a hostname
-can resolve differently between the two.
+or Kafka broker, an SNS topic or SQS queue. DeviceChain refuses a destination that resolves
+to a private, loopback, link-local, carrier-NAT or cloud-metadata address, and it does so
+at the moment the connection is dialled rather than when the URL is saved, because a
+hostname can resolve differently between the two.
 
-That covers the webhook, HTTP-call and SMTP paths. It cannot cover MQTT, Kafka or AWS
-SNS/SQS: those are built inside an embedded stream engine that exposes no place to hook a
-dialer. For Kafka an address check would not be enough even with one — the client dials
-the bootstrap broker and then registers whatever addresses that broker returns in its
-metadata, so the tenant's own broker chooses the second hop. The network layer is the only
-boundary those three have.
+That check covers every tenant path, on any cluster, whether or not this section is
+enabled: webhooks, HTTP calls and SMTP, and the MQTT (including `ws://` and `wss://`),
+Kafka and SNS/SQS connectors. For Kafka it covers every broker the cluster advertises in
+its metadata, not only the addresses the connector names. For SNS and SQS it covers an
+endpoint override. Proxy environment variables are not used on any of these paths. A
+refused destination is final: the dispatch is dead-lettered as `blocked` and not retried.
 
-`networkPolicy.enabled=true` renders an egress `NetworkPolicy` for `outbound-connectors`
-that permits DNS, the platform's own datastores and services, and the public internet —
-and nothing else.
+Permitting a private destination is `instance.config.infrastructure.egress.allowedDestinations`,
+one `/32` per address. An allowance applies to every tenant and every path. Destinations
+that are private by construction — Amazon MSK brokers, Amazon MQ, SNS or SQS through an
+interface VPC endpoint with private DNS — need an entry for each address, and an interface
+endpoint has one per availability zone.
+
+`networkPolicy.enabled=true` adds a second, independent layer: an egress `NetworkPolicy`
+for `outbound-connectors` that permits DNS, the platform's own datastores and services, and
+the public internet — and nothing else. It is defence in depth against a defect in the
+in-process check, not what makes the boundary hold.
 
 **It only does anything if your CNI enforces NetworkPolicy.** The object is ordinary
 Kubernetes API and every cluster accepts and stores it, so `kubectl get netpol` shows it
@@ -381,9 +388,9 @@ would silently leave the network permitting what the code refuses.
   instance's namespace, so it is not affected.
 
 - It compares address prefixes, so it cannot look inside an IPv6 address that carries an
-  IPv4 one. On a NAT64 or dual-stack cluster a tenant broker at a translated address
-  reaches what the translated address points at, including a metadata service, on exactly
-  the paths this policy exists to bound. Closing that needs the policy generated from your
+  IPv4 one. On a NAT64 or dual-stack cluster it does not refuse a tenant broker at a
+  translated address that points at a private or metadata address. The in-process check
+  does, on every path; closing it in this layer too needs the policy generated from your
   cluster's own translation prefix.
 - It is a **ceiling** over `instance.config.infrastructure.egress.allowedDestinations`
   for the paths it covers — two controls in series rather than one. That setting permits

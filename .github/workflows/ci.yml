@@ -184,7 +184,7 @@ jobs:
         run: hack/go-race.sh --self-test
 
       # Which modules the detector covers, said once, as a table. The race step
-      # rides the whole per-module `go` matrix and runs on four of them, and a step
+      # rides the whole per-module `go` matrix and runs on the few in the race set, and a step
       # that decides not to run renders as the same green tick as one that ran —
       # so a reader cannot recover the covered set from the matrix. This is where
       # that set is legible.
@@ -230,11 +230,11 @@ jobs:
           # Per-module cache key, NOT the shared "**/go.sum". Every matrix entry
           # hashing all go.sum files computed the SAME key, and a GitHub cache key is
           # write-once — so the first job to finish its post-step saved the cache and
-          # every other entry skipped saving. The slowest module (outbound-connectors,
-          # whose Bento tree is ~1,240 extra packages) is the LEAST likely to win that
-          # race, so its build cache was almost never persisted and it recompiled Bento
-          # cold on nearly every run. A per-module key gives each entry its own cache to
-          # restore from.
+          # every other entry skipped saving. The slowest module is the LEAST likely to
+          # win that race — when this was found, outbound-connectors, then carrying an
+          # embedded stream engine's dependency tree — so its build cache was almost never
+          # persisted and it recompiled cold on nearly every run. A per-module key gives
+          # each entry its own cache to restore from.
           #
           # 🔴 go.mod IS LISTED ALONGSIDE go.sum BECAUSE NOT EVERY WORKSPACE MODULE
           # HAS A go.sum. `deploy` requires nothing at all — a three-line go.mod and no
@@ -448,8 +448,8 @@ jobs:
       # in the go matrix, rather than in a workflow of its own because govulncheck
       # has to run INSIDE a module (same constraint as every other Go gate here) and
       # this job already provides a warm per-module build cache. Measured on a warm
-      # cache: 3.4s for core, 4.7s for outbound-connectors — the Bento tree, and the
-      # slowest module here.
+      # cache: 3.4s for core, 4.7s for outbound-connectors, which was then the slowest
+      # module here (it has since shed its largest dependency tree).
       #
       # 🔑 A GREEN RUN DOES NOT MEAN "no vulnerable dependencies". It means nothing
       # REACHABLE — govulncheck resolves advisories down to the call graph, and a
@@ -502,7 +502,7 @@ jobs:
         # The setup-go cache above restores GOCACHE, so those stale results survive
         # into CI — a PR touching only a fixture is precisely the shape that would
         # replay someone else's green. This disables result caching only; the BUILD
-        # cache (the expensive part — outbound-connectors' Bento tree) is untouched.
+        # cache (the expensive part) is untouched.
         run: |
           if [ "${{ matrix.module }}" = "backend/k8s" ]; then
             # Read into an array rather than splitting an unquoted $(...). The
@@ -1937,11 +1937,11 @@ jobs:
           # Per-module cache key, NOT the shared "**/go.sum". Every matrix entry
           # hashing all go.sum files computed the SAME key, and a GitHub cache key is
           # write-once — so the first job to finish its post-step saved the cache and
-          # every other entry skipped saving. The slowest module (outbound-connectors,
-          # whose Bento tree is ~1,240 extra packages) is the LEAST likely to win that
-          # race, so its build cache was almost never persisted and it recompiled Bento
-          # cold on nearly every run. A per-module key gives each entry its own cache to
-          # restore from.
+          # every other entry skipped saving. The slowest module is the LEAST likely to
+          # win that race — when this was found, outbound-connectors, then carrying an
+          # embedded stream engine's dependency tree — so its build cache was almost never
+          # persisted and it recompiled cold on nearly every run. A per-module key gives
+          # each entry its own cache to restore from.
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       # Install ko ourselves rather than via ko-build/setup-ko. The action has now

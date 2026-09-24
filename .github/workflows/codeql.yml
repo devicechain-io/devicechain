@@ -93,14 +93,13 @@ on:
   # declined on those grounds — see the analysis note below.
   #
   # If you ever DO want it faster, the measured lever is not parallelism. A
-  # per-module matrix compiles 9754 packages against a 2749-package union (3.55x)
-  # and would report a `backend/core` finding ~20 times, once per category. The
-  # real weight is one dependency: `bento/public/components/aws` is an
-  # everything-with-AWS-auth bundle, and its elasticsearch/opensearch halves pull
-  # 817 packages — 29.7% of the union, and half of outbound-connectors' own
-  # compile time — that nothing here uses. Pruning them needs a fork or an
-  # upstream narrow bundle, since `internal/impl/aws` cannot be imported directly
-  # and the impls carry no build tags.
+  # per-module matrix compiled 9754 packages against a 2749-package union (3.55x)
+  # and would report a `backend/core` finding ~20 times, once per category. When
+  # that was measured, the real weight was one dependency — the embedded stream
+  # engine outbound-connectors then carried, whose AWS bundle alone pulled 817
+  # packages (29.7% of the union) that nothing here used. That engine has since
+  # been removed in favour of clients the service owns, so every figure in this
+  # paragraph predates it: re-measure before optimising anything.
   pull_request:
     branches: [main]
     paths:

@@ -1512,7 +1512,9 @@ reason, a stream and two alerts. If you run a warm standby for `event-processing
 warm standby, only the replica running detection dispatches actions". If you route or silence
 alerts by name, two new warnings are added: `RateLimiterOverflowInUse` and
 `TenantsMeteredAtPlatformDefault`. If you filter dead letters by reason, or route alerts by name,
-read "Outbound actions are no longer dropped when the detection engine catches up".
+read "Outbound actions are no longer dropped when the detection engine catches up". If a tenant connector publishes to a broker or endpoint on a
+private address, including MSK, Amazon MQ or an SNS/SQS interface endpoint, read "Connectors can
+no longer reach private addresses, and the connectors service has new clients" before upgrading.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1865,6 +1867,48 @@ Detections the engine re-publishes after a restart are now recognised by the mes
 once within a 30-minute window, so subscribers to the derived-events feed see fewer duplicates. Each
 derived event now carries a `triggeredAt` field. If you filter dead letters by reason, expect `shed`
 letters of kind `detection-action`. Nothing needs doing at the upgrade.
+
+#### Connectors can no longer reach private addresses, and the connectors service has new clients
+
+MQTT, Kafka, SNS and SQS connectors now get the same connect-time check that webhooks and mail
+relays already had. A destination that resolves to a loopback, private, carrier-grade NAT,
+link-local or cloud-metadata address is refused. The refusal is **final**: the dispatch is
+dead-lettered as `blocked` and not retried. For Kafka this covers every broker the cluster
+advertises, not only the addresses you configured. The check runs in the service itself, so it no
+longer depends on `networkPolicy.enabled` or on your cluster enforcing it.
+
+What to check before upgrading:
+
+- **Destinations on private addresses stop receiving.** This includes:
+  - an in-cluster or peered broker;
+  - **Amazon MSK brokers**, which are private by default;
+  - **Amazon MQ** used for MQTT;
+  - **SNS and SQS reached through an interface VPC endpoint with private DNS enabled**. With
+    private DNS, even the default `sns.<region>.amazonaws.com` / `sqs.<region>.amazonaws.com`
+    names resolve to private addresses, so connectors with no endpoint override are affected too.
+
+  Allow each address as its own `/32` under
+  `instance.config.infrastructure.egress.allowedDestinations`. An interface endpoint has one
+  address per availability zone, and each needs its own entry. An allowance applies to every
+  tenant and every connector and webhook path, not only the one you have in mind.
+- **MQTT URLs must use `tcp://`, `mqtt://`, `ssl://`, `tls://`, `mqtts://`, `ws://` or `wss://`**,
+  with an explicit port and one broker per entry. `tcps://`, `mqtt+ssl://` and `unix://` are no
+  longer accepted. They are refused when a connector is saved, and a stored connector that uses
+  one is dead-lettered as `invalid` when it fires. Kafka addresses must be `host:port`.
+- **Proxy environment variables** (`HTTPS_PROXY`, `ALL_PROXY`) are no longer used by connectors,
+  and neither are `AWS_*` variables or AWS config files on the pod.
+- **The Kafka client changed.**
+  - The default client id is now `devicechain` (it was `bento`). Set `clientId` on the connector
+    if your brokers apply ACLs or quotas by client id.
+  - Records without a key are now spread with sticky partitioning.
+  - The protocol version is negotiated with the broker rather than fixed.
+  - Delivery is unchanged: leader acknowledgement, no idempotent producer.
+- **SQS messages are sent one at a time** (`SendMessage`), not in batches. The IAM permission is
+  the same `sqs:SendMessage`.
+
+Two things improve as a side effect. A Kafka broker that is briefly unreachable is now retried
+rather than dead-lettered as `invalid`. And the connectors service's binary, which is most of its
+image, is about a third of its previous size.
 
 ### The one-time durable-ingest cutover
 

@@ -10,15 +10,16 @@
 # only one available — Go will not download a newer toolchain to satisfy a
 # higher requirement, it fails. And a module's `go.mod` carries the LANGUAGE
 # version that module's own code needs, which is a floor and is routinely lower
-# than the workspace's: `go.work`'s directive must be >= every module's, and ours
-# tracks whatever the embedded Bento library declares.
+# than the workspace's: `go.work`'s directive must be >= every module's, so it
+# tracks the highest `go` line any workspace module declares, and a dependency
+# bump can raise that.
 #
 # So a workflow pointed at a module `go.mod` installs a toolchain that `go build`
 # inside the workspace then refuses to use. It is not a warning — the build dies
 # with `go.work requires go >= X (running go Y; GOTOOLCHAIN=local)`.
 #
 # That is not hypothetical. Of the 19 setup-go steps across 13 workflow files,
-# `ko-base-image.yml` held the ONE pointed at `backend/core/go.mod`. When the Bento bump moved the workspace floor
+# `ko-base-image.yml` held the ONE pointed at `backend/core/go.mod`. When a dependency bump moved the workspace floor
 # from 1.26.5 to 1.26.6, that workflow started failing every week and nothing
 # said so: it is a scheduled job whose only consumer is a 40-day liveness check
 # in `check-ko-base-pin.sh`, so the base-image pin was frozen for three weeks

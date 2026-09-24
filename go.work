@@ -1,18 +1,19 @@
-// Floor at 1.26.6 (ADR-060): the embedded Bento connector library
-// (warpstreamlabs/bento, landed in outbound-connectors in slice C4b) declares the
-// language version, which propagates to that module and therefore to the workspace. The
-// workspace `go` directive must be >= every module's, so it tracks whatever Bento
-// declares — v1.20 said 1.26.5, v1.21 says 1.26.6.
+// The workspace `go` directive must be >= every module's, so it is a floor set by the
+// highest `go` line any workspace module declares. Today several modules declare the
+// value below — the maintainer tools under backend/tools and outbound-connectors among
+// them — so it cannot drop until every one of them does. Ask the tree which, rather than
+// this comment: grep -H '^go ' $(go list -m -f '{{.GoMod}}').
 //
-// 🔴 THIS LINE MOVES WITH A DEPENDENCY BUMP, AND NOTHING BUMPS IT FOR YOU. Dependabot
-// raises the go directive of the MODULE it touches and never looks at the workspace, so
-// a Bento bump lands with outbound-connectors at 1.26.6 and this at 1.26.5 — and the
-// workspace then refuses to load AT ALL. Every Go module's CI job fails, including
-// modules the bump never touched, with an error naming outbound-connectors. The blast
-// radius makes it read as a broad breakage; it is one line, here.
+// 🔴 THIS LINE MOVES WITH A DEPENDENCY BUMP, AND NOTHING BUMPS IT FOR YOU. A dependency
+// that declares a newer language version raises the go directive of the MODULE that
+// takes it, and Dependabot raises only that module's line and never looks at the
+// workspace — so the module lands above this floor and the workspace then refuses to
+// load AT ALL. Every Go module's CI job fails, including modules the bump never touched,
+// with an error naming the one module that moved. The blast radius makes it read as a
+// broad breakage; it is one line, here.
 //
-// No version is named in the comment above deliberately: a number frozen in prose drifts
-// away from the tree, and this one already had — it said v1.19 while the tree ran v1.20.
+// No module or dependency version is named in the comment above deliberately: a number
+// frozen in prose drifts away from the tree, and this one already had.
 go 1.26.6
 
 // 🔑 THE TOOLCHAIN IS PINNED SEPARATELY FROM THE LANGUAGE FLOOR, AND THEY MOVE FOR

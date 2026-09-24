@@ -38,7 +38,7 @@ describe('serializeConfig', () => {
     expect(json).toEqual({ urls: ['tcp://a:1883', 'tcp://b:1883'], topic: 'alerts', qos: 2 });
   });
 
-  it('mqtt: a blank qos is omitted so Bento defaults apply', () => {
+  it('mqtt: a blank qos is omitted so the service default applies', () => {
     const st = emptyFormState(spec('mqtt'));
     st.fields.urls = 'tcp://a:1883';
     st.fields.topic = 't';

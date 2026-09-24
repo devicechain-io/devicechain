@@ -10,10 +10,10 @@ import (
 )
 
 // ConnectorType is a registered outbound-connector kind. It is DeviceChain's stable
-// token for a target, decoupled from the underlying Bento output name (the C4b/C4c
-// generator maps a type onto its Bento output), so the type value is API-stable even
-// if a component's registered name changes. A `publish` action's ConnectorRef resolves
-// to a Connector whose Type is one of these.
+// token for a target, decoupled from the client library that delivers to it (connectorspec
+// maps a type onto a typed target, and the publish package onto its client), so the type
+// value is API-stable even if the client behind it changes. A `publish` action's
+// ConnectorRef resolves to a Connector whose Type is one of these.
 type ConnectorType string
 
 const (

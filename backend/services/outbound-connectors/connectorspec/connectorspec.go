@@ -1,17 +1,24 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package connectorspec turns a versioned Connector's {type, config} + resolved
-// credential into the Bento output configuration the publish sink runs (ADR-060 Tier 2).
-// It is deliberately Bento-FREE — it only builds a config document — so it can be reused
-// at connector-write time and at dispatch without linking the Bento tree into anything
-// that only needs to validate a shape. The `publish` package consumes the output this
-// produces.
+// Package connectorspec turns a versioned Connector's {type, config} plus its resolved
+// credential into a typed Target the publish package delivers to (ADR-060 Tier 2).
 //
-// The output config is emitted as a JSON document. JSON is a strict subset of YAML 1.2,
-// so Bento's AddOutputYAML parses it directly, and json.Marshal escapes every value —
-// so a tenant-supplied URL/topic or a resolved credential can never break out of its
-// field or inject additional Bento config (no string interpolation into YAML).
+// The same parser runs at connector-write time (ValidateConfig, so an author hears about
+// a bad destination while still looking at it) and again at dispatch (Build, because a
+// stored row may have been written before a rule existed, or past the write path
+// entirely). There is one reader of a config, so the two cannot disagree about what a
+// destination may be.
+//
+// What a destination may be is narrow on purpose. Every Target this package returns names
+// TCP endpoints only — host and port — because those are the only destinations the
+// platform egress guard can judge at connect time. A unix socket, a scheme a client
+// library would interpret its own way, a second destination smuggled into one entry
+// after a comma: each is refused here, and the publish package's dial refuses anything
+// but TCP again underneath.
+//
+// This package dials nothing and logs nothing; a Target carries the credential in memory
+// only.
 package connectorspec
 
 import (
@@ -21,91 +28,83 @@ import (
 	"strings"
 )
 
-// rejectInterpolation guards a value bound for a Bento INTERPOLATED config field (topic,
-// key, …) against the Bloblang opener "${!", which Bento would evaluate per message. A
-// tenant-authored value must be a literal, never executable Bloblang — the interpolation
-// surface is otherwise one transitive import away from exposing functions to tenant input.
-func rejectInterpolation(field, value string) error {
-	if strings.Contains(value, "${!") {
-		return fmt.Errorf("%s must not contain the Bloblang interpolation opener \"${!\"", field)
-	}
-	return nil
-}
-
-// ErrUnsupportedType is returned for a connector type with no registered output builder
+// ErrUnsupportedType is returned for a connector type with no registered target builder
 // in this build. It is distinct from "unknown type" (model rejects those at write): a
-// type may be a valid, creatable vocabulary member whose Bento generator has not shipped
-// yet (e.g. kafka before slice C4c). The dispatch executor maps it to a terminal,
-// dead-lettered outcome — recognized but not executable — never a silent drop.
+// type may be a valid, creatable vocabulary member whose client has not shipped yet
+// (gcp_pubsub). The dispatch executor maps it to a terminal, dead-lettered outcome —
+// recognized but not executable — never a silent drop.
 var ErrUnsupportedType = errors.New("connector type has no output generator in this build")
 
-// builder is the per-type contract: validate the config shape, and build the Bento
-// output config map from the config + resolved secret. Registered in the table below;
-// slice C4c adds kafka/aws_sns/aws_sqs/gcp_pubsub entries with no other change.
+// Target is a fully-validated publish destination plus its credential. It is sealed:
+// exactly MQTTTarget, KafkaTarget, SNSTarget and SQSTarget implement it, and the publish
+// package switches over those four.
+type Target interface{ isTarget() }
+
+// builder parses and validates one connector type's config. It returns a Target without
+// its credential; Build attaches the secret and applies the checks that need it. Parsing
+// and validation are ONE function so the write path and the dispatch path run the same
+// rules.
 type builder struct {
-	validate func(config []byte) error
-	build    func(config []byte, secret string) (map[string]any, error)
+	parse  func(config []byte) (Target, error)
+	secret func(t Target, secret string) (Target, error)
 }
 
-// builders is the registered output-generator set. Adding a generator is the only change
-// needed to ship a new output (SD-4: one `publish` action, the type selects it). C4b
-// shipped mqtt; C4c adds kafka + aws_sns + aws_sqs.
+// builders is the registered target set. Adding a target type means adding a parser here
+// and a client in the publish package; the `publish` REACT action is unchanged (the type
+// selects the transport).
 var builders = map[string]builder{
-	"mqtt":    {validate: validateMQTT, build: buildMQTT},
-	"kafka":   {validate: validateKafka, build: buildKafka},
-	"aws_sns": {validate: validateSNS, build: buildSNS},
-	"aws_sqs": {validate: validateSQS, build: buildSQS},
-	// gcp_pubsub is DEFERRED: Bento's gcp_pubsub output authenticates via Application Default
-	// Credentials (process-global env / workload identity), with no per-connector credential field —
-	// so a per-tenant credential cannot be injected via config without breaking tenant isolation.
-	// It needs a credential-injection follow-up before it can ship.
+	"mqtt":    {parse: parseMQTT, secret: withMQTTSecret},
+	"kafka":   {parse: parseKafka, secret: withKafkaSecret},
+	"aws_sns": {parse: parseSNS, secret: withSNSSecret},
+	"aws_sqs": {parse: parseSQS, secret: withSQSSecret},
+	// gcp_pubsub has no delivery implementation in this build. When it ships it will
+	// authenticate with a credential stored on the connector, as the AWS targets do,
+	// never with the pod's ambient identity.
 }
 
-// Supported reports whether a Bento output generator is registered for connType in this
-// build.
+// Supported reports whether a target builder is registered for connType in this build.
 func Supported(connType string) bool {
 	_, ok := builders[connType]
 	return ok
 }
 
 // ValidateConfig checks the per-type config shape for connType. Returns ErrUnsupportedType
-// if no generator is registered. Callable at connector-write time (fail early) and at
-// dispatch (defense in depth against a forged/corrupt stored config).
+// if no builder is registered. It runs exactly the parser Build runs.
 func ValidateConfig(connType string, config []byte) error {
 	b, ok := builders[connType]
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrUnsupportedType, connType)
 	}
-	return b.validate(config)
+	_, err := b.parse(config)
+	return err
 }
 
-// BuildOutput generates the Bento output configuration (a JSON string, which is valid
-// YAML for Bento) for connType from its config + resolved secret. It re-validates the
-// config (defense in depth: a stored rule could have been forged past the write-time
-// gate). The secret is injected into the output config in memory only — it is never
-// logged (the publish sink silences Bento's logger and this package logs nothing).
-func BuildOutput(connType string, config []byte, secret string) (string, error) {
+// Build parses and validates connType's stored config and attaches the resolved secret,
+// returning the Target the publish package delivers to. It re-validates everything
+// ValidateConfig does: a stored row can predate a rule, or have been written past the
+// write path. The secret is carried in memory only and is never part of an error.
+func Build(connType string, config []byte, secret string) (Target, error) {
 	b, ok := builders[connType]
 	if !ok {
-		return "", fmt.Errorf("%w: %q", ErrUnsupportedType, connType)
+		return nil, fmt.Errorf("%w: %q", ErrUnsupportedType, connType)
 	}
-	if err := b.validate(config); err != nil {
-		return "", err
-	}
-	m, err := b.build(config, secret)
+	t, err := b.parse(config)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	// json.Marshal escapes every value → no field breakout / YAML injection from a
-	// tenant-supplied URL/topic or the resolved credential.
-	out, err := json.Marshal(m)
-	if err != nil {
-		return "", fmt.Errorf("marshal output config: %w", err)
+	return b.secret(t, secret)
+}
+
+// decodeStrict decodes a config object into v, rejecting unknown fields (fail closed: a
+// misspelled field is a refusal, never a silently-default value) and trailing data.
+func decodeStrict(kind string, config []byte, v any) error {
+	dec := json.NewDecoder(strings.NewReader(string(config)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("%s config: %w", kind, err)
 	}
-	// Escape "${" as "$${" so Bento's config env-var substitution (which runs over the raw
-	// config before parsing, and which the publish sink additionally neutralizes via an
-	// always-unset lookup) leaves every value LITERAL. Without this, a credential or a
-	// topic/url containing the literal sequence "${x}" would be silently rewritten to empty
-	// (a corrupted send). Bento un-escapes "$${" back to "${" after substitution.
-	return strings.ReplaceAll(string(out), "${", "$${"), nil
+	if dec.More() {
+		return fmt.Errorf("%s config: trailing data after the config object", kind)
+	}
+	return nil
 }

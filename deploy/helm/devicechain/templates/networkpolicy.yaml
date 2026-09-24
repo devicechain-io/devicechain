@@ -88,16 +88,16 @@
 # WHY THIS EXISTS AND WHY IT IS SEPARATE FROM THE GO GUARD.
 #
 # Tenant-configured destinations reaching a private address are refused in
-# core/egress, inside the dialer's Control hook, for the two HTTP paths and
-# SMTP. That covers three of the six egress paths. The other three — MQTT,
-# Kafka and AWS SNS/SQS — are built inside embedded Bento from YAML, and
-# Bento's StreamBuilder exposes no dialer to hook. paho, sarama and the AWS
-# SDK each have a dialer seam; Bento sets none of them.
+# core/egress, inside the dialer's Control hook, for EVERY egress path: the two
+# HTTP paths, SMTP, and the MQTT, Kafka and AWS SNS/SQS connector clients, each
+# of which is handed the guarded dial. For Kafka that covers the brokers the
+# cluster advertises in metadata as well as the seeds, because every connection
+# the client makes goes through that one dial.
 #
-# And for Kafka no address check would suffice even with a dialer: sarama dials
-# the bootstrap broker and then registers whatever addresses that broker returns
-# in its metadata response, so the tenant's own broker chooses the second hop.
-# Only the network layer sees that one.
+# This policy is a second, independent layer at the pod — defence in depth
+# against a defect in the Go guard, enforced by the CNI rather than the
+# process. It is not what makes the boundary hold; it is why a single defect
+# there would not be enough.
 #
 # 🔴 IT ONLY DOES ANYTHING IF YOUR CNI ENFORCES POLICY — AND ON A LOCAL KIND
 # CLUSTER IT DOES.

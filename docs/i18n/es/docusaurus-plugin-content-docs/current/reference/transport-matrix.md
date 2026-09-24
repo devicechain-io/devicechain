@@ -239,7 +239,7 @@ conector es un sumidero de un solo sentido—, así que **Lectura** y **Suscripc
 | Conector | Lectura | Escritura | Suscripción | Notas |
 | --- | :---: | :---: | :---: | --- |
 | Webhook `httpCall` | — | ● | — | Solo `POST`; se rechaza cualquier otro método |
-| `publish` → MQTT | — | ● | — | QoS 0/1/2; usuario + secreto; **sin ajustes de TLS** — vea más abajo |
+| `publish` → MQTT | — | ● | — | QoS 0/1/2; usuario + secreto; URL `tcp`, `mqtt`, `ssl`, `tls`, `mqtts`, `ws`, `wss`; **sin ajustes de TLS** — vea más abajo |
 | `publish` → Kafka | — | ● | — | TLS; SASL `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` |
 | `publish` → AWS SNS | — | ● | — | Solo credenciales estáticas por inquilino |
 | `publish` → AWS SQS | — | ● | — | Solo credenciales estáticas por inquilino |
@@ -248,24 +248,27 @@ conector es un sumidero de un solo sentido—, así que **Lectura** y **Suscripc
 La ausencia de TLS en la fila de MQTT merece decirse con claridad junto a la de Kafka, que sí tiene
 un conmutador `tls` real: la configuración del conector MQTT **no tiene campos de TLS de ningún
 tipo**, y rechaza claves desconocidas, así que no hay nada que redactar. El TLS solo ocurre de forma
-implícita, dando al bróker una URL `ssl://` — sin ninguna manera de aportar una CA, un certificado de
-cliente o un ajuste de verificación.
+implícita, dando al bróker una URL `ssl://`, `tls://`, `mqtts://` o `wss://` — verificada contra el
+almacén de confianza público y el host que nombra la URL, sin ninguna manera de aportar una CA, un
+certificado de cliente o un ajuste de verificación.
 
 Los dos conectores de AWS exigen deliberadamente una clave de acceso estática y **no** recurren a la
 identidad IAM ambiental del pod en el que se ejecutan. Tomar prestada la identidad de nube de la
 propia plataforma para hacer la llamada de un inquilino es justamente la confusión que esa separación
 existe para impedir.
 
+Cada destino de un conector se comprueba al establecer la conexión, y uno que resuelve a una dirección
+privada o de metadatos de nube se rechaza — vea
+[a dónde puede enviar un conector](../concepts/outbound-connectors.md#destinations).
+
 :::warning Un conector de Google Pub/Sub se puede crear y nunca enviará nada
 `gcp_pubsub` es un tipo de conector válido: la API lo acepta, y el conector se guarda y se publica
-como cualquier otro. **No tiene generador de salida**, así que todo despacho hacia él falla de forma
-terminal y acaba en la cola de mensajes muertos — reconocido pero no ejecutable, nunca descartado en
-silencio.
+como cualquier otro. **No tiene implementación de entrega**, así que todo despacho hacia él falla de
+forma terminal y acaba en la cola de mensajes muertos — reconocido pero no ejecutable, nunca descartado
+en silencio.
 
-La razón de que se retenga en lugar de despacharse: la salida Pub/Sub de Bento se autentica mediante
-Application Default Credentials —la identidad de todo el proceso— sin ningún campo de credencial por
-conector, de modo que no podría inyectarse la credencial de un inquilino sin que todos compartieran
-una sola identidad. Se despachará cuando exista una forma de dar a cada conector la suya.
+No tiene implementación de entrega en esta versión. Cuando se publique, se autenticará con una
+credencial guardada en el conector, como hacen los conectores de AWS, nunca con la identidad del pod.
 :::
 
 Aparte de los conectores, los [canales de notificación](../guides/notification-channels.md) llegan a

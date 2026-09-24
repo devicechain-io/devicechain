@@ -360,7 +360,7 @@ What the compiler does **not** check, stated because each has bitten someone:
   command's parameter schema — both are checked, but downstream at enqueue (§10b), not here;
 - a `publish` action's connector reference. A dangling one is not a drop-and-log: outbound-connectors
   classifies both "no such connector" and "connector has no published version" as terminal
-  (`backend/services/outbound-connectors/processor/executor.go:185-198`), so the dispatch is
+  (`backend/services/outbound-connectors/processor/executor.go:232-245`), so the dispatch is
   **dead-lettered and acked on its first delivery** (`consumer.go:333-339`) — zero retries, and
   nothing surfaces it to the rule's author. The rule keeps firing and every firing goes straight to
   the dead-letter stream.
@@ -653,12 +653,18 @@ send itself is capped to end `sendMargin` before it (`sendContext` in `processor
 budget for one dispatch is one message's clock — `waitBudget + secretResolve + maxSend + sendMargin`
 = 8 + 5 + 20 + 5 = 38s < 60s — and `TestOneDispatchFitsAckWait` pins it against the constants.
 
-Two hardening measures in the embedded-Bento path are worth naming because neither is obvious:
-**environment interpolation is disabled** (`backend/services/outbound-connectors/publish/bento.go:71-77`)
-— Bento substitutes `${VAR}` over raw config before parsing, so without this a tenant-authored config
-value could exfiltrate a pod-environment secret to the tenant's own broker — and Bento's logger is
-routed to a discarding logger so a component cannot print credentials to stdout. Components are
-registered selectively, never the full catalog.
+The publish path's hardening is one property, stated in `backend/services/outbound-connectors/publish/dial.go`:
+**every connection a publish client makes comes from one dial function**, which runs the egress guard
+on the resolved address, refuses any network but TCP, counts a dial as `blocked` only when every
+address it tried was refused, cancels the whole send on the first refusal, and wraps each connection
+so it is closed when the send ends and cannot receive more than a send needs. The MQTT client gets it
+as its open-connection function (not `SetDialer`, which its WebSocket and `ALL_PROXY` paths bypass),
+the Kafka client as its dialer — so a cluster's advertised brokers are checked like the seeds — and
+the AWS SNS/SQS clients as their HTTP transport's dial, on a configuration built literally rather
+than loaded, so nothing is read from the pod's environment, files or instance metadata. The shapes a
+connector config may name are narrowed before that, by one parser that runs at save and at dispatch
+(`connectorspec.Build` / `ValidateConfig`). `TestTheBinaryLinksNoAmbientCloudMachinery` pins that the
+service binary links no AWS config loader, IMDS, STS or SSO client.
 
 Secret resolution is the only place a credential is **decrypted out of the store**
 (`backend/services/outbound-connectors/processor/secret_resolver.go:30-35`), cached for 60s under a
@@ -666,12 +672,11 @@ Secret resolution is the only place a credential is **decrypted out of the store
 type — "the ONLY place cleartext is materialized in this service" — as being about the *store
 boundary*, because taken literally it is not true of the process, and a reader deciding what a heap
 dump or a panic could expose needs the literal answer. After `Resolve` returns, the cleartext sits in
-an executor local for the length of the send (`processor/executor.go:109-124` for `httpCall`,
-`:204-216` for `publish`), goes onto the outbound request as an `Authorization`-style header
-(`backend/core/httpsink/httpsink.go:206-209`), and — for a publish — is written **into the generated
-Bento output YAML** before that config is parsed
-(`backend/services/outbound-connectors/connectorspec/mqtt.go:106-107`, and the same shape in
-`connectorspec/aws.go` and `connectorspec/kafka.go`). What the secret-store red line actually buys is
+an executor local for the length of the send (`processor/executor.go:129-144` for `httpCall`,
+`:251-263` for `publish`), goes onto the outbound request as an `Authorization`-style header
+(`backend/core/httpsink/httpsink.go:206-209`), and — for a publish — is carried **on the typed target**
+`connectorspec.Build` returns (the MQTT password, the Kafka SASL password or the AWS secret access
+key) into the client for the send. What the secret-store red line actually buys is
 narrower than "materialized once" and is still worth having: never logged, never surfaced on the API,
 never on the wire beyond the authenticated outbound call itself.
 
