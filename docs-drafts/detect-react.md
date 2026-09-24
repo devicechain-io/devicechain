@@ -704,8 +704,14 @@ the gate charges (`AllowAt` on the `ConnectorRateGate`) and what rides the wire
 (the `TriggeredAt` field of `ConnectorDispatchRequest`) are the same value; the outbound-connectors consumer runs
 the same function over the wire value and the dispatch message's own `AppendTime` and calls
 the limiter's `WaitAt`. Each fallback is counted on `<area>_rate_clock_fallback_total{source}`
-(`core.NewRateClockFallbacks`), and `RateMeteringClockFallback` fires when it has not stopped for an
-hour.
+(`core.NewRateClockFallbacks`): `append` (no stamp), `capped` (a stamp later than the carrying
+message's `AppendTime`, charged at that `AppendTime`) and `now`. `RateMeteringClockFallback` fires
+when `append` or `now` has not stopped for an hour. It does not watch `capped`, because a steady
+`capped` count is clock skew, not a missing stamp: `idleAdvance` stamps the event-processing pod's
+wall clock and the stream leader stores the message a few milliseconds later by its own, so a pod
+clock running ahead of the broker's by more than that gap caps every idle-advance detection while
+the engine is stamping correctly. The same holds at the sink between the derived-events and
+connector-dispatch stream leaders.
 
 **Why that is safe to feed a limiter.** The times are not monotonic — two event-sources pods'
 clocks differ, a replay re-feeds old times, a redelivery arrives behind newer admissions. The core

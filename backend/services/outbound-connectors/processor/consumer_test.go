@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -298,6 +299,36 @@ func TestHandleRateShedDeadLetters(t *testing.T) {
 	}
 	if len(dead.written()) != 1 {
 		t.Fatalf("a rate-shed dispatch must be written to the dead-letter subject once, got %d", len(dead.written()))
+	}
+}
+
+// TestACeilingThatAdmitsNothingIsShedNotRetried pins the disposition of a refusal that is not a
+// budget timeout: a ceiling with a burst of 0 refuses every token outright, forever. That is a shed
+// (dead-lettered as rate_limited and acked), NOT a transient failure: leaving it unacked would spend
+// every one of the message's deliveries on a refusal no redelivery can change, and churn the poison
+// cap the rate gate promises never to touch.
+func TestACeilingThatAdmitsNothingIsShedNotRetried(t *testing.T) {
+	rl := core.NewTenantRateLimiter(core.StaticCeiling(1000, 0))
+	srv, hits := countingServer(t)
+
+	dead := &fakeWriter{}
+	c := newTestConsumerWithRate(dead, &fakeSecretStore{}, rl, 40*time.Millisecond)
+	ack := &fakeAck{}
+	c.handle(context.Background(), httpDispatch(t, srv.URL, ack)) // first delivery: far below the cap
+
+	if hits.Load() != 0 {
+		t.Fatalf("a refused dispatch must not be sent, endpoint saw %d requests", hits.Load())
+	}
+	if !ack.acked {
+		t.Fatal("a ceiling that admits nothing is a shed: the dispatch must be dead-lettered and acked, " +
+			"not left unacked to redeliver against a refusal no redelivery can change")
+	}
+	w := dead.written()
+	if len(w) != 1 {
+		t.Fatalf("want exactly one dead letter, got %d", len(w))
+	}
+	if got := w[0].Headers[deadletter.HeaderDeadReason]; got != outcomeRateLimited {
+		t.Fatalf("dead reason = %q, want %q (a rate refusal, not a send failure)", got, outcomeRateLimited)
 	}
 }
 

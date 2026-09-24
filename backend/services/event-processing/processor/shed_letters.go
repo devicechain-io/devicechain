@@ -80,6 +80,26 @@ func newShedLetterer(dead *deadletter.Sink, b ShedLetterBudget, m *ReactMetrics)
 	}
 }
 
+// admit charges one letter to BOTH budgets, or to neither. Charging them one after the other
+// would spend the first on a letter the second refuses: a global refusal would still take the
+// tenant's token, so a quiet tenant caught in another tenant's flood would have its next shed
+// summarised when it could have been lettered; and a per-tenant refusal would still take a global
+// token, so a tenant over its own budget would drain everyone's. So the global token is RESERVED
+// (at one instant, so the cancel below lands on the same instant and returns it), the tenant is
+// asked, and the reservation is cancelled if either says no.
+func (s *shedLetterer) admit(tenant string) bool {
+	now := time.Now()
+	r := s.global.ReserveN(now, 1)
+	if !r.OK() {
+		return false
+	}
+	if r.DelayFrom(now) > 0 || !s.perTenant.Allow(tenant) {
+		r.CancelAt(now)
+		return false
+	}
+	return true
+}
+
 // letter records the sheds of one derived event that REACT is about to ack. It is called only on a
 // Done dispatch: a Retry re-runs the whole event, sheds included, and a letter written then would
 // be about an attempt that did not stand.
@@ -88,9 +108,14 @@ func newShedLetterer(dead *deadletter.Sink, b ShedLetterBudget, m *ReactMetrics)
 // two shed actions of one event are two letters, a redelivery of the same event re-writes neither,
 // and neither collides with the whole-message id the exhausted arm and the max-delivery recorder
 // share. A write that fails is counted as a loss by the sink and never blocks the ack.
+//
+// A shed letter records a REFUSAL ON ONE DELIVERY; it is not proof that the action was never sent.
+// The letter is written before the ack, so if that ack is lost the event redelivers, is metered
+// again, and may then be ADMITTED: the action is delivered while the letter still says it was
+// refused. That is rare and accepted.
 func (s *shedLetterer) letter(ctx context.Context, msg messaging.Message, ev runtime.DerivedEvent, sheds []react.ShedAction) {
 	for _, shed := range sheds {
-		if !s.perTenant.Allow(ev.Tenant) || !s.global.Allow() {
+		if !s.admit(ev.Tenant) {
 			s.metrics.recordShedUnlettered(shed.Kind)
 			s.mu.Lock()
 			byKind := s.unlettered[ev.Tenant]

@@ -411,19 +411,20 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 				c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, errTooLateToSend)
 				return
 			}
-			if errors.Is(err, core.ErrWaitBudget) {
-				// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
-				// signal; a per-message warn would flood the log for exactly the over-quota tenant
-				// this fires on.
-				log.Debug().Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
-					Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
-				c.deadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited)
-				return
-			}
-			// Anything else is not a verdict on the tenant's rate — a wait interrupted by its own
-			// deadline, or a limiter that refused outright — so it is disposed of as a transient
-			// failure rather than dead-lettered as a shed.
-			c.retryOrDeadLetter(tctx, msg, req.RuleID, tenant, action, err)
+			// Every other refusal is a SHED, and is dead-lettered rather than retried. Past the two
+			// arms above, the limiter answers with one of: ErrWaitBudget (the token is further off
+			// than the budget), the wait's own budget deadline arriving first (the budget ran out
+			// without a token, which is the same verdict reached a moment later), or a ceiling that
+			// admits nothing at all (a burst of 0). None of them is transient: the last is PERMANENT
+			// until the ceiling changes, so retrying it would only spend the message's deliveries
+			// and churn the poison cap that the rate gate promises never to touch.
+			//
+			// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
+			// signal; a per-message warn would flood the log for exactly the over-quota tenant
+			// this fires on.
+			log.Debug().Err(err).Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
+				Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
+			c.deadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited)
 			return
 		}
 	}

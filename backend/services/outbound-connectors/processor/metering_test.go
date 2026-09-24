@@ -96,7 +96,7 @@ func TestTheSinkShedsAFloodAsLive(t *testing.T) {
 
 // The sink meters on the same time REACT did, chosen by the same reader: the stamp; the broker
 // time when there is no stamp or the stamp is later than it; now when there is neither. Each
-// fallback is counted. The choice is shown by what it admits: a bucket whose one token was spent
+// fallback is counted under its own cause. The choice is shown by what it admits: a bucket whose one token was spent
 // ten seconds ago sheds a dispatch metered ten seconds ago, and admits one metered now.
 func TestSinkMeteringFallsBack(t *testing.T) {
 	srv, hits := countingServer(t)
@@ -119,8 +119,11 @@ func TestSinkMeteringFallsBack(t *testing.T) {
 	if got := len(dead.written()); got != 2 {
 		t.Fatalf("shed %d, want 2 (the two metered at their broker time)", got)
 	}
-	if got := fallbackCount(t, reg, "append"); got != 2 {
-		t.Errorf("append fallbacks = %v, want 2", got)
+	if got := fallbackCount(t, reg, "append"); got != 1 {
+		t.Errorf("append fallbacks = %v, want 1 (the missing stamp)", got)
+	}
+	if got := fallbackCount(t, reg, "capped"); got != 1 {
+		t.Errorf("capped fallbacks = %v, want 1 (the stamp after the broker time)", got)
 	}
 	if got := fallbackCount(t, reg, "now"); got != 1 {
 		t.Errorf("now fallbacks = %v, want 1", got)

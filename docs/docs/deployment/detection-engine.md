@@ -433,7 +433,7 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `DeadLetterStoreLosing` | Dead letters reached the stream but could not be written to the store, so they will age out of it unrecorded. Look at the operator database. |
 | `ReactConnectorEgressShedding` | A tenant is over its outbound rate on the timeline its telemetry reached the platform, and its outbound actions are being shed. Each is dead-lettered with reason `shed`, within a budget; read them with `dcctl dead-letters`. A catch-up after a restart does not cause this. |
 | `ReactShedLettersOverBudget` | A tenant is shedding outbound actions faster than they are recorded one by one, so the excess is summarised in one dead letter per tenant per minute. |
-| `RateMeteringClockFallback` | Outbound actions have been metered on broker or arrival time for an hour because they carried no trigger time, so a catch-up can be shed as a flood again. Check that event-processing and outbound-connectors run the same release. |
+| `RateMeteringClockFallback` | Outbound actions have been metered on broker or arrival time for an hour because they carried no trigger time, so a catch-up can be shed as a flood again. Check that event-processing and outbound-connectors run the same release. A trigger time later than its message's broker time is counted separately, as source `capped`, and does not fire this: that is clock skew between the pod and the broker, not a missing time. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 
 :::warning A halted engine still reports healthy

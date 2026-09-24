@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -275,6 +276,47 @@ func TestShedLettersStayWithinTheTenantAndGlobalBudgets(t *testing.T) {
 	})
 }
 
+// A letter is charged to both budgets or to neither: a refusal by one never spends the other's
+// token.
+func TestAShedLetterRefusedByOneBudgetSpendsNeither(t *testing.T) {
+	letterer := func(b ShedLetterBudget) (*shedLetterer, *deadRecorder) {
+		dead := &deadRecorder{}
+		ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
+		ms.UseMetricsRegistry(prometheus.NewRegistry())
+		return newShedLetterer(deadletter.NewProducer(ms).NewSink(dead), b, NewReactMetrics(ms)), dead
+	}
+	shedFor := func(t *testing.T, s *shedLetterer, tenant, token string) {
+		ev := sendCmdEvent()
+		ev.Tenant, ev.RuleID = tenant, tenant+"/p@1/r1"
+		s.letter(core.WithTenant(context.Background(), tenant), derivedMsg(t, tenant, ev, 1, &fakeAck{}), ev,
+			[]react.ShedAction{{Kind: "httpCall", Token: token}})
+	}
+	t.Run("a global refusal keeps the tenant's token", func(t *testing.T) {
+		// One global letter per 100 ms; one per tenant, not refilled within the test.
+		s, dead := letterer(ShedLetterBudget{PerTenantPerSecond: 0.001, PerTenantBurst: 1, GlobalPerSecond: 10, GlobalBurst: 1})
+		shedFor(t, s, "loud", "a")  // spends the global token
+		shedFor(t, s, "quiet", "b") // global refuses: summarised, and quiet's token must survive
+		if len(dead.msgs) != 1 {
+			t.Fatalf("wrote %d letters, want 1 (the global budget allows one)", len(dead.msgs))
+		}
+		time.Sleep(150 * time.Millisecond) // the global budget refills; quiet's would not
+		shedFor(t, s, "quiet", "c")
+		if len(dead.msgs) != 2 {
+			t.Fatal("quiet's next shed was not lettered: the global refusal spent its tenant token")
+		}
+	})
+	t.Run("a tenant refusal keeps the global token", func(t *testing.T) {
+		// Two global letters, not refilled within the test; one per tenant.
+		s, dead := letterer(ShedLetterBudget{PerTenantPerSecond: 0.001, PerTenantBurst: 1, GlobalPerSecond: 0.001, GlobalBurst: 2})
+		shedFor(t, s, "loud", "a")  // loud's token and one global token
+		shedFor(t, s, "loud", "b")  // loud is over its own budget: the global token must be returned
+		shedFor(t, s, "quiet", "c") // so quiet still finds one
+		if len(dead.msgs) != 2 {
+			t.Fatalf("wrote %d letters, want 2: loud's refused letter spent a global token", len(dead.msgs))
+		}
+	})
+}
+
 // Stop summarises the window it cuts short: the counts since the last flush are not dropped.
 func TestStopFlushesTheSummary(t *testing.T) {
 	dead := &deadRecorder{}
@@ -331,10 +373,55 @@ func TestMeteringFallsBackAppendThenNow(t *testing.T) {
 			t.Errorf("%s: forwarded triggeredAt %v, want the metered %v", c.name, got, c.want)
 		}
 	}
-	if got := labelledCounter(t, reg, clockFallbacks, "source", "append"); got != 2 {
-		t.Errorf("append fallbacks = %v, want 2", got)
+	if got := labelledCounter(t, reg, clockFallbacks, "source", "append"); got != 1 {
+		t.Errorf("append fallbacks = %v, want 1 (the missing stamp)", got)
+	}
+	if got := labelledCounter(t, reg, clockFallbacks, "source", "capped"); got != 1 {
+		t.Errorf("capped fallbacks = %v, want 1 (the stamp after the broker time)", got)
 	}
 	if got := labelledCounter(t, reg, clockFallbacks, "source", "now"); got != 1 {
 		t.Errorf("now fallbacks = %v, want 1", got)
+	}
+}
+
+// The time REACT metered reaches outbound-connectors ON THE WIRE, through the real connector client.
+// The test above stops at a fake sink, which is exactly where this can go missing: a client that
+// drops triggeredAt from the dispatch leaves every REACT-side assertion green while the sink falls
+// back to the connector-dispatch message's own broker time — REACT's DRAIN time — and so paces a
+// compliant backlog at the tenant's rate (or sheds it) there, the defect metering on arrival fixes.
+func TestTheMeteredTimeIsForwardedOnTheDispatchWire(t *testing.T) {
+	appended := time.Now().Add(-time.Minute).UTC()
+	stamped := appended.Add(-10 * time.Second)
+	cases := []struct {
+		name        string
+		triggeredAt time.Time
+		want        time.Time
+	}{
+		{"stamped", stamped, stamped},
+		{"stamp after the broker time is capped", appended.Add(time.Hour), appended},
+		{"no stamp", time.Time{}, appended},
+	}
+	gate := &meterGate{admit: true}
+	w := &captureConnectorWriter{}
+	rd, _ := reactWithConnectors(t, connectorRule(httpCallAction()), nil, NewConnectorClient(w), gate,
+		&deadRecorder{}, testShedBudget)
+	for i, c := range cases {
+		w.payload = nil
+		ev := sendCmdEvent()
+		ev.TriggeredAt = c.triggeredAt
+		msg := derivedMsg(t, "acme", ev, 1, &fakeAck{})
+		msg.AppendTime = appended
+		rd.handle(msg)
+		if w.payload == nil {
+			t.Fatalf("%s: nothing was published on the connector-dispatch subject", c.name)
+		}
+		out, err := connectorwire.UnmarshalConnectorDispatchRequest(w.payload)
+		if err != nil {
+			t.Fatalf("%s: decode the published dispatch: %v", c.name, err)
+		}
+		if !out.TriggeredAt.Equal(c.want) || !out.TriggeredAt.Equal(gate.at[i]) {
+			t.Errorf("%s: wire triggeredAt %v, want %v (the time the gate metered, %v)",
+				c.name, out.TriggeredAt, c.want, gate.at[i])
+		}
 	}
 }

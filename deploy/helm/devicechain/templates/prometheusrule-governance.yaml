@@ -21,9 +21,12 @@ such name shares one. RateLimiterOverflowInUse fires while that shared allowance
 
 The last two watch the outbound ceiling's clock and its record. REACT and the connectors
 service meter a tenant's outbound actions on the time the triggering telemetry reached the
-platform, which the detection engine stamps; a dispatch without a usable stamp is metered on
-its broker time or on arrival and counted on <area>_rate_clock_fallback_total, and a
-sustained fallback means a catch-up can be shed as a flood again (RateMeteringClockFallback).
+platform, which the detection engine stamps; a dispatch without a stamp is metered on its
+broker time or on arrival and counted on <area>_rate_clock_fallback_total, and a sustained
+fallback means a catch-up can be shed as a flood again (RateMeteringClockFallback). A stamp
+later than its message's broker time is capped at that time and counted as source "capped",
+which the alert does not watch: it is the pod's and the broker's clocks disagreeing, not a
+missing stamp, and it holds steadily on a healthy install whose clocks are skewed.
 An action REACT sheds is dead-lettered within a per-tenant and a global budget; past the
 budget it is only counted and summarised (ReactShedLettersOverBudget).
 */}}
@@ -79,12 +82,12 @@ spec:
         # `for` is an hour: an upgrade drains the dispatches that were in flight before the
         # engine stamped trigger times, and those fall back legitimately for minutes, not hours.
         - alert: RateMeteringClockFallback
-          expr: sum by (job, source) (increase({__name__=~"devicechain_[a-z0-9]+_rate_clock_fallback_total", namespace="{{ $ns }}"}[30m])) > 0
+          expr: sum by (job, source) (increase({__name__=~"devicechain_[a-z0-9]+_rate_clock_fallback_total", namespace="{{ $ns }}", source!="capped"}[30m])) > 0
           for: 1h
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
             summary: "Outbound actions are being metered on a fallback clock"
-            description: "For at least an hour, {{ "{{ $labels.job }}" }} has metered outbound actions on the {{ "{{ $labels.source }}" }} clock because they carried no usable trigger time. The detection engine has stopped stamping trigger times, so actions are metered on broker or arrival time and a catch-up after a restart can be shed as a flood again. An upgrade's in-flight backlog clears well inside the hour. Check that event-processing and outbound-connectors run the same release."
+            description: "For at least an hour, {{ "{{ $labels.job }}" }} has metered outbound actions on the {{ "{{ $labels.source }}" }} clock because they carried no trigger time. The detection engine has stopped stamping trigger times, so actions are metered on broker or arrival time and a catch-up after a restart can be shed as a flood again. An upgrade's in-flight backlog clears well inside the hour. Check that event-processing and outbound-connectors run the same release."
 {{- end }}

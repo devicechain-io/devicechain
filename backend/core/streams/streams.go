@@ -527,8 +527,11 @@ var All = []Stream{
 	// window every re-published detection reached REACT again and charged the tenant's
 	// outbound ceiling a second time — shedding, and dead-lettering, actions whose originals
 	// had already been delivered. It is sized like inbound-events' to a bad rollout; a replay
-	// older than it re-publishes duplicates, which the idempotency key still collapses at the
-	// command sink but which REACT's outbound gate charges.
+	// older than it re-publishes duplicates. A sendCommand duplicate is still collapsed by its
+	// idempotency key at the command sink. A connector duplicate is NOT: REACT's outbound gate
+	// charges it again, and if admitted it is SENT again. outbound-connectors forwards the
+	// idempotency key to the destination but does not deduplicate on it, so collapsing it is
+	// the destination's job.
 	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: 1800,
 		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
