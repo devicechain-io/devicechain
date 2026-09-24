@@ -2373,13 +2373,10 @@ func (rp *ResolvedEventsProcessor) haltStaleWriter() {
 	}
 	err := fmt.Errorf("event-processing: the DETECT checkpoint for partition %q was refused as stale — "+
 		"another writer owns a higher checkpoint, so this replica can never commit again", rp.cfg.PartitionId)
-	if rp.Microservice != nil {
-		// Runs on its own goroutine: this is called from the single-writer loop, and
-		// FailNow's teardown calls ExecuteStop, which joins that very loop.
-		go rp.Microservice.FailNow(err)
-		return
-	}
-	log.Error().Err(err).Msg("DETECT is halted and cannot end the process; it has no microservice handle")
+	// Called from the single-writer loop, which FailNow's teardown (ExecuteStop) joins; safe
+	// because FailNow returns at once and tears down on its own goroutine. A nil Microservice
+	// is FailNow's to report.
+	rp.Microservice.FailNow(err)
 }
 
 // stateBudgetStats is the bounded, tenant-label-free result of a per-tenant state-budget sample: the
@@ -2408,8 +2405,11 @@ func (rp *ResolvedEventsProcessor) recordStateBudget() {
 // as the consumer-lag gauges (slice 8). It reuses the same Backlog probe as idle-advance — safe to
 // call concurrently with the read loop — and is bounded by backlogProbeTimeout so a black-holed
 // broker cannot stall the single-writer loop. A probe error leaves the last-good gauge value in
-// place (staleness an operator reads as "no fresh sample", not a false zero) and is logged at debug,
-// matching idle-advance's fail-safe posture. A nil backlogProbe (the scaffold/test path, or a reader
+// place (staleness an operator reads as "no fresh sample", not a false zero) and is logged at warn —
+// a lag gauge that has silently stopped refreshing is broker trouble an operator should see — or at
+// debug when the processor's own context is cancelled, so a shutdown does not warn. (Idle-advance
+// runs the same probe and keeps its failure at debug, so one broker fault is warned about once.)
+// A nil backlogProbe (the scaffold/test path, or a reader
 // that cannot report backlog) is skipped.
 func (rp *ResolvedEventsProcessor) sampleConsumerLag(ctx context.Context) {
 	if rp.backlogProbe == nil {
@@ -2419,7 +2419,11 @@ func (rp *ResolvedEventsProcessor) sampleConsumerLag(ctx context.Context) {
 	pending, ackPending, err := rp.backlogProbe.Backlog(pctx)
 	cancel()
 	if err != nil {
-		log.Debug().Err(err).Msg("Consumer-lag sample skipped: cannot read the resolved-events backlog.")
+		if ctx.Err() != nil {
+			log.Debug().Err(err).Msg("Consumer-lag sample skipped: cannot read the resolved-events backlog.")
+		} else {
+			log.Warn().Err(err).Msg("Consumer-lag sample skipped: cannot read the resolved-events backlog.")
+		}
 		return
 	}
 	rp.metrics.recordConsumerLag(pending, ackPending)

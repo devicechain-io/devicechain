@@ -163,23 +163,18 @@ func TestTheProductionWaitReturnsOnCancellationRatherThanElapsing(t *testing.T) 
 // recordingSink stands where the microservice stands. It has to: the production sink ends
 // the process, so a test that let it run would take the test binary down with it — which
 // is the reason this branch went untested for so long.
+//
+// It never blocks: the sink is called inline on the read goroutine (see reportTo).
 type recordingSink struct {
-	mu      sync.Mutex
-	errs    []error
-	entered chan struct{}
-	release chan struct{}
+	mu   sync.Mutex
+	errs []error
 }
 
 func newRecordingSink() *recordingSink {
-	return &recordingSink{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	return &recordingSink{}
 }
 
 func (r *recordingSink) report(err error) {
-	select {
-	case r.entered <- struct{}{}:
-	default:
-	}
-	<-r.release
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.errs = append(r.errs, err)
@@ -193,28 +188,19 @@ func (r *recordingSink) reported() []error {
 
 func TestAnExhaustedBudgetIsReportedAndNotOnlyLogged(t *testing.T) {
 	sink := newRecordingSink()
-	close(sink.release) // this test does not need to hold the sink open
 	p := NewReadPacer(nil, "test stream").UseClock(VirtualClock()).reportTo(sink.report)
 
 	if _, stopped := runToStop(t, context.Background(), p, 100000); !stopped {
 		t.Fatal("the pacer never gave up, so there was nothing to report")
 	}
 
-	// The report is dispatched on its own goroutine, so wait for it rather than racing it.
-	deadline := time.After(5 * time.Second)
-	for len(sink.reported()) == 0 {
-		select {
-		case <-deadline:
-			t.Fatal("the pacer gave up on the loop but reported it to nobody: the process keeps " +
-				"running, the pod goes on reporting ready, and the only trace is a log line")
-		case <-time.After(time.Millisecond):
-		}
-	}
-
-	// Let a second report land if one is coming, so "exactly once" is an assertion rather
-	// than a race the first read usually wins.
-	time.Sleep(10 * time.Millisecond)
+	// The report is made inline on the read goroutine, so it has landed by the time the
+	// loop has stopped.
 	got := sink.reported()
+	if len(got) == 0 {
+		t.Fatal("the pacer gave up on the loop but reported it to nobody: the process keeps " +
+			"running, the pod goes on reporting ready, and the only trace is a log line")
+	}
 	if len(got) != 1 {
 		t.Fatalf("the give-up was reported %d times, want exactly 1: a repeated report races "+
 			"several teardowns against each other: %v", len(got), got)
@@ -235,49 +221,49 @@ func TestAnExhaustedBudgetIsReportedAndNotOnlyLogged(t *testing.T) {
 	}
 }
 
-// 🔴 THE REASON giveUp SPAWNS A GOROUTINE. The sink tears the process down, and teardown
-// runs the component's ExecuteStop, which waits on the very read goroutine that is
-// reporting. Called inline, that is a loop waiting on a shutdown that is waiting on the
-// loop.
-//
-// 🔑 IT DOES NOT HANG THE POD, AND AN EARLIER VERSION OF THIS COMMENT SAID IT DID.
-// Microservice.teardown already runs Stop on its own goroutine behind the teardown
-// budget, so the process still exits non-zero. What the inline call actually costs is the
-// whole budget in delay, a Terminate that never runs, and an outcome that reads "teardown
-// did not finish within Ns" instead of naming the stream that stopped draining — so the
-// operator is told the shutdown was slow rather than what broke.
-//
-// Delete the `go` in giveUp and this test blocks and then fails; nothing else in this
-// file notices.
-func TestTheGiveUpDoesNotBlockTheLoopThatRaisedIt(t *testing.T) {
-	sink := newRecordingSink() // release is NOT closed: the sink blocks, as a teardown would
-	p := NewReadPacer(nil, "test stream").UseClock(VirtualClock()).reportTo(sink.report)
+// 🔴 A GIVE-UP REPORTED FROM THE READ GOROUTINE, THROUGH THE REAL FailNow. The report
+// tears the process down, and teardown runs the component's ExecuteStop, which waits on
+// the very read goroutine that is reporting. giveUp calls FailNow inline, which is safe
+// only because FailNow returns at once and runs the teardown on its own goroutine (the
+// contract failnow_async_test.go pins). Were it to run the teardown inline, the Stopper
+// below would wait on a loop that is waiting on the Stopper: the budget would expire and
+// the outcome would read "teardown did not finish within 1s" instead of naming the stream
+// that stopped draining — the operator told the shutdown was slow rather than what broke.
+func TestAGiveUpThroughTheRealFailNowReportsTheStreamNotTheBudget(t *testing.T) {
+	captureExit(t)
+	loopReturned := make(chan struct{})
+	callbacks := NewNoOpLifecycleCallbacks()
+	callbacks.Stopper.Preprocess = func(context.Context) error {
+		<-loopReturned // the component's Stop joins its read loop
+		return nil
+	}
+	ms := runnable(t, callbacks)
+	oneSecondBudget(t, ms)
+	p := NewReadPacer(ms, "test stream").UseClock(VirtualClock())
 
-	returned := make(chan bool, 1)
 	go func() {
-		_, stopped := runToStop(t, context.Background(), p, 100000)
-		returned <- stopped
+		defer close(loopReturned)
+		runToStop(t, context.Background(), p, 100000)
 	}()
 
-	// The sink must actually have been entered, or this test would pass against a pacer
-	// that never reported at all.
-	select {
-	case <-sink.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the sink was never called, so this test proves nothing about blocking")
+	start := time.Now()
+	err := ms.waitForShutdown()
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("the give-up ended the process with a nil outcome, which exits 0")
 	}
-
-	select {
-	case stopped := <-returned:
-		if !stopped {
-			t.Fatal("the loop returned without stopping")
+	msg := err.Error()
+	for _, want := range []string{"test stream", "not recovering"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the outcome does not name %q, so the exit does not say what broke: %s", want, msg)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the loop is still parked inside its own give-up: the report is being made " +
-			"on the read goroutine, so teardown will wait for a loop that is waiting for " +
-			"teardown and the pod hangs until it is SIGKILLed")
 	}
-	close(sink.release)
+	if strings.Contains(msg, "teardown did not finish") {
+		t.Errorf("the teardown waited on the read loop that reported: %s", msg)
+	}
+	if elapsed >= time.Second {
+		t.Errorf("the shutdown took %s, the whole teardown budget: something waited on the read loop", elapsed)
+	}
 }
 
 // 🔑 THE COUNTERWEIGHT. Both tests above are satisfied by a pacer that reports on every
@@ -285,7 +271,6 @@ func TestTheGiveUpDoesNotBlockTheLoopThatRaisedIt(t *testing.T) {
 // while the loop is recovering.
 func TestARecoveringLoopIsNeverReported(t *testing.T) {
 	sink := newRecordingSink()
-	close(sink.release)
 	p := NewReadPacer(nil, "test stream").UseClock(VirtualClock()).reportTo(sink.report)
 
 	for i := 0; i < 5000; i++ {
@@ -295,7 +280,6 @@ func TestARecoveringLoopIsNeverReported(t *testing.T) {
 		}
 		p.Succeeded()
 	}
-	time.Sleep(10 * time.Millisecond) // give any errant goroutine time to land
 	if got := sink.reported(); len(got) != 0 {
 		t.Fatalf("a loop that recovered from every failure was reported as unfit %d times; "+
 			"the process would be torn down for faults it had already survived: %v",

@@ -349,3 +349,60 @@ func TestATermGatedReaderRechecksItsGateAfterAFetch(t *testing.T) {
 	require.Len(t, reader.(*natsReader).pending, 3,
 		"the Fetch brought nothing back, so this test did not reach the post-Fetch check")
 }
+
+// 🔴 A TERM HANDS OUT ONLY WHAT IT FETCHED. A term-gated reader keeps its buffer across a
+// park (the test above), so a replica that lost the term with messages buffered and later
+// regained it would hand those out first — messages fetched under an old ownership epoch,
+// which the new term's replay re-derives. BindTerm, at the new term's start, discards them.
+//
+// It discards them WITHOUT a Nak, so the broker redelivers them only at AckWait: a read
+// bounded well inside AckWait comes back empty. The two defects this tells apart are named
+// by NumDelivered in the failure — a buffer that survived hands out sequence 2 on its first
+// delivery; a buffer that was Nak'd hands out a redelivery at once.
+func TestBindTermDropsWhatThePreviousTermBufferedWithoutNaking(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	var held atomic.Bool
+	reader, nr := primeBuffer(t, nmgr, &held)
+	require.Greater(t, nmgr.ackWait(), 20*time.Second)
+
+	// The term ends and a new one begins on the same replica.
+	require.NoError(t, nr.UnbindTerm())
+	require.NoError(t, nr.BindTerm())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	msg, err := reader.ReadMessage(ctx)
+	require.ErrorIs(t, err, io.EOF,
+		"the new term handed out sequence %d (delivery %d): a delivery of 1 is the old term's buffered "+
+			"copy, a delivery of 2 means the buffer was Nak'd rather than left to AckWait",
+		msg.StreamSeq, msg.NumDelivered)
+}
+
+// BindTerm refuses while a read is in flight rather than racing the read over the buffer:
+// its only caller binds after the previous term's loops are joined, and this makes that a
+// checked precondition instead of a data race a future caller could introduce silently.
+func TestBindTermRefusesWhileAReadIsInFlight(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+
+	var held atomic.Bool
+	reader, nr := primeBuffer(t, nmgr, &held)
+
+	held.Store(false) // the read below parks at the gate
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := reader.ReadMessage(ctx)
+		done <- err
+	}()
+	require.Eventually(t, nr.reading.Load, 5*time.Second, time.Millisecond, "the read never started")
+
+	err := nr.BindTerm()
+	require.ErrorIs(t, err, ErrConcurrentRead)
+
+	cancel()
+	require.ErrorIs(t, <-done, io.EOF)
+	require.Len(t, nr.pending, 2, "a refused BindTerm touched the buffer of the read in flight")
+}

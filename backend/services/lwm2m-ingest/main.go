@@ -870,9 +870,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 // inert pod whose socket died would sit Ready and answer no probe, with nothing restarting it. It
 // routes through failProcess rather than log.Fatal for the reason failProcess documents: log.Fatal
 // is an immediate os.Exit that skips the readiness drain and the HTTP server's shutdown, severing
-// whatever probe or scrape was in flight. failProcess is off-goroutine for the same reason as the
-// leadership fuse — beforeMicroserviceStopped calls inertStop, which waits on the very serve
-// goroutine that would otherwise be parked inside FailNow.
+// whatever probe or scrape was in flight. Calling it from the serve goroutine is safe for the same
+// reason as the leadership fuse: beforeMicroserviceStopped calls inertStop, which waits on that
+// very goroutine, and FailNow returns at once and runs the teardown on its own goroutine.
 //
 // 🔴 It is a named function rather than a closure inline above so a test can drive the wiring
 // ITSELF: a test that hand-built the same closure would be asserting against its own copy, and
@@ -1160,13 +1160,13 @@ func transportDeathError(err error) error {
 	return fmt.Errorf("%s: %w", reason, err)
 }
 
-// failProcess ends the process with a non-zero status, off this goroutine.
+// failProcess ends the process with a non-zero status.
 //
-// Off this goroutine because FailNow tears the microservice down, which runs
+// It is called from the leadership goroutine, and FailNow's teardown runs
 // beforeMicroserviceStopped — which cancels the leadership loop and then WAITS on
-// leadershipDone, the channel this goroutine closes when it returns. Calling it inline would
-// deadlock the shutdown it is asking for. event-processing's own leadership fuse is written the
-// same way, for the same reason.
+// leadershipDone, the channel this goroutine closes when it returns. That is safe only because
+// Microservice.FailNow returns at once and runs the teardown on its own goroutine; core pins that
+// contract, so this caller does not repeat it.
 //
 // It is FailNow rather than log.Fatal because log.Fatal is an immediate os.Exit: it skips every
 // lifecycle callback, including the shutdown ordering beforeMicroserviceStopped establishes (the
@@ -1177,11 +1177,7 @@ func transportDeathError(err error) error {
 // It sits behind a variable so the fuse can be exercised by a test without ending the test
 // binary. Only a test ever replaces it.
 var failProcess = func(err error) {
-	if Microservice == nil {
-		log.Error().Err(err).Msg("LwM2M ingest cannot end the process; it has no microservice handle.")
-		return
-	}
-	go Microservice.FailNow(err)
+	Microservice.FailNow(err)
 }
 
 // consecutiveTermBuildFailures counts back-to-back leadership-term build failures; it is only ever

@@ -609,22 +609,65 @@ func (ms *Microservice) ShutDownNow() { ms.shutDown(nil) }
 // like an orderly stop to `kubectl get pods`, to a container-exit alert and to anyone
 // reading the event stream; exit 1 does not.
 //
-// err must be non-nil. A nil here would silently become an orderly stop, which is the
-// one thing a caller reaching for this method does not want.
+// A nil err becomes a generic error rather than an orderly stop, which is the one thing
+// a caller reaching for this method does not want.
 //
-// It runs the drain window and the whole teardown on the CALLER'S goroutine, so it must
-// not be called from a callback that something else is waiting on, such as the NATS
-// client's single async-callback goroutine. A component that can only say "I cannot
-// recover" from there uses MarkNotLive instead, which leaves the restart to the kubelet.
+// 🔴 IT RETURNS AT ONCE, AND IT CLAIMS THE PROCESS BEFORE IT DOES. The drain window and
+// the teardown run on a goroutine of their own, so FailNow is safe to call from any
+// goroutine — including one the teardown itself waits on (a read loop a Stopper joins),
+// a paho callback, or the NATS client's single async-callback goroutine. Run inline, the
+// teardown would wait on its own caller: the budget would expire and the outcome would be
+// "teardown did not finish" instead of the error that ended the process. Every caller
+// used to wrap it in its own `go` for that reason; the contract now lives here, once.
+//
+// The claim is NOT on that goroutine, and that is the other half of the contract. The
+// phase swap that decides which shutdown owns the process runs before FailNow returns,
+// so a SIGTERM arriving a moment later finds the process already claimed and cannot
+// paint an orderly exit over this failure. Scheduled on the goroutine, the swap would
+// race the signal handler and a failure could exit 0.
+//
+// The first outcome wins: a FailNow after a shutdown has already claimed the process is
+// a logged no-op, and does not log the "shutting down with a non-zero status" line,
+// because that would be false. A nil receiver logs that it cannot end the process and
+// returns; it never panics, since a component that got this far has something to report.
 func (ms *Microservice) FailNow(err error) {
 	if err == nil {
 		err = errors.New("core: a component ended the process without saying why")
 	}
+	if ms == nil {
+		log.Error().Err(err).Msg("FailNow was called with no microservice, so it cannot end the process.")
+		return
+	}
+	prev, claimed := ms.claimShutdown()
+	if !claimed {
+		log.Warn().Err(err).Msg("A component declared this process unfit to continue, but a shutdown already owns it; that shutdown decides the exit status.")
+		return
+	}
 	log.Error().Err(err).Msg("A component has declared this process unfit to continue; shutting down with a non-zero status.")
-	ms.shutDown(err)
+	go ms.runShutdown(prev, err)
+}
+
+// claimShutdown moves the process to phaseStopping and reports the phase it left, and
+// whether this caller is the one that claimed it. Exactly one caller ever wins.
+func (ms *Microservice) claimShutdown() (prev int32, claimed bool) {
+	prev = ms.phase.Swap(phaseStopping)
+	return prev, prev != phaseStopping
 }
 
 func (ms *Microservice) shutDown(fatal error) {
+	prev, claimed := ms.claimShutdown()
+	if !claimed {
+		// A shutdown is already running. Teardown is not idempotent, and the outcome
+		// has an owner already.
+		log.Warn().Msg("Shutdown already in progress; ignoring.")
+		return
+	}
+	ms.runShutdown(prev, fatal)
+}
+
+// runShutdown is the shutdown a successful claimShutdown owns; prev is the phase the
+// claim moved the process out of.
+func (ms *Microservice) runShutdown(prev int32, fatal error) {
 	// 🔴 A service that never finished starting has nothing to tear down and MUST NOT
 	// try. The lifecycle's own state guards do not stop it: a stop from Initialized is
 	// permitted, deliberately and for reasons lifecycle.go sets out, and Initialized is
@@ -638,10 +681,9 @@ func (ms *Microservice) shutDown(fatal error) {
 	// shutdown, and took the outcome slot — so a startup failure arriving a moment
 	// later was dropped and the process exited 0.
 	//
-	// One atomic swap answers all three cases and claims the process in the same step,
-	// so no ordering against the startup goroutine is left to chance.
-	switch ms.phase.Swap(phaseStopping) {
-	case phaseStarting:
+	// One atomic swap (claimShutdown) answers all three cases and claims the process in
+	// the same step, so no ordering against the startup goroutine is left to chance.
+	if prev == phaseStarting {
 		// 🔴 THIS REPORTS AN ORDERLY STOP, NOT A FAILURE, and that is a deliberate call.
 		// Reaching here means something ASKED this process to stop; not having finished
 		// starting was not its own verdict on itself. Kubernetes terminates a
@@ -670,11 +712,6 @@ func (ms *Microservice) shutDown(fatal error) {
 		// nil for a signal-driven stop, which is not this process's verdict on itself;
 		// non-nil when a component called FailNow, which is.
 		ms.finished(fatal)
-		return
-	case phaseStopping:
-		// A shutdown is already running. Teardown is not idempotent, and the outcome
-		// has an owner already.
-		log.Warn().Msg("Shutdown already in progress; ignoring.")
 		return
 	}
 

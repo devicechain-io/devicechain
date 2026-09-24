@@ -219,6 +219,10 @@ type termHandle struct {
 // by the previous term's consumers describes a membership, rule set or fence set
 // that the new term's catch-up and reconciles are about to read from the durable
 // projections anyway, in their proper order.
+//
+// The readers' own fetch buffers are the same argument once more, and are covered by
+// BindTerm (bindTermReaders), which discards whatever a previous term left buffered
+// before the new term's first read.
 func (rp *ResolvedEventsProcessor) resetForTerm() {
 	rp.pendingAcks = rp.pendingAcks[:0]
 	rp.pendingDets = rp.pendingDets[:0]
@@ -569,17 +573,12 @@ func (rp *ResolvedEventsProcessor) termReaders() []messaging.TermBoundReader {
 	return bound
 }
 
-// failProcess ends the process with a non-zero status, off this goroutine.
+// failProcess ends the process with a non-zero status.
 //
-// Off this goroutine because FailNow tears the microservice down, which calls
-// ExecuteStop, which waits on supWG — the very group this goroutine belongs to.
-// Calling it inline would deadlock the shutdown it is asking for.
+// It runs on a goroutine in supWG, which the teardown's ExecuteStop waits on; that is safe
+// because Microservice.FailNow returns at once and runs the teardown on its own goroutine.
+// A nil Microservice is FailNow's to report.
 func (rp *ResolvedEventsProcessor) failProcess(err error) {
-	wrapped := fmt.Errorf("event-processing: DETECT leadership has stopped for partition %q and cannot resume; "+
-		"this pod holds no partition and detects nothing, so it exits to be replaced: %w", rp.cfg.PartitionId, err)
-	if rp.Microservice == nil {
-		log.Error().Err(wrapped).Msg("DETECT cannot end the process; it has no microservice handle")
-		return
-	}
-	go rp.Microservice.FailNow(wrapped)
+	rp.Microservice.FailNow(fmt.Errorf("event-processing: DETECT leadership has stopped for partition %q and cannot resume; "+
+		"this pod holds no partition and detects nothing, so it exits to be replaced: %w", rp.cfg.PartitionId, err))
 }

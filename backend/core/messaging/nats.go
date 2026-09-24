@@ -1268,11 +1268,14 @@ const termGatePoll = 50 * time.Millisecond
 // that batch still in the buffer, unacked, rather than handing its first message out; a
 // reader without ReaderWithReleaseOnPark leaves it for the broker to redeliver at AckWait.
 //
-// What the reader has buffered SURVIVES a park: when the gate reopens, the buffer is
-// handed out where it left off. That is DETECT's behaviour and it is deliberate — Held
-// can go false and back to true inside one term (a renewal that lands late re-opens the
-// window), and dropping the buffer there would reorder a single writer's input. A reader
-// with no ordered state to protect opts out of the buffer with ReaderWithReleaseOnPark.
+// What the reader has buffered SURVIVES a park inside one term, but not a term boundary:
+// when the gate reopens within the same term, the buffer is handed out where it left off.
+// That is DETECT's behaviour and it is deliberate — Held can go false and back to true
+// inside one term (a renewal that lands late re-opens the window), and dropping the buffer
+// there would reorder a single writer's input. BindTerm, at the start of the NEXT term,
+// discards whatever a previous term left, so a term hands out only what it fetched itself.
+// A reader with no ordered state to protect opts out of the buffer with
+// ReaderWithReleaseOnPark.
 //
 // 🔴 THE PREDICATE IS LATE-BOUND ON PURPOSE. NewReader runs at service start, long
 // before any lease is acquired, so this takes a function rather than a value: the
@@ -1343,9 +1346,35 @@ func (r *natsReader) releases() bool { return r.releaseOnPark && r.held != nil }
 //
 // Doing the bind at term START instead puts that failure inside the term build,
 // where it is a term-build failure the caller's retry fuse already covers.
+//
+// 🔴 IT ALSO DISCARDS WHAT A PREVIOUS TERM LEFT IN THE FETCH BUFFER, WITHOUT A NAK. A
+// term-gated reader keeps its buffer across a park (see ReaderWithTermGate), so without
+// this a replica that lost the term with messages buffered and later regained it would
+// hand those out first: messages fetched under an old ownership epoch, which the new
+// term's replay is about to re-derive. The drop is here, at the next term's start, and
+// NOT on the end-of-stream path, because a park inside one term must keep the buffer.
+//
+// What the drop costs is time and deliveries, not correctness. The messages are unacked,
+// so the broker redelivers each at AckWait — after newer messages the new term has
+// already fetched, which is the same reordering a takeover by another replica imposes,
+// and which the consumers tolerate. And each drop spends one delivery against MaxDeliver,
+// so under a flapping lease a message caught in the buffer across enough terms can
+// exhaust: on the resolved-events stream that is counted as a replay-covered exhaustion
+// (and can raise ReplayCoveredDeliveriesExhausted), on a fact stream it is a dead letter.
+// No Nak is sent, so a drop never costs more than the AckWait expiry would have.
+//
+// The buffer has no concurrent writer here: the only caller binds at term start, after
+// the previous term's read loops have been joined. That is a CHECKED precondition — a
+// read in flight is refused with ErrConcurrentRead, as an overlapping ReadMessage is —
+// so a future caller that breaks it gets a term-build failure, not a data race.
 func (r *natsReader) BindTerm() error {
 	r.bindMu.Lock()
 	defer r.bindMu.Unlock()
+	if !r.reading.CompareAndSwap(false, true) {
+		return fmt.Errorf("%w: BindTerm on durable %q while a read is in flight", ErrConcurrentRead, r.durable)
+	}
+	r.dropPending()
+	r.reading.Store(false)
 	// A new term re-opens the reader the last UnbindTerm closed. This is the ONLY
 	// thing that clears the flag, so nothing between the two terms can re-attach.
 	r.unbound = false
@@ -2268,9 +2297,10 @@ func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.
 		// connection event that is not self-healing, which is exactly why it must not
 		// share a level with the two above.
 		//
-		// Runs on the client's single async-callback goroutine, which is why this marks
-		// liveness rather than calling FailNow: FailNow runs the whole teardown on its
-		// caller's goroutine.
+		// It marks liveness rather than calling FailNow on purpose: the remedy is a
+		// restart that re-reads the credential, and a credential that is still wrong
+		// should surface as the kubelet's visible crash loop — the process knows only
+		// that it cannot recover, not that it must go this instant.
 		nats.ClosedHandler(func(nc *nats.Conn) {
 			if requested.Load() {
 				log.Info().Str("area", area).Msg("NATS connection closed during shutdown")

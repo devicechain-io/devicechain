@@ -123,9 +123,9 @@ func NewReadPacer(ms *Microservice, what string) *ReadPacer {
 // it can be installed in one expression.
 //
 // It is a test seam and it is unexported on purpose: no service should be choosing where
-// its own give-up goes. It exists for the tests that must OBSERVE the report while it is
-// in flight — the one pinning that the report is not made on the read goroutine has to
-// hold the sink open, which a real microservice will not do.
+// its own give-up goes. The sink is called INLINE on the read goroutine, so it must not
+// block: the production sink, FailNow, returns at once by contract, and a test sink that
+// parks would park the loop with it.
 //
 // It is NOT needed merely to see that a report happened: FailNow on a struct-literal
 // Microservice records its outcome and returns, so a test can call the real thing and
@@ -197,21 +197,9 @@ func (p *ReadPacer) giveUp(err error, elapsed time.Duration) {
 			"to report it to; the loop is stopping.")
 		return
 	}
-	// 🔴 ON ITS OWN GOROUTINE, AND THAT IS NOT STYLE. FailNow tears the process down, and
-	// teardown runs this component's ExecuteStop, which waits on the read goroutine — the
-	// one calling this. Inline, that is a loop waiting on a shutdown that is waiting on
-	// the loop. The caller returns true immediately afterwards, which is what lets that
-	// wait complete.
-	//
-	// 🔑 IT IS NOT A HANG, AND SAYING SO WOULD BE WRONG — Microservice.teardown already
-	// runs Stop on its own goroutine behind the teardown budget, precisely so a component
-	// that blocks cannot hold the process. What an inline report costs is subtler and is
-	// the reason to keep the `go`: the exit is delayed by the whole budget, Terminate
-	// never runs, and — worst of the three — the outcome carried out of the process
-	// becomes "teardown did not finish within Ns" instead of the read-loop error built
-	// just above. The operator is then told the shutdown was slow, not which stream
-	// stopped draining, which is the one thing this error exists to tell them.
-	go p.fail(fatal)
+	// FailNow returns at once and runs the teardown on its own goroutine, so reporting from
+	// the read goroutine — the one that teardown's Stop waits on — is safe; see FailNow.
+	p.fail(fatal)
 }
 
 // sleepUntilCancelled waits for d, reporting false if ctx was cancelled first. A
