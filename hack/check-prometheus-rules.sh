@@ -466,7 +466,16 @@ if counts[largest] >= floor:
 PY
 }
 
-# run_rule_tests <stage-dir> <rendered-rule-file> <tests-file>
+# run_rule_tests <group> <stage-dir> <rendered-rule-file> <tests-file>
+#
+# 🔴 THE COVERAGE CHECK RUNS HERE, IN FRONT OF PROMTOOL, and not as a separate
+# call beside it. It used to be a second line in the main loop, and deleting that
+# line left every gate green: the self-test called check_alert_coverage directly,
+# and the real run only ever exercised it on a tree that already passed. Found by
+# mutation. Now there is no way to run a group's unit tests without first proving
+# they name every alert on both sides and load the rules they were staged beside,
+# and the self-test drives its one-sided and unloaded fixtures through THIS entry
+# point. Returns 3 for a coverage refusal, so the caller can say which it was.
 #
 # Each group runs in its OWN directory. The tests name their rule file as
 # `rendered-rules.yaml`, relative to the test file's own directory, so two groups
@@ -474,7 +483,8 @@ PY
 # would silently be checked against the first's -- a green run proving nothing
 # about either.
 run_rule_tests() {
-  local gwork="$1" rules="$2" tests="$3"
+  local group="$1" gwork="$2" rules="$3" tests="$4"
+  check_alert_coverage "$group" "$rules" "$tests" || return 3
   mkdir -p "$gwork"
   cp "$tests" "$gwork/rules-tests.yaml"
   cp "$rules" "$gwork/rendered-rules.yaml"
@@ -621,7 +631,7 @@ self_test() {
     st_fail "fully covered alerts were reported as untested"
   check_alert_census 2 "$d/rule-selftest-alpha.yaml" "$d/rule-selftest-beta.yaml" >/dev/null ||
     st_fail "a floor above the largest rule file was refused by the census"
-  run_rule_tests "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null ||
+  run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null ||
     st_fail "the clean synthetic rules failed their own unit tests"
   st_ok "a clean bundle passes every stage, and a non-PrometheusRule document is ignored"
 
@@ -837,7 +847,7 @@ EOF
     st_fail "the inverted-rule mutation did not apply -- believe no verdict from this run"
   check_alert_coverage selftest-alpha "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null ||
     st_fail "the inverted rule was caught by the COVERAGE check, so case 10 proves nothing about evaluation"
-  if run_rule_tests "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null 2>&1; then
+  if run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null 2>&1; then
     st_fail "a rule inverted so it can never fire still passed its own unit tests"
   fi
   st_ok "a rule that parses but can never fire is caught by the unit tests"
@@ -1043,6 +1053,12 @@ EOF
   # Cases 21-23 — A ONE-SIDED OR UNLOADED TESTS FILE, each planted alone on the
   # clean bundle, whose alpha tests assert SelfTestProbeFiring on both sides.
   # Every mutation is grep-asserted, for the reason the header gives.
+  #
+  # 🔴 DRIVEN THROUGH run_rule_tests, the entry point the real run uses, not
+  # through check_alert_coverage alone. Calling the check directly proved the
+  # check works and nothing about whether the real run calls it; with it wired
+  # in there, deleting that call makes these three cases fail. Cases 21 and 22
+  # pass promtool unrefused, so only the coverage arm can refuse them.
   # -------------------------------------------------------------------------
 
   # Case 21 — NO FIRING ASSERTION. The firing case is deleted, so only
@@ -1065,7 +1081,7 @@ PY
     st_fail "the no-firing mutation removed the quiet case too, so it is not planted alone"
   st_expect_refusal "an alert asserted only to stay quiet is refused" \
     "never asserted to FIRE: SelfTestProbeFiring" \
-    check_alert_coverage selftest-alpha "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
+    run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
 
   # Case 22 — NO QUIET ASSERTION. The mirror image: a rule that fires on every
   # state satisfies a tests file that only ever asks it to fire.
@@ -1086,7 +1102,7 @@ PY
     st_fail "the no-quiet mutation removed the firing case too, so it is not planted alone"
   st_expect_refusal "an alert asserted only to fire is refused" \
     "never asserted to stay QUIET: SelfTestProbeFiring" \
-    check_alert_coverage selftest-alpha "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
+    run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
 
   # Case 23 — A MISSPELLED `rule_files`, alone. promtool loads a file that is not
   # there as zero rules, without an error.
@@ -1099,7 +1115,7 @@ PY
     st_fail "the misspelled-rule_files mutation did not apply -- believe no verdict from this run"
   st_expect_refusal "a tests file naming a rule file that is not staged is refused" \
     "must be exactly [rendered-rules.yaml]" \
-    check_alert_coverage selftest-alpha "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
+    run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
 
   # Case 24 — A LIVENESS FLOOR THAT ONE FILE CAN CLEAR, alone. The clean bundle's
   # alpha file holds one alert, so a floor of 1 is met by reading alpha alone and
@@ -1166,8 +1182,11 @@ note "every rendered rule group parses"
 # went stale within a release). check_alert_census, just below, prints the count and
 # REFUSES a floor that is not strictly above the largest single rule file -- so a
 # run that read only one file can never clear it. And check_always_firing itself
-# refuses a render holding fewer alerts than the floor. Between the two, ordinary
-# rule churn -- adding alerts, retiring one -- never touches it.
+# refuses a render holding fewer alerts than the floor. Between the two, what
+# trips it is the corpus moving far enough to meet it from either side: the
+# largest single file growing to the floor (the census asks for a higher one), or
+# removals taking the whole render below it. Everyday churn well inside those
+# bounds does not.
 #
 # A floor set AT the current count would be a tripwire on legitimate editing
 # rather than a liveness probe. Every rule addition would have to raise it (this
@@ -1248,11 +1267,12 @@ check_group_accounting "$work" "${!rule_tests[@]}" -- "${untested_groups[@]}" ||
 for group in "${!rule_tests[@]}"; do
   tests_file="${rule_tests[$group]}"
 
-  check_alert_coverage "$group" "$work/rule-$group.yaml" "$tests_file" ||
-    fail "the $group rule unit tests do not name every alert the chart renders"
-
   say "running the $group rule unit tests"
-  run_rule_tests "$work/t-$group" "$work/rule-$group.yaml" "$tests_file" ||
+  status=0
+  run_rule_tests "$group" "$work/t-$group" "$work/rule-$group.yaml" "$tests_file" || status=$?
+  [ "$status" -eq 3 ] &&
+    fail "the $group rule unit tests do not cover every alert both ways, or do not load the rendered rules"
+  [ "$status" -eq 0 ] ||
     fail "a $group alerting rule does not behave as specified.
 
 These tests are the only thing in the repository that evaluates an alert

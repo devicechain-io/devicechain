@@ -36,7 +36,7 @@
 // near-miss of the defect, it is the correctly parenthesised form of it and it must
 // pass. The clause is inert for alerting — an expression that returns nothing and one
 // that returns a false comparison leave an alert in the same state, inactive with its
-// `for` reset — so the chart's newer rules leave it out, but a rule that carries it is
+// `for` reset — so the dead-letter rules leave it out, but a rule that carries it is
 // not wrong. `absent()`, `unless`, `and on()` and a deliberate dead-man's `vector(1)`
 // must pass for the same reason — a guard that flags correct rules is a guard nobody
 // keeps.

@@ -71,6 +71,12 @@ tests:
   # ------------------------------------------------------------------
   # A brief burst of poison drops -- three in three minutes, then nothing. The rate
   # is above zero for less than the 10m `for`, so this never pages.
+  #
+  # 🔴 THE 7m ASSERTION IS THE ONE THAT PINS THE `for`. rate[5m] over this burst is
+  # positive from 2m through 7m and zero from 8m, so a rule waiting only 5m would
+  # fire at exactly 7m and resolve a minute later -- quiet at 6m and at 20m alike.
+  # Without 7m, shortening the wait to 5m passed every case in this file (found by
+  # mutation). 8m would not catch it either: by then the rate is already zero.
   # ------------------------------------------------------------------
   - name: a brief burst of poison drops shorter than the for window stays quiet
     interval: 1m
@@ -79,6 +85,9 @@ tests:
         values: '0 0 1 2 3 3x30'
     alert_rule_test:
       - eval_time: 6m
+        alertname: ReactPoisonDropping
+        exp_alerts: []
+      - eval_time: 7m
         alertname: ReactPoisonDropping
         exp_alerts: []
       - eval_time: 20m
