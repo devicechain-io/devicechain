@@ -205,6 +205,41 @@ a **consumer-lag gauge** — how far detection has fallen behind the resolved-ev
 stream — and **rule firing counts**, so "is the alarm engine keeping up, and what
 is it doing?" is answerable at a glance.
 
+## Messages a consumer never read {#unread-loss}
+
+Every JetStream stream has a ceiling. When a stream is full it discards its **oldest** messages to
+make room, so ingest keeps running. A consumer that had not read a message yet when it was
+discarded will never read it. The broker does not report this, so every service measures it for
+each durable consumer it reads, and three alerts watch the result:
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `JetStreamStreamNearFull` | warning | A stream has been over 80% of its byte ceiling for 10 minutes. Nothing has been lost yet. It covers the streams of every service. | Look for a consumer that is falling behind. If the traffic has simply outgrown the stream, raise its ceiling. |
+| `JetStreamDurableLostUnread` | critical | A consumer moved past messages that were removed before it read them. They were never processed. | If a tenant was being deleted at the time, this is expected: the deletion removed messages the consumer had not reached yet. Otherwise the stream was full while this consumer was behind. Either the ceiling is too small for the traffic, or the consumer is slower than its producer. |
+| `JetStreamDurableStalledBehindStream` | critical | A consumer has been handed no messages for at least two minutes, and the stream has already discarded messages ahead of it. A consumer that is reading, however slowly, does not fire this one; its losses fire `JetStreamDurableLostUnread`. | The service is running, since it reports this, but its consumer is not reading. Look for message handling stuck on a dependency such as the database, or pods waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding. |
+
+The ceilings are `streamMaxBytes` (the high-volume streams), `streamMaxBytesCold` (the others) and
+`streamMaxMsgs` under `instance.config.infrastructure.nats`. The JetStream volume is sized from
+their sum, so raise the volume with them (see [Bootstrap an Instance](./bootstrap.md)).
+
+The alerts read two series, which every service exports for each durable consumer it reads:
+
+- **`devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`** counts the
+  messages the consumer moved past without reading them. It is a lower bound: a redelivery, or a
+  message deleted behind the consumer, makes it count less, never more.
+- **`devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`** is how many
+  messages have been discarded ahead of a consumer that was handed no messages since the previous
+  sample (every 30 seconds). It is 0 while the consumer is reading, even when it is behind: those
+  losses are the counter's. It drops back to 0 when the consumer reads again, and the counter above
+  takes over.
+
+Both exist at 0 from the moment the service creates the consumer's reader. Every replica of a service reports the same
+consumer and counts the same loss, so combine them with `max`, not `sum`. A pod restart resets the
+counter, so read it with `increase()` or `rate()`. Each pod measures from its own first sample, so a
+loss the consumer moves past while every pod of the reading service is restarting at once can go
+uncounted. A service with no running pods reports neither series, so neither alert can fire for
+it; the near-full warning and your pod-health alerts cover that case.
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command

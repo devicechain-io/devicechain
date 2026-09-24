@@ -192,17 +192,4 @@ spec:
           annotations:
             summary: "A tenant is over its DETECT state budget"
             description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget (ADR-023) for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
-        - alert: EventProcessingStreamNearFull
-          expr: |
-            max by (stream) (
-              devicechain_eventprocessing_jetstream_stream_used_bytes{namespace="{{ $ns }}"}
-              / clamp_min(devicechain_eventprocessing_jetstream_stream_limit_bytes{namespace="{{ $ns }}"}, 1)
-            ) > 0.8
-          for: 10m
-          labels:
-            severity: warning
-            devicechain_instance: {{ $id }}
-          annotations:
-            summary: "A JetStream stream is near its ceiling"
-            description: "Stream {{`{{ $labels.stream }}`}} is over 80% of its byte ceiling for 10m; the oldest messages will be evicted (DiscardOld) once full."
 {{- end }}

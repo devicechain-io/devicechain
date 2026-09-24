@@ -1496,9 +1496,11 @@ are the first three sections below. The three after them matter only if you watc
 metrics yourself, rely on command responses that could not be recorded, or open GraphQL WebSocket
 connections from your own code. One more thing needs doing on every instance built before this
 release: check the superuser's password (see "The superuser no longer has a default password"
-below). The last section matters if you call the GraphQL API from your own code or scripts, or size
+below). The sign-in section matters if you call the GraphQL API from your own code or scripts, or size
 the JetStream volume yourself: sign-in is now rate-limited, and a GraphQL request is limited in how
-many root fields and password checks it can carry.
+many root fields and password checks it can carry. If you route or silence alerts by name, read
+"A consumer that falls behind a full stream now raises an alert": `EventProcessingStreamNearFull` is
+renamed.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1697,6 +1699,29 @@ console, the dashboard app, the SDKs and `dcctl` already stay within every limit
 
 [Request limits](../reference/graphql-api.md#request-limits) and [sign-in
 backoff](../reference/graphql-api.md#sign-in-backoff) have the details.
+
+#### A consumer that falls behind a full stream now raises an alert
+
+A full JetStream stream discards its oldest messages. Before this release, a consumer that had not
+read those messages yet lost them without any metric or alert saying so. Every service now measures
+this for each durable consumer it reads and exports two new series:
+
+- `devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`: messages the
+  consumer moved past without reading them.
+- `devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`: messages discarded
+  ahead of a consumer that has stopped reading (one that was handed no messages since the previous
+  sample; a consumer that is reading but behind reads 0 here).
+
+Two new critical alerts read them: `JetStreamDurableLostUnread` and
+`JetStreamDurableStalledBehindStream`. Deleting a tenant can fire the first one: the deletion removes
+that tenant's messages, including any a consumer had not reached yet. See
+[Messages a consumer never read](./observability.md#unread-loss) for what each alert means and what
+to do.
+
+The near-full warning is **renamed** from `EventProcessingStreamNearFull` to
+**`JetStreamStreamNearFull`**, and it now covers the streams of every service, not only
+event-processing's. The threshold (80% of the byte ceiling for 10 minutes) is unchanged. If an
+Alertmanager route or silence names the old alert, change it to the new name.
 
 ### The one-time durable-ingest cutover
 
