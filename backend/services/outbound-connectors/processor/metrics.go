@@ -32,8 +32,12 @@ const (
 	outcomeUnsupported = "unsupported"
 	// outcomeRateLimited — the dispatch's tenant was over its outbound egress rate (ADR-060 SD-3)
 	// for longer than the smoothing wait budget, so it was shed to the dead-letter subject. A brief
-	// burst is admitted by the wait and never reaches this; a rising rate_limited count is a tenant
-	// sustained over its outbound quota.
+	// burst is admitted by the wait and never reaches this. event-processing meters the same ceiling
+	// on the same trigger time and sheds an over-quota action before dispatching it, so a sustained
+	// rate_limited count is NOT the ordinary sign of a tenant over quota (that is the source's
+	// react_connector_egress_shed_total): it means this end refused what the source admitted -- the
+	// two ends' ceilings disagree, or retries of failing sends are being metered here a second time.
+	// The chart's ConnectorDispatchRateLimited alert fires on it.
 	outcomeRateLimited = "rate_limited"
 	// outcomeTenantDeleted — the dispatch's tenant has been through the delete door (ADR-077), so the
 	// send was refused and the message dropped (acked). Counted apart from a rate shed because the two

@@ -1525,6 +1525,10 @@ If you accept device traffic over HTTP, or size tier ingest ceilings for billing
 ingest has its own allowance". If you read an event's `processedTime`, or rely on windowed detection rules after an
 `event-sources` outage, read "`processedTime` now means when the platform received an event". If you watch pod restart counts, read "A lost presence connection now restarts `event-sources`".
 
+If you route or silence alerts by name, two more warnings are added, `JetStreamReplicationUnobserved`
+and `ConnectorDispatchRateLimited` (see "Two new warnings: an unreadable stream, and connector sheds
+the detection engine admitted").
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2128,6 +2132,28 @@ What changes that you can see:
   waiting commands is no longer dropped when the adapter is busy.
 
 Nothing needs doing at the upgrade.
+
+#### Two new warnings: an unreadable stream, and connector sheds the detection engine admitted
+
+- **`JetStreamReplicationUnobserved`** (warning, `jetstream-replication` group) fires when a
+  running pod has been unable for 15 minutes to read the replication state of a stream it could
+  read earlier. Until now a service that could not read a stream stopped reporting it, and the
+  other replication alerts went quiet for that stream rather than saying so. It also fires for
+  every stream on every pod during a broker outage, which is deliberate: nothing else in the chart
+  reports one. It resolves six hours after the stream was last read, whether or not it can be read
+  again. See [Replication](./observability.md#replication).
+- **`ConnectorDispatchRateLimited`** (warning, `governance` group) fires when outbound-connectors
+  has shed dispatches as over their tenant's outbound rate for 15 minutes. The detection engine
+  already sheds over-quota actions before dispatching them, so this means the two services
+  disagree about the ceiling (most often their platform defaults differ) or failing sends are
+  being retried and metered again. Before upgrading, check that `outboundMessagesPerSecond` and
+  `outboundBurst` are set the same for event-processing and outbound-connectors. Otherwise it
+  fires whenever a tenant metered at the platform default sends faster than the lower of the two.
+  See
+  [Tenants metered at the platform default](./observability.md#tenant-ceilings).
+- **`JetStreamLeaseBucketNotReplicated` has a new summary**, "The partition-lease bucket is not
+  replicated". Its name, labels and severity are unchanged. Update any route or silence that
+  matches on the old summary text.
 
 ### The one-time durable-ingest cutover
 

@@ -1,0 +1,506 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the JetStream replication alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# These rules read BROKER STATE, reported per stream by every service that uses the
+# stream, so most of what can go wrong with them is about WHICH series one reading is
+# compared against. The cases below hold one service's low reading beside another's
+# healthy one, and require the alert to name the service that saw it: a rule that folded
+# the services together would either miss it or page without saying where.
+#
+# The quiet cases are the two healthy installs, which look alike to the first three
+# rules and differ only in broker_clustered: a single-node install (everything at 1,
+# broker not clustered) and a replicated one (everything at 3, broker clustered). Only
+# JetStreamClusterUnused tells a clustered broker storing one copy apart from the first.
+#
+# JetStreamReplicationUnobserved is the counterweight to the other four. A pod that
+# cannot read a stream DELETES its replication series rather than freezing them, which
+# leaves the other four nothing to evaluate. Its cases model that deletion with
+# promtool's `stale` marker, which is what a deleted series looks like to Prometheus on
+# the next scrape. (`_`, a missing sample, would keep the old value visible for the 5m
+# lookback and make every timing below five minutes late.) The cases pin what it does
+# about a restart, a sibling that can still read the stream, a pod that is gone, a
+# single missed pass, a broker outage, and the lookback running out -- the last two are
+# deliberate, documented behaviour, pinned so that changing either is a decision.
+#
+# THE SERIES, and what is known about them:
+#
+#   - devicechain_<area>_jetstream_replicas_desired / _replicas_actual / _peers_current
+#     {stream} -- GaugeVecs written together on every 30s pass that can read the stream,
+#     and DELETED together on a pass that cannot (core/messaging/stream_metrics.go).
+#   - devicechain_<area>_jetstream_broker_clustered -- a plain gauge, exported from
+#     process start and written at the top of every pass whether or not any stream could
+#     be read. It reads 0 while the pod is disconnected from the broker.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml. Naming it below is not
+# optional: promtool with no rule_files loads no rules, and every expected alert then
+# reads as "the rule does not fire" rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # A healthy SINGLE-NODE install: every stream and bucket at one replica, one current
+  # peer, and a broker that is not clustered. Nothing fires. This is the state the
+  # first three rules must never page on, and the one JetStreamClusterUnused tells apart
+  # from a clustered broker by broker_clustered alone.
+  # ------------------------------------------------------------------
+  - name: a healthy single-node install raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: JetStreamNotReplicatedAsConfigured, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamReplicaPeersDegraded, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamLeaseBucketNotReplicated, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamClusterUnused, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamReplicationUnobserved, exp_alerts: []}
+
+  # ------------------------------------------------------------------
+  # A healthy REPLICATED install: two services, two replicas of one of them, every stream
+  # and the lease bucket at three replicas with three current peers, on a clustered
+  # broker. Nothing fires.
+  # ------------------------------------------------------------------
+  - name: a healthy replicated install raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x60'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '1x60'
+      - series: 'devicechain_devicemanagement_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_devicemanagement_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_devicemanagement_jetstream_peers_current{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '3x60'
+      - series: 'devicechain_devicemanagement_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management"}'
+        values: '1x60'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: JetStreamNotReplicatedAsConfigured, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamReplicaPeersDegraded, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamLeaseBucketNotReplicated, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamClusterUnused, exp_alerts: []}
+      - {eval_time: 60m, alertname: JetStreamReplicationUnobserved, exp_alerts: []}
+
+  # ------------------------------------------------------------------
+  # One service sees a stream at one replica while another sees it at three, both
+  # configured for three. Exactly one alert, naming the service that saw the low value.
+  # Grouped by stream alone, the other service's 3 would still leave a firing alert,
+  # but one that could not say where.
+  # ------------------------------------------------------------------
+  - name: one service seeing a stream under-replicated fires JetStreamNotReplicatedAsConfigured for that service
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x30'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x30'
+      - series: 'devicechain_devicemanagement_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '3x30'
+      - series: 'devicechain_devicemanagement_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: JetStreamNotReplicatedAsConfigured
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamNotReplicatedAsConfigured
+        exp_alerts:
+          - exp_labels:
+              stream: devicechain_resolved-events
+              job: devicechain/device-management
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "JetStream stream or bucket is not replicated as configured"
+              description: "devicechain_resolved-events has fewer replicas than this instance is configured for. This instance is NOT highly available for that stream. Both halves of the toggle must agree: instance.config.infrastructure.nats.streamReplicas sets the replica count, and the NATS server cluster (tofu var.ha / nats_cluster_replicas) must be large enough to host it. NOTE this does NOT clear on its own once peers arrive: the replica lift runs only when a service starts and ensures its streams, and a lift that failed mid-scale (JSClusterNoPeersError) is warned and not retried. Once the cluster is whole, restart the affected Deployments to re-run the lift."
+
+  # ------------------------------------------------------------------
+  # Labelled three replicas with two current peers, for longer than the 20m `for`.
+  # ------------------------------------------------------------------
+  - name: a replicated stream short of current peers fires JetStreamReplicaPeersDegraded
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x30'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: JetStreamReplicaPeersDegraded
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: JetStreamReplicaPeersDegraded
+        exp_alerts:
+          - exp_labels:
+              stream: devicechain_resolved-events
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "JetStream replica peers are not current"
+              description: "devicechain_resolved-events reports more replicas than it has current, online RAFT peers. It is labelled replicated but is not: losing the leader may lose data or availability. Check NATS pod health and placement — three replicas across pods that share one node survive zero node losses."
+
+  # ------------------------------------------------------------------
+  # RAFT CATCH-UP after a replica lift: the new followers are not current for fifteen
+  # minutes while the data is copied, and then they are. The 20m `for` exists for this;
+  # the 14m assertion is the one a 10m `for` fails.
+  # ------------------------------------------------------------------
+  - name: followers catching up after a replica lift stay quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x40'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x14 3x25'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: JetStreamReplicaPeersDegraded
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: JetStreamReplicaPeersDegraded
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The lease bucket at one replica as seen by ONE service, on an instance configured
+  # for three: critical, naming that service. The other service's 3 must not mask it,
+  # which is what an earlier `max` across services did.
+  # ------------------------------------------------------------------
+  - name: one service seeing the lease bucket under-replicated fires JetStreamLeaseBucketNotReplicated
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x30'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x30'
+      - series: 'devicechain_devicemanagement_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="KV_devicechain_dc_leases"}'
+        values: '3x30'
+      - series: 'devicechain_devicemanagement_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="KV_devicechain_dc_leases"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: JetStreamLeaseBucketNotReplicated
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamLeaseBucketNotReplicated
+        exp_alerts:
+          - exp_labels:
+              stream: KV_devicechain_dc_leases
+              job: devicechain/device-management
+              namespace: dci-devicechain
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The partition-lease bucket is not replicated"
+              description: "KV_devicechain_dc_leases holds the partition-ownership leases that decide which pod may write. On an instance configured for HA it must be replicated: at one replica, losing its node does not just lose the leases, it blocks every standby's Acquire and the lease-fenced failover cannot happen at all. Do not claim lease-fenced HA while this is firing."
+
+  # ------------------------------------------------------------------
+  # A stream that is NOT the lease bucket at one replica, on an instance configured for
+  # three: the configuration alert's job, not this critical one's.
+  # ------------------------------------------------------------------
+  - name: another stream under-replicated does not fire JetStreamLeaseBucketNotReplicated
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x30'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '1x30'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x30'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: JetStreamLeaseBucketNotReplicated
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A clustered broker with every stream configured for one replica: paying for a
+  # cluster and surviving zero node losses. The first three rules see a perfectly
+  # consistent 1/1/1 and cannot fire; this one can.
+  # ------------------------------------------------------------------
+  - name: a clustered broker storing single-replica streams fires JetStreamClusterUnused
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_desired{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x30'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x30'
+      - series: 'devicechain_eventprocessing_jetstream_peers_current{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '1x30'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: JetStreamClusterUnused
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamClusterUnused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The NATS broker is clustered but nothing on it is replicated"
+              description: "This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused."
+      # A single-replica lease bucket on an instance configured for one replica is not
+      # the critical alert's business: its `desired > 1` arm is what says so.
+      - eval_time: 15m
+        alertname: JetStreamLeaseBucketNotReplicated
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamNotReplicatedAsConfigured
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 A STREAM THIS POD STOPS BEING ABLE TO READ, while it goes on reading another one
+  # and keeps sampling. Its series are deleted at 11m, which the other four rules read
+  # as nothing to evaluate. This fires at 26m, naming the stream and the pod. The 25m
+  # assertion is the one a shorter `for` fails.
+  # ------------------------------------------------------------------
+  - name: a stream that becomes unreadable fires JetStreamReplicationUnobserved
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x70'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x70'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts:
+          - exp_labels:
+              stream: KV_devicechain_dc_leases
+              pod: dc-event-processing-6b7d-aaaaa
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A service can no longer read a JetStream stream's replication state"
+              description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
+      # The rules it stands in for are silent on that stream, which is the point.
+      - eval_time: 26m
+        alertname: JetStreamLeaseBucketNotReplicated
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 A SIBLING THAT CAN STILL READ THE STREAM DOES NOT MASK ONE THAT CANNOT. Two live
+  # replicas of one service; the first loses the lease bucket at 11m and the second goes
+  # on reading it. The alert names the first. Grouped by job instead of by pod, the
+  # second replica's series would satisfy the `unless` and this would be silent.
+  # ------------------------------------------------------------------
+  - name: one replica losing a stream its sibling still reads fires JetStreamReplicationUnobserved for that replica
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x70'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x70'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '1x70'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts:
+          - exp_labels:
+              stream: KV_devicechain_dc_leases
+              pod: dc-event-processing-6b7d-aaaaa
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A service can no longer read a JetStream stream's replication state"
+              description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
+
+  # ------------------------------------------------------------------
+  # A pod restart, or a rollout: the old pod's series all end at 10m, broker_clustered
+  # with them, and the new pod reports the same stream from 11m. The old pod has history
+  # and no current series, but it has no broker_clustered either, so it is not "still
+  # sampling" and nothing fires.
+  # ------------------------------------------------------------------
+  - name: a pod replaced by a new one stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-7f2a-bbbbb", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '_x11 3x60'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-7f2a-bbbbb", job="devicechain/event-processing"}'
+        values: '_x11 1x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A pod that is gone entirely, with no replacement: everything it exported ends at
+  # 10m. Quiet by design -- a pod that is down is pod health's to report, not this
+  # alert's. This also pins that the broker_clustered arm is there: without it, the
+  # pod's history alone would fire.
+  # ------------------------------------------------------------------
+  - name: a pod that is gone entirely stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x10 stale'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # One failed pass: the stream's series are deleted and back on the next pass. Pending
+  # for that minute, never firing. The 11m assertion is the one a rule with no `for`
+  # fails.
+  # ------------------------------------------------------------------
+  - name: a single missed pass stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale 3x60'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x72'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 A BROKER OUTAGE, and the decision it pins. Every stream becomes unreadable on
+  # every pod at 11m. The first pod has lost its connection, so its broker_clustered
+  # reads 0 from then on; the second is still connected but JetStream is not answering,
+  # so it goes on reading 1. Either way the pod is up and sampling, and it fires for
+  # EVERY stream on both. That is accepted on purpose: the alert's claim is true, and
+  # nothing else in the chart pages on the broker being unreachable. Changing it to go
+  # quiet when a pod has lost every stream is a decision, and this case is where it is
+  # made.
+  # ------------------------------------------------------------------
+  - name: a broker outage fires JetStreamReplicationUnobserved for every stream on every pod
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events"}'
+        values: '3x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x10 0x60'
+      - series: 'devicechain_devicemanagement_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale'
+      - series: 'devicechain_devicemanagement_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management"}'
+        values: '1x70'
+    alert_rule_test:
+      - eval_time: 26m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts:
+          - exp_labels:
+              stream: KV_devicechain_dc_leases
+              pod: dc-event-processing-6b7d-aaaaa
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A service can no longer read a JetStream stream's replication state"
+              description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
+          - exp_labels:
+              stream: devicechain_resolved-events
+              pod: dc-event-processing-6b7d-aaaaa
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A service can no longer read a JetStream stream's replication state"
+              description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of devicechain_resolved-events earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
+          - exp_labels:
+              stream: KV_devicechain_dc_leases
+              pod: dc-device-management-5c4f-ccccc
+              job: devicechain/device-management
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A service can no longer read a JetStream stream's replication state"
+              description: "dc-device-management-5c4f-ccccc (devicechain/device-management) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
+
+  # ------------------------------------------------------------------
+  # 🔴 THE LOOKBACK RUNS OUT, and that is a stated limit, not a recovery. The stream is
+  # unreadable from 11m and stays unreadable. The alert is firing five hours later, and
+  # quiet once the last reading, at 10m, is more than six hours old -- the stream still
+  # unreadable. The description says a resolved alert is not proof of recovery for
+  # exactly this reason; lengthening or removing the lookback changes this case.
+  # ------------------------------------------------------------------
+  - name: a stream unreadable for longer than the lookback stops firing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_jetstream_replicas_actual{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", stream="KV_devicechain_dc_leases"}'
+        values: '3x10 stale'
+      - series: 'devicechain_eventprocessing_jetstream_broker_clustered{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x400'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts:
+          - exp_labels:
+              stream: KV_devicechain_dc_leases
+              pod: dc-event-processing-6b7d-aaaaa
+              job: devicechain/event-processing
+              namespace: dci-devicechain
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A service can no longer read a JetStream stream's replication state"
+              description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
+      - eval_time: 6h11m
+        alertname: JetStreamReplicationUnobserved
+        exp_alerts: []

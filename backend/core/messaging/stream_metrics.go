@@ -262,7 +262,11 @@ func (m *streamMetrics) sampleReplication(name string, info *nats.StreamInfo, de
 // longer reach the JetStream API would keep exporting a scrapable, plausible,
 // stale "everything is fine" — and the one condition that would have fired can
 // never fire while the thing it watches is unreachable. Absence of a series is
-// detectable (Prometheus `absent()`, a stale-series alert); a frozen series is not.
+// detectable; a frozen series is not. The chart's JetStreamReplicationUnobserved
+// alert is what detects it: a stream this pod reported earlier and reports no
+// longer, while its jetstream_broker_clustered gauge says the pod is still sampling.
+// (Prometheus `absent()` cannot, because it needs the stream names written into the
+// rule.)
 func (m *streamMetrics) forgetReplication(name string) {
 	m.replicasDesired.DeleteLabelValues(name)
 	m.replicasActual.DeleteLabelValues(name)
@@ -330,11 +334,12 @@ func sampleFailureLog(ctx context.Context) *zerolog.Event {
 //
 // The per-name error handling is the same for a cancelled pass — a cancelled
 // StreamInfo is skipped like any other failure, though logged at debug rather than
-// warn (see sampleFailureLog) — but the loops then stop rather than working through the remaining names to fail identically on
-// each. Note this DROPS the replication series for the names not reached, which is
-// correct: they are dropped by forgetReplication on an ordinary failure too, and a
-// sampler that has been told to stop should not leave a gauge asserting a value it
-// can no longer refresh.
+// warn (see sampleFailureLog) — but the loops then stop rather than working through
+// the remaining names to fail identically on each. At most the name whose StreamInfo
+// was in flight has its replication series dropped (its call failed, so
+// forgetReplication ran for it); the names not reached KEEP their last values, because
+// the loop returns before touching them. That is harmless where it happens -- the pass
+// is cancelled only when the service is stopping, and the pod's series go with it.
 //
 // durables are the readers this service created. Each is sampled right after its
 // stream, against that stream's StreamInfo — the same snapshot the fill gauges read —

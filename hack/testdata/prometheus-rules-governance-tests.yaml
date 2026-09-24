@@ -20,6 +20,11 @@
 # drains dispatches from before trigger times were stamped, which fall back for minutes and
 # must not page, and a healthy instance exports both counters at zero.
 #
+# ConnectorDispatchRateLimited watches ONE outcome of a counter with many. Its quiet
+# cases are again the ones worth writing down: a tenant whose own configuration fails its
+# dispatches (a dead webhook, a private destination, a missing connector) moves the other
+# outcomes as steadily as it likes, and none of that may page the operator.
+#
 # THE SERIES, and what is known about them:
 #
 #   - devicechain_<area>_governance_unresolved_admissions_total{dimension, cause} -- a
@@ -33,6 +38,9 @@
 #     all created at 0, exported by event-processing and outbound-connectors. capped (a stamp
 #     later than its message's broker time) is clock skew between nodes, not a missing stamp,
 #     and the alert must not watch it.
+#   - devicechain_outboundconnectors_connector_dispatch_total{action, outcome} -- a
+#     CounterVec whose children appear on the first dispatch with that action and
+#     outcome, so on a healthy instance the rate_limited series may not exist at all.
 #
 # Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
 # rendered group in beside this file as rendered-rules.yaml. Naming it below is not
@@ -325,4 +333,92 @@ tests:
         exp_alerts: []
       - eval_time: 120m
         alertname: RateMeteringClockFallback
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The connectors service sheds httpCall dispatches for rate, steadily, beside sends
+  # that succeed: one alert, naming the service and the action. The sends do not fire
+  # it; only the rate_limited outcome does.
+  # ------------------------------------------------------------------
+  - name: sustained rate-limited dispatches fire ConnectorDispatchRateLimited
+    interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="httpCall", outcome="rate_limited"}'
+        values: '0 0 1+2x40'
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="httpCall", outcome="sent"}'
+        values: '0+50x42'
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="publish", outcome="sent"}'
+        values: '0+50x42'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ConnectorDispatchRateLimited
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: ConnectorDispatchRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/outbound-connectors
+              action: httpCall
+            exp_annotations:
+              summary: "The connectors service is shedding outbound actions the detection engine admitted"
+              description: "For at least 15 minutes, devicechain/outbound-connectors has shed httpCall dispatches for being over their tenant's outbound rate. The detection engine meters the same ceiling on the same timeline and sheds over-quota actions before dispatching them, so these were admitted at one end and refused at the other: the two ends disagree about the ceiling. The usual cause is the platform default configured differently for event-processing and outbound-connectors (outboundMessagesPerSecond and outboundBurst must match), or one of them metering at the default because it cannot read tenant ceilings (see TenantsMeteredAtPlatformDefault), or sends that are failing and being retried, since every retry is metered again here and only once at the source. Each shed dispatch is dead-lettered with reason rate_limited; inspect them with `dcctl dead-letters`."
+
+  # ------------------------------------------------------------------
+  # 🔴 ONE TENANT'S BROKEN CONFIGURATION. Its webhook fails and is dead-lettered, it aims
+  # a publish at a private address, it references a connector that is gone, it uses a
+  # type this build cannot send -- every one of them steadily, for an hour. None of it
+  # pages the operator: each is already dead-lettered where the tenant's problem can be
+  # read, and an alert on them would let any tenant hold the operator's pager.
+  # ------------------------------------------------------------------
+  - name: a tenant's failing dispatches do not fire ConnectorDispatchRateLimited
+    interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="httpCall", outcome="dead"}'
+        values: '0+5x60'
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="publish", outcome="blocked"}'
+        values: '0+5x60'
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="httpCall", outcome="invalid"}'
+        values: '0+5x60'
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="publish", outcome="unsupported"}'
+        values: '0+5x60'
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="httpCall", outcome="retry"}'
+        values: '0+5x60'
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="httpCall", outcome="rate_limited"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: ConnectorDispatchRateLimited
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A burst the smoothing wait could not absorb: rate-limited sheds for five minutes,
+  # then none. Its rate is positive from 2m through 10m, inside the 15m `for`, and 10m is
+  # the last minute a shorter wait would still be firing at.
+  # ------------------------------------------------------------------
+  - name: a brief burst of rate-limited dispatches stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", action="httpCall", outcome="rate_limited"}'
+        values: '0 0 3 6 9 12 15 18 18x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ConnectorDispatchRateLimited
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ConnectorDispatchRateLimited
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Rate-limited sheds in ANOTHER instance's namespace are that instance's business.
+  # ------------------------------------------------------------------
+  - name: rate-limited dispatches in another namespace do not fire ConnectorDispatchRateLimited
+    interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_connector_dispatch_total{namespace="dci-other", pod="dc-outbound-connectors-5d8b-zzzzz", job="dci-other/outbound-connectors", action="httpCall", outcome="rate_limited"}'
+        values: '0+2x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: ConnectorDispatchRateLimited
         exp_alerts: []
