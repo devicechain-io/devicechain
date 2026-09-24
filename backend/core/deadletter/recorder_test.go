@@ -453,3 +453,46 @@ func TestDeadLetterStreamsCarryTheThirtyMinuteDedupWindow(t *testing.T) {
 		require.Equal(t, 30*time.Minute, info.Config.Duplicates, "%s's dedup window", suffix)
 	}
 }
+
+// GUARD: kills "the consumer is not part of the letter's dedup id". Two areas whose durables
+// read ONE stream — resolved-events is read by device-state and event-management alike — each
+// exhaust their deliveries on the SAME sequence. Those are two losses, one per area, and each
+// is owed its own letter. The dedup id is the only thing between them: were it derived from
+// the stream and sequence alone, the second area's letter would be dropped by the broker as
+// a duplicate of the first, and that area's loss would be recorded nowhere.
+func TestTwoAreasExhaustingOneSequenceEachGetALetter(t *testing.T) {
+	srv := startBroker(t)
+	// Both rigs exist before the publish, so both durables are delivered sequence 1.
+	a := newRecorderRig(t, srv, streams.ResolvedEvents)
+	b := newRecorderRig(t, srv, streams.ResolvedEvents)
+	seq := a.publish(streams.ResolvedEvents, []byte(`{"measurement":21.5}`), nil)
+	require.EqualValues(t, 1, seq)
+
+	a.deliverAll(a.readers[0])
+	b.deliverAll(b.readers[0])
+	a.keepPulling(a.readers[0])
+	b.keepPulling(b.readers[0])
+	eventually(t, 10*time.Second, "one letter per area", func() bool {
+		return a.records(streams.ResolvedEvents, string(messaging.MaxDeliveryLettered)) == 1 &&
+			b.records(streams.ResolvedEvents, string(messaging.MaxDeliveryLettered)) == 1
+	})
+	// Both recorders report lettering; the broker is the one that could still have dropped a
+	// write as a duplicate, so the stream it holds is the evidence.
+	held := a.held(streams.DeadLetters)
+	require.Len(t, held, 2, "one area's letter was swallowed by the other's")
+
+	stream := messaging.StreamName("test", streams.ResolvedEvents)
+	want := map[string]string{
+		a.area: "mdl." + stream + "." + messaging.DurableName("test", a.area, streams.ResolvedEvents) + ".1",
+		b.area: "mdl." + stream + "." + messaging.DurableName("test", b.area, streams.ResolvedEvents) + ".1",
+	}
+	got := map[string]string{}
+	for _, m := range held {
+		e, err := Unmarshal(m.Data)
+		require.NoError(t, err)
+		require.Equal(t, ReasonNoOutcome, e.Reason)
+		require.Contains(t, e.Detail, stream+"#1")
+		got[e.Source] = m.Header.Get(nats.MsgIdHdr)
+	}
+	require.Equal(t, want, got, "each area's letter must name its own durable")
+}

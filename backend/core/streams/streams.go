@@ -238,6 +238,14 @@ type Stream struct {
 	// deliveries against a real broker and shows the area's checkpoint still covers every
 	// message (event-processing's replay_covers_exhausted_test.go is the one for DETECT).
 	// Each name must also be in Areas.
+	//
+	// 🔴 A single-writer area's claim rests on its LEASE too. DETECT applies every delivery
+	// on first sight only while one replica consumes the shared durable; a zombie leader that
+	// has lost its lease but not yet noticed can apply messages whose checkpoint is then
+	// refused, and those redeliver to the real leader, which may already be past their
+	// sequence and drop them as duplicates. That split-brain loss exists with or without
+	// exhaustion, and the lease's local deadline (30s) makes a zombie outliving AckWait x
+	// MaxDeliver unrealistic — see ResolvedEventsProcessor's type comment.
 	ReplayCovered []string
 	// Why records what drives this stream's volume. It is the reasoning behind
 	// the tier, kept next to the tier so a reclassification has to confront it.
@@ -500,9 +508,10 @@ var All = []Stream{
 		Why:            "raw device telemetry — the primary ingest path"},
 	//
 	// event-processing is REPLAY-COVERED: DETECT acks a resolved event only after a
-	// snapshot checkpoint covers it, applies every delivery on first sight, and after a
-	// restart replays this stream by sequence from its last committed checkpoint — so a
-	// checkpoint outage that exhausts its deliveries loses no event (see ReplayCovered).
+	// snapshot checkpoint covers it, applies every delivery on first sight (true while the
+	// partition lease keeps it a single writer), and after a restart replays this stream by
+	// sequence from its last committed checkpoint — so a checkpoint outage that exhausts its
+	// deliveries loses no event (see ReplayCovered for the split-brain residual).
 	// device-state and event-management are not: their exhausted deliveries are lettered.
 	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
 		ReplayCovered: []string{"event-processing"},
