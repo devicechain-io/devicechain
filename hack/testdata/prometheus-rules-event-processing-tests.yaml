@@ -259,6 +259,9 @@ tests:
   # A long REPLAY: the leader is not yet live, but it checkpoints as it goes. The
   # checkpoint term is what keeps this quiet, and removing it fires here.
   # ------------------------------------------------------------------
+  # Written as an HA pair on purpose: the standby next to the replaying leader reports
+  # zero checkpoints, so this is the case that tells max() over the checkpoint increase
+  # from min() — with min() the standby's flat counter would page on a healthy replay.
   - name: a leader replaying and checkpointing before it goes live stays quiet
     interval: 1m
     input_series:
@@ -268,6 +271,12 @@ tests:
         values: '0x30'
       - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
         values: '0+1x30'
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
     alert_rule_test:
       - eval_time: 25m
         alertname: DetectLeaderIsNotConsuming

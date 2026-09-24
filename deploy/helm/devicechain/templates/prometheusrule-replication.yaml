@@ -194,8 +194,8 @@ spec:
         # the `unless` would find the sibling's series. By pod on the left only, a
         # restarted pod's old name would fire, because it has history and no current
         # series. By pod on both sides, a pod that is gone has no broker_clustered either,
-        # so a restart, a rollout, and a release that stops using a stream (new pods never
-        # report it) are all quiet, and a live replica that loses a stream fires even
+        # so a replaced pod, a rollout, and a release that stops using a stream (new pods
+        # never report it) are all quiet, and a live replica that loses a stream fires even
         # while its siblings can read it.
         #
         # What it deliberately does, and cannot do:
@@ -205,7 +205,10 @@ spec:
         #     reports broker_clustered 0 while disconnected; the witness reads the series,
         #     not its value, so it holds either way.)
         #   - A stream this pod has NEVER read since it started is invisible to it: there
-        #     is no history to compare against. That includes a pod restarted into the fault.
+        #     is no history to compare against. That includes a REPLACEMENT pod started into
+        #     the fault. A container restarted in place (crash, OOMKill, liveness failure)
+        #     keeps its pod label, so the earlier process's readings are still in the
+        #     lookback and it DOES fire.
         #   - It resolves once the last reading falls out of the 6h lookback, whether or
         #     not the stream is readable again.
         #   - A pod that is entirely down exports nothing, so this is quiet; that is pod

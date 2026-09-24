@@ -105,6 +105,10 @@ spec:
         # sheds over-quota actions before they are dispatched, so a sustained shed HERE means
         # the two ends disagree about the ceiling, which is an operator's configuration, or
         # that retries of failing sends are being charged a second time at this end.
+        # That second cause IS reachable by a tenant: one whose destination keeps failing
+        # while it sends near its quota raises this on its own. The pager argument above
+        # applies to it too, and severity=warning is what makes it acceptable -- this must
+        # never be promoted to critical while the retry cause remains.
         # `for` is 15m to match ReactConnectorEgressShedding: a burst the smoothing wait
         # cannot absorb is not a disagreement.
         - alert: ConnectorDispatchRateLimited

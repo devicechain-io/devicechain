@@ -22,7 +22,7 @@
 # promtool's `stale` marker, which is what a deleted series looks like to Prometheus on
 # the next scrape. (`_`, a missing sample, would keep the old value visible for the 5m
 # lookback and make every timing below five minutes late.) The cases pin what it does
-# about a restart, a sibling that can still read the stream, a pod that is gone, a
+# about a replaced pod, a sibling that can still read the stream, a pod that is gone, a
 # single missed pass, a broker outage, and the lookback running out -- the last two are
 # deliberate, documented behaviour, pinned so that changing either is a decision.
 #
@@ -356,7 +356,7 @@ tests:
               description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
 
   # ------------------------------------------------------------------
-  # A pod restart, or a rollout: the old pod's series all end at 10m, broker_clustered
+  # A replaced pod, or a rollout: the old pod's series all end at 10m, broker_clustered
   # with them, and the new pod reports the same stream from 11m. The old pod has history
   # and no current series, but it has no broker_clustered either, so it is not "still
   # sampling" and nothing fires.
