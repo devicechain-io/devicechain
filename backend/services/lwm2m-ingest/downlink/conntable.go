@@ -72,8 +72,10 @@ type ConnTable struct {
 	// winning Bind (Register) or a Refresh that heals onto a new conn (a queue-mode sleeper's
 	// re-handshake). These are exactly the LwM2M wake signals, so it drives the L4b wake-drain
 	// (wired to Dispatcher.Drain). It is deliberately NOT fired on a keepalive no-op Refresh: a
-	// device that stayed live got its commands via the live dispatch path, so re-draining every
-	// keepalive would be pure query load. Set once before serving; read on handler goroutines.
+	// device that stayed live has nothing a keepalive could add — its live commands are dispatched
+	// as they arrive, and any it had to park are drained by the dispatcher's own loop without
+	// waiting for a wake — so re-draining every keepalive would be pure query load. Set once
+	// before serving; read on handler goroutines.
 	onLive func(tenant, deviceToken string)
 }
 

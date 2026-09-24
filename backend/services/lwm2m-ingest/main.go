@@ -412,13 +412,22 @@ func buildMetrics() {
 			"Commands dropped as unprocessable (no parseable tenant in the subject, or an undecodable envelope)."),
 		ResponseFails: Microservice.NewCounter("command_response_publish_failures_total",
 			"Command outcomes that could not be published to command-responses after local retries (the op already ran, so the command is not redelivered; it will TIMEOUT)."),
-		// L4b wake-drain (ADR-075): commands held for an offline device and delivered on its wake.
+		// L4b drain (ADR-075): commands held or parked for a device and delivered, in order, by
+		// a drain turn once it is live.
 		Drained: Microservice.NewCounter("commands_drained_total",
-			"Held commands dispatched to a device on its Register/Update wake (LwM2M queue-mode drain)."),
+			"Backlogged (held or parked) commands dispatched to a live device by a drain, oldest first."),
 		DrainErrors: Microservice.NewCounter("command_drain_errors_total",
-			"Wake-drain fetches that failed (retried on the device's next Register/Update)."),
-		DrainDropped: Microservice.NewCounter("command_drain_dropped_total",
-			"Wake-drain triggers dropped because the device's shard worker was busy (the next wake re-triggers)."),
+			"Drain fetches that failed; retried after a short delay while the device stays live."),
+		DrainTurns: Microservice.NewCounter("command_drain_turns_total",
+			"Drain turns run: each fetches and dispatches at most a few backlogged commands for one device, alternating with live work on its shard."),
+		// Parks instead of live dispatch, split by reason because each reads differently: full is
+		// a slow device, offline is queue mode working, bind is a device reconnecting, unconfirmed
+		// is command-delivery failing to confirm. Summed, a slow device would hide in queue mode.
+		OverflowParked: Microservice.NewCounterVec("commands_overflow_parked_total",
+			"Live commands parked in command-delivery instead of dispatched, by reason (full: the device's dispatch queue was full; offline: no live connection; bind: its backlog was not yet drained after it connected; unconfirmed: a command ahead of it could not be confirmed). Delivered in order by a drain moments later.",
+			[]string{"reason"}),
+		OverflowBlocked: Microservice.NewCounter("command_overflow_blocked_total",
+			"Times the command reader had to wait for the park pool because every park worker was busy; rises only while command-delivery is slow or unreachable."),
 		// Live-path confirmation outcomes, split for the same reason as the claim outcomes below:
 		// a stale dispatch is the exclusion working, a claim error is command-delivery unreachable.
 		StaleDispatch: Microservice.NewCounter("commands_stale_dispatch_total",
@@ -431,9 +440,9 @@ func buildMetrics() {
 		// deliverable command going undelivered. Summed into one series, an outage would look like
 		// ordinary contention.
 		DrainClaimLost: Microservice.NewCounter("command_drain_claims_lost_total",
-			"Held commands another dispatcher or the delivery sweep claimed first, so this wake did not dispatch them — a duplicate actuation avoided, not a fault."),
+			"Backlogged commands another dispatcher or the delivery sweep claimed first, so this drain did not dispatch them — a duplicate actuation avoided, not a fault."),
 		DrainClaimErrors: Microservice.NewCounter("command_drain_claim_errors_total",
-			"Held commands NOT dispatched because ownership could not be established with command-delivery (fail-closed; retried on the device's next Register/Update)."),
+			"Backlogged commands NOT dispatched because ownership could not be established with command-delivery (fail-closed; retried shortly, in order)."),
 		TenantGoneRefused: Microservice.NewCounter("commands_tenant_deleted_total",
 			"Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware."),
 	}
@@ -603,7 +612,7 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		opts.Parker = parker
 		dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)
 		// Wire the wake-drain: a device becoming reachable on a fresh conn (Register / re-handshake
-		// Update) triggers a drain of its held commands. A no-op when draining is disabled or on a
+		// Update) gates its live commands and triggers a drain of its held commands. A no-op when draining is disabled or on a
 		// standby (Drain guards both). Set before serving begins.
 		connTable.SetOnLive(dispatcher.Drain)
 	}
@@ -1049,9 +1058,9 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	// device-commands and dispatches to this term's conn table, only while leaderCtx is live.
 	// Leader-only pull is what keeps a standby (which never runs this) from draining the shared
 	// durable. It returns when leaderCtx is cancelled; dispatcherDone lets the unwind wait for its
-	// workers to finish. We wait for the dispatcher to be READY (its wake-drain queues published)
-	// before serving, so a Register in a serve-before-Run window does not silently defer its
-	// wake-drain — a real gap at failover when the whole fleet re-Registers at once.
+	// workers to finish. We wait for the dispatcher to be READY (its shards published) before
+	// serving, so a Register in a serve-before-Run window does not silently lose its wake — a real
+	// gap at failover when the whole fleet re-Registers at once.
 	dispatcherDone := make(chan struct{})
 	if dispatcher != nil {
 		go func() {

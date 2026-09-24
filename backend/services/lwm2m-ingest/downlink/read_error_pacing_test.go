@@ -53,7 +53,7 @@ const pacedReads = 60
 // readpacer_test.go; what belongs here is that the loop stops asking and that Run returns.
 func pacingDispatcher(t *testing.T, reader reader) *Dispatcher {
 	t.Helper()
-	return NewDispatcher(reader, &fakePublisher{}, &fakeLookup{}, &fakeExecutor{}, nil, nil, Metrics{},
+	return NewDispatcher(reader, &fakePublisher{}, &fakeLookup{}, &fakeExecutor{}, &fakeFetcher{}, nil, Metrics{},
 		Options{
 			Workers:   1,
 			ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock()),

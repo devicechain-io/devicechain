@@ -96,7 +96,7 @@ type recordingFetcher struct {
 	devices []string
 }
 
-func (f *recordingFetcher) Pending(_ context.Context, tenant, deviceToken string) ([]DrainCommand, error) {
+func (f *recordingFetcher) Pending(_ context.Context, tenant, deviceToken string, _ int) ([]DrainCommand, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.devices = append(f.devices, tenant+"/"+deviceToken)

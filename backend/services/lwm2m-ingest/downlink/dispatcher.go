@@ -106,17 +106,21 @@ type connLookup interface {
 	Lookup(tenant, deviceToken string) (mux.Conn, Reach)
 }
 
-// drainFetcher reads a waking device's backlogged commands (HELD or PARKED — drainStatuses)
-// from command-delivery (*CommandFetcher satisfies it). It is the read side of the durable
-// hold (ADR-075 L4b, Architecture D): a command withheld for a device known absent, or one
-// the live path published and this dispatcher handed back because the device turned out to be
-// asleep, is pulled here at the device's next wake. nil disables draining (an inert or
-// pre-L4b-wiring build, and the disposition unit tests).
+// drainFetcher reads a device's backlogged commands (HELD or PARKED — drainStatuses) from
+// command-delivery, oldest first and at most limit of them (*CommandFetcher satisfies it). It is
+// the read side of the durable hold (ADR-075 L4b, Architecture D): a command withheld for a device
+// known absent, or one this dispatcher handed back because the device was asleep, its shard was
+// full or its gate was up, is pulled here by a drain turn.
+//
+// It is REQUIRED alongside a reader (NewDispatcher refuses the combination without it): every
+// command this dispatcher parks is delivered by a drain, and a gate is lifted only by one, so a
+// dispatcher that could park but not drain would strand every gated device's commands silently.
+// nil is allowed only for the disposition unit tests, which construct a dispatcher with no reader.
 //
 // It takes no clock: the expiry horizon that decides which rows are still drainable is applied
 // in the database against the SERVER's clock, so a skewed pod cannot drop a live command.
 type drainFetcher interface {
-	Pending(ctx context.Context, tenant, deviceToken string) ([]DrainCommand, error)
+	Pending(ctx context.Context, tenant, deviceToken string, limit int) ([]DrainCommand, error)
 }
 
 // commandClaimer is the WRITE half of the drain (*CommandClaimer satisfies it): it moves a
@@ -176,11 +180,21 @@ type Metrics struct {
 	ParkSkipped   prometheus.Counter // a park not attempted: no parker wired, or the envelope carried no dispatch nonce
 	Poison        prometheus.Counter // ack-dropped: unparseable subject tenant or envelope
 	ResponseFails prometheus.Counter // a command response we could not publish after local retries (outcome lost to TTL)
-	// L4b wake-drain instruments (ADR-075). Drained/DrainErrors are the operationally interesting
-	// signals; DrainDropped is a load/health signal.
-	Drained      prometheus.Counter // a held command dispatched to a device on its Register/Update wake
-	DrainErrors  prometheus.Counter // a wake-drain fetch that failed (retried on the device's next wake)
-	DrainDropped prometheus.Counter // a wake-drain trigger dropped because the device's shard was busy (next wake re-triggers)
+	// L4b drain instruments (ADR-075). Drained/DrainErrors are the operationally interesting
+	// signals; DrainTurns is a load signal.
+	Drained     prometheus.Counter // a backlogged command dispatched to a device by a drain turn
+	DrainErrors prometheus.Counter // a drain fetch that failed (retried after drainRetryDelay while the device stays live)
+	DrainTurns  prometheus.Counter // drain turns run (each fetches at most drainTurnMax rows for one device)
+	// OverflowParked counts live commands handed back to command-delivery instead of being
+	// dispatched, by reason (full / offline / bind / unconfirmed — see the parkReason constants).
+	// They are delivered in order by a drain moments later. The reasons are kept apart because
+	// they mean different things: a slow device, queue mode working, a device reconnecting, and
+	// command-delivery failing to confirm. One number mixing them could not be read.
+	OverflowParked *prometheus.CounterVec
+	// OverflowBlocked counts the times the reader had to WAIT for the overflow pool: every park
+	// worker busy and its queue full. Parks take a command-delivery round trip, so this rises
+	// only while command-delivery is slow or down; it is the one place the reader still blocks.
+	OverflowBlocked prometheus.Counter
 	// Live-path confirmation outcomes, split for the reason the drain's claim outcomes are.
 	// StaleDispatch is BENIGN: a late or duplicate delivery the platform had already re-armed
 	// or re-sent, discarded rather than actuated — a duplicate actuation avoided. LiveClaimErrors
@@ -191,10 +205,10 @@ type Metrics struct {
 	// Claim outcomes, split because they mean opposite things operationally. LOST is BENIGN —
 	// someone else owns that command and we correctly declined to actuate it twice. ERRORS is a
 	// FAULT: command-delivery could not be reached, so a claimable command went undispatched
-	// (fail-closed) and the device waits for its next wake. One counter would let a rising
-	// outage hide inside a normal-looking race count.
+	// (fail-closed) and the device's turn is retried after drainRetryDelay. One counter would let
+	// a rising outage hide inside a normal-looking race count.
 	DrainClaimLost   prometheus.Counter // a held command another dispatcher/the sweep claimed first — no actuation, correct
-	DrainClaimErrors prometheus.Counter // a claim that could not be established; the command is NOT dispatched, retried next wake
+	DrainClaimErrors prometheus.Counter // a claim that could not be established; the command is NOT dispatched, retried shortly
 	// TenantGoneRefused counts live commands ack-dropped because their tenant has been
 	// deleted (ADR-077). Distinct from Poison: the command is well formed, the platform is
 	// declining to actuate an offboarded customer's hardware. Wake-drains refused for the
@@ -211,14 +225,37 @@ const (
 	DefaultWorkers = 16
 	// DefaultOpTimeout bounds one CoAP exchange to a device (a CON to a marginal radio).
 	DefaultOpTimeout = 10 * time.Second
-	// workerQueueDepth buffers each worker so a burst to distinct devices does not immediately
-	// back-pressure the single reader. NAMED LIMIT (ADR-075 L4a S4): once a shard's buffer fills
-	// behind one live-but-unresponsive device (each op burning the full opTimeout), the single
-	// reader BLOCKS on the routed send and the whole instance's command throughput drops to that
-	// device's rate — a head-of-line convoy. The route-time non-live pre-filter keeps offline and
-	// other-protocol devices out of the shards, so only a genuinely-live-but-slow device causes it;
-	// L4b's durable hold-and-drain is the real fix (dispatch decouples from a slow radio entirely).
+	// workerQueueDepth buffers each shard's LIVE queue. When it is full, route does not wait: the
+	// command is parked in command-delivery and its device gated, and a drain delivers it in order
+	// moments later (see gate.go). So a slow device no longer holds the single reader, and with it
+	// the whole instance's command throughput, to its own rate — the head-of-line convoy this
+	// used to name as a limit. What still back-pressures the reader is the overflow pool, and only
+	// while command-delivery itself is slow (see overflowWorkers).
 	workerQueueDepth = 8
+	// drainTurnMax bounds one drain turn: at most this many backlogged rows for ONE device, after
+	// which the shard's worker takes its next live task before another turn. So the worst a
+	// device sharing a shard with a backlogged one waits is about (1 + drainTurnMax) ops, 50s at
+	// the default opTimeout, where a full live queue used to cost it depth × opTimeout.
+	//
+	// It is 4 because it sits below AckWait / DefaultOpTimeout (60s / 10s = 6): a live task queued
+	// behind one full turn is dispatched inside its own ack deadline, so a turn never makes a live
+	// command redeliver. It also replaced the old per-wake cap of 32 as the device-edge flood
+	// governor: a backlog now reaches a device 4 at a time, interleaved with the shard's live work,
+	// and keeps going while the device stays live instead of waiting for a wake that a connected
+	// device never sends.
+	drainTurnMax = 4
+	// overflowWorkers is the park pool's size, and overflowDepth its queue. Each park is one
+	// command-delivery round trip, bounded by the service client's 10s request timeout. The pool
+	// fills only while command-delivery is slow; the reader then waits on it (counted on
+	// OverflowBlocked) rather than dropping or reordering. The bound on that wait is the convoy
+	// this leaves: while command-delivery is down, the reader moves at overflowWorkers parks per
+	// 10s timeout. A live command would not get through then either, since its confirmation needs
+	// the same service.
+	overflowWorkers = 4
+	overflowDepth   = 64
+	// drainRetryDelay defers a device's next drain turn after a fetch or claim error, so an outage
+	// does not spin every shard. A timer retries it; see pickEligible.
+	drainRetryDelay = 5 * time.Second
 	// responsePublishAttempts bounds the LOCAL retry of a command-response publish. After a
 	// successful dispatch the command's fate is sealed (ADR-075 L4a S1): we retry the publish a few
 	// times, then ack REGARDLESS — never redeliver a message whose CoAP op already ran (which would
@@ -250,12 +287,16 @@ type Dispatcher struct {
 	tenantDeleted func(tenant string) bool
 	workers       int
 	opTimeout     time.Duration
-	// queuesPtr publishes the CURRENT leadership term's worker channels so Drain (called from the
-	// /rd handler goroutine, off the Run loop) can enqueue a wake-drain onto a device's shard. It is
-	// nil whenever this replica is not the serving leader (before Run, and after it returns), so a
-	// Drain on a standby is a safe no-op. atomic so the handler goroutine reads it without a lock.
-	queuesPtr atomic.Pointer[[]chan task]
-	// ready is closed by Run once queuesPtr is published and the workers are started. The leader waits
+	// shardsPtr publishes the CURRENT leadership term's shards so Drain (called from the /rd
+	// handler goroutine, off the Run loop) can gate a device and wake its shard. It is nil whenever
+	// this replica is not the serving leader (before Run, and after it returns), so a Drain on a
+	// standby is a safe no-op. atomic so the handler goroutine reads it without a lock. The shards,
+	// and every gate in them, are per term: a new leader starts with none, and rebuilds them from
+	// each device's first bind (see gate.go).
+	shardsPtr atomic.Pointer[[]*shardState]
+	// clock times the gates' deadlines and the deferred-turn timer. realClock outside tests.
+	clock dispatchClock
+	// ready is closed by Run once shardsPtr is published and the workers are started. The leader waits
 	// on it BEFORE serving the transport, so the first Register (which fires Drain) never lands in a
 	// serve-before-Run window where Drain would no-op and silently defer the wake-drain to the device's
 	// next Update — a real gap at failover, when the whole fleet re-Registers at once. One-shot per
@@ -300,9 +341,9 @@ type Options struct {
 }
 
 // NewDispatcher builds a Dispatcher over the durable command reader, the command-responses writer,
-// the conn table, the CoAP op executor, the wake-drain fetcher (nil disables draining) and the
-// wake-drain claimer (nil means a backlogged HELD or PARKED command is not dispatched —
-// fail-closed).
+// the conn table, the CoAP op executor, the drain fetcher (required with a reader; nil only for
+// reader-less unit tests, where it disables draining) and the claimer (nil means no command, live
+// or backlogged, is dispatched — fail-closed).
 // tenantDeleted gates ACTUATION on the ADR-077 tenant lifecycle (Options.TenantDeleted).
 // Nil disables the gate, matching the resolver's own fail-open.
 //
@@ -332,6 +373,11 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 			"one a command-reader loop whose consumer is broken retries forever while the term " +
 			"stays healthy, and the pod reports leader and serving while dispatching nothing")
 	}
+	if rdr != nil && fetcher == nil {
+		panic("lwm2m-ingest: NewDispatcher needs a drain fetcher when it is given a reader; every " +
+			"command it parks is delivered by a drain, and a device's gate is lifted only by one, " +
+			"so without it a gated device's commands would be parked and never delivered")
+	}
 	return &Dispatcher{
 		reader:        rdr,
 		responses:     responses,
@@ -345,12 +391,13 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		tenantDeleted: opts.TenantDeleted,
 		workers:       opts.Workers,
 		opTimeout:     opts.OpTimeout,
+		clock:         realClock{},
 		ready:         make(chan struct{}),
 	}
 }
 
-// Ready returns a channel closed once Run has published this term's worker queues — the leader waits
-// on it before serving the transport so no wake-drain is lost to a serve-before-Run window.
+// Ready returns a channel closed once Run has published this term's shards — the leader waits on it
+// before serving the transport so no wake is lost to a serve-before-Run window.
 func (d *Dispatcher) Ready() <-chan struct{} { return d.ready }
 
 // work is one parsed live command (a consumed device-commands message) routed to a device-sharded
@@ -361,28 +408,39 @@ type work struct {
 	env    deliveryEnvelope
 }
 
-// drainJob is a wake-drain trigger for one device, routed to that device's shard so it serializes
-// with the device's live commands (no reorder, no concurrent double-dispatch).
+// drainJob names one device whose backlog a drain turn serves. It runs on that device's shard
+// worker, so it serializes with the device's live commands (no reorder, no concurrent
+// double-dispatch).
 type drainJob struct {
 	tenant      string
 	deviceToken string
 }
 
-// task is the union a shard worker processes: a live command OR a wake-drain. Both carry the device
-// token so Run and Drain route them to the same shard(deviceToken) worker — the seam that makes a
-// device's drain and live dispatch strictly serial.
+// task is the union a shard worker processes: a live command OR a drain turn. Both carry the device
+// token and run on the same shard(deviceToken) worker — the seam that makes a device's drain and
+// live dispatch strictly serial. A live task reaches the worker through the shard's queue; a drain
+// turn is started by the worker itself (runOneDrainTurn), never queued, so it can never be dropped.
 type task struct {
 	deviceToken string
 	live        *work
 	drain       *drainJob
 }
 
+// overflowItem is one live command bound for the park pool rather than the live queue.
+type overflowItem struct {
+	shard  *shardState
+	key    deviceKey
+	w      work
+	reason string
+}
+
 // Run consumes and dispatches until ctx is cancelled (leadership eviction / shutdown). It is the
-// single reader + a fixed pool of device-sharded workers: the reader parses each message and routes
-// it to worker[hash(deviceToken)], so a device's commands stay in stream order while distinct
-// devices dispatch concurrently. The reader honors ctx (ReadMessage returns on cancel) so an
-// evicted replica stops pulling promptly; the durable consumer is bound (not owned), so its cursor
-// survives the term and the next leader resumes from the last ack.
+// single reader + a fixed pool of device-sharded workers + a small park pool: the reader parses each
+// message and either queues it on worker[hash(deviceToken)] or, when the device must not be
+// dispatched live right now, hands it to the park pool (see route). A device's commands stay in
+// stream order while distinct devices dispatch concurrently. The reader honors ctx (ReadMessage
+// returns on cancel) so an evicted replica stops pulling promptly; the durable consumer is bound
+// (not owned), so its cursor survives the term and the next leader resumes from the last ack.
 func (d *Dispatcher) Run(ctx context.Context) {
 	// The workers run on a ctx this function can end on its own, not just on the term's.
 	//
@@ -403,34 +461,39 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	runCtx, stopWorkers := context.WithCancel(ctx)
 	defer stopWorkers()
 
-	queues := make([]chan task, d.workers)
+	shards := make([]*shardState, d.workers)
+	overflow := make(chan overflowItem, overflowDepth)
 	var wg sync.WaitGroup
-	for i := range queues {
-		queues[i] = make(chan task, workerQueueDepth)
+	for i := range shards {
+		shards[i] = newShardState()
 		wg.Add(1)
-		go func(ch chan task) {
+		go func(s *shardState) {
 			defer wg.Done()
-			// A ctx-select worker (not `range ch`) so an evicted term stops immediately and the
-			// channels are never closed — Drain, called from the /rd handler goroutine, can then
-			// send without racing a close(). A live command left buffered at eviction is simply
-			// unprocessed (unacked → redelivers to the next leader); a drain trigger left buffered
-			// is re-fired by the next wake. Either is safe.
+			d.serveShard(runCtx, s)
+		}(shards[i])
+	}
+	for range overflowWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// A command left in the overflow queue at eviction is unacked and redelivers to the
+			// next leader, like one left in a shard queue.
 			for {
 				select {
 				case <-runCtx.Done():
 					return
-				case t := <-ch:
-					d.process(runCtx, t)
+				case it := <-overflow:
+					d.parkTracked(runCtx, it.shard, it.key, it.w, it.reason)
 				}
 			}
-		}(queues[i])
+		}()
 	}
-	// Publish this term's queues so Drain (handler goroutine) can enqueue; clear on return so a
-	// post-eviction Drain is a no-op rather than feeding channels whose workers have exited. Signal
-	// ready AFTER the publish so the leader only starts serving once wake-drains can be accepted.
-	d.queuesPtr.Store(&queues)
+	// Publish this term's shards so Drain (handler goroutine) can wake them; clear on return so a
+	// post-eviction Drain is a no-op rather than gating shards whose workers have exited. Signal
+	// ready AFTER the publish so the leader only starts serving once wakes can be accepted.
+	d.shardsPtr.Store(&shards)
 	close(d.ready)
-	defer d.queuesPtr.Store(nil)
+	defer d.shardsPtr.Store(nil)
 
 	// The read loop's own shutdown check, its terminal error set and its pacing all live in
 	// messaging.RunConsumer now. What stays here is the routing, which is this dispatcher's
@@ -448,7 +511,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	// this loop would retry a broken consumer once a second, forever, behind a pod reporting
 	// leader and serving. Metrics carries no read-error counter, so nothing would show it.
 	messaging.RunConsumer(ctx, d.reader, d.readPacer, func(msg messaging.Message) bool {
-		return d.route(ctx, queues, msg)
+		return d.route(ctx, shards, overflow, msg)
 	})
 
 	// Ends the workers on both exits: an evicted term, where the caller's ctx is already
@@ -457,12 +520,100 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-// route places one command message on its device's shard worker, and reports whether the
-// read loop should carry on.
+// serveShard is one shard's worker loop: take a live task if there is one, otherwise wait for a live
+// task or a nudge; then run at most ONE drain turn. So a shard alternates one live task with one
+// bounded drain turn (drainTurnMax ops), and neither can starve the other.
 //
-// 🔴 IT IS THE ONE GOROUTINE THAT MUST NOT MAKE A NETWORK ROUND TRIP, which is what decides
-// each disposition below.
-func (d *Dispatcher) route(ctx context.Context, queues []chan task, msg messaging.Message) bool {
+// 🔴 THE LIVE QUEUE IS CHECKED FIRST, WITHOUT BLOCKING, and that is what makes the alternation
+// strict rather than a coin toss. With a single select over both channels Go picks at random
+// when both are ready, so a device sharing the shard with a deep backlog could wait any number
+// of turns. Checking the queue first bounds that wait at one turn.
+//
+// A ctx-select loop (not `range ch`) so an evicted term stops immediately and the channel is never
+// closed. A live command left buffered at eviction is simply unprocessed (unacked → redelivers to
+// the next leader), and the gates die with the term: the next leader rebuilds them from each
+// device's first bind.
+func (d *Dispatcher) serveShard(ctx context.Context, s *shardState) {
+	for {
+		var t task
+		got := false
+		select {
+		case <-ctx.Done():
+			return
+		case t = <-s.ch:
+			got = true
+		default:
+			select {
+			case <-ctx.Done():
+				return
+			case t = <-s.ch:
+				got = true
+			case <-s.nudge:
+			}
+		}
+		if got {
+			key := deviceKey{t.live.tenant, t.deviceToken}
+			if reason, park := s.dequeue(key); park {
+				// The device was gated after this command was queued. It goes to the backlog
+				// behind whatever gated it, rather than past it.
+				d.parkTracked(ctx, s, key, *t.live, reason)
+			} else {
+				d.process(ctx, t)
+			}
+		}
+		d.runOneDrainTurn(ctx, s)
+	}
+}
+
+// runOneDrainTurn serves at most one ready device, at most drainTurnMax of its backlogged rows, and
+// then settles its gate (finishTurn). If more devices want a turn it nudges its own shard, so the
+// worker comes straight back after taking any live task that is waiting.
+//
+// 🔴 THE TRIGGER IS LOCAL, AND IT HAS TO BE. A device that stays connected sends keepalive Updates
+// on its live connection, and those fire no wake (ConnTable.Refresh returns early on an unchanged
+// conn). A drain that waited for the device to wake would leave a connected device's backlog —
+// parked because its queue was full, or re-armed by the platform — until it next re-handshaked or
+// its commands expired. So the park settle, the gate set and this worker's own loop are what start
+// a turn, and a device drains for as long as it stays live and has rows.
+func (d *Dispatcher) runOneDrainTurn(ctx context.Context, s *shardState) {
+	if ctx.Err() != nil {
+		return
+	}
+	key, gen0, ok := s.pickEligible(d.clock)
+	if !ok {
+		return
+	}
+	incr(d.metrics.DrainTurns, 1)
+	res := d.process(ctx, task{deviceToken: key.deviceToken, drain: &drainJob{tenant: key.tenant, deviceToken: key.deviceToken}})
+	if ctx.Err() != nil {
+		return // the term is ending, and the gates with it
+	}
+	if s.finishTurn(key, gen0, res, d.clock.Now()) {
+		s.poke()
+	}
+}
+
+// route places one command message on its device's shard, or hands it to the park pool, and reports
+// whether the read loop should carry on.
+//
+// 🔴 IT IS THE ONE GOROUTINE THAT MUST NOT MAKE A NETWORK ROUND TRIP, AND IT NO LONGER WAITS ON A
+// SHARD. It used to block on a full shard queue, so one live-but-slow device (each op burning the
+// full opTimeout) held the single reader, and with it every other device on the instance, to that
+// device's rate. Now a command that cannot be queued live is parked in command-delivery by the
+// park pool and its device gated; a drain delivers it in order moments later.
+//
+// A command goes to the park pool, rather than the live queue, when its device:
+//   - is OFFLINE (served, but no live connection): parking is a network round trip, which this
+//     goroutine must not make, and the pool keeps it out of the device's shard so a
+//     command-delivery outage cannot fill shards with parks timing out;
+//   - is GATED: an earlier command of its has taken the backlog road, and this one must follow it;
+//   - has a FULL shard queue.
+//
+// The one remaining wait is on the park pool itself, when all its workers are busy and its queue
+// is full: that happens only while command-delivery is slow, and is counted on OverflowBlocked.
+// Dropping the command instead, or leaving it unacked, would lose its place: a redelivered copy
+// could arrive after a drain had already served newer rows.
+func (d *Dispatcher) route(ctx context.Context, shards []*shardState, overflow chan<- overflowItem, msg messaging.Message) bool {
 	w, ok := d.parse(msg)
 	if !ok {
 		return true // poison — already acked + counted in parse
@@ -472,62 +623,76 @@ func (d *Dispatcher) route(ctx context.Context, queues []chan task, msg messagin
 	// protocol adapter's device-commands too — is ack-dropped HERE, so it never occupies a
 	// per-device worker slot. It is another protocol's traffic and there is nothing for this
 	// adapter to record about it.
-	//
-	// 🔴 AN OFFLINE SERVED DEVICE IS NO LONGER DROPPED HERE, AND THAT IS DELIBERATE. Its
-	// command has to be PARKED in command-delivery, which is a network round trip, and this
-	// is the JetStream read loop — the one goroutine that must not make one. So it is routed
-	// to the device's shard worker, which parks it there. The alternative considered and
-	// rejected was a third task kind with a non-blocking send like Drain's: a dropped park
-	// task has no next wake to re-trigger it, so a full shard would silently leave the row in
-	// SENT with no signal — losing exactly the fix this exists to deliver.
-	//
-	// The cost is stated rather than hidden: offline-device commands now occupy shard slots,
-	// so while command-delivery is unreachable a shard can be blocked by parks timing out.
-	// That is bounded, self-healing, and preferable to a silent loss.
-	if _, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken); reach == ReachNotServed {
+	_, reach := d.conns.Lookup(w.tenant, w.env.DeviceToken)
+	if reach == ReachNotServed {
 		d.dropNonLive(reach, w.msg)
 		return true
 	}
-	// The live-command send BLOCKS on a full shard (the named head-of-line convoy, L4a S4) — a
-	// live command must not be dropped. The drain send (Drain) is non-blocking by contrast, so a
-	// wake never stalls the handler.
+	key := deviceKey{w.tenant, w.env.DeviceToken}
+	s := shards[d.shard(w.env.DeviceToken)]
+	reason := s.admit(key, reach, task{deviceToken: w.env.DeviceToken, live: &w})
+	if reason == "" {
+		return true // queued live
+	}
+	it := overflowItem{shard: s, key: key, w: w, reason: reason}
 	select {
-	case queues[d.shard(w.env.DeviceToken)] <- task{deviceToken: w.env.DeviceToken, live: &w}:
+	case overflow <- it:
+		return true
+	default:
+	}
+	incr(d.metrics.OverflowBlocked, 1)
+	select {
+	case overflow <- it:
+		return true
 	case <-ctx.Done():
-		// Evicted before we could route: do NOT ack, so the message redelivers to the next
-		// leader rather than being dropped by a replica that is no longer serving. Ending the
-		// loop here is what the old `for ctx.Err() == nil` condition did one statement later.
+		// Evicted before we could hand it over: do NOT ack, so the message redelivers to the next
+		// leader rather than being dropped by a replica that is no longer serving. The gate state
+		// dies with the term.
 		return false
 	}
-	return true
 }
 
-// Drain enqueues a wake-drain for a device onto its shard worker, so the leader pulls that device's
-// backlogged commands (HELD or PARKED) from command-delivery and dispatches them to the now-live conn
-// (ADR-075 L4b).
-// The /rd handler calls it after a device becomes live (Register/Update) — the LwM2M queue-mode wake
-// signal. It is NON-BLOCKING: a wake must never stall the CoAP read loop, so a full shard drops the
-// trigger (counted) and the device's next Update re-triggers. A call on a standby (no active term)
-// is a no-op. Draining and live dispatch for the same device share one shard worker, so they never
-// run concurrently or reorder.
+// Drain gates a device and asks its shard for a drain turn, so the leader pulls that device's
+// backlogged commands (HELD or PARKED) from command-delivery and dispatches them, in order, to its
+// live conn (ADR-075 L4b). It is called when a device becomes live on a fresh connection (Register,
+// or a re-handshake Update — the LwM2M queue-mode wake), and when a live delivery turns out to have
+// been re-armed already (claimLive).
+//
+// 🔴 IT GATES AS WELL AS WAKES. The gates are in memory and per term, so on a new leader — or
+// after any reconnect — nothing here knows whether the device has PARKED rows waiting (left by an
+// old leader's overflow, or re-armed by command-delivery's stranded pass). A live command arriving
+// before the drain has looked would overtake them. So the device is gated until a turn has seen its
+// backlog empty. The cost is that a live command landing between the bind and the end of that
+// first turn is parked and drained rather than dispatched directly: one fetch round trip, which the
+// bind already paid.
+//
+// It is non-blocking and it is NEVER DROPPED: it records the request under the shard's lock and
+// nudges the worker. (It used to enqueue onto the shard's channel and drop the wake when the shard
+// was full, promising that "the next wake re-triggers" — which a device that stays connected never
+// sends.) A call on a standby (no active term) is a no-op.
 func (d *Dispatcher) Drain(tenant, deviceToken string) {
 	if d.fetcher == nil {
-		return // draining disabled (inert / pre-wiring build)
+		return // draining disabled (reader-less unit tests only; NewDispatcher refuses it otherwise)
 	}
-	p := d.queuesPtr.Load()
+	p := d.shardsPtr.Load()
 	if p == nil {
 		return // not the serving leader right now
 	}
-	queues := *p
-	t := task{deviceToken: deviceToken, drain: &drainJob{tenant: tenant, deviceToken: deviceToken}}
-	select {
-	case queues[d.shard(deviceToken)] <- t:
-	default:
-		incr(d.metrics.DrainDropped, 1) // shard busy — the next wake re-triggers
-	}
+	(*p)[d.shard(deviceToken)].wake(deviceKey{tenant, deviceToken})
 }
 
-// process dispatches one shard-worker task: a live command or a wake-drain.
+// shardFor returns the current term's shard for a device, or nil when no term is running (a
+// standby, or a unit test calling dispatch directly).
+func (d *Dispatcher) shardFor(deviceToken string) *shardState {
+	p := d.shardsPtr.Load()
+	if p == nil {
+		return nil
+	}
+	return (*p)[d.shard(deviceToken)]
+}
+
+// process runs one shard-worker task: a live command or a drain turn. It returns what a drain turn
+// found (the zero value for a live command).
 //
 // 🔴 The ADR-077 lifecycle gate sits HERE, at the union, because there are TWO ways a
 // command reaches a device and command-delivery's own gate covers neither completely:
@@ -535,30 +700,33 @@ func (d *Dispatcher) Drain(tenant, deviceToken string) {
 //   - the LIVE path reads the device-commands stream, and a command published in the
 //     moments before the delete is already durable in that stream — command-delivery
 //     refusing to publish more does not unpublish those;
-//   - the WAKE-DRAIN re-fetches commands still HELD or PARKED and fires them when a sleeping
+//   - the DRAIN re-fetches commands still HELD or PARKED and fires them when a sleeping
 //     device next registers, which can be long after the tenant was deleted. Nothing on
 //     that path had a lifecycle check: the (tenant, token) is remembered from a
 //     registration that predates the delete, and PSK bindings are static config.
 //
 // A command is a PHYSICAL ACTUATION, so "the sweep gate stops most of them" is not a
 // standard this path can be held to. Gating the union rather than the two callers means a
-// third task kind cannot be added without one.
-func (d *Dispatcher) process(ctx context.Context, t task) {
+// third task kind cannot be added without one. (Parking is not actuation, so the park paths do
+// not pass through here: a deleted tenant's parked command is refused by the drain that would
+// have delivered it.)
+func (d *Dispatcher) process(ctx context.Context, t task) turnResult {
 	switch {
 	case t.live != nil:
 		if d.tenantDeleted(t.live.tenant) {
 			// Acked, not retried: the tenant is not coming back, and leaving the message
 			// unacked would redeliver this refusal until the stream ages out.
 			d.ackRefused(t.live.msg, t.live.tenant)
-			return
+			return turnResult{}
 		}
 		d.dispatch(ctx, *t.live)
 	case t.drain != nil:
 		if d.tenantDeleted(t.drain.tenant) {
-			return
+			return turnResult{stopped: true}
 		}
-		d.drain(ctx, *t.drain)
+		return d.drain(ctx, *t.drain)
 	}
+	return turnResult{}
 }
 
 // ackRefused settles a live command refused by the lifecycle gate. It is counted apart
@@ -612,8 +780,19 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 		// longer pre-filters it) or it dropped between the route-time check and now. Either way
 		// the command went nowhere, so hand it back: park it in command-delivery, where it can be
 		// cancelled, expires as EXPIRED rather than blaming the device with TIMEOUT, and is
-		// claimed by the drain on the device's next wake.
-		d.park(ctx, w)
+		// claimed by the drain on the device's next wake. (A command routed while the device was
+		// already offline never reaches here: route sends it straight to the park pool. This is
+		// the device that dropped after its command was queued.)
+		//
+		// It is tracked on the device's gate like every other park, so a park that errors holds
+		// the device's later commands behind its redelivery.
+		if s := d.shardFor(w.env.DeviceToken); s != nil {
+			key := deviceKey{w.tenant, w.env.DeviceToken}
+			s.beginPark(key, parkReasonOffline)
+			d.parkTracked(ctx, s, key, w, parkReasonOffline)
+			return
+		}
+		d.park(ctx, w, parkReasonOffline)
 		return
 	}
 	if reach != ReachLive {
@@ -677,14 +856,16 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 // Its outcomes, and what each does with the message:
 //   - WON: actuate, quoting the returned nonce.
 //   - LOST: the dispatch this envelope names is gone. Ack-drop and count StaleDispatch, then
-//     nudge a wake drain for the device: the usual cause is that the row was re-armed to
-//     PARKED, and a device that stays connected sends no wake of its own, so without the
-//     nudge that row would wait for a re-handshake. Drain is non-blocking and targets this
-//     worker's own shard, so calling it from here cannot deadlock.
+//     call Drain for the device: the usual cause is that the row was re-armed to PARKED, and a
+//     device that stays connected sends no wake of its own, so without it that row would wait
+//     for a re-handshake. Drain also gates the device, so none of its later live commands can
+//     overtake the re-armed row. It only takes this worker's own shard lock briefly and never
+//     blocks, so calling it from here cannot deadlock.
 //   - ERROR: FAIL CLOSED. Count LiveClaimErrors and leave the message UNACKED, so it
 //     redelivers at the ack deadline — never Nak'd, which would spend the whole delivery
 //     budget in the instant of an outage. Actuating on a confirmation we could not obtain is
-//     the one outcome that cannot be taken back.
+//     the one outcome that cannot be taken back. The device is GATED (reason "unconfirmed")
+//     until that redelivery has been parked or its budget has run out: see below.
 //   - ERROR because the term was evicted: return unacked and uncounted, as claim does — it
 //     is the eviction, not command-delivery, and counting it would make every failover
 //     look like an outage.
@@ -694,12 +875,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 //     is a wiring fault; the command is left unacked and counted, like any other failure to
 //     establish ownership.
 //
-// ⚠️ AN ERROR CAN REORDER ONE DEVICE'S COMMANDS, AND THAT IS A KNOWN GAP RATHER THAN A
-// PROPERTY. The unacked message redelivers at the ack deadline; if command-delivery recovers
-// before then, a LATER command for the same device can arrive, be confirmed and actuate
-// first. Closing it needs a per-device gate that holds the device's later live commands until
-// the backlog has been drained in order, and that gate belongs with the dispatcher's
-// full-shard handling, which is where it is built.
+// 🔴 WHY AN ERROR GATES THE DEVICE. The unacked message redelivers at the ack deadline, and if
+// command-delivery recovers before then, a LATER command for the same device would arrive, be
+// confirmed and actuate first — a reorder, of exactly the kind a firmware write followed by its
+// execute cannot survive. So the error gates the device and holds the gate for this command's
+// redelivery (gate.go): the device's later commands are parked behind it, the redelivered copy
+// finds the device gated and is parked too, and a drain then serves them all oldest-first. The
+// one way order can still break is a command-delivery outage longer than the whole redelivery
+// budget, after which the broker gives up on the message and the gate stops waiting for it.
 func (d *Dispatcher) claimLive(ctx context.Context, w work) (string, bool) {
 	if w.env.DispatchNonce == "" {
 		incr(d.metrics.LiveClaimErrors, 1)
@@ -720,6 +903,9 @@ func (d *Dispatcher) claimLive(ctx context.Context, w work) (string, bool) {
 			incr(d.metrics.LiveClaimErrors, 1)
 			log.Debug().Err(err).Str("tenant", w.tenant).Str("command", w.env.Token).
 				Msg("Could not confirm a live LwM2M command's dispatch; not actuating it, leaving it unacked to retry on redelivery.")
+			if s := d.shardFor(w.env.DeviceToken); s != nil {
+				s.gateUnconfirmed(deviceKey{w.tenant, w.env.DeviceToken}, w.env.Token, d.clock.Now())
+			}
 		}
 		return "", false
 	}
@@ -759,52 +945,75 @@ func (d *Dispatcher) parkConfirmed(w work, nonce string) {
 	}
 }
 
-// drain pulls a waking device's backlogged commands (HELD or PARKED) from command-delivery and
-// dispatches them to its now-live conn, oldest-first (ADR-075 L4b). It runs on the device's shard
-// worker (so it never races or reorders the device's live commands), leader-only (Drain no-ops on a
-// standby). A fetch failure is counted and retried on the device's next wake; the device dropping or
-// the term being evicted mid-drain stops cleanly, leaving the remaining rows untouched for the next
-// wake (never a partial ack of something not dispatched).
+// drain is ONE drain turn for a device: it pulls at most drainTurnMax of the device's backlogged
+// commands (HELD or PARKED) from command-delivery, oldest first, and dispatches them to its live
+// conn (ADR-075 L4b). It runs on the device's shard worker (so it never races or reorders the
+// device's live commands), leader-only (Drain no-ops on a standby), and reports what it found so
+// the worker can decide whether the device's gate lifts, it needs another turn, or it retries
+// later (finishTurn).
+//
+// A fetch failure is counted and retried after drainRetryDelay. The device dropping or the term
+// being evicted mid-turn stops cleanly, leaving the remaining rows untouched for the next wake or
+// the next leader (never a partial ack of something not dispatched).
 //
 // 🔴 The ordering inside the loop is CLAIM, THEN DISPATCH, and it is that way round because
 // dispatching is IRREVERSIBLE. See claim below for why.
-func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
+//
+// 🔴 A CLAIM ERROR ENDS THE TURN, and it used to skip to the next row. Skipping kept the rest of
+// the backlog moving on the next wake, but it dispatched a NEWER row while an older one stayed
+// behind, and a firmware write and its execute cannot survive that. The turn now stops at the
+// first row it could not claim and retries from it after drainRetryDelay, so the backlog still
+// moves, in order.
+func (d *Dispatcher) drain(ctx context.Context, job drainJob) turnResult {
 	if ctx.Err() != nil || d.fetcher == nil {
-		return
+		return turnResult{stopped: true}
 	}
-	cmds, err := d.fetcher.Pending(ctx, job.tenant, job.deviceToken)
+	if _, reach := d.conns.Lookup(job.tenant, job.deviceToken); reach != ReachLive {
+		return turnResult{stopped: true} // not live: its next bind wakes it again
+	}
+	cmds, err := d.fetcher.Pending(ctx, job.tenant, job.deviceToken, drainTurnMax)
 	if err != nil {
-		if ctx.Err() == nil { // a fetch aborted by eviction is not a drain error
-			incr(d.metrics.DrainErrors, 1)
-			log.Debug().Err(err).Str("tenant", job.tenant).Str("device", job.deviceToken).
-				Msg("Could not fetch held LwM2M commands at wake; retrying on the device's next Register/Update.")
+		if ctx.Err() != nil { // a fetch aborted by eviction is not a drain error
+			return turnResult{stopped: true}
 		}
-		return
+		incr(d.metrics.DrainErrors, 1)
+		log.Debug().Err(err).Str("tenant", job.tenant).Str("device", job.deviceToken).
+			Msg("Could not fetch backlogged LwM2M commands; retrying shortly while the device stays live.")
+		return turnResult{failed: true}
 	}
 	for _, c := range cmds {
 		if ctx.Err() != nil {
-			return // evicted mid-drain: the remaining rows are untouched, for the next leader's wake
+			return turnResult{stopped: true} // evicted mid-turn: the remaining rows are untouched, for the next leader
 		}
 		conn, reach := d.conns.Lookup(job.tenant, job.deviceToken)
 		if reach != ReachLive {
-			return // the device dropped mid-drain: the remaining rows are untouched, for the next wake
+			return turnResult{stopped: true} // the device dropped mid-turn: the remaining rows are untouched, for its next wake
 		}
-		// A lost claim below does not cost this wake a delivery, even though the page is now
-		// exactly maxDrainPerWake rows with no over-fetch: it means someone else has already
-		// moved the row out of the dispatchable set, so a skipped row is one that has left the
-		// backlog, not a slot taken from a row still awaiting delivery. (A row the live path just
-		// dispatched is SENT, which is not drainable, so it was never on the page.) See
-		// maxDrainPerWake in fetcher.go.
+		// A lost claim below does not cost this turn a delivery, even though the page is exactly
+		// drainTurnMax rows with no over-fetch: it means someone else has already moved the row
+		// out of the dispatchable set, so a skipped row is one that has left the backlog, not a
+		// slot taken from a row still awaiting delivery. (A row the live path just dispatched is
+		// SENT, which is not drainable, so it was never on the page.)
 		//
 		// Take the command out of command-delivery's dispatchable set BEFORE actuating. A
 		// command we could not claim is one we must not fire.
-		nonce, won := d.claim(ctx, job.tenant, c)
+		nonce, won, failed := d.claim(ctx, job.tenant, c)
+		if failed {
+			if ctx.Err() != nil {
+				return turnResult{stopped: true}
+			}
+			return turnResult{fetched: len(cmds), failed: true}
+		}
 		if !won {
 			continue
 		}
 		d.executeAndReport(ctx, conn, job.tenant, job.deviceToken, c.Name, c.Token, nonce, c.Payload)
 		incr(d.metrics.Drained, 1)
 	}
+	if ctx.Err() != nil {
+		return turnResult{stopped: true}
+	}
+	return turnResult{fetched: len(cmds)}
 }
 
 // claim takes ownership of one backlogged command and reports whether the drain may dispatch
@@ -843,17 +1052,17 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) {
 // Both non-dispatch outcomes are counted, and they are counted apart (see Metrics):
 //   - LOST (false, nil): another dispatcher or the sweep won it. Benign, no actuation.
 //   - ERROR: command-delivery unreachable/forbidden/failing. FAIL CLOSED — declining to
-//     actuate is recoverable (the row is still dispatchable and the device's next wake
-//     retries), whereas actuating on an unconfirmed claim is not. Logged at debug like the
-//     fetch-failure path: on a real outage this fires once per backlogged command per wake,
-//     and a warn per row would bury the outage in its own noise.
+//     actuate is recoverable (the row is still dispatchable, and the turn retries from it after
+//     drainRetryDelay), whereas actuating on an unconfirmed claim is not. Logged at debug like
+//     the fetch-failure path: on a real outage this fires once per device per retry, and a warn
+//     each time would bury the outage in its own noise. failed reports it, so the turn stops.
 //
 // 🔴 IT ALSO RETURNS THE DISPATCH NONCE, AND THE DRAIN CANNOT REPORT AN OUTCOME WITHOUT IT.
 // This path has no delivery envelope — it dispatches a row it read, not a message it consumed
 // — so the claim is the only place the identity of the dispatch it just created exists. A
 // response that names no dispatch is refused by command-delivery, so a drain that dropped this
 // value would actuate devices and settle nothing.
-func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) (string, bool) {
+func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) (nonce string, won, failed bool) {
 	if d.claimer == nil {
 		// Claiming disabled but a claimable row arrived: refuse rather than fire. Counted as
 		// an error, not a loss — nobody else took this command, the platform simply cannot
@@ -861,24 +1070,24 @@ func (d *Dispatcher) claim(ctx context.Context, tenant string, c DrainCommand) (
 		incr(d.metrics.DrainClaimErrors, 1)
 		log.Debug().Str("tenant", tenant).Str("command", c.Token).Str("status", c.Status).
 			Msg("Not dispatching a held LwM2M command: no command claimer is wired, so ownership cannot be established.")
-		return "", false
+		return "", false, true
 	}
 	nonce, won, err := d.claimer.Claim(ctx, tenant, c.Token)
 	if err != nil {
 		if ctx.Err() == nil { // a claim aborted by eviction is not a claim failure
 			incr(d.metrics.DrainClaimErrors, 1)
 			log.Debug().Err(err).Str("tenant", tenant).Str("command", c.Token).
-				Msg("Could not claim a held LwM2M command at wake; not dispatching it (it stays dispatchable and retries on the device's next Register/Update).")
+				Msg("Could not claim a backlogged LwM2M command; not dispatching it (it stays dispatchable and is retried shortly, in order).")
 		}
-		return "", false
+		return "", false, true
 	}
 	if !won {
 		// Someone else moved it out of the dispatchable set first. Nothing is wrong; this is
 		// the mechanism working.
 		incr(d.metrics.DrainClaimLost, 1)
-		return "", false
+		return "", false, false
 	}
-	return nonce, true
+	return nonce, true, false
 }
 
 // executeAndReport runs one command's CoAP op on a live conn and, unless the term was evicted mid-op,
@@ -966,9 +1175,19 @@ func (d *Dispatcher) dropNonLive(reach Reach, msg messaging.Message) {
 	ackDrop(msg)
 }
 
-// park hands a served-but-offline device's command back to command-delivery (SENT -> PARKED)
-// and then settles the message. It runs on the device's shard worker, never on the reader
-// goroutine, because it makes a network call.
+// parkTracked parks one live command for a device whose gate it has already been counted
+// against (admit, dequeue or beginPark), and settles the gate with the outcome. Every park this
+// dispatcher makes for a live command outside a unit test goes through here, so the gate always
+// knows what is still on its way into the device's backlog.
+func (d *Dispatcher) parkTracked(ctx context.Context, s *shardState, key deviceKey, w work, reason string) {
+	out := d.park(ctx, w, reason)
+	s.settlePark(key, w.env.Token, out, d.clock.Now())
+}
+
+// park hands a live command back to command-delivery (SENT -> PARKED) instead of dispatching it,
+// and then settles the message. reason says why (see the parkReason constants): its device was
+// offline, its shard queue was full, or its gate was up. It runs on a park-pool worker or on the
+// device's shard worker, never on the reader goroutine, because it makes a network call.
 //
 // 🔴 THE ACK DECISION IS THE WHOLE FUNCTION, AND EACH BRANCH IS DELIBERATE:
 //
@@ -986,23 +1205,25 @@ func (d *Dispatcher) dropNonLive(reach Reach, msg messaging.Message) {
 // redelivers immediately, which turns MaxDeliver into a fuse measured in milliseconds and
 // burns the whole retry budget during the instant of an outage.
 //
-// 🔴 BE HONEST ABOUT THE FLOOR: A ROW WHOSE PARK NEVER LANDS IS WORSE OFF THAN BEFORE PARKING
-// EXISTED, NOT EQUAL TO IT. An earlier version of this comment called exhaustion "the
-// pre-PARKED behaviour", and that is wrong in the one direction that matters. Before this
-// change, SENT was in drainStatuses, so a stuck row was still DELIVERED on the device's next
-// wake. Now SENT is invisible to the drain, the sweep and the cancel alike, so once the retry
-// budget is spent — MaxDeliver × AckWait, on the order of minutes — nothing moves that row
-// again and it lapses to TIMEOUT, which is precisely the mislabel PARKED exists to remove.
-// The exposure needs a command-delivery outage spanning the whole budget. It is bounded, it is
-// rare, and it is the concrete argument for the stranded-SENT reconciler that is filed and not
-// built: that reconciler, not this retry, is what would make the floor honest.
-func (d *Dispatcher) park(ctx context.Context, w work) {
+// 🔴 BE HONEST ABOUT THE FLOOR: A ROW WHOSE PARK NEVER LANDS IS NOT DELIVERED BY THE DRAIN. SENT
+// is invisible to the drain, the sweep and the cancel alike, so once the retry budget is spent —
+// MaxDeliver × AckWait, on the order of minutes — the row waits in SENT for command-delivery's
+// stranded-SENT pass, which re-arms it to PARKED once its grace has passed. Until then it is
+// neither delivered nor cancellable, and the device's gate has stopped waiting for it, so it is
+// also the one place a device's commands can be delivered out of order. The exposure needs a
+// command-delivery outage spanning the whole budget.
+func (d *Dispatcher) park(ctx context.Context, w work, reason string) parkOutcome {
 	// 🔑 COUNTED WHERE THE MESSAGE SETTLES, NOT ON ENTRY. Counting at the top looks equivalent
 	// and is not: a park that errors is retried by redelivery, so one offline command would
-	// increment this once per attempt and read as several. The inflation would land during
-	// exactly the outages an operator consults this counter to understand.
-	settle := func() {
-		incr(d.metrics.ServedOffline, 1)
+	// increment these once per attempt and read as several. The inflation would land during
+	// exactly the outages an operator consults them to understand.
+	settle := func(parked bool) {
+		if reason == parkReasonOffline {
+			incr(d.metrics.ServedOffline, 1)
+		}
+		if parked && d.metrics.OverflowParked != nil {
+			d.metrics.OverflowParked.WithLabelValues(reason).Inc()
+		}
 		ackDrop(w.msg)
 	}
 
@@ -1011,26 +1232,27 @@ func (d *Dispatcher) park(ctx context.Context, w work) {
 		log.Debug().Str("tenant", w.tenant).Str("command", w.env.Token).
 			Bool("parkerWired", d.parker != nil).
 			Msg("Not parking an undeliverable LwM2M command; it stays SENT and rides its TTL.")
-		settle()
-		return
+		settle(false)
+		return parkSkipped
 	}
 
 	parked, err := d.parker.Park(ctx, w.tenant, w.env.Token, w.env.DispatchNonce)
 	if err != nil {
 		if ctx.Err() != nil {
-			return // evicted mid-park: leave unacked so the next leader redelivers it
+			return parkEvicted // evicted mid-park: leave unacked so the next leader redelivers it
 		}
 		incr(d.metrics.ParkErrors, 1)
 		log.Debug().Err(err).Str("tenant", w.tenant).Str("command", w.env.Token).
 			Msg("Could not park an undeliverable LwM2M command; leaving it unacked to retry on redelivery.")
-		return
+		return parkErrored
 	}
 	if !parked {
 		// The command moved on under us — answered, cancelled, expired, or re-claimed by a
 		// wake drain. Settled, not failed.
 		incr(d.metrics.ParkSettled, 1)
 	}
-	settle()
+	settle(parked)
+	return parkDone
 }
 
 // shard maps a device token to a worker index so all of a device's commands run in stream order on

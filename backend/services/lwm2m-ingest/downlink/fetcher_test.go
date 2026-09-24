@@ -74,7 +74,7 @@ func TestPendingPreservesServerOrder(t *testing.T) {
 	}}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
-	got, err := f.Pending(context.Background(), "tenantA", "dev-1")
+	got, err := f.Pending(context.Background(), "tenantA", "dev-1", 10)
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
@@ -97,13 +97,15 @@ func TestPendingPreservesServerOrder(t *testing.T) {
 	}
 }
 
-// TestPendingCapsAtPerWakeMax proves the per-wake dispatch cap holds even if the server ever
-// returned more rows than the `limit` it was sent (contract drift): a constrained radio must
-// not take an unbounded burst at wake. The selection being the OLDEST N is the server's job —
-// this fake cannot simulate an ORDER BY — so this asserts the COUNT and the pass-through
-// order, nothing about which rows the database would have chosen.
-func TestPendingCapsAtPerWakeMax(t *testing.T) {
-	n := maxDrainPerWake + 5
+// TestPendingCapsAtTheCallersLimit proves the page bound holds even if the server ever returned
+// more rows than the `limit` it was sent (contract drift): a drain turn must never dispatch more
+// than it asked for, since that bound is what lets a shard alternate turns with live work. The
+// selection being the OLDEST N is the server's job — this fake cannot simulate an ORDER BY — so
+// this asserts the COUNT and the pass-through order, nothing about which rows the database would
+// have chosen.
+func TestPendingCapsAtTheCallersLimit(t *testing.T) {
+	const limit = 4
+	n := limit + 5
 	rows := make([]drainRow, 0, n)
 	for i := 1; i <= n; i++ {
 		rows = append(rows, drainRow{
@@ -113,14 +115,14 @@ func TestPendingCapsAtPerWakeMax(t *testing.T) {
 	}
 	f := NewCommandFetcher(&fakeQuerier{rows: rows}, "http://cd/graphql")
 
-	got, err := f.Pending(context.Background(), "t", "d")
+	got, err := f.Pending(context.Background(), "t", "d", limit)
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
-	if len(got) != maxDrainPerWake {
-		t.Fatalf("got %d, want the per-wake cap %d", len(got), maxDrainPerWake)
+	if len(got) != limit {
+		t.Fatalf("got %d, want the caller's limit %d", len(got), limit)
 	}
-	for i := 0; i < maxDrainPerWake; i++ {
+	for i := 0; i < limit; i++ {
 		want := "c" + strconv.Itoa(i+1)
 		if got[i].Token != want {
 			t.Fatalf("position %d: got %q, want %q — the cap must take the HEAD of the server's page", i, got[i].Token, want)
@@ -148,7 +150,7 @@ func TestPendingCallsDrainableCommandsOnTheWire(t *testing.T) {
 	q := &fakeQuerier{}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
-	if _, err := f.Pending(context.Background(), "tenantA", "dev-1"); err != nil {
+	if _, err := f.Pending(context.Background(), "tenantA", "dev-1", 4); err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
 	// The operation itself: the dedicated drain query, not the general paged `commands` one.
@@ -177,17 +179,31 @@ func TestPendingCallsDrainableCommandsOnTheWire(t *testing.T) {
 	if dev, ok := q.gotVars["deviceToken"].(string); !ok || dev != "dev-1" {
 		t.Fatalf("deviceToken = %#v, want the string \"dev-1\"", q.gotVars["deviceToken"])
 	}
-	// The limit sent IS the per-wake dispatch cap: there is no over-fetch any more, because the
-	// server returns the oldest N rather than an arbitrary N.
+	// The limit sent IS the caller's page: there is no over-fetch, because the server returns the
+	// oldest N rather than an arbitrary N.
 	lim, ok := q.gotVars["limit"].(int)
 	if !ok {
 		t.Fatalf("limit is %T, want int (the schema declares Int)", q.gotVars["limit"])
 	}
-	if lim != maxDrainPerWake {
-		t.Fatalf("limit = %d, want the per-wake cap %d", lim, maxDrainPerWake)
+	if lim != 4 {
+		t.Fatalf("limit = %d, want the 4 the caller asked for", lim)
 	}
-	if lim != 32 {
-		t.Fatalf("the per-wake cap is %d; the device-edge flood governor is 32", lim)
+}
+
+// TestPendingRefusesANonPositiveLimit: the server clamps a missing or non-positive limit to a
+// default page, so sending one would hand a caller that asked for nothing a page of commands to
+// actuate. It is refused before the wire.
+func TestPendingRefusesANonPositiveLimit(t *testing.T) {
+	q := &fakeQuerier{rows: []drainRow{{Token: "c1", Name: "lwm2m.read", Status: "PARKED"}}}
+	f := NewCommandFetcher(q, "http://cd/graphql")
+	for _, lim := range []int{0, -1} {
+		got, err := f.Pending(context.Background(), "t", "d", lim)
+		if err == nil || got != nil {
+			t.Fatalf("limit %d: got %v, %v; want a refusal", lim, got, err)
+		}
+	}
+	if q.gotQuery != "" {
+		t.Fatal("a refused limit must not reach command-delivery")
 	}
 }
 
@@ -240,7 +256,7 @@ func TestPendingDrainsHeldAndParkedCarryingStatus(t *testing.T) {
 	}}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
-	got, err := f.Pending(context.Background(), "t", "d")
+	got, err := f.Pending(context.Background(), "t", "d", 10)
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
@@ -271,7 +287,7 @@ func TestPendingDropsNonDrainableStatus(t *testing.T) {
 	}}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
-	got, err := f.Pending(context.Background(), "t", "d")
+	got, err := f.Pending(context.Background(), "t", "d", 10)
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
@@ -376,7 +392,7 @@ func TestPendingWarnsOnceNamingTheDriftedStatuses(t *testing.T) {
 	}}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
-	got, err := f.Pending(context.Background(), "tenantA", "dev-1")
+	got, err := f.Pending(context.Background(), "tenantA", "dev-1", 10)
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
@@ -441,7 +457,7 @@ func TestPendingIsSilentWhenEveryRowIsDrainable(t *testing.T) {
 	}}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
-	got, err := f.Pending(context.Background(), "tenantA", "dev-1")
+	got, err := f.Pending(context.Background(), "tenantA", "dev-1", 10)
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
@@ -461,7 +477,7 @@ func TestPendingPropagatesError(t *testing.T) {
 	q := &fakeQuerier{err: errors.New("command-delivery unreachable")}
 	f := NewCommandFetcher(q, "http://cd/graphql")
 
-	_, err := f.Pending(context.Background(), "t", "d")
+	_, err := f.Pending(context.Background(), "t", "d", 10)
 	if err == nil {
 		t.Fatalf("expected the query error to propagate")
 	}
@@ -471,7 +487,7 @@ func TestPendingPropagatesError(t *testing.T) {
 // returns an empty slice, so a wake with no queue is silent, not a logged failure.
 func TestPendingEmptyIsNotAnError(t *testing.T) {
 	f := NewCommandFetcher(&fakeQuerier{rows: nil}, "http://cd/graphql")
-	got, err := f.Pending(context.Background(), "t", "d")
+	got, err := f.Pending(context.Background(), "t", "d", 10)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("got %d cmds, err %v; want 0/nil", len(got), err)
 	}

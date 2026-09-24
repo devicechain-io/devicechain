@@ -5,6 +5,7 @@ package downlink
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/rs/zerolog/log"
@@ -28,9 +29,9 @@ type commandQuerier interface {
 // CommandHeld/CommandParked — the "MUST" is a request to a future editor, and it used to be
 // the whole of the mechanism. What stands behind it now is DETECTION, not prevention, and the
 // difference is worth being exact about: Pending counts the rows its defensive drainable()
-// re-check discards and warns once per wake, naming the offending statuses. A rename on the
+// re-check discards and warns once per fetch, naming the offending statuses. A rename on the
 // other side still ships, and every affected device still loses its entire backlog on the
-// wake it happens. What changed is that the loss is AUDIBLE. Without the warn the symptom is
+// fetch it happens. What changed is that the loss is AUDIBLE. Without the warn the symptom is
 // an empty slice, which is indistinguishable from a device with nothing queued — no error, no
 // metric, nothing to notice.
 //
@@ -91,24 +92,18 @@ func drainable(status string) bool {
 	return slices.Contains(drainStatuses, status)
 }
 
-// maxDrainPerWake bounds the per-wake DISPATCH: a waking device drains at most this many
-// of its OLDEST backlogged commands (drainStatuses), the remainder on its next
-// Register/Update. It is the
-// device-edge flood governor (ADR-075 L4b) — a REACT send-command storm (the programmatic
-// flood origin, not operators) cannot slam a constrained radio with an unbounded burst the
-// instant it wakes.
+// The page size is the CALLER's: a drain turn asks for drainTurnMax rows (dispatcher.go, where the
+// bound and its reasoning live). drainableCommands orders oldest-first in the database, so the N
+// rows it returns ARE the oldest N. There is deliberately no over-fetch, and the one way a row can
+// be skipped inside a turn does NOT create one: a LOST claim means another actor already moved the
+// row out of the dispatchable set, so it is no longer drainable. (A row the live path just
+// dispatched is SENT, which is not in drainStatuses, so it was never on the page.) What is left
+// over — a backlog deeper than one page — is served by the device's next turn, which follows
+// straight on while the device stays live.
 //
-// It is ALSO the page size now: drainableCommands orders oldest-first in the database, so the
-// N rows it returns ARE the oldest N. There is deliberately no over-fetch, and the one way a
-// row can be skipped inside the drain loop does NOT create one: a LOST claim means another
-// actor already moved the row out of the dispatchable set, so it is no longer drainable. (A
-// row the live path just dispatched is SENT, which is not in drainStatuses, so it was never
-// on this page.)
-//
-// The skipped row is one that has left the set, not a slot stolen from a row that still
-// needs delivering. What is genuinely left over — a device with a deeper backlog
-// than this cap — drains on its next Register/Update, which was always true.
-const maxDrainPerWake = 32
+// (There used to be a fixed per-wake cap of 32 here, and the rest of a deeper backlog waited for
+// the device's next Register/Update. A device that stays connected sends neither, so that
+// remainder could wait until the commands expired.)
 
 // drainQuery pulls a device's drainable backlog: the commands in drainStatuses (HELD or
 // PARKED) that are not past their expiry horizon, OLDEST FIRST, bounded by `limit`. All three
@@ -176,17 +171,16 @@ type drainResponse struct {
 type CommandFetcher struct {
 	client  commandQuerier
 	baseURL string
-	max     int // per-wake dispatch cap; sent as the query's `limit` (the server returns the oldest N)
 }
 
 // NewCommandFetcher builds a fetcher over the command-delivery GraphQL client + URL.
 func NewCommandFetcher(client commandQuerier, baseURL string) *CommandFetcher {
-	return &CommandFetcher{client: client, baseURL: baseURL, max: maxDrainPerWake}
+	return &CommandFetcher{client: client, baseURL: baseURL}
 }
 
-// Pending returns a waking device's backlogged commands — those in drainStatuses (HELD or
-// PARKED), not past their expiry horizon, OLDEST FIRST, at most maxDrainPerWake of them. Every
-// one of those four properties is the SERVER's: drainableCommands applies the status set, the
+// Pending returns a device's backlogged commands — those in drainStatuses (HELD or PARKED), not
+// past their expiry horizon, OLDEST FIRST, at most limit of them. Every one of those four
+// properties is the SERVER's: drainableCommands applies the status set, the
 // horizon, the ORDER BY and the limit in the database, and this function hands the rows on in
 // the order it received them.
 //
@@ -197,26 +191,32 @@ func NewCommandFetcher(client commandQuerier, baseURL string) *CommandFetcher {
 // the exact instant of expiry, so the two halves of the platform could classify the same row
 // differently. One clock, one predicate, one answer.
 //
-// A device with more commands than the cap drains the rest on subsequent wakes, as each drained
-// command leaves the drainable set. A device with none pending is the overwhelmingly common case
-// (one mostly-empty query per Register/Update) and returns an empty slice, not an error.
-func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string) ([]DrainCommand, error) {
+// A device with more commands than the limit drains the rest on its following turns, as each
+// drained command leaves the drainable set. A device with none pending is the overwhelmingly common
+// case (one mostly-empty query per bind) and returns an empty slice, not an error.
+//
+// A limit below 1 is refused rather than sent: the server would clamp it to a default page, and a
+// caller that asked for nothing would silently get something.
+func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string, limit int) ([]DrainCommand, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("downlink: drain page limit must be at least 1, got %d", limit)
+	}
 	// 🔴 This and command-delivery's schema MUST land together: drainableCommands is a distinct
 	// query, so against an older command-delivery this call fails loudly (a counted drain error,
-	// retried on the next wake) rather than silently degrading.
-	vars := map[string]any{"deviceToken": deviceToken, "limit": f.max}
+	// retried shortly) rather than silently degrading.
+	vars := map[string]any{"deviceToken": deviceToken, "limit": limit}
 	var resp drainResponse
 	if err := f.client.Query(ctx, f.baseURL, tenant, drainQuery, vars, &resp); err != nil {
 		return nil, err
 	}
 
 	rows := resp.DrainableCommands
-	out := make([]DrainCommand, 0, min(len(rows), f.max))
+	out := make([]DrainCommand, 0, min(len(rows), limit))
 	var dropped int
 	var droppedStatuses []string // distinct, in the order first seen
 	for _, r := range rows {
-		if len(out) >= f.max {
-			break // defensive: the server clamps to `limit`, but never dispatch more than the cap
+		if len(out) >= limit {
+			break // defensive: the server clamps to `limit`, but never dispatch more than was asked for
 		}
 		// Defensive: the server already filtered on the drainable states, but never hand a row
 		// outside that set to dispatch even if the contract ever drifts (a terminal command must
@@ -251,10 +251,10 @@ func (f *CommandFetcher) Pending(ctx context.Context, tenant, deviceToken string
 		// field produces — the caller's omission hides.
 		out = append(out, DrainCommand{Token: r.Token, Name: r.Name, Payload: payload, Status: r.Status})
 	}
-	// ONE line per wake, not one per row, and that is the point rather than tidiness: this fires
-	// only on contract drift, and drift is not per-device — it hits EVERY waking device on the
+	// ONE line per fetch, not one per row, and that is the point rather than tidiness: this fires
+	// only on contract drift, and drift is not per-device — it hits EVERY draining device on the
 	// instance at once. A warn per row would emit a backlog's worth of identical lines per
-	// device per Register/Update and bury the signal in itself, which is the same reason the
+	// device per drain turn and bury the signal in itself, which is the same reason the
 	// claim-failure path logs at debug. The distinct STATUSES are the whole diagnostic: the
 	// offending name is what says which side renamed what.
 	//
