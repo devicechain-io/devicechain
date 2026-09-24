@@ -191,6 +191,52 @@ func TestVerbatimCopyNamesADeclaredStream(t *testing.T) {
 	}
 }
 
+// A replay-covered area silences the only record of its durable's give-ups, so the claim is
+// held to three things this leaf can check: the area actually reads the stream (it is in
+// Areas), the stream is one whose give-ups would otherwise be lettered (a NotLettered stream
+// has nothing to silence, and naming an area there would read as a claim nobody made), and
+// the set is exactly the one the tree has proven. The last is deliberately a literal: adding a
+// name must fail here and send its author to write the proof the field's comment asks for.
+func TestReplayCoveredIsDeclaredOnlyWhereProven(t *testing.T) {
+	type pair struct{ suffix, area string }
+	var got []pair
+	for _, s := range All {
+		for _, a := range s.ReplayCovered {
+			got = append(got, pair{s.Suffix, a})
+			in := false
+			for _, r := range s.Areas {
+				in = in || r == a
+			}
+			if !in {
+				t.Errorf("stream %q declares area %q replay-covered, but %q is not in its Areas", s.Suffix, a, a)
+			}
+			if s.DeadLetterKind == NotLettered {
+				t.Errorf("stream %q is NotLettered, so declaring %q replay-covered on it silences nothing", s.Suffix, a)
+			}
+		}
+	}
+	want := []pair{{ResolvedEvents, "event-processing"}}
+	same := len(got) == len(want)
+	for i := 0; same && i < len(got); i++ {
+		same = got[i] == want[i]
+	}
+	if !same {
+		t.Errorf("replay-covered declarations = %v, want %v; a new one needs a test that exhausts the "+
+			"durable's deliveries on a real broker and shows its checkpoint still covers every message", got, want)
+	}
+	if !ReplayCoveredBy(ResolvedEvents, "event-processing") {
+		t.Error("ReplayCoveredBy does not read the declaration")
+	}
+	for _, other := range []string{"device-state", "event-management"} {
+		if ReplayCoveredBy(ResolvedEvents, other) {
+			t.Errorf("%s reads resolved-events through an ordinary durable; its give-ups must be lettered", other)
+		}
+	}
+	if ReplayCoveredBy("a-suffix-nobody-declared", "event-processing") {
+		t.Error("an undeclared suffix must not read as replay-covered")
+	}
+}
+
 // The work-queue retention is the max-delivery capture's alone. Anything else declared so
 // would lose a message the moment one reader acked it — every other stream has several
 // readers, one per area, each owed its own copy.

@@ -1599,7 +1599,7 @@ nombre. Si sus valores de outbound-connectors fijan `dispatchBacklog`, elimínel
 actualizar: el servicio ahora se niega a arrancar con él (vea «El servicio de conectores ya no
 acepta dispatchBacklog» más abajo). Si filtra los mensajes no entregados por tipo o por motivo, o
 tiene alertas sobre su stream, lea «Los mensajes abandonados en su último intento ahora se
-registran» más abajo: añade tres tipos, un motivo y un stream.
+registran» más abajo: añade tres tipos, un motivo, un stream y dos alertas.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -1882,6 +1882,15 @@ Qué cambia para usted:
   redimensionar nada. Está vacío en régimen normal, y una alerta nueva, `MaxDeliveryRecordsWaiting`,
   se dispara si hay avisos esperando sin registrar ([Mensajes que agotaron sus intentos de
   entrega](./observability.md#max-delivery-records)).
+- **Los abandonos del motor de detección se cuentan, no se registran.** `event-processing` lee
+  `resolved-events` desde su propio punto de control guardado y vuelve a leer el stream tras un
+  reinicio, así que un evento que agotó ahí sus intentos no se ha perdido. Cuando el motor no puede
+  guardar su punto de control durante más tiempo del que el broker sigue reentregando (normalmente,
+  una caída de la base de datos), todos los eventos de ese intervalo agotan sus intentos, y un
+  registro por cada uno informaría de pérdidas que no ocurrieron. En su lugar se cuentan con
+  `outcome="replay-covered"`, y una alerta nueva de nivel warning,
+  `ReplayCoveredDeliveriesExhausted`, informa de ellos. Los demás servicios que leen
+  `resolved-events` siguen registrando los suyos.
 - **El stream de mensajes no entregados gana una ventana de duplicados de 30 minutos,** aplicada en
   el sitio durante la actualización, y también el stream propio de mensajes no entregados del
   servicio de conectores. Es lo que hace que un abandono registrado a la vez por un servicio y por el

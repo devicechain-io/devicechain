@@ -44,6 +44,11 @@
 #     capacity-bounded reader is created, so they EXIST on a healthy instance rather
 #     than being absent; the quiet scenarios carry them at zero for the reason given
 #     for the unread series above.
+#   - devicechain_<area>_max_delivery_records_total{stream,outcome} -- a CounterVec
+#     the max-delivery recorder keeps. ReplayCoveredDeliveriesExhausted reads only
+#     outcome="replay-covered", which exists at 0 from the recorder's start for a
+#     stream the area is declared replay-covered on. An area's replicas share one
+#     recorder durable, so each exhaustion is counted by ONE pod: the rule sums.
 #   - devicechain_<area>_jetstream_stream_used_messages{stream} -- the stream-fill gauge
 #     every service reports for each stream it ensures. MaxDeliveryRecordsWaiting reads
 #     it for the max-delivery capture only, a work queue whose count is the backlog of
@@ -366,4 +371,67 @@ tests:
         exp_alerts: []
       - eval_time: 59m
         alertname: MaxDeliveryRecordsWaiting
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # ReplayCoveredDeliveriesExhausted. A checkpoint outage on a replay-covered
+  # consumer exhausts deliveries in a burst. Two replicas share one recorder
+  # durable, so each exhaustion is counted on ONE of them -- 3 on one pod and
+  # 2 on the other are 5 exhaustions, and the rule must say 5, not 3.
+  #
+  #   minutes  0- 9   both at 0 (created at 0 by the recorder)
+  #   minute  10      pod a counts 3, pod b counts 2
+  #   minutes 11+     flat
+  # ------------------------------------------------------------------
+  - name: a replay-covered consumer that ran out of deliveries warns, summed across pods
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_max_delivery_records_total{namespace="dci-devicechain", pod="dc-event-processing-5c4b-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events", outcome="replay-covered"}'
+        values: '0x9 3x60'
+      - series: 'devicechain_eventprocessing_max_delivery_records_total{namespace="dci-devicechain", pod="dc-event-processing-5c4b-bbbbb", job="devicechain/event-processing", stream="devicechain_resolved-events", outcome="replay-covered"}'
+        values: '0x9 2x60'
+      # A LETTERED exhaustion on another consumer of the same stream is the dead
+      # letter's business, not this alert's.
+      - series: 'devicechain_eventmanagement_max_delivery_records_total{namespace="dci-devicechain", pod="dc-event-management-7d8e-ccccc", job="devicechain/event-management", stream="devicechain_resolved-events", outcome="lettered"}'
+        values: '0x9 4x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ReplayCoveredDeliveriesExhausted
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ReplayCoveredDeliveriesExhausted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/event-processing
+              stream: devicechain_resolved-events
+            exp_annotations:
+              summary: "A consumer ran out of delivery attempts because it could not save its checkpoint"
+              description: "5 message(s) on devicechain_resolved-events ran out of delivery attempts to devicechain/event-processing in the last 15 minutes. This consumer re-reads the stream from its own saved checkpoint, so nothing has been lost and no dead letter is written, but its checkpoint has not been saved for longer than the broker keeps redelivering: look for the service's database or broker connection failing. While it is running it keeps what it has read in memory and saves it when the checkpoint succeeds. If it restarts first, it re-reads the stream from the last saved checkpoint, and a message the stream has already discarded (JetStreamStreamNearFull) cannot be re-read."
+      # The window has passed and nothing new ran out: quiet again.
+      - eval_time: 30m
+        alertname: ReplayCoveredDeliveriesExhausted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 Quiet cases: the series at zero on a healthy instance, a counter that
+  # APPEARS at n and stays flat (a restart, from Prometheus's side), and
+  # another instance's namespace.
+  # ------------------------------------------------------------------
+  - name: a healthy, restarted or foreign replay-covered counter is quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_max_delivery_records_total{namespace="dci-devicechain", pod="dc-event-processing-5c4b-aaaaa", job="devicechain/event-processing", stream="devicechain_resolved-events", outcome="replay-covered"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_max_delivery_records_total{namespace="dci-devicechain", pod="dc-event-processing-5c4b-ddddd", job="devicechain/event-processing", stream="devicechain_resolved-events", outcome="replay-covered"}'
+        values: '7x60'
+      - series: 'devicechain_eventprocessing_max_delivery_records_total{namespace="dci-other", pod="dc-event-processing-5c4b-eeeee", job="other/event-processing", stream="other_resolved-events", outcome="replay-covered"}'
+        values: '0x9 6x50'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ReplayCoveredDeliveriesExhausted
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: ReplayCoveredDeliveriesExhausted
         exp_alerts: []

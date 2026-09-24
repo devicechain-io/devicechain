@@ -46,6 +46,17 @@ import (
 // own arm derives the same id from the message's Origin — so a give-up that both an arm and
 // the recorder see (the arm overran its window, then wrote) is stored once.
 //
+// # What it does not letter
+//
+// A durable that its stream's declaration names REPLAY-COVERED for this area
+// (streams.Stream.ReplayCovered) loses nothing when its deliveries run out: the area re-reads
+// the stream by sequence from a checkpoint it commits itself, and acks only behind that
+// checkpoint. Its exhaustion means the checkpoint has been failing, not that a message was
+// abandoned, so the recorder acks the advisory without fetching the original or calling the
+// MaxDeliveryFunc, and counts it under outcome "replay-covered", which the chart alerts on.
+// The recorder reads that from the declaration once, at start; it knows no area or stream by
+// name.
+//
 // # What it cannot do
 //
 // A record is LATE, not lost, while an area is down: nothing is emitted until some replica
@@ -88,16 +99,27 @@ const (
 	MaxDeliveryNotLettered MaxDeliveryOutcome = "not-lettered"
 	// MaxDeliveryLost: the letter could not be written on the recorder's final attempt.
 	MaxDeliveryLost MaxDeliveryOutcome = "lost"
+	// MaxDeliveryReplayCovered: the durable is declared replay-covered for this area
+	// (streams.Stream.ReplayCovered), so nothing was lost and no letter is written; the
+	// exhaustion is counted, because it means the area's checkpoint has not committed for
+	// longer than AckWait x MaxDeliver. Decided here, never by the func.
+	MaxDeliveryReplayCovered MaxDeliveryOutcome = "replay-covered"
 	// maxDeliveryMalformed: the capture delivered something that is not a max-delivery
 	// advisory for one of this manager's durables. Decided here, never by the func.
 	maxDeliveryMalformed MaxDeliveryOutcome = "malformed"
 )
 
-// maxDeliveryOutcomes is every outcome, for initialising the series at zero.
+// maxDeliveryOutcomes is every outcome the func can return, plus malformed, for initialising a
+// lettered durable's series at zero. A replay-covered durable gets replayCoveredOutcomes
+// instead: the func never sees its advisories, so a zero under "lettered" or "lost" would
+// claim a measurement nothing makes.
 var maxDeliveryOutcomes = []MaxDeliveryOutcome{
 	MaxDeliveryLettered, MaxDeliveryGone, MaxDeliveryUnattributable, MaxDeliveryTenantDeleted,
 	MaxDeliveryNotLettered, MaxDeliveryLost, maxDeliveryMalformed,
 }
+
+// replayCoveredOutcomes is what the handler can count for a replay-covered durable.
+var replayCoveredOutcomes = []MaxDeliveryOutcome{MaxDeliveryReplayCovered, maxDeliveryMalformed}
 
 // MaxDeliveryFunc records one max-delivery. An error leaves the advisory unacked, so it is
 // redelivered after the ack window; see MaxDelivery.Final for the one delivery on which that
@@ -180,12 +202,16 @@ func (nmgr *NatsManager) startRecorder(ctx context.Context) error {
 		return err
 	}
 	suffixOf := map[string]string{}
+	covered := map[string]bool{}
 	filters := []string{}
 	for _, r := range nmgr.readers {
 		if streams.RetentionFor(r.suffix) == streams.RetentionWorkQueue {
 			continue
 		}
 		suffixOf[r.stream] = r.suffix
+		// The one place the replay-covered declaration is read: the handler decides from
+		// this map, and the series are initialised from it below.
+		covered[r.stream] = streams.ReplayCoveredBy(r.suffix, nmgr.Microservice.FunctionalArea)
 		if subj := AdvisorySubject(r.stream, r.durable); !slices.Contains(filters, subj) {
 			filters = append(filters, subj)
 		}
@@ -204,9 +230,9 @@ func (nmgr *NatsManager) startRecorder(ctx context.Context) error {
 	if err := rec.bind(); err != nil {
 		return fmt.Errorf("binding the max-delivery recorder: %w", err)
 	}
-	h := &maxDeliveryHandler{nmgr: nmgr, record: record, suffixOf: suffixOf}
+	h := &maxDeliveryHandler{nmgr: nmgr, record: record, suffixOf: suffixOf, replayCovered: covered}
 	for s := range suffixOf {
-		nmgr.metrics.initMaxDeliveryRecords(s)
+		nmgr.metrics.initMaxDeliveryRecords(s, covered[s])
 	}
 	rctx, cancel := context.WithCancel(ctx)
 	nmgr.recorder = rec
@@ -261,6 +287,9 @@ type maxDeliveryHandler struct {
 	// suffixOf maps each of this manager's reader streams to its declared suffix. The
 	// recorder's filter admits only those streams' advisories.
 	suffixOf map[string]string
+	// replayCovered marks the streams on which this area's durable is declared
+	// replay-covered (streams.Stream.ReplayCovered).
+	replayCovered map[string]bool
 }
 
 // handle records one advisory and acks it, or leaves it unacked to be redelivered when the
@@ -281,6 +310,16 @@ func (h *maxDeliveryHandler) handle(ctx context.Context, msg Message) {
 			Msg("The max-delivery capture delivered something that is not a max-delivery advisory for one of " +
 				"this service's durables; acking it so it does not block the queue")
 		h.nmgr.metrics.countMaxDelivery(label, maxDeliveryMalformed)
+		h.ack(msg)
+		return
+	}
+	if h.replayCovered[stream] {
+		// Not lettered, and not fetched: the area re-reads its stream from a checkpoint it
+		// commits itself, so the message is not lost and a letter would report a loss that
+		// did not happen. What IS true is that the area's checkpoint has been failing for
+		// longer than AckWait x MaxDeliver — possibly for every message in that window, so
+		// this is counted rather than logged per message.
+		h.nmgr.metrics.countMaxDelivery(stream, MaxDeliveryReplayCovered)
 		h.ack(msg)
 		return
 	}

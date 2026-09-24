@@ -179,7 +179,9 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"by the original's stream and what was done: lettered (a dead letter was written), gone "+
 				"(the stream no longer held it), unattributable (no tenant), tenant-deleted, not-lettered "+
 				"(a dead-letter reader's own give-up: counted as lost), lost (the letter could not be "+
-				"written), malformed (not a max-delivery advisory for one of this service's durables).",
+				"written), malformed (not a max-delivery advisory for one of this service's durables), "+
+				"replay-covered (not lettered: this service re-reads the stream from its own checkpoint, "+
+				"so the message is not lost, but that checkpoint has been failing).",
 			[]string{"stream", "outcome"}),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
@@ -215,14 +217,19 @@ func (m *streamMetrics) heldPastAckWaitFor(durable string) func(stage string) {
 	return func(stage string) { m.heldPastAckWait.WithLabelValues(durable, stage).Inc() }
 }
 
-// initMaxDeliveryRecords creates stream's max-delivery series at zero for every outcome, so
-// an increase() over one reads the first record rather than missing it. A no-op on a manager
-// with no metrics (one assembled by hand in a unit test).
-func (m *streamMetrics) initMaxDeliveryRecords(stream string) {
+// initMaxDeliveryRecords creates stream's max-delivery series at zero for every outcome the
+// recorder can count for it, so an increase() over one reads the first record rather than
+// missing it. replayCovered selects the replay-covered set (see replayCoveredOutcomes). A no-op
+// on a manager with no metrics (one assembled by hand in a unit test).
+func (m *streamMetrics) initMaxDeliveryRecords(stream string, replayCovered bool) {
 	if m == nil || m.maxDeliveryRecords == nil {
 		return
 	}
-	for _, o := range maxDeliveryOutcomes {
+	outcomes := maxDeliveryOutcomes
+	if replayCovered {
+		outcomes = replayCoveredOutcomes
+	}
+	for _, o := range outcomes {
 		m.maxDeliveryRecords.WithLabelValues(stream, string(o)).Add(0)
 	}
 }

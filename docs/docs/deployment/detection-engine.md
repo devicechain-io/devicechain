@@ -123,6 +123,12 @@ connectors service's own dead-letter stream, which holds the full request. The r
 owned the message, the next time that service pulls from the stream — so while a service is
 down, its records arrive late rather than not at all.
 
+The engine's own reading of resolved events is the exception. It acknowledges an event only after
+a checkpoint includes it, and reads the stream again from its last checkpoint on every start, so
+an event whose attempts ran out while the checkpoint could not be saved is not lost and is not
+dead-lettered. It is counted instead, and the `ReplayCoveredDeliveriesExhausted` alert reports it
+([Messages that ran out of delivery attempts](./observability.md#max-delivery-records)).
+
 Read them with `dcctl dead-letters list`, which authenticates as an operator identity:
 
 ```bash

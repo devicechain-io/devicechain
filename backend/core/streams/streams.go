@@ -219,6 +219,26 @@ type Stream struct {
 	// that copy (no payload). Whoever writes a give-up — the service's own arm or the
 	// max-delivery recorder — writes the copy there first. "" means none.
 	VerbatimCopy string
+	// ReplayCovered names the areas whose durable on this stream loses nothing when its
+	// deliveries run out, because the area does not depend on the durable to see a message
+	// again: it re-reads the STREAM by sequence from a checkpoint it commits itself, and it
+	// acks only once that checkpoint covers the message. For such a durable an exhausted
+	// delivery is not an abandoned message, it is a checkpoint that has not committed for
+	// AckWait x MaxDeliver — so the max-delivery recorder writes no dead letter for it and
+	// counts it instead (outcome "replay-covered"), which is what the chart's alert reads.
+	//
+	// 🔴 PER AREA, NOT PER STREAM. The claim is about how one area consumes, and a stream
+	// has as many ways of being consumed as it has readers: resolved-events is re-read by
+	// event-processing's DETECT loop, but device-state and event-management read the same
+	// stream through ordinary durables, and an exhausted delivery there IS a message those
+	// areas never handled. A stream-wide flag would silence their letters too.
+	//
+	// 🔴 A NAME HERE IS A CLAIM THAT NEEDS A PROOF. Adding one removes the only record of
+	// that durable's give-ups, so it is backed by a test that exhausts the durable's
+	// deliveries against a real broker and shows the area's checkpoint still covers every
+	// message (event-processing's replay_covers_exhausted_test.go is the one for DETECT).
+	// Each name must also be in Areas.
+	ReplayCovered []string
 	// Why records what drives this stream's volume. It is the reasoning behind
 	// the tier, kept next to the tier so a reclassification has to confront it.
 	Why string
@@ -478,7 +498,15 @@ var All = []Stream{
 	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
 		DeadLetterKind: kindEvent,
 		Why:            "raw device telemetry — the primary ingest path"},
-	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent, Why: "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
+	//
+	// event-processing is REPLAY-COVERED: DETECT acks a resolved event only after a
+	// snapshot checkpoint covers it, applies every delivery on first sight, and after a
+	// restart replays this stream by sequence from its last committed checkpoint — so a
+	// checkpoint outage that exhausts its deliveries loses no event (see ReplayCovered).
+	// device-state and event-management are not: their exhausted deliveries are lettered.
+	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
+		ReplayCovered: []string{"event-processing"},
+		Why:           "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
 
 	// One message per detection, and a subscribe-able product in its own right
 	// (ADR-037): clients live-subscribe by tenant like any other event feed.
@@ -727,6 +755,18 @@ func DeadLetterKindFor(suffix string) string {
 // suffix's stream, or "" when the stream declares none.
 func VerbatimCopyFor(suffix string) string {
 	return bySuffix[suffix].VerbatimCopy
+}
+
+// ReplayCoveredBy reports whether area's durable on suffix's stream is declared
+// replay-covered: its exhausted deliveries lose nothing, so they are counted rather than
+// dead-lettered. See Stream.ReplayCovered.
+func ReplayCoveredBy(suffix, area string) bool {
+	for _, a := range bySuffix[suffix].ReplayCovered {
+		if a == area {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDeclared reports whether a suffix names a declared stream.

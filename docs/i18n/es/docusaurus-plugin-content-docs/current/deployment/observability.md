@@ -273,9 +273,21 @@ con `dcctl dead-letters list`). El stream es una cola de trabajo: un aviso regis
 así que en una instancia sana está vacío. El contador
 `devicechain_<área>_max_delivery_records_total{stream,outcome}` dice qué se hizo con cada aviso.
 
+Hay un consumidor que es una excepción, y está declarado como tal: el motor de detección de
+`event-processing` lee `resolved-events` desde su propio punto de control guardado. Confirma un
+evento solo cuando un punto de control lo cubre, y tras un reinicio vuelve a leer el stream desde
+el último punto de control, así que un evento que agotó sus intentos de entrega no se ha perdido.
+Cuando su punto de control no se puede guardar (normalmente porque su base de datos no responde)
+durante más tiempo del que el broker sigue reentregando, todos los eventos de ese intervalo agotan
+sus intentos. Esos avisos no se convierten en mensajes no entregados, que informarían de cientos de
+pérdidas que no ocurrieron. Se cuentan con `outcome="replay-covered"`, y la alerta siguiente
+informa de ellos. Los demás servicios que leen `resolved-events` no tienen ese punto de control, y
+sus avisos se registran como mensajes no entregados como siempre.
+
 | Alerta | Qué significa | Qué hacer |
 | --- | --- | --- |
 | `MaxDeliveryRecordsWaiting` | Hay avisos de mensajes que agotaron sus intentos esperando desde hace 15 minutos sin convertirse en registros. | Compruebe que todos los servicios están en marcha: uno caído registra tarde. Si el aviso persiste con todo sano, nombra un consumidor que ya ningún servicio lee (un lector retirado en una actualización); no se registrará y puede borrarse del stream. |
+| `ReplayCoveredDeliveriesExhausted` | Un consumidor que lee su stream desde su propio punto de control agotó intentos de entrega en los últimos 15 minutos, porque el punto de control lleva sin guardarse más tiempo del que el broker sigue reentregando. Todavía no se ha perdido nada. | Corrija lo que impide al servicio que indica la etiqueta `job` guardar su punto de control, normalmente su conexión a la base de datos. Mientras el servicio sigue en marcha, guarda lo que ha leído en cuanto el punto de control se guarda. Si se reinicia antes, vuelve a leer el stream desde el último punto de control guardado, y los eventos que el stream ya haya descartado no se pueden volver a leer, así que vigile también `JetStreamStreamNearFull`. |
 
 ## Relacionado
 

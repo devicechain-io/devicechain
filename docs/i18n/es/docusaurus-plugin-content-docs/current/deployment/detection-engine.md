@@ -138,6 +138,13 @@ conector apunta al flujo propio de mensajes no entregados del servicio de conect
 petición completa. Lo escribe el servicio dueño del mensaje la próxima vez que lee del flujo, así que,
 mientras un servicio está caído, sus registros llegan tarde, pero llegan.
 
+La lectura de los eventos resueltos que hace el propio motor es la excepción. Confirma un evento
+solo después de que un punto de control lo incluya, y en cada arranque vuelve a leer el flujo desde
+su último punto de control, así que un evento que agotó sus intentos mientras el punto de control no
+se podía guardar no se pierde ni se envía a la cola de mensajes no entregados. En su lugar se
+cuenta, y la alerta `ReplayCoveredDeliveriesExhausted` informa de ello ([Mensajes que agotaron sus
+intentos de entrega](./observability.md#max-delivery-records)).
+
 Consúltelos con `dcctl dead-letters list`, que se autentica como una identidad de operador:
 
 ```bash

@@ -1504,7 +1504,7 @@ renamed. If your outbound-connectors values set `dispatchBacklog`, delete it bef
 service now refuses to start with it (see "The connectors service no longer accepts dispatchBacklog"
 below). If you filter dead letters by kind or reason, or alert on the dead-letter stream, read
 "Messages abandoned on their last attempt are now dead-lettered" below: it adds three kinds, a
-reason and a stream.
+reason, a stream and two alerts.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1772,6 +1772,14 @@ What changes for you:
   empty in steady state, and a new alert, `MaxDeliveryRecordsWaiting`, fires if notices wait on it
   unrecorded ([Messages that ran out of delivery
   attempts](./observability.md#max-delivery-records)).
+- **The detection engine's give-ups are counted, not dead-lettered.** `event-processing` reads
+  `resolved-events` from its own saved checkpoint and reads the stream again after a restart, so
+  an event whose attempts ran out there has not been lost. When the engine cannot save its
+  checkpoint for longer than the broker keeps redelivering (usually a database outage), every
+  event in that window runs out of attempts, and a letter for each would report losses that did
+  not happen. They are counted with `outcome="replay-covered"` instead, and a new warning alert,
+  `ReplayCoveredDeliveriesExhausted`, reports them. The other services that read
+  `resolved-events` still dead-letter theirs.
 - **The dead-letter stream gains a 30-minute duplicate window,** applied in place on upgrade, and
   so does the connectors service's own dead-letter stream. It is what makes a give-up recorded both
   by a service and by the broker's notice land once.

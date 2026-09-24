@@ -130,6 +130,14 @@ type Config struct {
 //     by sequence also re-reads any message that exhausted MaxDeliver on the durable,
 //     so a checkpoint outage plus a crash cannot silently drop events.
 //
+// 🔴 A DECLARATION RESTS ON THIS. resolved-events names event-processing REPLAY-COVERED
+// (streams.Stream.ReplayCovered), so the platform's max-delivery recorder writes no dead
+// letter when this durable's deliveries run out — it counts them instead. That is true only
+// while this processor acks behind a committed checkpoint, applies every delivery on first
+// sight, and replays the stream by sequence on restart; replay_covers_exhausted_test.go
+// proves each against a real broker. A change that breaks any of the three must remove the
+// declaration, or an exhausted event is lost with no record anywhere.
+//
 // Only after replay reaches the head does the live loop run, consuming the durable
 // reader. Redelivered duplicates (seq <= the replayed head) are dropped by the
 // engine's guard and acked; new events advance it.
