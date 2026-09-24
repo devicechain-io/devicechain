@@ -113,6 +113,14 @@ and a *resolve* that was not dispatched leaves an alarm active that should have 
 Treat a dead letter as something to investigate, not something that will drain on its own.
 :::
 
+A message a service abandons on its last attempt — a pod stopped mid-handling, or a handler
+that ran past its window — is recorded too, with reason `no-outcome`. Such a letter never
+settles a command: the last attempt may have done its work and lost only its acknowledgement.
+For busy device streams the letter points at the original rather than copying it, and names
+where to find it until the stream ages it out. The record is written by the service that
+owned the message, the next time that service pulls from the stream — so while a service is
+down, its records arrive late rather than not at all.
+
 Read them with `dcctl dead-letters list`, which authenticates as an operator identity:
 
 ```bash
@@ -387,7 +395,7 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
 | `ReactPoisonDropping` | Actions are not being dispatched after exhausting their retries — alarms and commands are not happening. The detections are dead-lettered so you can see which, but nothing replays them. Treat as urgent. |
-| `DeadLetterWriteLost` | Something was given up on **and** could not be written to the dead-letter stream. Look at the broker, and at the service's log: a letter the service refused to write lands here too. |
+| `DeadLetterWriteLost` | Something was given up on **and** could not be written to the dead-letter stream. Look at the broker, and at the service's log: a letter the service refused to write lands here too, and so does a dead letter that the dead-letter store or the command writeback ran out of attempts on. |
 | `DeadLetterStoreLosing` | Dead letters reached the stream but could not be written to the store, so they will age out of it unrecorded. Look at the operator database. |
 | `ReactConnectorEgressShedding` | Outbound dispatch is over the tenant's rate limit and is being shed. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |

@@ -255,6 +255,19 @@ get through.
 | --- | --- | --- | --- |
 | `ReaderHeldMessagePastAckWait` | warning | A handler held a message past its acknowledgement window, so it was redelivered. `stage=worker`: a send ran long, so the message may have been sent twice. `stage=buffer`: a message was dropped before it was handed out, and its redelivery was handled instead. | For `stage=worker`, look for a slow or unresponsive destination behind the service named by the `durable` label. For `stage=buffer`, the service is not keeping up with its stream. |
 
+## Messages that ran out of delivery attempts {#max-delivery-records}
+
+After five unacknowledged deliveries the broker stops handing a message out and publishes a
+notice. A platform stream, `max-deliveries`, captures those notices, and each service turns
+its own into dead letters with reason `no-outcome` (read them with `dcctl dead-letters list`).
+The stream is a work queue: a recorded notice is deleted, so on a healthy instance it is empty.
+The counter `devicechain_<area>_max_delivery_records_total{stream,outcome}` says what was done
+with each notice.
+
+| Alert | What it means | What to do |
+| --- | --- | --- |
+| `MaxDeliveryRecordsWaiting` | Notices of messages that ran out of delivery attempts have waited 15 minutes without being recorded. | Check that every service is running: one that is down records late. If a notice stays once everything is healthy, it names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream. |
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command

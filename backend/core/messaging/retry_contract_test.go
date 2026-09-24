@@ -108,6 +108,12 @@ func TestEveryStreamGetsTheSameRetryContract(t *testing.T) {
 			sawCold = true
 		}
 		_, err := nmgr.NewReader(s.Suffix)
+		if s.Shape == streams.ShapeAdvisory {
+			// The capture is read only by the max-delivery recorder, whose durable is built
+			// by the same consumerConfig; NewReader refuses it.
+			require.Errorf(t, err, "NewReader(%s) must be refused", s.Suffix)
+			continue
+		}
 		require.NoErrorf(t, err, "NewReader(%s)", s.Suffix)
 		assertPlatformRetryContract(t, nmgr, instance, area, s.Suffix, "default construction")
 	}

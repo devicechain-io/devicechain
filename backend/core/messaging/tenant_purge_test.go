@@ -82,6 +82,11 @@ func TestPurgeTenantReachesEveryDeclaredStreamShape(t *testing.T) {
 
 	seeded := map[string]string{}
 	for _, suffix := range streams.Suffixes() {
+		// The advisory capture holds the broker's notices, which carry no tenant; the purge
+		// skips it by shape, and TestPurgeTenantLeavesTheAdvisoryCaptureAlone pins that.
+		if streams.ShapeOf(suffix) == streams.ShapeAdvisory {
+			continue
+		}
 		seeded[suffix] = seedStream(t, js, suffix, purgeVictim, purgeBystander)
 	}
 	require.NotEmpty(t, seeded, "the declared inventory is empty, so this test measures nothing")
@@ -107,6 +112,26 @@ func TestPurgeTenantReachesEveryDeclaredStreamShape(t *testing.T) {
 			"%s contributed nothing to the report, so its filter matched no messages — for the "+
 				"%s shape that is what a wrongly-built subject looks like", suffix, streams.ShapeOf(suffix))
 	}
+}
+
+// The advisory capture holds the broker's notices, not a tenant's messages: its subjects
+// carry no tenant, so there is no filter a purge could scope to one. A purge leaves it alone
+// — what a notice points AT is purged from its own stream in the same pass.
+func TestPurgeTenantLeavesTheAdvisoryCaptureAlone(t *testing.T) {
+	nc, js := purgeRig(t)
+	name := StreamName(purgeInstance, streams.MaxDeliveries)
+	subjects := StreamSubjects(purgeInstance, streams.MaxDeliveries)
+	_, err := js.AddStream(&nats.StreamConfig{Name: name, Subjects: subjects,
+		Retention: nats.WorkQueuePolicy, Storage: nats.MemoryStorage})
+	require.NoError(t, err)
+	advisory := AdvisorySubject(StreamName(purgeInstance, streams.RaiseAlarm), "some-durable")
+	_, err = js.Publish(advisory, []byte(`{"type":"io.nats.jetstream.advisory.v1.max_deliver"}`))
+	require.NoError(t, err)
+
+	res, err := PurgeTenant(context.Background(), nc, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.NotContains(t, res.PerStream, name)
+	assert.Equal(t, uint64(1), streamMsgs(t, js, name), "the purge touched the advisory capture")
 }
 
 // TestPurgeTenantIsIdempotent covers the Store contract: it is called on every pass until

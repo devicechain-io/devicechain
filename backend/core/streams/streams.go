@@ -92,6 +92,33 @@ const (
 	// to it. The producer is the device, via the broker's MQTT gateway, which is the
 	// entire point — the message is durable before any of our code runs.
 	ShapeDeviceEvents
+	// ShapeAdvisory is a capture of the BROKER'S OWN advisories, which live outside the
+	// instance's subject tree altogether ("$JS.EVENT.ADVISORY..."). Like
+	// ShapeDeviceEvents the suffix names the stream and appears in no subject, and
+	// nothing in the platform publishes to it: the producer is nats-server. Its
+	// subjects carry no tenant, which is why a tenant purge skips a stream of this
+	// shape. See MaxDeliveries, its one user.
+	ShapeAdvisory
+)
+
+// Retention is how a stream lets go of a message.
+//
+// It is declared rather than assumed because the difference is visible to every
+// reader of a stream's counts: under Limits a message stays until a ceiling or its
+// age evicts it, whoever has read it; under WorkQueue an ACK removes it. A reader
+// that reasons about "what has this durable skipped" from stream positions reads
+// acked-and-removed work-queue messages as skipped, so it must know which kind of
+// stream it is looking at, and it must learn that from the declaration rather than
+// from a list of exceptions kept beside it.
+type Retention int
+
+const (
+	// RetentionLimits is every stream but one: messages age out, or are evicted
+	// oldest-first at the ceiling, independently of who has read them.
+	RetentionLimits Retention = iota
+	// RetentionWorkQueue removes a message when it is acked, so the stream's count
+	// is exactly the work nobody has finished. Only MaxDeliveries is declared so.
+	RetentionWorkQueue
 )
 
 // String names a shape for the messages that mention one.
@@ -105,6 +132,8 @@ func (s Shape) String() string {
 		return "tenant-device"
 	case ShapeDeviceEvents:
 		return "device-events"
+	case ShapeAdvisory:
+		return "advisory"
 	default:
 		return "tenant"
 	}
@@ -173,10 +202,44 @@ type Stream struct {
 	// so it is sized to the redelivery gap it must cover, not to how long duplicates
 	// are conceivable.
 	DuplicateWindowSeconds int
+	// Retention is how the stream lets go of a message; see Retention. The zero value
+	// is RetentionLimits, which every stream but one is.
+	Retention Retention
+	// DeadLetterKind is the kind (core/deadletter's vocabulary) of a dead letter written
+	// about a message consumed from this stream — by an in-handler arm or by the
+	// platform's max-delivery recorder, which is why it is declared once, here, rather
+	// than chosen at each call site. NotLettered forbids a letter: the stream is itself
+	// a sink, or a report, and a give-up on it is counted as a loss instead.
+	//
+	// It is a string rather than a deadletter.Kind because this package is a LEAF;
+	// core/deadletter checks every declared value against its vocabulary.
+	DeadLetterKind string
+	// VerbatimCopy, when set, names the stream that holds a BYTE-IDENTICAL copy of a
+	// message given up on from this one, and makes the dead letter an index entry for
+	// that copy (no payload). Whoever writes a give-up — the service's own arm or the
+	// max-delivery recorder — writes the copy there first. "" means none.
+	VerbatimCopy string
 	// Why records what drives this stream's volume. It is the reasoning behind
 	// the tier, kept next to the tier so a reclassification has to confront it.
 	Why string
 }
+
+// NotLettered is the DeadLetterKind of a stream whose give-ups are never lettered:
+// the dead-letter sinks themselves (a letter about a letter would loop), the
+// write-only reports, and the max-delivery capture.
+const NotLettered = "-"
+
+// The dead-letter kinds the declarations below use. They must equal core/deadletter's
+// Kind values, which that package's vocabulary test enforces over every declaration.
+const (
+	kindEvent             = "event"
+	kindDetectionAction   = "detection-action"
+	kindNotification      = "notification"
+	kindConnectorDispatch = "connector-dispatch"
+	kindCommandResponse   = "command-response"
+	kindCommand           = "command"
+	kindControlFact       = "control-fact"
+)
 
 // The subject suffixes. These are constants rather than fields read off All so a
 // call site can name a stream without a lookup, and so a rename is a compile
@@ -260,6 +323,15 @@ const (
 	// something that is empty in steady state. What that gives up is telling producers
 	// apart by subject, which the envelope carries anyway (core/deadletter).
 	DeadLetters = "dead-letters"
+
+	// MaxDeliveries captures the broker's max-delivery advisory for every platform
+	// durable: the notice nats-server publishes when it stops redelivering a message
+	// because every delivery ran out. A message that ends that way with no outcome
+	// recorded — a pod stopped mid-handling, a handler that ran past its window — never
+	// reaches a service's own dead-letter arm, so this capture is the only place its
+	// give-up is written down until each area's recorder letters it (core/messaging's
+	// recorder). See its declaration below for the four properties the capture rests on.
+	MaxDeliveries = "max-deliveries"
 )
 
 // ConnectorDispatchDead is the terminal dead-letter sink for connector dispatch
@@ -296,10 +368,11 @@ const (
 // deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
 // ceiling, because taking the Hot ceiling in full does not fit the disk budget.
 //
-// The arithmetic, at the shipped defaults: the declared streams reserve 8704 MiB
-// (7 Hot x 1 GiB + 10 Cold x 128 MiB + this capped capture stream at 256 MiB), the
-// MQTT gateway stores 384 MiB and the KV buckets 1024 MiB (5 State x 128 + 6 Cache
-// x 64) — 9.875 GiB reserved against the 14 GiB max_file_store a 16Gi PV yields.
+// The arithmetic, at the shipped defaults: the declared streams reserve 8712 MiB
+// (7 Hot x 1 GiB + 10 Cold x 128 MiB + this capped capture stream at 256 MiB + the
+// max-delivery capture capped at 8 MiB), the MQTT gateway stores 384 MiB and the KV
+// buckets 1024 MiB (5 State x 128 + 6 Cache x 64) — 9.883 GiB reserved against the
+// 14 GiB max_file_store a 16Gi PV yields.
 // (Recount when a stream is added: this sentence said "8 Cold / 9.5 GiB" while the
 // tree held nine, and it is the sentence anyone weighing a new stream reads.) Every
 // ceiling is reserved UP FRONT, so an uncapped capture stream does not merely
@@ -327,6 +400,19 @@ const (
 // store that stops buffering telemetry entirely once nothing subscribes to it
 // over MQTT (ADR-030 slice I7).
 const deviceEventsCaptureMaxBytesCap = 256 << 20
+
+// maxDeliveriesMaxBytesCap caps the max-delivery capture. An advisory is a few hundred
+// bytes and the stream is a work queue, so it holds only advisories no recorder has
+// finished with — steady state is empty. 8 MiB is some tens of thousands of them.
+//
+// 🔴 8, NOT 32, BECAUSE OF --compact. There the Cold ceiling is 16 MiB and binds before
+// any larger cap would; taking all 16 left the compact volume 184 MiB unreserved, under
+// cli/bootstrap's 192 MiB headroom floor (TestCompactReservationFitsItsSmallerVolume).
+// At 8 MiB the compact headroom sits exactly ON that floor, so the next stream anyone
+// declares must grow the compact volume or lower another ceiling — the test says so.
+// Overflow is DiscardOld: the oldest unrecorded notices are evicted, which the
+// MaxDeliveryRecordsWaiting and near-full alerts are there to make visible first.
+const maxDeliveriesMaxBytesCap = 8 << 20
 
 // DeadLetter returns the dead-letter suffix derived from a base suffix.
 //
@@ -390,25 +476,26 @@ var All = []Stream{
 	// backstops only the events that carry one. Widening the window trades memory
 	// for a longer covered outage; it does not remove the residual.
 	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
-		Why: "raw device telemetry — the primary ingest path"},
-	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, Why: "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
+		DeadLetterKind: kindEvent,
+		Why:            "raw device telemetry — the primary ingest path"},
+	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent, Why: "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
 
 	// One message per detection, and a subscribe-able product in its own right
 	// (ADR-037): clients live-subscribe by tenant like any other event feed.
-	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, Why: "DETECT output — scales with rule firings against device traffic"},
+	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
 	// SHARED/SERVER, DOUBLE/LONG) is upserted or deleted, so a DYNAMIC detection
 	// threshold can read the device's own attribute instead of a compile-time
 	// literal. At-most-once; consumer keeps a durable projection.
-	{Suffix: DeviceAttribute, Areas: []string{"device-management", "event-processing"}, Tier: Hot, Why: "attribute set/delete per device — scales with fleet size"},
+	{Suffix: DeviceAttribute, Areas: []string{"device-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
 
 	// PER-DEVICE: the concrete subject carries the target device's token as a
 	// final segment so the broker grant can confine a device to its own commands.
 	// event-sources also has to recognize this suffix — to tell command traffic
 	// from device telemetry — which is the case that first motivated centralizing
 	// these names: a second literal is how the two drift apart.
-	{Suffix: DeviceCommands, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, Why: "outbound commands — scale with fleet size"},
+	{Suffix: DeviceCommands, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
 	// reason the gateway is no longer an MQTT client: the broker writes a device's
@@ -422,8 +509,8 @@ var All = []Stream{
 	// are refused (messaging.WriteMessages) rather than allowed to publish to a
 	// subject that matches no stream.
 	{Suffix: DeviceEventsCapture, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
-		MaxBytesCap: deviceEventsCaptureMaxBytesCap,
-		Why:         "raw device publishes, captured before PUBACK — the ingest durability floor"},
+		MaxBytesCap: deviceEventsCaptureMaxBytesCap, DeadLetterKind: kindEvent,
+		Why: "raw device publishes, captured before PUBACK — the ingest durability floor"},
 
 	// PER-DEVICE, and it is the device token that makes a response ATTRIBUTABLE.
 	//
@@ -444,7 +531,7 @@ var All = []Stream{
 	// One consumer still reads every response: StreamSubject appends the extra wildcard
 	// level for this shape, so the filter follows the declaration automatically. That
 	// the two must move together is the point of deriving both from here.
-	{Suffix: CommandResponses, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, Why: "device replies to commands — scale with fleet size"},
+	{Suffix: CommandResponses, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the
@@ -452,19 +539,23 @@ var All = []Stream{
 	// CAVEAT: a DETECT replay after outbound-connectors deploys re-publishes
 	// detections as NEW messages the consumer will run — a stale OccurredTime is
 	// the consumer's drop/flag signal.
-	{Suffix: ConnectorDispatch, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot, Why: "REACT outbound dispatch — scales with rule firings"},
+	//
+	// Its give-ups are kept VERBATIM on connector-dispatch.dead, because a replay of an
+	// outbound send has to be byte-identical; the dead letter is only the index entry.
+	{Suffix: ConnectorDispatch, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot,
+		DeadLetterKind: kindConnectorDispatch, VerbatimCopy: ConnectorDispatchDead, Why: "REACT outbound dispatch — scales with rule firings"},
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
 
 	// Emitted post-commit on profile publish, carrying the ENABLED rules frozen
 	// into the new version, keyed on profile-version token. At-most-once.
-	{Suffix: DetectionRulesPublished, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "a rule publish — a human authoring action"},
+	{Suffix: DetectionRulesPublished, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
 
 	// Emitted post-commit when a device is created or re-typed, naming the device
 	// and the stable profile token its type adopts, so DETECT can arm absence for
 	// a device that has NEVER reported (the dead-man roster). Removal rides the
 	// entity-deleted fact rather than this one. At-most-once.
-	{Suffix: DeviceRoster, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "roster projection updates"},
+	{Suffix: DeviceRoster, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that
 	// version's fences and the content address of each one's geometry so event-processing's live
@@ -478,17 +569,17 @@ var All = []Stream{
 	// a second copy of its own. A fact that never reaches the stream is recovered by that startup
 	// reconcile, not by replay. Its size depends on the fence COUNT and on nothing the fences
 	// contain, so no fence set can outgrow one message.
-	{Suffix: GeoFenceSetManifest, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "a fence edit — a human authoring action"},
+	{Suffix: GeoFenceSetManifest, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as
 	// event-management's event_anchors — can reconcile dangling references.
 	// At-least-once and idempotent.
-	{Suffix: EntityDeleted, Areas: []string{"device-management", "event-management", "event-processing"}, Tier: Cold, Why: "entity lifecycle fan-out"},
+	{Suffix: EntityDeleted, Areas: []string{"device-management", "event-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
-	{Suffix: AlarmEvents, Areas: []string{"device-management", "notification-management"}, Tier: Cold, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, Areas: []string{"device-management", "notification-management"}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
@@ -496,20 +587,58 @@ var All = []Stream{
 	// monotonic decision timestamp. Since the ADR-057 cutover retired the
 	// measurement evaluator this is the SOLE alarm-raise path — there is no peer
 	// to double-raise against.
-	{Suffix: RaiseAlarm, Areas: []string{"device-management", "event-processing"}, Tier: Cold, Why: "REACT alarm requests"},
+	{Suffix: RaiseAlarm, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindDetectionAction, Why: "REACT alarm requests"},
 
-	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
-	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, Why: "error path — near zero in steady state; see the spike caveat below"},
-	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
+	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
+	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
+	// The dedup window is what lets the connectors service's own arm and the platform's
+	// max-delivery recorder both write the verbatim copy of one give-up and store it
+	// ONCE: both carry the same id, derived from the original's stream position.
+	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, DuplicateWindowSeconds: 1800,
+		DeadLetterKind: NotLettered, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
 	// 🔴 user-management IS IN THIS LIST BECAUSE IT READS, NOT BECAUSE IT WRITES. Areas is
 	// the ADR-020 A0 deployment predicate, and NewReader creates the stream exactly as
 	// NewWriter does — so a profile running the store but none of the four producers would
 	// otherwise have a stream the replication check believes should not be there.
+	//
+	// Every area that reads a stream writes here: each runs a max-delivery recorder that
+	// letters its own abandoned deliveries. The 30-minute dedup window is what makes a
+	// give-up recorded by BOTH an in-handler arm and that recorder land once — both carry
+	// an id derived from the original's (stream, durable, sequence). It is sized to cover
+	// an arm that overran its ack window by a long way, and a recorder that was down for
+	// a pod restart, not an outage of any length: past it a second letter is a benign
+	// duplicate, never a loss.
 	{Suffix: DeadLetters,
 		Areas: []string{"event-processing", "notification-management", "command-delivery",
-			"device-management", "user-management", "outbound-connectors"},
-		Tier: Cold, Why: "ADR-024 dead-letter sink: five areas write it, user-management stores it, " +
-			"command-delivery reads it back to settle the commands its letters are about"},
+			"device-management", "user-management", "outbound-connectors", "device-state",
+			"event-management", "event-sources", "lwm2m-ingest"},
+		Tier: Cold, DuplicateWindowSeconds: 1800, DeadLetterKind: NotLettered,
+		Why: "ADR-024 dead-letter sink: every area that consumes a stream writes it, user-management " +
+			"stores it, command-delivery reads it back to settle the commands its letters are about"},
+
+	// The max-delivery capture. Four properties it rests on, each with a consequence an
+	// operator can see:
+	//
+	//  1. INTEREST MUST EXIST BEFORE THE NEXT PULL. nats-server publishes the advisory on
+	//     the next pull of the exhausted durable, and only if something is subscribed to
+	//     its subject at that moment. This stream is that something, so an advisory for a
+	//     stream this capture does not list (yet) is produced into nothing.
+	//  2. AN OLD POD CAN FLIP THE SUBJECT LIST BACK. Every area reconciles this stream's
+	//     subjects on start, so during a rollout a restarting old pod can drop a stream
+	//     newly declared here; that stream's advisories have no interest until a new pod
+	//     restarts.
+	//  3. IT IS A WORK QUEUE, so an acked advisory leaves the stream and its message count
+	//     is the unrecorded backlog. That is what the MaxDeliveryRecordsWaiting alert
+	//     reads, and why nothing may read this stream's cursor gaps as unread loss.
+	//  4. A LEADERLESS STREAM DROPS THE BROKER'S INTERNAL PUBLISH. There is no retry on the
+	//     server side; an advisory emitted while this stream has no leader is gone.
+	{Suffix: MaxDeliveries,
+		Areas: []string{"device-management", "device-state", "event-management", "event-sources",
+			"notification-management", "outbound-connectors", "command-delivery", "user-management",
+			"event-processing", "lwm2m-ingest"},
+		Tier: Cold, Shape: ShapeAdvisory, Retention: RetentionWorkQueue, MaxBytesCap: maxDeliveriesMaxBytesCap,
+		DeadLetterKind: NotLettered,
+		Why:            "broker advisories for deliveries that ran out — empty in steady state"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are
@@ -575,6 +704,25 @@ func DuplicateWindowSecondsFor(suffix string) int {
 // config.StreamMaxBytesFor, which is the single place the two are reconciled.
 func MaxBytesCapFor(suffix string) int64 {
 	return bySuffix[suffix].MaxBytesCap
+}
+
+// RetentionFor returns a suffix's declared retention. An undeclared suffix reads as
+// RetentionLimits, but nothing creates a stream for one (see IsDeclared).
+func RetentionFor(suffix string) Retention {
+	return bySuffix[suffix].Retention
+}
+
+// DeadLetterKindFor returns the dead-letter kind declared for a message consumed from
+// suffix's stream: a core/deadletter Kind value, NotLettered, or "" for a suffix this
+// package does not declare. A caller treats "" as a defect, never as permission.
+func DeadLetterKindFor(suffix string) string {
+	return bySuffix[suffix].DeadLetterKind
+}
+
+// VerbatimCopyFor returns the suffix holding a byte-identical copy of a give-up on
+// suffix's stream, or "" when the stream declares none.
+func VerbatimCopyFor(suffix string) string {
+	return bySuffix[suffix].VerbatimCopy
 }
 
 // IsDeclared reports whether a suffix names a declared stream.

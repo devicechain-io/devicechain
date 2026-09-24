@@ -96,9 +96,11 @@ const (
 	//     directions. Too low a constant dead-letters and acks a message the broker
 	//     would still have retried (a message lost to a transient outage). Too high a
 	//     constant means the arm never fires: the broker stops redelivering at ITS
-	//     limit and no dead letter is ever written, so the message vanishes with no
-	//     record. Neither shows up in the test estate, because every test of those arms
-	//     constructs the delivery count by hand rather than getting it from a broker.
+	//     limit and the arm's letter — the one carrying the handler's own error — is
+	//     never written; only the max-delivery recorder's "no outcome" letter records
+	//     it (recorder.go), which misreports a failure as an abandonment. Neither shows
+	//     up in the test estate, because every test of those arms constructs the
+	//     delivery count by hand rather than getting it from a broker.
 	//
 	// So the rule is: the consumer's view of its own retry budget and the consumer
 	// CONFIG must come from one place. Today they do, because there is exactly one
@@ -236,6 +238,16 @@ type NatsManager struct {
 	// stamps on each message must be the SAME number, and ackWait() is the one place
 	// both read it from.
 	ackWaitOverride time.Duration
+
+	// recordBuild builds this manager's max-delivery handler; RecordMaxDeliveries sets it in
+	// the initialize phase, and ExecuteStart refuses to start readers without it. recorder is
+	// the durable on the capture stream, recorderCancel ends its loop and recorderWg joins it.
+	// All three are touched only on the lifecycle goroutine; recorderCancel nil means no
+	// recorder is running (the same re-entry guard the sampler uses). See recorder.go.
+	recordBuild    func(*NatsManager) (MaxDeliveryFunc, error)
+	recorder       *natsReader
+	recorderCancel context.CancelFunc
+	recorderWg     sync.WaitGroup
 }
 
 // SetAckWaitForTesting sets the AckWait this manager configures on the durables it
@@ -645,7 +657,8 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
-	subjects := []string{StreamSubject(nmgr.Microservice.InstanceId, suffix)}
+	subjects := StreamSubjects(nmgr.Microservice.InstanceId, suffix)
+	retention := retentionPolicy(streams.RetentionFor(suffix))
 	dupWindow := time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
 	// restart degrades into a retry rather than a crash-loop (A6). A stream that
@@ -668,6 +681,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	// NewReader and NewReplayReader are all reached from the oncreate callback, which
 	// takes only the manager. That is a signature change across every service and is
 	// deliberately not folded in here.
+	var refused error
 	err := core.RetryInfraConnect(context.Background(), "nats jetstream", func(context.Context) error {
 		info, err := nmgr.js.StreamInfo(name)
 		if err == nil {
@@ -695,6 +709,19 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// Check C exists to settle, by rolling every service simultaneously during
 			// the lift. If that shows contention, the coordination has to come from
 			// somewhere outside this call path.
+			// Retention is the one property a reconcile will not move. JetStream refuses to
+			// change it on an existing stream, and it decides what an ack MEANS — under a
+			// work queue it deletes the message — so a stream carrying the wrong one is
+			// refused loudly here rather than run on with semantics nobody declared. Pre-GA
+			// the remedy is a recreate.
+			if info.Config.Retention != retention {
+				// Not returned as the op's error: no retry can fix it, so it ends the retry
+				// loop at once and is returned after it.
+				refused = fmt.Errorf("stream %s exists with retention %s, but core/streams "+
+					"declares %s; JetStream cannot change a stream's retention in place, so it has to be "+
+					"deleted and recreated", name, info.Config.Retention, retention)
+				return nil
+			}
 			cfg := info.Config
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
@@ -749,7 +776,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			Name:      name,
 			Subjects:  subjects,
 			Storage:   nats.FileStorage,
-			Retention: nats.LimitsPolicy,
+			Retention: retention,
 			Discard:   nats.DiscardOld,
 			MaxAge:    streamMaxAge,
 			Replicas:  nmgr.effectiveStreamReplicas(),
@@ -761,14 +788,30 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		}
 		log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
 			Int64("maxMsgs", bounds.maxMsgs).Int32("maxMsgSize", bounds.maxMsgSize).
-			Msg("Created JetStream stream")
+			Str("retention", retention.String()).Msg("Created JetStream stream")
 		return nil
 	})
+	if err == nil {
+		err = refused
+	}
 	if err != nil {
 		return "", err
 	}
 	nmgr.trackStream(name)
 	return name, nil
+}
+
+// retentionPolicy is the JetStream retention a declared Retention creates. A value this
+// does not know panics: a retention nobody mapped must not quietly become Limits, which is
+// the policy under which an ack deletes nothing.
+func retentionPolicy(r streams.Retention) nats.RetentionPolicy {
+	switch r {
+	case streams.RetentionLimits:
+		return nats.LimitsPolicy
+	case streams.RetentionWorkQueue:
+		return nats.WorkQueuePolicy
+	}
+	panic(fmt.Sprintf("messaging: no JetStream retention for streams.Retention %d", r))
 }
 
 // reconcileStreamReplicas applies the replica factor to an existing stream as an
@@ -981,6 +1024,11 @@ func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 		return fmt.Errorf("messaging: %q is a device-events capture stream written by the broker's "+
 			"MQTT gateway, not by the platform; it has no publish path", w.suffix)
 	}
+	// The same for the advisory capture: its producer is nats-server itself, and its
+	// subjects are the broker's, not a tenant's.
+	if streams.ShapeOf(w.suffix) == streams.ShapeAdvisory {
+		return fmt.Errorf("messaging: %q captures the broker's own advisories; it has no publish path", w.suffix)
+	}
 	return w.publish(ctx, "", msgs...)
 }
 
@@ -1103,6 +1151,12 @@ type natsReader struct {
 	stream  string
 	subject string
 	durable string
+	// filters, when set, replaces subject as the durable's filter with an exact LIST of
+	// subjects (FilterSubjects), and subject is then empty. Only the max-delivery recorder
+	// has one: its filter is the advisory subject of each of its area's own durables, which
+	// no single pattern expresses. Sorted, so a comparison against the server's copy is a
+	// comparison of sets.
+	filters []string
 	// sub is the current pull subscription. It is written by the read-loop goroutine
 	// (bind, on first attach and on self-heal re-bind) and read by the lifecycle
 	// goroutine (ExecuteStop's Unsubscribe), so it is an atomic pointer rather than a
@@ -1306,6 +1360,12 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 		MaxAckPending: readerMaxAckPending,
 		FilterSubject: r.subject,
 	}
+	// A reader with a filter LIST (the max-delivery recorder) sets FilterSubjects instead;
+	// the server refuses a config carrying both.
+	if len(r.filters) > 0 {
+		cfg.FilterSubject = ""
+		cfg.FilterSubjects = r.filters
+	}
 	// DeliverPolicy is otherwise left at its zero value (DeliverAll) so AddConsumer
 	// stays idempotent against durables older builds created without setting it; a
 	// reader that opted into ReaderWithDeliverNew pins DeliverNew on its own durable
@@ -1389,15 +1449,22 @@ func (r *natsReader) reconcileFilterSubject() error {
 	if err != nil {
 		return err
 	}
-	if info.Config.FilterSubject == r.subject {
+	// A filter LIST is compared as a set, for the same reason and with the same explicit
+	// update: the recorder's list follows its area's readers, so a release that adds or
+	// drops a reader must move the durable too, and AddConsumer reports success without
+	// moving it.
+	have := slices.Clone(info.Config.FilterSubjects)
+	slices.Sort(have)
+	if info.Config.FilterSubject == r.subject && slices.Equal(have, r.filters) {
 		return nil
 	}
 	log.Info().Str("stream", r.stream).Str("durable", r.durable).
 		Str("from", info.Config.FilterSubject).Str("to", r.subject).
+		Strs("fromList", have).Strs("toList", r.filters).
 		Msg("Moving an existing durable consumer onto this build's filter subject")
 	if _, err := r.nmgr.js.UpdateConsumer(r.stream, r.consumerConfig()); err != nil {
-		return fmt.Errorf("moving durable %q from filter %q to %q: %w",
-			r.durable, info.Config.FilterSubject, r.subject, err)
+		return fmt.Errorf("moving durable %q from filter %q %v to %q %v: %w",
+			r.durable, info.Config.FilterSubject, have, r.subject, r.filters, err)
 	}
 	return nil
 }
@@ -1407,7 +1474,16 @@ func (r *natsReader) reconcileFilterSubject() error {
 // tenant. The durable name is scoped to the instance + functional area + suffix
 // (not the tenant), so every replica of a service shares one consumer and each
 // message is delivered to exactly one of them.
+//
+// It refuses the advisory capture (streams.MaxDeliveries). Only the manager's own
+// max-delivery recorder reads that stream, through an exact filter per durable; a second
+// reader with the whole-stream filter would overlap it, which a work-queue stream forbids —
+// and every advisory it took would be one no recorder lettered.
 func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (MessageReader, error) {
+	if streams.ShapeOf(suffix) == streams.ShapeAdvisory {
+		return nil, fmt.Errorf("messaging: %q is read only by the max-delivery recorder (RecordMaxDeliveries), "+
+			"not through NewReader", suffix)
+	}
 	stream, err := nmgr.ensureStream(suffix)
 	if err != nil {
 		return nil, err
@@ -1837,6 +1913,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		msg.StreamSeq = seq
 		msg.AppendTime = appended
 		msg.slot = sl
+		msg.origin = Origin{Suffix: r.suffix, Stream: r.stream, Consumer: r.durable, Seq: seq}
 		return msg, nil
 	}
 }
@@ -2276,8 +2353,9 @@ func (nmgr *NatsManager) Start(ctx context.Context) error {
 	return nmgr.lifecycle.Start(ctx)
 }
 
-// ExecuteStart instantiates the service's readers/writers via oncreate, then starts
-// the stream-utilization sampler over the streams they ensured.
+// ExecuteStart instantiates the service's readers/writers via oncreate, starts the
+// max-delivery recorder over those readers (recorder.go), then starts the
+// stream-utilization sampler over the streams they ensured.
 //
 // The sampler's context is derived from the START context, so cancelling the root
 // context ends the sampler without anything else having to ask — which is what E10
@@ -2285,6 +2363,11 @@ func (nmgr *NatsManager) Start(ctx context.Context) error {
 // signalling channel this replaced could not do.
 func (nmgr *NatsManager) ExecuteStart(ctx context.Context) error {
 	if err := nmgr.oncreate(nmgr); err != nil {
+		return err
+	}
+	// The max-delivery recorder follows the readers oncreate just built, so it starts after
+	// them; see recorder.go for why a manager with readers and no recorder refuses to start.
+	if err := nmgr.startRecorder(ctx); err != nil {
 		return err
 	}
 	// Guard against starting a second sampler if Start is ever retried without an
@@ -2305,8 +2388,8 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 	return nmgr.lifecycle.Stop(ctx)
 }
 
-// ExecuteStop stops the metrics sampler, unsubscribes readers, drains the connection
-// and WAITS for the drain to finish, so the connection is closed when it returns. The
+// ExecuteStop stops the metrics sampler and the max-delivery recorder, unsubscribes
+// readers, drains the connection and WAITS for the drain to finish, so the connection is closed when it returns. The
 // sampler is stopped first (before Drain) so it is not mid-StreamInfo when the
 // connection closes. See drainAndWait for the wait and its bound.
 //
@@ -2343,6 +2426,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 		}
 		nmgr.samplerCancel = nil
 	}
+	// The recorder is joined the same bounded way, and before the reader unsubscribes: it
+	// may be mid-letter, and the letter is worth more than the few seconds.
+	nmgr.stopRecorder(ctx)
 	// A connection that is already closed has no subscriptions left to release, and
 	// every Unsubscribe on it fails. That is the ordinary state of a stop that follows
 	// an unrequested close — the kubelet stopping the container whose liveness failed —

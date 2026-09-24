@@ -35,12 +35,14 @@ package deadletter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -60,15 +62,18 @@ const (
 	// against that command.
 	KindCommandResponse Kind = "command-response"
 	// KindConnectorDispatch is an outbound send — a webhook call or a broker publish to
-	// a tenant's registered connector — that the connectors service gave up on.
+	// a tenant's registered connector — that the platform gave up on.
 	//
-	// 🔑 IT IS THE ONE KIND WHOSE ORIGINAL LIVES ELSEWHERE. That service keeps its own
-	// terminal sink (connector-dispatch.dead) holding the request VERBATIM, because a
-	// replay of an outbound send has to be byte-identical and an envelope is a summary.
-	// This letter is the INDEX entry for it: it puts the give-up in the one list an
-	// operator reads. So it carries no Payload — the body is already durable one stream
-	// over, and storing it twice would double the retention cost of the platform's
-	// noisiest error path to say the same thing.
+	// 🔑 IT IS THE ONE KIND WHOSE ORIGINAL LIVES ELSEWHERE. Whoever writes it — the
+	// connectors service's own arm, or the platform's max-delivery recorder when a
+	// dispatch's deliveries ran out with no outcome — first writes the request VERBATIM to
+	// connector-dispatch.dead, because a replay of an outbound send has to be
+	// byte-identical and an envelope is a summary. This letter is the INDEX entry for it:
+	// it puts the give-up in the one list an operator reads. So it carries no Payload —
+	// the body is already durable one stream over, and storing it twice would double the
+	// retention cost of the platform's noisiest error path to say the same thing. It holds
+	// for both writers by construction: the connector-dispatch stream DECLARES its verbatim
+	// copy (streams.Stream.VerbatimCopy), and the recorder reads that declaration.
 	//
 	// 🔴 SUBJECT AND SEQUENCE LOCATE THE ORIGINAL ON THE SOURCE STREAM, NOT THE COPY ON
 	// THE DEAD SUBJECT, and reading them the other way sends an operator to a sequence
@@ -83,6 +88,16 @@ const (
 	// give-ups, so on a busy instance the original can be discarded on the byte ceiling
 	// first. That is why the verbatim copy, not the pointer, is the durable record.
 	KindConnectorDispatch Kind = "connector-dispatch"
+	// KindEvent is a device event — raw, captured or resolved — whose every delivery to a
+	// consumer ran out with no outcome.
+	KindEvent Kind = "event"
+	// KindCommand is an outbound command to a device whose every delivery to a consumer ran
+	// out with no outcome.
+	KindCommand Kind = "command"
+	// KindControlFact is a control-plane fact — a published rule set, a roster or attribute
+	// update, a fence-set manifest, an entity deletion — whose every delivery ran out with
+	// no outcome, so the consumer's projection may be missing it until its next reconcile.
+	KindControlFact Kind = "control-fact"
 )
 
 // allKinds is the vocabulary in one place, so a reader that has to OFFER the set — the
@@ -97,6 +112,7 @@ const (
 // is a visible gap rather than a silent one — but keep them together anyway.
 var allKinds = []Kind{
 	KindDetectionAction, KindNotification, KindCommandResponse, KindConnectorDispatch,
+	KindEvent, KindCommand, KindControlFact,
 }
 
 // Kinds returns the Kind vocabulary as strings, in declaration order.
@@ -151,14 +167,32 @@ const (
 	// ReasonUnprocessable it would read as poison, when it is the one reason here whose
 	// letter describes work that would succeed if it were sent again.
 	ReasonShed Reason = "shed"
+	// ReasonNoOutcome means every delivery ran out with NO outcome recorded by the consumer:
+	// the pod was stopped mid-handling, or the handler ran past its ack window, and the
+	// broker gave up. It is written by the platform's max-delivery recorder, not by a
+	// service's own arm, which by definition never reached a decision.
+	//
+	// 🔴 IT SETTLES NOTHING. The final delivery may well have done its work and lost only
+	// its ack — a handler past its window commits and then acks too late — so a consumer
+	// that read this letter as "the work is lost" could undo work that happened.
+	ReasonNoOutcome Reason = "no-outcome"
 )
+
+// HeaderDeadReason is the message header stamped on a VERBATIM copy of a give-up (on
+// connector-dispatch.dead) recording why it was given up on, so a healthy-but-shed dispatch
+// is distinguishable from poison on the one shared terminal subject.
+const HeaderDeadReason = "Dc-Dead-Reason"
+
+// DeadReasonNoOutcome is HeaderDeadReason's value on a verbatim copy the max-delivery
+// recorder wrote: the dispatch's deliveries ran out with no outcome recorded.
+const DeadReasonNoOutcome = "no_outcome"
 
 // Valid reports whether r is one of the declared reasons. Bounded for the same reasons
 // Kind.Valid is, and written the same way: a positive switch, so a value nobody declared
 // is refused on the write path rather than becoming an unfilterable row.
 func (r Reason) Valid() bool {
 	switch r {
-	case ReasonExhausted, ReasonUnprocessable, ReasonShed:
+	case ReasonExhausted, ReasonUnprocessable, ReasonShed, ReasonNoOutcome:
 		return true
 	default:
 		return false
@@ -206,7 +240,9 @@ func (r Reason) WorkWasAttempted() bool {
 	default:
 		// ReasonUnprocessable and ReasonShed both describe work the producer looked at and
 		// declined — nothing was attempted, so nothing is lost — and so does any reason a
-		// later build adds without revisiting this.
+		// later build adds without revisiting this. ReasonNoOutcome is here for a different
+		// reason: the work may have been done (see its declaration), and a veto is the only
+		// safe answer about work whose outcome nobody recorded.
 		return false
 	}
 }
@@ -409,9 +445,10 @@ func NewProducer(ms *core.Microservice) *Producer {
 		lost: ms.NewCounter(LostCounterName,
 			"Dead letters this service gave up on and could NOT record: the work is gone with "+
 				"no letter anywhere. Either the write failed on every attempt (the broker was "+
-				"unreachable or refusing, or out of storage) or the service refused its own "+
-				"letter as malformed, which is a defect in the service. The pod's LOST error "+
-				"log line says which."),
+				"unreachable or refusing, or out of storage), or the service refused its own "+
+				"letter as malformed, which is a defect in the service, or a dead-letter reader "+
+				"(the store or the command writeback) ran out of deliveries on a letter, which then "+
+				"ages out of the stream unstored. The pod's LOST error log line says which."),
 	}
 }
 
@@ -504,16 +541,94 @@ func detach(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), writeDeadline)
 }
 
-// Write records one dead letter. ctx must carry the tenant, which is what scopes the
-// subject; a context without one is refused by the writer, fail-closed.
+// Write records one dead letter that is NOT about a consumed message — a publish that never
+// reached the bus, say. ctx must carry the tenant, which is what scopes the subject; a
+// context without one is refused by the writer, fail-closed.
 //
 // It stamps the producer's source on e before anything else; see Envelope.Source.
+//
+// 🔴 IT REFUSES AN ENVELOPE CARRYING A Sequence, counted as a loss like any other refusal.
+// A sequence says the letter is about a consumed message, and such a letter must go through
+// WriteFor: that is where its dedup id comes from, and without it the letter and the
+// platform's max-delivery recorder's letter about the same delivery would both be stored.
 //
 // It returns an error only when the letter could not be recorded — refused as malformed,
 // or not written after every attempt — at which point the work is LOST, and the loss has
 // already been counted through onLoss. A caller that ignores the error is not thereby
 // hiding anything.
 func (s *Sink) Write(ctx context.Context, e Envelope) error {
+	if e.Sequence != 0 {
+		err := errors.New("the envelope carries a stream sequence, so it is about a consumed message " +
+			"and must be written with WriteFor")
+		s.onLoss(err)
+		return fmt.Errorf("dead letter LOST — %s was refused before any write, a defect in the "+
+			"producing service: %w", e.Kind, err)
+	}
+	return s.write(ctx, e, "")
+}
+
+// WriteFor records one dead letter about msg, a message this service CONSUMED and is giving
+// up on. ctx must carry the tenant, as for Write.
+//
+// It fills what msg already knows, so an arm cannot get it wrong:
+//
+//   - Kind, from the declaration of the stream msg came from (msg.Origin().Suffix; see
+//     streams.Stream.DeadLetterKind). The kind of a letter is a property of the stream, not
+//     a choice each arm makes, because the platform's max-delivery recorder letters the same
+//     stream's abandoned deliveries and the two must agree.
+//   - Subject, Sequence, Attempts and Correlation, from msg.
+//   - the dedup id, OriginID(msg), which the recorder derives for the same delivery.
+//
+// 🔴 EACH OF THESE IS REFUSED, counted as a loss and returned, because each is a defect in
+// the caller rather than a condition to handle: a preset e.Kind (a second place deciding the
+// kind), a message with no Origin (not from a durable reader, so there is nothing to derive
+// from), and a message from a stream declared streams.NotLettered.
+func (s *Sink) WriteFor(ctx context.Context, msg messaging.Message, e Envelope) error {
+	o := msg.Origin()
+	var refusal error
+	kind := streams.DeadLetterKindFor(o.Suffix)
+	switch {
+	case e.Kind != "":
+		refusal = fmt.Errorf("the envelope presets kind %q; WriteFor derives it from the stream", e.Kind)
+	case kind == "":
+		refusal = fmt.Errorf("the message has no origin on a declared stream (suffix %q), so no kind "+
+			"or dedup id can be derived; only a message from a durable reader can be lettered with WriteFor",
+			o.Suffix)
+	case kind == streams.NotLettered:
+		refusal = fmt.Errorf("stream %q is declared NotLettered; a give-up on it is never lettered", o.Suffix)
+	}
+	if refusal != nil {
+		s.onLoss(refusal)
+		return fmt.Errorf("dead letter LOST — refused before any write, a defect in the producing "+
+			"service: %w", refusal)
+	}
+	e.Kind = Kind(kind)
+	e.Subject = msg.Subject
+	e.Sequence = o.Seq
+	e.Attempts = msg.NumDelivered
+	e.Correlation = msg.CorrelationID()
+	return s.write(ctx, e, OriginID(msg))
+}
+
+// OriginID is the dedup id of a letter about msg: "mdl.<stream>.<consumer>.<seq>" from its
+// Origin, or "" — no dedup at all — when any part is missing or the sequence is 0. An id
+// built from a partial origin would collide across unrelated messages, which on a dedup
+// window is a silent loss rather than a harmless duplicate.
+func OriginID(msg messaging.Message) string {
+	o := msg.Origin()
+	return originID(o.Stream, o.Consumer, o.Seq)
+}
+
+func originID(stream, consumer string, seq uint64) string {
+	if stream == "" || consumer == "" || seq == 0 {
+		return ""
+	}
+	return fmt.Sprintf("mdl.%s.%s.%d", stream, consumer, seq)
+}
+
+// write is the one write path: validate, then retry within the detached deadline. dedupID,
+// when set, is published as the letter's Nats-Msg-Id.
+func (s *Sink) write(ctx context.Context, e Envelope, dedupID string) error {
 	e.Source = s.source
 	body, err := Marshal(e)
 	if err != nil {
@@ -521,18 +636,31 @@ func (s *Sink) Write(ctx context.Context, e Envelope) error {
 		return fmt.Errorf("dead letter LOST — %s was refused before any write, a defect in "+
 			"the producing service: %w", e.Kind, err)
 	}
-	msg := messaging.Message{Value: body}
+	msg := messaging.Message{Value: body, DedupID: dedupID}
 	if e.Correlation != "" {
 		msg = msg.WithCorrelationID(e.Correlation)
 	}
+	attempts, err := writeWithRetries(ctx, s.writer, msg)
+	if err != nil {
+		s.onLoss(err)
+		return fmt.Errorf("dead letter LOST — %s could not be written in %d attempt(s) and its "+
+			"source message will not redeliver: %w", e.Kind, attempts, err)
+	}
+	return nil
+}
+
+// writeWithRetries writes msg with the bounded retries every give-up write gets, under a
+// context detached from the caller's cancellation (see detach). It reports how many attempts
+// it made.
+func writeWithRetries(ctx context.Context, w Writer, msg messaging.Message) (int, error) {
 	wctx, cancel := detach(ctx)
 	defer cancel()
-
+	var err error
 	attempts := 0
 	for attempts < writeAttempts {
 		attempts++
-		if err = s.writer.WriteMessages(wctx, msg); err == nil {
-			return nil
+		if err = w.WriteMessages(wctx, msg); err == nil {
+			return attempts, nil
 		}
 		if attempts < writeAttempts {
 			select {
@@ -543,7 +671,5 @@ func (s *Sink) Write(ctx context.Context, e Envelope) error {
 			}
 		}
 	}
-	s.onLoss(err)
-	return fmt.Errorf("dead letter LOST — %s could not be written in %d attempt(s) and its "+
-		"source message will not redeliver: %w", e.Kind, attempts, err)
+	return attempts, err
 }

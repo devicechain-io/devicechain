@@ -27,13 +27,14 @@ func TestKindsOffersEveryDeclaredKind(t *testing.T) {
 	}
 	for _, declared := range []Kind{
 		KindDetectionAction, KindNotification, KindCommandResponse, KindConnectorDispatch,
+		KindEvent, KindCommand, KindControlFact,
 	} {
 		if !offered[string(declared)] {
 			t.Errorf("kind %q is declared but not offered by Kinds(), so dcctl's --kind help "+
 				"tells an operator a real filter value does not exist", declared)
 		}
 	}
-	if len(Kinds()) != 4 {
+	if len(Kinds()) != 7 {
 		t.Errorf("Kinds() has %d entries; a kind was added or removed without this test and "+
 			"the dcctl help being revisited: %v", len(Kinds()), Kinds())
 	}

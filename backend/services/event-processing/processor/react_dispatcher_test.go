@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -67,7 +68,11 @@ func derivedMsg(t *testing.T, tenant string, ev runtime.DerivedEvent, numDeliver
 	if err != nil {
 		t.Fatal(err)
 	}
-	return messaging.NewConsumedMessage("dc."+tenant+".derived-events", b, numDelivered, nil, ack)
+	// Attributable the way the derived-events durable reader makes it: the dead-letter arm
+	// derives the letter's kind and dedup id from this origin.
+	return messaging.NewConsumedMessage("dc."+tenant+".derived-events", b, numDelivered, nil, ack).
+		WithOrigin(messaging.Origin{Suffix: streams.DerivedEvents, Stream: "dc_derived-events",
+			Consumer: "dc_event-processing_derived-events", Seq: 31})
 }
 
 func sendCmdEvent() runtime.DerivedEvent {
@@ -309,7 +314,7 @@ func TestReactDeadLettersAtTheCap(t *testing.T) {
 	if e.Attempts != messaging.MaxDeliver+2 {
 		t.Fatalf("attempts = %d, want the message's own count %d", e.Attempts, messaging.MaxDeliver+2)
 	}
-	if e.Subject == "" || e.OccurredAt.IsZero() || len(e.Payload) == 0 {
+	if e.Subject == "" || e.OccurredAt.IsZero() || len(e.Payload) == 0 || e.Sequence != 31 {
 		t.Fatalf("the letter cannot be located or understood: %+v", e)
 	}
 	if dead.tenants[0] != "acme" {

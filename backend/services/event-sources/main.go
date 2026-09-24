@@ -18,6 +18,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -643,6 +644,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// Create and initialize nats manager.
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
+	// This service builds its manager by hand rather than through core/service, so it
+	// installs the max-delivery recorder itself: a capture delivery that runs out with no
+	// outcome is lettered like any other. The manager refuses to start its reader without it.
+	NatsManager.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(Microservice)))
 	err = NatsManager.Initialize(ctx)
 	if err != nil {
 		return err

@@ -211,18 +211,15 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 	if rd.dead == nil {
 		return
 	}
-	err := rd.dead.Write(tctx, deadletter.Envelope{
-		Kind:   deadletter.KindDetectionAction,
+	// WriteFor fills the kind (derived-events' declared one), subject, sequence, attempts and
+	// correlation from msg, and the dedup id the max-delivery recorder shares.
+	err := rd.dead.WriteFor(tctx, msg, deadletter.Envelope{
 		Reason: deadletter.ReasonExhausted,
 		Summary: "a detection fired and its authored actions could not be dispatched after " +
 			"every delivery attempt",
-		Attempts:    msg.NumDelivered,
-		Subject:     msg.Subject,
-		Sequence:    msg.StreamSeq,
-		Correlation: msg.CorrelationID(),
-		Reference:   ev.RuleID,
-		OccurredAt:  time.Now().UTC(),
-		Payload:     msg.Value,
+		Reference:  ev.RuleID,
+		OccurredAt: time.Now().UTC(),
+		Payload:    msg.Value,
 	})
 	if err != nil {
 		// The loss is already counted, on dead_letter_lost_total, by the sink — see

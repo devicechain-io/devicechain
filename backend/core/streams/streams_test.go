@@ -128,14 +128,84 @@ func TestMaxBytesCapIsDeclaredOnlyWhereIntended(t *testing.T) {
 			"its headroom floor; see config.TestBudgetLeavesHeadroomForUnaccountedStreams",
 			int64(deviceEventsCaptureMaxBytesCap))
 	}
+	// The max-delivery capture is capped for the opposite reason: it is empty in steady
+	// state, and its tier ceiling would reserve far more than it could ever need.
+	if got := MaxBytesCapFor(MaxDeliveries); got != maxDeliveriesMaxBytesCap {
+		t.Errorf("MaxBytesCapFor(%q) = %d, want %d", MaxDeliveries, got, int64(maxDeliveriesMaxBytesCap))
+	}
 	for _, s := range All {
-		if s.Suffix == DeviceEventsCapture {
+		if s.Suffix == DeviceEventsCapture || s.Suffix == MaxDeliveries {
 			continue
 		}
 		if got := MaxBytesCapFor(s.Suffix); got != 0 {
-			t.Errorf("stream %q declares a ceiling cap of %d; only the capture stream should, "+
+			t.Errorf("stream %q declares a ceiling cap of %d; only the two capture streams should, "+
 				"since every other stream is meant to track its tier's ceiling", s.Suffix, got)
 		}
+	}
+}
+
+// Every stream says what a letter about one of its messages is — or that there is none.
+// An empty declaration is refused because the max-delivery recorder reads it for every
+// stream a service consumes: "" would be a stream whose abandoned deliveries are neither
+// lettered nor counted as refused, which is the silent drop the recorder exists to end.
+// The VALUES are checked against the vocabulary in core/deadletter, which this leaf
+// cannot import.
+func TestEveryStreamDeclaresADeadLetterKind(t *testing.T) {
+	for _, s := range All {
+		if s.DeadLetterKind == "" {
+			t.Errorf("stream %q declares no DeadLetterKind; declare its kind, or NotLettered", s.Suffix)
+		}
+	}
+	// The sinks and the capture must never be lettered: a letter about a letter loops.
+	for _, sink := range []string{DeadLetters, ConnectorDispatchDead, FailedEvents, FailedDecode, MaxDeliveries} {
+		if got := DeadLetterKindFor(sink); got != NotLettered {
+			t.Errorf("DeadLetterKindFor(%q) = %q, want NotLettered", sink, got)
+		}
+	}
+	if got := DeadLetterKindFor("a-suffix-nobody-declared"); got != "" {
+		t.Errorf("DeadLetterKindFor(unknown) = %q, want \"\" so a caller refuses it", got)
+	}
+}
+
+// A verbatim copy is a real stream the writer ensures and the budget counts, so it must be
+// declared — and it must itself be unlettered, or a give-up on the copy would be copied.
+func TestVerbatimCopyNamesADeclaredStream(t *testing.T) {
+	copies := 0
+	for _, s := range All {
+		if s.VerbatimCopy == "" {
+			continue
+		}
+		copies++
+		if !IsDeclared(s.VerbatimCopy) {
+			t.Errorf("stream %q names verbatim copy %q, which is not declared", s.Suffix, s.VerbatimCopy)
+		}
+		if DeadLetterKindFor(s.VerbatimCopy) != NotLettered {
+			t.Errorf("verbatim copy %q must be NotLettered", s.VerbatimCopy)
+		}
+	}
+	if got := VerbatimCopyFor(ConnectorDispatch); got != ConnectorDispatchDead {
+		t.Errorf("VerbatimCopyFor(%q) = %q, want %q", ConnectorDispatch, got, ConnectorDispatchDead)
+	}
+	if copies != 1 {
+		t.Errorf("%d streams declare a verbatim copy; want exactly connector-dispatch", copies)
+	}
+}
+
+// The work-queue retention is the max-delivery capture's alone. Anything else declared so
+// would lose a message the moment one reader acked it — every other stream has several
+// readers, one per area, each owed its own copy.
+func TestOnlyTheCaptureStreamIsWorkQueue(t *testing.T) {
+	for _, s := range All {
+		want := RetentionLimits
+		if s.Suffix == MaxDeliveries {
+			want = RetentionWorkQueue
+		}
+		if got := RetentionFor(s.Suffix); got != want {
+			t.Errorf("RetentionFor(%q) = %d, want %d", s.Suffix, got, want)
+		}
+	}
+	if ShapeOf(MaxDeliveries) != ShapeAdvisory {
+		t.Errorf("%q must be the advisory shape", MaxDeliveries)
 	}
 }
 

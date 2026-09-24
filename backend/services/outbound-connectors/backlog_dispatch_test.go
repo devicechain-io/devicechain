@@ -105,6 +105,7 @@ func TestDispatchBacklogIsSentOnce(t *testing.T) {
 		reader, err = newDispatchReader(m, cfg)
 		return err
 	})
+	nmgr.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(ms)))
 	nmgr.SetAckWaitForTesting(t, 8*time.Second)
 	require.NoError(t, nmgr.Initialize(context.Background()))
 	require.NoError(t, nmgr.Start(context.Background()))

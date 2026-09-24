@@ -474,11 +474,6 @@ func (c *DispatchConsumer) rateWaitDeadline(ctx context.Context, now time.Time) 
 // delivery, where leaving the message unacked could not redeliver it (past the cap; see deadLetter).
 const deadLetterWriteAttempts = 3
 
-// headerDeadReason is the message-header key stamped on a dead-lettered dispatch recording WHY it was
-// dead-lettered (the outcome* value: rate_limited / dead / unsupported / invalid), so a rate-shed
-// (healthy, replayable) is distinguishable from genuine poison on the shared terminal subject.
-const headerDeadReason = "Dc-Dead-Reason"
-
 // deadLetter writes the original message verbatim to the terminal dead-letter subject
 // ({instance}.{tenant}.connector-dispatch.dead), then acks the original so it stops redelivering.
 // tctx already carries the tenant, which the writer requires to scope the subject (fail-closed on
@@ -496,8 +491,14 @@ func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Messag
 	// Stamp the disposition on the dead-lettered message (not just the metric/log) so an operator or a
 	// future replay tool can tell a healthy-but-rate-shed dispatch (replayable) apart from genuine
 	// poison (unsupported/invalid/permanently-failed) sharing this terminal subject. The header rides
-	// through the NATS writer (it propagates non-correlation headers).
-	dead := messaging.Message{Value: msg.Value, Headers: map[string]string{headerDeadReason: outcome}}.
+	// through the NATS writer (it propagates non-correlation headers). The value is the outcome*
+	// label (rate_limited / dead / unsupported / invalid); the platform's max-delivery recorder
+	// writes deadletter.DeadReasonNoOutcome under the same key.
+	//
+	// The dedup id is the one that recorder derives for the same delivery, so if this arm overran
+	// the message's ack window and the recorder has already copied it, the copy is stored once.
+	dead := messaging.Message{Value: msg.Value, Headers: map[string]string{deadletter.HeaderDeadReason: outcome},
+		DedupID: deadletter.OriginID(msg)}.
 		WithCorrelationID(msg.CorrelationID())
 	finalDelivery := msg.NumDelivered >= messaging.MaxDeliver
 
@@ -579,21 +580,18 @@ func (c *DispatchConsumer) index(tctx context.Context, msg messaging.Message, ru
 	if c.deadIndex == nil {
 		return
 	}
-	_ = c.deadIndex.Write(tctx, deadletter.Envelope{
-		Kind:   deadletter.KindConnectorDispatch,
+	// WriteFor fills the kind (connector-dispatch's declared one), subject, sequence, attempts and
+	// correlation from msg, and the dedup id the max-delivery recorder shares.
+	_ = c.deadIndex.WriteFor(tctx, msg, deadletter.Envelope{
 		Reason: indexReasonFor(outcome),
 		Summary: "an outbound connector dispatch was given up on; the request itself is on this " +
 			"instance's connector-dispatch dead-letter subject",
 		// 🔴 THE DETAIL IS THE BOUNDED OUTCOME LABEL, NEVER THE ENDPOINT'S OWN ERROR TEXT. A send
 		// failure's message carries the status and address of a destination the TENANT chose, and
 		// this record is read across tenants; the egress boundary closed exactly that oracle.
-		Detail:      action + "/" + outcome,
-		Attempts:    msg.NumDelivered,
-		Subject:     msg.Subject,
-		Sequence:    msg.StreamSeq,
-		Correlation: msg.CorrelationID(),
-		Reference:   rule,
-		OccurredAt:  time.Now().UTC(),
+		Detail:     action + "/" + outcome,
+		Reference:  rule,
+		OccurredAt: time.Now().UTC(),
 	})
 }
 

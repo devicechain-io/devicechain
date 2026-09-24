@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 // fakeAlarmApi implements DeviceManagementApi by embedding a (nil) MockApi to satisfy the whole
@@ -78,7 +79,11 @@ func raiseMsg(t *testing.T, tenant string, req model.RaiseAlarmRequest, numDeliv
 	if err != nil {
 		t.Fatal(err)
 	}
-	return messaging.NewConsumedMessage("dc."+tenant+".raise-alarm", b, numDelivered, nil, ack)
+	// Attributable the way the raise-alarm durable reader makes it: the dead-letter arm derives
+	// the letter's kind and dedup id from this origin.
+	return messaging.NewConsumedMessage("dc."+tenant+".raise-alarm", b, numDelivered, nil, ack).
+		WithOrigin(messaging.Origin{Suffix: streams.RaiseAlarm, Stream: "dc_raise-alarm",
+			Consumer: "dc_device-management_raise-alarm", Seq: 23})
 }
 
 func validReq() model.RaiseAlarmRequest {
@@ -292,6 +297,9 @@ func TestARaiseAlarmEdgeThatCannotBeAppliedIsDeadLettered(t *testing.T) {
 	}
 	if e.Attempts != messaging.MaxDeliver+1 {
 		t.Fatalf("attempts = %d, want the message's own count", e.Attempts)
+	}
+	if got, want := dead.msgs[0].DedupID, "mdl.dc_raise-alarm.dc_device-management_raise-alarm.23"; got != want {
+		t.Fatalf("dedup id = %q, want %q: the id the max-delivery recorder derives for the same delivery", got, want)
 	}
 	if dead.tenants[0] != "acme" {
 		t.Fatalf("the letter was written under tenant %q", dead.tenants[0])

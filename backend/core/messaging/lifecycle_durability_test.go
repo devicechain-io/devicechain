@@ -206,6 +206,7 @@ func TestTrafficPublishedWhileTheConsumerIsDownSurvives(t *testing.T) {
 			reader = r
 			return err
 		})
+	consumer.RecordMaxDeliveries(recordNothing)
 	if err := consumer.Initialize(ctx); err != nil {
 		t.Fatalf("consumer initialize: %v", err)
 	}
@@ -372,6 +373,7 @@ func TestAnUnackedMessageIsNotRedeliveredImmediately(t *testing.T) {
 			reader = r
 			return err
 		})
+	consumer.RecordMaxDeliveries(recordNothing)
 	if err := consumer.Initialize(ctx); err != nil {
 		t.Fatalf("consumer initialize: %v", err)
 	}

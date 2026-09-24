@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-outbound-connectors/config"
@@ -67,6 +68,7 @@ func capacityMessageOn(t *testing.T, ackWait time.Duration, body []byte) (messag
 		reader = r
 		return err
 	})
+	nmgr.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(ms)))
 	nmgr.SetAckWaitForTesting(t, ackWait)
 	require.NoError(t, nmgr.Initialize(context.Background()))
 	require.NoError(t, nmgr.Start(context.Background()))
@@ -271,7 +273,7 @@ func TestRateWaitCutByAckDeadlineOnFinalDeliveryIsDeadLettered(t *testing.T) {
 
 	letters := dead.written()
 	require.Len(t, letters, 1, "a final delivery too late to send must be dead-lettered, not stranded")
-	require.Equal(t, outcomeDead, letters[0].Headers[headerDeadReason],
+	require.Equal(t, outcomeDead, letters[0].Headers[deadletter.HeaderDeadReason],
 		"a wait cut by the redelivery deadline is not a rate shed, even on the final delivery")
 	require.Eventually(t, func() bool { return unackedOn(t, srv) == 0 }, 5*time.Second, 20*time.Millisecond,
 		"the dead-lettered dispatch must be acked on the broker")

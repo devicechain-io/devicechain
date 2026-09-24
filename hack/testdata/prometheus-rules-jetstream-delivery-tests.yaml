@@ -44,6 +44,11 @@
 #     capacity-bounded reader is created, so they EXIST on a healthy instance rather
 #     than being absent; the quiet scenarios carry them at zero for the reason given
 #     for the unread series above.
+#   - devicechain_<area>_jetstream_stream_used_messages{stream} -- the stream-fill gauge
+#     every service reports for each stream it ensures. MaxDeliveryRecordsWaiting reads
+#     it for the max-delivery capture only, a work queue whose count is the backlog of
+#     abandoned deliveries nobody has recorded; every area samples it, so it arrives
+#     from several pods at once with the same value.
 #
 # Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
 # rendered group in beside this file as rendered-rules.yaml.
@@ -314,4 +319,51 @@ tests:
     alert_rule_test:
       - eval_time: 10m
         alertname: ReaderHeldMessagePastAckWait
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MaxDeliveryRecordsWaiting. The capture is a work queue, so its count is
+  # the backlog nobody has recorded. Two pods sample the same stream and
+  # report the same count: `max`, one alert.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-device-management-6f7d-aaaaa", stream="devicechain_max-deliveries"}'
+        values: '0x5 2x30'
+      - series: 'devicechain_eventprocessing_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-event-processing-5c4b-bbbbb", stream="devicechain_max-deliveries"}'
+        values: '0x5 2x30'
+    alert_rule_test:
+      # Waiting, but not yet for the whole window: a recorder that is merely restarting.
+      - eval_time: 15m
+        alertname: MaxDeliveryRecordsWaiting
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: MaxDeliveryRecordsWaiting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_max-deliveries
+            exp_annotations:
+              summary: "Messages that ran out of delivery attempts are waiting to be recorded"
+              description: "2 notice(s) of messages whose every delivery attempt ran out have been waiting on devicechain_max-deliveries for 15 minutes without being turned into dead letters. Each service records its own; one that is down or crash-looping records late, so first check that every service is running and look in its logs for errors from the max-delivery recorder. A notice that stays after every service is healthy names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream."
+
+  # ------------------------------------------------------------------
+  # 🔴 A healthy instance: the capture exists and is empty, and a busy
+  # ordinary stream is not this alert's business.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-device-management-6f7d-aaaaa", stream="devicechain_max-deliveries"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-device-management-6f7d-aaaaa", stream="devicechain_raise-alarm"}'
+        values: '500x60'
+      - series: 'devicechain_notificationmanagement_jetstream_stream_used_messages{namespace="dci-other", pod="dc-notification-management-7c9f-abcde", stream="other_max-deliveries"}'
+        values: '9x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MaxDeliveryRecordsWaiting
+        exp_alerts: []
+      - eval_time: 59m
+        alertname: MaxDeliveryRecordsWaiting
         exp_alerts: []

@@ -110,4 +110,21 @@ spec:
           annotations:
             summary: "A service held a message past its acknowledgement window, so it was redelivered"
             description: "The reader for durable {{`{{ $labels.durable }}`}} held a message longer than the broker waits for an acknowledgement, so the broker handed it out again. stage=worker: a send was still running when that happened, so the message may have been sent twice -- look for a slow or unresponsive destination behind this service. stage=buffer: the reader dropped a message it had fetched but not yet handed to a worker, and the broker's redelivery is handled instead; nothing was sent twice, but the service is not keeping up."
+        - alert: MaxDeliveryRecordsWaiting
+          # The max-delivery capture is a WORK QUEUE: a recorder acks each advisory once it
+          # has dead-lettered (or deliberately skipped) the message it names, and the ack
+          # deletes it. So the stream's message count is exactly the abandoned deliveries no
+          # recorder has written down yet, and on a healthy instance it drains to zero within
+          # seconds. `max`, not `sum`: every pod that ensures the stream samples the same count.
+          #
+          # 🔴 `[a-z0-9]+`, NOT `.+` -- the reasoning is on DeadLetterWriteLost in
+          # prometheusrule.yaml.
+          expr: max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_messages", stream=~".+max-deliveries", namespace="{{ $ns }}"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Messages that ran out of delivery attempts are waiting to be recorded"
+            description: "{{`{{ $value }}`}} notice(s) of messages whose every delivery attempt ran out have been waiting on {{`{{ $labels.stream }}`}} for 15 minutes without being turned into dead letters. Each service records its own; one that is down or crash-looping records late, so first check that every service is running and look in its logs for errors from the max-delivery recorder. A notice that stays after every service is healthy names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream."
 {{- end }}

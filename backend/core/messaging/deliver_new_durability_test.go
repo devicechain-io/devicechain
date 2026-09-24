@@ -87,6 +87,7 @@ func TestADeliverNewDurableStillReceivesTrafficPublishedWhileItIsDown(t *testing
 			reader = r
 			return err
 		})
+	consumer.RecordMaxDeliveries(recordNothing)
 	if err := consumer.Initialize(ctx); err != nil {
 		t.Fatalf("consumer initialize: %v", err)
 	}

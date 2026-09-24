@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -54,6 +55,13 @@ func newIndexingConsumer(dead, index messaging.MessageWriter) *DispatchConsumer 
 	return NewDispatchConsumer(&fakeReader{}, dead, index, testProducer(), e, nil, 5*time.Second, nil, 1, nil, core.NewReadPacer(nil, "test"))
 }
 
+// withDispatchOrigin makes msg attributable the way the connector-dispatch durable reader does:
+// the index entry's kind and dedup id are derived from it (deadletter.Sink.WriteFor).
+func withDispatchOrigin(msg messaging.Message, seq uint64) messaging.Message {
+	return msg.WithOrigin(messaging.Origin{Suffix: streams.ConnectorDispatch,
+		Stream: "inst_connector-dispatch", Consumer: "inst_outbound-connectors_connector-dispatch", Seq: seq})
+}
+
 func indexEnvelope(t *testing.T, w *fakeWriter) deadletter.Envelope {
 	t.Helper()
 	w.mu.Lock()
@@ -75,10 +83,10 @@ func TestGiveUpIsIndexedOnThePlatformDeadLetterStream(t *testing.T) {
 	dead, index := &fakeWriter{}, &fakeWriter{}
 	c := newIndexingConsumer(dead, index)
 	tctx := core.WithTenant(context.Background(), "tenant-a")
-	msg := messaging.Message{
+	msg := withDispatchOrigin(messaging.Message{
 		Subject: messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
 		Value:   []byte(`{"kind":"httpCall"}`), NumDelivered: messaging.MaxDeliver, StreamSeq: 41,
-	}.WithCorrelationID("corr-9")
+	}.WithCorrelationID("corr-9"), 41)
 
 	c.deadLetter(tctx, msg, "rule-7", "httpCall", outcomeDead)
 
@@ -118,6 +126,19 @@ func TestGiveUpIsIndexedOnThePlatformDeadLetterStream(t *testing.T) {
 	if copied != "corr-9" {
 		t.Fatalf("the verbatim copy carries correlation %q, want %q; without it the index entry "+
 			"names a message that cannot be found on the dead subject", copied, "corr-9")
+	}
+	// 🔑 BOTH CARRY THE ID THE PLATFORM'S MAX-DELIVERY RECORDER DERIVES FOR THIS DELIVERY, so a
+	// give-up this arm records after overrunning its ack window — when the recorder has already
+	// written the copy and the index entry — is stored once on each stream, not twice.
+	const originID = "mdl.inst_connector-dispatch.inst_outbound-connectors_connector-dispatch.41"
+	dead.mu.Lock()
+	copyID := dead.messages[0].DedupID
+	dead.mu.Unlock()
+	index.mu.Lock()
+	indexID := index.messages[0].DedupID
+	index.mu.Unlock()
+	if copyID != originID || indexID != originID {
+		t.Fatalf("dedup ids: copy %q, index %q; want both %q", copyID, indexID, originID)
 	}
 	// 🔑 THE REFERENCE IDENTIFIES THE WORK WITHIN ITS KIND, which for a connector dispatch
 	// is the rule that drove it — the thing an operator can act on. The action alone would
@@ -204,10 +225,10 @@ func TestIndexDetailIsTheBoundedOutcomeLabel(t *testing.T) {
 	c := newIndexingConsumer(dead, index)
 	tctx := core.WithTenant(context.Background(), "tenant-a")
 
-	c.deadLetter(tctx, messaging.Message{
+	c.deadLetter(tctx, withDispatchOrigin(messaging.Message{
 		Subject: messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
 		Value:   []byte(`{}`), NumDelivered: messaging.MaxDeliver,
-	}, "rule-7", "httpCall", outcomeRateLimited)
+	}, 3), "rule-7", "httpCall", outcomeRateLimited)
 
 	// Both halves are bounded enums, so neither can carry an endpoint's own error text.
 	if e := indexEnvelope(t, index); e.Detail != "httpCall/"+outcomeRateLimited {
@@ -226,9 +247,9 @@ func TestAFailedIndexWriteStillAcksTheTerminalMessage(t *testing.T) {
 	tctx := core.WithTenant(context.Background(), "tenant-a")
 
 	acked := &countingAcker{}
-	msg := messaging.NewConsumedMessage(
+	msg := withDispatchOrigin(messaging.NewConsumedMessage(
 		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
-		[]byte(`{}`), messaging.MaxDeliver, nil, acked)
+		[]byte(`{}`), messaging.MaxDeliver, nil, acked), 5)
 
 	c.deadLetter(tctx, msg, "rule-7", "httpCall", outcomeDead)
 
@@ -270,9 +291,9 @@ func TestTheGiveUpIsAckedBeforeTheIndexIsWritten(t *testing.T) {
 	dead, index := &fakeWriter{}, &fakeWriter{}
 	c := newIndexingConsumer(dead, index)
 	acker := &orderRecordingAcker{index: index}
-	msg := messaging.NewConsumedMessage(
+	msg := withDispatchOrigin(messaging.NewConsumedMessage(
 		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
-		[]byte(`{}`), messaging.MaxDeliver, nil, acker)
+		[]byte(`{}`), messaging.MaxDeliver, nil, acker), 6)
 
 	c.deadLetter(core.WithTenant(context.Background(), "tenant-a"), msg, "rule-7", "httpCall", outcomeDead)
 
@@ -324,9 +345,9 @@ func TestAFinalDeliveryThatCannotBeDeadLetteredIsCountedAsLost(t *testing.T) {
 	c := NewDispatchConsumer(&fakeReader{}, dead, index, producer, e, nil, 5*time.Second, nil, 1,
 		nil, core.NewReadPacer(nil, "test"))
 	acked := &countingAcker{}
-	msg := messaging.NewConsumedMessage(
+	msg := withDispatchOrigin(messaging.NewConsumedMessage(
 		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
-		[]byte(`{}`), messaging.MaxDeliver, nil, acked)
+		[]byte(`{}`), messaging.MaxDeliver, nil, acked), 5)
 
 	if got := gatheredCounter(t, reg, connectorsLost); got != 0 {
 		t.Fatalf("%s = %v before anything was lost, want 0", connectorsLost, got)
@@ -373,9 +394,9 @@ func TestAFailedIndexWriteIsNotCountedAsLost(t *testing.T) {
 	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
 	c := NewDispatchConsumer(&fakeReader{}, &fakeWriter{}, index, producer, e, nil, 5*time.Second, nil,
 		1, nil, core.NewReadPacer(nil, "test"))
-	msg := messaging.NewConsumedMessage(
+	msg := withDispatchOrigin(messaging.NewConsumedMessage(
 		messaging.ScopedSubject("inst", "tenant-a", "connector-dispatch"),
-		[]byte(`{}`), messaging.MaxDeliver, nil, &countingAcker{})
+		[]byte(`{}`), messaging.MaxDeliver, nil, &countingAcker{}), 7)
 
 	c.deadLetter(core.WithTenant(context.Background(), "tenant-a"), msg, "rule-7", "httpCall", outcomeDead)
 

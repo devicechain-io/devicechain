@@ -65,7 +65,7 @@ func constructorBuiltProcessor(t *testing.T, dead deadletter.Writer, api *fakeAp
 	producer := deadletter.NewProducer(ms)
 
 	p := NewCommandDeliveryProcessor(ms, &oneMessageReader{
-		msg: messaging.NewConsumedMessage("inst-1.acme.command-responses.pump-1",
+		msg: responseMessage(
 			[]byte(`{"commandToken":"cmd-1","success":true}`), numDelivered, nil, nil),
 	}, nil, core.NewNoOpLifecycleCallbacks(), api, nil, nil, producer.NewSink(dead), metrics)
 	return p, reg

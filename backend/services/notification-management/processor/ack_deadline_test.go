@@ -17,6 +17,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -56,6 +57,7 @@ func capacityMessageWith(t *testing.T, ackWait time.Duration, body []byte) messa
 		reader = r
 		return err
 	})
+	nmgr.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(ms)))
 	nmgr.SetAckWaitForTesting(t, ackWait)
 	require.NoError(t, nmgr.Initialize(context.Background()))
 	require.NoError(t, nmgr.Start(context.Background()))

@@ -15,8 +15,10 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/model"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/service"
 )
 
 // 🔴 WHAT THIS FILE EXISTS FOR: Api.Nudger is written during NatsManager.START, and the
@@ -64,12 +66,12 @@ func startNatsWiringFixture(t *testing.T) *messaging.NatsManager {
 	t.Helper()
 	host, port := startEmbeddedNats(t)
 
-	prevMs, prevCfg, prevNats, prevRdb, prevApi := Microservice, Configuration, NatsManager, RdbManager, Api
+	prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Api, Svc
 	prevProc, prevWriteback := CommandDeliveryProcessor, DeadLetterWriteback
 	prevResponses, prevCommands := CommandResponsesReader, DeviceCommandsWriter
 	prevDelivery, prevWritebackMetrics := DeliveryMetrics, WritebackMetrics
 	t.Cleanup(func() {
-		Microservice, Configuration, NatsManager, RdbManager, Api = prevMs, prevCfg, prevNats, prevRdb, prevApi
+		Microservice, Configuration, NatsManager, RdbManager, Api, Svc = prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc
 		CommandDeliveryProcessor, DeadLetterWriteback = prevProc, prevWriteback
 		CommandResponsesReader, DeviceCommandsWriter = prevResponses, prevCommands
 		DeliveryMetrics, WritebackMetrics = prevDelivery, prevWritebackMetrics
@@ -91,6 +93,8 @@ func startNatsWiringFixture(t *testing.T) *messaging.NatsManager {
 	Configuration = &config.CommandDeliveryConfiguration{
 		SweepIntervalSeconds: config.DefaultSweepIntervalSeconds,
 	}
+	// buildMetrics reads the dead-letter producer core/service builds, as it does in main.
+	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	buildMetrics()
 
 	RdbManager = rdb.NewRdbManager(Microservice, core.NewNoOpLifecycleCallbacks(), nil,
@@ -98,6 +102,8 @@ func startNatsWiringFixture(t *testing.T) *messaging.NatsManager {
 	Api = model.NewApi(RdbManager)
 
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
+	// What Svc.Initialize installs on the manager it builds; this one is built by hand.
+	NatsManager.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(Svc.DeadLetters))
 	mgr := NatsManager
 	t.Cleanup(func() {
 		if c := mgr.Conn(); c != nil && !c.IsClosed() {

@@ -361,19 +361,16 @@ func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.M
 	if cause != nil {
 		detail = cause.Error()
 	}
-	err := np.dead.Write(ctx, deadletter.Envelope{
-		Kind:   deadletter.KindNotification,
+	// WriteFor fills the kind (alarm-events' declared one), subject, sequence, attempts and
+	// correlation from msg, and the dedup id the max-delivery recorder shares.
+	err := np.dead.WriteFor(ctx, msg, deadletter.Envelope{
 		Reason: deadletter.ReasonExhausted,
 		Summary: "an alarm could not be delivered to any configured channel after every " +
 			"delivery attempt, so nobody was paged about it",
-		Detail:      detail,
-		Attempts:    msg.NumDelivered,
-		Subject:     msg.Subject,
-		Sequence:    msg.StreamSeq,
-		Correlation: msg.CorrelationID(),
-		Reference:   alarm,
-		OccurredAt:  time.Now().UTC(),
-		Payload:     msg.Value,
+		Detail:     detail,
+		Reference:  alarm,
+		OccurredAt: time.Now().UTC(),
+		Payload:    msg.Value,
 	})
 	if err != nil {
 		// The loss is already counted, on dead_letter_lost_total, by the sink — see

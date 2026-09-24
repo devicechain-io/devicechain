@@ -76,7 +76,7 @@ var (
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
 	// letters are stamped with and the ONE dead_letter_lost_total both of its arms count
-	// losses on. Built once, in the initialize phase, for the reason the metrics are.
+	// losses on. Built by core/service (Svc.DeadLetters), which the max-delivery recorder shares.
 	DeadLetters *deadletter.Producer
 )
 
@@ -127,7 +127,9 @@ func buildMetrics() {
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
 	RaiseAlarmMetrics = processor.NewRaiseAlarmMetrics(Microservice)
 	AlarmEventMetrics = processor.NewAlarmEventMetrics(Microservice)
-	DeadLetters = deadletter.NewProducer(Microservice)
+	// core/service built it: the platform's max-delivery recorder letters under it too,
+	// and a second NewProducer here would panic on the duplicate counter.
+	DeadLetters = Svc.DeadLetters
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")

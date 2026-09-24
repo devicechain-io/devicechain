@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
@@ -80,8 +81,12 @@ func validEventBytes(t *testing.T) []byte {
 	return bytes
 }
 
+// msgWith builds a message as the alarm-events durable reader hands it out, attributable to its
+// stream: the dead-letter arm derives the letter's kind and dedup id from that origin.
 func msgWith(subject string, value []byte, numDelivered int, ack messaging.Acknowledger) messaging.Message {
-	return messaging.NewConsumedMessage(subject, value, numDelivered, nil, ack)
+	return messaging.NewConsumedMessage(subject, value, numDelivered, nil, ack).
+		WithOrigin(messaging.Origin{Suffix: streams.AlarmEvents, Stream: "inst_alarm-events",
+			Consumer: "inst_notification-management_alarm-events", Seq: 17})
 }
 
 // A well-formed event is dispatched and acked once, exactly once.
@@ -253,6 +258,9 @@ func TestANotificationThatReachedNobodyIsDeadLettered(t *testing.T) {
 	assert.Equal(t, "notification-management", e.Source, "the letter must name the service that wrote it")
 	assert.Equal(t, "alarm-1", e.Reference, "the letter must name the alarm nobody was paged about")
 	assert.Equal(t, messaging.MaxDeliver, e.Attempts)
+	assert.EqualValues(t, 17, e.Sequence, "the letter locates the original by its origin sequence")
+	assert.Equal(t, "mdl.inst_alarm-events.inst_notification-management_alarm-events.17", dead.msgs[0].DedupID,
+		"the letter must carry the id the max-delivery recorder derives for the same delivery")
 	assert.Contains(t, e.Detail, "smtp is down", "the delivery error is what makes the letter diagnosable")
 	assert.NotEmpty(t, e.Payload)
 	assert.Equal(t, "tenant1", dead.tenants[0],

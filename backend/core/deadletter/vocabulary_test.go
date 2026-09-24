@@ -36,6 +36,9 @@ func TestWorkWasAttemptedClassifiesEveryDeclaredReason(t *testing.T) {
 		ReasonUnprocessable: false,
 		// Refused on a governed ceiling. Never attempted, and would succeed if sent again.
 		ReasonShed: false,
+		// Every delivery ran out with no outcome recorded. The final delivery may have
+		// committed and lost only its ack, so a letter must never settle state on this.
+		ReasonNoOutcome: false,
 	}
 
 	declared := declaredConstants(t, vocabularySource, "Reason")
@@ -236,8 +239,9 @@ func TestUnmarshalStillReadsAnUndeclaredKindOrReason(t *testing.T) {
 func TestTheDeclaredVocabularyStillWrites(t *testing.T) {
 	for _, k := range []Kind{
 		KindDetectionAction, KindNotification, KindCommandResponse, KindConnectorDispatch,
+		KindEvent, KindCommand, KindControlFact,
 	} {
-		for _, r := range []Reason{ReasonExhausted, ReasonUnprocessable, ReasonShed} {
+		for _, r := range []Reason{ReasonExhausted, ReasonUnprocessable, ReasonShed, ReasonNoOutcome} {
 			e := Envelope{
 				Kind: k, Reason: r, Source: "event-processing",
 				Summary: "it did not happen", OccurredAt: time.Now().UTC(),

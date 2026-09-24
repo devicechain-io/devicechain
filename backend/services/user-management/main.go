@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -159,6 +160,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				core.NewNoOpLifecycleCallbacks(), DeadLetterMetrics)
 			return DeadLetterConsumer.Initialize(context.Background())
 		})
+	// Built by hand rather than through core/service, so the max-delivery recorder is
+	// installed here. This service's one reader is on the dead-letter stream, whose give-ups
+	// are never lettered: a letter the store runs out of deliveries on is counted as LOST on
+	// this service's dead_letter_lost_total instead. The manager refuses to start without it.
+	NatsManager.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(Microservice)))
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err
 	}
