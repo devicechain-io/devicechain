@@ -137,10 +137,10 @@ func TestABacklogDrainDoesNotHoldOtherTenantsWorkers(t *testing.T) {
 		}
 	})
 
-	client := &http.Client{Transport: egress.NewGuard([]netip.Prefix{
+	guard := egress.NewGuard([]netip.Prefix{
 		netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128"),
-	}).Transport()}
-	executor := processor.NewExecutor(processor.NewSecretResolver(nil), nil, client,
+	})
+	executor := processor.NewExecutor(processor.NewSecretResolver(nil), nil, guard,
 		time.Duration(cfg.SendTimeoutMs)*time.Millisecond)
 	// 10 a second, with a burst of 20 to absorb the few positions the worker pool reorders.
 	limiter := core.NewTenantRateLimiter(core.StaticCeiling(10, 20))

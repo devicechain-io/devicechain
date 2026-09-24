@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/connectorwire"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -26,7 +28,8 @@ func meteredConsumer(t *testing.T, dead messaging.MessageWriter, rl *core.Tenant
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "outbound-connectors"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackClient(), 5*time.Second)
+	e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil,
+		egress.NewGuard([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}), 5*time.Second)
 	return NewDispatchConsumer(&fakeReader{}, dead, nil, testProducer(), e, rl, budget, nil, 1,
 		NewDispatchMetrics(ms), core.NewReadPacer(nil, "test")), reg
 }
