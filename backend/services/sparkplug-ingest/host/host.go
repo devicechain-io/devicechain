@@ -17,8 +17,10 @@ package host
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -134,6 +136,20 @@ type Metrics struct {
 	// that distinguishes a broken config (a bad host or rejected credential makes it
 	// climb) from a healthy but idle deployment (it stays flat, as does Messages).
 	ConnectFailures prometheus.Counter
+	// SubscribeFailures counts sessions this host ABANDONED because a group subscription
+	// failed after the broker had accepted the connection — most often a refusal (SUBACK
+	// 0x80: the source's credential may not read that group). It is the counterpart of
+	// ConnectFailures for the half of a broken configuration that connects cleanly.
+	//
+	// 🔴 ONE REFUSED GROUP STOPS THE WHOLE SOURCE. A host announces ONE STATE for all of
+	// its groups, so it cannot be online for some and offline for others; announcing
+	// ONLINE with a group missing would tell that group's edge nodes to flush their
+	// store-and-forward buffers into a subscription that does not exist, and the reconcile
+	// probe would then declare every asserted device in that group DISCONNECTED for
+	// staying silent. So the session is ended and retried with backoff instead, and the
+	// source ingests none of its groups until every one is granted. A climbing counter is
+	// therefore an ingest outage for that source, not a presence nuance.
+	SubscribeFailures prometheus.Counter
 	// IngestFailures counts accepted messages whose samples were dropped after the
 	// in-handler retry budget was exhausted (device-management or NATS unreachable).
 	// A clean-session Host gets no broker redelivery, so this is real (bounded) loss —
@@ -209,19 +225,22 @@ type Client struct {
 	// newClient builds the underlying MQTT client; injected so tests can supply a
 	// fake without a broker.
 	newClient func(*mqtt.ClientOptions) mqtt.Client
+	// subscribe makes one confirmed group subscription; defaulted to
+	// messaging.SubscribeMqttConfirmed. It is a seam because a test fake cannot build a
+	// GRANTED paho SubscribeToken (its result map is unexported), so without it a fake
+	// client can only ever be refused.
+	subscribe func(client mqtt.Client, filter string, qos byte, cb mqtt.MessageHandler, timeout time.Duration) error
+	// backoffSleep waits out a reconnect backoff (false if ctx ended first); defaulted to
+	// sleep, overridable so a test can read the backoff sequence runLoop chose without
+	// waiting it out.
+	backoffSleep func(ctx context.Context, d time.Duration) bool
 
 	mu        sync.Mutex
 	mc        mqtt.Client
 	sessionTs int64 // the current session's STATE timestamp (for a graceful OFFLINE)
 	cancel    context.CancelFunc
 	runCtx    context.Context // the Connect lifecycle context; bounds the ingest retry
-	// sessionCtx is the CURRENT MQTT session's context — cancelled the instant that
-	// connection is lost (or on Stop). The reconcile probe runs under it so a broker drop
-	// mid-window aborts the probe before it can declare a mass death against a broker it
-	// can no longer hear (ADR-067 SP4b). A new session installs a fresh one.
-	sessionCtx    context.Context
-	sessionCancel context.CancelFunc
-	wg            sync.WaitGroup
+	wg        sync.WaitGroup
 	// probeWG tracks in-flight reconcile probes so Stop drains them (they abort promptly
 	// on the session context, so this just closes the goroutine-leak-on-shutdown gap).
 	probeWG sync.WaitGroup
@@ -252,11 +271,13 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 			DeviceTypeToken: source.DeviceTypeToken,
 			AutoRegister:    source.AutoRegister,
 		},
-		stateTopic:  StateTopic(source.HostId),
-		now:         now,
-		newClient:   func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
-		rebirthCh:   make(chan nodeKey, rebirthQueueDepth),
-		probeWindow: reconcileProbeWindow,
+		stateTopic:   StateTopic(source.HostId),
+		now:          now,
+		newClient:    func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
+		subscribe:    messaging.SubscribeMqttConfirmed,
+		backoffSleep: sleep,
+		rebirthCh:    make(chan nodeKey, rebirthQueueDepth),
+		probeWindow:  reconcileProbeWindow,
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
 	c.rebirthPub = c.publishRebirth
@@ -325,21 +346,41 @@ func (c *Client) Connect() {
 // would reuse the fixed Last-Will and freeze the timestamp, breaking the
 // Sparkplug 3.0 per-session freshness B4 depends on). On a lost connection it
 // reconnects with a new timestamp; on ctx cancellation (Stop) it exits.
+//
+// 🔑 THE BACKOFF RESETS ONLY AFTER A FULL SESSION. A session is full once onConnected
+// has subscribed to every group AND announced ONLINE (it sets the session's up flag).
+// Connecting is not enough: a broker that accepts the connection and refuses a group
+// would otherwise be re-dialled every second forever, because each attempt "succeeds"
+// at the step the backoff used to be reset on. A session that ends before it was full
+// (abandoned by onConnected, or lost mid-setup) backs off like a failed connect, and a
+// full session that is later lost reconnects at once, as it always has.
 func (c *Client) runLoop(ctx context.Context) {
 	defer c.wg.Done()
 	backoff := minReconnectBackoff
+	// waitOut sleeps the current backoff and grows it; false means ctx ended.
+	waitOut := func() bool {
+		if !c.backoffSleep(ctx, backoff) {
+			return false
+		}
+		backoff = nextBackoff(backoff)
+		return true
+	}
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		sessionTs := c.now().UnixMilli()
 		lost := make(chan struct{}, 1)
+		// up is set by onConnected only once THIS session is fully established; it is
+		// per session so a late handler from an earlier session cannot mark this one up.
+		up := new(atomic.Bool)
 		// One context per MQTT session, cancelled the instant this connection ends, so
 		// the reconcile probe launched by onConnected aborts rather than declaring a mass
-		// death against a broker it can no longer hear (ADR-067 SP4b).
+		// death against a broker it can no longer hear (ADR-067 SP4b). It is handed to
+		// onConnected as an argument rather than read back from a field, so a handler that
+		// finishes late can only ever act under ITS OWN session's context.
 		sessionCtx, sessionCancel := context.WithCancel(ctx)
-		c.setSessionCtx(sessionCtx, sessionCancel)
-		client := c.newClient(c.sessionOptions(sessionTs, lost))
+		client := c.newClient(c.sessionOptions(sessionCtx, sessionTs, lost, up))
 
 		if err := mqtt.WaitTokenTimeout(client.Connect(), connectTimeout); err != nil {
 			if c.metrics.ConnectFailures != nil {
@@ -349,21 +390,36 @@ func (c *Client) runLoop(ctx context.Context) {
 				Msg("Broker connect failed; retrying.")
 			client.Disconnect(0)
 			sessionCancel()
-			if !sleep(ctx, backoff) {
+			if !waitOut() {
 				return
 			}
-			backoff = nextBackoff(backoff)
 			continue
 		}
-		// Connected: the OnConnect handler (in the options) has subscribed and
-		// announced ONLINE.
-		c.setSession(client, sessionTs)
-		backoff = minReconnectBackoff
+		// Connected. The OnConnect handler (in the options) subscribes and announces
+		// ONLINE on paho's own goroutine; it signals lost if it has to abandon the session.
 
 		select {
 		case <-lost:
+			// Cancel first: onConnected installs its client only while its session is
+			// live (setSessionIfLive), so once this is cancelled the clearSession below
+			// cannot be undone by a handler that is still finishing.
 			sessionCancel()
-			log.Warn().Str("tenant", c.tenant).Str("broker", c.broker.URL).Msg("Broker connection lost; reconnecting with a fresh session.")
+			// Disconnect here, on runLoop's goroutine, never inside onConnected: paho runs
+			// that handler on a goroutine of its own and disconnecting from it risks a
+			// deadlock. For a connection the broker already dropped this is a no-op.
+			client.Disconnect(disconnectQuiesceMs)
+			// Stop pointing the rebirth publisher at a connection that has ended.
+			c.clearSession(client)
+			if up.Load() {
+				backoff = minReconnectBackoff
+				log.Warn().Str("tenant", c.tenant).Str("broker", c.broker.URL).Msg("Broker connection lost; reconnecting with a fresh session.")
+				continue
+			}
+			log.Warn().Str("tenant", c.tenant).Str("broker", c.broker.URL).Dur("retry_in", backoff).
+				Msg("Session ended before it was fully established (a group subscription or the ONLINE announcement failed); retrying.")
+			if !waitOut() {
+				return
+			}
 		case <-ctx.Done():
 			sessionCancel()
 			return
@@ -375,7 +431,7 @@ func (c *Client) runLoop(ctx context.Context) {
 // OFFLINE Last-Will and (via the connect handler) the ONLINE birth with the same
 // sessionTs — the Sparkplug 3.0 timestamp match (B4) an edge node uses to reject
 // a stale OFFLINE from a prior session.
-func (c *Client) sessionOptions(sessionTs int64, lost chan struct{}) *mqtt.ClientOptions {
+func (c *Client) sessionOptions(sessionCtx context.Context, sessionTs int64, lost chan struct{}, up *atomic.Bool) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(c.broker.URL)
 	opts.SetClientID(c.broker.ClientID)
@@ -403,34 +459,21 @@ func (c *Client) sessionOptions(sessionTs int64, lost chan struct{}) *mqtt.Clien
 	opts.SetOrderMatters(true)
 	// B4: OFFLINE STATE Last-Will, retained + QoS 1, timestamp-matched to ONLINE.
 	opts.SetBinaryWill(c.stateTopic, statePayload(false, sessionTs), 1, true)
-	opts.SetOnConnectHandler(func(client mqtt.Client) { c.onConnected(client, sessionTs) })
+	opts.SetOnConnectHandler(func(client mqtt.Client) { c.onConnected(sessionCtx, client, sessionTs, lost, up) })
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 		log.Warn().Err(err).Str("tenant", c.tenant).Str("broker", c.broker.URL).Msg("MQTT connection to the broker dropped.")
-		select {
-		case lost <- struct{}{}:
-		default:
-		}
+		signalLost(lost)
 	})
 	return opts
 }
 
-// setSessionCtx installs the current MQTT session's context + cancel.
-func (c *Client) setSessionCtx(ctx context.Context, cancel context.CancelFunc) {
-	c.mu.Lock()
-	c.sessionCtx = ctx
-	c.sessionCancel = cancel
-	c.mu.Unlock()
-}
-
-// currentSessionCtx returns the current session's context (Background if none yet).
-func (c *Client) currentSessionCtx() context.Context {
-	c.mu.Lock()
-	ctx := c.sessionCtx
-	c.mu.Unlock()
-	if ctx == nil {
-		return context.Background()
+// signalLost tells runLoop this session has ended. Non-blocking: lost is buffered for
+// one, and a second signal (a drop racing an abandon) carries no new information.
+func signalLost(lost chan struct{}) {
+	select {
+	case lost <- struct{}{}:
+	default:
 	}
-	return ctx
 }
 
 // onConnected fires on each successful connection. It subscribes BEFORE announcing
@@ -440,10 +483,19 @@ func (c *Client) currentSessionCtx() context.Context {
 // (ADR-067 SP4b): FIRST floor the epoch generator from the device-state projection
 // (before subscribing, so no birth on this session can mint a sub-floor, stale-rejected
 // epoch), THEN — after ONLINE — launch the liveness probe under this session's context.
-func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
+//
+// 🔴 IT IS ALL OR NOTHING. If ANY group subscription fails, or the ONLINE announcement
+// does, the session is abandoned: no ONLINE, no probe, and lost is signalled so runLoop
+// disconnects and retries with backoff. Carrying on with the groups that were granted is
+// what this used to do, and it is worse than stopping: the one ONLINE STATE speaks for
+// every group, so the refused group's edge nodes flush their store-and-forward buffers
+// into a subscription that does not exist, and the probe then declares that group's
+// asserted devices DISCONNECTED for staying silent. Without ONLINE the probe must not run
+// either: the rebirths it sends are answered by nodes that still see this host offline.
+func (c *Client) onConnected(sessionCtx context.Context, client mqtt.Client, sessionTs int64, lost chan struct{}, up *atomic.Bool) {
 	// Record the live client before any traffic can arrive, so a rebirth triggered by
 	// the first inbound message publishes over this connection rather than a stale one.
-	c.setSession(client, sessionTs)
+	c.setSessionIfLive(sessionCtx, client, sessionTs)
 	// Begin a fresh reconciliation window BEFORE subscribing, so every birth/data on this
 	// session (including a retained NBIRTH that flushes the instant we subscribe) counts
 	// toward liveness. A node that re-births between connect and the probe is genuinely
@@ -452,38 +504,53 @@ func (c *Client) onConnected(client mqtt.Client, sessionTs int64) {
 
 	// Phase 1 (before subscribe): establish the epoch floor from the projection so no
 	// birth on this session mints a stale-rejected epoch. Returns the asserted set to
-	// probe. A read failure degrades to no-floor + no-probe this cycle (logged).
-	asserted := c.establishEpochFloor(c.currentSessionCtx())
+	// probe. A read failure degrades to no-floor + no-probe this cycle (logged). If the
+	// session is then abandoned the raised floor is harmless: it only ever moves up.
+	asserted := c.establishEpochFloor(sessionCtx)
 
 	for _, filter := range c.subscriptions() {
 		// Confirmed rather than merely awaited: paho's WaitTokenTimeout returns the
 		// token's Error(), which a broker REFUSAL leaves nil (see
 		// SubscribeMqttConfirmed). Unconfirmed, a host whose credential may not read a
-		// group's topics logs that it subscribed to all of them and then sits silent —
+		// group's topics logs that it subscribed to all of them and then sits silent,
 		// indistinguishable from a group with no devices publishing.
-		if err := messaging.SubscribeMqttConfirmed(client, filter, 1, c.onMessage, subscribeTimeout); err != nil {
-			log.Error().Err(err).Str("tenant", c.tenant).Str("filter", filter).Msg("Failed to subscribe to Sparkplug group traffic.")
-			continue
+		if err := c.subscribe(client, filter, 1, c.onMessage, subscribeTimeout); err != nil {
+			if c.metrics.SubscribeFailures != nil {
+				c.metrics.SubscribeFailures.Inc()
+			}
+			ev := log.Error().Err(err).Str("tenant", c.tenant).Str("filter", filter)
+			if errors.Is(err, messaging.ErrSubscriptionRefused) {
+				ev = ev.Str("hint", "the source's broker credential is most likely not permitted to read this group")
+			}
+			// Stop at the first failure: the remaining filters are pointless on a session
+			// that is being abandoned.
+			ev.Msg("Sparkplug group subscription failed; ending this session without announcing ONLINE. The source ingests none of its groups until every group is granted.")
+			signalLost(lost)
+			return
 		}
 		log.Info().Str("tenant", c.tenant).Str("filter", filter).Msg("Subscribed to Sparkplug group traffic.")
 	}
 
 	if err := mqtt.WaitTokenTimeout(client.Publish(c.stateTopic, 1, true, statePayload(true, sessionTs)), publishTimeout); err != nil {
-		log.Error().Err(err).Str("tenant", c.tenant).Str("topic", c.stateTopic).Msg("Failed to publish ONLINE STATE.")
-	} else {
-		log.Info().Str("tenant", c.tenant).Str("topic", c.stateTopic).Int64("timestamp", sessionTs).Msg("Announced Host Application ONLINE.")
+		// Same path as a refused group: an edge node that never saw ONLINE will not answer
+		// the probe's rebirths, so probing now would declare live devices dead.
+		log.Error().Err(err).Str("tenant", c.tenant).Str("topic", c.stateTopic).
+			Msg("Failed to publish ONLINE STATE; ending this session without probing.")
+		signalLost(lost)
+		return
 	}
+	log.Info().Str("tenant", c.tenant).Str("topic", c.stateTopic).Int64("timestamp", sessionTs).Msg("Announced Host Application ONLINE.")
+	up.Store(true)
 
 	// Phase 2 (after ONLINE): probe the asserted set for liveness, under THIS session's
 	// context so a broker drop mid-probe aborts it before it can declare a mass death.
 	// Tracked in probeWG so Stop drains it. onConnected only runs while runLoop is alive,
 	// so this Add never races Stop's post-runLoop probeWG.Wait.
 	if len(asserted) > 0 {
-		sctx := c.currentSessionCtx()
 		c.probeWG.Add(1)
 		go func() {
 			defer c.probeWG.Done()
-			c.reconcileProbe(sctx, asserted)
+			c.reconcileProbe(sessionCtx, asserted)
 		}()
 	}
 }
@@ -874,11 +941,28 @@ func (c *Client) Stop() {
 	c.probeWG.Wait()
 }
 
-// setSession records the live client and its session timestamp.
-func (c *Client) setSession(client mqtt.Client, sessionTs int64) {
+// setSessionIfLive records the live client and its session timestamp, unless its
+// session has already ended. runLoop cancels a session's context BEFORE it clears the
+// session (clearSession), and both run under mu, so a connect handler finishing late
+// cannot reinstate a connection runLoop has already abandoned.
+func (c *Client) setSessionIfLive(sessionCtx context.Context, client mqtt.Client, sessionTs int64) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sessionCtx.Err() != nil {
+		return
+	}
 	c.mc = client
 	c.sessionTs = sessionTs
+}
+
+// clearSession forgets client as the live connection, if it still is the live one, so
+// the rebirth publisher and Stop stop addressing a connection that has ended.
+func (c *Client) clearSession(client mqtt.Client) {
+	c.mu.Lock()
+	if c.mc == client {
+		c.mc = nil
+		c.sessionTs = 0
+	}
 	c.mu.Unlock()
 }
 

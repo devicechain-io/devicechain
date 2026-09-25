@@ -134,6 +134,31 @@ func TestReceiverBlindDeviceSurfaced(t *testing.T) {
 	assert.Equal(t, 0, r.Distinct("unknown-device"), "an unknown device has received nothing")
 }
 
+// A subscription that fails on a RECONNECT makes the device blind, and the report must
+// say so. The device here was subscribed by its first connect (readyOnce has fired and
+// subscribed is true); the reconnect's subscribe then fails. Before, only a success was
+// recorded, so the device stayed "subscribed" and its silence read as "no command
+// arrived".
+//
+// The fake's Subscribe answers with a completed token that is not a paho
+// SubscribeToken, which the real confirmed subscribe refuses because it cannot read a
+// grant from it; that is the failure path the handler takes on a refusal.
+func TestARefusedResubscribeMarksTheDeviceBlind(t *testing.T) {
+	r := New("inst-1", "acme", "tcp://x:1883", nil)
+	ds := r.newTestDevice("harness-cmd-probe-002")
+	ds.readyOnce.Do(func() { ds.ready <- nil }) // the FIRST connect subscribed
+	require.True(t, ds.subscribed)
+
+	fc := newFakeClient()
+	fc.subscribeResult = &fakeToken{completes: true}
+	r.onConnect(ds)(fc)
+
+	rep := r.Report()
+	assert.Equal(t, []string{"harness-cmd-probe-002"}, rep.Blind,
+		"a device whose reconnect subscription failed is still reported as receiving")
+	assert.False(t, rep.Devices["harness-cmd-probe-002"].Subscribed)
+}
+
 // `responded` must mean "the broker ACKED this response", not "we tried".
 //
 // 🔴 A count that included attempts would report a healthy far end on a device whose
