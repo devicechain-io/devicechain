@@ -4,25 +4,30 @@ title: White-Labeling & Branding
 
 # White-Labeling & Branding
 
-DeviceChain lets a tenant present the console under its own brand: a **logo**, a **color palette**, and a **product title** replace the DeviceChain defaults throughout the tenant's console session. White-labeling is part of the open-source core — there is no separate edition for it — so an operator can run one instance and let each customer tenant see *their* brand.
+A tenant can present the console under its own brand. A logo, a color palette and a product title replace the DeviceChain defaults throughout the tenant's console session. White-labeling is part of the open-source core, with no separate edition, so you can run one instance and let each customer tenant see *their* brand.
 
 :::note Status
-Available: the branding cascade (tenant → operator default → built-in floor), the console **Branding** editor, per-field inheritance, and logo storage via the object store or an inline/external reference. Planned (Phase 3): a per-tenant **login-screen skin**, **favicon**, and **custom-domain → tenant branding** resolution — until then the login page shows the built-in DeviceChain brand (not the operator default), since no tenant is known before sign-in and branding is applied only once a tenant is selected.
+Available: the branding cascade (tenant → operator default → built-in floor), the console **Branding** editor, per-field inheritance, and logo storage via the object store or an inline/external reference.
+Planned: a per-tenant login-screen skin, favicon, and custom-domain → tenant branding resolution. Until then the login page shows the built-in DeviceChain brand, not the operator default. See [Branding cascade](#the-cascade).
 :::
 
-White-labeling here means **branding** — look and feel. It is not a per-tenant fork of the application: menus, copy, and translations are the same for every tenant.
+White-labeling here means branding: look and feel. It is not a per-tenant fork of the application. Menus, copy and translations are the same for every tenant.
 
-## The cascade
+## Branding cascade {#the-cascade}
 
 Branding is resolved **field by field** through a fallback chain, most specific first:
 
-1. **Tenant override** — the tenant's own stored branding fields.
-2. **Operator default** — an instance-wide default the operator sets (a system setting), applied to every tenant that hasn't overridden a field.
-3. **Built-in floor** — the stock DeviceChain look, compiled into the platform so the cascade always resolves without any configuration.
+1. **Tenant override**: the tenant's own stored branding fields.
+2. **Operator default**: an instance-wide default the operator sets as a system setting. It applies to every tenant that hasn't overridden a field.
+3. **Built-in floor**: the stock DeviceChain look, compiled into the platform so the cascade always resolves without any configuration.
 
-A tenant that sets nothing inherits the operator default; an operator that sets nothing gets the built-in floor. Clearing a tenant field re-inherits it — the editor shows, per field, whether the value is set or inherited. The cascade is resolved **server-side**, so every client (console, embedders) sees the same effective branding.
+A tenant that sets nothing inherits the operator default. An operator that sets nothing gets the built-in floor. Clearing a tenant field re-inherits it, and the editor shows, per field, whether the value is set or inherited.
 
-## What is customizable
+The server resolves the cascade, so every client (the console and embedders) sees the same effective branding.
+
+The login page cannot use the cascade. No tenant is known before sign-in, and branding is applied only once a tenant is selected, so the login page shows the built-in DeviceChain brand.
+
+## Customizable fields {#what-is-customizable}
 
 | Surface | Fields |
 |---|---|
@@ -30,31 +35,42 @@ A tenant that sets nothing inherits the operator default; an operator that sets 
 | **Logo** | an image (with a max-height knob) swapped into the console header |
 | **Palette** | four colors — primary, background, foreground, accent — applied as CSS custom properties at the app root |
 
-Because the console themes entirely through design tokens, the palette is one write point, with no custom CSS: **primary** and **accent** restyle the application's design tokens (buttons, focus rings, accents), while **background** and **foreground** recolor the branded sidebar chrome only — the page base keeps its light/dark theme. (Arbitrary CSS injection is deliberately not offered — it is an XSS and maintenance surface for marginal gain over a proper palette.)
+The console themes entirely through design tokens, so the palette is a single write point and needs no custom CSS:
+
+- **Primary** and **accent** restyle the application's design tokens (buttons, focus rings, accents).
+- **Background** and **foreground** recolor the branded sidebar chrome only. The page base keeps its light/dark theme.
+
+Arbitrary CSS injection is deliberately not offered. It would be an XSS and maintenance risk for little gain over a proper palette.
 
 ## Logo storage
 
-A logo is an opaque **reference**, resolved three ways:
+A logo is an opaque reference, resolved one of three ways:
 
-- **Uploaded** — stored in the [object store](./object-storage.md) and streamed back through an authorizing per-tenant proxy path, never a public URL.
-- **Inline** — a bounded `data:` URI (≤ 256 KB) kept directly on the branding record, for zero-infrastructure installs.
-- **External URL** — an `https://` asset the tenant hosts itself.
+- **Uploaded**: stored in the [object store](./object-storage.md) and streamed back through an authorizing per-tenant proxy path, never a public URL.
+- **Inline**: a bounded `data:` URI (≤ 256 KB) kept directly on the branding record, for installs with no extra infrastructure.
+- **External URL**: an `https://` asset the tenant hosts itself.
 
-Uploads and inline images are validated server-side (raster image types only, size ceilings enforced).
+The server validates uploads and inline images before storing them: raster image types only, with size ceilings enforced.
 
 ## Where branding lives
 
-Branding is a set of typed, nullable columns on the **tenant control-plane record** — not a JSON blob, and **never in the JWT**. Tokens stay auth-only; the console reads the resolved branding through the self-scoped `tenant` query (its regular boot query) and caches it stale-while-revalidate per tenant (the cached value paints first, then a fresh fetch replaces it on every load) — so a rebrand propagates promptly. The resolved branding also carries an `updatedAt` that bumps when *either* the tenant override or the operator default changes, for clients that want to key a cache of their own on it.
+Branding is a set of typed, nullable columns on the tenant control-plane record. It is not a JSON blob, and it is **never in the JWT**: tokens carry authentication only.
 
-## Editing
+The console reads the resolved branding through the self-scoped `tenant` query, its regular boot query. It caches the result per tenant, stale-while-revalidate: the cached value paints first, then a fresh fetch replaces it on every load. A rebrand therefore shows up promptly.
 
-Branding is edited in the console's **Branding** page (tenant plane), gated on the `branding:write` authority. The theme fields (title, palette, logo height) commit together as the raw override; the logo is managed separately with immediate actions, so replacing the theme never wipes an uploaded logo.
+The resolved branding also carries an `updatedAt`. It changes when *either* the tenant override or the operator default changes, so clients that keep their own cache can key it on this value.
 
-The corresponding GraphQL surface:
+## Edit branding {#editing}
 
-- **`setTenantBranding`** — writes the caller's own tenant's theme override; a null field clears that field (re-inherits).
-- **`setTenantLogo`** — sets or clears the logo reference; uploads go through a dedicated endpoint that writes to the object store.
+You edit branding on the console's **Branding** page (tenant plane), which requires the `branding:write` authority.
 
-Both are self-scoped to the tenant in the caller's token and validated fail-closed before anything is stored.
+The theme fields (title, palette, logo height) are saved together as the raw override. The logo is managed separately, with actions that take effect immediately, so replacing the theme never wipes an uploaded logo.
+
+The matching GraphQL mutations:
+
+- **`setTenantBranding`** writes the caller's own tenant's theme override. A null field clears that field, so it re-inherits.
+- **`setTenantLogo`** sets or clears the logo reference. Uploads go through a dedicated endpoint that writes to the object store.
+
+Both act only on the tenant in the caller's token. Both validate their input and reject anything invalid before storing it.
 
 See also [Multi-Tenancy](./multi-tenancy.md) for the tenant model this record hangs off, and [Object Storage](./object-storage.md) for where uploaded assets live.
