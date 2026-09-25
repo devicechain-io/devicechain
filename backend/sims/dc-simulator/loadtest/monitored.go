@@ -6,10 +6,12 @@ package loadtest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/devicechain-io/dc-simulator/loadtest/monitor"
 	"github.com/devicechain-io/dc-simulator/sim"
 )
@@ -105,6 +107,20 @@ func RunMonitored(ctx context.Context, hs *sim.Handshake, p Profile, cohortSize 
 		return nil, err
 	}
 
+	// The monitor holds ONE socket for the whole run and the server closes it when the
+	// token it was opened with expires, so fetch a token that outlives the run now, before
+	// anything is provisioned or driven, and refuse the run if the server's tokens do not
+	// live that long. Refusing here is the point: a run that loses its monitor midway
+	// fails on a violation that says nothing about the platform.
+	need := monitorLifetimeNeeded(p)
+	monitorToken, err := pinnedToken(ctx, rt.Session, need)
+	if err != nil {
+		if errors.Is(err, userclient.ErrTokenLifetimeTooShort) {
+			return nil, tokenLifetimeRefusal(need, err)
+		}
+		return nil, fmt.Errorf("fetching the monitor's access token: %w", err)
+	}
+
 	// Clean-tenant precondition, same as L1's Run. A persistent sim (dcctl sim
 	// start) emits from the SAME deterministic device tokens, so its traffic would
 	// interleave on the cohort subscriptions — a false monotonicity violation from
@@ -124,7 +140,7 @@ func RunMonitored(ctx context.Context, hs *sim.Handshake, p Profile, cohortSize 
 	}
 
 	// Subscribe before driving so the monitor catches events from the first tick.
-	mon, err := monitor.Dial(ctx, hs.Endpoints.EventMgmtWS, rt.Session.AccessToken)
+	mon, err := monitor.Dial(ctx, hs.Endpoints.EventMgmtWS, monitorToken)
 	if err != nil {
 		return nil, err
 	}

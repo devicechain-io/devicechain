@@ -27,6 +27,8 @@ type authStub struct {
 	n          int
 	selectExp  string
 	refreshErr bool
+	// refreshExp is the lifetime a refresh claims; empty means farFuture.
+	refreshExp string
 }
 
 func farFuture() string  { return time.Now().Add(time.Hour).Format(time.RFC3339) }
@@ -56,7 +58,11 @@ func (s *authStub) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.n++
-		writeData(w, fmt.Sprintf(`{"refresh":{"accessToken":"access-%d","refreshToken":"refresh-%d","expiresAt":%q}}`, s.n, s.n, farFuture()))
+		exp := s.refreshExp
+		if exp == "" {
+			exp = farFuture()
+		}
+		writeData(w, fmt.Sprintf(`{"refresh":{"accessToken":"access-%d","refreshToken":"refresh-%d","expiresAt":%q}}`, s.n, s.n, exp))
 	default:
 		writeErrors(w, "unknown operation")
 	}

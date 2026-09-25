@@ -677,9 +677,12 @@ type DetectionReport struct {
 	ProbeFailures int               `json:"probeEmitFailures"`
 	SafetyAlarms  map[string]string `json:"safetyAlarmStates"` // token → durable state summary
 	EdgeAlarms    map[string]string `json:"edgeAlarmStates"`
-	LiveSignal    bool              `json:"liveSignalPresent"`   // whether detectionStream was watched at all
-	Detection     detmonitor.Report `json:"detectionLiveSignal"` // NON-GATING evidence
-	Invariants    []Invariant       `json:"invariants"`
+	LiveSignal    bool              `json:"liveSignalPresent"` // whether detectionStream was watched at all
+	// LiveAbsent says why there was no live signal, so a green run cannot hide that it
+	// never watched the stream. Empty when LiveSignal is true.
+	LiveAbsent string            `json:"liveSignalAbsentReason,omitempty"`
+	Detection  detmonitor.Report `json:"detectionLiveSignal"` // NON-GATING evidence
+	Invariants []Invariant       `json:"invariants"`
 }
 
 // Passed reports whether every invariant held. An empty invariant set is NOT a pass
@@ -715,7 +718,7 @@ func (r *DetectionReport) Human() string {
 		fmt.Fprintf(&b, "  live detection signal (NON-authoritative, lossy): %d edge(s) observed, %d watcher violation(s)\n",
 			r.Detection.Observed, len(r.Detection.Violations))
 	} else {
-		fmt.Fprintf(&b, "  live detection signal: absent (no eventProcessingWS, or subscribe failed) — verdict is on the durable alarm oracle alone\n")
+		fmt.Fprintf(&b, "  live detection signal: absent (%s) — verdict is on the durable alarm oracle alone\n", r.LiveAbsent)
 	}
 	for _, inv := range r.Invariants {
 		mark := "FAIL"
@@ -809,15 +812,27 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 
 	// Subscribe detectionStream as NON-GATING live evidence. A dial/subscribe failure
 	// must not fail the run (the durable oracle is the authority), so a failure here
-	// downgrades to "no live signal" rather than aborting.
+	// downgrades to "no live signal" rather than aborting. So does a token that would
+	// expire before the run ends: the socket is held for the whole run and the server
+	// closes it at the token's expiry, which would read as a lost view.
 	var mon *detmonitor.Monitor
-	if strings.TrimSpace(hs.Endpoints.EventProcessingWS) != "" {
-		if m, derr := detmonitor.Dial(ctx, hs.Endpoints.EventProcessingWS, rt.Session.AccessToken); derr != nil {
+	var absentReason string
+	need := detectionLifetimeNeeded(cfg)
+	if strings.TrimSpace(hs.Endpoints.EventProcessingWS) == "" {
+		absentReason = "the handshake has no eventProcessingWS"
+		log.Info().Msg("handshake has no eventProcessingWS — running on the durable alarm oracle with no live detection signal")
+	} else if liveToken, terr := pinnedToken(ctx, rt.Session, need); terr != nil {
+		absentReason = fmt.Sprintf("no access token lives the %s the run holds the socket for", need)
+		log.Warn().Err(terr).Dur("need", need).Msg("skipping the live detectionStream monitor: its token would expire mid-run — proceeding on the durable alarm oracle alone")
+	} else {
+		if m, derr := detmonitor.Dial(ctx, hs.Endpoints.EventProcessingWS, liveToken); derr != nil {
+			absentReason = "the detectionStream dial failed"
 			log.Warn().Err(derr).Msg("could not dial detectionStream for the live signal — proceeding on the durable alarm oracle alone")
 		} else {
 			mon = m
 			defer mon.Stop()
 			if werr := mon.Watch(ctx, HarnessProfileToken); werr != nil {
+				absentReason = "the detectionStream subscribe failed"
 				log.Warn().Err(werr).Msg("could not subscribe detectionStream — proceeding without the live signal")
 				_ = mon.Stop()
 				mon = nil
@@ -829,8 +844,6 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 				}
 			}
 		}
-	} else {
-		log.Info().Msg("handshake has no eventProcessingWS — running on the durable alarm oracle with no live detection signal")
 	}
 
 	// Point the runtime's emit set at the background fleet so sim.EmitAll drives
@@ -948,6 +961,7 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		SafetyAlarms:  summarizeAlarms(safetyStates),
 		EdgeAlarms:    summarizeAlarms(edgeStates),
 		LiveSignal:    mon != nil,
+		LiveAbsent:    absentReason,
 		Detection:     liveSignal,
 		Invariants:    invs,
 		Drive: DriveStats{

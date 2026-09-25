@@ -88,10 +88,12 @@ const (
 	// bounds every connection by its token's lifetime. It is still a lost view (the
 	// monitor was blind from then on, so it fails the run), but it is the MONITOR'S
 	// limit, not a platform delivery defect: this monitor does not re-dial, so a run
-	// that outlives the REMAINING life of the token held at dial ends this way. That
-	// can be about a minute, not a full token TTL: a TenantSession hands out its
-	// cached token until one minute before exp, so whether a normal-length run hits
-	// this depends on when that token happened to be minted.
+	// that outlives the REMAINING life of the token held at dial ends this way. The
+	// harnesses that dial it now fetch a token that outlives the whole run first
+	// (TenantSession.AccessTokenValidFor), and refuse the run (or skip a non-gating
+	// monitor) when no token lives that long, so a run no longer meets this by the luck
+	// of when its cached token was minted. What is left is a server that invalidates
+	// or shortens a token mid-run, and a caller that dials without that check.
 	ViolTokenExpired = "token-expired"
 	// ViolBlindDevice: a cohort device delivered zero events over the whole run —
 	// the monitor never actually watched it, so a clean verdict for it is a

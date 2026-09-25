@@ -5,6 +5,7 @@ package userclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -61,6 +62,71 @@ func (s *TenantSession) Tenant() string { return s.tenant }
 // AccessToken returns a currently-valid tenant access token, authenticating or
 // refreshing as needed. Use it for the graphql-ws connectionParams bearer.
 func (s *TenantSession) AccessToken(ctx context.Context) (string, error) { return s.token(ctx) }
+
+// ErrTokenLifetimeTooShort is returned (wrapped, naming both durations) by
+// AccessTokenValidFor when even a freshly issued access token does not live as long as
+// the caller asked: the server's access-token lifetime is shorter than the work the
+// token has to outlast.
+var ErrTokenLifetimeTooShort = errors.New("the access token does not live long enough")
+
+// AccessTokenValidFor returns a tenant access token that is still valid for at least min
+// from now, renewing it first if the cached one would expire sooner.
+//
+// It is for a caller that presents ONE token for a long time and cannot swap it midway,
+// such as a WebSocket whose token is checked at connect and which the server closes when
+// that token expires. AccessToken's own margin (refreshSkew) protects a single request;
+// it says nothing about a socket held for twenty minutes.
+//
+// If a freshly issued token still has less than min left, it returns
+// ErrTokenLifetimeTooShort rather than a token that is known to expire early.
+//
+// Renewal shares AccessToken's single-flight, so it never runs a second exchange beside
+// one already in flight: two concurrent renewals would spend the SAME refresh token, one
+// would lose the server's single-use claim, and that caller would fall back to a full
+// sign-in. Joining a flight started by AccessToken can hand back the cached token, good
+// enough for that caller but not for min, so a flight that did not issue a token is
+// followed by another one that asks for min.
+func (s *TenantSession) AccessTokenValidFor(ctx context.Context, min time.Duration) (string, error) {
+	if access, exp := s.cached(); access != "" && time.Until(exp) >= min {
+		return access, nil
+	}
+	for range maxJoinedFlights {
+		r, err := s.renew(ctx, min)
+		if err != nil {
+			return "", err
+		}
+		left := time.Until(r.expiresAt)
+		if left >= min {
+			return r.token, nil
+		}
+		if r.fresh {
+			return "", fmt.Errorf("%w: a freshly issued one is valid for %s, and %s was needed",
+				ErrTokenLifetimeTooShort, left.Round(time.Second), min)
+		}
+	}
+	return "", fmt.Errorf("userclient: no access token valid for %s after %d renewals, each "+
+		"joining another caller's", min, maxJoinedFlights)
+}
+
+// maxJoinedFlights bounds how many renewals AccessTokenValidFor makes when each one joins
+// a flight that some other caller started and that did not issue a token.
+const maxJoinedFlights = 3
+
+// renewal is what one renewal flight hands every caller that joined it.
+type renewal struct {
+	token     string
+	expiresAt time.Time
+	// fresh is true when the flight issued a token rather than finding the cached one
+	// still good enough.
+	fresh bool
+}
+
+// cached returns the cached access token and its expiry.
+func (s *TenantSession) cached() (string, time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.access, s.expiresAt
+}
 
 // Query executes a GraphQL operation against baseURL (a tenant-scoped service GraphQL
 // endpoint) with the tenant access token as bearer, decoding "data" into out. The
@@ -164,37 +230,41 @@ func hostMatches(host string, u *url.URL) bool {
 // collapses to one exchange) and runs on a detached context so one caller's
 // cancellation cannot abort a renewal shared by others.
 func (s *TenantSession) token(ctx context.Context) (string, error) {
-	s.mu.RLock()
-	access, exp := s.access, s.expiresAt
-	s.mu.RUnlock()
-	if access != "" && time.Now().Before(exp.Add(-refreshSkew)) {
+	access, exp := s.cached()
+	if access != "" && time.Until(exp) > refreshSkew {
 		return access, nil
 	}
+	r, err := s.renew(ctx, refreshSkew)
+	return r.token, err
+}
 
+// renew single-flights a renewal unless the cached token already has more than need left
+// (re-checked inside the flight, so a concurrent burst collapses to one exchange). Every
+// renewal on this session goes through the ONE key "auth": see AccessTokenValidFor.
+func (s *TenantSession) renew(ctx context.Context, need time.Duration) (renewal, error) {
 	ch := s.group.DoChan("auth", func() (any, error) {
-		s.mu.RLock()
-		access, exp := s.access, s.expiresAt
-		s.mu.RUnlock()
-		if access != "" && time.Now().Before(exp.Add(-refreshSkew)) {
-			return access, nil
+		access, exp := s.cached()
+		if access != "" && time.Until(exp) > need {
+			return renewal{token: access, expiresAt: exp}, nil
 		}
 		at, err := s.reauth(context.Background())
 		if err != nil {
-			return "", err
+			return renewal{}, err
 		}
+		r := renewal{token: at.AccessToken, expiresAt: parseExpiry(at.ExpiresAt), fresh: true}
 		s.mu.Lock()
-		s.access, s.refreshToken, s.expiresAt = at.AccessToken, at.RefreshToken, parseExpiry(at.ExpiresAt)
+		s.access, s.refreshToken, s.expiresAt = r.token, at.RefreshToken, r.expiresAt
 		s.mu.Unlock()
-		return at.AccessToken, nil
+		return r, nil
 	})
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return renewal{}, ctx.Err()
 	case res := <-ch:
 		if res.Err != nil {
-			return "", res.Err
+			return renewal{}, res.Err
 		}
-		return res.Val.(string), nil
+		return res.Val.(renewal), nil
 	}
 }
 
