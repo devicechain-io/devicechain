@@ -2076,6 +2076,24 @@ hueco antes de que lo haga. `updateProvisioningProfile` ya rechazaba un valor en
 perfil que ya esté guardado con un secreto vacío no coincide ahora con ningún secreto presentado,
 vacío o no: asígnele uno real con `updateProvisioningProfile`.
 
+#### Las alertas de mensajes no entregados pasan a su propio grupo de reglas
+
+Las tres alertas de mensajes no entregados, `ReactPoisonDropping`, `DeadLetterStoreLosing` y
+`DeadLetterWriteLost`, se distribuyen ahora en su propio PrometheusRule `dead-letter` (grupo
+`devicechain.dead-letter`) en lugar de en `event-processing`. Sus nombres, etiquetas, severidades,
+umbrales y descripciones no cambian, así que las rutas y los silencios que filtran por el nombre de
+la alerta o por sus etiquetas siguen funcionando.
+
+- **Una alerta pendiente o disparada durante la actualización vuelve a empezar.** Prometheus ve una
+  regla nueva, así que la alerta se resuelve y vuelve cuando ha pasado su espera `for` (5 o 10
+  minutos), si la condición se mantiene.
+- **Si selecciona objetos PrometheusRule por nombre**, o busca grupos de reglas en la interfaz de
+  Prometheus, añada `dead-letter`.
+- **`DeadLetterStoreLosing` y `DeadLetterWriteLost` ya no terminan en `or vector(0)`.** Una
+  expresión que no devuelve nada y una que devuelve una comparación falsa dejan la alerta en el
+  mismo estado, así que la cláusula no cambiaba nada. Ambas alertas se disparan y se resuelven
+  exactamente igual que antes.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

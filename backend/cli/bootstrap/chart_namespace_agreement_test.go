@@ -353,7 +353,7 @@ var promQLNamespaceMatcher = regexp.MustCompile(`\bnamespace\s*(=~|!~|!=|=)\s*"(
 //
 // The walks look for the SHAPE (a namespaceSelector's matchNames, a `namespace=` matcher
 // in any string) rather than for the objects known to have one, so the ServiceMonitors,
-// both PodMonitors and all six PrometheusRules are covered by construction, along with
+// both PodMonitors and every PrometheusRule are covered by construction, along with
 // anything added next to them.
 func TestEveryNamespaceNamedInTheRenderedManifestIsAccountedFor(t *testing.T) {
 	want := InstanceNamespace(nsTestInstanceID)

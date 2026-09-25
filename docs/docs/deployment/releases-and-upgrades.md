@@ -1947,6 +1947,23 @@ provisioning secret has not shipped yet; the check closes the gap before it does
 already stored with an empty secret now matches no presented secret at all, empty or not: give it a
 real one with `updateProvisioningProfile`.
 
+#### The dead-letter alerts move to their own rule group
+
+The three dead-letter alerts, `ReactPoisonDropping`, `DeadLetterStoreLosing` and
+`DeadLetterWriteLost`, now ship in their own `dead-letter` PrometheusRule (group
+`devicechain.dead-letter`) instead of `event-processing`. Their names, labels, severities,
+thresholds and descriptions are unchanged, so routes and silences that match on the alert name or
+its labels keep working.
+
+- **One that is pending or firing during the upgrade starts over.** Prometheus sees a new rule, so
+  the alert resolves and comes back once its `for` wait (5 or 10 minutes) has passed, if the
+  condition still holds.
+- **If you select PrometheusRule objects by name**, or look up rule groups in the Prometheus UI,
+  add `dead-letter`.
+- **`DeadLetterStoreLosing` and `DeadLetterWriteLost` no longer end in `or vector(0)`.** An
+  expression that returns nothing and one that returns a false comparison leave an alert in the
+  same state, so the clause changed nothing. Both alerts fire and resolve exactly as before.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

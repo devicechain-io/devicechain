@@ -198,7 +198,7 @@ func TestAProducerCannotBeMisbuilt(t *testing.T) {
 
 // 🔑 THE EXPORTED NAME MUST MATCH THE ALERT'S SELECTOR, FOR EVERY SHIPPED AREA.
 //
-// The DeadLetterWriteLost alert in deploy/helm/devicechain/templates/prometheusrule.yaml
+// The DeadLetterWriteLost alert in deploy/helm/devicechain/templates/prometheusrule-dead-letter.yaml
 // selects every adopter of this package by __name__ regex and lists none of them — so the
 // composed name is now the ONLY thing joining a loss to the alert. Every other test reads
 // the counter by the name this package is expected to produce; this one checks that name

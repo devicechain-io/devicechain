@@ -4,6 +4,8 @@ A Prometheus-Operator PrometheusRule CRD, gated on metrics.enabled + metrics.ale
 (same operator assumption as the ServiceMonitor). Every expression is scoped to THIS
 instance's namespace, so one rule object alerts only on its own instance. Thresholds are
 conservative defaults tuned for alert-quietness; operators tune per deployment.
+
+The dead-letter alerts, ReactPoisonDropping among them, are in prometheusrule-dead-letter.yaml.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -118,59 +120,6 @@ spec:
           annotations:
             summary: "device-management does not serve the geofence manifest doors"
             description: "event-processing asked device-management for a fence-set manifest and was told the query does not exist, which means the two are running builds from either side of the manifest-delivery change. Expected briefly while an upgrade rolls, since the two services are independent Deployments and neither waits for the other. Sustained means device-management is behind — most likely rolled back on its own — and fence edits are not reaching the detection engine until it rolls forward."
-        - alert: ReactPoisonDropping
-          expr: sum(rate(devicechain_eventprocessing_react_events_poison_dropped_total{namespace="{{ $ns }}"}[5m])) > 0
-          for: 10m
-          labels:
-            severity: critical
-            devicechain_instance: {{ $id }}
-          annotations:
-            summary: "REACT is giving up on un-dispatchable derived events"
-            description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
-        - alert: DeadLetterStoreLosing
-          # 🔴 THE PARENTHESES AROUND `or vector(0)` ARE LOAD-BEARING, and this rule shipped
-          # without them. `>` binds TIGHTER than `or`, so `sum(rate(x)) or vector(0) > 0`
-          # parses as `sum(rate(x)) or (vector(0) > 0)`: the right side filters the sample 0
-          # by `> 0` and is empty, which leaves a bare `sum(rate(x))` with NO COMPARISON AT
-          # ALL. An alert fires on any sample its expression returns, whatever the value —
-          # and because this metric is a plain Counter (not a CounterVec) it is registered at
-          # construction and exported at 0, so the series always exists and rate() always
-          # returns a sample. The result was a `severity: critical` alert firing permanently
-          # on every instance about five minutes after rollout. Bind the comparison to the
-          # whole expression, the way DeadLetterWriteLost below already does.
-          expr: (sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="{{ $ns }}"}[5m])) or vector(0)) > 0
-          for: 5m
-          labels:
-            severity: critical
-            devicechain_instance: {{ $id }}
-          annotations:
-            summary: "the dead-letter store is losing records"
-            description: "Dead letters reached their final delivery attempt without being written to the store, so failures the platform recorded once are now recorded nowhere. The store's database is the thing to look at — the consumer rides out a blip in process and spends every delivery attempt before giving up, so this means an outage of minutes, not seconds. Look also at the consumer's backlog: what is lost here is a subset of what is late."
-        - alert: DeadLetterWriteLost
-          # 🔑 SELECTED BY NAME, NOT LISTED. Every service that writes dead letters counts a
-          # lost one on the same counter, built by the core dead-letter producer and exported
-          # under that service's own subsystem, so this selector covers every adopter with no
-          # list to keep. The list this replaced was maintained by hand, and one
-          # service's losses were missing from it.
-          #
-          # 🔴 `[a-z0-9]+`, NOT `.+`. The area segment never contains `_` (its dashes are
-          # stripped), so the stricter form matches the one name core builds and nothing else.
-          # `.+` would also match the older per-path names some services exported, and old pods
-          # still export those during an upgrade: after rate() drops the name, two series from
-          # one pod share a labelset and the rule fails to evaluate, silencing it.
-          #
-          # The outer `or vector(0)` is still load-bearing: sum() over no series is the EMPTY
-          # vector, so with nothing scraped the expression would be absent rather than false.
-          # Its parentheses bind the comparison to the whole expression — see
-          # DeadLetterStoreLosing above for what happens without them.
-          expr: (sum(rate({__name__=~"devicechain_[a-z0-9]+_dead_letter_lost_total", namespace="{{ $ns }}"}[5m])) or vector(0)) > 0
-          for: 5m
-          labels:
-            severity: critical
-            devicechain_instance: {{ $id }}
-          annotations:
-            summary: "work is being lost with no record of it"
-            description: "A service gave up on a message AND could not record it as a dead letter, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. There are three causes, and the pod's LOST error log line tells them apart. The write failed — the broker is unreachable, refusing, or out of storage, so look at JetStream. Or the service refused its own letter as malformed, which is a defect in that service. Or a dead-letter READER — the dead-letter store in user-management, or the command writeback in command-delivery — ran out of delivery attempts on a letter, which may now age out of the stream without having been stored or settled (its last attempt may have committed and lost only its acknowledgement, so this cause can overstate the loss); look at that service's database, where a stored letter settles the question, or its own logs. Note that a FULL dead-letter stream does not cause this — every stream discards oldest, so a full one silently evicts the earliest letters instead, which this alert cannot see."
         - alert: ReactConnectorEgressShedding
           expr: sum by (action) (rate(devicechain_eventprocessing_react_connector_egress_shed_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 15m

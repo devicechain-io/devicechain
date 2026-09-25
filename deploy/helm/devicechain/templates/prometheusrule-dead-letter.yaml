@@ -1,0 +1,77 @@
+{{/*
+Alerting rules for DEAD LETTERS: work the platform gave up on, and the record of it.
+
+WHY THIS GROUP EXISTS. These three alerts are not about one service. A dead letter is
+written by whichever service gave up on a message, stored by user-management, and the
+loss counter DeadLetterWriteLost reads is exported by every service that writes one --
+so none of them belongs to the DETECT/REACT group they used to sit in, and one of them
+reads a user-management metric. ReactPoisonDropping is an event-processing counter, but
+what it reports is the same thing as the other two: work given up on, dead-lettered,
+and replayed by nothing.
+
+They live in their own group so they can be unit-tested as one. Every expression is
+scoped to THIS instance's namespace, so one rule object alerts only on its own instance.
+
+NO `or vector(0)` in any of them, deliberately. An expression that returns nothing and
+one that returns a false comparison leave an alert in exactly the same state -- inactive,
+with any pending `for` reset -- so the clause changes nothing an alert can do. Its one
+recorded effect here was the day it was written without parentheses around it: `>` binds
+tighter than `or`, the comparison attached to `vector(0)` alone, and DeadLetterStoreLosing
+fired permanently at critical on every instance. hack/check-prometheus-rules.sh now
+refuses that shape; leaving the clause out removes the chance to write it.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{/* The alert label below names the INSTANCE, not its namespace: those are the
+     same string today and are about to stop being, so they are spelled apart. */}}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dead-letter
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.dead-letter
+      rules:
+        - alert: ReactPoisonDropping
+          expr: sum(rate(devicechain_eventprocessing_react_events_poison_dropped_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "REACT is giving up on un-dispatchable derived events"
+            description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
+        - alert: DeadLetterStoreLosing
+          expr: sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "the dead-letter store is losing records"
+            description: "Dead letters reached their final delivery attempt without being written to the store, so failures the platform recorded once are now recorded nowhere. The store's database is the thing to look at — the consumer rides out a blip in process and spends every delivery attempt before giving up, so this means an outage of minutes, not seconds. Look also at the consumer's backlog: what is lost here is a subset of what is late."
+        - alert: DeadLetterWriteLost
+          # 🔑 SELECTED BY NAME, NOT LISTED. Every service that writes dead letters counts a
+          # lost one on the same counter, built by the core dead-letter producer and exported
+          # under that service's own subsystem, so this selector covers every adopter with no
+          # list to keep. The list this replaced was maintained by hand, and one
+          # service's losses were missing from it.
+          #
+          # 🔴 `[a-z0-9]+`, NOT `.+`. The area segment never contains `_` (its dashes are
+          # stripped), so the stricter form matches the one name core builds and nothing else.
+          # `.+` would also match the older per-path names some services exported, and old pods
+          # still export those during an upgrade: after rate() drops the name, two series from
+          # one pod share a labelset and the rule fails to evaluate, silencing it.
+          expr: sum(rate({__name__=~"devicechain_[a-z0-9]+_dead_letter_lost_total", namespace="{{ $ns }}"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "work is being lost with no record of it"
+            description: "A service gave up on a message AND could not record it as a dead letter, on a delivery that will not repeat — so the work is gone and nothing anywhere records what it was. This is the one failure on these paths with no evidence left behind, which is why it is separate from the giving-up alerts and fires faster than they do. There are three causes, and the pod's LOST error log line tells them apart. The write failed — the broker is unreachable, refusing, or out of storage, so look at JetStream. Or the service refused its own letter as malformed, which is a defect in that service. Or a dead-letter READER — the dead-letter store in user-management, or the command writeback in command-delivery — ran out of delivery attempts on a letter, which may now age out of the stream without having been stored or settled (its last attempt may have committed and lost only its acknowledgement, so this cause can overstate the loss); look at that service's database, where a stored letter settles the question, or its own logs. Note that a FULL dead-letter stream does not cause this — every stream discards oldest, so a full one silently evicts the earliest letters instead, which this alert cannot see."
+{{- end }}

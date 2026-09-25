@@ -100,9 +100,10 @@ tests:
               description: "The credential-attempt store is full, so user-management is checking password sign-ins WITHOUT slowing down repeated failures on any address that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 5 minutes. Sign-in itself still works -- refusing it would let whoever filled the store lock every user out -- but guessing is now limited only by the per-request field cap and the cost of each password check. The store fills when sign-ins are sent for a very large number of distinct email addresses inside ten minutes, which almost always means someone is spraying addresses. Find where the sign-in traffic comes from (the ingress logs, and user-management's rate-limited 'credential attempt store is full' warning) and block it upstream. The store drains on its own as entries expire, ten minutes after the flood stops. If the sign-in traffic is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
 
   # ------------------------------------------------------------------
-  # Nothing scraped at all. This rule is quiet then -- the or vector(0) makes the
-  # expression FALSE rather than empty -- and it is not the rule that reports a
-  # user-management nobody is scraping; the tenant-purge group's visibility alert is.
+  # Nothing scraped at all. This rule is quiet then -- with or without its
+  # or vector(0), which alerting cannot tell apart from an empty result -- and it is
+  # not the rule that reports a user-management nobody is scraping; the tenant-purge
+  # group's visibility alert is.
   # ------------------------------------------------------------------
   - interval: 1m
     input_series: []

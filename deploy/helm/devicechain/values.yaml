@@ -518,8 +518,9 @@ metrics:
   # that have the Prometheus Operator but no Grafana sidecar. Ignored when
   # metrics.enabled is false.
   grafanaDashboards: true
-  # alerts renders the PrometheusRules for the platform's own services: the
-  # event-processing (DETECT + REACT) rules and the command-delivery rules. Requires
+  # alerts renders the PrometheusRules for the platform's own services: among them the
+  # event-processing (DETECT + REACT) rules, the dead-letter rules and the
+  # command-delivery rules (templates/prometheusrule*.yaml has them all). Requires
   # the Prometheus Operator CRDs (same as enabled). Ignored when metrics.enabled is
   # false. The database and replication rules below are gated separately, because they
   # describe infrastructure this chart does not install.

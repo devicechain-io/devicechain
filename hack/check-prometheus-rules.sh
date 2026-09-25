@@ -14,13 +14,14 @@
 # alerts simply never fire.
 #
 # That is the same failure mode as an alert with no series, reached by a
-# different route, and this repo now ships ten rule files: the DETECT/REACT
-# rules, the JetStream replication rules (ADR-020 A0), the JetStream delivery
-# rules (unread loss, stream fill, messages held past AckWait and the max-delivery
-# record), the database backup rules (ADR-028, ADR-020 A2.5), the database storage rules (ADR-020 A2),
-# the database control-plane rules (ADR-020 A1.5), the command-delivery rules,
-# the tenant-purge rules, the sign-in rules and the governance rules. A break in any one
-# takes its neighbours with it.
+# different route, and this repo ships a rule file per concern: the DETECT/REACT
+# rules, the dead-letter rules, the JetStream replication rules (ADR-020 A0), the
+# JetStream delivery rules (unread loss, stream fill, messages held past AckWait and
+# the max-delivery record), the database backup rules (ADR-028, ADR-020 A2.5), the
+# database storage rules (ADR-020 A2), the database control-plane rules (ADR-020
+# A1.5), the command-delivery rules, the tenant-purge rules, the sign-in rules and the
+# governance rules. A break in any one takes its neighbours with it. (No count is
+# written here: the run prints how many alerts and files it read.)
 #
 # 🔴 THIS SCRIPT CANNOT SEE A MISSPELLED SERIES NAME. promtool parses PromQL; it
 # has no idea whether `devicechain_commanddelivery_batch_refusals_total` is a
@@ -66,9 +67,9 @@
 # before believing the result.
 #
 # That mutation is no longer a thing somebody did once by hand: `--self-test`
-# plants it, and nine other defects, EACH ALONE, and requires this file's own
-# checking functions to reject every one of them. It carries the lesson above
-# forward too — every planted mutation is grep-asserted before the verdict is
+# plants it, and every other defect this file claims to catch, EACH ALONE, and
+# requires this file's own checking functions to reject every one of them. It
+# carries the lesson above forward too — every planted mutation is grep-asserted before the verdict is
 # believed, because a mutation that did not apply produces a SUCCESS that reads
 # exactly like a check that cannot fail.
 #
@@ -318,6 +319,25 @@ PY
 # A negative assertion can only name rules its author knew about. This turns
 # "the tests cover what I remembered" into "the tests cover every rule", so a new
 # alert is untested loudly rather than silently.
+#
+# 🔴 AND NAMED ON BOTH SIDES: every alert needs at least one assertion that it
+# FIRES (a non-empty `exp_alerts`) and at least one that it stays QUIET (an empty
+# or absent `exp_alerts`, which promtool reads the same way). One side alone
+# proves nothing about the rule:
+#
+#   - quiet assertions only are satisfied by a rule that can never fire -- and by
+#     a tests file that loaded NO RULES AT ALL. promtool, given a `rule_files`
+#     entry naming a file that does not exist, or no `rule_files` at all, loads
+#     zero rules with no error, and every `exp_alerts: []` then passes. Measured
+#     against the pinned promtool, not assumed. A database-backup alert shipped in
+#     exactly that state: asserted quiet twice, never asserted to fire.
+#   - firing assertions only are satisfied by a rule that fires on everything,
+#     which is the alert that gets switched off within a week.
+#
+# 🔴 THE `rule_files` IT NAMES MUST BE EXACTLY `rendered-rules.yaml`, the one name
+# run_rule_tests stages beside it. A firing assertion would catch a misspelling
+# too, but only by failing in promtool as "the rule does not fire", which sends
+# its reader to the rule instead of to the typo. Refused here, by name.
 check_alert_coverage() {
   python3 - "$1" "$2" "$3" <<'PY'
 import os, sys, yaml
@@ -338,14 +358,31 @@ for g in yaml.safe_load(open(rendered))["groups"]:
         if "alert" in rule:
             defined.add(rule["alert"])
 
-covered = set()
-for case in yaml.safe_load(open(tests)).get("tests", []):
-    for assertion in case.get("alert_rule_test", []):
-        if "alertname" in assertion:
-            covered.add(assertion["alertname"])
-
 if not defined:
     sys.exit("the rendered %s group defines no alerts at all; this check would pass vacuously" % group)
+
+doc = yaml.safe_load(open(tests)) or {}
+
+staged = "rendered-rules.yaml"
+if doc.get("rule_files") != [staged]:
+    sys.exit(
+        "%s names rule_files %r; it must be exactly [%s], the one file run_rule_tests\n"
+        "  stages beside it. promtool loads a rule file that does not exist -- or no\n"
+        "  rule_files at all -- as ZERO rules without an error, and every quiet assertion\n"
+        "  then passes against nothing."
+        % (tests, doc.get("rule_files"), staged)
+    )
+
+covered, firing, quiet = set(), set(), set()
+for case in doc.get("tests") or []:
+    for assertion in case.get("alert_rule_test") or []:
+        if "alertname" not in assertion:
+            continue
+        name = assertion["alertname"]
+        covered.add(name)
+        # promtool reads a missing exp_alerts as "no alerts expected", so it counts
+        # as quiet here too, rather than as neither.
+        (firing if assertion.get("exp_alerts") else quiet).add(name)
 
 untested = defined - covered
 if untested:
@@ -366,11 +403,79 @@ if stale:
         % (group, ", ".join(sorted(stale)))
     )
 
-print("    %s: %d alert(s) defined, all covered by unit tests" % (group, len(defined)))
+never_fires = defined - firing
+if never_fires:
+    sys.exit(
+        "these %s alerts are never asserted to FIRE: %s.\n"
+        "  An alert with only quiet assertions passes against a file that loaded no rules,\n"
+        "  and against a rule that can never fire. Add a case to %s whose exp_alerts names\n"
+        "  the alert it expects."
+        % (group, ", ".join(sorted(never_fires)), tests)
+    )
+
+never_quiet = defined - quiet
+if never_quiet:
+    sys.exit(
+        "these %s alerts are never asserted to stay QUIET: %s.\n"
+        "  An alert with only firing assertions passes a rule that fires on every state,\n"
+        "  healthy and idle included. Add a case to %s asserting `exp_alerts: []`."
+        % (group, ", ".join(sorted(never_quiet)), tests)
+    )
+
+print("    %s: %d alert(s) defined, each asserted to fire and to stay quiet" % (group, len(defined)))
 PY
 }
 
-# run_rule_tests <stage-dir> <rendered-rule-file> <tests-file>
+# check_alert_census <floor> <rule-file>...
+#
+# Prints how many alerts the render holds and which file holds the most, and
+# refuses a floor that is not STRICTLY ABOVE that largest file. The floor passed
+# to check_always_firing is a liveness probe: it separates "read every file and
+# found nothing" from "read almost nothing". A floor at or below the largest one
+# file can be cleared by a run that read only that file, so it would no longer say
+# the whole render was read -- and rule files only grow, so this is the direction
+# a once-correct floor goes stale in. The numbers are printed rather than written
+# into a comment, where they were wrong within a release of being written.
+check_alert_census() {
+  python3 - "$@" <<'PY'
+import os, sys, yaml
+
+floor, files = int(sys.argv[1]), sys.argv[2:]
+if not files:
+    sys.exit("no rule files to count; the census read nothing, which is not a pass")
+
+counts = {}
+for path in files:
+    n = 0
+    for doc in yaml.safe_load_all(open(path)):
+        for g in (doc or {}).get("groups") or []:
+            n += sum(1 for r in g.get("rules") or [] if "alert" in r)
+    counts[os.path.basename(path)] = n
+
+largest = max(counts, key=lambda k: counts[k])
+total = sum(counts.values())
+print("    %d alert(s) across %d rule file(s); the largest, %s, holds %d; the floor is %d"
+      % (total, len(counts), largest, counts[largest], floor))
+if counts[largest] >= floor:
+    sys.exit(
+        "the always-firing floor (%d) is not above the largest single rule file (%s, %d\n"
+        "  alerts), so a run that read only that file would clear it and the floor would no\n"
+        "  longer show the whole render was read. Raise the floor above %d."
+        % (floor, largest, counts[largest], counts[largest])
+    )
+PY
+}
+
+# run_rule_tests <group> <stage-dir> <rendered-rule-file> <tests-file>
+#
+# 🔴 THE COVERAGE CHECK RUNS HERE, IN FRONT OF PROMTOOL, and not as a separate
+# call beside it. It used to be a second line in the main loop, and deleting that
+# line left every gate green: the self-test called check_alert_coverage directly,
+# and the real run only ever exercised it on a tree that already passed. Found by
+# mutation. Now there is no way to run a group's unit tests without first proving
+# they name every alert on both sides and load the rules they were staged beside,
+# and the self-test drives its one-sided and unloaded fixtures through THIS entry
+# point. Returns 3 for a coverage refusal, so the caller can say which it was.
 #
 # Each group runs in its OWN directory. The tests name their rule file as
 # `rendered-rules.yaml`, relative to the test file's own directory, so two groups
@@ -378,7 +483,8 @@ PY
 # would silently be checked against the first's -- a green run proving nothing
 # about either.
 run_rule_tests() {
-  local gwork="$1" rules="$2" tests="$3"
+  local group="$1" gwork="$2" rules="$3" tests="$4"
+  check_alert_coverage "$group" "$rules" "$tests" || return 3
   mkdir -p "$gwork"
   cp "$tests" "$gwork/rules-tests.yaml"
   cp "$rules" "$gwork/rendered-rules.yaml"
@@ -413,7 +519,13 @@ run_rule_tests() {
 # ---------------------------------------------------------------------------
 
 st_fail() { printf '\033[1;31mSELF-TEST FAILED: %s\033[0m\n' "$*" >&2; exit 1; }
-st_ok() { printf '  ok: %s\n' "$*"; }
+# Counted rather than written down: the closing line reports how many checks ran,
+# so it cannot drift from the cases below the way a hand-kept number did.
+st_passed=0
+st_ok() {
+  st_passed=$((st_passed + 1))
+  printf '  ok: %s\n' "$*"
+}
 
 # st_bundle <dir> — a clean synthetic bundle: a rendered manifest carrying two
 # PrometheusRules and one document that is NOT one (so the kind filter is
@@ -501,8 +613,8 @@ self_test() {
   # -------------------------------------------------------------------------
   # Case 0 — THE COUNTERWEIGHT, and it runs first. Every "the defect was caught"
   # below is satisfied just as well by a checker that fails everything, so a
-  # bundle with nothing wrong with it has to come back clean through ALL FIVE
-  # stages before any of them means anything.
+  # bundle with nothing wrong with it has to come back clean through EVERY
+  # stage before any of them means anything.
   # -------------------------------------------------------------------------
   d="$st/clean"
   st_bundle "$d"
@@ -517,9 +629,11 @@ self_test() {
     st_fail "a fully accounted-for set of groups was reported as unaccounted"
   check_alert_coverage selftest-alpha "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null ||
     st_fail "fully covered alerts were reported as untested"
-  run_rule_tests "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null ||
+  check_alert_census 2 "$d/rule-selftest-alpha.yaml" "$d/rule-selftest-beta.yaml" >/dev/null ||
+    st_fail "a floor above the largest rule file was refused by the census"
+  run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null ||
     st_fail "the clean synthetic rules failed their own unit tests"
-  st_ok "a clean bundle passes all five stages, and a non-PrometheusRule document is ignored"
+  st_ok "a clean bundle passes every stage, and a non-PrometheusRule document is ignored"
 
   # -------------------------------------------------------------------------
   # Case 1 — A REQUIRED GROUP STOPPED RENDERING, alone. The positive control:
@@ -598,9 +712,29 @@ self_test() {
   # than the bundle, so each defect can be planted with the others genuinely
   # absent: mutating a name in the bundle's tests would trip BOTH the untested and
   # the stale arm at once, and either one firing would look like success.
+  #
+  # 🔴 EVERY FIXTURE HERE IS OTHERWISE VALID -- `rule_files` spelled right, each
+  # covered alert asserted on both sides -- AND EVERY CASE ASSERTS ITS MESSAGE. The
+  # coverage stage has several arms and exits on the first that trips, so a
+  # fixture carrying a second, unintended defect is refused for THAT one, and an
+  # exit-status-only assertion would read it as this case passing.
   # -------------------------------------------------------------------------
   d="$st/coverage"
   mkdir -p "$d"
+
+  # st_expect_refusal <label> <message-fragment> <command>...
+  st_expect_refusal() {
+    local label="$1" want="$2" out
+    shift 2
+    if out="$("$@" 2>&1)"; then
+      st_fail "$label: not refused"
+    fi
+    case "$out" in
+    *"$want"*) ;;
+    *) st_fail "$label: refused, but not for the reason under test ($want): $out" ;;
+    esac
+    st_ok "$label"
+  }
 
   # Case 6 — AN ALERT NAMED IN NO UNIT TEST, alone.
   cat >"$d/two-alerts.yaml" <<'EOF'
@@ -613,14 +747,19 @@ groups:
         expr: up > 1
 EOF
   cat >"$d/covers-one.yaml" <<'EOF'
+rule_files:
+  - rendered-rules.yaml
 tests:
   - alert_rule_test:
       - alertname: CoveredAlert
+        exp_alerts:
+          - exp_labels: {}
+      - alertname: CoveredAlert
+        exp_alerts: []
 EOF
-  if check_alert_coverage selftest "$d/two-alerts.yaml" "$d/covers-one.yaml" >/dev/null 2>&1; then
-    st_fail "did not flag an alert that appears in no unit test"
-  fi
-  st_ok "an alert named in no unit test is caught"
+  st_expect_refusal "an alert named in no unit test is caught" \
+    "appear in no unit test: UncoveredAlert" \
+    check_alert_coverage selftest "$d/two-alerts.yaml" "$d/covers-one.yaml"
 
   # Case 7 — A UNIT TEST NAMING AN ALERT THAT NO LONGER RENDERS, alone. Its
   # assertions still pass: an alert that does not exist fires nothing.
@@ -632,15 +771,21 @@ groups:
         expr: up > 0
 EOF
   cat >"$d/covers-a-ghost.yaml" <<'EOF'
+rule_files:
+  - rendered-rules.yaml
 tests:
   - alert_rule_test:
       - alertname: CoveredAlert
+        exp_alerts:
+          - exp_labels: {}
+      - alertname: CoveredAlert
+        exp_alerts: []
       - alertname: RemovedAlert
+        exp_alerts: []
 EOF
-  if check_alert_coverage selftest "$d/one-alert.yaml" "$d/covers-a-ghost.yaml" >/dev/null 2>&1; then
-    st_fail "did not flag a unit test naming an alert the chart no longer renders"
-  fi
-  st_ok "a stale unit test naming a removed alert is caught"
+  st_expect_refusal "a stale unit test naming a removed alert is caught" \
+    "no longer renders: RemovedAlert" \
+    check_alert_coverage selftest "$d/one-alert.yaml" "$d/covers-a-ghost.yaml"
 
   # Case 8 — A GROUP WITH NO ALERTS AT ALL, alone. Recording rules only: every
   # set-difference below it is empty, so without this arm it passes vacuously.
@@ -652,12 +797,20 @@ groups:
         expr: up
 EOF
   cat >"$d/empty-tests.yaml" <<'EOF'
+rule_files:
+  - rendered-rules.yaml
 tests: []
 EOF
-  if check_alert_coverage selftest "$d/no-alerts.yaml" "$d/empty-tests.yaml" >/dev/null 2>&1; then
-    st_fail "did not flag a group that defines no alerts at all"
-  fi
-  st_ok "a group defining no alerts is refused rather than passed vacuously"
+  st_expect_refusal "a group defining no alerts is refused rather than passed vacuously" \
+    "defines no alerts at all" \
+    check_alert_coverage selftest "$d/no-alerts.yaml" "$d/empty-tests.yaml"
+
+  # The counterweight for 6-8: the same minimal pair with nothing planted passes.
+  # Without it, every refusal above is satisfied by a stage that refuses everything
+  # hand-written.
+  check_alert_coverage selftest "$d/one-alert.yaml" "$d/covers-one.yaml" >/dev/null ||
+    st_fail "a minimal pair with every alert asserted on both sides was refused"
+  st_ok "a minimal pair asserting each alert on both sides passes"
 
   # Case 9 — A MISSING UNIT-TEST FILE, alone. An unreadable tests file yields no
   # alert names, which is indistinguishable from full coverage unless it errors.
@@ -694,7 +847,7 @@ EOF
     st_fail "the inverted-rule mutation did not apply -- believe no verdict from this run"
   check_alert_coverage selftest-alpha "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null ||
     st_fail "the inverted rule was caught by the COVERAGE check, so case 10 proves nothing about evaluation"
-  if run_rule_tests "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null 2>&1; then
+  if run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml" >/dev/null 2>&1; then
     st_fail "a rule inverted so it can never fire still passed its own unit tests"
   fi
   st_ok "a rule that parses but can never fire is caught by the unit tests"
@@ -809,10 +962,12 @@ EOF
   # everything. Each of these is a shape this chart ships or would legitimately
   # ship.
   #
-  # 🔴 `(… or vector(0)) > 0` IS NOT A NEAR-MISS OF THE DEFECT, IT IS ITS CORRECT
-  # FORM. Without the `or vector(0)`, an alert summing several services goes
-  # ABSENT rather than false the moment one of them stops being scraped — so a
-  # gate that discouraged the idiom would cause the failure it exists to prevent.
+  # 🔴 `(… or vector(0)) > 0` IS NOT A NEAR-MISS OF THE DEFECT, IT IS ITS
+  # CORRECTLY PARENTHESISED FORM, and the sign-in rule ships it. The clause is
+  # inert for alerting -- an empty result and a false one leave an alert in the
+  # same state -- which is why the dead-letter rules dropped it; but a rule that
+  # carries it is not wrong, and a gate that refused it would be refusing a
+  # correct rule for resembling a broken one.
   # -------------------------------------------------------------------------
   cat >"$d/clean.yaml" <<'EOF'
 groups:
@@ -894,7 +1049,83 @@ EOF
   [ "$rc" -eq 2 ] || st_fail "a run with no rule files exited $rc, not 2: $out"
   st_ok "a run with no rule files is refused rather than passed"
 
-  echo "self-test passed: 19 defects, each planted alone, each caught; two clean bundles pass"
+  # -------------------------------------------------------------------------
+  # Cases 21-23 — A ONE-SIDED OR UNLOADED TESTS FILE, each planted alone on the
+  # clean bundle, whose alpha tests assert SelfTestProbeFiring on both sides.
+  # Every mutation is grep-asserted, for the reason the header gives.
+  #
+  # 🔴 DRIVEN THROUGH run_rule_tests, the entry point the real run uses, not
+  # through check_alert_coverage alone. Calling the check directly proved the
+  # check works and nothing about whether the real run calls it; with it wired
+  # in there, deleting that call makes these three cases fail. Cases 21 and 22
+  # pass promtool unrefused, so only the coverage arm can refuse them.
+  # -------------------------------------------------------------------------
+
+  # Case 21 — NO FIRING ASSERTION. The firing case is deleted, so only
+  # `exp_alerts: []` remains -- the shape that passes promtool against a rule
+  # that can never fire, and against a file that loaded no rules at all.
+  d="$st/no-firing"
+  st_bundle "$d"
+  extract_rules "$d/rendered.yaml" "$d" selftest-alpha selftest-beta >/dev/null ||
+    st_fail "the extractor failed for a reason other than the one under test"
+  python3 - "$d/alpha-tests.yaml" <<'PY'
+import sys, yaml
+p = sys.argv[1]
+doc = yaml.safe_load(open(p))
+doc["tests"] = [c for c in doc["tests"] if not any(a.get("exp_alerts") for a in c["alert_rule_test"])]
+yaml.safe_dump(doc, open(p, "w"))
+PY
+  grep -q 'exp_labels' "$d/alpha-tests.yaml" &&
+    st_fail "the no-firing mutation did not apply -- believe no verdict from this run"
+  grep -q 'exp_alerts: \[\]' "$d/alpha-tests.yaml" ||
+    st_fail "the no-firing mutation removed the quiet case too, so it is not planted alone"
+  st_expect_refusal "an alert asserted only to stay quiet is refused" \
+    "never asserted to FIRE: SelfTestProbeFiring" \
+    run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
+
+  # Case 22 — NO QUIET ASSERTION. The mirror image: a rule that fires on every
+  # state satisfies a tests file that only ever asks it to fire.
+  d="$st/no-quiet"
+  st_bundle "$d"
+  extract_rules "$d/rendered.yaml" "$d" selftest-alpha selftest-beta >/dev/null ||
+    st_fail "the extractor failed for a reason other than the one under test"
+  python3 - "$d/alpha-tests.yaml" <<'PY'
+import sys, yaml
+p = sys.argv[1]
+doc = yaml.safe_load(open(p))
+doc["tests"] = [c for c in doc["tests"] if all(a.get("exp_alerts") for a in c["alert_rule_test"])]
+yaml.safe_dump(doc, open(p, "w"))
+PY
+  grep -q 'exp_alerts: \[\]' "$d/alpha-tests.yaml" &&
+    st_fail "the no-quiet mutation did not apply -- believe no verdict from this run"
+  grep -q 'exp_labels' "$d/alpha-tests.yaml" ||
+    st_fail "the no-quiet mutation removed the firing case too, so it is not planted alone"
+  st_expect_refusal "an alert asserted only to fire is refused" \
+    "never asserted to stay QUIET: SelfTestProbeFiring" \
+    run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
+
+  # Case 23 — A MISSPELLED `rule_files`, alone. promtool loads a file that is not
+  # there as zero rules, without an error.
+  d="$st/misspelled-rule-files"
+  st_bundle "$d"
+  extract_rules "$d/rendered.yaml" "$d" selftest-alpha selftest-beta >/dev/null ||
+    st_fail "the extractor failed for a reason other than the one under test"
+  sed -i 's/^  - rendered-rules.yaml$/  - rendered-rule.yaml/' "$d/alpha-tests.yaml"
+  grep -q '^  - rendered-rule.yaml$' "$d/alpha-tests.yaml" ||
+    st_fail "the misspelled-rule_files mutation did not apply -- believe no verdict from this run"
+  st_expect_refusal "a tests file naming a rule file that is not staged is refused" \
+    "must be exactly [rendered-rules.yaml]" \
+    run_rule_tests selftest-alpha "$d/stage" "$d/rule-selftest-alpha.yaml" "$d/alpha-tests.yaml"
+
+  # Case 24 — A LIVENESS FLOOR THAT ONE FILE CAN CLEAR, alone. The clean bundle's
+  # alpha file holds one alert, so a floor of 1 is met by reading alpha alone and
+  # no longer shows that the whole render was read.
+  d="$st/clean"
+  st_expect_refusal "a floor not above the largest rule file is refused" \
+    "is not above the largest single rule file" \
+    check_alert_census 1 "$d/rule-selftest-alpha.yaml" "$d/rule-selftest-beta.yaml"
+
+  echo "self-test passed: $st_passed checks -- every planted defect caught, each alone, and every clean input passed"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -917,7 +1148,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance)
+required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -946,12 +1177,16 @@ note "every rendered rule group parses"
 # what a clean corpus reports and also what a run over a chart that stopped
 # rendering its rules reports.
 #
-# 🔴 IT IS SET BELOW TODAY'S CORPUS ON PURPOSE, and the exact value is derived
-# rather than chosen. The chart renders 44 alerts across ten rule files, and the
-# largest single file holds 15. The floor is 20: strictly ABOVE the biggest one
-# file, so a run that read only a SUBSET of the files can never clear it, and
-# comfortably below 44, so ordinary rule churn -- adding alerts, retiring one --
-# never touches it.
+# 🔴 IT IS SET BELOW TODAY'S CORPUS ON PURPOSE, and it is bounded on both sides by
+# checks rather than by numbers in this comment (the numbers once written here
+# went stale within a release). check_alert_census, just below, prints the count and
+# REFUSES a floor that is not strictly above the largest single rule file -- so a
+# run that read only one file can never clear it. And check_always_firing itself
+# refuses a render holding fewer alerts than the floor. Between the two, what
+# trips it is the corpus moving far enough to meet it from either side: the
+# largest single file growing to the floor (the census asks for a higher one), or
+# removals taking the whole render below it. Everyday churn well inside those
+# bounds does not.
 #
 # A floor set AT the current count would be a tripwire on legitimate editing
 # rather than a liveness probe. Every rule addition would have to raise it (this
@@ -964,8 +1199,13 @@ note "every rendered rule group parses"
 # loose: no rule files at all is refused outright, the extractor's required-groups
 # control catches a group that stopped rendering, and the per-file cross-count
 # catches a file the walk reads only part of.
+always_firing_floor=20
+say "counting the rendered alerts"
+check_alert_census "$always_firing_floor" "${rule_files[@]}" ||
+  fail "the always-firing check's liveness floor no longer proves the whole render was read"
+
 say "checking every rendered alert for a reachable false state"
-check_always_firing 20 "${rule_files[@]}" || {
+check_always_firing "$always_firing_floor" "${rule_files[@]}" || {
   status=$?
   if [ "$status" -eq 2 ]; then
     fail "the always-firing check could not run, so the rules were NOT checked.
@@ -1007,6 +1247,7 @@ declare -A rule_tests=(
   [sign-in]="$repo_root/hack/testdata/prometheus-rules-sign-in-tests.yaml"
   [jetstream-delivery]="$repo_root/hack/testdata/prometheus-rules-jetstream-delivery-tests.yaml"
   [governance]="$repo_root/hack/testdata/prometheus-rules-governance-tests.yaml"
+  [dead-letter]="$repo_root/hack/testdata/prometheus-rules-dead-letter-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop
@@ -1026,11 +1267,12 @@ check_group_accounting "$work" "${!rule_tests[@]}" -- "${untested_groups[@]}" ||
 for group in "${!rule_tests[@]}"; do
   tests_file="${rule_tests[$group]}"
 
-  check_alert_coverage "$group" "$work/rule-$group.yaml" "$tests_file" ||
-    fail "the $group rule unit tests do not name every alert the chart renders"
-
   say "running the $group rule unit tests"
-  run_rule_tests "$work/t-$group" "$work/rule-$group.yaml" "$tests_file" ||
+  status=0
+  run_rule_tests "$group" "$work/t-$group" "$work/rule-$group.yaml" "$tests_file" || status=$?
+  [ "$status" -eq 3 ] &&
+    fail "the $group rule unit tests do not cover every alert both ways, or do not load the rendered rules"
+  [ "$status" -eq 0 ] ||
     fail "a $group alerting rule does not behave as specified.
 
 These tests are the only thing in the repository that evaluates an alert
