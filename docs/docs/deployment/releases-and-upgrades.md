@@ -1937,6 +1937,16 @@ per stream; a sample interrupted by shutdown stays at debug. During a credential
 outage the authentication warning repeats once per device connect attempt, so a fleet reconnecting
 through the outage logs one warning per attempt.
 
+#### A provisioning profile can no longer be created with a blank secret
+
+`createProvisioningProfile` now refuses an empty or whitespace-only `provisionKey` or
+`provisionSecret`. A profile with an empty secret would match a device that also sent an empty
+secret. No instance was exposed to that, because the path a device would use to present a
+provisioning secret has not shipped yet; the check closes the gap before it does.
+`updateProvisioningProfile` already refused a blank value. A profile
+already stored with an empty secret now matches no presented secret at all, empty or not: give it a
+real one with `updateProvisioningProfile`.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

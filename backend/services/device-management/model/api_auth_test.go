@@ -81,6 +81,22 @@ func TestEvaluateCredential_BasicSecretWrong(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCredentialSecretMismatch)
 }
 
+// The compare is over digests, so every near miss must still be refused: a secret of
+// the same length, one extending the stored secret, a prefix of it, and an empty one.
+func TestEvaluateCredential_BasicSecretNearMisses(t *testing.T) {
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	cred := credential(CredentialMqttBasic, strptr("s3cret"), nil)
+
+	for _, presented := range []string{"s3creT", "s3cret-extra", "s3cre", ""} {
+		err := evaluateCredential(cred, &PresentedCredential{
+			CredentialType: string(CredentialMqttBasic),
+			CredentialId:   "cred-1",
+			Secret:         strptr(presented),
+		}, now)
+		assert.ErrorIs(t, err, ErrCredentialSecretMismatch, "presented %q", presented)
+	}
+}
+
 func TestEvaluateCredential_BasicSecretMissing(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	cred := credential(CredentialMqttBasic, strptr("s3cret"), nil)

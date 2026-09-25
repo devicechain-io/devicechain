@@ -13,7 +13,9 @@
 // ONE function means no call path can reach the first without its kind's policy: there
 // is nothing to remember at a new call site, because there is no other compare to call.
 // hack/check-credential-compare.sh fails the build if production code outside this
-// package names bcrypt.CompareHashAndPassword.
+// package names bcrypt.CompareHashAndPassword, subtle.ConstantTimeCompare or hmac.Equal
+// without an exemption for that function and that member, stating why the compare is
+// not a guessable credential check; every run prints the exemptions it honoured.
 //
 // # The policy: backoff per principal
 //

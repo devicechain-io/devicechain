@@ -2066,6 +2066,16 @@ queda en depuración. Durante una caída del almacén de credenciales (la base d
 autenticación se repite una vez por cada intento de conexión de un dispositivo, así que una flota
 que se reconecta durante la caída registra un aviso por intento.
 
+#### Ya no se puede crear un perfil de aprovisionamiento con un secreto en blanco
+
+`createProvisioningProfile` rechaza ahora un `provisionKey` o un `provisionSecret` vacío o formado
+solo por espacios. Un perfil con un secreto vacío coincidiría con un dispositivo que también enviara
+un secreto vacío. Ninguna instancia quedó expuesta a ello, porque la vía por la que un dispositivo
+presentaría un secreto de aprovisionamiento todavía no se ha publicado; la comprobación cierra el
+hueco antes de que lo haga. `updateProvisioningProfile` ya rechazaba un valor en blanco. Un
+perfil que ya esté guardado con un secreto vacío no coincide ahora con ningún secreto presentado,
+vacío o no: asígnele uno real con `updateProvisioningProfile`.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

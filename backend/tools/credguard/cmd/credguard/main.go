@@ -1,11 +1,17 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command credguard reports production code that names bcrypt.CompareHashAndPassword
-// outside the credential primitive. It exits 1 when it finds any, or when an exemption
-// matched nothing, and 2 when it cannot do its job.
+// Command credguard reports production code that names a watched secret compare
+// (credguard.Watched) outside the credential primitive without an exemption for that
+// function and that member. It exits 1 when it finds any, or when an exemption matched
+// nothing, and 2 when it cannot do its job — including a malformed or duplicate
+// exemption.
 //
-//	credguard [-exempt dir.func=reason]... root[=minfiles]...
+// Every run, success included, prints the exempt set with each entry's site count and
+// reason, so the exemptions are visible in every CI log rather than being the one claim
+// nothing reports.
+//
+//	credguard [-exempt dir.func@member=reason]... root[=minfiles]...
 package main
 
 import (
@@ -19,27 +25,25 @@ import (
 	"github.com/devicechain-io/dc-credguard"
 )
 
-type exemptFlag []credguard.Exemption
+type specFlag []string
 
-func (e *exemptFlag) String() string { return fmt.Sprint(*e) }
-func (e *exemptFlag) Set(s string) error {
-	ex, err := credguard.ParseExemption(s)
-	if err != nil {
-		return err
-	}
-	*e = append(*e, ex)
-	return nil
-}
+func (s *specFlag) String() string     { return strings.Join(*s, ",") }
+func (s *specFlag) Set(v string) error { *s = append(*s, v); return nil }
 
 func main() {
-	var exemptions exemptFlag
-	flag.Var(&exemptions, "exempt", "dir.func=reason: allow the compare inside one function, for a stated reason")
+	var specs specFlag
+	flag.Var(&specs, "exempt", "dir.func@member=reason: allow one watched member inside one function, for a stated reason")
 	flag.CommandLine.Init("credguard", flag.ContinueOnError)
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 	if flag.NArg() == 0 {
-		fmt.Fprintln(os.Stderr, "usage: credguard [-exempt dir.func=reason]... <root>[=minfiles]...")
+		fmt.Fprintln(os.Stderr, "usage: credguard [-exempt dir.func@member=reason]... <root>[=minfiles]...")
+		os.Exit(2)
+	}
+	exemptions, err := credguard.ParseExemptions(specs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "credguard: %v\n", err)
 		os.Exit(2)
 	}
 
@@ -81,6 +85,13 @@ func main() {
 		os.Exit(2)
 	}
 
+	// 🔴 THE EXEMPT SET IS PRINTED ON EVERY RUN. An exemption is the one claim a clean
+	// scan never reports: it is what the guard was told not to look at. Listing each
+	// one with its site count and reason puts that claim in every CI log.
+	for _, e := range exemptions {
+		fmt.Printf("exempt %s (%d site(s)): %s\n", e, res.Used[e.String()], e.Reason)
+	}
+
 	failed := false
 	for _, f := range res.Findings {
 		fmt.Println(f)
@@ -102,13 +113,18 @@ func main() {
 		failed = true
 	}
 
+	labels := make([]string, 0, len(credguard.Watched))
+	for _, m := range credguard.Watched {
+		labels = append(labels, m.Label)
+	}
 	if failed {
 		fmt.Fprintf(os.Stderr, "\ncredguard: %d finding(s), %d stale exemption(s), across %d files.\n"+
-			"A bcrypt compare outside backend/core/credential is a password check the sign-in\n"+
-			"backoff does not count. Authenticate through credential.Checker.Check instead.\n",
-			len(res.Findings), len(stale), res.Files())
+			"A secret compare (%s) outside backend/core/credential is a check the\n"+
+			"per-principal backoff does not count. Authenticate through credential.Checker.Check,\n"+
+			"or exempt the function for that member with the reason it is not a guessable check.\n",
+			len(res.Findings), len(stale), res.Files(), strings.Join(labels, ", "))
 		os.Exit(1)
 	}
-	fmt.Printf("credguard: %d files parsed, no bcrypt compare outside %s (%d exemption(s) in use).\n",
-		res.Files(), credguard.OwnerDir, len(res.Used))
+	fmt.Printf("credguard: %d files parsed, no watched compare outside %s (%d exemption(s), listed above).\n",
+		res.Files(), credguard.OwnerDir, len(exemptions))
 }

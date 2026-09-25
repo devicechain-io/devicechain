@@ -1,26 +1,41 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package credguard finds production code that compares a secret against a bcrypt hash
-// anywhere but the credential primitive.
+// Package credguard finds production code that compares a secret — against a bcrypt
+// hash or in constant time — anywhere but the credential primitive, unless a named
+// exemption says why that compare is not a guessable credential check.
 //
 // # Why this exists
 //
-// A bcrypt compare is what a password guess costs the server. backend/core/credential
-// owns the ONLY one that authenticates anybody, and puts a per-principal backoff in
-// front of it, so the login mutation and the OAuth token endpoint cannot run a compare
-// the limiter does not count. That property holds only while nothing else calls
-// bcrypt.CompareHashAndPassword: a second call site is an unthrottled guessing oracle
-// the moment it is reachable from a request, and nothing about it looks wrong in
-// review — it is the obvious way to check a password.
+// A compare is what a guess costs the server. backend/core/credential owns the one
+// compare that authenticates people and OAuth clients, and puts a per-principal
+// backoff in front of it, so the login mutation and the OAuth token endpoint cannot
+// run a compare the limiter does not count. That property holds only while nothing
+// else compares a presented secret: a second call site is an unthrottled guessing
+// oracle the moment it is reachable from a request, and nothing about it looks wrong
+// in review — it is the obvious way to check a password.
+//
+// # What it watches
+//
+// The members in Watched: bcrypt.CompareHashAndPassword, subtle.ConstantTimeCompare
+// and hmac.Equal — the three ways this codebase, or code written the obvious way,
+// checks a secret. Every site outside the primitive must carry an exemption that
+// names its directory, its function AND the member it calls, with a reason. The
+// member is part of the key so that an exemption granted for one kind of compare
+// does not silently admit a different kind added to the same function later.
 //
 // # What it does NOT cover
 //
-// It watches the bcrypt class only. A secret compared some other way —
-// subtle.ConstantTimeCompare against a stored token, an HMAC check — is a credential
-// check this guard cannot see, and several exist in device-management today (claim,
-// provisioning and device credential secrets). "Nothing compares a bcrypt hash outside
-// the primitive" is the claim; "nothing checks a credential unthrottled" is not.
+//   - == or bytes.Equal on a secret. Neither is distinguishable from ordinary
+//     equality by syntax, so a secret compared that way is invisible here.
+//   - subtle.ConstantTimeEq, subtle.ConstantTimeByteEq and the rest of crypto/subtle:
+//     they compare integers, not presented secrets, and are not watched.
+//   - A database equality lookup used as authentication. A device ACCESS_TOKEN is
+//     exactly that: the bearer IS the credential id, matched by WHERE credential_id
+//     = ?, with no compare for this guard to see.
+//
+// "No watched compare outside the primitive without a stated reason" is the claim;
+// "nothing checks a credential unthrottled" is not.
 //
 // # Why it parses rather than greps
 //
@@ -29,7 +44,8 @@
 // VALUE assigned to a variable and called through it (`var cmp =
 // bcrypt.CompareHashAndPassword`). The selector is present in the AST wherever the
 // function is named, called or not, under whatever local name the file bound the import
-// to. A dot-import erases the selector, so one is refused outright.
+// to. A dot-import erases the selector, so a dot-import of any watched package is
+// refused outright.
 package credguard
 
 import (
@@ -39,47 +55,150 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 )
 
-// bcryptPath is the package whose compare is watched.
-const bcryptPath = "golang.org/x/crypto/bcrypt"
+// Member is one watched function: the import path of its package, its name, and the
+// label an exemption uses to name it.
+type Member struct {
+	Path  string
+	Name  string
+	Label string
+}
 
-// compareFunc is the watched member.
-const compareFunc = "CompareHashAndPassword"
+// Watched is every member the guard reports. Each is resolved against a file's imports
+// separately, so an alias bound to one watched package can never mask another.
+var Watched = []Member{
+	{Path: "golang.org/x/crypto/bcrypt", Name: "CompareHashAndPassword", Label: "bcrypt.CompareHashAndPassword"},
+	{Path: "crypto/subtle", Name: "ConstantTimeCompare", Label: "subtle.ConstantTimeCompare"},
+	{Path: "crypto/hmac", Name: "Equal", Label: "hmac.Equal"},
+}
+
+// memberByLabel finds a watched member by its exemption label.
+func memberByLabel(label string) (Member, bool) {
+	for _, m := range Watched {
+		if m.Label == label {
+			return m, true
+		}
+	}
+	return Member{}, false
+}
 
 // OwnerDir is the directory — matched as a trailing run of path components — of the
-// one package allowed to name the compare: the credential primitive. Its subpackages
-// are NOT included: credentialtest is a fake store, and has no business comparing.
+// one package allowed to name a watched compare: the credential primitive. Its
+// subpackages are NOT included: credentialtest is a fake store, and has no business
+// comparing.
 const OwnerDir = "backend/core/credential"
 
-// Exemption allows the compare inside one named function of one directory, for a
-// reason that is not authentication. Dir is matched as a trailing run of path
-// components, so it is written from a stable root ("backend/core/natsauth").
+// Exemption allows ONE watched member inside one named function of one directory, for
+// a reason that is not a guessable credential check. Dir is matched as a trailing run
+// of path components, so it is written from a stable root ("backend/core/natsauth").
+//
+// Func is the function's name, or Recv.Method for a method (the receiver's type name,
+// without its pointer or type parameters). The receiver is part of the key so that an
+// exemption for a function Open does not also admit a method (*T).Open in the same
+// package, nor one T's method admit another type's method of the same name.
 type Exemption struct {
 	Dir    string
 	Func   string
+	Member string // a Watched Label
 	Reason string
 }
 
-func (e Exemption) String() string { return e.Dir + "." + e.Func }
+// String is the exemption's key, dir.func@member. Two exemptions with the same key
+// are refused (ParseExemptions), so the key identifies one entry.
+func (e Exemption) String() string { return e.Dir + "." + e.Func + "@" + e.Member }
 
-// ParseExemption parses "dir.func=reason".
+// ParseExemption parses "dir.func@member=reason", where member is a Watched label and
+// func is "Name" or "Recv.Method". Dir runs to the first "." after its last "/", so
+// its final path component cannot itself contain a dot.
 func ParseExemption(s string) (Exemption, error) {
 	key, reason, ok := strings.Cut(s, "=")
 	if !ok || strings.TrimSpace(reason) == "" {
-		return Exemption{}, fmt.Errorf("exemption %q has no reason; write it as dir.func=reason", s)
+		return Exemption{}, fmt.Errorf("exemption %q has no reason; write it as dir.func@member=reason", s)
 	}
-	i := strings.LastIndex(key, ".")
-	if i <= 0 || i == len(key)-1 {
-		return Exemption{}, fmt.Errorf("exemption %q is not dir.func", key)
+	fnKey, member, ok := strings.Cut(key, "@")
+	if !ok {
+		return Exemption{}, fmt.Errorf("exemption %q names no member; write it as dir.func@member=reason "+
+			"so it cannot admit a different kind of compare in the same function", key)
 	}
-	return Exemption{Dir: key[:i], Func: key[i+1:], Reason: reason}, nil
+	if _, known := memberByLabel(member); !known {
+		labels := make([]string, 0, len(Watched))
+		for _, m := range Watched {
+			labels = append(labels, m.Label)
+		}
+		return Exemption{}, fmt.Errorf("exemption %q names %q, which is not a watched member (%s)",
+			key, member, strings.Join(labels, ", "))
+	}
+	slash := strings.LastIndex(fnKey, "/")
+	dot := strings.Index(fnKey[slash+1:], ".")
+	if dot <= 0 {
+		return Exemption{}, fmt.Errorf("exemption %q is not dir.func@member", key)
+	}
+	dot += slash + 1
+	dir, fn := fnKey[:dot], fnKey[dot+1:]
+	parts := strings.Split(fn, ".")
+	if len(parts) > 2 || slices.Contains(parts, "") {
+		return Exemption{}, fmt.Errorf("exemption %q is not dir.func@member or dir.Recv.Method@member", key)
+	}
+	return Exemption{Dir: dir, Func: fn, Member: member, Reason: reason}, nil
 }
 
-// Finding is one place a file names the compare outside the primitive.
+// funcKey is the name an exemption uses for a declaration: Name for a function,
+// Recv.Method for a method, with the receiver's pointer and type parameters dropped.
+func funcKey(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) == 0 {
+		return fd.Name.Name
+	}
+	t := fd.Recv.List[0].Type
+	for {
+		switch x := t.(type) {
+		case *ast.StarExpr:
+			t = x.X
+			continue
+		case *ast.ParenExpr:
+			t = x.X
+			continue
+		case *ast.IndexExpr:
+			t = x.X
+			continue
+		case *ast.IndexListExpr:
+			t = x.X
+			continue
+		}
+		break
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name + "." + fd.Name.Name
+	}
+	// Not a receiver shape Go accepts; a key no exemption can name, so it is reported.
+	return "?." + fd.Name.Name
+}
+
+// ParseExemptions parses every entry and refuses a DUPLICATE key. Two identical
+// entries would share one usage count, so one of them could be stale without ever
+// being reported.
+func ParseExemptions(specs []string) ([]Exemption, error) {
+	out := make([]Exemption, 0, len(specs))
+	seen := map[string]bool{}
+	for _, s := range specs {
+		e, err := ParseExemption(s)
+		if err != nil {
+			return nil, err
+		}
+		if seen[e.String()] {
+			return nil, fmt.Errorf("duplicate exemption %s", e)
+		}
+		seen[e.String()] = true
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// Finding is one place a file names a watched compare outside the primitive.
 type Finding struct {
 	Pos     token.Position
 	Message string
@@ -91,8 +210,8 @@ func (f Finding) String() string {
 
 // Result is what a scan saw, including how much. PerRoot counts parsed files per root —
 // a caller that does not check it cannot tell a clean tree from one it never read.
-// Used counts the sites each exemption matched; an exemption that matched nothing is
-// stale, and the caller reports it.
+// Used counts the sites each exemption matched, keyed by Exemption.String(); an
+// exemption that matched nothing is stale, and the caller reports it.
 type Result struct {
 	PerRoot  map[string]int
 	Findings []Finding
@@ -172,26 +291,41 @@ func hasDirSuffix(dir, suffix string) bool {
 func scanFile(fset *token.FileSet, file *ast.File, dir string, exemptions []Exemption, used map[string]int) []Finding {
 	var out []Finding
 
-	// EVERY local name bound to bcrypt, not the last one: a file may import the same
-	// package twice under two names, and a single-name loop would watch only one.
-	names := map[string]bool{}
+	// local import name -> selector name -> the watched member it resolves to. EVERY
+	// local name bound to a watched package is recorded, not the last one: a file may
+	// import the same package twice under two names, and a single-name map would watch
+	// only one. Keyed per import, so `b "crypto/subtle"` next to `bc
+	// "golang.org/x/crypto/bcrypt"` resolves b.ConstantTimeCompare to subtle, not to
+	// whatever b last meant.
+	names := map[string]map[string]Member{}
 	for _, imp := range file.Imports {
 		p, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || p != bcryptPath {
+		if err != nil {
 			continue
 		}
-		switch {
-		case imp.Name == nil:
-			names["bcrypt"] = true
-		case imp.Name.Name == ".":
-			out = append(out, Finding{
-				Pos: fset.Position(imp.Pos()),
-				Message: "dot-imports " + bcryptPath + ", which makes a call to " + compareFunc +
-					" unanalyzable here",
-			})
-		case imp.Name.Name == "_":
-		default:
-			names[imp.Name.Name] = true
+		for _, m := range Watched {
+			if m.Path != p {
+				continue
+			}
+			local := p[strings.LastIndex(p, "/")+1:]
+			switch {
+			case imp.Name == nil:
+			case imp.Name.Name == ".":
+				out = append(out, Finding{
+					Pos: fset.Position(imp.Pos()),
+					Message: "dot-imports " + p + ", which makes a call to " + m.Name +
+						" unanalyzable here",
+				})
+				continue
+			case imp.Name.Name == "_":
+				continue
+			default:
+				local = imp.Name.Name
+			}
+			if names[local] == nil {
+				names[local] = map[string]Member{}
+			}
+			names[local][m.Name] = m
 		}
 	}
 	if len(names) == 0 {
@@ -199,29 +333,42 @@ func scanFile(fset *token.FileSet, file *ast.File, dir string, exemptions []Exem
 	}
 
 	for _, decl := range file.Decls {
+		// A closure is attributed to its enclosing FuncDecl, so an exemption for a
+		// function covers the closures it builds — and, because the member is part of
+		// the match, ONLY for the member the exemption names.
 		fn := ""
 		if fd, ok := decl.(*ast.FuncDecl); ok {
-			fn = fd.Name.Name
+			fn = funcKey(fd)
 		}
 		ast.Inspect(decl, func(n ast.Node) bool {
 			sel, ok := n.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != compareFunc {
+			if !ok {
 				return true
 			}
 			id, ok := sel.X.(*ast.Ident)
-			if !ok || !names[id.Name] {
+			if !ok {
+				return true
+			}
+			m, ok := names[id.Name][sel.Sel.Name]
+			if !ok {
 				return true
 			}
 			for _, e := range exemptions {
-				if fn != "" && fn == e.Func && hasDirSuffix(dir, e.Dir) {
+				if fn != "" && fn == e.Func && e.Member == m.Label && hasDirSuffix(dir, e.Dir) {
 					used[e.String()]++
 					return true
 				}
 			}
+			named := id.Name + "." + m.Name
+			if named != m.Label {
+				named += " (" + m.Label + ")"
+			}
 			out = append(out, Finding{
 				Pos: fset.Position(sel.Pos()),
-				Message: fmt.Sprintf("names %s.%s outside %s: compare a presented secret through "+
-					"credential.Checker, which counts the attempt", id.Name, compareFunc, OwnerDir),
+				Message: fmt.Sprintf("names %s outside %s: compare a presented secret "+
+					"through credential.Checker, which counts the attempt, or exempt this "+
+					"function for this member with the reason it is not a guessable check",
+					named, OwnerDir),
 			})
 			return true
 		})
