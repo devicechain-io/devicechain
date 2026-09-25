@@ -679,6 +679,11 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 // logStoreFull warns that the attempt store is full, at most once per
 // storeFullLogInterval, carrying how many fail-opens the interval hid. The counter,
 // not this line, is what sees every one.
+//
+// The message is worded for every kind, since each service's Checker logs it under its
+// own name: "sign-ins" alone would send an operator reading device-management's log
+// looking for people when the cause is MQTT connects. The one string the alerts quote,
+// "credential attempt store is full", is kept at its head.
 func (c *Checker) logStoreFull(kind Kind) {
 	c.fullLog.Lock()
 	now := c.now()
@@ -692,9 +697,11 @@ func (c *Checker) logStoreFull(kind Kind) {
 	c.fullLog.Unlock()
 
 	log.Warn().Str("kind", string(kind)).Int("suppressed", suppressed).
-		Msg("The credential attempt store is full, so sign-in attempts are being checked " +
-			"WITHOUT their per-account backoff until entries expire. This usually means " +
-			"someone is sending sign-ins for many distinct identifiers.")
+		Msg("The credential attempt store is full, so attempts of this kind are being checked " +
+			"WITHOUT their per-principal backoff until entries expire. This usually means " +
+			"someone is presenting many distinct identifiers (sign-in addresses, or MQTT " +
+			"usernames for device credentials); for device credentials, a large fleet " +
+			"reconnecting at once can fill it too.")
 }
 
 // admit reads the principal's record, refuses the attempt while its delay is running,

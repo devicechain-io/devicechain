@@ -526,12 +526,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// credential-attempt bucket. It fails closed when that bucket cannot be reached,
 		// and OPEN, without the backoff, when it is full, since anyone can fill it by
 		// presenting enough distinct usernames (the credential package doc says why).
-		attemptsKV, err := NatsManager.DeviceCredentialAttemptStore()
-		if err != nil {
-			return err
-		}
-		creds, err := credential.NewChecker(attemptsKV, processor.DeviceCredentialPolicies,
-			credential.WithCounter(CredentialChecks))
+		creds, err := processor.NewDeviceCredentialChecker(NatsManager, credential.WithCounter(CredentialChecks))
 		if err != nil {
 			return err
 		}

@@ -264,6 +264,55 @@ func TestMissingMqttStreamsFail(t *testing.T) {
 	}
 }
 
+// A state bucket's missing hint reaches ITS missing finding and nothing else: not
+// another bucket's, and not its own under-replication finding, which has a different
+// cause.
+func TestStateBucketMissingHintIsScopedToItsAbsence(t *testing.T) {
+	const hint = " HINT-FOR-CREDS"
+	exp := testExpectation(3)
+	exp.StateBucketMissingHints = map[string]string{"KV_i_dc_credential_attempts": hint}
+
+	snap := healthy(exp)
+	snap.Objects = dropObject(snap.Objects, "KV_i_dc_credential_attempts")
+	snap.Objects = dropObject(snap.Objects, "KV_i_dc_locks")
+	rep := Verify(snap, exp)
+	seen := map[string]bool{}
+	for _, f := range find(rep, "A1") {
+		seen[f.Object] = true
+		has := strings.Contains(f.Message, hint)
+		switch f.Object {
+		case "KV_i_dc_credential_attempts":
+			if !has || !strings.Contains(f.Message, "MISSING") {
+				t.Errorf("the hinted bucket's missing finding lacks its hint: %s", f)
+			}
+		default:
+			if has {
+				t.Errorf("another object's finding carries the hint: %s", f)
+			}
+		}
+	}
+	if !seen["KV_i_dc_credential_attempts"] || !seen["KV_i_dc_locks"] {
+		t.Fatalf("both absent buckets must be reported; got:\n%s", rep.Format())
+	}
+
+	under := healthy(exp)
+	for i := range under.Objects {
+		if under.Objects[i].Name == "KV_i_dc_credential_attempts" {
+			under.Objects[i].Replicas = 1
+		}
+	}
+	judged := false
+	for _, f := range find(Verify(under, exp), "A1") {
+		judged = judged || f.Object == "KV_i_dc_credential_attempts"
+		if strings.Contains(f.Message, hint) {
+			t.Errorf("an under-replication finding carries the missing hint: %s", f)
+		}
+	}
+	if !judged {
+		t.Fatal("the under-replicated bucket produced no A1 finding, so this half proves nothing")
+	}
+}
+
 // --- A3: consumer groups -----------------------------------------------------
 
 // TestConsumerThatDidNotRemapFails is the assertion that turns "nats-server says

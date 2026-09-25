@@ -325,9 +325,16 @@ func TestDeviceCredentialStoreIsRequiredWhereDeviceManagementRuns(t *testing.T) 
 		{"device-management deployed", []string{"user-management", "device-management"}, true},
 		{"device-management absent", []string{"user-management", "event-sources"}, false},
 	} {
-		got := slices.Contains(ReplicationExpectation("inst", 3, tc.deployed).StateBuckets, want)
+		exp := ReplicationExpectation("inst", 3, tc.deployed)
+		got := slices.Contains(exp.StateBuckets, want)
 		if got != tc.required {
 			t.Errorf("%s: %q required = %v, want %v", tc.name, want, got, tc.required)
+		}
+		// Required by DEPLOYMENT, while the bucket exists only when the callout is
+		// configured: the missing finding has to say so, or a hand-installed chart
+		// without the callout reads as broken.
+		if hint := exp.StateBucketMissingHints[want]; tc.required && !strings.Contains(hint, "auth callout") {
+			t.Errorf("%s: the required device credential bucket carries no missing hint (%q)", tc.name, hint)
 		}
 	}
 }

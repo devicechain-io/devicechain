@@ -155,6 +155,11 @@ type Expectation struct {
 	LeaseBucketRequired bool
 	// StateBuckets are the other KV backing streams required present by name.
 	StateBuckets []string
+	// StateBucketMissingHints explains, per StateBuckets name, an absence that can have
+	// a cause other than a broken deployment. It is appended only to that bucket's
+	// MISSING finding, never to an under-replication one, the way the MQTT streams'
+	// hint is.
+	StateBucketMissingHints map[string]string
 	// CacheBucketSuffixes are the per-area cache buckets, matched by suffix because
 	// their concrete names carry a functional-area segment and therefore depend on
 	// which areas are deployed. Each suffix must match at least one observed object.
@@ -290,7 +295,8 @@ func Verify(snap Snapshot, exp Expectation) Report {
 		required = append(required, namedRole{name: n, check: "A1", role: "instance message stream"})
 	}
 	for _, n := range exp.StateBuckets {
-		required = append(required, namedRole{name: n, check: "A1", role: "state KV bucket"})
+		required = append(required, namedRole{name: n, check: "A1", role: "state KV bucket",
+			missingHint: exp.StateBucketMissingHints[n]})
 	}
 	for _, n := range exp.MqttStreams {
 		required = append(required, namedRole{

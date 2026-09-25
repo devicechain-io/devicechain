@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // DeviceCredentialPolicy is the backoff on MQTT password connects, per MQTT username
@@ -35,4 +36,22 @@ var DeviceCredentialPolicy = credential.Policy{Free: 10, Base: time.Second, Cap:
 // credential.NewChecker.
 var DeviceCredentialPolicies = map[credential.Kind]credential.Policy{
 	credential.KindDeviceCredential: DeviceCredentialPolicy,
+}
+
+// NewDeviceCredentialChecker builds the Checker the auth callout compares every MQTT
+// password through: DeviceCredentialPolicies over the instance's DEVICE
+// credential-attempt bucket.
+//
+// It is the one place that picks the bucket, and it exists so that choice is tested:
+// nmgr also serves CredentialAttemptStore, the bucket people's sign-in backoff lives
+// in, and building the device Checker over that one compiles, starts and throttles
+// exactly as well — until a spray of MQTT usernames fills it and switches off the
+// sign-in backoff for people (messaging.DeviceCredentialAttemptStore says why the two
+// are kept apart). main.go calls this and nothing else.
+func NewDeviceCredentialChecker(nmgr *messaging.NatsManager, opts ...credential.Option) (*credential.Checker, error) {
+	attempts, err := nmgr.DeviceCredentialAttemptStore()
+	if err != nil {
+		return nil, err
+	}
+	return credential.NewChecker(attempts, DeviceCredentialPolicies, opts...)
 }

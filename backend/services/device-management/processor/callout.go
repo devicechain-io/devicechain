@@ -327,9 +327,17 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 //
 // Every refusal is charged and compared, a real credential or not: an unknown, expired
 // or misconfigured credential returns "" to the Checker, which compares its dummy and
-// counts the attempt exactly as it does a wrong password, so neither the answer nor its
-// timing tells a caller which usernames exist. What differs is only the returned
-// error, which the caller logs and never sends.
+// counts the attempt exactly as it does a wrong password, so the ANSWER never tells a
+// caller which usernames exist: what differs is only the returned error, which the
+// caller logs and never sends.
+//
+// 🔴 The TIMING still can, and this does not claim otherwise. The lookup costs more
+// for a username that exists: DeviceCredentialByCredentialId's Preload("Device") runs
+// its second query only when the first found a row, and the device is then resolved
+// before the compare. So an existing username costs at least one more database round
+// trip on every admitted attempt, and the free attempts are samples enough to measure
+// it. That predates the throttle (AuthenticateDevice has the same shape); the backoff
+// bounds how many samples a caller gets per username, it does not equalize them.
 //
 // Two connects for one username that race (a reconnect overlapping a stale session)
 // are both evaluated: the one whose charge loses the compare-and-set re-reads the
