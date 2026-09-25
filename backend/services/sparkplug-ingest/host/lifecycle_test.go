@@ -43,8 +43,37 @@ type fakeClient struct {
 	pubs   map[string][]byte
 	// pubErr, when set, fails every Publish with it.
 	pubErr error
-	// disconnects counts Disconnect calls.
+	// disconnects counts Disconnect calls; each one is also recorded in events as
+	// "disconnect".
 	disconnects atomic.Int32
+	// sent is every Publish in call order, including the ones pubErr failed.
+	sent []sentMsg
+}
+
+// sentMsg is one recorded Publish.
+type sentMsg struct {
+	topic    string
+	retained bool
+	payload  []byte
+}
+
+// sentTo returns every payload published to topic, in order.
+func (f *fakeClient) sentTo(topic string) []sentMsg {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []sentMsg
+	for _, m := range f.sent {
+		if m.topic == topic {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (f *fakeClient) eventLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...)
 }
 
 func newFakeClient() *fakeClient { return &fakeClient{pubs: map[string][]byte{}} }
@@ -56,9 +85,10 @@ func (f *fakeClient) Subscribe(topic string, _ byte, _ mqtt.MessageHandler) mqtt
 	return fakeToken{}
 }
 
-func (f *fakeClient) Publish(topic string, _ byte, _ bool, payload interface{}) mqtt.Token {
+func (f *fakeClient) Publish(topic string, _ byte, retained bool, payload interface{}) mqtt.Token {
 	f.mu.Lock()
 	f.pubs[topic] = payload.([]byte)
+	f.sent = append(f.sent, sentMsg{topic: topic, retained: retained, payload: payload.([]byte)})
 	f.mu.Unlock()
 	f.record("pub:" + topic)
 	if f.pubErr != nil {
@@ -70,7 +100,7 @@ func (f *fakeClient) Publish(topic string, _ byte, _ bool, payload interface{}) 
 func (f *fakeClient) IsConnected() bool      { return true }
 func (f *fakeClient) IsConnectionOpen() bool { return true }
 func (f *fakeClient) Connect() mqtt.Token    { return fakeToken{} }
-func (f *fakeClient) Disconnect(uint)        { f.disconnects.Add(1) }
+func (f *fakeClient) Disconnect(uint)        { f.disconnects.Add(1); f.record("disconnect") }
 func (f *fakeClient) SubscribeMultiple(map[string]byte, mqtt.MessageHandler) mqtt.Token {
 	return fakeToken{}
 }

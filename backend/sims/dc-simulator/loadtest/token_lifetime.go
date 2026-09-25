@@ -5,6 +5,7 @@ package loadtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -52,4 +53,15 @@ func pinnedToken(ctx context.Context, s *userclient.TenantSession, need time.Dur
 func tokenLifetimeRefusal(need time.Duration, err error) error {
 	return fmt.Errorf("cannot measure: this run holds a live monitor socket for %s, longer than an "+
 		"access token lives; shorten the hold or raise the access-token lifetime: %w", need, err)
+}
+
+// liveTokenAbsentReason says, for the report, why the detection run's live monitor has no
+// token. The two reasons are different and the report must name whichever it was: a token
+// that cannot outlive the run is a property of the server's configuration, while a failed
+// fetch (a network error, a refused sign-in) says nothing about lifetimes.
+func liveTokenAbsentReason(need time.Duration, err error) string {
+	if errors.Is(err, userclient.ErrTokenLifetimeTooShort) {
+		return fmt.Sprintf("no access token lives the %s the run holds the socket for", need)
+	}
+	return "the access token for the detectionStream could not be fetched"
 }

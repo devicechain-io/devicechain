@@ -404,6 +404,22 @@ func (c *Client) runLoop(ctx context.Context) {
 			// live (setSessionIfLive), so once this is cancelled the clearSession below
 			// cannot be undone by a handler that is still finishing.
 			sessionCancel()
+			// 🔴 AN ABANDONED SESSION ANNOUNCES ITS OWN OFFLINE BEFORE THE CLEAN DISCONNECT.
+			// A clean DISCONNECT discards the Last-Will (see Stop), and an ONLINE publish
+			// that timed out waiting for its PUBACK may still have been stored by the
+			// broker as the retained STATE. Left alone, that ONLINE outlives this session,
+			// and a later session abandoned over a refused group publishes no STATE at
+			// all, so the edge nodes see this host ONLINE for as long as the refusal lasts
+			// and flush their store-and-forward buffers into nothing. Best-effort: a
+			// session that refused a group before publishing anything is overwritten with
+			// the OFFLINE its own will would have carried. A full session (up) only ever
+			// ends here because the broker dropped it, and then the will speaks for it.
+			if !up.Load() && client.IsConnected() {
+				if err := mqtt.WaitTokenTimeout(client.Publish(c.stateTopic, 1, true, statePayload(false, sessionTs)), publishTimeout); err != nil {
+					log.Warn().Err(err).Str("tenant", c.tenant).Str("topic", c.stateTopic).
+						Msg("Failed to publish OFFLINE STATE for an abandoned session.")
+				}
+			}
 			// Disconnect here, on runLoop's goroutine, never inside onConnected: paho runs
 			// that handler on a goroutine of its own and disconnecting from it risks a
 			// deadlock. For a connection the broker already dropped this is a no-op.

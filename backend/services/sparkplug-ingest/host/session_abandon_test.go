@@ -270,3 +270,88 @@ func TestAnAbandonedSessionBacksOffAndAFullSessionResets(t *testing.T) {
 	defer c.mu.Unlock()
 	assert.Nil(t, c.mc, "the ended session is still recorded as the live connection")
 }
+
+// runScriptedSessions drives runLoop through one session per entry of script (then
+// cancels) and returns each session's fake connection. prepare runs on each fake before
+// its session connects.
+func runScriptedSessions(t *testing.T, c *Client, script []string, prepare func(i int, fc *fakeClient)) []*fakeClient {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &sessionScript{cancel: cancel, script: script}
+	c.newClient = func(opts *mqtt.ClientOptions) mqtt.Client {
+		cl := s.newClient(opts)
+		s.mu.Lock()
+		i := len(s.clients) - 1
+		fc := s.clients[i]
+		s.mu.Unlock()
+		if i < len(script) {
+			prepare(i, fc)
+		}
+		return cl
+	}
+	c.backoffSleep = func(ctx context.Context, _ time.Duration) bool { return ctx.Err() == nil }
+	c.wg.Add(1)
+	done := make(chan struct{})
+	go func() { c.runLoop(ctx); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runLoop did not finish the scripted sessions")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*fakeClient(nil), s.clients...)
+}
+
+// An ONLINE the client gave up waiting for may still have been stored by the broker as
+// the retained STATE, and the clean disconnect that ends the abandoned session discards
+// the Last-Will that would have replaced it. So the abandoned session publishes its own
+// retained OFFLINE, stamped with its session timestamp, BEFORE disconnecting; otherwise
+// the stale ONLINE stands, and edge nodes flush into a host that is not subscribed.
+//
+// The fake records a publish even when it fails it, which is the case that matters: the
+// broker kept the message and only the acknowledgement went missing.
+func TestAnAbandonedSessionOverwritesAPossiblyRetainedOnlineBeforeDisconnecting(t *testing.T) {
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
+		Broker{}, nil, fixedNow, Metrics{})
+	c.subscribe = grantAll
+
+	clients := runScriptedSessions(t, c, []string{"online-unacked"}, func(_ int, fc *fakeClient) {
+		fc.pubErr = errors.New("PUBACK not received in time")
+	})
+
+	fc := clients[0]
+	states := fc.sentTo(c.stateTopic)
+	require.Len(t, states, 2, "the abandoned session did not publish OFFLINE after its unacknowledged ONLINE")
+	online, err := ParseState(states[0].payload)
+	require.NoError(t, err)
+	assert.True(t, online.Online)
+	offline, err := ParseState(states[1].payload)
+	require.NoError(t, err)
+	assert.False(t, offline.Online, "the second STATE of an abandoned session must be OFFLINE")
+	assert.True(t, states[1].retained, "an OFFLINE that is not retained does not replace a retained ONLINE")
+	assert.Equal(t, online.Timestamp, offline.Timestamp, "the OFFLINE must carry the session's own timestamp")
+
+	events := fc.eventLog()
+	require.GreaterOrEqual(t, len(events), 2)
+	assert.Equal(t, "disconnect", events[len(events)-1], "the OFFLINE must be published before the clean disconnect")
+	assert.Equal(t, "pub:"+c.stateTopic, events[len(events)-2], "the OFFLINE must be published before the clean disconnect")
+}
+
+// The counterweight: a FULL session that the broker later drops publishes no OFFLINE of
+// its own on the way out, because the broker publishes its Last-Will. Only its ONLINE is
+// ever sent on that connection.
+func TestALostFullSessionLeavesItsOfflineToTheWill(t *testing.T) {
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
+		Broker{}, nil, fixedNow, Metrics{})
+	c.subscribe = grantAll
+
+	clients := runScriptedSessions(t, c, []string{"full-then-lost"}, func(int, *fakeClient) {})
+
+	states := clients[0].sentTo(c.stateTopic)
+	require.Len(t, states, 1, "a full session that was lost published a STATE besides its ONLINE")
+	online, err := ParseState(states[0].payload)
+	require.NoError(t, err)
+	assert.True(t, online.Online)
+}

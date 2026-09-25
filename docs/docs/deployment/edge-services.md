@@ -421,7 +421,10 @@ often because the source's credential may not read it — the source does not an
 ingests none of its groups, disconnects, and retries on the same backing-off loop, up to 30 seconds
 apart. Announcing online with a group missing would be worse: that group's edge nodes would flush
 their buffered data into a subscription that does not exist, and the source would then mark their
-devices disconnected for staying silent. Watch **`subscribe_failures_total`**: any increase means a
+devices disconnected for staying silent. Before it disconnects, the source publishes its offline
+state itself, because a clean disconnect does not trigger its Last Will: an online announcement the
+broker stored but never acknowledged is replaced rather than left standing. Watch
+**`subscribe_failures_total`**: any increase means a
 source is down, and the log line names the group that was refused.
 
 **Reconnection is deliberately handled by the platform rather than by the MQTT client library.** Every

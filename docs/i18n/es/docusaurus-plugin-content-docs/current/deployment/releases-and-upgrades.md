@@ -2309,7 +2309,9 @@ cualquiera de los grupos de la fuente (lo más habitual, porque la credencial de
 leer ese grupo), la fuente ya no se anuncia en línea. No ingiere ninguno de sus grupos, se
 desconecta y reintenta con una espera creciente de hasta 30 segundos hasta que se conceden todos
 los grupos. Por tanto, un solo grupo rechazado detiene toda esa fuente hasta que se corrija la ACL
-del broker. Ocurre lo mismo si el broker no confirma el propio anuncio en línea.
+del broker. Ocurre lo mismo si el broker no confirma el propio anuncio en línea. Antes de desconectarse, la
+fuente publica su estado fuera de línea, para que un anuncio en línea que el broker guardó sin
+confirmarlo no se quede vigente.
 
 Antes, la fuente se anunciaba en línea con el grupo ausente. Los nodos edge de ese grupo volcaban
 entonces sus datos almacenados en una suscripción que no existía, y la fuente marcaba después sus
@@ -2328,10 +2330,13 @@ endpoint de tokens de OAuth devuelve `server_error` sin el texto del error subya
 rechazada porque la sesión terminó, la membresía se eliminó o se desactivó, o el inquilino niega el
 acceso sigue gastando el token.
 
-Solo se beneficia un cliente que reintenta. La biblioteca cliente de Go que usan el simulador, las
-pruebas de carga y `dcctl` puede reintentar con el mismo token de renovación en lugar de necesitar
-un nuevo inicio de sesión con contraseña. La consola sigue cerrando la sesión del usuario ante
-cualquier fallo de renovación. No hay que hacer nada en la actualización.
+Solo se beneficia un cliente que reintenta con el mismo token de renovación. Un cliente OAuth, como
+un agente de IA que se conecta por MCP, recibe ahora `server_error` en lugar de `invalid_grant`
+durante esa caída, así que puede reintentar en lugar de pedir al usuario que lo autorice de nuevo. La
+biblioteca cliente de Go que usan el simulador, las pruebas de carga y `dcctl` ya no pierde su token
+de renovación por la caída, pero sigue recurriendo a un inicio de sesión con contraseña cuando falla
+una renovación, como antes. La consola sigue cerrando la sesión del usuario ante cualquier fallo de
+renovación. No hay que hacer nada en la actualización.
 
 ### La transición única a la ingesta duradera
 

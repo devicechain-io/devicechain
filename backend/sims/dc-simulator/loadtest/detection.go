@@ -822,8 +822,9 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		absentReason = "the handshake has no eventProcessingWS"
 		log.Info().Msg("handshake has no eventProcessingWS — running on the durable alarm oracle with no live detection signal")
 	} else if liveToken, terr := pinnedToken(ctx, rt.Session, need); terr != nil {
-		absentReason = fmt.Sprintf("no access token lives the %s the run holds the socket for", need)
-		log.Warn().Err(terr).Dur("need", need).Msg("skipping the live detectionStream monitor: its token would expire mid-run — proceeding on the durable alarm oracle alone")
+		absentReason = liveTokenAbsentReason(need, terr)
+		log.Warn().Err(terr).Dur("need", need).Str("reason", absentReason).
+			Msg("skipping the live detectionStream monitor — proceeding on the durable alarm oracle alone")
 	} else {
 		if m, derr := detmonitor.Dial(ctx, hs.Endpoints.EventProcessingWS, liveToken); derr != nil {
 			absentReason = "the detectionStream dial failed"

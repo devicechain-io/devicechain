@@ -144,3 +144,20 @@ func TestAMonitoredRunWithinItsTokenGoesOnToThePlatform(t *testing.T) {
 		t.Fatalf("the run never went past sign-in, so this proves nothing about the check (error: %v)", err)
 	}
 }
+
+// The detection report names the reason its live signal is missing, so a token fetch that
+// failed for a reason other than lifetime must not be reported as a lifetime problem: that
+// would send the operator to raise a setting that was never the cause.
+func TestTheDetectionReportNamesWhyItsLiveTokenIsMissing(t *testing.T) {
+	need := 3 * time.Minute
+	short := fmt.Errorf("fetching: %w", userclient.ErrTokenLifetimeTooShort)
+	if got := liveTokenAbsentReason(need, short); !strings.Contains(got, "no access token lives the 3m0s") {
+		t.Errorf("a token that cannot outlive the run was not reported as a lifetime problem: %q", got)
+	}
+
+	failed := errors.New("dial tcp: connection refused")
+	got := liveTokenAbsentReason(need, failed)
+	if strings.Contains(got, "lives") || !strings.Contains(got, "could not be fetched") {
+		t.Errorf("a failed token fetch was reported as %q, not as a failed fetch", got)
+	}
+}

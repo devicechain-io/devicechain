@@ -2165,7 +2165,8 @@ any one of the source's groups (most often because the source's credential may n
 group), the source no longer announces itself online. It ingests none of its groups, disconnects,
 and retries with a growing wait of up to 30 seconds until every group is granted. One refused group
 therefore stops that whole source until the broker's ACL is fixed. The same happens if the broker
-does not acknowledge the online announcement itself.
+does not acknowledge the online announcement itself. Before it disconnects, the source publishes its
+offline state, so an online announcement the broker kept without acknowledging it does not linger.
 
 Before, the source announced itself online with the group missing. That group's edge nodes then
 flushed their buffered data into a subscription that did not exist, and the source later marked
@@ -2183,9 +2184,12 @@ refreshed right now; try again"), and the OAuth token endpoint returns `server_e
 underlying error text. A refresh that is refused because the session ended, the membership was
 removed or disabled, or the tenant refuses access still uses the token up.
 
-Only a client that retries benefits. The Go client library the simulator, the load tests and
-`dcctl` use can retry with the same refresh token rather than needing a fresh password sign-in. The
-console still signs the user out on any refresh failure. Nothing needs doing at the upgrade.
+Only a client that retries with the same refresh token benefits. An OAuth client, such as an AI
+agent connecting over MCP, now gets `server_error` rather than `invalid_grant` during such an outage,
+so it can retry instead of asking the user to authorize it again. The Go client library the
+simulator, the load tests and `dcctl` use no longer loses its refresh token to the outage, but it
+still falls back to a password sign-in whenever a refresh fails, as it did before. The console still
+signs the user out on any refresh failure. Nothing needs doing at the upgrade.
 
 ### The one-time durable-ingest cutover
 

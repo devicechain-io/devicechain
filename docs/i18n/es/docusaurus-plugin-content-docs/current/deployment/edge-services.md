@@ -458,7 +458,9 @@ fuente no se anuncia en línea, no ingiere ninguno de sus grupos, se desconecta 
 bucle con espera creciente, hasta 30 segundos entre intentos. Anunciarse en línea con un grupo ausente
 sería peor: los nodos edge de ese grupo volcarían sus datos almacenados en una suscripción que no
 existe, y la fuente marcaría después sus dispositivos como desconectados por quedarse en silencio.
-Vigile **`subscribe_failures_total`**: cualquier aumento significa que una fuente está caída, y la
+Antes de desconectarse, la fuente publica ella misma su estado fuera de línea, porque una desconexión
+limpia no activa su Last Will: un anuncio en línea que el broker guardó pero nunca confirmó se
+reemplaza en lugar de quedarse vigente. Vigile **`subscribe_failures_total`**: cualquier aumento significa que una fuente está caída, y la
 línea de log nombra el grupo rechazado.
 
 **La reconexión la gestiona deliberadamente la plataforma y no la biblioteca cliente de MQTT.** Cada
