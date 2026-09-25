@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -302,7 +303,8 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 		if errors.Is(cerr, gorm.ErrRecordNotFound) {
 			found = false
 		} else if cerr != nil {
-			return nil, errServer(cerr.Error())
+			log.Error().Err(cerr).Msg("OAuth refresh could not load the client its token is bound to; the token is left unconsumed.")
+			return nil, errServer(errGrantUnavailable)
 		}
 		if berr := checkRefreshClientBinding(boundClient, requestClientID, claims.Scope, client, found); berr != nil {
 			return nil, berr
@@ -319,18 +321,42 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 
 	entry, err := m.refreshKV.Get(claims.ID)
 	if err != nil {
-		return nil, errInvalidGrant("refresh token is invalid or expired")
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, errInvalidGrant("refresh token is invalid or expired")
+		}
+		log.Error().Err(err).Msg("OAuth refresh could not read the refresh-token store; the token is left unconsumed.")
+		return nil, errServer(errGrantUnavailable)
 	}
-	if err := m.refreshKV.Delete(claims.ID, nats.LastRevision(entry.Revision())); err != nil {
-		return nil, errInvalidGrant("refresh token is invalid or expired")
-	}
+	rev := entry.Revision()
 
+	// Every read BEFORE the token is consumed, as in Refresh: a store error leaves the
+	// token redeemable (server_error, retry the same token), and a definite denial burns
+	// it so it cannot revive if the membership or tenant is re-enabled before it expires.
+	//
 	// The access token carries the (possibly narrowed) scope; the rotated refresh
 	// token keeps the ORIGINAL grant scope (RFC 6749 §6 — a per-request narrowing
 	// bounds the access token, it does not permanently downgrade the grant), so a
 	// client that narrows once does not irreversibly lose the rest of its grant. The
 	// client binding is carried forward so the rotated token stays bound.
-	tokens, err := m.mintScopedGrant(ctx, claims.Username, claims.SessionEpoch, claims.Tenant, scope, claims.Scope, []string(claims.Audience), claims.ClientId)
+	grant, gerr := m.resolveScopedGrant(ctx, claims.Username, claims.SessionEpoch, claims.Tenant, scope, claims.Scope)
+	if gerr != nil {
+		if gerr.Code != "server_error" {
+			// Revision-checked, so it only ever deletes the token this refresh read.
+			if err := m.refreshKV.Delete(claims.ID, nats.LastRevision(rev)); err != nil && !errors.Is(err, nats.ErrKeyRevisionMismatch) {
+				log.Warn().Err(err).Msg("A denied OAuth refresh could not burn its token; it stays denied at every later use.")
+			}
+		}
+		return nil, gerr
+	}
+	if err := m.refreshKV.Delete(claims.ID, nats.LastRevision(rev)); err != nil {
+		if errors.Is(err, nats.ErrKeyRevisionMismatch) {
+			return nil, errInvalidGrant("refresh token is invalid or expired")
+		}
+		log.Error().Err(err).Msg("OAuth refresh could not claim the refresh token; it is left unconsumed.")
+		return nil, errServer(errGrantUnavailable)
+	}
+
+	tokens, err := m.mintScoped(grant, []string(claims.Audience), claims.ClientId)
 	if err != nil {
 		return nil, err
 	}
@@ -395,19 +421,47 @@ func checkRefreshClientBinding(boundClientID, requestClientID, boundScope string
 // identity, or one whose session has ended since (a password reset), fails the
 // grant, as do a lost membership and a denied tenant.
 func (m *Manager) mintScopedGrant(ctx context.Context, email string, epoch auth.SessionEpoch, tenant, accessScope, refreshScope string, audience []string, clientID string) (*OAuthTokens, error) {
+	grant, gerr := m.resolveScopedGrant(ctx, email, epoch, tenant, accessScope, refreshScope)
+	if gerr != nil {
+		return nil, gerr
+	}
+	return m.mintScoped(grant, audience, clientID)
+}
+
+// errGrantUnavailable is the server_error description when a grant could not be re-checked
+// because a store failed. It is fixed text: the cause is logged, never sent to the client.
+const errGrantUnavailable = "the grant could not be checked right now; try again"
+
+// scopedGrant is a re-resolved OAuth grant, ready to mint: everything mintScoped needs, and
+// nothing it has to read.
+type scopedGrant struct {
+	email, tenant             string
+	epoch                     auth.SessionEpoch
+	roles                     []string
+	accessCapped, refreshCaps []string
+	accessScope, refreshScope string
+	su                        bool
+}
+
+// resolveScopedGrant is the READ half of mintScopedGrant: it re-resolves the identity's
+// grant in the tenant and caps its authorities to each scope, touching no token. It is
+// split out so RefreshOAuth can do every read before it consumes the refresh token. A
+// policy refusal is invalid_grant or invalid_scope; a store error is a server_error with
+// fixed text (errGrantUnavailable), its cause logged rather than returned.
+func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch auth.SessionEpoch, tenant, accessScope, refreshScope string) (scopedGrant, *oauthError) {
 	accessAllow, err := scopeAllowance(accessScope)
 	if err != nil {
-		return nil, errInvalidScope(err.Error())
+		return scopedGrant{}, errInvalidScope(err.Error())
 	}
 	refreshAllow, err := scopeAllowance(refreshScope)
 	if err != nil {
-		return nil, errInvalidScope(err.Error())
+		return scopedGrant{}, errInvalidScope(err.Error())
 	}
 	// Defence in depth: the tenant reaches the superuser branch of
 	// resolveTenantGrant with no DB lookup, so grammar-check it here (as SelectTenant
 	// does) rather than trust the value carried on the code / refresh token.
 	if err := core.ValidateToken(tenant); err != nil {
-		return nil, errInvalidGrant("invalid tenant")
+		return scopedGrant{}, errInvalidGrant("invalid tenant")
 	}
 
 	id, err := m.sessionIdentity(ctx, email, epoch)
@@ -417,50 +471,60 @@ func (m *Manager) mintScopedGrant(ctx context.Context, email string, epoch auth.
 		// denial — else an infra blip is reported to the client as grant-revoked,
 		// killing an otherwise-valid session.
 		if errors.Is(err, errSessionEnded) {
-			return nil, errInvalidGrant("subject is no longer valid")
+			return scopedGrant{}, errInvalidGrant("subject is no longer valid")
 		}
-		return nil, errServer(err.Error())
+		log.Error().Err(err).Msg("Could not load the identity to re-check an OAuth grant.")
+		return scopedGrant{}, errServer(errGrantUnavailable)
 	}
 	su := isSuperuser(id)
 	mem := findMembership(id.Memberships, tenant)
 	if mem == nil && !su {
-		return nil, errInvalidGrant("subject is no longer a member of the tenant")
+		return scopedGrant{}, errInvalidGrant("subject is no longer a member of the tenant")
 	}
 	roles, authorities, err := m.resolveTenantGrant(ctx, tenant, mem, su)
 	if err != nil {
 		if errors.Is(err, errTenantAccessDenied) {
-			return nil, errInvalidGrant("tenant access denied")
+			return scopedGrant{}, errInvalidGrant("tenant access denied")
 		}
-		return nil, errServer(err.Error())
+		log.Error().Err(err).Msg("Could not load the tenant to re-check an OAuth grant.")
+		return scopedGrant{}, errServer(errGrantUnavailable)
 	}
 
 	// Cap the identity's *effective* authorities (the same set the console token
 	// would carry, viewer baseline included) to each token's scope allowance.
 	// Intersect caps even the superuser "*" to the allowance, so an OAuth session
 	// can never exceed its scope.
-	accessCapped := capToScope(authorities, su, accessAllow)
-	refreshCapped := capToScope(authorities, su, refreshAllow)
+	return scopedGrant{
+		email: email, tenant: tenant, epoch: auth.SessionEpoch(id.SessionEpoch), roles: roles,
+		accessCapped: capToScope(authorities, su, accessAllow),
+		refreshCaps:  capToScope(authorities, su, refreshAllow),
+		accessScope:  accessScope, refreshScope: refreshScope, su: su,
+	}, nil
+}
 
+// mintScoped is the WRITE half of mintScopedGrant: it issues the OAuth access + refresh pair
+// for a resolved grant and records the new refresh jti.
+func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) (*OAuthTokens, error) {
 	m.mu.RLock()
 	issuer := m.issuer
 	m.mu.RUnlock()
 
-	access, err := issuer.IssueOAuthAccess(tenant, email, roles, accessCapped, accessScope, audience, su, clientID, uuid.NewString())
+	access, err := issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString())
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueOAuthRefresh(tenant, email, auth.SessionEpoch(id.SessionEpoch), roles, refreshCapped, refreshScope, audience, clientID, refreshJti)
+	refresh, err := issuer.IssueOAuthRefresh(g.tenant, g.email, g.epoch, g.roles, g.refreshCaps, g.refreshScope, audience, clientID, refreshJti)
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
-	if _, err := m.refreshKV.Put(refreshJti, []byte(email)); err != nil {
+	if _, err := m.refreshKV.Put(refreshJti, []byte(g.email)); err != nil {
 		return nil, errServer(err.Error())
 	}
 	return &OAuthTokens{
 		AccessToken:  access.Token,
 		RefreshToken: refresh.Token,
-		Scope:        accessScope,
+		Scope:        g.accessScope,
 		ExpiresIn:    int(m.accessTTL.Seconds()),
 	}, nil
 }
