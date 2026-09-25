@@ -5,38 +5,41 @@ title: Managing Device Assignments
 
 # Managing Device Assignments
 
-An **assignment** relates a device to a **customer**, **area**, or **asset** so its telemetry carries organizational context. In DeviceChain an assignment is just a **tracked relationship** on the uniform entity graph — there is no separate assignment record.
+An **assignment** relates a device to a customer, area or asset, so its telemetry carries organizational context. In DeviceChain an assignment is a **tracked relationship** on the uniform entity graph. There is no separate assignment record.
 
 :::note Status
-Available. Assignments are managed from the device detail page's **Assignment** tab in the console, or over the device-management GraphQL API.
+Available. Manage assignments from the **Assignment** tab on the device detail page in the console, or over the device-management GraphQL API.
 :::
 
-## Assignment organizes; it does not gate
+## Assignment organizes; it does not gate {#assignment-organizes-it-does-not-gate}
 
-A device authenticates with a **credential**; assignment only **organizes** its data. The two are independent:
+A device authenticates with a credential. Assignment only organizes its data, and the two are independent:
 
-- A device that is registered and credentialed **reports telemetry immediately**, even with no assignment. Its events resolve with an **empty anchor set** — they still persist and still update the device's live state; they simply aren't attributed to a customer/area/asset yet.
-- **Assigning** the device later gives its subsequent events an **anchor**, so queries like "every reading for Building 7" find them.
+- A registered, credentialed device reports telemetry immediately, even with no assignment. Its events resolve with an empty anchor set: they still persist and still update the device's live state, but they are not yet attributed to a customer, area or asset.
+- Assigning the device later gives its subsequent events an anchor, so queries such as "every reading for Building 7" find them.
 
-Unassigned devices are therefore never silently dropped — a change from earlier behavior.
+Unassigned devices are therefore never silently dropped. This is a change from earlier behavior.
 
-## Every assignment is an anchor
+## Every assignment is an anchor {#every-assignment-is-an-anchor}
 
-A device may hold **several** assignments at once — a customer *and* an area *and* an asset. When the device reports an event, **each** assignment is recorded as an **anchor** on that event. So the same reading is queryable by **every** dimension: it shows up under the customer *and* under the area. There is no "primary" — the assignments are equal.
+A device may hold several assignments at once: a customer, an area and an asset. When the device reports an event, each assignment is recorded as an **anchor** on that event. The same reading is then queryable by every dimension; it shows up under the customer and under the area. No assignment is primary — they are equal.
 
-Concretely, each event's anchors live in a sibling `event_anchors` set (one row per assignment), and an anchor-filtered query ("events for area Y") matches events whose set contains that anchor. Anchors are captured **at write time**, so history is stable: a device that later moves areas keeps the area each old event was in when it happened.
+Each event's anchors live in a sibling `event_anchors` set, one row per assignment. An anchor-filtered query ("events for area Y") matches events whose set contains that anchor.
 
-## Assign a device (console)
+Anchors are captured at write time, so history is stable. A device that later moves areas keeps, on each old event, the area it was in when that event happened.
+
+## Assign a device (console) {#assign-a-device-console}
 
 1. Open the device's detail page and select the **Assignment** tab.
-2. Choose a **target type** (Customer / Area / Asset) and pick the **target** entity.
-3. Click **Assign**. Repeat to add more assignments — the device can be assigned to several targets at once.
+2. Choose a target type (Customer / Area / Asset) and pick the target entity.
+3. Click **Assign**.
+4. Repeat to add more assignments. The device can be assigned to several targets at once.
 
-To unassign, click **Unassign** on a row. It stops anchoring the device's *future* events to that target; events already recorded keep their anchors.
+To unassign, click **Unassign** on a row. The device's future events stop being anchored to that target; events already recorded keep their anchors.
 
-## Assign a device (GraphQL)
+## Assign a device (GraphQL) {#assign-a-device-graphql}
 
-An assignment is a relationship edge of the reserved **`assigned`** type (a built-in *tracked* type, auto-provisioned per tenant on first use). Create one with the bulk mutation, addressing source and target by `(type, token)`:
+An assignment is a relationship edge of the reserved **`assigned`** type. This is a built-in tracked type, provisioned automatically per tenant on first use. Create one with the bulk mutation, addressing source and target by `(type, token)`:
 
 ```graphql
 mutation {
@@ -64,8 +67,10 @@ query {
 }
 ```
 
-Remove one with `removeEntityRelationships(tokens: ["<edge token>"])`. All three operations require the `device:write` authority (list requires `device:read`).
+Remove one with `removeEntityRelationships(tokens: ["<edge token>"])`.
 
-## Relationship vs. assignment
+Creating and removing assignments requires the `device:write` authority. Listing them requires `device:read`.
 
-Assignment is one use of the general relationship graph. The same `createEntityRelationships` / `removeEntityRelationships` mutations back **group membership** (the reserved untracked `member` type) and any custom relationship type you define. What makes a relationship an *assignment that anchors events* is simply that its type is **tracked**. See the [Domain Model](../concepts/domain-model.md#relationships).
+## Relationship vs. assignment {#relationship-vs-assignment}
+
+Assignment is one use of the general relationship graph. The same `createEntityRelationships` and `removeEntityRelationships` mutations back group membership (the reserved untracked `member` type) and any custom relationship type you define. What makes a relationship an assignment that anchors events is that its type is **tracked**. See the [Domain Model](../concepts/domain-model.md#relationships).
