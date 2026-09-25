@@ -1639,8 +1639,8 @@ tiene alertas sobre el estado en línea de un host Sparkplug, lea «Una fuente S
 rechazado sigue fuera de línea, y una renovación sobrevive a una caída breve».
 
 Si dimensiona usted mismo el volumen de JetStream, lea «device-management usa un solo bucket de
-caché por tipo de dispositivo en lugar de dos»: la reserva se reduce, y una instancia actualizada
-conserva dos buckets que ya no usa hasta que los borre.
+caché por tipo de dispositivo en lugar de dos»: la actualización añade la reserva de un bucket de
+caché, y el total baja de su nivel anterior solo cuando borre los dos buckets que ya no usa.
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -2388,8 +2388,13 @@ lugar de tres, y un evento ya no puede validarse contra una versión del perfil 
 otra. No hay nada que hacer salvo que dimensione usted mismo el volumen de JetStream o gestione los
 buckets a mano.
 
-- **La reserva de JetStream baja en un bucket de caché** (64 MiB por defecto, 4 MiB en el preset
-  compacto).
+- **La actualización añade un bucket de caché a la reserva de JetStream** (64 MiB por defecto,
+  4 MiB en el preset compacto). device-management crea el bucket nuevo al arrancar, y los dos que
+  reemplaza conservan su reserva hasta que los borre (vea el punto siguiente). Si el volumen de
+  JetStream tiene menos espacio libre que un bucket de caché, la creación del bucket nuevo falla
+  por falta de almacenamiento y device-management no arranca. Una vez borrados los dos buckets
+  antiguos, la reserva queda un bucket de caché por debajo de la de antes de la actualización, que
+  es también lo que reserva una instalación nueva.
 - **Una instancia actualizada conserva los dos buckets que este reemplaza**:
   `<instance>_device-management_metric-defs-by-type` y
   `<instance>_device-management_profile-scope-by-type`. Nada escribe en ellos tras la

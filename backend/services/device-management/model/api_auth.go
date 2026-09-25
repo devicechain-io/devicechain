@@ -229,15 +229,20 @@ func (api *Api) lookupPresentedCredential(ctx context.Context, presented *Presen
 // JOIN. The joined row is accepted only if it is the credential's own device (by id) in
 // the credential's own tenant.
 //
-// 🔴 BOTH CHECKS ARE REQUIRED, NOT DEFENSIVE. The join carries the soft-delete predicate
-// but NOT the tenant predicate — the scope callback qualifies only the statement's own
-// table — so a device_id that points across tenants (corrupt data: a normal create
-// resolves the device inside the tenant) would otherwise authenticate as the other
-// tenant's device. The tenant-scoped preload this replaced refused it; this refuses it
-// the same way. The id check makes a soft-deleted or missing device a refusal whatever
-// the scan leaves in Device: gorm leaves it nil when the joined columns are NULL, but that
-// depends on how each column scans, and a future Device field with a serializer would
-// allocate an empty one instead.
+// 🔴 THE TENANT CHECK IS REQUIRED, NOT DEFENSIVE. The join carries the soft-delete
+// predicate but NOT the tenant predicate — the scope callback qualifies only the
+// statement's own table — so a device_id that points across tenants (corrupt data: a
+// normal create resolves the device inside the tenant) would otherwise authenticate as
+// the other tenant's device. The tenant-scoped preload this replaced refused it; this
+// refuses it the same way. The tenant check also refuses a soft-deleted or missing device
+// if the scan ever allocates an empty Device instead of leaving it nil (gorm leaves it nil
+// when the joined columns are NULL, but that depends on how each column scans, and a
+// future Device field with a serializer could change it): an empty Device's TenantId is "".
+//
+// The id check is belt-and-braces, and no test reaches it: the join's ON clause already
+// pins devices.id to the credential's device_id, and the only other way to get a
+// mismatched id — an empty Device — is refused by the tenant check first. It stays because
+// it states what the joined row must be at the one place that trusts it.
 func credentialDevice(cred *DeviceCredential) (*Device, error) {
 	d := cred.Device
 	if d == nil || d.ID != cred.DeviceId || d.TenantId != cred.TenantId {

@@ -19,7 +19,7 @@ import (
 )
 
 // newGeoFenceTestApi builds a sqlite-backed Api with the geofence tables and the
-// device-type/profile chain ProfileScopeByDeviceType walks, so the stamp can be
+// device-type/profile chain ProfileResolutionByDeviceType walks, so the stamp can be
 // followed all the way from a fence write to what the resolve path would read.
 func newGeoFenceTestApi(t *testing.T) *Api {
 	t.Helper()

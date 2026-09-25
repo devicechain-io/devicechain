@@ -1536,8 +1536,8 @@ If you run Sparkplug sources, or alert on a Sparkplug host's online state, read 
 with a refused group stays offline, and a refresh survives a brief outage".
 
 If you size the JetStream volume yourself, read "device-management keeps one cache bucket per
-device type instead of two": the reservation shrinks, and an upgraded instance keeps two buckets
-it no longer uses until you delete them.
+device type instead of two": the upgrade adds one cache bucket's reservation, and the total drops
+below its previous level only once you delete the two buckets it no longer uses.
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -2236,8 +2236,13 @@ device type's published profile once instead of three times, and one event can n
 validated against one profile version and labelled with another. Nothing needs doing unless you
 size the JetStream volume yourself or manage buckets by hand.
 
-- **The JetStream reservation drops by one cache bucket** (64 MiB by default, 4 MiB on the compact
-  preset).
+- **The upgrade adds one cache bucket to the JetStream reservation** (64 MiB by default, 4 MiB on
+  the compact preset). device-management creates the new bucket when it starts, and the two it
+  replaces keep their reservation until you delete them (see the next item). If the JetStream
+  volume has less free room than one cache bucket, creating the new bucket fails for lack of
+  storage and device-management does not start. Once the two old buckets are deleted, the
+  reservation is one cache bucket lower than before the upgrade, which is also what a fresh
+  install reserves.
 - **An upgraded instance keeps the two buckets this one replaces**:
   `<instance>_device-management_metric-defs-by-type` and
   `<instance>_device-management_profile-scope-by-type`. Nothing writes to them after the upgrade,
