@@ -24,8 +24,8 @@ import (
 // What it counts is STATEMENTS, not round trips. gorm does not trace BEGIN or COMMIT —
 // they run on the connection pool beneath the logger — so a caller that wants round
 // trips has to add two per transaction itself, and has to know how many transactions
-// its path opens. A statement that fails is still counted: a refused fence read is
-// still a trip to the database.
+// its path opens. A statement that fails is still counted: a fence read that errors
+// (an unreadable fence) is still a trip to the database.
 //
 // It starts ARMED. A disarmed counter returns from Trace without rendering the SQL,
 // because rendering it (the fc callback, which runs the dialect's Explain) is CPU that
