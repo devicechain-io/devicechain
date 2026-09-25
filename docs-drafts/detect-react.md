@@ -88,16 +88,28 @@ synthesis exists at all: without it the resolver nil-dereferenced and crash-loop
 (`backend/services/event-processing/internal/runtime/registry.go:226-232`). A silent "my rule never
 fires" is far more often this than a rule bug.
 
-Publication is 1→N with a coordinated ack, stated as the contract at
-`backend/services/device-management/processor/inbound.go:174-176`: `:209` publishes each resolved
-event, and the source message is acked (`:239`) only after the last event it produced is durable. A
-publish failure latches instead, so the source is never acked and the whole message redelivers
-(`settleResolved`, `:226-241`).
+Publication is 1→N with a coordinated ack (`backend/services/device-management/processor/inbound.go`).
+`ProcessResolvedEvent` hands each resolved event to a `messaging.OrderedWriter`
+(`backend/core/messaging/ordered.go`), which keeps up to `PUBLISH_WINDOW` publishes awaiting
+their PubAck and reports every outcome in submission order on one settle goroutine.
+`settleResolved` runs there and acks the source only after the last event it produced has its
+PubAck. A publish failure latches instead, so the source is never acked and the whole message
+redelivers. The failed-events loop uses the same writer and acks its source only once the
+failed-event record is stored.
+
+Several pods write this stream (every replica, and both sides of a rolling update), and inside one
+pod the resolver pool finishes events out of arrival order, so a device's events can land slightly
+out of order. DETECT applies them in stream order; windowed rules count a late event within the
+allowed lateness, other kinds drop a reading older than one already seen. A failed publish is
+republished only after the inbound AckWait (60s), which is beyond the default lateness.
 
 The stream is `resolved-events` (`backend/core/streams/streams.go:176`), subject
 `{instance}.{tenant}.resolved-events`, file storage, 7-day age limit
-(`backend/core/messaging/nats.go:566-574`). **It declares no dedup window** — contrast
-`inbound-events`, which declares 1800s (`streams.go:322`).
+(`backend/core/messaging/nats.go:566-574`). **It declares no dedup window of its own** — contrast
+`inbound-events`, which declares 1800s (`streams.go:322`) — so the broker's 2-minute default
+applies. Each resolved publish carries a `Nats-Msg-Id` of tenant, inbound stream sequence and
+fan-out index (`resolvedDedupID`), stable across redelivery, so the copy published on the first
+redelivery of a source whose PubAck was lost is not stored twice.
 
 ## 2. The spine — one goroutine, and everything else marshals into it
 

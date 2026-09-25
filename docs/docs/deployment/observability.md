@@ -341,6 +341,17 @@ The alerts read these series, which every service that uses JetStream exports:
 - **`devicechain_<area>_jetstream_broker_clustered`**: 1 when the connected broker is clustered, 0
   otherwise, including while the service is disconnected. It exists for as long as the pod runs.
 
+No alert reads the next series, but it is the one to look at when publishing is slow:
+
+- **`devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`**: how long each publish
+  to a JetStream stream took, from sending it to the service acting on the broker's
+  acknowledgement or on its failure, by the stream it was sent to. `mode="sync"` is a publish the
+  service waited on alone. `mode="pipelined"` is one of several in flight at once (the resolved
+  events `device-management` publishes), and its time includes any wait behind an earlier publish
+  still in flight, so the two modes are not directly comparable. A publish the broker never
+  answered is counted at the 5-second limit, so the count above the `le="5"` bucket is the
+  publishes that ran into it.
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command

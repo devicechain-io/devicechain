@@ -26,13 +26,23 @@ const (
 	MESSAGE_BACKLOG_SIZE        = 100 // Number of inbound messages that can be read and waiting to be processed
 	FAILED_EVENT_BACKLOG_SIZE   = 100 // Number of failed events that can be waiting to publish
 	RESOLVED_EVENT_BACKLOG_SIZE = 100 // Number of resolved events that can be waiting to publish
+
+	// PUBLISH_WINDOW is how many resolved (or failed) events may be awaiting their broker
+	// acknowledgement at once (messaging.OrderedWriter). Each publish is a round trip — on a
+	// replicated stream, a quorum commit — and a loop that waits for each before sending the
+	// next resolves at most one event per round trip however many resolvers it runs.
+	// Chosen with BenchmarkResolvedPublishThroughput: the whole pipeline measured no faster
+	// with a wider window, and a narrower one is fewer publishes a reconnect fails at once
+	// and fewer sources held unacked in the pod.
+	PUBLISH_WINDOW = 128
 )
 
 // ackCoord coordinates acknowledgement of one source message across the 1->N
 // resolved-event fan-out it produced. The source is acked once every resolved
 // event has been durably published, or left unacked if any publish fails so the
-// whole message is redelivered after AckWait (ADR-022 review A3). It is only ever touched by
-// the single ProcessResolvedEvent goroutine, so no locking is required.
+// whole message is redelivered after AckWait (ADR-022 review A3). Once OnResolvedEvent has
+// built it, it is only ever touched by the resolved writer's settle goroutine (see
+// settleResolved), so no locking is required.
 type ackCoord struct {
 	src       messaging.Message
 	remaining int
@@ -45,27 +55,33 @@ type ackCoord struct {
 // coord ties the item back to its source message for ack coordination.
 // correlation carries the inbound message's correlation id so the outbound
 // resolved event is stamped with it and stays traceable end to end (E15).
+// index is the event's position in its source's fan-out; with the source's
+// stream sequence it names the publish for the broker's dedup (resolvedDedupID).
 type resolvedItem struct {
 	tenant      string
 	event       dmodel.ResolvedEvent
 	coord       *ackCoord
+	index       int
 	correlation string
 }
 
 // failedItem pairs a failed event with its tenant for the same reason.
 // correlation carries the inbound message's correlation id onto the outbound
-// failed event for the same end-to-end traceability (E15).
+// failed event for the same end-to-end traceability (E15). src is the inbound
+// message the record is about: it is acked only once the record is stored (see
+// ProcessFailedEvent).
 type failedItem struct {
 	tenant      string
 	event       dmodel.FailedEvent
+	src         messaging.Message
 	correlation string
 }
 
 type InboundEventsProcessor struct {
 	Microservice         *core.Microservice
 	InboundEventsReader  messaging.MessageReader
-	ResolvedEventsWriter messaging.MessageWriter
-	FailedEventsWriter   messaging.MessageWriter
+	ResolvedEventsWriter messaging.OrderedWriter
+	FailedEventsWriter   messaging.OrderedWriter
 	Api                  dmodel.DeviceManagementApi
 	AuthMode             string
 	// MaxFutureSkew bounds how far a device-reported instant may lead the server's
@@ -78,6 +94,11 @@ type InboundEventsProcessor struct {
 	failed    chan failedItem
 	resolved  chan resolvedItem
 	resolvers []*EventResolver
+
+	// resolverCount is the size of the resolver pool; 0 means EVENT_RESOLVER_COUNT. It is
+	// set only by the throughput benchmark, which measures how the pool width interacts
+	// with the publish stage.
+	resolverCount int
 
 	// metrics is every Prometheus instrument this processor exports. It is built ONCE,
 	// in the initialize phase, and handed in — NOT built here — because the processor
@@ -156,8 +177,8 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 // metrics is built once in the initialize phase (see NewResolveMetrics) and shared by
 // every processor this service constructs, because this constructor runs again on every
 // start.
-func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.MessageWriter,
-	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string,
+func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.OrderedWriter,
+	failed messaging.OrderedWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string,
 	maxFutureSkew time.Duration, metrics ResolveMetrics) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
@@ -176,29 +197,38 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageR
 	return iproc
 }
 
-// Handle case where event failed to process.
+// ProcessFailedEvent publishes one failed-event record, and acks the inbound message it is
+// about only once the broker has stored that record.
+//
+// A record that does not reach the stream leaves its source unacked, so the source is
+// redelivered and resolved again — or, at its last delivery, recorded by the platform's
+// max-delivery recorder from the source stream. Either way the failure is recorded
+// somewhere. Acking at hand-off, as this loop once did, lost it whenever the publish failed.
 func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) bool {
 	item, more := <-iproc.failed
-	if more {
-		log.Debug().Str("message", item.event.Message).Msg("received failed event")
-
-		// Marshal event message to protobuf.
-		bytes, err := proto.MarshalFailedEvent(&item.event)
-		if err != nil {
-			log.Error().Err(err).Msg("unable to marshal event to protobuf")
-		}
-
-		// Create and deliver message on the failed event's tenant subject.
-		msg := messaging.Message{
-			Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
-			Value: bytes,
-		}.WithCorrelationID(item.correlation)
-		err = iproc.FailedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
-		iproc.FailedEventsWriter.HandleResponse(err)
-		return false
-	} else {
+	if !more {
 		return true
 	}
+	log.Debug().Str("message", item.event.Message).Msg("received failed event")
+
+	// Marshal event message to protobuf.
+	bytes, err := proto.MarshalFailedEvent(&item.event)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to marshal event to protobuf")
+	}
+
+	// Create and deliver message on the failed event's tenant subject.
+	msg := messaging.Message{
+		Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
+		Value: bytes,
+	}.WithCorrelationID(item.correlation)
+	src := item.src
+	iproc.FailedEventsWriter.Publish(core.WithTenant(ctx, item.tenant), msg, func(err error) {
+		if err == nil {
+			_ = src.Ack()
+		}
+	})
+	return false
 }
 
 // invalidEventErrorCap bounds the decode error recorded on an undecodable message.
@@ -258,7 +288,10 @@ func boundDecodeError(text string) string {
 func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Message) {
 	tenant, ok := messaging.ParseTenantFromSubject(msg.Subject)
 	if !ok {
+		// Nothing can be recorded against no tenant, and redelivery cannot supply one, so
+		// the message is dropped as the resolver drops any untenanted message.
 		log.Warn().Msg(fmt.Sprintf("Dropping invalid event with no parseable tenant in subject %q", msg.Subject))
+		_ = msg.Ack()
 		return
 	}
 	// Where the original is and how big it is. It goes in the record's message because
@@ -277,12 +310,14 @@ func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Mes
 	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), iproc.Microservice.FunctionalArea,
 		"message could not be parsed; payload not retained ("+locator+")", err, nil)
 	failed.Error = bounded
-	iproc.failed <- failedItem{tenant: tenant, event: *failed, correlation: msg.CorrelationID()}
+	iproc.failed <- failedItem{tenant: tenant, event: *failed, src: msg, correlation: msg.CorrelationID()}
 }
 
-// Called when an event can not be resolved. correlation is the inbound message's
-// correlation id, carried onto the outbound failed event for traceability (E15).
-func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uint, unrez esmodel.UnresolvedEvent, rezerr error, correlation string) {
+// Called when an event can not be resolved. src is the inbound message, acked once the
+// failed-event record is stored; its correlation id is carried onto that record for
+// traceability (E15).
+func (iproc *InboundEventsProcessor) OnUnresolvedEvent(src messaging.Message, tenant string, reason uint, unrez esmodel.UnresolvedEvent, rezerr error) {
+	correlation := src.CorrelationID()
 	// Drop the presented credential before the event is archived. The dead-letter
 	// record is durable — it outlives the request by the stream's retention and is
 	// the thing an operator exports when debugging ingest — and by the time
@@ -300,7 +335,9 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uin
 	// Marshal event message to protobuf.
 	bytes, err := esproto.MarshalUnresolvedEvent(&archived)
 	if err != nil {
+		// Terminal either way: the same event will not marshal on a redelivery.
 		log.Error().Err(err).Msg("unable to marshal unresolved event to protobuf")
+		_ = src.Ack()
 	} else {
 		// Log the resolution failure REASON before dead-lettering. Without this the
 		// cause travels only inside the dead-lettered FailedEvent payload — an
@@ -314,55 +351,105 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(tenant string, reason uin
 			Msg("event could not be resolved; dead-lettering")
 		failed := dmodel.NewFailedEvent(reason, iproc.Microservice.FunctionalArea,
 			"event could not be resolved", rezerr, bytes)
-		iproc.failed <- failedItem{tenant: tenant, event: *failed, correlation: correlation}
+		iproc.failed <- failedItem{tenant: tenant, event: *failed, src: src, correlation: correlation}
 	}
 }
 
 // Handle case where event was successfully resolved. The source message is acked
 // only after the last resolved event it produced has been durably published, and
 // left unacked if any publish fails so AckWait redelivers the whole message (A3).
+//
+// The publish is handed to the resolved writer, which keeps up to PUBLISH_WINDOW in
+// flight and reports each outcome to settleResolved in the order submitted here.
 func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) bool {
 	item, more := <-iproc.resolved
-	if more {
-		bytes, err := proto.MarshalResolvedEvent(&item.event)
-		if err == nil {
-			msg := messaging.Message{
-				// The source device token, carried as the producer-local Key. Read the
-				// next paragraph before relying on it for anything: this is NOT what
-				// keeps a device's events in order.
-				//
-				// Key was the Kafka partition key, and on Kafka it did order a device's
-				// events by hashing them onto one partition. On JetStream there are no
-				// partitions and Key is not even transmitted — the writer builds the
-				// nats.Msg from Value plus headers only (core/messaging/nats.go), and
-				// nothing on the read side reconstructs it, which is exactly what the
-				// Message doc means by "producer-local and not transmitted, since no
-				// consumer reads it".
-				//
-				// What DETECT actually relies on is the stream's own ordering: this loop
-				// is the single writer of resolved-events, it publishes one event at a
-				// time in resolution order, and JetStream assigns a gapless, monotonic
-				// stream sequence per stream. The engine checkpoints that StreamSeq and
-				// replays from it, so per-device order falls out of per-stream order.
-				// A second concurrent writer into this suffix would break that property
-				// and no partition key would restore it.
-				//
-				// The token is still the right value to put here — it is 1:1 with the
-				// device and no id crosses the seam (ADR-044) — so it stays as fidelity
-				// for a transport that does read a key. It is not load-bearing today.
-				Key:   []byte(item.event.SourceDeviceToken),
-				Value: bytes,
-			}.WithCorrelationID(item.correlation)
-			err = iproc.ResolvedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
-			iproc.ResolvedEventsWriter.HandleResponse(err)
-		} else {
-			log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
-		}
-		iproc.settleResolved(item.coord, err)
-		return false
-	} else {
+	if !more {
 		return true
 	}
+	coord := item.coord
+	settle := func(err error) { iproc.settleResolved(coord, err) }
+	bytes, err := proto.MarshalResolvedEvent(&item.event)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
+		// Through the writer, not inline: the outcome must reach the coordinator on the
+		// writer's settle goroutine, in order, like every published one.
+		iproc.ResolvedEventsWriter.Fail(err, settle)
+		return false
+	}
+	msg := messaging.Message{
+		// The source device token, carried as the producer-local Key. Read the
+		// next paragraphs before relying on it for anything: this is NOT what
+		// keeps a device's events in order.
+		//
+		// Key was the Kafka partition key, and on Kafka it did order a device's
+		// events by hashing them onto one partition. On JetStream there are no
+		// partitions and Key is not even transmitted — the writer builds the
+		// nats.Msg from Value plus headers only (core/messaging/nats.go), and
+		// nothing on the read side reconstructs it, which is exactly what the
+		// Message doc means by "producer-local and not transmitted, since no
+		// consumer reads it".
+		//
+		// What DETECT actually relies on is the stream's own order, not the number
+		// of writers. JetStream gives every message on resolved-events a gapless,
+		// monotonic stream sequence; the engine applies events in that order,
+		// checkpoints it and replays from it, so a replay sees exactly the order the
+		// live run saw however many pods wrote the stream.
+		//
+		// There is more than one writer, and nothing should assume otherwise. Every
+		// device-management replica runs this loop; a rolling update runs the old
+		// and the new pod side by side; and even inside one pod the resolver pool
+		// finishes events out of arrival order, so two events from one device can
+		// reach this loop — and the stream — in either order. The writer then keeps
+		// several publishes in flight (messaging.OrderedWriter); they reach the
+		// stream in the order they are submitted here.
+		//
+		// So a device's events can arrive out of event-time order in two ways, and
+		// only the first is small:
+		//
+		//   - a REORDER, from the resolver pool, several replicas or a rollout: a
+		//     fraction of a second. DETECT still applies the late event in stream
+		//     order; windowed rules count it if it arrives within their allowed
+		//     lateness, and every other rule kind discards a reading older than one
+		//     it has already seen.
+		//   - a REDELIVERY: a publish that fails leaves its source unacked, and the
+		//     source is resolved and published again no sooner than the inbound
+		//     AckWait (60 s) later. That is far beyond the default lateness, so the
+		//     event is LATE to detection. Nothing here removes that; only a lateness
+		//     above AckWait would absorb it.
+		//
+		// No partition key and no writer count restores a per-device publish order.
+		//
+		// The token is still the right value to put here — it is 1:1 with the
+		// device and no id crosses the seam (ADR-044) — so it stays as fidelity
+		// for a transport that does read a key. It is not load-bearing today.
+		Key:     []byte(item.event.SourceDeviceToken),
+		Value:   bytes,
+		DedupID: resolvedDedupID(item.tenant, coord, item.index),
+	}.WithCorrelationID(item.correlation)
+	iproc.ResolvedEventsWriter.Publish(core.WithTenant(ctx, item.tenant), msg, settle)
+	return false
+}
+
+// resolvedDedupID names one resolved-event publish for the broker's duplicate window, so a
+// publish that was stored but whose acknowledgement was lost — a timeout, a reconnect, a
+// leader change — is not stored a second time when its source is redelivered and published
+// again. resolved-events declares no window of its own, so the broker's default (two
+// minutes) applies, and the first redelivery comes one AckWait (60 s) after the fetch.
+//
+// The id is built only from values that survive a redelivery unchanged and cannot be
+// supplied by a device: the tenant, the source's inbound stream sequence and the event's
+// position in the source's fan-out. The sequence alone is unique across tenants (one inbound
+// stream carries them all); the tenant is there because a dedup id is stream-scoped and
+// every id on a shared stream is kept tenant-scoped (see messaging.Message.DedupID).
+//
+// A source with no stream sequence (broker metadata unavailable) gets NO id, never a
+// shared one: every such source would carry the same sequence, 0, and the second would
+// be discarded as a duplicate of the first.
+func resolvedDedupID(tenant string, coord *ackCoord, index int) string {
+	if coord == nil || coord.src.StreamSeq == 0 {
+		return ""
+	}
+	return fmt.Sprintf("resolved:%s:%d:%d", tenant, coord.src.StreamSeq, index)
 }
 
 // settleResolved records the outcome of publishing one resolved event against
@@ -370,6 +457,10 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 // is left unacked (AckWait redelivers the whole message); success decrements the
 // outstanding count and acks the source when the last resolved event has been
 // published.
+//
+// It runs only on the resolved writer's settle goroutine (messaging.OrderedWriter),
+// in the order the events were submitted, and err is nil only after the broker's
+// PubAck.
 func (iproc *InboundEventsProcessor) settleResolved(coord *ackCoord, err error) {
 	if coord == nil {
 		return
@@ -397,8 +488,8 @@ func (iproc *InboundEventsProcessor) OnResolvedEvent(src messaging.Message, tena
 	}
 	coord := &ackCoord{src: src, remaining: len(events)}
 	correlation := src.CorrelationID()
-	for _, event := range events {
-		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved, coord: coord, correlation: correlation}
+	for i, event := range events {
+		iproc.resolved <- resolvedItem{tenant: tenant, event: *event.Resolved, coord: coord, index: i, correlation: correlation}
 	}
 }
 
@@ -422,7 +513,11 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		MaxFutureSkew: iproc.MaxFutureSkew,
 		Bounded:       iproc.metrics.eventTimeBounded,
 	}
-	for w := 1; w <= EVENT_RESOLVER_COUNT; w++ {
+	count := iproc.resolverCount
+	if count == 0 {
+		count = EVENT_RESOLVER_COUNT
+	}
+	for w := 1; w <= count; w++ {
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, eventTime, iproc.messages,
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics.red,
 			locationMemo)
@@ -540,12 +635,32 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	if iproc.procCancel != nil {
 		iproc.procCancel()
 	}
-	iproc.readerWG.Wait()   // reader stopped: no more sends to messages
+	iproc.readerWG.Wait() // reader stopped: no more sends to messages
+	// Nothing more is fetched from here on, so a failing stream no longer needs its
+	// consumption slowed: what is left is only what this pod already holds, and every
+	// source a failure leaves unacked is redelivered either way.
+	if iproc.ResolvedEventsWriter != nil {
+		iproc.ResolvedEventsWriter.Draining()
+	}
+	if iproc.FailedEventsWriter != nil {
+		iproc.FailedEventsWriter.Draining()
+	}
 	close(iproc.messages)   //
 	iproc.workerWG.Wait()   // resolvers drained + exited: no more sends to resolved/failed
 	close(iproc.resolved)   //
 	close(iproc.failed)     //
-	iproc.outboundWG.Wait() // outbound loops drained + exited
+	iproc.outboundWG.Wait() // submitters drained: every item has been handed to a writer
+	// Every handed-over publish now settles — its source acked on its PubAck, or left
+	// unacked for redelivery — before this returns, which is before the NATS drain. The
+	// publishes in flight together each wait at most the 5 s publish ceiling, and failures
+	// are no longer backed off (Draining, above); the service's teardown budget bounds the
+	// whole, and a source it cuts off is simply left unacked.
+	if iproc.ResolvedEventsWriter != nil {
+		iproc.ResolvedEventsWriter.Close()
+	}
+	if iproc.FailedEventsWriter != nil {
+		iproc.FailedEventsWriter.Close()
+	}
 	return nil
 }
 

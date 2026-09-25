@@ -2411,6 +2411,36 @@ buckets a mano.
   esta solo el bucket nuevo. Si una edición de geocercas se pierde así, los eventos de ubicación se
   marcan con el conjunto de geocercas anterior durante hasta ese TTL.
 
+#### Los eventos resueltos se publican varios a la vez
+
+No hay que hacer nada en la actualización.
+
+- **`device-management` mantiene hasta 128 publicaciones de eventos resueltos esperando al bróker a
+  la vez,** en lugar de esperar a cada una antes de enviar la siguiente, así que la resolución de un
+  pod ya no queda limitada a un viaje de ida y vuelta de publicación cada vez. Un evento de entrada
+  se sigue confirmando solo después de que se hayan almacenado todos los eventos resueltos que
+  produjo, y uno cuya publicación falla se sigue dejando para su reentrega.
+- **Un evento resuelto se almacena una sola vez cuando su evento de entrada se reentrega.** Cada
+  publicación resuelta lleva un identificador de detección de duplicados derivado de su evento de
+  entrada, así que cuando una publicación se almacenó pero se perdió su confirmación, la copia
+  publicada en la reentrega la descarta el bróker en lugar de almacenarla dos veces. El bróker
+  conserva cada identificador durante dos minutos, lo que cuesta memoria de NATS por cada evento
+  resuelto publicado en ese intervalo, unos 100 bytes cada uno según la medición en proceso.
+- **Un evento fallido se confirma solo después de que su registro se almacene en el flujo
+  failed-events.** Antes, el evento de entrada se confirmaba cuando su registro se entregaba para
+  publicarlo, así que un registro que no se llegaba a publicar se perdía. Ahora el evento de entrada
+  se reentrega o, en su última entrega, se registra como mensaje fallido (dead letter).
+- **Cuando publicar en resolved-events sigue fallando, `device-management` va más despacio** en
+  lugar de hacer fallar toda su cola de entrada a máxima velocidad: tras una publicación fallida
+  espera medio segundo, duplicándose hasta dos segundos, antes de tomar la siguiente.
+- **Los eventos resueltos de un dispositivo pueden llegar al flujo ligeramente desordenados,** y ya
+  podían antes: cada réplica publica, y una actualización progresiva ejecuta dos pods a la vez. El
+  ajuste [`watermarkLatenessSeconds`](./detection-engine.md) de la detección lo tolera. Un evento
+  cuya publicación falló se vuelve a publicar al menos 60 segundos después, más allá del valor por
+  defecto.
+- **Un histograma nuevo, `devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`,**
+  mide cada publicación en JetStream. [Observabilidad](./observability.md) lo describe.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

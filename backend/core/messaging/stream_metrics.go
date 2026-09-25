@@ -127,7 +127,33 @@ type streamMetrics struct {
 	// durables holds each durable's previous sample, which the counter is the difference
 	// against. Accessed only from the single sampler goroutine, like warned.
 	durables map[durableRef]durableSample
+
+	// publishLatency is how long each JetStream publish took, by the stream suffix it went
+	// to and by the writer's mode. Both labels are bounded: suffixes are the platform's
+	// declared set (ensureStream refuses anything else) and mode has two values. It carries
+	// no tenant and no subject.
+	//
+	// 🔑 THE TWO MODES MEASURE DIFFERENT THINGS, which is why mode is a label rather than
+	// being folded away. publishModeSync is one request's round trip. publishModePipelined
+	// is from the send to the moment the outcome is acted on, which is after every publish
+	// submitted before it has settled — so a slow or timed-out publish at the head of the
+	// window lifts the samples of everything queued behind it. Comparing the two is
+	// comparing a latency with a latency-plus-queueing.
+	publishLatency *prometheus.HistogramVec
 }
+
+const (
+	// publishModeSync is a MessageWriter publish: one request, waited on.
+	publishModeSync = "sync"
+	// publishModePipelined is an OrderedWriter publish: one of a window in flight at once,
+	// settled in submission order.
+	publishModePipelined = "pipelined"
+)
+
+// publishBuckets spans a loopback PubAck (well under a millisecond) through a replicated
+// stream's quorum commit to the publish ceiling. The top finite bucket IS publishWait, so
+// the count above it is the publishes that ran into the ceiling.
+var publishBuckets = []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
 // durableRef names one durable consumer on one stream: a reader this service created.
 type durableRef struct {
@@ -184,9 +210,34 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"replay-covered (not lettered: this service re-reads the stream from its own checkpoint, "+
 				"so the message is not lost, but that checkpoint has been failing).",
 			[]string{"stream", "outcome"}),
+		publishLatency: ms.NewHistogramVec("jetstream_publish_duration_seconds",
+			"Time from sending a JetStream publish to acting on its acknowledgement or failure, by stream "+
+				"suffix and mode. mode=sync is one request's round trip; mode=pipelined includes any wait "+
+				"behind an earlier publish still in flight. A publish the broker never answered is counted "+
+				"at the 5 s ceiling.",
+			[]string{"suffix", "mode"}, publishBuckets),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
+}
+
+// initPublish creates a writer's latency series at count 0 when the writer is built, for the
+// reason initDurable gives: a series that first appears with samples has nothing earlier to
+// compare against, and "no publishes yet" should not read the same as "not measured". A
+// no-op on a manager with no metrics (one assembled by hand in a unit test).
+func (m *streamMetrics) initPublish(suffix, mode string) {
+	if m == nil || m.publishLatency == nil {
+		return
+	}
+	m.publishLatency.WithLabelValues(suffix, mode)
+}
+
+// observePublish records one publish's latency. See publishLatency for what each mode means.
+func (m *streamMetrics) observePublish(suffix, mode string, d time.Duration) {
+	if m == nil || m.publishLatency == nil {
+		return
+	}
+	m.publishLatency.WithLabelValues(suffix, mode).Observe(d.Seconds())
 }
 
 // initDurable creates a durable's per-reader series at 0: the two unread series for every

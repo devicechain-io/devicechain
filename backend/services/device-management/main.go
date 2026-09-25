@@ -47,8 +47,8 @@ var (
 
 	InboundEventsReader    messaging.MessageReader
 	InboundEventsProcessor *processor.InboundEventsProcessor
-	ResolvedEventsWriter   messaging.MessageWriter
-	FailedEventsWriter     messaging.MessageWriter
+	ResolvedEventsWriter   messaging.OrderedWriter
+	FailedEventsWriter     messaging.OrderedWriter
 
 	// AlarmEventsWriter publishes alarm state-change events (ADR-041). It backs the
 	// publisher injected into the shared Api so every alarm transition — the DETECT edge
@@ -168,15 +168,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	InboundEventsReader = ievents
 
-	// Add and initialize resolved events writer.
-	revents, err := nmgr.NewWriter(streams.ResolvedEvents)
+	// Add and initialize resolved events writer. Both inbound publish loops pipeline their
+	// publishes (see processor.PUBLISH_WINDOW); the processor closes these writers when it
+	// stops, before the connection drains.
+	revents, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, processor.PUBLISH_WINDOW)
 	if err != nil {
 		return err
 	}
 	ResolvedEventsWriter = revents
 
 	// Add and initialize failed events writer.
-	fevents, err := nmgr.NewWriter(streams.FailedEvents)
+	fevents, err := nmgr.NewOrderedWriter(streams.FailedEvents, processor.PUBLISH_WINDOW)
 	if err != nil {
 		return err
 	}
