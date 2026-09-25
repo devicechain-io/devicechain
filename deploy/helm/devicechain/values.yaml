@@ -147,9 +147,9 @@ instance:
         # 8712 MiB (8.51 GiB) rather than 9.375. The MQTT gateway's own streams, bounded
         # at startup because nats-server creates them unlimited, add 384 MiB for
         # 8.883 GiB total. The KV buckets (device caches, locks, refresh tokens,
-        # OAuth codes, sign-in attempt counts) are bounded too — 5 State buckets at
-        # 128 MiB + 6 Cache buckets at 64 MiB — and reserve a further 1 GiB, for
-        # 9.883 GiB (10120 MiB) reserved.
+        # OAuth codes, sign-in and MQTT password attempt counts) are bounded too — 6
+        # State buckets at 128 MiB + 6 Cache buckets at 64 MiB — and reserve a further
+        # 1152 MiB, for 10.008 GiB (10248 MiB) reserved.
         #
         # 🔴 THESE NUMBERS ARE COMPUTED FROM THE REGISTRY, NOT MAINTAINED BY HAND, AND
         # THEY HAD ALREADY DRIFTED ONCE. Before this was corrected the paragraph read
@@ -163,7 +163,7 @@ instance:
         # by summing StreamMaxBytesFor over streams.Suffixes() rather than adjusting
         # the sentence.
         # That fits the 16Gi JetStream PV, whose max_file_store ceiling is 14Gi,
-        # leaving 4.117 GiB (4216 MiB) genuinely unreserved. Note that ceiling floors 90% of the
+        # leaving 3.992 GiB (4088 MiB) genuinely unreserved. Note that ceiling floors 90% of the
         # PV's MAGNITUDE and reattaches the unit (floor(16 * 0.9) = 14 → "14Gi"), so
         # it is 14Gi and not 14.4 GiB — the difference is 409 MiB of headroom that
         # does not exist.

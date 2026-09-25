@@ -21,3 +21,17 @@ func (nmgr *NatsManager) CredentialAttemptStore() (nats.KeyValue, error) {
 	return nmgr.KeyValueStore(kv.BucketCredentialAttempts,
 		CredentialAttemptsBucketName(nmgr.Microservice.InstanceId), credential.AttemptTTL)
 }
+
+// DeviceCredentialAttemptStore returns the instance's DEVICE credential-attempt bucket:
+// the backoff state device-management's MQTT auth callout keeps per MQTT username
+// (credential.KindDeviceCredential), creating it if it does not exist.
+//
+// It is a bucket of its own rather than a second kind in CredentialAttemptStore's,
+// because a full attempt bucket fails OPEN for every principal in it, and anyone can
+// fill one by presenting enough distinct identifiers. Sharing would let a spray of MQTT
+// usernames switch off the password backoff for people, and a spray of email addresses
+// switch it off for devices.
+func (nmgr *NatsManager) DeviceCredentialAttemptStore() (nats.KeyValue, error) {
+	return nmgr.KeyValueStore(kv.BucketDeviceCredentialAttempts,
+		DeviceCredentialAttemptsBucketName(nmgr.Microservice.InstanceId), credential.AttemptTTL)
+}

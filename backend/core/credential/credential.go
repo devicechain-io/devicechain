@@ -2,7 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package credential is the one place a presented secret is compared against a stored
-// bcrypt hash, and the one place that comparison is rate-limited.
+// one, and the one place that comparison is rate-limited.
+//
+// # The compare belongs to the kind
+//
+// Each Kind is compared by ONE comparator, fixed in this package (comparators) rather
+// than chosen by the caller: a person's password and an OAuth client secret against a
+// bcrypt hash, a device's MQTT password against the stored secret as SHA-256 digests in
+// constant time. A caller that could pick the comparator could pick a plaintext compare
+// for a kind whose store holds bcrypt hashes — a security downgrade expressed as
+// configuration — so it cannot.
 //
 // # Why one primitive
 //
@@ -13,9 +22,10 @@
 // ONE function means no call path can reach the first without its kind's policy: there
 // is nothing to remember at a new call site, because there is no other compare to call.
 // hack/check-credential-compare.sh fails the build if production code outside this
-// package names bcrypt.CompareHashAndPassword, subtle.ConstantTimeCompare or hmac.Equal
-// without an exemption for that function and that member, stating why the compare is
-// not a guessable credential check; every run prints the exemptions it honoured.
+// package names bcrypt.CompareHashAndPassword, or either constant-time compare
+// (subtle.ConstantTimeCompare, hmac.Equal), without an exemption for that function and
+// that member stating why the compare is not a guessable credential check; every run
+// prints the exemptions it honoured.
 //
 // # The policy: backoff per principal
 //
@@ -54,8 +64,9 @@
 // # Existence does not leak
 //
 // The key is derived from the PRESENTED identifier, and an unknown principal runs the
-// identical sequence — read, charge, lookup, compare (against a dummy hash of the same
-// cost; an Unthrottled kind skips only the read and the charge) — so it is throttled on
+// identical sequence — read, charge, lookup, compare (against its kind's dummy, at the
+// same cost as a stored secret of that kind; an Unthrottled kind skips only the read
+// and the charge) — so it is throttled on
 // exactly the same schedule as a real one. A fast "throttled" reply reveals
 // only throttle state the caller built up themselves, and it looks the same whether the
 // account exists or not.
@@ -70,8 +81,12 @@
 // byte ceiling is not a refusal of the attempt. The attempt is evaluated WITHOUT its
 // backoff — looked up and compared exactly as an admitted one would be, charged nothing
 // — and counted as OutcomeStoreFull, which the chart alerts on. Losing the backoff is
-// the smaller failure: guessing stays bounded by the per-request work limit and the
-// bcrypt cost of every compare.
+// the smaller failure. For a bcrypt kind, guessing stays bounded by the per-request
+// work limit and the bcrypt cost of every compare; for KindDeviceCredential, whose
+// compare is cheap, it is bounded only by the rate the broker accepts connects, which
+// is what the device-management callout had before it was throttled at all. People's
+// sign-ins and device connects keep their counts in separate buckets for exactly this
+// reason: a spray that fills one does not switch off the other's backoff.
 //
 // 🔴 WHO LOSES THE BACKOFF IS EVERY PRINCIPAL NOT INSIDE A RUNNING DELAY, not only new
 // ones. A replicated bucket checks its byte ceiling before proposing a write, counting
@@ -93,11 +108,13 @@ package credential
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -126,7 +143,59 @@ const (
 	// KindOAuthClient is an OAuth client authenticating with its client secret. ID is
 	// the client_id.
 	KindOAuthClient Kind = "oauth-client"
+	// KindDeviceCredential is a device connecting to the MQTT gateway with a username
+	// and password (an MQTT_BASIC credential). ID is "{tenant}:{credentialId}" — the
+	// MQTT username as presented — which is unambiguous because the token grammar
+	// excludes ":" from a tenant id. Its stored secret is the device's password itself,
+	// so it is compared as digests rather than against a bcrypt hash.
+	KindDeviceCredential Kind = "device-credential"
 )
+
+// comparator is how one kind's presented secret is compared against its stored one.
+type comparator struct {
+	// compare returns nil on a match and a non-nil error on a mismatch.
+	compare func(stored, secret []byte) error
+	// bcrypt is whether the stored value is a bcrypt hash, which decides what an
+	// unknown principal is compared against (see NewChecker).
+	bcrypt bool
+}
+
+// comparators is THE mapping from kind to compare. It is fixed here and not supplied
+// by callers (see the package doc). A kind with no entry cannot be declared: NewChecker
+// refuses it.
+var comparators = map[Kind]comparator{
+	KindIdentity:         {compare: bcrypt.CompareHashAndPassword, bcrypt: true},
+	KindOAuthClient:      {compare: bcrypt.CompareHashAndPassword, bcrypt: true},
+	KindDeviceCredential: {compare: digestCompare},
+}
+
+// constantTimeCompare is subtle.ConstantTimeCompare. It is a variable only so a test
+// can see the lengths digestCompare hands it (export_test.go).
+var constantTimeCompare = subtle.ConstantTimeCompare
+
+// digestCompare compares a plaintext stored secret against a presented one in time
+// that depends on neither's content NOR LENGTH. subtle.ConstantTimeCompare returns at
+// once when its inputs differ in length, so comparing the plaintexts would let a
+// timing measurement recover the stored secret's length; comparing their fixed-width
+// digests gives it two 32-byte inputs every time.
+func digestCompare(stored, secret []byte) error {
+	// The digests are never stored or sent anywhere: they exist only so the compare
+	// below sees two equal-length inputs. This is not password hashing at rest.
+	s, p := sha256.Sum256(stored), sha256.Sum256(secret)
+	if constantTimeCompare(s[:], p[:]) != 1 {
+		return ErrMismatch
+	}
+	return nil
+}
+
+// ErrUnknownKind is returned by NewChecker for a declared kind this package has no
+// comparator for: a typo, or a kind added without deciding how it is compared.
+var ErrUnknownKind = errors.New("credential: no comparator for kind")
+
+// ErrUndeclaredKind is returned by Check for a principal whose kind the Checker was
+// not built with. Nothing is read, charged or compared: a kind with no policy has no
+// schedule to apply, and falling back to some default would be a policy nobody chose.
+var ErrUndeclaredKind = errors.New("credential: kind was not declared to this Checker")
 
 // Principal names who is being authenticated. ID is the PRESENTED identifier, whether
 // or not it names anything that exists — that is what keeps existence from leaking.
@@ -357,17 +426,21 @@ const casAttempts = 3
 // limiter exists to slow down.
 const contendedRetry = time.Second
 
-// Checker compares secrets against bcrypt hashes behind a per-principal backoff.
+// Checker compares secrets against stored ones behind a per-principal backoff.
 type Checker struct {
 	store    Store
 	policies map[Kind]Policy
-	dummy    []byte
-	now      func() time.Time
-	checks   *prometheus.CounterVec
-	// compare is bcrypt.CompareHashAndPassword. It is a field only so a test can
-	// observe WHICH hash each check paid for (export_test.go): the dummy compare is
-	// the timing equalizer, and an outcome-level test cannot see it being skipped.
-	compare func(hash, secret []byte) error
+	// dummies is, per declared kind, what an unknown principal's secret is compared
+	// against: a bcrypt hash of the production cost for a bcrypt kind, and a
+	// plaintext for the digest kind, whose stored values are plaintext.
+	dummies map[Kind][]byte
+	now     func() time.Time
+	checks  *prometheus.CounterVec
+	// compares is each declared kind's comparator. It is a field only so a test can
+	// observe WHICH stored value each check paid for (export_test.go): the dummy
+	// compare is the timing equalizer, and an outcome-level test cannot see it being
+	// skipped.
+	compares map[Kind]func(stored, secret []byte) error
 
 	// fullLog rate-limits the warning a full store logs: during the spray that fills
 	// the bucket, every sign-in attempt fails open, and a line per attempt would turn
@@ -385,16 +458,21 @@ const storeFullLogInterval = time.Minute
 // Option configures a Checker.
 type Option func(*Checker)
 
-// WithCompareObserver calls seen with the stored hash of every compare the checker
+// WithCompareObserver calls seen with the stored value of every compare the checker
 // runs — the dummy included — before running it. It only observes: it cannot change
 // what is compared or the result. It exists so a test in another package can count the
-// bcrypt compares a request actually paid for, which no outcome or error can show.
+// compares a request actually paid for, which no outcome or error can show.
 func WithCompareObserver(seen func(hash []byte)) Option {
-	return func(c *Checker) {
-		inner := c.compare
-		c.compare = func(hash, secret []byte) error {
-			seen(hash)
-			return inner(hash, secret)
+	return func(c *Checker) { c.observeCompares(seen) }
+}
+
+// observeCompares wraps every declared kind's compare so seen is told the stored
+// value first.
+func (c *Checker) observeCompares(seen func(stored []byte)) {
+	for k, inner := range c.compares {
+		c.compares[k] = func(stored, secret []byte) error {
+			seen(stored)
+			return inner(stored, secret)
 		}
 	}
 }
@@ -412,31 +490,59 @@ func WithClock(now func() time.Time) Option { return func(c *Checker) { c.now = 
 // series created by the first fail-open would hide exactly that one.
 func WithCounter(c *prometheus.CounterVec) Option { return func(ch *Checker) { ch.checks = c } }
 
-// dummySecret is hashed at construction so an unknown principal pays a real compare.
+// dummySecret is what an unknown principal is compared against, so it pays a real
+// compare: hashed with bcrypt at construction for a bcrypt kind, and used as it is for
+// the digest kind, whose stored values are plaintext.
 const dummySecret = "dc-credential-timing-equalizer"
 
-// NewChecker builds a Checker. A nil store and a kind without a valid policy are
-// refused: a checker that could not count attempts would be the unthrottled compare
-// this package exists to remove.
+// NewChecker builds a Checker for the kinds policies declares: the map's keys, and
+// only those, so a Check on any other kind fails with ErrUndeclaredKind. A nil store,
+// an empty map, a kind this package has no comparator for (ErrUnknownKind) and an
+// invalid policy are refused: a checker that could not count attempts would be the
+// unthrottled compare this package exists to remove.
 func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker, error) {
 	if store == nil {
 		return nil, errors.New("credential: a Checker needs an attempt store")
 	}
-	for _, k := range []Kind{KindIdentity, KindOAuthClient} {
-		p, ok := policies[k]
+	if len(policies) == 0 {
+		return nil, errors.New("credential: a Checker needs at least one kind's policy")
+	}
+	// Sorted so that, of several bad kinds, the same one is reported every time.
+	kinds := make([]Kind, 0, len(policies))
+	for k := range policies {
+		kinds = append(kinds, k)
+	}
+	slices.Sort(kinds)
+
+	c := &Checker{store: store, policies: policies, now: time.Now,
+		dummies:  map[Kind][]byte{},
+		compares: map[Kind]func(stored, secret []byte) error{}}
+	// The bcrypt dummy is generated only when a bcrypt kind is declared (a hash at
+	// production cost is time a service checking only device passwords has no reason
+	// to spend at startup), and once, however many bcrypt kinds share it.
+	var bcryptDummy []byte
+	for _, k := range kinds {
+		cmp, ok := comparators[k]
 		if !ok {
-			return nil, fmt.Errorf("credential: no policy for kind %q", k)
+			return nil, fmt.Errorf("%w %q", ErrUnknownKind, k)
 		}
-		if err := p.validate(); err != nil {
+		if err := policies[k].validate(); err != nil {
 			return nil, fmt.Errorf("credential: policy for kind %q: %w", k, err)
 		}
+		c.compares[k] = cmp.compare
+		if !cmp.bcrypt {
+			c.dummies[k] = []byte(dummySecret)
+			continue
+		}
+		if bcryptDummy == nil {
+			h, err := bcrypt.GenerateFromPassword([]byte(dummySecret), bcrypt.DefaultCost)
+			if err != nil {
+				return nil, err
+			}
+			bcryptDummy = h
+		}
+		c.dummies[k] = bcryptDummy
 	}
-	dummy, err := bcrypt.GenerateFromPassword([]byte(dummySecret), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, err
-	}
-	c := &Checker{store: store, policies: policies, dummy: dummy, now: time.Now,
-		compare: bcrypt.CompareHashAndPassword}
 	for _, o := range opts {
 		o(c)
 	}
@@ -470,9 +576,11 @@ func Key(p Principal) string {
 
 // Check authenticates secret for principal p.
 //
-// lookup returns the stored bcrypt hash, or "" when the principal does not exist or is
-// not allowed to authenticate — in which case a dummy hash is compared instead, so the
-// two cost the same. lookup is called only for an attempt that is admitted.
+// lookup returns the stored secret (a bcrypt hash, or for KindDeviceCredential the
+// plaintext), or "" when the principal does not exist or is not allowed to
+// authenticate, in which case the kind's dummy is compared instead, so the two cost
+// the same. "" never matches, whatever is presented. lookup is called only for an
+// attempt that is admitted.
 //
 // It returns nil on a match, ErrMismatch on a mismatch, a *ThrottledError when the
 // attempt is not yet allowed, a lookup error unchanged, and an *UnavailableError
@@ -511,8 +619,9 @@ func (c *Checker) Check(ctx context.Context, p Principal, secret string, lookup 
 func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup func(context.Context) (string, error)) (bool, error) {
 	policy, ok := c.policies[p.Kind]
 	if !ok {
-		return false, fmt.Errorf("credential: no policy for kind %q", p.Kind)
+		return false, fmt.Errorf("%w: %q", ErrUndeclaredKind, p.Kind)
 	}
+	compare := c.compares[p.Kind]
 	key := Key(p)
 
 	// hadRecord is whether a success has a record to clear. It is always true for a
@@ -542,9 +651,9 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 	}
 	stored := []byte(hash)
 	if hash == "" {
-		stored = c.dummy
+		stored = c.dummies[p.Kind]
 	}
-	if c.compare(stored, []byte(secret)) != nil || hash == "" {
+	if compare(stored, []byte(secret)) != nil || hash == "" {
 		return failedOpen, ErrMismatch
 	}
 	if policy.Unthrottled || !hadRecord {
@@ -570,6 +679,11 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 // logStoreFull warns that the attempt store is full, at most once per
 // storeFullLogInterval, carrying how many fail-opens the interval hid. The counter,
 // not this line, is what sees every one.
+//
+// The message is worded for every kind, since each service's Checker logs it under its
+// own name: "sign-ins" alone would send an operator reading device-management's log
+// looking for people when the cause is MQTT connects. The one string the alerts quote,
+// "credential attempt store is full", is kept at its head.
 func (c *Checker) logStoreFull(kind Kind) {
 	c.fullLog.Lock()
 	now := c.now()
@@ -583,9 +697,11 @@ func (c *Checker) logStoreFull(kind Kind) {
 	c.fullLog.Unlock()
 
 	log.Warn().Str("kind", string(kind)).Int("suppressed", suppressed).
-		Msg("The credential attempt store is full, so sign-in attempts are being checked " +
-			"WITHOUT their per-account backoff until entries expire. This usually means " +
-			"someone is sending sign-ins for many distinct identifiers.")
+		Msg("The credential attempt store is full, so attempts of this kind are being checked " +
+			"WITHOUT their per-principal backoff until entries expire. This usually means " +
+			"someone is presenting many distinct identifiers (sign-in addresses, or MQTT " +
+			"usernames for device credentials); for device credentials, a large fleet " +
+			"reconnecting at once can fill it too.")
 }
 
 // admit reads the principal's record, refuses the attempt while its delay is running,

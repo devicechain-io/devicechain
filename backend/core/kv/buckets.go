@@ -114,6 +114,23 @@ var All = []Bucket{
 			"is where that shows, and the CredentialAttemptStoreFull alert fires on it.",
 	},
 	{
+		Name: BucketDeviceCredentialAttempts,
+		Tier: State,
+		Why: "device-management's MQTT password backoff (credential.KindDeviceCredential): " +
+			"one entry per MQTT username tried in the last 10 minutes, a real one or not, " +
+			"since a connect is charged before the credential is looked up. A SUCCESSFUL " +
+			"connect leaves an entry too (the delete marker that clears its record, held for " +
+			"the same TTL), so this bucket scales with the CONNECT RATE, not only with failures. " +
+			"At roughly 200 bytes an entry that is about 650k connects inside 10 minutes at the " +
+			"default 128 MiB State ceiling and about 80k at the compact preset's 16 MiB. A full " +
+			"bucket makes the checker FAIL OPEN for devices only (connects are still checked, " +
+			"without the backoff); a people's sign-in spray fills the other bucket and cannot " +
+			"switch this one off, nor the reverse. A very large reconnect wave can fill it " +
+			"legitimately. The outcome=\"store_full\" series of " +
+			"devicechain_devicemanagement_credential_checks_total is where that shows, and the " +
+			"DeviceCredentialAttemptStoreFull alert fires on it.",
+	},
+	{
 		Name: BucketLocks,
 		Tier: State,
 		Why: "One entry per HELD lock — a handful at a time, TTL'd so a crashed " +
@@ -172,17 +189,20 @@ var All = []Bucket{
 // inventory does, and renaming one breaks the build instead of silently
 // disconnecting a bucket from its ceiling.
 const (
-	BucketRefreshTokens         = "dc_refresh_tokens"
-	BucketOAuthCodes            = "dc_oauth_codes"
-	BucketCredentialAttempts    = "dc_credential_attempts"
-	BucketLocks                 = "dc_locks"
-	BucketLeases                = "dc_leases"
-	BucketDeviceByToken         = "device-by-token"
-	BucketRelationshipsBySource = "relationships-by-source"
-	BucketMembershipsByEntity   = "memberships-by-entity"
-	BucketMetricDefsByType      = "metric-defs-by-type"
-	BucketProfileScopeByType    = "profile-scope-by-type"
-	BucketScopedGroupsExist     = "scoped-groups-exist"
+	BucketRefreshTokens      = "dc_refresh_tokens"
+	BucketOAuthCodes         = "dc_oauth_codes"
+	BucketCredentialAttempts = "dc_credential_attempts"
+	// BucketDeviceCredentialAttempts is kept apart from BucketCredentialAttempts on
+	// purpose: see its entry in All.
+	BucketDeviceCredentialAttempts = "dc_device_credential_attempts"
+	BucketLocks                    = "dc_locks"
+	BucketLeases                   = "dc_leases"
+	BucketDeviceByToken            = "device-by-token"
+	BucketRelationshipsBySource    = "relationships-by-source"
+	BucketMembershipsByEntity      = "memberships-by-entity"
+	BucketMetricDefsByType         = "metric-defs-by-type"
+	BucketProfileScopeByType       = "profile-scope-by-type"
+	BucketScopedGroupsExist        = "scoped-groups-exist"
 )
 
 // TierFor returns the tier of the named bucket.

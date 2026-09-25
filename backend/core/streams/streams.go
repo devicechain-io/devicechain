@@ -177,7 +177,7 @@ type Stream struct {
 	//
 	// A cap, specifically, and not an absolute size. The tier ceilings are what an
 	// operator sizes a deployment with, and --compact sets them far below the
-	// defaults (64 MiB Hot against a 2Gi volume). An absolute ceiling would ignore
+	// defaults (64 MiB Hot against a 3Gi volume). An absolute ceiling would ignore
 	// that entirely and claim four times the largest other stream in a compact
 	// install — the deployment profile would stop meaning anything for this stream.
 	// Taking the smaller of the two keeps the operator's sizing authoritative and
@@ -399,7 +399,7 @@ const (
 // The arithmetic, at the shipped defaults: the declared streams reserve 8712 MiB
 // (7 Hot x 1 GiB + 10 Cold x 128 MiB + this capped capture stream at 256 MiB + the
 // max-delivery capture capped at 8 MiB), the MQTT gateway stores 384 MiB and the KV
-// buckets 1024 MiB (5 State x 128 + 6 Cache x 64) — 9.883 GiB reserved against the
+// buckets 1152 MiB (6 State x 128 + 6 Cache x 64) — 10.008 GiB reserved against the
 // 14 GiB max_file_store a 16Gi PV yields.
 // (Recount when a stream is added: this sentence said "8 Cold / 9.5 GiB" while the
 // tree held nine, and it is the sentence anyone weighing a new stream reads.) Every
@@ -419,7 +419,7 @@ const (
 // it is still pinned by is being a CAP rather than an absolute — see below.
 //
 // Being a CAP is what keeps this honest under --compact, whose Hot ceiling is
-// 64 MiB against a 2Gi volume: there the tier binds and this number never applies.
+// 64 MiB against a 3Gi volume: there the tier binds and this number never applies.
 // An absolute 256 MiB would have overrun the compact budget outright — it did,
 // which is how the cap semantics were arrived at rather than assumed.
 //
@@ -434,10 +434,13 @@ const deviceEventsCaptureMaxBytesCap = 256 << 20
 // finished with — steady state is empty. 8 MiB is some tens of thousands of them.
 //
 // 🔴 8, NOT 32, BECAUSE OF --compact. There the Cold ceiling is 16 MiB and binds before
-// any larger cap would; taking all 16 left the compact volume 184 MiB unreserved, under
-// cli/bootstrap's 192 MiB headroom floor (TestCompactReservationFitsItsSmallerVolume).
-// At 8 MiB the compact headroom sits exactly ON that floor, so the next stream anyone
-// declares must grow the compact volume or lower another ceiling — the test says so.
+// any larger cap would; taking all 16 left the compact volume (2Gi then, a 1 GiB store)
+// 184 MiB unreserved, under cli/bootstrap's 192 MiB headroom floor
+// (TestCompactReservationFitsItsSmallerVolume). At 8 MiB that headroom sat exactly ON
+// the floor, and the next State bucket did push it under: the compact volume grew to
+// 3Gi, a 2 GiB store, which leaves about a gigabyte over the floor. So 8 MiB is no
+// longer pinned by the compact budget; it stays because steady state is empty, and
+// raising it would buy nothing.
 // Overflow is DiscardOld: the oldest unrecorded notices are evicted, which the
 // MaxDeliveryRecordsWaiting and near-full alerts are there to make visible first.
 const maxDeliveriesMaxBytesCap = 8 << 20

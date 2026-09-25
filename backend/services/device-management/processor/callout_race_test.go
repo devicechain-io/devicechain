@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	nats "github.com/nats-io/nats.go"
@@ -72,7 +73,7 @@ func TestCalloutStartDoesNotReturnBeforeTheServerCanRouteToIt(t *testing.T) {
 		d.Token = "sensor-001"
 		return d, nil
 	}}
-	r := NewCalloutResponder(nc, api, creds.IssuerSeed, "inst-1", nil)
+	r := mustResponder(t, nc, api, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, nil)
 
 	// The window opens here and everything the responder writes from now on — the SUB
 	// included — sits in the proxy for subInFlight before the server sees it.

@@ -5,11 +5,14 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/nats-io/jwt/v2"
@@ -49,11 +52,11 @@ const genericAuthFailure = "device authentication failed"
 // CalloutResponder answers NATS auth-callout requests for device connections
 // (ADR-025). A device connecting to the MQTT gateway presents
 // username="{tenant}:{credentialId}" / password=secret AND an MQTT client id under
-// "{instanceId}:{tenant}:{deviceToken}"; this resolves the credential via the ADR-014
-// AuthenticateDevice path and, on success, mints a NATS user JWT confining the
-// connection to that one device's subjects. Internal services present the static
-// service credential and are exempt from the callout, so only device connections
-// ever reach here.
+// "{instanceId}:{tenant}:{deviceToken}"; this resolves the credential (ADR-014) —
+// a password through credential.Checker, under a per-username backoff — and, on
+// success, mints a NATS user JWT confining the connection to that one device's
+// subjects. Internal services present the static service credential and are exempt
+// from the callout, so only device connections ever reach here.
 //
 // The client id is part of the contract rather than firmware's business because it
 // is the key the broker files a device's MQTT session under — see the comment on
@@ -72,7 +75,43 @@ type CalloutResponder struct {
 	// without a live user-management — the same injection shape event-sources uses for
 	// its ingest limiter. Never nil; see NewCalloutResponder.
 	tenantDeleted func(tenant string) bool
+	// creds compares every MQTT password behind DeviceCredentialPolicy's backoff. Never
+	// nil: NewCalloutResponder refuses to build a responder without one.
+	creds *credential.Checker
+	// unavailableLog rate-limits the warning for an attempt store that cannot be
+	// reached. While it is down EVERY password connect is refused, so a line per
+	// connect would be one per device in a reconnecting fleet.
+	unavailableLog rateLimitedLog
 }
+
+// rateLimitedLog lets one line through per interval and counts the ones it held back.
+type rateLimitedLog struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+}
+
+// unavailableLogInterval is the most often the callout logs an unreachable attempt store.
+const unavailableLogInterval = time.Minute
+
+// allow reports whether a line may be written at now, and how many were held back
+// since the last one that was.
+func (r *rateLimitedLog) allow(now time.Time) (bool, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.last.IsZero() && now.Sub(r.last) < unavailableLogInterval {
+		r.suppressed++
+		return false, 0
+	}
+	held := r.suppressed
+	r.last, r.suppressed = now, 0
+	return true, held
+}
+
+// errNoCredentialChecker is NewCalloutResponder's refusal to build a responder that
+// would compare device passwords with no backoff.
+var errNoCredentialChecker = errors.New("the device auth callout needs a credential checker: " +
+	"without one every MQTT password would be compared unthrottled")
 
 // NewCalloutResponder builds a responder over an established NATS connection (the
 // service's own trusted connection), the device-management API, the account issuer
@@ -85,27 +124,37 @@ type CalloutResponder struct {
 // user-management gets — the same fail-open the resolver itself takes, made explicit
 // here so an unwired gate behaves like an unresolvable one rather than panicking or
 // refusing everything. main logs when it takes that path.
-func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, issuerSeed, instanceId string, tenantDeleted func(string) bool) *CalloutResponder {
+//
+// creds is the Checker every MQTT password is compared through (built over the
+// device credential-attempt store, with DeviceCredentialPolicies). It is REQUIRED: a
+// nil one is refused with an error rather than defaulting to a compare with no backoff.
+func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *credential.Checker, issuerSeed, instanceId string, tenantDeleted func(string) bool) (*CalloutResponder, error) {
+	if creds == nil {
+		return nil, errNoCredentialChecker
+	}
 	if tenantDeleted == nil {
 		tenantDeleted = func(string) bool { return false }
 	}
 	return &CalloutResponder{
 		conn:          conn,
 		api:           api,
+		creds:         creds,
 		issuerSeed:    issuerSeed,
 		instanceId:    instanceId,
 		ttl:           natsauth.DefaultUserJWTTTL,
 		now:           time.Now,
 		tenantDeleted: tenantDeleted,
-	}
+	}, nil
 }
 
 // Start subscribes to the auth-callout subject. Once subscribed, every non-exempt
 // (i.e. device) connection is gated by handle. Each request is handled on its own
-// goroutine so one slow AuthenticateDevice call (a DB round-trip + secret check)
-// does not stall the whole queue — nats.go dispatches a subscription's callbacks
-// serially, and a connect storm within the broker's auth window otherwise backs
-// up. The DB connection pool is the natural backpressure on concurrency.
+// goroutine so one slow check (for a password, attempt-store reads and writes on
+// JetStream plus a DB round-trip; for an access token, the DB round-trip) does not
+// stall the whole queue — nats.go dispatches a subscription's callbacks serially, and
+// a connect storm within the broker's auth window otherwise backs up. The DB
+// connection pool and JetStream's own request handling are the backpressure on
+// concurrency.
 //
 // 🔴 SYNCED, and this is the sharpest instance of that rule on the platform. A bare
 // QueueSubscribe returns before the server has registered anything, and the publisher
@@ -188,25 +237,28 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		return "", genericAuthFailure
 	}
 
-	// AuthenticateDevice is tenant-scoped via the context tenant (the fail-closed
+	// The credential lookup is tenant-scoped via the context tenant (the fail-closed
 	// DB callback), so a credential is only ever resolved within its own tenant.
 	ctx := core.WithTenant(context.Background(), tenant)
 	// The authenticated DEVICE — not just "some device in this tenant" — decides the
 	// grant, so the JWT can confine this connection to its own command subject and its
 	// own events topic. The result was previously discarded, which is why the grant
 	// could only ever be tenant-wide.
-	device, err := c.api.AuthenticateDevice(ctx, presented, c.now())
+	var device *model.Device
+	var err error
+	if presented.Secret != nil {
+		device, err = c.checkPassword(ctx, tenant, presented)
+	} else {
+		// 🔴 AN ACCESS-TOKEN CONNECT IS NOT THROTTLED, and that is a known gap rather
+		// than an oversight. The token IS the credential id, matched by a database
+		// equality lookup, so every guess is a different principal: a per-principal
+		// backoff would slow nothing and write one attempt record per guess. Limiting
+		// it needs a key the guesser cannot vary (per source or per tenant), which
+		// this does not have.
+		device, err = c.api.AuthenticateDevice(ctx, presented, c.now())
+	}
 	if err != nil {
-		// A device's wrong answer is routine and stays quiet. Anything else — the
-		// credential store failing, or a stored credential that can never authenticate
-		// — is invisible at Debug and is the operator's to fix, so it is a Warn. Either
-		// way the caller learns nothing but the generic refusal.
-		if model.IsCredentialRefusal(err) {
-			log.Debug().Err(err).Str("tenant", tenant).Msg("Auth-callout rejected a device connection.")
-		} else {
-			log.Warn().Err(err).Str("tenant", tenant).
-				Msg("Auth-callout could not authenticate a device connection: the credential store failed or holds a malformed credential.")
-		}
+		c.logAuthFailure(tenant, err)
 		return "", genericAuthFailure
 	}
 	if device == nil || device.Token == "" {
@@ -227,10 +279,12 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	// looks a session up (mqttProcessConnect authorizes, then createOrRestoreSession), so
 	// a refusal prevents the takeover instead of undoing one. And it cannot move earlier
 	// within this function, however tempting the deleted-tenant gate above makes it look:
-	// the required id is derived from the DEVICE TOKEN, which only AuthenticateDevice
-	// produces. So unlike the lifecycle gate, a wrong client id costs one credential
-	// lookup — the right trade anyway, since refusing sooner would mean refusing on a
-	// value we had not yet earned the right to compare against.
+	// the required id is derived from the DEVICE TOKEN, which only a successful
+	// credential check produces. So unlike the lifecycle gate, a wrong client id costs a
+	// full credential check — the right trade anyway, since refusing sooner would mean
+	// refusing on a value we had not yet earned the right to compare against. It is not
+	// a credential FAILURE, so it is not charged to the password backoff: the check
+	// that just succeeded has already cleared that username's record.
 	//
 	// A raw NATS connection reports an empty client id and is refused by the same
 	// comparison. That is not collateral damage: a device credential is already pinned to
@@ -260,6 +314,97 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		return "", genericAuthFailure
 	}
 	return signed, ""
+}
+
+// checkPassword authenticates an MQTT_BASIC connect through the credential Checker, so
+// its compare sits behind DeviceCredentialPolicy's backoff on the presented username.
+//
+// The principal is "{tenant}:{credentialId}" EXACTLY as presented. Both halves are
+// matched byte for byte by the lookup (the tenant-scope predicate and credential_id =
+// ?), so a spelling that differs, in case or otherwise, is a different principal AND
+// names no credential the lookup can find: it cannot reach this username's credential
+// under a fresh backoff.
+//
+// Every refusal is charged and compared, a real credential or not: an unknown, expired
+// or misconfigured credential returns "" to the Checker, which compares its dummy and
+// counts the attempt exactly as it does a wrong password, so the ANSWER never tells a
+// caller which usernames exist: what differs is only the returned error, which the
+// caller logs and never sends.
+//
+// 🔴 The TIMING still can, and this does not claim otherwise. The lookup costs more
+// for a username that exists: DeviceCredentialByCredentialId's Preload("Device") runs
+// its second query only when the first found a row, and the device is then resolved
+// before the compare. So an existing username costs at least one more database round
+// trip on every admitted attempt, and the free attempts are samples enough to measure
+// it. That predates the throttle (AuthenticateDevice has the same shape); the backoff
+// bounds how many samples a caller gets per username, it does not equalize them.
+//
+// Two connects for one username that race (a reconnect overlapping a stale session)
+// are both evaluated: the one whose charge loses the compare-and-set re-reads the
+// record and charges on top, and with ten free attempts neither is delayed. Only a
+// charge that loses three races in a row is refused as throttled (for a second), which
+// takes at least three more concurrent connects for the same username.
+func (c *CalloutResponder) checkPassword(ctx context.Context, tenant string, presented *model.PresentedCredential) (*model.Device, error) {
+	var device *model.Device
+	// reason is what the lookup found when it found no usable credential: the precise
+	// refusal, or ErrCredentialMisconfigured. It never reaches the device.
+	var reason error
+	p := credential.Principal{Kind: credential.KindDeviceCredential, ID: tenant + ":" + presented.CredentialId}
+	err := c.creds.Check(ctx, p, *presented.Secret, func(ctx context.Context) (string, error) {
+		d, stored, err := c.api.ResolveDeviceCredential(ctx, presented, c.now())
+		switch {
+		case err == nil:
+			device = d
+			return stored, nil
+		// Misconfigured is the operator's to fix (logged at Warn), but it is still a
+		// refusal ON THE WIRE, so it is charged and compared like one: answering it
+		// differently would make the callout an oracle for which stored credentials
+		// are broken.
+		case model.IsCredentialRefusal(err), errors.Is(err, model.ErrCredentialMisconfigured):
+			reason = err
+			return "", nil
+		default:
+			// The database failing: returned to the Checker unchanged, and still
+			// charged (a failed lookup is not a free attempt).
+			return "", err
+		}
+	})
+	switch {
+	case err == nil:
+		return device, nil
+	case reason != nil:
+		// The lookup already said why; the Checker's mismatch adds nothing.
+		return nil, reason
+	case errors.Is(err, credential.ErrMismatch):
+		return nil, model.ErrCredentialSecretMismatch
+	default:
+		return nil, err
+	}
+}
+
+// logAuthFailure logs why a device connect was refused. A device's own wrong answer —
+// model.IsCredentialRefusal, or a connect held back by the password backoff — is
+// routine and stays at Debug. An attempt store that cannot be reached refuses every
+// password connect, so it is a Warn, rate-limited. Anything else — the credential store
+// failing, or a stored credential that can never authenticate — is invisible at Debug
+// and is the operator's to fix, so it is a Warn. Either way the device learns nothing
+// but the generic refusal.
+func (c *CalloutResponder) logAuthFailure(tenant string, err error) {
+	var throttled *credential.ThrottledError
+	switch {
+	case model.IsCredentialRefusal(err), errors.As(err, &throttled):
+		log.Debug().Err(err).Str("tenant", tenant).Msg("Auth-callout rejected a device connection.")
+	case errors.Is(err, credential.ErrUnavailable):
+		if ok, held := c.unavailableLog.allow(c.now()); ok {
+			log.Warn().Err(err).Int("suppressed", held).
+				Msg("Auth-callout is refusing every MQTT password connect: the device credential " +
+					"attempt store in JetStream cannot be reached, and a connect that cannot be " +
+					"counted is not checked.")
+		}
+	default:
+		log.Warn().Err(err).Str("tenant", tenant).
+			Msg("Auth-callout could not authenticate a device connection: the credential store failed or holds a malformed credential.")
+	}
 }
 
 // respond signs and publishes the authorization response. Exactly one of userJWT

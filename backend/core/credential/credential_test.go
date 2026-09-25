@@ -492,10 +492,6 @@ func TestConstructionRefusals(t *testing.T) {
 	_, err := credential.NewChecker(nil, policies(testPolicy))
 	require.ErrorContains(t, err, "attempt store")
 
-	_, err = credential.NewChecker(credentialtest.NewStore(),
-		map[credential.Kind]credential.Policy{credential.KindIdentity: testPolicy})
-	require.ErrorContains(t, err, `no policy for kind "oauth-client"`)
-
 	for _, bad := range []credential.Policy{
 		{Free: 0, Base: time.Second, Cap: time.Minute},
 		{Free: 3, Base: 0, Cap: time.Minute},

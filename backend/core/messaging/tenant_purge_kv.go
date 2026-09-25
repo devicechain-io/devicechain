@@ -201,6 +201,12 @@ func KvPurgeExemptions() []string {
 			"principal of a throttled kind, keyed by a hash of the presented identifier (today an " +
 			"email). It names no tenant — a sign-in attempt belongs to the PERSON, like the refresh-token store — and " +
 			"every entry expires ten minutes after its last write, well inside the settle window",
+		kv.BucketDeviceCredentialAttempts + ": MQTT password backoff state, one entry per " +
+			"recently tried MQTT username. The username does name a tenant, but the key is a HASH " +
+			"of it, so no sweep can find a tenant's entries by name; the entries carry only a " +
+			"count and a time. Every entry expires ten minutes after its last write, well inside " +
+			"the settle window, and once device-management sees the delete, that tenant's " +
+			"connects are refused before they are counted",
 		kv.BucketLocks + " and " + kv.BucketLeases + ": coordination state keyed by functional area " +
 			"and partition. No tenant is expressible in either today — the partitions in use are " +
 			"fixed names — and both expire in seconds. 🔴 That first clause has a known expiry " +

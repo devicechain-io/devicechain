@@ -1517,6 +1517,9 @@ private address, including MSK, Amazon MQ or an SNS/SQS interface endpoint, read
 no longer reach private addresses, and the connectors service has new clients" before upgrading.
 If your values set `checkpointIntervalSeconds` for `event-processing` above 30, lower it before
 upgrading (see "`checkpointIntervalSeconds` is capped at 30, and some silent failures now warn").
+If devices connect over MQTT with a password, or the instance was installed with `--compact`, read
+"Repeated failed MQTT password connects are slowed down": the compact preset's JetStream volume
+grows, and an existing compact instance has to move it before the upgrade can continue.
 
 If you write GraphQL documents by hand, read "GraphQL documents must use GraphQL's own comments and
 strings": Go-style comments, backquoted strings and single-quoted characters are now refused.
@@ -2190,6 +2193,36 @@ so it can retry instead of asking the user to authorize it again. The Go client 
 simulator, the load tests and `dcctl` use no longer loses its refresh token to the outage, but it
 still falls back to a password sign-in whenever a refresh fails, as it did before. The console still
 signs the user out on any refresh failure. Nothing needs doing at the upgrade.
+
+#### Repeated failed MQTT password connects are slowed down
+
+Nothing needs doing unless a device connects with a wrong MQTT password in a loop, or the instance
+was installed with `--compact`. [Repeated failed connects are slowed
+down](../guides/device-credentials.md#connect-backoff) has the details.
+
+- **After 10 failed connects in a row for one MQTT username, the next attempt waits 1 second,**
+  doubling up to 30 seconds. A connect made during the wait is refused like a wrong password, even
+  if the password is right. A successful connect resets the count. Access-token connects and
+  credentials in event bodies are not affected.
+- **Someone who knows a device's MQTT username can keep that device from reconnecting** for as long
+  as they keep sending wrong passwords for it. Devices that are already connected are not affected
+  until they reconnect.
+- **Password connects now need JetStream.** If the store that holds the counts cannot be reached,
+  password connects are refused, including briefly while that store's JetStream leader changes, for
+  example while a NATS node restarts.
+- During a database outage, a device whose password connects keep failing is slowed down the same
+  way, so after its first 10 attempts its refused connects are logged at debug rather than as a
+  warning each. An unreachable count store is logged as one warning a minute.
+- **The JetStream reservation grows by 128 MiB** (16 MiB on the compact preset) for the new bucket
+  that holds the counts.
+- **The compact preset's JetStream volume grows from 2Gi to 3Gi** to make room: the store the
+  volume gives JetStream grows from 1 GiB to 2 GiB. On an instance installed with `--compact`
+  before this release, `dcctl bootstrap` stops at its infrastructure step, before it touches
+  NATS, because the volume of a running NATS cannot be resized in place. It prints the steps to
+  move the volume to 3Gi and keep the JetStream data; follow them and run it again.
+- **A new alert, `DeviceCredentialAttemptStoreFull`** (warning), fires when that bucket fills.
+  Connects keep working, but without the slow-down. A very large reconnect wave can fill it as well
+  as an attack can.
 
 ### The one-time durable-ingest cutover
 

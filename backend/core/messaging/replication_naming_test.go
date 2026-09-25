@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,20 +49,27 @@ func TestExpectationCoversTheBucketsTheRuntimeCreates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CredentialAttemptStore: %v", err)
 	}
+	deviceCredStore, err := nmgr.DeviceCredentialAttemptStore()
+	if err != nil {
+		t.Fatalf("DeviceCredentialAttemptStore: %v", err)
+	}
+	if credStore.Bucket() == deviceCredStore.Bucket() {
+		t.Fatalf("the people and device credential-attempt stores are one bucket (%q): a "+
+			"spray that fills it would switch off both backoffs", credStore.Bucket())
+	}
 
 	exp := ReplicationExpectation(instance, 1, nil)
 
-	// The credential-attempt store is a REQUIRED state bucket, not merely one a prefix
-	// sweep happens to reach: a missing one fails every sign-in. So the name the
-	// expectation requires must be the bucket the runtime actually created.
-	wantCred := KvStreamName(credStore.Bucket())
-	requiredCred := false
-	for _, b := range exp.StateBuckets {
-		requiredCred = requiredCred || b == wantCred
-	}
-	if !requiredCred {
-		t.Errorf("the runtime created credential-attempt bucket %q but the expectation's "+
-			"required state buckets are %v", wantCred, exp.StateBuckets)
+	// The credential-attempt stores are REQUIRED state buckets, not merely ones a prefix
+	// sweep happens to reach: a missing one fails every sign-in, or every MQTT password
+	// connect. So the name the expectation requires must be the bucket the runtime
+	// actually created.
+	for _, store := range []string{credStore.Bucket(), deviceCredStore.Bucket()} {
+		want := KvStreamName(store)
+		if !slices.Contains(exp.StateBuckets, want) {
+			t.Errorf("the runtime created credential-attempt bucket %q but the expectation's "+
+				"required state buckets are %v", want, exp.StateBuckets)
+		}
 	}
 	snap, err := replication.Collect(nmgr.js, exp)
 	if err != nil {
@@ -300,5 +308,33 @@ func TestNilAreasRequiresEveryStream(t *testing.T) {
 	if got := len(ReplicationExpectation("inst", 3, nil).Streams); got != len(streams.All) {
 		t.Fatalf("an unknown deployment must require all %d stream(s); got %d",
 			len(streams.All), got)
+	}
+}
+
+// The device credential-attempt bucket is required exactly where device-management,
+// the service that creates it, is deployed, and when nothing is known about what is
+// deployed, since that resolves to the strict side.
+func TestDeviceCredentialStoreIsRequiredWhereDeviceManagementRuns(t *testing.T) {
+	want := KvStreamName(DeviceCredentialAttemptsBucketName("inst"))
+	for _, tc := range []struct {
+		name     string
+		deployed []string
+		required bool
+	}{
+		{"unknown deployment", nil, true},
+		{"device-management deployed", []string{"user-management", "device-management"}, true},
+		{"device-management absent", []string{"user-management", "event-sources"}, false},
+	} {
+		exp := ReplicationExpectation("inst", 3, tc.deployed)
+		got := slices.Contains(exp.StateBuckets, want)
+		if got != tc.required {
+			t.Errorf("%s: %q required = %v, want %v", tc.name, want, got, tc.required)
+		}
+		// Required by DEPLOYMENT, while the bucket exists only when the callout is
+		// configured: the missing finding has to say so, or a hand-installed chart
+		// without the callout reads as broken.
+		if hint := exp.StateBucketMissingHints[want]; tc.required && !strings.Contains(hint, "auth callout") {
+			t.Errorf("%s: the required device credential bucket carries no missing hint (%q)", tc.name, hint)
+		}
 	}
 }

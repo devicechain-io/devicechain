@@ -342,6 +342,21 @@ func TestTokenEndpointDoesNotNeedTheAttemptStore(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, postToken(t, f, confidentialID, "wrong").Code)
 }
 
+// A Checker built from CredentialPolicies answers for every kind this service checks:
+// the Manager's password login (KindIdentity) and the token endpoint's client secret
+// (KindOAuthClient). A Checker declares exactly the kinds its policy map names, so a
+// kind missing from the map would be refused with ErrUndeclaredKind at the first
+// sign-in rather than at startup; this is the startup-time check that it is not.
+func TestCredentialPoliciesDeclareEveryKindTheManagerChecks(t *testing.T) {
+	c, err := credential.NewChecker(credentialtest.NewStore(), CredentialPolicies)
+	require.NoError(t, err)
+	for _, k := range []credential.Kind{credential.KindIdentity, credential.KindOAuthClient} {
+		err := c.Check(context.Background(), credential.Principal{Kind: k, ID: "someone"}, "wrong",
+			func(context.Context) (string, error) { return "", nil })
+		require.ErrorIs(t, err, credential.ErrMismatch, "kind %s", k)
+	}
+}
+
 // The shipped policy for client secrets is Unthrottled. Pinned on its own because the
 // fixture above borrows it, so a change to it would change what those tests test.
 func TestClientSecretsAreUnthrottled(t *testing.T) {

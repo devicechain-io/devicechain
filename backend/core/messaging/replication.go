@@ -113,6 +113,43 @@ func CredentialAttemptsBucketName(instanceId string) string {
 	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketCredentialAttempts))
 }
 
+// DeviceCredentialAttemptsBucketName is the concrete KV bucket holding an instance's
+// device MQTT password backoff state. Instance-prefixed for the same reason as
+// CredentialAttemptsBucketName: two instances sharing a broker must not share a
+// throttle.
+func DeviceCredentialAttemptsBucketName(instanceId string) string {
+	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketDeviceCredentialAttempts))
+}
+
+// deviceCredentialStoreArea is the functional area that creates the device
+// credential-attempt bucket: device-management, when it serves the MQTT auth callout.
+const deviceCredentialStoreArea = "device-management"
+
+// deviceCredentialStoreDeployed reports whether the device credential-attempt bucket
+// must exist. A nil area set means "unknown", which resolves to REQUIRED, the strict
+// direction (see ReplicationExpectation).
+//
+// 🔴 THE LIMIT: it is keyed on device-management being DEPLOYED, not on its callout
+// being configured, because the check observes which areas run and cannot see a
+// service's configuration. device-management creates the bucket only when it serves
+// the callout, i.e. when the instance's NATS config carries a callout issuer seed.
+// dcctl always provisions one, so on every dcctl install the two coincide; a chart
+// installed by hand without the seed runs device-management with no bucket, and the
+// check reports it MISSING with nothing wrong. deviceCredentialStoreMissingHint says
+// so in the finding itself, where the operator reading it will look.
+func deviceCredentialStoreDeployed(deployedAreas []string) bool {
+	return len(deployedAreas) == 0 || slices.Contains(deployedAreas, deviceCredentialStoreArea)
+}
+
+// deviceCredentialStoreMissingHint is appended to the device credential-attempt
+// bucket's MISSING finding (see deviceCredentialStoreDeployed for why it can be absent
+// on a healthy instance).
+const deviceCredentialStoreMissingHint = " device-management creates this bucket only when it " +
+	"serves the MQTT auth callout, which needs a callout issuer seed in the instance's NATS " +
+	"configuration. dcctl always sets one; on an instance installed without it the callout is " +
+	"off and this absence is expected. Otherwise, check device-management's log for why it did " +
+	"not start the callout."
+
 // ReplicationExpectation states, in concrete broker names, what an instance's
 // JetStream objects must look like at the given replica factor (ADR-020 A0).
 //
@@ -179,6 +216,16 @@ func ReplicationExpectation(instanceId string, replicas int, deployedAreas []str
 		// The credential-attempt store is created unconditionally by user-management
 		// too, and a full or unreplicated one fails every sign-in the same way.
 		KvStreamName(CredentialAttemptsBucketName(instanceId)),
+	}
+	// The device credential-attempt store is created by device-management when it
+	// starts the MQTT auth callout, which every instance dcctl installs does (dcctl
+	// always provisions the callout's issuer). A full one only drops the device backoff,
+	// but an unreplicated one refuses every MQTT password connect for as long as its one
+	// replica is down, so it is required by name wherever device-management runs.
+	if deviceCredentialStoreDeployed(deployedAreas) {
+		name := KvStreamName(DeviceCredentialAttemptsBucketName(instanceId))
+		exp.StateBuckets = append(exp.StateBuckets, name)
+		exp.StateBucketMissingHints = map[string]string{name: deviceCredentialStoreMissingHint}
 	}
 	for _, b := range kv.All {
 		if b.Tier != kv.Cache {
