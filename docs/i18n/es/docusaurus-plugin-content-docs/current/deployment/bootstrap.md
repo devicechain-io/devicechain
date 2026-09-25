@@ -482,7 +482,7 @@ Un preajuste para clústeres pequeños, que se elige al instalar. Compone palanc
 existen en lugar de añadir un eje de ajuste propio:
 
 - techos por-stream más bajos de JetStream y KV, y los volúmenes más pequeños que
-  eso permite (2Gi JetStream, 2Gi Postgres relacional, 4Gi TimescaleDB);
+  eso permite (3Gi JetStream, 2Gi Postgres relacional, 4Gi TimescaleDB);
 - **solicitudes** (requests) de programación más bajas (25m / 64Mi), para que los
   pods quepan en un nodo pequeño —los límites quedan intactos, ya que bajar el
   límite de memoria convierte la presión en OOMKills y bajar el límite de CPU

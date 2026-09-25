@@ -484,7 +484,7 @@ A preset for small clusters, chosen at install. It composes levers that already 
 rather than adding a tuning axis of its own:
 
 - lower JetStream and KV per-stream ceilings, and the smaller volumes those permit
-  (2Gi JetStream, 2Gi relational Postgres, 4Gi TimescaleDB);
+  (3Gi JetStream, 2Gi relational Postgres, 4Gi TimescaleDB);
 - lower scheduling **requests** (25m / 64Mi), so pods fit a small node — limits are
   untouched, since lowering the memory limit converts pressure into OOMKills and lowering
   the CPU limit throttles, neither of which shrinks anything;

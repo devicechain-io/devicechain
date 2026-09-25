@@ -61,6 +61,51 @@ The credential above is the **per-event** check. In addition, MQTT/NATS **connec
 
 See [Connecting a Device](./connecting-a-device.md) for the transport details.
 
+## Repeated failed connects are slowed down {#connect-backoff}
+
+MQTT connects that present a username and password are slowed down after repeated failures,
+so a password cannot be guessed at the rate the broker accepts connections.
+
+- **What counts:** failed password connects in a row for one MQTT username
+  (`{tenant}:{credentialId}`). An unknown username counts exactly like a real one, so the
+  answer never tells anyone which usernames exist.
+- **The schedule:** the first 10 failures in a row are not slowed down. After the 10th, the
+  next attempt on that username waits 1 second, and each further failure doubles the wait, up
+  to 30 seconds.
+- **During the wait, even the correct password is refused.** The broker gives the same
+  refusal as for a wrong password. The device connects normally once the wait is over.
+- **A successful connect resets the count.**
+- **Not slowed down:** access-token connects (a connect with no password), and credentials
+  carried in event bodies. The per-event check gives the sender no answer, so it cannot be
+  used to guess.
+
+:::warning Anyone who knows a device's username can delay its reconnects
+
+The count is kept per username, and the username is not secret. Someone who keeps sending
+wrong passwords for a device's username can keep that device from reconnecting for as long as
+they keep it up. Each wait is capped at 30 seconds, but they can start the next one as soon as
+the last ends. A device that is already connected is not affected until it reconnects.
+Don't publish device usernames, and give every `MQTT_BASIC` credential a strong password.
+
+:::
+
+The counts are kept in JetStream, so every device-management replica sees the same ones:
+
+- If JetStream cannot be reached, **password connects are refused** until it can, because a
+  connect that cannot be counted is not checked. This includes a brief window while the
+  JetStream leader of the bucket that holds the counts changes, for example while a NATS node
+  restarts. Access-token connects keep working.
+- The bucket holding the counts is size-limited. Every connect, successful or not, keeps an
+  entry for ten minutes. If the bucket fills, connects keep working but are **no longer slowed
+  down**, and the `DeviceCredentialAttemptStoreFull` alert fires. That happens when connects
+  are sent for a very large number of different usernames, or when a very large fleet
+  reconnects at once. The bucket empties on its own ten minutes later. To give it more room,
+  raise `instance.config.infrastructure.nats.kvStateMaxBytes`.
+
+The `devicechain_devicemanagement_credential_checks_total` metric counts every password
+connect check by `outcome`: `throttled` for a connect refused during a wait, `unavailable`
+when the counts could not be reached, and `store_full` when the bucket was full.
+
 ## Register a credential (console)
 
 1. Open the device's detail page and select the **Credentials** tab.

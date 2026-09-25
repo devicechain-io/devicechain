@@ -61,6 +61,56 @@ La credencial anterior es la verificación **por evento**. Además, las **conexi
 
 Ver [Conexión de un dispositivo](./connecting-a-device.md) para los detalles de transporte.
 
+## Las conexiones fallidas repetidas se ralentizan {#connect-backoff}
+
+Las conexiones MQTT que presentan usuario y contraseña se ralentizan tras fallos repetidos, de
+modo que una contraseña no puede adivinarse al ritmo al que el broker acepta conexiones.
+
+- **Qué cuenta:** los fallos seguidos de conexión con contraseña para un mismo usuario MQTT
+  (`{tenant}:{credentialId}`). Un usuario desconocido cuenta exactamente igual que uno real, así
+  que la respuesta nunca revela qué usuarios existen.
+- **El calendario:** los primeros 10 fallos seguidos no se ralentizan. Tras el décimo, el
+  siguiente intento con ese usuario espera 1 segundo, y cada fallo posterior duplica la espera,
+  hasta 30 segundos.
+- **Durante la espera se rechaza incluso la contraseña correcta.** El broker da el mismo rechazo
+  que para una contraseña incorrecta. El dispositivo se conecta con normalidad cuando termina la
+  espera.
+- **Una conexión correcta pone la cuenta a cero.**
+- **No se ralentizan:** las conexiones con token de acceso (una conexión sin contraseña) ni las
+  credenciales que viajan en el cuerpo de los eventos. La verificación por evento no da ninguna
+  respuesta al remitente, así que no sirve para adivinar.
+
+:::warning Quien conozca el usuario de un dispositivo puede retrasar sus reconexiones
+
+La cuenta se lleva por usuario, y el usuario no es secreto. Alguien que siga enviando
+contraseñas incorrectas para el usuario de un dispositivo puede impedir que ese dispositivo se
+reconecte mientras siga haciéndolo. Cada espera está limitada a 30 segundos, pero puede iniciar
+la siguiente en cuanto termina la anterior. Un dispositivo que ya está conectado no se ve
+afectado hasta que se reconecta. No publique los usuarios de los dispositivos y dé a cada
+credencial `MQTT_BASIC` una contraseña robusta.
+
+:::
+
+Las cuentas se guardan en JetStream, de modo que todas las réplicas de device-management ven las
+mismas:
+
+- Si no se puede acceder a JetStream, **las conexiones con contraseña se rechazan** hasta que se
+  pueda, porque una conexión que no se puede contar no se verifica. Esto incluye una breve
+  ventana mientras cambia el líder de JetStream del bucket que guarda las cuentas, por ejemplo
+  mientras se reinicia un nodo de NATS. Las conexiones con token de acceso siguen funcionando.
+- El bucket que guarda las cuentas tiene un tamaño limitado. Cada conexión, correcta o no,
+  conserva una entrada durante diez minutos. Si el bucket se llena, las conexiones siguen
+  funcionando pero **dejan de ralentizarse**, y se dispara la alerta
+  `DeviceCredentialAttemptStoreFull`. Eso ocurre cuando se envían conexiones para un número muy
+  grande de usuarios distintos, o cuando una flota muy grande se reconecta a la vez. El bucket se
+  vacía solo diez minutos después. Para darle más espacio, aumente
+  `instance.config.infrastructure.nats.kvStateMaxBytes`.
+
+La métrica `devicechain_devicemanagement_credential_checks_total` cuenta cada verificación de
+conexión con contraseña por `outcome`: `throttled` para una conexión rechazada durante una
+espera, `unavailable` cuando no se pudo acceder a las cuentas y `store_full` cuando el bucket
+estaba lleno.
+
 ## Registrar una credencial (consola)
 
 1. Abre la página de detalle del dispositivo y selecciona la pestaña **Credentials**.

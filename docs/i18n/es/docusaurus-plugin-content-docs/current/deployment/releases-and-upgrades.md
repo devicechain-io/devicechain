@@ -1615,6 +1615,10 @@ el servicio de conectores tiene clientes nuevos» antes de actualizar.
 Si sus valores fijan `checkpointIntervalSeconds` de `event-processing` por encima de 30, redúzcalo
 antes de actualizar (vea «`checkpointIntervalSeconds` tiene un máximo de 30, y algunos fallos
 silenciosos ahora avisan»).
+Si hay dispositivos que se conectan por MQTT con contraseña, o la instancia se instaló con
+`--compact`, lea «Las conexiones MQTT fallidas repetidas con contraseña se ralentizan»: el volumen
+de JetStream del preset compacto crece, y una instancia compacta existente tiene que moverlo antes
+de que la actualización pueda continuar.
 
 el servicio de conectores tiene clientes nuevos» antes de actualizar. Si escribe documentos de
 GraphQL a mano, lea «Los documentos de GraphQL deben usar los comentarios y las cadenas propios de
@@ -2337,6 +2341,39 @@ biblioteca cliente de Go que usan el simulador, las pruebas de carga y `dcctl` y
 de renovación por la caída, pero sigue recurriendo a un inicio de sesión con contraseña cuando falla
 una renovación, como antes. La consola sigue cerrando la sesión del usuario ante cualquier fallo de
 renovación. No hay que hacer nada en la actualización.
+
+#### Las conexiones MQTT fallidas repetidas con contraseña se ralentizan
+
+No hay que hacer nada salvo que un dispositivo se conecte en bucle con una contraseña MQTT
+incorrecta, o que la instancia se haya instalado con `--compact`. [Las conexiones fallidas
+repetidas se ralentizan](../guides/device-credentials.md#connect-backoff) tiene los detalles.
+
+- **Tras 10 conexiones fallidas seguidas para un mismo usuario MQTT, el siguiente intento espera 1
+  segundo,** duplicándose hasta 30 segundos. Una conexión hecha durante la espera se rechaza como
+  una contraseña incorrecta, aunque la contraseña sea correcta. Una conexión correcta pone la cuenta
+  a cero. Las conexiones con token de acceso y las credenciales en el cuerpo de los eventos no se
+  ven afectadas.
+- **Alguien que conozca el usuario MQTT de un dispositivo puede impedir que ese dispositivo se
+  reconecte** mientras siga enviando contraseñas incorrectas para él. Los dispositivos que ya están
+  conectados no se ven afectados hasta que se reconectan.
+- **Las conexiones con contraseña necesitan ahora JetStream.** Si no se puede acceder al almacén
+  que guarda las cuentas, las conexiones con contraseña se rechazan, también brevemente mientras
+  cambia el líder de JetStream de ese almacén, por ejemplo mientras se reinicia un nodo de NATS.
+- Durante una caída de la base de datos, un dispositivo cuyas conexiones con contraseña siguen
+  fallando se ralentiza del mismo modo, así que tras sus primeros 10 intentos sus conexiones
+  rechazadas se registran en depuración en lugar de como un aviso cada una. Un almacén de cuentas
+  inaccesible se registra como un aviso por minuto.
+- **La reserva de JetStream crece 128 MiB** (16 MiB en el preset compacto) para el bucket nuevo
+  que guarda las cuentas.
+- **El volumen de JetStream del preset compacto crece de 2Gi a 3Gi** para hacerle sitio: el
+  almacén que el volumen da a JetStream crece de 1 GiB a 2 GiB. En una instancia instalada con
+  `--compact` antes de esta versión, `dcctl bootstrap` se detiene en su paso de infraestructura,
+  antes de tocar NATS, porque el volumen de un NATS en ejecución no se puede redimensionar en
+  caliente. Muestra los pasos para mover el volumen a 3Gi conservando los datos de JetStream;
+  sígalos y vuelva a ejecutarlo.
+- **Una alerta nueva, `DeviceCredentialAttemptStoreFull`** (aviso), se dispara cuando ese bucket
+  se llena. Las conexiones siguen funcionando, pero sin la ralentización. Una ola de reconexiones
+  muy grande puede llenarlo igual que un ataque.
 
 ### La transición única a la ingesta duradera
 
