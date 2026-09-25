@@ -129,6 +129,8 @@ func TestStartPhaseRestartDoesNotPanic(t *testing.T) {
 		"the rebirth enqueued counter is not built in the initialize phase")
 	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_rebirth_dropped_total",
 		"the rebirth dropped counter is not built in the initialize phase")
+	require.Contains(t, afterInitialize, "devicechain_sparkplugingest_subscribe_failures_total",
+		"the subscribe failures counter is not built in the initialize phase")
 
 	// start runs the part of afterMicroserviceStarted that is this service's own.
 	start := func() {

@@ -392,19 +392,34 @@ func wireReactDispatcher(nmgr *messaging.NatsManager) error {
 	// here rather than inside the dispatcher so a deployment that could not create it
 	// fails at startup, next to every other stream this service needs, rather than at the
 	// first failure — which is the one moment the arm has to work.
-	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	deadLetters, err := newDeadLetterSink(nmgr)
 	if err != nil {
 		return err
 	}
 	ReactDispatcher = processor.NewReactDispatcher(Microservice, reader,
 		processor.NewStoreRuleResolver(DetectRuleStore), commands, alarms, connectors, connectorRate,
-		DeadLetters.NewSink(deadWriter), processor.ShedLetterBudget{
+		deadLetters, processor.ShedLetterBudget{
 			PerTenantPerSecond: Configuration.ShedLetterPerSecond,
 			PerTenantBurst:     Configuration.ShedLetterBurst,
 			GlobalPerSecond:    Configuration.ShedLetterGlobalPerSecond,
 			GlobalBurst:        Configuration.ShedLetterGlobalBurst,
 		}, ReactMetrics)
 	return nil
+}
+
+// newDeadLetterSink builds this service's sink over the platform dead-letter stream, stamped
+// by DeadLetters (the producer core/service built, which the max-delivery recorder shares).
+//
+// It is a function of its own so dead_letter_wiring_test.go builds the sink exactly as this
+// service does and reads what lands on the stream: a sink over the wrong stream, or from a
+// producer other than this service's, writes every letter where no reader looks, and nothing
+// else here would notice.
+func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
+	w, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return nil, err
+	}
+	return DeadLetters.NewSink(w), nil
 }
 
 // newReactReader is the REACT derived-events reader: term-gated on the DETECT lease and

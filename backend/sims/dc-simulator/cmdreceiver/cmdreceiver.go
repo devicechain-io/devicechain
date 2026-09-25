@@ -351,11 +351,19 @@ func (r *Receiver) onConnect(ds *deviceState) mqtt.OnConnectHandler {
 		// device subscribed, unblocks the caller, and then delivers nothing: the
 		// harness reconciles wire evidence that never arrives against durable commands
 		// that really were sent, and reads a broker ACL problem as a platform defect.
+		//
+		// The result is recorded on EVERY connect, not only the first. A refusal on a
+		// RECONNECT used to be dropped: subscribed stayed true from the first connect and
+		// readyOnce had already fired, so nothing reported it, and a device that had gone
+		// blind was still reported as receiving. Recording false here puts it in
+		// Report().Blind, which is what the harness reads.
 		suberr := messaging.SubscribeMqttConfirmed(c, ds.commandTopic, 1, r.onMessage(ds), subscribeTimeout)
-		if suberr == nil {
-			ds.mu.Lock()
-			ds.subscribed = true
-			ds.mu.Unlock()
+		ds.mu.Lock()
+		ds.subscribed = suberr == nil
+		ds.mu.Unlock()
+		if suberr != nil {
+			log.Warn().Err(suberr).Str("device", ds.token).Str("topic", ds.commandTopic).
+				Msg("cmdreceiver: command subscription failed on (re)connect; the device is blind until a later reconnect succeeds")
 		}
 		ds.readyOnce.Do(func() { ds.ready <- suberr })
 	}

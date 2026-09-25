@@ -135,6 +135,21 @@ func buildMetrics() {
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
 }
 
+// newDeadLetterSink builds this service's sink over the platform dead-letter stream, stamped
+// by DeadLetters (the producer core/service built, which the max-delivery recorder shares).
+//
+// It is a function of its own so dead_letter_wiring_test.go builds the sink exactly as this
+// service does and reads what lands on the stream: a sink over the wrong stream, or from a
+// producer other than this service's, writes every letter where no reader looks, and nothing
+// else here would notice.
+func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
+	w, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return nil, err
+	}
+	return DeadLetters.NewSink(w), nil
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound events (wildcard across tenants).
 	ievents, err := nmgr.NewReader(streams.InboundEvents)
@@ -161,11 +176,10 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// It is created BEFORE the arms that use it so a deployment that cannot create the
 	// dead-letter stream fails at startup, beside every other stream this service needs,
 	// rather than at the first failure — the one moment an arm has to work.
-	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	deadLetters, err := newDeadLetterSink(nmgr)
 	if err != nil {
 		return err
 	}
-	deadLetters := DeadLetters.NewSink(deadWriter)
 
 	// Add the alarm-events writer and inject a publisher over it into the shared Api
 	// (ADR-041). CachedApi embeds this same *Api, so both the DETECT edge integrator and

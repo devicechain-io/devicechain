@@ -103,6 +103,21 @@ func buildMetrics() {
 	DeadLetters = Svc.DeadLetters
 }
 
+// newDeadLetterSink builds this service's sink over the platform dead-letter stream, stamped
+// by DeadLetters (the producer core/service built, which the max-delivery recorder shares).
+//
+// It is a function of its own so dead_letter_wiring_test.go builds the sink exactly as this
+// service does and reads what lands on the stream: a sink over the wrong stream, or from a
+// producer other than this service's, writes every letter where no reader looks, and nothing
+// else here would notice.
+func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
+	w, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return nil, err
+	}
+	return DeadLetters.NewSink(w), nil
+}
+
 // createNatsComponents creates the messaging components used by this microservice:
 // a durable consumer of the alarm-events stream feeding the notification processor.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
@@ -128,7 +143,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// recorded where an operator can see which pages were never sent. Built here so a
 	// deployment that cannot create the stream fails at startup, beside every other stream
 	// this service needs, rather than at the first failure — the one moment it has to work.
-	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	deadLetters, err := newDeadLetterSink(nmgr)
 	if err != nil {
 		return err
 	}
@@ -139,7 +154,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// because a collector belongs to the process while everything this callback builds
 	// belongs to the connection, and a second registration of the same collector panics.
 	NotificationProcessor = processor.NewNotificationProcessor(Microservice, AlarmEventsReader,
-		core.NewNoOpLifecycleCallbacks(), Notifier, DeadLetters.NewSink(deadWriter), NotifyMetrics)
+		core.NewNoOpLifecycleCallbacks(), Notifier, deadLetters, NotifyMetrics)
 	return NotificationProcessor.Initialize(context.Background())
 }
 

@@ -450,6 +450,19 @@ los grupos a los que suscribirse. Un broker inalcanzable se reintenta en su prop
 creciente: **degrada esa única fuente, no el pod ni la fuente de ningún otro inquilino.** Para esto,
 vigile `connect_failures_total` en lugar de la salud del pod.
 
+**Un solo grupo rechazado detiene toda esa fuente hasta que se corrija la ACL del broker.** Una fuente
+anuncia un único estado en línea/fuera de línea para todos sus grupos, así que no puede estar en línea
+para unos y fuera de línea para otros. Si el broker acepta la conexión pero rechaza la suscripción a
+cualquiera de sus grupos (lo más habitual, porque la credencial de la fuente no puede leerlo), la
+fuente no se anuncia en línea, no ingiere ninguno de sus grupos, se desconecta y reintenta en el mismo
+bucle con espera creciente, hasta 30 segundos entre intentos. Anunciarse en línea con un grupo ausente
+sería peor: los nodos edge de ese grupo volcarían sus datos almacenados en una suscripción que no
+existe, y la fuente marcaría después sus dispositivos como desconectados por quedarse en silencio.
+Antes de desconectarse, la fuente publica ella misma su estado fuera de línea, porque una desconexión
+limpia no activa su Last Will: un anuncio en línea que el broker guardó pero nunca confirmó se
+reemplaza en lugar de quedarse vigente. Vigile **`subscribe_failures_total`**: cualquier aumento significa que una fuente está caída, y la
+línea de log nombra el grupo rechazado.
+
 **La reconexión la gestiona deliberadamente la plataforma y no la biblioteca cliente de MQTT.** Cada
 reconexión abre una sesión genuinamente nueva con una marca de tiempo nueva, porque Sparkplug exige
 que el nacimiento del host y su certificado de muerte lleven la misma marca de tiempo para que un nodo
@@ -589,6 +602,7 @@ rasparla.
 |---|---|
 | `is_leader` | 1 en el pod que sirve, 0 en el resto. **Alerte si la suma no es 1.** |
 | `connect_failures_total` | Un broker configurado no es alcanzable. Que suba significa que una fuente está caída mientras el pod parece sano. |
+| `subscribe_failures_total` | El broker aceptó la conexión pero rechazó (o nunca confirmó) la suscripción a un grupo, lo más probable porque la credencial de la fuente no puede leerlo. La fuente sigue fuera de línea, no ingiere ninguno de sus grupos y reintenta. **Alerte ante cualquier aumento.** |
 | `messages_total` | Tráfico Sparkplug entrante. Una línea plana con una flota viva es el síntoma de una suscripción perdida o de una fuente muerta. |
 | `presence_emitted_total` | Señales de conexión/desconexión producidas. |
 | `rebirth_requests_total` | Nodos a los que se pide que se vuelvan a anunciar. Que suba de forma sostenida significa que un nodo no consigue resincronizarse. |

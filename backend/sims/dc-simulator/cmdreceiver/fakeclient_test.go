@@ -25,6 +25,9 @@ type fakeClient struct {
 	connected     bool
 	disconnects   int
 	lastQuiesce   uint
+	// subscribeResult is what Subscribe() returns; nil keeps the original behaviour of
+	// refusing to be used by accident.
+	subscribeResult mqtt.Token
 }
 
 func newFakeClient() *fakeClient { return &fakeClient{connected: true} }
@@ -87,7 +90,10 @@ func (f *fakeClient) Publish(string, byte, bool, interface{}) mqtt.Token {
 	panic("fakeClient.Publish not implemented")
 }
 func (f *fakeClient) Subscribe(string, byte, mqtt.MessageHandler) mqtt.Token {
-	panic("fakeClient.Subscribe not implemented")
+	if f.subscribeResult == nil {
+		panic("fakeClient.Subscribe not implemented (set subscribeResult)")
+	}
+	return f.subscribeResult
 }
 func (f *fakeClient) SubscribeMultiple(map[string]byte, mqtt.MessageHandler) mqtt.Token {
 	panic("fakeClient.SubscribeMultiple not implemented")

@@ -4,7 +4,9 @@
 package host
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +25,15 @@ func (fakeToken) WaitTimeout(time.Duration) bool { return true }
 func (fakeToken) Done() <-chan struct{}          { ch := make(chan struct{}); close(ch); return ch }
 func (fakeToken) Error() error                   { return nil }
 
+// failedToken is a completed paho token that carries an error, the shape a publish the
+// broker never acknowledged comes back as.
+type failedToken struct{ err error }
+
+func (failedToken) Wait() bool                     { return true }
+func (failedToken) WaitTimeout(time.Duration) bool { return true }
+func (failedToken) Done() <-chan struct{}          { ch := make(chan struct{}); close(ch); return ch }
+func (t failedToken) Error() error                 { return t.err }
+
 // fakeClient is a minimal mqtt.Client that records the ordered sequence of
 // subscribe/publish calls so a test can assert both what was published and that
 // the subscribe happened before the STATE birth.
@@ -30,6 +41,39 @@ type fakeClient struct {
 	mu     sync.Mutex
 	events []string // "sub:<topic>" / "pub:<topic>" in call order
 	pubs   map[string][]byte
+	// pubErr, when set, fails every Publish with it.
+	pubErr error
+	// disconnects counts Disconnect calls; each one is also recorded in events as
+	// "disconnect".
+	disconnects atomic.Int32
+	// sent is every Publish in call order, including the ones pubErr failed.
+	sent []sentMsg
+}
+
+// sentMsg is one recorded Publish.
+type sentMsg struct {
+	topic    string
+	retained bool
+	payload  []byte
+}
+
+// sentTo returns every payload published to topic, in order.
+func (f *fakeClient) sentTo(topic string) []sentMsg {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []sentMsg
+	for _, m := range f.sent {
+		if m.topic == topic {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (f *fakeClient) eventLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...)
 }
 
 func newFakeClient() *fakeClient { return &fakeClient{pubs: map[string][]byte{}} }
@@ -41,18 +85,22 @@ func (f *fakeClient) Subscribe(topic string, _ byte, _ mqtt.MessageHandler) mqtt
 	return fakeToken{}
 }
 
-func (f *fakeClient) Publish(topic string, _ byte, _ bool, payload interface{}) mqtt.Token {
+func (f *fakeClient) Publish(topic string, _ byte, retained bool, payload interface{}) mqtt.Token {
 	f.mu.Lock()
 	f.pubs[topic] = payload.([]byte)
+	f.sent = append(f.sent, sentMsg{topic: topic, retained: retained, payload: payload.([]byte)})
 	f.mu.Unlock()
 	f.record("pub:" + topic)
+	if f.pubErr != nil {
+		return failedToken{f.pubErr}
+	}
 	return fakeToken{}
 }
 
 func (f *fakeClient) IsConnected() bool      { return true }
 func (f *fakeClient) IsConnectionOpen() bool { return true }
 func (f *fakeClient) Connect() mqtt.Token    { return fakeToken{} }
-func (f *fakeClient) Disconnect(uint)        {}
+func (f *fakeClient) Disconnect(uint)        { f.disconnects.Add(1); f.record("disconnect") }
 func (f *fakeClient) SubscribeMultiple(map[string]byte, mqtt.MessageHandler) mqtt.Token {
 	return fakeToken{}
 }
@@ -70,16 +118,21 @@ func (f *fakeClient) OptionsReader() mqtt.ClientOptionsReader { return mqtt.Clie
 // ONLINE stamps would collide and this test goes red.
 func TestStateTimestampIsFreshPerSession(t *testing.T) {
 	c := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h"}, Broker{}, nil, nil, Metrics{})
+	// Every group granted. The fake's Subscribe returns a plain token, which the real
+	// confirmed subscribe (rightly) reads as a refusal, and a refused group now ends the
+	// session before ONLINE; this test's subject is the timestamps and their order, so it
+	// grants through the seam and records the call the way the client makes it.
+	c.subscribe = grantAll
 
 	// Session A at timestamp 1000: the will (from the options) and the ONLINE
 	// birth (published by onConnected) must both carry 1000.
-	willA, err := ParseState(c.sessionOptions(1000, make(chan struct{}, 1)).WillPayload)
+	willA, err := ParseState(c.sessionOptions(context.Background(), 1000, make(chan struct{}, 1), new(atomic.Bool)).WillPayload)
 	require.NoError(t, err)
 	assert.False(t, willA.Online)
 	assert.Equal(t, int64(1000), willA.Timestamp)
 
 	fcA := newFakeClient()
-	c.onConnected(fcA, 1000)
+	c.onConnected(context.Background(), fcA, 1000, make(chan struct{}, 1), new(atomic.Bool))
 	onlineA, err := ParseState(fcA.pubs[c.stateTopic])
 	require.NoError(t, err)
 	assert.True(t, onlineA.Online)
@@ -91,15 +144,22 @@ func TestStateTimestampIsFreshPerSession(t *testing.T) {
 	assert.Equal(t, []string{"sub:spBv1.0/#", "pub:" + c.stateTopic}, fcA.events)
 
 	// Session B at a later timestamp 2000: fresh, and again internally matched.
-	willB, err := ParseState(c.sessionOptions(2000, make(chan struct{}, 1)).WillPayload)
+	willB, err := ParseState(c.sessionOptions(context.Background(), 2000, make(chan struct{}, 1), new(atomic.Bool)).WillPayload)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2000), willB.Timestamp)
 
 	fcB := newFakeClient()
-	c.onConnected(fcB, 2000)
+	c.onConnected(context.Background(), fcB, 2000, make(chan struct{}, 1), new(atomic.Bool))
 	onlineB, err := ParseState(fcB.pubs[c.stateTopic])
 	require.NoError(t, err)
 	assert.Equal(t, willB.Timestamp, onlineB.Timestamp)
 
 	assert.NotEqual(t, onlineA.Timestamp, onlineB.Timestamp, "each session must get a FRESH timestamp")
+}
+
+// grantAll is a subscribe seam that grants every filter, going through the client's own
+// Subscribe so a fakeClient still records the call in order.
+func grantAll(client mqtt.Client, filter string, qos byte, cb mqtt.MessageHandler, _ time.Duration) error {
+	client.Subscribe(filter, qos, cb) //subconfirm:ok a test seam standing in for the confirmed subscribe; the grant is this fake's answer
+	return nil
 }

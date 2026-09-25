@@ -106,6 +106,21 @@ func buildMetrics() {
 	DeadLetters = Svc.DeadLetters
 }
 
+// newDeadLetterSink builds this service's sink over the platform dead-letter stream, stamped
+// by DeadLetters (the producer core/service built, which the max-delivery recorder shares).
+//
+// It is a function of its own so dead_letter_wiring_test.go builds the sink exactly as this
+// service does and reads what lands on the stream: a sink over the wrong stream, or from a
+// producer other than this service's, writes every letter where no reader looks, and nothing
+// else here would notice.
+func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
+	w, err := nmgr.NewWriter(streams.DeadLetters)
+	if err != nil {
+		return nil, err
+	}
+	return DeadLetters.NewSink(w), nil
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound device responses (wildcard across tenants).
 	responses, err := nmgr.NewReader(streams.CommandResponses)
@@ -131,7 +146,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// fact replied. Built here so a deployment that cannot create the stream fails at
 	// startup, beside every other stream this service needs, rather than at the first
 	// failure — the one moment the arm has to work.
-	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
+	deadLetters, err := newDeadLetterSink(nmgr)
 	if err != nil {
 		return err
 	}
@@ -140,7 +155,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
-		presenceReader(infra), DeadLetters.NewSink(deadWriter), DeliveryMetrics)
+		presenceReader(infra), deadLetters, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and

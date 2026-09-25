@@ -414,6 +414,19 @@ groups to subscribe to. A broker that is unreachable is retried on its own backi
 **it degrades that one source, not the pod and not any other tenant's source.** Watch
 `connect_failures_total` rather than pod health for this.
 
+**One refused group stops that whole source until the broker's ACL is fixed.** A source announces a
+single online/offline state for all of its groups, so it cannot be online for some and offline for
+others. If the broker accepts the connection but refuses the subscription to any one group — most
+often because the source's credential may not read it — the source does not announce itself online,
+ingests none of its groups, disconnects, and retries on the same backing-off loop, up to 30 seconds
+apart. Announcing online with a group missing would be worse: that group's edge nodes would flush
+their buffered data into a subscription that does not exist, and the source would then mark their
+devices disconnected for staying silent. Before it disconnects, the source publishes its offline
+state itself, because a clean disconnect does not trigger its Last Will: an online announcement the
+broker stored but never acknowledged is replaced rather than left standing. Watch
+**`subscribe_failures_total`**: any increase means a
+source is down, and the log line names the group that was refused.
+
 **Reconnection is deliberately handled by the platform rather than by the MQTT client library.** Every
 reconnection opens a genuinely fresh session with a fresh timestamp, because Sparkplug requires the
 host's birth and its death certificate to carry the same timestamp so an edge node can reject a
@@ -543,6 +556,7 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 |---|---|
 | `is_leader` | 1 on the serving pod, 0 elsewhere. **Alert on the sum not being 1.** |
 | `connect_failures_total` | A configured broker is not reachable. Rising means one source is down while the pod looks healthy. |
+| `subscribe_failures_total` | The broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. The source stays offline, ingests none of its groups, and retries. **Alert on any increase.** |
 | `messages_total` | Inbound Sparkplug traffic. A flat line on a live fleet is the symptom of a lost subscription or a dead source. |
 | `presence_emitted_total` | Connect/disconnect signals produced. |
 | `rebirth_requests_total` | Nodes being asked to re-announce. Steadily rising means a node is failing to resynchronise. |

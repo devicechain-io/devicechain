@@ -1529,6 +1529,9 @@ If you route or silence alerts by name, two more warnings are added, `JetStreamR
 and `ConnectorDispatchRateLimited` (see "Two new warnings: an unreadable stream, and connector sheds
 the detection engine admitted").
 
+If you run Sparkplug sources, or alert on a Sparkplug host's online state, read "A Sparkplug source
+with a refused group stays offline, and a refresh survives a brief outage".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2154,6 +2157,39 @@ Nothing needs doing at the upgrade.
 - **`JetStreamLeaseBucketNotReplicated` has a new summary**, "The partition-lease bucket is not
   replicated". Its name, labels and severity are unchanged. Update any route or silence that
   matches on the old summary text.
+
+#### A Sparkplug source with a refused group stays offline, and a refresh survives a brief outage
+
+**Sparkplug.** If the broker accepts a Sparkplug source's connection but refuses its subscription to
+any one of the source's groups (most often because the source's credential may not read that
+group), the source no longer announces itself online. It ingests none of its groups, disconnects,
+and retries with a growing wait of up to 30 seconds until every group is granted. One refused group
+therefore stops that whole source until the broker's ACL is fixed. The same happens if the broker
+does not acknowledge the online announcement itself. Before it disconnects, the source publishes its
+offline state, so an online announcement the broker kept without acknowledging it does not linger.
+
+Before, the source announced itself online with the group missing. That group's edge nodes then
+flushed their buffered data into a subscription that did not exist, and the source later marked
+their devices disconnected for staying silent. A new counter,
+`devicechain_sparkplugingest_subscribe_failures_total`, counts the abandoned sessions: alert on any
+increase. The log line names the refused group. If you watch the Sparkplug host state, a source with
+a refused group now shows as offline rather than online. [Edge services](./edge-services.md) has
+the details.
+
+**Session refresh.** Refreshing a session used to use up the refresh token before re-checking the
+session. A database or broker error during that check then ended the session: the refresh failed
+as "invalid or expired token", and the token could not be used again. The check now runs first. A
+store error leaves the token valid and returns an error you can retry ("the session could not be
+refreshed right now; try again"), and the OAuth token endpoint returns `server_error` without the
+underlying error text. A refresh that is refused because the session ended, the membership was
+removed or disabled, or the tenant refuses access still uses the token up.
+
+Only a client that retries with the same refresh token benefits. An OAuth client, such as an AI
+agent connecting over MCP, now gets `server_error` rather than `invalid_grant` during such an outage,
+so it can retry instead of asking the user to authorize it again. The Go client library the
+simulator, the load tests and `dcctl` use no longer loses its refresh token to the outage, but it
+still falls back to a password sign-in whenever a refresh fails, as it did before. The console still
+signs the user out on any refresh failure. Nothing needs doing at the upgrade.
 
 ### The one-time durable-ingest cutover
 

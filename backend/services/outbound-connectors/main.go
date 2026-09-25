@@ -123,7 +123,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Every other arm in the platform lands in that list; this one now does too. Created here, beside
 	// the stream it indexes, so a deployment that cannot create it fails at startup rather than at
 	// the first give-up — the one moment the arm has to work.
-	deadIndex, err := nmgr.NewWriter(streams.DeadLetters)
+	deadIndex, err := newDeadLetterIndexWriter(nmgr)
 	if err != nil {
 		return err
 	}
@@ -375,4 +375,15 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles.
 	return Svc.Terminate(ctx)
+}
+
+// newDeadLetterIndexWriter builds the writer over the platform dead-letter stream that the
+// dispatch consumer indexes its give-ups on (the consumer builds the index sink from it and
+// DeadLetters itself; that choice is pinned in the processor).
+//
+// It is a function of its own so dead_letter_wiring_test.go writes through the writer this
+// service builds and reads what lands on the stream: a writer over the wrong stream puts every
+// index entry where no reader looks, and nothing else here would notice.
+func newDeadLetterIndexWriter(nmgr *messaging.NatsManager) (messaging.MessageWriter, error) {
+	return nmgr.NewWriter(streams.DeadLetters)
 }

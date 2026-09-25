@@ -206,6 +206,8 @@ func buildMetrics() host.Metrics {
 			"Rebirth requests discarded because the publish queue was full. A latency signal, not an error rate: the per-node backoff re-requests on the next window."),
 		ConnectFailures: Microservice.NewCounter("connect_failures_total",
 			"Failed broker connect attempts across all sources (readiness is not broker-gated; this is how a broken source config surfaces)."),
+		SubscribeFailures: Microservice.NewCounter("subscribe_failures_total",
+			"Sessions abandoned because a Sparkplug group subscription failed after the broker accepted the connection (most often a refusal: the source's credential may not read that group). The source never announces ONLINE and ingests none of its groups while any group is refused; it retries with backoff."),
 		IngestFailures: Microservice.NewCounter("ingest_failures_total",
 			"Accepted messages whose samples were dropped after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable)."),
 	}

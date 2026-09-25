@@ -56,6 +56,18 @@ var ErrInvalidCredentials = errors.New("invalid credentials")
 // expired), or belongs to a session that has ended (see sessionIdentity).
 var ErrInvalidToken = errors.New("invalid or expired token")
 
+// ErrRefreshUnavailable is returned by Refresh when the platform could not decide whether
+// the refresh token may be redeemed: the database or the refresh-token store failed while
+// the grant was being re-checked. The token is NOT consumed, so the caller can retry the
+// same refresh once the platform is back. Its text never carries the cause, because the
+// GraphQL mutation hands this error's text to the caller verbatim; the cause is logged.
+var ErrRefreshUnavailable = errors.New("the session could not be refreshed right now; try again")
+
+// errNotAMember is a refresh's denial when the identity no longer belongs to the token's
+// tenant (and is not a superuser). It is a sentinel so refuseRefresh can tell it apart
+// from a store error, like errSessionEnded and errTenantAccessDenied.
+var errNotAMember = errors.New("the identity is no longer a member of the tenant")
+
 // errSessionEnded is sessionIdentity's refusal: the identity a previously issued
 // credential names is gone, disabled, or has had its session epoch changed since the
 // credential was minted (a password reset, a disable, or a delete and re-create).
@@ -750,6 +762,20 @@ func (m *Manager) recordAuth(ctx context.Context, operation, actor, tenant strin
 // also belong to the identity's current session (sessionIdentity), so a password
 // reset, disable or delete ends it — and every other refresh token of that
 // identity — at its next use.
+//
+// 🔑 EVERY READ HAPPENS BEFORE THE TOKEN IS CONSUMED. The claim (a revision-checked
+// delete) used to come first, so a database blip while the grant was re-checked burned a
+// perfectly good token and signed the user out. Now the outcome decides:
+//
+//   - a DEFINITE denial (the session ended, the membership is gone, the tenant refuses)
+//     still burns the token, so it cannot come back to life if the membership or tenant
+//     is re-enabled before it expires, and returns ErrInvalidToken;
+//   - a store error leaves the token unconsumed and returns ErrRefreshUnavailable, so the
+//     same token works once the platform recovers;
+//   - otherwise the token is claimed, and only one of N concurrent refreshes wins it.
+//
+// The cost of reading first is that N concurrent refreshes of one token each do the reads
+// before the one winning claim; the losers are refused at the claim as before.
 func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	claims, err := m.validator.ValidateRefresh(refreshToken)
 	if err != nil {
@@ -766,36 +792,67 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}
 	entry, err := m.refreshKV.Get(claims.ID)
 	if err != nil {
-		return nil, ErrInvalidToken
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, ErrInvalidToken // rotated, revoked or expired
+		}
+		log.Error().Err(err).Msg("Refresh could not read the refresh-token store; the token is left unconsumed.")
+		return nil, ErrRefreshUnavailable
 	}
-	// Rotate atomically: a revision-checked delete claims the token, so only one
-	// of N concurrent refreshes wins. A replayed or stolen refresh token can't
-	// mint two sessions — the losing delete fails and that refresh is rejected.
-	if err := m.refreshKV.Delete(claims.ID, nats.LastRevision(entry.Revision())); err != nil {
-		return nil, ErrInvalidToken
-	}
+	rev := entry.Revision()
 
 	// The refresh token's subject is the identity email; the tenant is its claim.
-	// Every failure here — an ended session or a store error alike — is reported as
-	// an invalid token, as it always has been on this path.
 	id, err := m.sessionIdentity(ctx, claims.Username, claims.SessionEpoch)
 	if err != nil {
-		return nil, ErrInvalidToken
+		return nil, m.refuseRefresh(claims.ID, rev, err)
 	}
 	su := isSuperuser(id)
 	mem := findMembership(id.Memberships, claims.Tenant)
 	if mem == nil && !su {
-		return nil, ErrInvalidToken
+		return nil, m.refuseRefresh(claims.ID, rev, errNotAMember)
 	}
 	roles, authorities, err := m.resolveTenantGrant(ctx, claims.Tenant, mem, su)
 	if err != nil {
-		if errors.Is(err, errTenantAccessDenied) {
-			return nil, ErrInvalidToken
+		return nil, m.refuseRefresh(claims.ID, rev, err)
+	}
+
+	// Rotate atomically: a revision-checked delete claims the token, so only one
+	// of N concurrent refreshes wins. A replayed or stolen refresh token can't
+	// mint two sessions — the losing delete fails and that refresh is rejected.
+	if err := m.refreshKV.Delete(claims.ID, nats.LastRevision(rev)); err != nil {
+		if errors.Is(err, nats.ErrKeyRevisionMismatch) {
+			return nil, ErrInvalidToken // another refresh of this token won
 		}
-		return nil, err
+		log.Error().Err(err).Msg("Refresh could not claim the refresh token; it is left unconsumed.")
+		return nil, ErrRefreshUnavailable
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, id.Email, claims.Tenant)
 	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), roles, authorities, su)
+}
+
+// refuseRefresh turns a failed re-check of a refresh grant into the error Refresh returns.
+// A definite denial (errSessionEnded, errNotAMember, errTenantAccessDenied) burns the
+// token, with the same revision-checked delete a successful refresh claims it with, and is
+// ErrInvalidToken. Anything else is a store error: the token is left unconsumed, the cause
+// is logged, and the caller gets ErrRefreshUnavailable, which does not carry it.
+func (m *Manager) refuseRefresh(jti string, rev uint64, cause error) error {
+	if isRefreshDenial(cause) {
+		// Best effort. Revision-checked, so it can only ever delete the token this refresh
+		// read; if it fails the token outlives the denial, and every later use of it is
+		// re-checked and denied the same way until it expires.
+		if err := m.refreshKV.Delete(jti, nats.LastRevision(rev)); err != nil && !errors.Is(err, nats.ErrKeyRevisionMismatch) {
+			log.Warn().Err(err).Msg("A denied refresh could not burn its token; it stays denied at every later use.")
+		}
+		return ErrInvalidToken
+	}
+	log.Error().Err(cause).Msg("Refresh could not re-check the grant; the token is left unconsumed.")
+	return ErrRefreshUnavailable
+}
+
+// isRefreshDenial reports whether a refresh re-check failed on POLICY rather than on a store
+// error: the only failures that may burn a refresh token.
+func isRefreshDenial(err error) bool {
+	return errors.Is(err, errSessionEnded) || errors.Is(err, errNotAMember) ||
+		errors.Is(err, errTenantAccessDenied)
 }
 
 // errTenantAccessDenied marks a regular member's denial from a tenant (tenant
@@ -934,6 +991,10 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	if err != nil {
 		return nil, err
 	}
+	// On a refresh this runs AFTER the old token was claimed, so a signing or Put failure
+	// here still consumes it. That is accepted: it is rare, and it fails toward signing in
+	// again rather than toward replay. Putting the new jti before claiming the old one
+	// would close it, at the price of two live tokens for one session.
 	if _, err := m.refreshKV.Put(refreshJti, []byte(email)); err != nil {
 		return nil, err
 	}
