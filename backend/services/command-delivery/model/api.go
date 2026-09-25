@@ -1251,15 +1251,17 @@ func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (CommandStat
 // actuate minutes after an operator was told the fleet write had stopped. Duplicating the
 // subquery per route is how one of them ends up without it.
 //
+// ConfirmDispatch runs it too, although a confirm keeps the row in SENT rather than taking it
+// back: the confirm is the last step before a transport actuates, so a called-off batch's
+// command stops there instead of reaching the device.
+//
 // It runs before the caller's own write and both are predicated on SENT, so exactly one of
 // the two can move the row — which is what makes the sequence safe without a transaction.
 // sent_time is cleared because a retired claim did not send anything.
 func (api *Api) stopCancelledBatchCommand(ctx context.Context, where string, args []any) (bool, error) {
-	cancelledBatches := api.RDB.DB(ctx).Model(&CommandBatch{}).
-		Select("id").Where("cancelled_at IS NOT NULL")
 	stopped := api.RDB.DB(ctx).Model(&Command{}).
 		Where(where, args...).
-		Where("status = ? AND batch_id IN (?)", CommandSent.String(), cancelledBatches).
+		Where("status = ? AND batch_id IN (?)", CommandSent.String(), api.cancelledBatchIds(ctx)).
 		Updates(map[string]any{
 			"status":    CommandCancelled.String(),
 			"sent_time": sql.NullTime{},
@@ -1268,6 +1270,16 @@ func (api *Api) stopCancelledBatchCommand(ctx context.Context, where string, arg
 		return false, stopped.Error
 	}
 	return stopped.RowsAffected == 1, nil
+}
+
+// cancelledBatchIds is the subquery naming every batch an operator has called off. It is the
+// ONE definition of "this command's batch was cancelled" on the write paths: the routes out of
+// SENT use it through stopCancelledBatchCommand, and ConfirmDispatch folds it into its own
+// predicate. Written once so a brake cannot be spelled one way on one route and another way on
+// the next.
+func (api *Api) cancelledBatchIds(ctx context.Context) *gorm.DB {
+	return api.RDB.DB(ctx).Model(&CommandBatch{}).
+		Select("id").Where("cancelled_at IS NOT NULL")
 }
 
 // maxDispatchFailures is the configured bound on failed dispatches, falling back to the
@@ -1643,27 +1655,26 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 //
 // Claim-THEN-dispatch is the ordering: the caller marks the row sent first and
 // issues the op only if it won the claim, so a losing racer declines instead of
-// re-actuating. The dispatcher also carries an in-memory recently-dispatched
-// cache, but that is defence in depth — it is per-pod and TTL-bounded, so it
-// cannot be the thing standing between a leadership change and a duplicate
-// actuation.
+// re-actuating. The live path is claimed too: the transport confirms a published
+// envelope's dispatch (ConfirmDispatch) before actuating it, so neither route to a
+// device rests on a per-pod cache.
 //
-// 🔴 BE PRECISE ABOUT WHAT THE CLAIM DOES AND DOES NOT CLOSE. It is structural
-// against a LATER sweep tick: once the row leaves the dispatchable set, no
-// subsequent PendingCommands read can return it. It is NOT structural against the
-// tick already in flight. The sweep SELECTs its batch and then publishes each row
-// in a loop, re-checking nothing in between, so a claim that lands after that
-// SELECT does not stop the publish that follows it — and the sweep's own MarkSent
-// then matches zero rows and is treated as a benign race. In that window the only
-// thing left between the two dispatches is the per-pod dedupe cache, which is
-// exactly the guarantee this comment must not overstate.
+// 🔴 BE PRECISE ABOUT WHAT THE CLAIM DOES AND DOES NOT CLOSE. Two dispatchers can never
+// both win the SAME claim: the sweep (deliverCommand) and this drain each run one
+// conditional UPDATE predicated on a claimable status, and the sweep builds and publishes
+// its envelope only AFTER its own claim returns true. A sweep that SELECTed a row the drain
+// then claimed finds its MarkSent matching zero rows, counts a lost claim and publishes
+// nothing. There is no window between the sweep's SELECT and its publish for a second copy
+// to escape through.
 //
-// 🔑 THE SWEEP NOW CLAIMS BEFORE IT PUBLISHES, which is what closes the LATER-tick
-// half of this properly rather than by the two paths happening to select disjoint
-// sets — they no longer do, since the presence gate produces held rows and the
-// reconciler returns them to QUEUED. What remains open is only the in-flight tick
-// described above, and it is narrow: both dispatchers claim first, so the loser
-// declines; the residue is a publish already in progress when the claim lands.
+// What the claim does NOT close is a row claimed TWICE over time. A claim ends when
+// something takes the row back out of SENT — a park (ParkClaim) or the stranded-SENT pass —
+// and the row is then claimable again, while the envelope from the first claim may still be
+// undelivered or in redelivery. That older envelope names the first claim's nonce. What
+// keeps it from actuating the device a second time is the live transport's
+// ConfirmDispatch: the row no longer carries that nonce, so the late copy is refused rather
+// than actuated. A transport that actuated envelopes without confirming them would reopen
+// exactly this.
 //
 // It reports whether THIS call performed the transition. RowsAffected==0 means
 // the row was not dispatchable — already sent by the sweep, already answered, or
@@ -1700,6 +1711,91 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool
 		return "", false, nil
 	}
 	return nonce, true, nil
+}
+
+// ConfirmDispatch is the LIVE-PATH claim: a transport that received a published command calls
+// it immediately before actuating the device, quoting the dispatch nonce from the envelope it
+// was handed. It answers with a FRESH nonce when this call confirmed the dispatch, and ("",
+// false) when the dispatch it names is no longer the row's current one.
+//
+// 🔴 WHY THE LIVE PATH NEEDS A CLAIM AT ALL. The delivery sweep claims a row QUEUED -> SENT and
+// then publishes it, and until this existed the transport actuated whatever arrived. But an
+// envelope can arrive LATE: an AckWait expiry while it sat queued behind a slow device, a
+// redelivery to a new leader, or a message no consumer pulled while every replica was down,
+// which has no AckWait timer running at all. Meanwhile the stranded-SENT pass may have re-armed
+// the row to PARKED and a wake drain may have claimed and actuated it. Actuating the late
+// envelope as well is a second physical actuation. Quoting the envelope's nonce makes the late
+// copy name a dispatch that no longer exists, so it loses here and is discarded.
+//
+// 🔴 IT ROTATES THE NONCE; A READ-ONLY CHECK WOULD NOT BE ENOUGH. Suppose a check read SENT/N,
+// then the stranded pass's ParkClaim(N) landed, then the op ran: the row is PARKED and the
+// drain actuates it again. Rotating N to a new value in the same conditional UPDATE makes the
+// confirm and the park mutually exclusive at the row, because both are predicated on
+// (SENT, N) and whichever lands first invalidates the other. The same rotation excludes every
+// later redelivered copy of the SAME envelope: the first confirm moves the row off N, so each
+// copy after it loses.
+//
+// 🔴 status = 'SENT' IS NOT REDUNDANT WITH THE NONCE, AND MUST NEVER BE "SIMPLIFIED" AWAY.
+// ParkClaim retires a claim WITHOUT clearing dispatch_nonce, so a PARKED row still carries N.
+// A confirm predicated on the nonce alone would match that PARKED row and actuate a command the
+// wake drain is also about to claim and actuate.
+//
+// 🔴 IT RESTAMPS sent_time, AND THAT IS LOAD-BEARING. Without it a late envelope's row keeps
+// its original sent_time, so the next stranded scan finds it already past the horizon and parks
+// it while the op is in flight, before its answer lands — and the drain actuates it again. The
+// restamp restarts the grace from the real actuation, and it makes sent_time say when the
+// device was actually sent the command. It is the POD clock, time.Now(), not SQL now(): every
+// sibling write stamps from the pod clock and the stranded horizon is computed from it, so one
+// comparison must not span two clocks.
+//
+// 🔴 THE BATCH BRAKE IS CHECKED TWICE, AND ONLY THE SECOND IS AIRTIGHT. The first write,
+// stopCancelledBatchCommand, lands a called-off batch's command on CANCELLED so the record says
+// what happened. It is a separate statement, so a cancel can commit between it and the
+// rotation; the rotation therefore carries the same cancelled-batch predicate in its own WHERE
+// clause, and a cancel that lands in that gap makes the rotation match nothing. The row then
+// stays SENT until the stranded pass retires it (to CANCELLED, through the same brake), and the
+// device is not actuated either way.
+//
+// Three outcomes, as MarkSentByToken's: (newNonce, true, nil) — confirmed, actuate, and quote
+// newNonce in the response (MarkResponse matches the row's CURRENT nonce, so the old one would
+// be refused); ("", false, nil) — lost, do not actuate; (_, _, err) — unknown, do not actuate.
+func (api *Api) ConfirmDispatch(ctx context.Context, token, nonce string) (string, bool, error) {
+	// NULL never matches `dispatch_nonce = ''` anyway; refusing up front says so rather than
+	// leaving the answer to three-valued logic.
+	if nonce == "" {
+		return "", false, nil
+	}
+	where, args := "token = ? AND dispatch_nonce = ?", []any{token, nonce}
+	stopped, err := api.stopCancelledBatchCommand(ctx, where, args)
+	if err != nil {
+		return "", false, err
+	}
+	if stopped {
+		return "", false, nil
+	}
+	return api.rotateDispatch(ctx, where, args)
+}
+
+// rotateDispatch is ConfirmDispatch's conditional UPDATE, split out only so the folded
+// cancelled-batch predicate can be tested on its own: the interleaving it closes (a cancel
+// committing between the brake write and this one) cannot be staged through ConfirmDispatch.
+func (api *Api) rotateDispatch(ctx context.Context, where string, args []any) (string, bool, error) {
+	next := newDispatchNonce()
+	res := api.RDB.DB(ctx).Model(&Command{}).
+		Where(where, args...).
+		Where("status = ?", CommandSent.String()).
+		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
+		Updates(map[string]any{
+			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
+			"dispatch_nonce": sql.NullString{String: next, Valid: true},
+		})
+	if res.Error != nil {
+		return "", false, res.Error
+	}
+	if res.RowsAffected != 1 {
+		return "", false, nil
+	}
+	return next, true, nil
 }
 
 // MarkResponse records a device response against a command, looked up by its token.

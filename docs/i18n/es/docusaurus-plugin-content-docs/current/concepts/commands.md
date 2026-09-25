@@ -193,13 +193,21 @@ Vale la pena conocer dos límites, porque ambos son deliberados:
   comando MQTT se entrega en vivo a quien esté conectado en ese instante, así que un comando
   que parece no haber llegado a ninguna parte es indistinguible de uno que sí llegó y cuya
   respuesta se perdió. Para esos, el comportamiento no cambia.
-- **Rearmar acepta que un comando pueda ejecutarse dos veces.** Un comando sin desenlace
-  registrado no es lo mismo que un comando que nunca se llevó a cabo: el dispositivo pudo
-  actuar y perderse el informe. Rearmar sigue siendo la mejor respuesta, porque la alternativa
-  es un `TIMEOUT` garantizado sobre un comando que la plataforma realmente nunca entregó,
-  escrito contra un dispositivo que no hizo nada mal. Interprétalo con la misma garantía de
-  al-menos-una-vez que se aplica a una devolución: lee un comando rearmado como «se
-  entregará», no como «no se había llevado a cabo».
+- **Rearmar acepta que un comando pueda ejecutarse dos veces cuando se perdió su respuesta.**
+  Un comando sin desenlace registrado no es lo mismo que un comando que nunca se llevó a cabo:
+  el dispositivo pudo actuar y perderse el informe. Rearmar sigue siendo la mejor respuesta,
+  porque la alternativa es un `TIMEOUT` garantizado sobre un comando que la plataforma
+  realmente nunca entregó, escrito contra un dispositivo que no hizo nada mal. Interprétalo con
+  la misma garantía de al-menos-una-vez que se aplica a una devolución: lee un comando rearmado
+  como «se entregará», no como «no se había llevado a cabo».
+
+Una *entrega* tardía es otra cosa, y no puede causar una segunda actuación. Tras una caída
+larga de LwM2M, la entrega original de un comando rearmado todavía puede aparecer — reentregada
+después de una conmutación por error, o recogida por primera vez cuando el adaptador vuelve a
+funcionar. Antes de que un comando LwM2M llegue a un dispositivo, el adaptador confirma con la
+plataforma que la entrega que tiene sigue siendo la actual del comando, y una entrega que la
+plataforma ya rearmó o reenvió se descarta en lugar de llevarse a cabo. La confirmación mueve
+el `sentTime` del comando al momento en que realmente se le envió al dispositivo.
 
 ### Cuánta acumulación puede retener un inquilino {#held-command-ceiling}
 
@@ -350,6 +358,12 @@ anuló.
 Cancelar un comando **individual** traza exactamente la misma línea: `QUEUED`, `HELD` y
 `PARKED` se cancelan, y un comando `SENT` se devuelve sin cambios en lugar de llevarse a
 `CANCELLED`. Ver [Cancela uno](../guides/sending-commands.md#cancel-one).
+
+Los dispositivos LwM2M tienen una parada más. El adaptador LwM2M confirma cada comando con la
+plataforma inmediatamente antes de llevarlo a cabo, así que un comando de un lote que se
+publicó pero aún no había llegado a su dispositivo cuando se canceló el lote se detiene ahí y
+registra `CANCELLED`. El resultado de la cancelación del lote todavía lo cuenta como ya
+enviado, porque eso era en el momento de la cancelación.
 
 Cancelar un lote nunca se rechaza. Un freno que se negara a actuar porque parte de la flota
 ya se movió dejaría comandada al resto de la flota, que es el peor desenlace disponible — así

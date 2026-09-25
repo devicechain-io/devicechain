@@ -118,10 +118,11 @@ var (
 	// commands the leader needs. ResponseWriter publishes command outcomes to command-responses.
 	CommandReader  messaging.MessageReader
 	ResponseWriter messaging.MessageWriter
-	// ingestURL / deviceStateURL are validated once at Init (fail closed on a misconfiguration)
+	// ingestURL / deviceStateURL / commandDeliveryURL are validated once at Init (fail closed on a misconfiguration)
 	// and reused by each term's presence layer.
-	ingestURL      string
-	deviceStateURL string
+	ingestURL          string
+	deviceStateURL     string
+	commandDeliveryURL string
 
 	// Metrics are created ONCE at Init and shared across every leadership term: a Prometheus
 	// instrument may be registered only once, so a per-term rebuild that re-created them would
@@ -228,12 +229,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	spec := service.Spec{}
 	if len(Configuration.Security.Identities) > 0 {
 		infra := Microservice.InstanceConfiguration.Infrastructure
-		// Validate the device-facing endpoints ONCE at startup (fail closed): a term that cannot
-		// resolve devices or floor its epoch must not be a silent non-serving leader.
-		if ingestURL, err = ingestEndpoint(infra); err != nil {
-			return err
-		}
-		if deviceStateURL, err = deviceStateEndpoint(infra); err != nil {
+		if ingestURL, deviceStateURL, commandDeliveryURL, err = serviceEndpoints(infra); err != nil {
 			return err
 		}
 		spec.Nats = &service.NatsSpec{OnCreate: func(*messaging.NatsManager) error { return nil }}
@@ -423,8 +419,12 @@ func buildMetrics() {
 			"Wake-drain fetches that failed (retried on the device's next Register/Update)."),
 		DrainDropped: Microservice.NewCounter("command_drain_dropped_total",
 			"Wake-drain triggers dropped because the device's shard worker was busy (the next wake re-triggers)."),
-		DrainDedup: Microservice.NewCounter("command_drain_dedup_total",
-			"Commands skipped because they were already dispatched (drain/live overlap) — a re-actuation avoided."),
+		// Live-path confirmation outcomes, split for the same reason as the claim outcomes below:
+		// a stale dispatch is the exclusion working, a claim error is command-delivery unreachable.
+		StaleDispatch: Microservice.NewCounter("commands_stale_dispatch_total",
+			"Live commands discarded because the platform had already re-armed or re-dispatched them — a duplicate actuation avoided, not a fault."),
+		LiveClaimErrors: Microservice.NewCounter("command_live_claim_errors_total",
+			"Live commands NOT actuated because their dispatch could not be confirmed with command-delivery (or the delivery named no dispatch); left unacked to retry on redelivery."),
 		// The two claim outcomes are SPLIT because they mean opposite things: a lost claim is the
 		// exclusion mechanism working (someone else owns that command, so we correctly did not
 		// actuate it twice), while a claim error is command-delivery being unreachable and a
@@ -478,7 +478,9 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// issues a command's CoAP op it CLAIMS the command (command-delivery's markCommandSent). The
 	// claim is what stops the delivery sweep from publishing the same still-dispatchable command a
 	// second time — and a command is a physical actuation, so the second publish moves real
-	// hardware again.
+	// hardware again. The LIVE path uses the same authority to confirm a published command's
+	// dispatch (confirmCommandDispatch) immediately before actuating it, which is what makes a
+	// late or redelivered delivery lose instead of moving the hardware twice.
 	//
 	// 🔑 command:claim, NOT command:write, and the narrowness is the point: this service must be
 	// able to take a command it is about to dispatch out of the sweep's reach, and nothing more.
@@ -565,23 +567,14 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// The L4b wake-drain fetcher reads a waking device's backlogged commands from command-delivery so
 	// the dispatcher can deliver commands held while the device was offline, and the CLAIMER is its
 	// write half — it takes a still-dispatchable command out of the sweep's reach immediately before
-	// the drain actuates it, so the same command is never published a second time. They are built
-	// together, from the same client and URL, because a fetcher without a claimer can read a
-	// claimable command but not dispatch it (the dispatcher fails closed). Both need the
-	// command-delivery GraphQL coordinate; without it draining is DISABLED (offline commands ride
-	// their TTL to their terminal state — the L4a behavior) rather than failing the service. Kept as
-	// the concrete types so a nil is passed to NewDispatcher as a true nil interface (below), not a
-	// typed nil.
-	var fetcher *downlink.CommandFetcher
-	var claimer *downlink.CommandClaimer
-	var parker *downlink.CommandParker
-	if cdURL, ok := commandDeliveryEndpoint(infra); ok {
-		fetcher = downlink.NewCommandFetcher(client, cdURL)
-		claimer = downlink.NewCommandClaimer(client, cdURL)
-		parker = downlink.NewCommandParker(client, cdURL)
-	} else {
-		log.Warn().Msg("command-delivery endpoint not configured (infrastructure.commandDelivery) — LwM2M queue-mode drain disabled; a command to an offline device rides its TTL to TIMEOUT instead of draining on the device's next wake.")
-	}
+	// the drain actuates it, and confirms a LIVE command's dispatch immediately before that one
+	// actuates, so the same command is never carried out a second time. The PARKER hands back a
+	// command whose device turned out to be asleep. All three are built from the same client and
+	// the command-delivery coordinate validated at startup, which is REQUIRED: without the claimer
+	// no command, live or drained, could be actuated at all.
+	fetcher := downlink.NewCommandFetcher(client, commandDeliveryURL)
+	claimer := downlink.NewCommandClaimer(client, commandDeliveryURL)
+	parker := downlink.NewCommandParker(client, commandDeliveryURL)
 
 	// The command dispatcher (L4a/L4b): it consumes device-commands (leader-only) and dispatches to
 	// the term's conn table, plus drains commands held for a device while it was offline on the
@@ -607,17 +600,8 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 			// for a fault it never saw.
 			ReadPacer: core.NewReadPacer(Microservice, "device commands"),
 		}
-		// Typed-nil care, as above: assign through the interface only when the concrete
-		// parker exists, so a missing command-delivery endpoint leaves a TRUE nil that the
-		// dispatcher's `d.parker == nil` check can see.
-		if parker != nil {
-			opts.Parker = parker
-		}
-		if fetcher != nil {
-			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)
-		} else {
-			dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), nil, nil, downlinkMetrics, opts)
-		}
+		opts.Parker = parker
+		dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)
 		// Wire the wake-drain: a device becoming reachable on a fresh conn (Register / re-handshake
 		// Update) triggers a drain of its held commands. A no-op when draining is disabled or on a
 		// standby (Drain guards both). Set before serving begins.
@@ -795,6 +779,23 @@ func buildReverseBindings(bindings map[string]config.PskBinding) map[string]map[
 	return rev
 }
 
+// serviceEndpoints validates, ONCE at startup, every service coordinate a credentialed adapter
+// depends on, and returns their GraphQL URLs (fail closed): a term that cannot resolve devices,
+// floor its epoch, or confirm a command before actuating it must not be a silent non-serving
+// leader. It is the startup's one call, so a test of it is a test of what startup refuses.
+func serviceEndpoints(infra mscfg.InfrastructureConfiguration) (ingest, deviceState, commandDelivery string, err error) {
+	if ingest, err = ingestEndpoint(infra); err != nil {
+		return "", "", "", err
+	}
+	if deviceState, err = deviceStateEndpoint(infra); err != nil {
+		return "", "", "", err
+	}
+	if commandDelivery, err = commandDeliveryEndpoint(infra); err != nil {
+		return "", "", "", err
+	}
+	return ingest, deviceState, commandDelivery, nil
+}
+
 // ingestEndpoint validates the device-management coordinate the registrar resolves through and
 // returns its GraphQL URL. Fail closed: a device-facing source that cannot resolve devices would
 // refuse every registration.
@@ -818,15 +819,19 @@ func deviceStateEndpoint(infra mscfg.InfrastructureConfiguration) (string, error
 	return fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port), nil
 }
 
-// commandDeliveryEndpoint returns the command-delivery GraphQL URL and whether it is configured.
-// Unlike the two above it is fail-OPEN (returns ok=false rather than an error): the L4b wake-drain it
-// feeds is an enhancement over connected-only dispatch, so a missing coordinate disables draining
-// (offline commands ride their TTL to TIMEOUT) rather than refusing to serve.
-func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, bool) {
+// commandDeliveryEndpoint validates the command-delivery coordinate the downlink needs and returns
+// its GraphQL URL. Fail closed, like the two above.
+//
+// 🔴 IT USED TO BE FAIL-OPEN, AND IT CANNOT BE ANY MORE. A missing coordinate once disabled only
+// the wake drain, which was an enhancement over connected-only dispatch. Every LIVE command is now
+// confirmed with command-delivery immediately before it actuates, so without the coordinate no
+// LwM2M command could ever reach a device — a downlink that is dead behind a pod reporting Ready,
+// with one warning at startup to say so. Refusing to start says it where it cannot be missed.
+func commandDeliveryEndpoint(infra mscfg.InfrastructureConfiguration) (string, error) {
 	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
-		return "", false
+		return "", fmt.Errorf("command-delivery endpoint not configured (infrastructure.commandDelivery) — lwm2m-ingest confirms every command with command-delivery before actuating it, so without it no command could reach a device")
 	}
-	return fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port), true
+	return fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port), nil
 }
 
 // afterMicroserviceStarted starts the HTTP surface and NATS (so the presence emitter can publish)

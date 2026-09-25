@@ -36,19 +36,21 @@ func (a *fakeAck) acked() bool { return a.count() > 0 }
 // carrying a delivery envelope, with a fake ack handle. The command token defaults to "cmd-"+token
 // (fine for a single command per device); a test issuing MULTIPLE distinct commands to the SAME
 // device must use cmdMsgTok with distinct command tokens, exactly as production does (commands are
-// per-tenant unique, ADR-042) — otherwise the drain/live dedup correctly treats them as one command.
+// per-tenant unique, ADR-042) — otherwise they are, as far as command-delivery is concerned, one
+// command.
 func cmdMsg(tenant, token, name, payload string, ack messaging.Acknowledger) messaging.Message {
 	return cmdMsgTok(tenant, token, "cmd-"+token, name, payload, ack)
 }
 
 func cmdMsgTok(tenant, deviceToken, cmdToken, name, payload string, ack messaging.Acknowledger) messaging.Message {
-	return cmdMsgNonce(tenant, deviceToken, cmdToken, name, payload, "", ack)
+	return cmdMsgNonce(tenant, deviceToken, cmdToken, name, payload, "env-nonce-"+cmdToken, ack)
 }
 
-// cmdMsgNonce is cmdMsgTok plus the DISPATCH NONCE the delivery sweep stamps on the publish it
-// is making. Every other builder in this file delegates here with an empty nonce, which is not
-// a shortcut but the pre-nonce wire shape a command published by an older build (or by anything
-// other than the sweep) still has — the case park() must decline rather than guess at.
+// cmdMsgNonce is cmdMsgTok with an explicit DISPATCH NONCE, the value the delivery sweep stamps on
+// the publish it is making. The other builders stamp "env-nonce-"+cmdToken, because every
+// production publish carries one and a live command without one is refused (claimLive). A test
+// that needs the nonce-less wire shape — a command published by something other than the sweep,
+// the case park() and claimLive must decline rather than guess at — passes "" here explicitly.
 //
 // The bytes are marshalled ONCE, here, so a nonce test and a non-nonce test cannot end up
 // asserting against two different notions of what went on the wire.
@@ -169,7 +171,11 @@ func newDispatcher(rdr reader, pub responsePublisher, look connLookup, exec exec
 	// A reportless pacer on a virtual clock: these tests exercise routing and dispatch, not
 	// pacing, and a real clock would make any read error in one of them cost a real pause.
 	// read_error_pacing_test.go is where the pacing itself is measured.
-	return NewDispatcher(rdr, pub, look, exec, nil, nil, Metrics{},
+	//
+	// The claimer CONFIRMS every live dispatch: every live command is confirmed before it
+	// actuates, so a dispatcher without one would refuse every live command these tests send.
+	// The confirmation itself is tested in the live-claim block below.
+	return NewDispatcher(rdr, pub, look, exec, nil, &fakeClaimer{won: true}, Metrics{},
 		Options{ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 }
 
@@ -207,6 +213,12 @@ type fakeClaimer struct {
 	err      error // if set, the claim could not be established at all
 	claimed  []string
 	observer func() // called inside Claim, to observe the world AT claim time (e.g. ops run so far)
+
+	// The LIVE-path confirmation (ClaimDispatch). Zero values confirm.
+	live     []liveClaim
+	liveLost bool   // the envelope's dispatch is stale: answer lost
+	liveErr  error  // the confirmation could not be established
+	onLive   func() // called inside ClaimDispatch, to observe (or change) the world at claim time
 }
 
 // Claim answers with a nonce that VARIES per claim rather than a fixed string, for the reason
@@ -234,6 +246,42 @@ func (c *fakeClaimer) claims() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.claimed...)
+}
+
+// liveClaim is one LIVE-path confirmation the dispatcher asked for: the command and the
+// envelope nonce it quoted.
+type liveClaim struct {
+	commandToken string
+	nonce        string
+}
+
+// ClaimDispatch is the stand-in for command-delivery's confirmCommandDispatch. Its knobs are
+// separate from the drain claim's (liveLost, liveErr) so a test can stage one path's outcome
+// without changing the other's. It answers a nonce that VARIES per call and differs from the
+// one quoted, as the real rotation does: a fake that echoed the envelope's value back could not
+// tell a response quoting the confirmed nonce from one quoting the stale one.
+func (c *fakeClaimer) ClaimDispatch(_ context.Context, _, commandToken, dispatchNonce string) (string, bool, error) {
+	c.mu.Lock()
+	c.live = append(c.live, liveClaim{commandToken: commandToken, nonce: dispatchNonce})
+	nonce := fmt.Sprintf("confirmed-nonce-%d", len(c.live))
+	obs, lost, err := c.onLive, c.liveLost, c.liveErr
+	c.mu.Unlock()
+	if obs != nil {
+		obs()
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if lost {
+		return "", false, nil
+	}
+	return nonce, true, nil
+}
+
+func (c *fakeClaimer) liveClaims() []liveClaim {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]liveClaim(nil), c.live...)
 }
 
 // parkCall records ONE call to the parker, with every argument it carried. The arguments are
@@ -388,43 +436,6 @@ func TestDrainDispatchesHeldCommands(t *testing.T) {
 		"each drained command names its OWN dispatch; one nonce for both would settle the wrong one")
 }
 
-// TestDrainSkipsCommandAlreadyDispatchedLive is the drain/live dedup guard: a command the live path
-// just dispatched must NOT be re-actuated when a drain fetches its PARKED row moments later.
-func TestDrainSkipsCommandAlreadyDispatchedLive(t *testing.T) {
-	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
-	pub := &fakePublisher{}
-	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
-	ff := &fakeFetcher{cmds: []DrainCommand{
-		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked}, // already fired live
-		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},           // fresh
-	}}
-	d := NewDispatcher(nil, pub, look, exec, ff, &fakeClaimer{won: true}, Metrics{}, Options{})
-
-	// The live path dispatches c1 first (marks it dispatched).
-	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, newAck()))
-	// Then a wake drain fetches c1 + c2: c1 must be skipped, only c2 dispatched.
-	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
-
-	assert.Equal(t, 2, exec.callCount(), "live c1 (1) + drain c2 (1); c1 is NOT re-actuated by the drain")
-}
-
-// TestDedupIsTenantScoped is the cross-tenant suppression guard (Blocker 1): device tokens and
-// command tokens are only per-tenant unique (ADR-042), so two tenants can each have device "pump-1"
-// carrying command "c1". One tenant's dispatch must NOT suppress the other's — else the second
-// tenant's command is acked without executing and silently lost.
-func TestDedupIsTenantScoped(t *testing.T) {
-	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
-	pub := &fakePublisher{}
-	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive, "globex/pump-1": ReachLive}}
-	d := newDispatcher(nil, pub, look, exec)
-
-	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"a"}`, newAck()))
-	d.dispatch(context.Background(), liveWorkTok("globex", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"b"}`, newAck()))
-
-	assert.Equal(t, 2, exec.callCount(), "a second tenant's identically-tokened command is not suppressed")
-	assert.Len(t, pub.responses(), 2, "both tenants' commands publish a response")
-}
-
 // TestDrainStopsWhenDeviceDropsMidDrain proves a device dropping mid-drain stops the drain cleanly —
 // the remaining commands are never dispatched to a dead conn, and are still there to deliver on the
 // next wake.
@@ -508,9 +519,9 @@ func TestDrainTriggerNoOpOnStandby(t *testing.T) {
 // 🔴 A command is a PHYSICAL ACTUATION, and the delivery sweep publishes anything still
 // DISPATCHABLE. So a drain that fired a HELD command's CoAP op without first taking the row
 // out of that set would leave it for the next sweep tick to publish down the live path — the
-// valve opened a second time. The in-memory dedupe does NOT cover this: it is per-pod and
-// TTL-bounded, so it says nothing about another replica or about this pod after a restart,
-// which are exactly the situations a leadership change produces.
+// valve opened a second time. Nothing held in one pod's memory could cover this: it would say
+// nothing about another replica or about this pod after a restart, which are exactly the
+// situations a leadership change produces.
 //
 // These four tests pin the ordering and all three of its outcomes. The two "must not
 // actuate" branches (claim lost, claim errored) are the ones a fake that just returned
@@ -660,35 +671,6 @@ func TestDispatchLiveExecutesPublishesAcks(t *testing.T) {
 	assert.Equal(t, "cmd-pump-1", resp[0].CommandToken)
 	assert.True(t, resp[0].Success)
 	assert.True(t, ack.acked(), "a dispatched command is acked (seal-fate)")
-}
-
-// TestDispatchLiveEchoesTheDispatchNonce pins the return half of the wire contract on the live
-// path: this adapter answers on the device's behalf, so it must quote the nonce it was handed.
-//
-// 🔴 WITHOUT IT EVERY LwM2M COMMAND WOULD ACTUATE AND THEN NEVER SETTLE. command-delivery
-// refuses a response that names no dispatch, so the row would stay SENT until its TTL dragged
-// it to TIMEOUT — "delivered, and the device never answered" — for a command the device
-// carried out and reported on. The test asserts the value, not merely its presence: a
-// hard-coded or re-minted nonce names a dispatch nobody is holding and is refused just the
-// same.
-func TestDispatchLiveEchoesTheDispatchNonce(t *testing.T) {
-	ack := newAck()
-	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
-	pub := &fakePublisher{}
-	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
-	d := newDispatcher(nil, pub, look, exec)
-
-	msg := cmdMsgNonce("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`,
-		"nonce-live-7", ack)
-	var env deliveryEnvelope
-	require.NoError(t, json.Unmarshal(msg.Value, &env))
-
-	d.dispatch(context.Background(), work{msg: msg, tenant: "acme", env: env})
-
-	resp := pub.responses()
-	require.Len(t, resp, 1, "a response is published")
-	assert.Equal(t, "nonce-live-7", resp[0].DispatchNonce,
-		"the outcome must name the dispatch it answers, quoted from the envelope it arrived in")
 }
 
 func TestDispatchNotServedAcksNoResponse(t *testing.T) {
@@ -921,8 +903,8 @@ func TestCommandWithNoDispatchNonceIsNotParked(t *testing.T) {
 	m := parkMetrics()
 	d := NewDispatcher(nil, &fakePublisher{}, look, &fakeExecutor{}, nil, nil, m, Options{Parker: parker})
 
-	// liveWorkTok stamps no nonce — the pre-nonce wire shape.
-	d.dispatch(context.Background(), liveWorkTok("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, ack))
+	// An explicit empty nonce — the nonce-less wire shape.
+	d.dispatch(context.Background(), liveWorkNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "", ack))
 
 	assert.Empty(t, parker.parks(), "a command with no dispatch nonce must NOT be parked — there is nothing to match on")
 	assert.True(t, ack.acked(), "it is ack-dropped exactly as it was before parking existed")
@@ -1284,7 +1266,7 @@ func TestProcessStillActuatesWhenTheGateSaysLive(t *testing.T) {
 
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
-	d := NewDispatcher(nil, &fakePublisher{}, look, exec, nil, nil, Metrics{}, live())
+	d := NewDispatcher(nil, &fakePublisher{}, look, exec, nil, &fakeClaimer{won: true}, Metrics{}, live())
 	w := liveWorkTok("acme", "pump-1", "c1", CommandWrite, `{"path":"/5/0/1","value":"u"}`, &fakeAck{})
 	d.process(context.Background(), task{deviceToken: "pump-1", live: &w})
 	assert.Equal(t, 1, exec.callCount(), "a live tenant's command must still actuate")

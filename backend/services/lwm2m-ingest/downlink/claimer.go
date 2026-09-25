@@ -43,9 +43,13 @@ type claimResponse struct {
 // It exists because the delivery sweep publishes anything still dispatchable. A drain that
 // dispatched a HELD row without first claiming it would leave that row HELD for the next
 // sweep tick to publish down the live path — and a command is a PHYSICAL ACTUATION, so that
-// is a valve opened twice, not a duplicate log line. The dispatcher's in-memory dedupe does
-// not close this: it is per-pod and TTL-bounded, so it cannot be what stands between a
-// leadership change and a duplicate actuation.
+// is a valve opened twice, not a duplicate log line. Only a claim on the row can close this:
+// anything held in one pod's memory says nothing about another replica, or about this pod
+// after a restart, which are exactly the two situations a leadership change produces.
+//
+// It also claims on the LIVE path (ClaimDispatch): a command that arrived on the delivery
+// stream is confirmed on its row immediately before it actuates, so a late or redelivered
+// envelope is discarded rather than carried out a second time.
 //
 // 🔴 THAT ARGUMENT IS HELD's, AND A PARKED ROW DOES NOT INHERIT IT — which is why the sentence
 // above names HELD and this one exists rather than the wording being widened. The sweep
@@ -96,6 +100,55 @@ func (c *CommandClaimer) Claim(ctx context.Context, tenant, commandToken string)
 	}
 	if *resp.DispatchNonce == "" {
 		return "", false, fmt.Errorf("downlink: claim command %q: the claim was granted with no dispatch nonce", commandToken)
+	}
+	return *resp.DispatchNonce, true, nil
+}
+
+// confirmDispatchMutation confirms a command received on the live delivery stream immediately
+// before actuating it, quoting the envelope's dispatch nonce. It is command-delivery's
+// confirmCommandDispatch, and it answers with the NEW nonce the confirmation rotated the row
+// to, or null when the envelope names a dispatch the row is no longer on.
+//
+// Field names are pinned to command-delivery's schema, for the reason claimMutation's are.
+const confirmDispatchMutation = `mutation($token: String!, $dispatchNonce: String!) {
+  confirmCommandDispatch(token: $token, dispatchNonce: $dispatchNonce)
+}`
+
+// confirmDispatchResponse decodes the mutation's single nullable-string field.
+type confirmDispatchResponse struct {
+	DispatchNonce *string `json:"confirmCommandDispatch"`
+}
+
+// ClaimDispatch is the LIVE-path claim: it confirms that the dispatch a delivery envelope names
+// is still the command's current one, and reports whether this caller may actuate it, along
+// with the NEW dispatch nonce it must quote when it publishes the outcome.
+//
+// 🔴 WHY THE LIVE PATH CLAIMS. An envelope can arrive late — redelivered after it waited out
+// its ack deadline behind a slow device, redelivered to a new leader, or pulled for the first
+// time long after it was published because no replica was reading. By then the platform may
+// have re-armed the command and a wake drain may have carried it out. The confirmation is
+// predicated on the envelope's nonce and rotates it, so a late copy names a dispatch that no
+// longer exists and loses; so does every redelivered copy after the first confirmation.
+//
+// 🔴 THE RESPONSE QUOTES THE RETURNED NONCE, NOT THE ENVELOPE'S. The confirmation moves the
+// row onto a new dispatch, and command-delivery matches an answer against the row's CURRENT
+// nonce, so an answer quoting the envelope's value would be refused and the command would
+// time out.
+//
+// The three outcomes are Claim's, and are treated the same way: (nonce, true, nil) actuate;
+// ("", false, nil) LOST — do not actuate; (_, _, err) unknown — do not actuate. A won
+// confirmation with an empty nonce is an error, for Claim's reason.
+func (c *CommandClaimer) ClaimDispatch(ctx context.Context, tenant, commandToken, dispatchNonce string) (string, bool, error) {
+	var resp confirmDispatchResponse
+	if err := c.client.Query(ctx, c.baseURL, tenant, confirmDispatchMutation,
+		map[string]any{"token": commandToken, "dispatchNonce": dispatchNonce}, &resp); err != nil {
+		return "", false, fmt.Errorf("downlink: confirm dispatch of command %q: %w", commandToken, err)
+	}
+	if resp.DispatchNonce == nil {
+		return "", false, nil
+	}
+	if *resp.DispatchNonce == "" {
+		return "", false, fmt.Errorf("downlink: confirm dispatch of command %q: the confirmation was granted with no dispatch nonce", commandToken)
 	}
 	return *resp.DispatchNonce, true, nil
 }

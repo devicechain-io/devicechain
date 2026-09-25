@@ -205,11 +205,10 @@ trading presence-write volume for a bounded telemetry blackout.
   `concurrency` (default 16) is the device-sharded worker count, which sets cross-device
   parallelism only — a single device's commands always run in stream order.
 
-Service coordinates come from the shared infrastructure config, and they are **not**
-uniformly fail-open. `deviceManagement` and `deviceState` are required (without them the
-adapter would refuse every registration, or could mint stale-rejected epochs across a
-clock step-back). `commandDelivery` is fail-**open**: absent, the wake drain is simply
-disabled and offline commands ride their TTL.
+Service coordinates come from the shared infrastructure config. `deviceManagement`,
+`deviceState` and `commandDelivery` are required (without them the adapter would refuse every registration, could mint
+stale-rejected epochs across a clock step-back, or could actuate no command at all, since
+every command is confirmed with command-delivery before it reaches a device).
 
 ## Denial-of-service posture
 
@@ -241,7 +240,7 @@ string. The families are:
 | `registrations_*`, `registration_updates_total`, `deregistrations_total`, `registration_expiries_total`, `active_registrations`, `shadows_reconstructed_total`, `presence_*`, `auth_errors_total`, `bad_requests_total` | `/rd` and presence, including failover reconstruction |
 | `notifies_received_total`, `notify_*`, `observe_*`, `active_observations`, `measurements_emitted_total`, `telemetry_*` | Observe/Notify decode and the measurement ingest path |
 | `ingest_messages_shed_total`, `ingest_samples_shed_total` | the per-tenant ingest ceiling |
-| `commands_*`, `command_park_*`, `command_drain_*`, `command_response_publish_failures_total` | downlink dispatch, park and wake-drain (see [COMMANDS.md](COMMANDS.md)) |
+| `commands_*`, `command_park_*`, `command_drain_*`, `command_live_claim_errors_total`, `command_response_publish_failures_total` | downlink dispatch, park and wake-drain (see [COMMANDS.md](COMMANDS.md)) |
 
 Labels are deliberately sparse (the ADR-023 cardinality lesson): **none is labeled by
 tenant or device.** `coap_requests_total{code}` is narrower than its name suggests — it

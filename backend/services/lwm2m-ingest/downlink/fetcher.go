@@ -64,7 +64,7 @@ const (
 // PARKED. A SENT row was ambiguous: either a hold awaiting this drain, or a command
 // dispatched moments ago and still unanswered — and the query could not tell them apart, so
 // this package dispatched out of SENT WITHOUT CLAIMING, which was the platform's only
-// unclaimed dispatch. Nothing but a 60-second per-pod dedup cache stood between that and
+// unclaimed dispatch. Nothing but a per-pod cache of recent dispatches stood between that and
 // actuating a device twice. Now the ambiguity is resolved before the query runs: a command
 // that went nowhere is PARKED, and every row this drain sees is claimed before it actuates.
 //
@@ -99,16 +99,14 @@ func drainable(status string) bool {
 // instant it wakes.
 //
 // It is ALSO the page size now: drainableCommands orders oldest-first in the database, so the
-// N rows it returns ARE the oldest N. There is deliberately no over-fetch, and the two ways a
-// row can be skipped inside the drain loop do NOT create one:
+// N rows it returns ARE the oldest N. There is deliberately no over-fetch, and the one way a
+// row can be skipped inside the drain loop does NOT create one: a LOST claim means another
+// actor already moved the row out of the dispatchable set, so it is no longer drainable. (A
+// row the live path just dispatched is SENT, which is not in drainStatuses, so it was never
+// on this page.)
 //
-//   - the per-pod dedupe cache (dispatcher.go) suppresses a row the live path just dispatched
-//     — but such a row is SENT, so it is not in drainStatuses and was never on this page;
-//   - a LOST claim means another actor already moved the row out of the dispatchable set, so
-//     it is likewise no longer drainable.
-//
-// In both cases the skipped row is one that has left the set, not a slot stolen from a row
-// that still needs delivering. What is genuinely left over — a device with a deeper backlog
+// The skipped row is one that has left the set, not a slot stolen from a row that still
+// needs delivering. What is genuinely left over — a device with a deeper backlog
 // than this cap — drains on its next Register/Update, which was always true.
 const maxDrainPerWake = 32
 

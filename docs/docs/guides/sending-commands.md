@@ -205,15 +205,17 @@ call off, see [Commanding a fleet](./commanding-a-fleet.md). It is not a loop of
 mutation: it pins the group's membership as of the moment it fires, records which devices
 were refused and why, and cancels as one operation.
 
-## Four operations that are not for you {#operations-that-are-not-for-you}
+## Five operations that are not for you {#operations-that-are-not-for-you}
 
-`markCommandSent`, `releaseHeldCommands` and `parkCommand` appear on this schema but are
-gated on **system-tier** authorities (`command:claim`, `command:wake` and `command:park`)
-that a tenant access token does not carry. They exist for transports that own a device's
-connection — an LwM2M device draining its backlog over the session it just opened, a broker
-reporting that a device came back, or a transport handing a command back because the device
-it was published toward turned out to be unreachable — and calling them from an application
-would fight the delivery sweep for control of a physical actuation.
+`markCommandSent`, `confirmCommandDispatch`, `releaseHeldCommands` and `parkCommand` appear on
+this schema but are gated on **system-tier** authorities (`command:claim` for the first two,
+`command:wake` and `command:park`) that a tenant access token does not carry. They exist for
+transports that own a device's connection — an LwM2M device draining its backlog over the
+session it just opened, an LwM2M adapter confirming a delivery is still current immediately
+before carrying it out, a broker reporting that a device came back, or a transport handing a
+command back because the device it was published toward turned out to be unreachable — and
+calling them from an application would fight the delivery sweep for control of a physical
+actuation.
 
 `drainableCommands` is the read those transports do first, and it is gated on
 **`command:claim`** — the same authority as `markCommandSent` rather than a fourth one of its
