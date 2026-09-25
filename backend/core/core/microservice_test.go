@@ -265,7 +265,7 @@ func TestFailNowExitsNonZeroAfterStartup(t *testing.T) {
 	codes := captureExit(t)
 	ms := runnable(t, NewNoOpLifecycleCallbacks())
 
-	go ms.FailNow(errors.New("the leadership supervisor stopped"))
+	ms.FailNow(errors.New("the leadership supervisor stopped"))
 	err := ms.reportOutcome(ms.waitForShutdown())
 
 	require.Error(t, err)
@@ -290,7 +290,7 @@ func TestFailNowKeepsItsErrorThroughAFullyCleanTeardown(t *testing.T) {
 	// same send reports success.
 	ms := runnable(t, NewNoOpLifecycleCallbacks())
 
-	go ms.FailNow(errors.New("irrecoverable"))
+	ms.FailNow(errors.New("irrecoverable"))
 	err := ms.waitForShutdown()
 
 	require.Error(t, err, "a clean Stop/Terminate swallowed the failure that caused the shutdown")

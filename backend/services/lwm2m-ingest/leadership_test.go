@@ -465,17 +465,11 @@ func TestTheLeadershipLoopStopsAndLeavesThePartitionTakeableWhenTheFuseBlows(t *
 // that release is written over) the two tests in nats_shutdown_test.go establish. Microservice
 // .FailNow runs that teardown and still exits non-zero.
 //
-// The observable here is that the error reaches FailNow at all. What it does NOT pin is the `go`,
-// and that gap is stated rather than papered over: this Microservice never started, so FailNow
-// reports the outcome and returns instead of tearing anything down, and it returns just as
-// promptly with the `go` removed. Core's own FailNow tests do not close it either — they pin that
-// FailNow runs the hooks and exits non-zero, which is a property of core, whereas the `go` is
-// about THIS service's own shape: beforeMicroserviceStopped waits on leadershipDone, and the
-// goroutine that closes leadershipDone is the one calling failProcess. Drop the `go` and that
-// goroutine parks inside FailNow, <-leadershipDone never fires, the teardown budget expires, and
-// the process exits 1 over an undrained NATS connection. A delayed, untidy exit — not a split
-// brain — which is why the gap is recorded here instead of being closed with a fake microservice
-// that could not exhibit it anyway.
+// The observable here is that the error reaches FailNow at all. That calling it from the
+// leadership goroutine — the one beforeMicroserviceStopped waits on through leadershipDone — does
+// not park that goroutine inside the teardown is FailNow's own contract now, and it lives in core:
+// TestFailNowFromAGoroutineTheTeardownWaitsOnExitsWithItsOwnError pins that FailNow returns at once
+// and the outcome is the caller's error rather than an expired teardown budget.
 func TestFailProcessHandsTheErrorToTheMicroservice(t *testing.T) {
 	prev := Microservice
 	t.Cleanup(func() { Microservice = prev })

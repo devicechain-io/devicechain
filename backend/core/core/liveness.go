@@ -31,12 +31,11 @@ type livenessFailure struct {
 // restarts it into the same wait, which makes the outage worse. Those states belong
 // in readiness or in the component's own retry loop.
 //
-// Contrast FailNow, which ends the process at once with a non-zero status. MarkNotLive
-// leaves the decision to the kubelet, which lets it run from a callback that must not
-// block (FailNow runs the whole teardown on the caller's goroutine) and costs one
-// liveness window before the restart. Both are chosen on purpose: FailNow for a
-// component that knows the process must go now, MarkNotLive for one that knows only
-// that it cannot recover.
+// Contrast FailNow, which ends the process now and reports a non-zero exit. MarkNotLive
+// leaves the restart to the kubelet, which costs one liveness window before it happens
+// and exits however the kubelet's kill does. Both are safe from a callback that must not
+// block. Both are chosen on purpose: FailNow for a component that knows the process must
+// go now, MarkNotLive for one that knows only that it cannot recover.
 //
 // It is a one-way latch and the FIRST reason wins; later calls change nothing and log
 // nothing, so a condition reported from several places produces one ERROR, not a

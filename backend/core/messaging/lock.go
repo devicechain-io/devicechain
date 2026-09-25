@@ -94,7 +94,7 @@ func (l *DistributedLock) WithLock(ctx context.Context, name string, logic func(
 		// the lock, so a Get-then-Delete race can never drop someone else's hold.
 		if derr := l.kv.Delete(key, nats.LastRevision(rev)); derr != nil {
 			log.Debug().Err(derr).Str("lock", name).
-				Msg("Distributed lock already released or taken over; nothing to delete.")
+				Msg("Distributed lock release did not delete its entry (it expired and was retaken, or the broker refused the delete).")
 		}
 	}()
 

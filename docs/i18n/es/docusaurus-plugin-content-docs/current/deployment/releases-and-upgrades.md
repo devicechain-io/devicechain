@@ -1612,6 +1612,9 @@ motor de detección se pone al día». Si un conector de un
 inquilino publica en un bróker o endpoint con dirección privada, incluidos MSK, Amazon MQ o un
 endpoint de interfaz de SNS/SQS, lea «Los conectores ya no pueden llegar a direcciones privadas, y
 el servicio de conectores tiene clientes nuevos» antes de actualizar.
+Si sus valores fijan `checkpointIntervalSeconds` de `event-processing` por encima de 30, redúzcalo
+antes de actualizar (vea «`checkpointIntervalSeconds` tiene un máximo de 30, y algunos fallos
+silenciosos ahora avisan»).
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -2033,6 +2036,35 @@ Dos cosas mejoran como efecto secundario. Un bróker de Kafka que está inaccesi
 se reintenta en lugar de acabar en la cola de mensajes no entregados como `invalid`. Y el binario
 del servicio de conectores, que es la mayor parte de su imagen, ocupa alrededor de un tercio de lo
 que ocupaba.
+
+#### `checkpointIntervalSeconds` tiene un máximo de 30, y algunos fallos silenciosos ahora avisan
+
+`event-processing` ahora se niega a arrancar cuando `checkpointIntervalSeconds` es mayor que 30. El
+motor de detección confirma su entrada solo cuando guarda un punto de control, así que un intervalo
+cercano o superior a la ventana de confirmación de 60 segundos del bróker retenía los mensajes de
+un flujo tranquilo hasta que el bróker los volvía a entregar y, tras cinco ventanas, los contaba
+como entregas agotadas, lo que dispara `ReplayCoveredDeliveriesExhausted` con un motor sano. 30
+deja margen para el propio punto de control. El límite es un rechazo al
+arrancar y no una comprobación del chart, así que `helm upgrade` con un valor mayor tiene éxito y
+después el pod no arranca. Si sus valores lo fijan más alto, redúzcalo antes de actualizar. El valor
+predeterminado (10) no se ve afectado.
+
+Algunos fallos que eran silenciosos con el nivel de registro predeterminado ahora registran un
+aviso:
+
+- un muestreo fallido del tamaño y la replicación de un flujo o de un bucket KV, o de la pérdida sin
+  leer de un consumidor;
+- un muestreo fallido del retraso del consumidor del motor de detección;
+- una autenticación de dispositivo en el bróker que falló por un motivo distinto de la propia
+  credencial del dispositivo: el almacén de credenciales falla, o una credencial almacenada no
+  tiene secreto y por tanto nunca puede autenticar.
+
+Un dispositivo que presenta una credencial incorrecta, desconocida, caducada o revocada sigue
+registrándose solo en depuración. Durante una caída del bróker, los avisos de muestreo se repiten en
+cada pasada, aproximadamente cada 30 segundos por flujo; un muestreo interrumpido por un apagado se
+queda en depuración. Durante una caída del almacén de credenciales (la base de datos), el aviso de
+autenticación se repite una vez por cada intento de conexión de un dispositivo, así que una flota
+que se reconecta durante la caída registra un aviso por intento.
 
 ### La transición única a la ingesta duradera
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // Default checkpoint cadence (ADR-051). The DETECT engine holds window/timer state
@@ -126,7 +127,11 @@ type EventProcessingConfiguration struct {
 	CheckpointEvents int
 
 	// CheckpointIntervalSeconds is the maximum wall-clock time between snapshot
-	// commits, so a quiet stream still checkpoints. Unset (0) defaults to 10s.
+	// commits, so a quiet stream still checkpoints. Unset (0) defaults to 10s. It must
+	// be at most half of messaging.AckWait: the engine acknowledges its input only when
+	// it checkpoints, so an interval near or past the broker's acknowledgement window
+	// redelivers messages, and half leaves room for the checkpoint itself. See
+	// validateCheckpointInterval.
 	CheckpointIntervalSeconds int
 
 	// WatermarkLatenessSeconds is the event-time out-of-orderness tolerance: how far the
@@ -272,16 +277,48 @@ func (c *EventProcessingConfiguration) RetiredConfigKeys() map[string]string {
 	}
 }
 
+// checkpointIntervalCeiling is the longest checkpoint interval, in whole seconds, whose held
+// messages are still acknowledged before the broker redelivers them: half of ackWait, which
+// leaves room for the checkpoint tick, the snapshot save and the detection publish. It is
+// derived from AckWait rather than written down, so the two cannot drift apart.
+func checkpointIntervalCeiling(ackWait time.Duration) int {
+	return int(ackWait / 2 / time.Second)
+}
+
+// validateCheckpointInterval refuses a non-positive interval and one past the ceiling.
+//
+// 🔴 A REFUSAL, NOT A SOFT CAP. The detection engine acknowledges its input only when it
+// checkpoints, so on a quiet stream every message is held until the interval elapses. Past
+// the acknowledgement window each is delivered again, and after MaxDeliver windows it is
+// counted as an exhausted delivery — on a perfectly healthy engine. Clamping would run with
+// a value the operator did not write; refusing at startup says so.
+//
+// The comparison is in SECONDS: converting secs to a Duration first would overflow for a
+// huge value and wrap to something that passes.
+func validateCheckpointInterval(secs int, ackWait time.Duration) error {
+	if secs <= 0 {
+		return fmt.Errorf("checkpointIntervalSeconds must be positive, got %d", secs)
+	}
+	if ceiling := checkpointIntervalCeiling(ackWait); secs > ceiling {
+		return fmt.Errorf("checkpointIntervalSeconds must be at most %d (half the broker's %s acknowledgement "+
+			"window), got %d: messages are acknowledged only at a checkpoint, so an interval near or past the window "+
+			"redelivers them and, after repeated windows, reports them as exhausted deliveries; half the window "+
+			"leaves room for the checkpoint itself", ceiling, ackWait, secs)
+	}
+	return nil
+}
+
 // Validate is the ADR-022 decision-1 validation hook. It rejects a non-positive
 // checkpoint cadence (fail closed): a zero/negative threshold would either never
 // checkpoint or checkpoint every event, both of which break the ack-on-checkpoint
-// contract or its write-amplification bound.
+// contract or its write-amplification bound. It also rejects a checkpoint interval
+// longer than half the broker's acknowledgement window (validateCheckpointInterval).
 func (c *EventProcessingConfiguration) Validate() error {
 	if c.CheckpointEvents <= 0 {
 		return fmt.Errorf("checkpointEvents must be positive, got %d", c.CheckpointEvents)
 	}
-	if c.CheckpointIntervalSeconds <= 0 {
-		return fmt.Errorf("checkpointIntervalSeconds must be positive, got %d", c.CheckpointIntervalSeconds)
+	if err := validateCheckpointInterval(c.CheckpointIntervalSeconds, messaging.AckWait); err != nil {
+		return err
 	}
 	// The per-tenant budgets fail closed: a negative ceiling is rejected rather than silently treated
 	// as unlimited (ADR-023 — an unset budget defaults to the platform ceiling in ApplyDefaults, never

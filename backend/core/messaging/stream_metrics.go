@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -291,10 +292,23 @@ func currentPeers(info *nats.StreamInfo) int {
 	return n
 }
 
+// sampleFailureLog is the level a failed broker sample is logged at: warn, because a
+// sample that silently stops arriving is broker trouble an operator should see, unless
+// ctx has been cancelled — a sampler told to stop fails every request in flight, and a
+// warning per stream on every rollout would teach operators to ignore the real ones.
+func sampleFailureLog(ctx context.Context) *zerolog.Event {
+	if ctx.Err() != nil {
+		return log.Debug()
+	}
+	return log.Warn()
+}
+
 // sample polls each stream and KV bucket once and updates its gauges, emitting an
 // edge-triggered warning when a stream crosses the near-full threshold. A
-// per-stream StreamInfo error is logged at debug and skipped (a transient broker
-// hiccup should not spam or stall the sampler).
+// per-stream StreamInfo error is logged at warn and skipped: it does not stall the
+// sampler, but a sample that silently stops arriving hides exactly the broker trouble
+// these gauges exist to show. A failure caused by the pass being cancelled (shutdown)
+// stays at debug, so a rollout does not print a warning per stream.
 //
 // Buckets deliberately get the replication triple and NOT the fill gauges, even
 // though a KV bucket is a stream and its fill is just as real. The reason is the
@@ -314,9 +328,9 @@ func currentPeers(info *nats.StreamInfo) int {
 // broker that has stopped answering a pass over a dozen streams and buckets is that
 // wait a dozen times over, all of it inside the join that shutdown blocks on.
 //
-// The per-name error handling is unchanged for a cancelled pass — a cancelled
-// StreamInfo is an error like any other, logged at debug and skipped — but the loops
-// then stop rather than working through the remaining names to fail identically on
+// The per-name error handling is the same for a cancelled pass — a cancelled
+// StreamInfo is skipped like any other failure, though logged at debug rather than
+// warn (see sampleFailureLog) — but the loops then stop rather than working through the remaining names to fail identically on
 // each. Note this DROPS the replication series for the names not reached, which is
 // correct: they are dropped by forgetReplication on an ordinary failure too, and a
 // sampler that has been told to stop should not leave a gauge asserting a value it
@@ -334,7 +348,7 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 		}
 		info, err := js.StreamInfo(name, nats.Context(ctx))
 		if err != nil {
-			log.Debug().Err(err).Str("bucket", name).Msg("KV bucket replication sample failed")
+			sampleFailureLog(ctx).Err(err).Str("bucket", name).Msg("KV bucket replication sample failed")
 			m.forgetReplication(name)
 			continue
 		}
@@ -346,7 +360,7 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 		}
 		info, err := js.StreamInfo(name, nats.Context(ctx))
 		if err != nil {
-			log.Debug().Err(err).Str("stream", name).Msg("Stream utilization sample failed")
+			sampleFailureLog(ctx).Err(err).Str("stream", name).Msg("Stream utilization sample failed")
 			m.forgetReplication(name)
 			continue
 		}
@@ -440,7 +454,7 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamContext, info *nats.StreamInfo, d durableRef) {
 	ci, err := js.ConsumerInfo(d.stream, d.durable, nats.Context(ctx))
 	if err != nil {
-		log.Debug().Err(err).Str("stream", d.stream).Str("durable", d.durable).
+		sampleFailureLog(ctx).Err(err).Str("stream", d.stream).Str("durable", d.durable).
 			Msg("Durable unread-loss sample failed")
 		return
 	}

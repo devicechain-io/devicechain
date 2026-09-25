@@ -1515,6 +1515,8 @@ alerts by name, two new warnings are added: `RateLimiterOverflowInUse` and
 read "Outbound actions are no longer dropped when the detection engine catches up". If a tenant connector publishes to a broker or endpoint on a
 private address, including MSK, Amazon MQ or an SNS/SQS interface endpoint, read "Connectors can
 no longer reach private addresses, and the connectors service has new clients" before upgrading.
+If your values set `checkpointIntervalSeconds` for `event-processing` above 30, lower it before
+upgrading (see "`checkpointIntervalSeconds` is capped at 30, and some silent failures now warn").
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -1909,6 +1911,31 @@ What to check before upgrading:
 Two things improve as a side effect. A Kafka broker that is briefly unreachable is now retried
 rather than dead-lettered as `invalid`. And the connectors service's binary, which is most of its
 image, is about a third of its previous size.
+
+#### `checkpointIntervalSeconds` is capped at 30, and some silent failures now warn
+
+`event-processing` now refuses to start when `checkpointIntervalSeconds` is above 30. The
+detection engine acknowledges its input only when it checkpoints, so an interval near or past the
+broker's 60-second acknowledgement window held messages on a quiet stream until the broker
+delivered them again, and after five windows counted them as exhausted deliveries, which raises
+`ReplayCoveredDeliveriesExhausted` on a healthy engine. 30 leaves room for the checkpoint itself. The limit is a startup refusal rather than
+a chart check, so `helm upgrade` with a larger value succeeds and the pod then fails to start. If
+your values set it higher, lower it before upgrading. The default (10) is unaffected.
+
+Some failures that were silent at the default log level now log a warning:
+
+- a failed sample of a stream's or KV bucket's size and replication, or of a consumer's unread
+  loss;
+- a failed sample of the detection engine's consumer lag;
+- device authentication at the broker that failed for a reason other than the device's own
+  credential: the credential store failing, or a stored credential that has no secret and so can
+  never authenticate.
+
+A device presenting a wrong, unknown, expired or revoked credential is still logged only at debug.
+During a broker outage the sampling warnings repeat on every sampling pass, about every 30 seconds
+per stream; a sample interrupted by shutdown stays at debug. During a credential-store (database)
+outage the authentication warning repeats once per device connect attempt, so a fleet reconnecting
+through the outage logs one warning per attempt.
 
 ### The one-time durable-ingest cutover
 

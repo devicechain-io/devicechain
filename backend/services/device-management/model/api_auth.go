@@ -39,6 +39,25 @@ var (
 	ErrCredentialMisconfigured = errors.New("stored credential is missing required secret material")
 )
 
+// IsCredentialRefusal reports whether err is the DEVICE's wrong answer — nothing presented,
+// an unknown type, an unknown or revoked credential, an expired one, or a wrong secret —
+// as opposed to a failure on the platform's side. A refusal is routine traffic (a
+// misconfigured or stale device retries it forever) and callers log it quietly; anything
+// else is worth an operator's attention.
+//
+// 🔴 ErrCredentialMisconfigured IS DELIBERATELY NOT A REFUSAL. It is a defect in STORED
+// data — a credential that requires a secret and has none, so it can never authenticate —
+// and no device can fix it by answering differently. It must be seen by an operator, not
+// filed with the wrong-password noise. This is the ONE place that classification is made;
+// a caller that needs it asks here rather than listing the sentinels again.
+func IsCredentialRefusal(err error) bool {
+	return errors.Is(err, ErrCredentialNotPresented) ||
+		errors.Is(err, ErrCredentialTypeInvalid) ||
+		errors.Is(err, ErrCredentialNotResolved) ||
+		errors.Is(err, ErrCredentialExpired) ||
+		errors.Is(err, ErrCredentialSecretMismatch)
+}
+
 // PresentedCredential is the authentication material a connecting device offers,
 // carried inbound on the event from the transport (ADR-014). CredentialId is the
 // public identifier the device presents (access token, X.509 thumbprint, or MQTT

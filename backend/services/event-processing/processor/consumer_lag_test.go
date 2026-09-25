@@ -5,8 +5,12 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
 // countingProber is a Backlog probe that records how many times it was called, so the consumer-lag
@@ -49,4 +53,53 @@ func TestSampleConsumerLag(t *testing.T) {
 	// No probe wired (scaffold/test): skipped, no panic.
 	rp.backlogProbe = nil
 	rp.sampleConsumerLag(context.Background())
+}
+
+// consumerLagSkipLevels returns the level of every "Consumer-lag sample skipped" line
+// in captured.
+func consumerLagSkipLevels(captured string) []string {
+	var levels []string
+	for _, line := range strings.Split(captured, "\n") {
+		var entry struct {
+			Level   string `json:"level"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &entry) == nil &&
+			strings.HasPrefix(entry.Message, "Consumer-lag sample skipped") {
+			levels = append(levels, entry.Level)
+		}
+	}
+	return levels
+}
+
+// A lag gauge that has silently stopped refreshing is broker trouble an operator should
+// see, so a failed probe on a live context is a Warn; a probe that failed because the
+// processor is stopping stays at Debug, so a shutdown does not warn. Each case asserts
+// exactly one line at its level — a positive assertion, so a muted logger fails.
+func TestSampleConsumerLagWarnsOnlyWhileLive(t *testing.T) {
+	prev := zerolog.GlobalLevel()
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prev) })
+
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.backlogProbe = &countingProber{err: errors.New("broker unreachable")}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"live", context.Background(), "warn"},
+		{"cancelled", cancelled, "debug"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := logSink.Capture(t)
+			rp.sampleConsumerLag(tc.ctx)
+			if got := consumerLagSkipLevels(logs.String()); len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("want exactly one %s consumer-lag skip line, got %v\ncaptured:\n%s", tc.want, got, logs.String())
+			}
+		})
+	}
 }

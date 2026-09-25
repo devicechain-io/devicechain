@@ -197,7 +197,16 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	// could only ever be tenant-wide.
 	device, err := c.api.AuthenticateDevice(ctx, presented, c.now())
 	if err != nil {
-		log.Debug().Err(err).Str("tenant", tenant).Msg("Auth-callout rejected a device connection.")
+		// A device's wrong answer is routine and stays quiet. Anything else — the
+		// credential store failing, or a stored credential that can never authenticate
+		// — is invisible at Debug and is the operator's to fix, so it is a Warn. Either
+		// way the caller learns nothing but the generic refusal.
+		if model.IsCredentialRefusal(err) {
+			log.Debug().Err(err).Str("tenant", tenant).Msg("Auth-callout rejected a device connection.")
+		} else {
+			log.Warn().Err(err).Str("tenant", tenant).
+				Msg("Auth-callout could not authenticate a device connection: the credential store failed or holds a malformed credential.")
+		}
 		return "", genericAuthFailure
 	}
 	if device == nil || device.Token == "" {

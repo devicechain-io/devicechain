@@ -19,17 +19,17 @@ import (
 // through the production launch (launchDemoteLoop), the production recheck and
 // restartForRecoveredBroker, and the production stopBrokerPresence.
 //
-// 🔴 WHAT IT PINS IS THE `go` IN failProcess. restartForRecoveredBroker runs on the
-// demote-loop goroutine, which is the goroutine that closes rt.stopped; the teardown the
-// exit triggers runs stopBrokerPresence, which waits on rt.stopped. Called inline, the
-// loop goroutine parks inside the teardown it asked for, the wait runs out its
-// five-second cap, and every such exit is a stalled one.
+// What it pins: the recovered path reaches the exit carrying "reachable again", and the
+// demote loop ends. restartForRecoveredBroker runs on the demote-loop goroutine, which is
+// the goroutine that closes rt.stopped, and the teardown the exit triggers runs
+// stopBrokerPresence, which waits on rt.stopped.
 //
-// endProcess is replaced by a stand-in that calls stopBrokerPresence directly — standing
-// in for the part of Microservice.FailNow's teardown (beforeMicroserviceStopped) that
-// waits on this goroutine. So the teardown-ORDERING property rests on that stand-in: the
-// real FailNow is exercised separately, below, and there it only proves the error
-// reaches it.
+// endProcess is replaced by a stand-in that models Microservice.FailNow's contract: it
+// returns at once and runs the teardown (here, the stopBrokerPresence that
+// beforeMicroserviceStopped would run) on a goroutine of its own. That the REAL FailNow
+// behaves that way is core's property, pinned there
+// (TestFailNowFromAGoroutineTheTeardownWaitsOnExitsWithItsOwnError); this service no
+// longer carries its own `go`.
 func TestRecoveredBrokerFailureDoesNotParkTheDemoteLoop(t *testing.T) {
 	type outcome struct {
 		err     error
@@ -40,9 +40,11 @@ func TestRecoveredBrokerFailureDoesNotParkTheDemoteLoop(t *testing.T) {
 	prevEnd, prevPresence := endProcess, brokerPresence
 	t.Cleanup(func() { endProcess, brokerPresence = prevEnd, prevPresence })
 	endProcess = func(err error) {
-		started := time.Now()
-		stopBrokerPresence()
-		got <- outcome{err: err, elapsed: time.Since(started)}
+		go func() {
+			started := time.Now()
+			stopBrokerPresence()
+			got <- outcome{err: err, elapsed: time.Since(started)}
+		}()
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -60,8 +62,8 @@ func TestRecoveredBrokerFailureDoesNotParkTheDemoteLoop(t *testing.T) {
 		assert.Contains(t, o.err.Error(), "reachable again",
 			"the reason the pod is going away was lost on the way to the exit")
 		assert.Less(t, o.elapsed, 2*time.Second,
-			"stopBrokerPresence took %v: it waited out its cap on rt.stopped, so the exit ran on the "+
-				"demote-loop goroutine that closes it instead of off it", o.elapsed)
+			"stopBrokerPresence took %v: it waited out its cap on rt.stopped, so the demote loop "+
+				"never returned after reporting the exit", o.elapsed)
 	case <-time.After(15 * time.Second):
 		t.Fatal("a recovered broker never reached the process exit")
 	}

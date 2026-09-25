@@ -369,9 +369,9 @@ func (r *recheckBroker) Run(ctx context.Context, now time.Time) error {
 
 // restartForRecoveredBroker ends this pod's tap-less run by ending the process, so the
 // kubelet starts one that will dial the broker normally. It goes through failProcess —
-// Microservice.FailNow, off this goroutine — which is how lwm2m-ingest ends a run whose
-// transport died under it. It runs on the demote-loop goroutine, the one that closes
-// rt.stopped, which is why the off-goroutine half matters here; see failProcess.
+// Microservice.FailNow — which is how lwm2m-ingest ends a run whose transport died under
+// it. It runs on the demote-loop goroutine, the one that closes rt.stopped, which is safe
+// only because FailNow returns at once and tears down on its own goroutine; see failProcess.
 //
 // 🔑 IT IS NOT A RESTART LOOP, AND THE ASYMMETRY OF THE TWO WINDOWS IS WHAT GUARANTEES
 // THAT. The recheck window is strictly SHORTER than the startup window, so any broker the
