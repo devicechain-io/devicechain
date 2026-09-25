@@ -316,9 +316,10 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 	// to carry a minted id through, and a redelivery replays the raw publish, so only a
 	// value computed from the content itself converges on the same row every time.
 	//
-	// ProcessedTime is deliberately NOT part of the identity: it is when WE handled the
-	// message, so including it would make every redelivery a new event and defeat the
-	// dedup this exists to protect.
+	// ProcessedTime is deliberately NOT part of the identity: it is when the platform
+	// received the message, which a transport with no capture stream stamps afresh on
+	// every redelivery of the raw publish, so including it would make each such
+	// redelivery a new event and defeat the dedup this exists to protect.
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return nil, core.ErrNoTenant

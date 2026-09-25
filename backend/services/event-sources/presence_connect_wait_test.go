@@ -33,7 +33,7 @@ func TestDialSystemAccountRefusesAConnectionThatNeverConnects(t *testing.T) {
 	cfg.Auth.SysUser = "sys"
 	cfg.Auth.SysPassword = "sys"
 
-	conn, err := dialSystemAccount(context.Background(), cfg, 300*time.Millisecond)
+	conn, err := dialSystemAccount(context.Background(), cfg, 300*time.Millisecond, nil)
 	require.Nil(t, conn, "a dial that never reached the broker must hand back no connection to subscribe on")
 	require.Error(t, err, "a connection that never connected must be reported as a failure, not handed on "+
 		"for Subscribe to discover ten seconds later as a flush timeout")
@@ -51,7 +51,7 @@ func TestDialSystemAccountAcceptsAReachableBroker(t *testing.T) {
 	cfg.Auth.SysPassword = "sys"
 
 	start := time.Now()
-	conn, err := dialSystemAccount(context.Background(), cfg, 10*time.Second)
+	conn, err := dialSystemAccount(context.Background(), cfg, 10*time.Second, nil)
 	require.NoError(t, err, "a reachable broker must still be dialled")
 	require.NotNil(t, conn)
 	defer conn.Close()

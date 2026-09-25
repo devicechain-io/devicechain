@@ -38,6 +38,10 @@ import (
 type fakeUM struct {
 	srv  *httptest.Server
 	down atomic.Bool
+	// rate is acme's ingest ceiling in messages per second; zero serves 1000. A test
+	// that must observe a spent bucket sets it near zero, so the bucket cannot refill
+	// between the shed and the assertion that follows it.
+	rate float64
 }
 
 func newFakeUM(t *testing.T) *fakeUM {
@@ -58,8 +62,12 @@ func newFakeUM(t *testing.T) *fakeUM {
 			}}})
 			return
 		}
+		rate := um.rate
+		if rate == 0 {
+			rate = 1000
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"tenantGovernance": map[string]any{
-			"ingestMessagesPerSecond": 1000, "ingestBurst": 50, "shedPriority": nil, "purgeState": "active",
+			"ingestMessagesPerSecond": rate, "ingestBurst": 50, "shedPriority": nil, "purgeState": "active",
 		}}})
 	}))
 	t.Cleanup(um.srv.Close)
@@ -96,11 +104,11 @@ type ingestWiring struct {
 func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring {
 	t.Helper()
 	savedConfig, savedSources, savedMs := Configuration, EventSources, Microservice
-	savedLive, savedBacklog, savedShed := RateLimiter, BacklogRateLimiter, ShedPriorityResolver
+	savedLive, savedBacklog, savedHTTP, savedShed := RateLimiter, BacklogRateLimiter, HttpRateLimiter, ShedPriorityResolver
 	savedInbound, savedFailed := InboundEventsWriter, FailedDecodeWriter
 	t.Cleanup(func() {
 		Configuration, EventSources, Microservice = savedConfig, savedSources, savedMs
-		RateLimiter, BacklogRateLimiter, ShedPriorityResolver = savedLive, savedBacklog, savedShed
+		RateLimiter, BacklogRateLimiter, HttpRateLimiter, ShedPriorityResolver = savedLive, savedBacklog, savedHTTP, savedShed
 		InboundEventsWriter, FailedDecodeWriter = savedInbound, savedFailed
 	})
 
@@ -187,19 +195,20 @@ func TestHTTPSprayIsBoundedAndAuthenticatedTenantsAreNot(t *testing.T) {
 	for i := 0; i < 3000; i++ {
 		w.post(t, client, fmt.Sprintf("invented-%d", i))
 	}
-	confirmed, pooled, overflow := RateLimiter.BucketCounts()
+	confirmed, pooled, overflow := HttpRateLimiter.BucketCounts()
 	assert.Equal(t, 0, confirmed, "no invented name may get a confirmed allowance")
 	assert.Equal(t, 1024, pooled, "the pool is full and no larger")
 	assert.True(t, overflow, "names past the pool share the overflow allowance")
 	assert.Equal(t, float64(burst), w.metric(t, overflowMetric, nil),
 		"the overflow served exactly its one burst and counted each admission")
+	assertAuthenticatedLimitersUntouched(t)
 
 	// The one real tenant: once user-management confirms it, it is metered in an
 	// allowance of its own at its own ceiling (1000/s, burst 50), while an invented name
 	// at the same moment is still shed by the drained overflow.
 	require.Eventually(t, func() bool {
 		w.post(t, client, "acme")
-		c, _, _ := RateLimiter.BucketCounts()
+		c, _, _ := HttpRateLimiter.BucketCounts()
 		return c == 1
 	}, 10*time.Second, 20*time.Millisecond, "acme never got a confirmed allowance")
 	time.Sleep(100 * time.Millisecond) // 1000/s: its own bucket refills well past its burst
@@ -222,6 +231,108 @@ func TestHTTPSprayIsBoundedAndAuthenticatedTenantsAreNot(t *testing.T) {
 	assert.Zero(t, shed, "an authenticated tenant must never be metered in the untrusted pool")
 }
 
+// HTTP names its tenant in a path segment and the device credential is checked only
+// after the message is admitted, so anyone who can reach the port and knows a tenant's
+// name can post as that tenant. Those posts must spend an allowance of their own: had
+// they spent the one the tenant's devices spend, an HTTP flood would shed the tenant's
+// captured MQTT telemetry, and a shed capture message is ack-dropped, which is the
+// permanent loss of data the broker already PUBACKed to the device.
+//
+// Driven through the real buildRateLimiter and buildEventSources, so the wiring (which
+// limiter main hands the gate for HTTP) is what is under test, not only the gate.
+func TestHTTPFloodOnARealTenantDoesNotDropItsCapturedTelemetry(t *testing.T) {
+	um := newFakeUM(t)
+	um.rate = 0.001 // acme's own ceiling: burst 50, and effectively no refill
+	w := wireIngest(t, um, 0.001, 2)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Wait for user-management to confirm acme, then flood it over HTTP until it is shed.
+	require.Eventually(t, func() bool {
+		w.post(t, client, "acme")
+		c, _, _ := httpLimiter().BucketCounts()
+		return c == 1
+	}, 10*time.Second, 20*time.Millisecond, "acme was never resolved and shed over HTTP")
+	for i := 0; i < 200 && w.post(t, client, "acme"); i++ {
+	}
+	require.False(t, w.post(t, client, "acme"), "the HTTP flood must have spent acme's HTTP allowance")
+
+	// acme's devices are untouched by it: a caught-up capture-stream message, and one from
+	// an external MQTT broker (which passes no send time), are each still admitted.
+	assert.True(t, ingestGate("gw", "acme", time.Now(), false, processor.OriginAuthenticated),
+		"an HTTP flood naming acme must not shed acme's captured telemetry")
+	assert.True(t, ingestGate("mqtt-ext", "acme", time.Time{}, false, processor.OriginAuthenticated),
+		"an HTTP flood naming acme must not shed acme's external-broker telemetry")
+}
+
+// httpLimiter is the limiter HTTP ingest is metered in.
+func httpLimiter() *core.TenantRateLimiter { return HttpRateLimiter }
+
+// assertAuthenticatedLimitersUntouched pins that HTTP ingest reached neither of the
+// limiters authenticated traffic is metered in: no bucket, pooled or confirmed, and no
+// overflow.
+func assertAuthenticatedLimitersUntouched(t *testing.T) {
+	t.Helper()
+	for name, l := range map[string]*core.TenantRateLimiter{"live": RateLimiter, "backlog": BacklogRateLimiter} {
+		c, p, o := l.BucketCounts()
+		assert.Truef(t, c == 0 && p == 0 && !o,
+			"HTTP ingest reached the %s limiter (%d confirmed, %d pooled, overflow %v)", name, c, p, o)
+	}
+}
+
+// The contention floor sheds HTTP ingest exactly as it sheds live authenticated
+// traffic: HTTP is new ingress, judged at admission. At the deepest floor the fail-safe
+// bronze band keeps nothing, so HTTP is refused outright while the capture backlog,
+// which the floor never sheds, is still admitted.
+//
+// Both construction branches are driven: buildRateLimiter builds the HTTP limiter once
+// with user-management configured (the production branch) and once without, and a floor
+// dropped from either one is a separate defect.
+func TestTheContentionFloorShedsHTTPIngest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		um   func(t *testing.T) *fakeUM
+	}{
+		{"with user-management", newFakeUM},
+		{"without user-management", func(*testing.T) *fakeUM { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			um := tc.um(t)
+			w := wireIngest(t, um, 1000, 100)
+			Configuration.Contention.ManualFloor = 3
+			client := &http.Client{Timeout: 5 * time.Second}
+
+			// With user-management, a tenant is not shed until its priority has resolved (an
+			// unresolved one is admitted at its base ceiling; see shedAdjusted), and the first
+			// look-up only starts that resolution. So wait for the resolved case, then prove
+			// it is resolution and not an exhausted bucket that refuses: acme's ceiling of
+			// 1000/s refills faster than this loop can spend it.
+			//
+			// The condition does not fail the test itself: Eventually polls on its own
+			// goroutine, and a poll still in flight when the test ends would fail a finished
+			// test and panic the package instead of reporting this assertion.
+			shed := func() bool {
+				resp, err := client.Post(fmt.Sprintf("http://%s/inst-1/acme/events", w.addr),
+					"application/json", strings.NewReader("not json"))
+				if err != nil {
+					return false
+				}
+				_ = resp.Body.Close()
+				return resp.StatusCode == http.StatusTooManyRequests
+			}
+			require.Eventually(t, shed, 10*time.Second, 20*time.Millisecond,
+				"HTTP ingest must be shed at the deepest contention floor")
+			if um != nil {
+				_, resolved := ShedPriorityResolver.Resolve("acme")
+				require.True(t, resolved, "the shed must be the resolved priority's, not a spent bucket's")
+			}
+			assert.False(t, ingestGate("mqtt-ext", "acme", time.Time{}, false, processor.OriginAuthenticated),
+				"the counterweight: live authenticated traffic is shed at this floor too")
+			assert.True(t, ingestGate("gw", "acme", time.Now().Add(-time.Hour), false, processor.OriginAuthenticated),
+				"the capture backlog is never shed by the floor")
+		})
+	}
+}
+
 // With no user-management configured the spray is bounded just the same, and nothing is
 // counted as unresolved: with no authority, the platform default IS the answer.
 func TestHTTPSprayIsBoundedWithoutUserManagement(t *testing.T) {
@@ -231,10 +342,13 @@ func TestHTTPSprayIsBoundedWithoutUserManagement(t *testing.T) {
 	for i := 0; i < 3000; i++ {
 		w.post(t, client, fmt.Sprintf("invented-%d", i))
 	}
-	confirmed, pooled, overflow := RateLimiter.BucketCounts()
+	confirmed, pooled, overflow := HttpRateLimiter.BucketCounts()
 	assert.Equal(t, 0, confirmed)
 	assert.Equal(t, 1024, pooled)
 	assert.True(t, overflow)
+	assert.Equal(t, float64(2), w.metric(t, overflowMetric, nil),
+		"the HTTP limiter's overflow served its one burst and counted each admission")
+	assertAuthenticatedLimitersUntouched(t)
 	for _, cause := range []string{"pending", "unreachable", "unknown-tenant"} {
 		assert.Equalf(t, float64(0), w.metric(t, unresolvedMetric, map[string]string{"cause": cause}),
 			"cause %q: a static ceiling is not unresolved", cause)

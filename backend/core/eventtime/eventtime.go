@@ -47,8 +47,9 @@ import "time"
 // store-and-forward devices and is left to each consumer's bounded-lateness handling; there
 // is no honest ceiling on how old a buffered reading may legitimately be.
 //
-// The processed time is stamped by the server at ingest and travels immutably in the
-// payload, so the bound is deterministic under replay: re-running the same bytes a week
+// The processed time is stamped by the server at ingest (the time the platform received
+// the event, identical on every redelivery of a captured message) and travels immutably
+// in the payload, so the bound is deterministic under replay: re-running the same bytes a week
 // later yields the same instant it yielded live. Disabled — returning occurred unchanged —
 // when the processed time is unset or maxSkew is non-positive.
 func Effective(occurred, processed time.Time, maxSkew time.Duration) (time.Time, bool) {

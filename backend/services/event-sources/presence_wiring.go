@@ -31,10 +31,103 @@ import (
 var brokerPresence *presenceRuntime
 
 type presenceRuntime struct {
-	conn    *nats.Conn
+	conn *nats.Conn
+	// guard judges a close of conn: nil exactly when conn is (the demotion-only runtime).
+	guard   *sysConnGuard
 	stops   []func()
 	cancel  context.CancelFunc
 	stopped chan struct{}
+}
+
+// sysConnGuard decides what a close of the system-account connection means.
+//
+// That connection dials with MaxReconnects(-1), so the library closes it for good only
+// when something tells it to stop: this process, or the broker refusing the credential.
+// nats.go closes a connection itself on the second identical authorization error in a
+// row, so a broker that stops accepting the system-account credential ends it
+// permanently. With no handler, that left the pod Ready and live with presence frozen:
+// no advisories read, nothing asserted or released, nothing restarting it.
+//
+// An UNREQUESTED close of an ARMED connection therefore marks the process not live (the
+// same rule core/messaging applies to the data-plane connection), and Kubernetes restarts
+// the pod. The restart re-reads the mounted credential and dials again; if the broker
+// still refuses it, that startup dial fails, the tap turns off and releases the devices
+// this source asserted, and the recheck keeps trying. The restart converges instead of
+// looping, and that depends on the ARMED state:
+//
+// 🔴 THE GUARD IS ARMED ONLY ONCE THE RUNNING TAP OWNS THE CONNECTION. The library's own
+// close for a refused credential also happens DURING THE STARTUP DIAL (the dial retries
+// under RetryOnFailedConnect and is refused twice), and a handler armed there would mark
+// every restart not live for as long as the credential stayed refused — a crash loop, not
+// one restart. Before arming, a close is the dial's to report, as an error, and the dial
+// does. The recheck dial gets no guard at all: a refused credential on a recheck must
+// never touch liveness.
+//
+// It marks liveness rather than calling FailNow because it runs on the client's async
+// callback goroutine. Readiness is untouched.
+type sysConnGuard struct {
+	armed     atomic.Bool // the running tap owns the connection; only then is a close a fault
+	requested atomic.Bool // this process asked for the close
+	judged    atomic.Bool // a close has been judged a fault once; there is only one verdict
+	// closes counts handler invocations that have FINISHED, verdict included, so an
+	// observer that waits on it reads the verdict rather than racing it.
+	closes atomic.Int32
+}
+
+// close closes nc as this process's own decision, recording that BEFORE the close so the
+// handler, which may run at once on another goroutine, can never see it unrecorded. A nil
+// guard just closes: a connection nobody guards has no verdict to protect.
+func (g *sysConnGuard) close(nc *nats.Conn) {
+	if g != nil {
+		g.requested.Store(true)
+	}
+	nc.Close()
+}
+
+// onClosed is the connection's ClosedHandler.
+func (g *sysConnGuard) onClosed(nc *nats.Conn) {
+	defer g.closes.Add(1)
+	g.judge(nc, "closed")
+}
+
+// arm hands the connection to the running tap. A close that landed before arming was
+// seen by the handler while unarmed and ignored, so it is judged here instead; nats.go
+// marks a connection CLOSED before it queues the handler, so between the two exactly one
+// of them sees an armed, closed connection first, and judged makes it the only verdict.
+func (g *sysConnGuard) arm(nc *nats.Conn) {
+	g.armed.Store(true)
+	if nc.IsClosed() {
+		g.judge(nc, "closed before the tap took it over")
+	}
+}
+
+func (g *sysConnGuard) judge(nc *nats.Conn, what string) {
+	if g.requested.Load() {
+		log.Info().Msg("The NATS system-account (presence) connection closed on this process's request.")
+		return
+	}
+	if !g.armed.Load() {
+		// The startup dial's to report: it returns an error and the tap turns off.
+		log.Debug().Msg("The NATS system-account connection closed before the presence tap owned it.")
+		return
+	}
+	if !g.judged.CompareAndSwap(false, true) {
+		return
+	}
+	cause := nc.LastError()
+	if cause == nil {
+		cause = errors.New("the client reported no error")
+	}
+	log.Error().Err(cause).Msg("The NATS system-account (presence) connection " + what + " permanently, " +
+		"and not by this process; broker presence is no longer being read and the connection will not come " +
+		"back. Liveness now fails so the pod restarts; the restarted pod dials again with its mounted " +
+		"credential and, if the broker still refuses it, turns broker presence off and releases the devices " +
+		"it asserted.")
+	if Microservice == nil {
+		return
+	}
+	Microservice.MarkNotLive(fmt.Errorf(
+		"NATS system-account (presence) connection closed permanently and not by this process: %w", cause))
 }
 
 // startBrokerPresence turns plain-MQTT presence from a guess into the broker's own
@@ -98,7 +191,8 @@ func startBrokerPresence(ctx context.Context) {
 		return
 	}
 
-	conn, err := dialSystemAccount(ctx, infra.Nats, systemAccountConnectWait)
+	guard := &sysConnGuard{}
+	conn, err := dialSystemAccount(ctx, infra.Nats, systemAccountConnectWait, guard)
 	if err != nil {
 		log.Error().Err(err).Msg("Could not reach the NATS system account within the startup window; " +
 			"broker-asserted MQTT presence is OFF for this pod's run and MQTT presence stays inferred. " +
@@ -112,7 +206,7 @@ func startBrokerPresence(ctx context.Context) {
 	tap := presence.NewTap(Microservice.InstanceId, source, presenceEmitter(), presenceGate(), presenceMetrics())
 	stopTap, err := tap.Subscribe(conn)
 	if err != nil {
-		conn.Close()
+		guard.close(conn)
 		log.Error().Err(err).Msg("Could not subscribe to the broker's connection advisories; " +
 			"broker-asserted MQTT presence is OFF.")
 		tapOff(presence.TapOffSubscribeFailed)
@@ -125,7 +219,7 @@ func startBrokerPresence(ctx context.Context) {
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	rt := &presenceRuntime{conn: conn, stops: []func(){stopTap}, cancel: cancel, stopped: make(chan struct{})}
+	rt := &presenceRuntime{conn: conn, guard: guard, stops: []func(){stopTap}, cancel: cancel, stopped: make(chan struct{})}
 
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
 		[]string{string(auth.TenantRead), string(auth.StateRead)})
@@ -179,6 +273,8 @@ func startBrokerPresence(ctx context.Context) {
 		probe = canary
 	}
 	go runPresenceLoops(runCtx, rt, reconciler, probe, cfg.ReconcileInterval(), cfg.CanaryInterval())
+	// Armed LAST: from here a close nobody asked for is a fault. See sysConnGuard.
+	guard.arm(conn)
 	brokerPresence = rt
 }
 
@@ -576,7 +672,7 @@ func stopBrokerPresence() {
 	// which has no broker connection — it reaches device-state and user-management over
 	// GraphQL, not over NATS.
 	if rt.conn != nil {
-		rt.conn.Close()
+		rt.guard.close(rt.conn)
 	}
 }
 
@@ -584,7 +680,11 @@ func stopBrokerPresence() {
 // data-plane one authenticates as the shared service user, this one as the
 // system-account user. They are distinct connections because they are distinct
 // accounts; a single connection lands in one account only.
-func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration, wait time.Duration) (*nats.Conn, error) {
+//
+// guard, when non-nil, becomes the connection's ClosedHandler; it judges nothing until it
+// is armed (see sysConnGuard). The recheck passes nil, so its connection has no handler.
+func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration, wait time.Duration,
+	guard *sysConnGuard) (*nats.Conn, error) {
 	url := fmt.Sprintf("nats://%s:%d", cfg.Hostname, cfg.Port)
 	opts := []nats.Option{
 		nats.Name("event-sources-presence"),
@@ -623,12 +723,15 @@ func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration, wait t
 	if tlsCfg != nil {
 		opts = append(opts, nats.Secure(tlsCfg))
 	}
+	if guard != nil {
+		opts = append(opts, nats.ClosedHandler(guard.onClosed))
+	}
 	conn, err := nats.Connect(url, opts...)
 	if err != nil {
 		return nil, err
 	}
 	if err := waitConnected(ctx, conn, wait); err != nil {
-		conn.Close()
+		guard.close(conn)
 		return nil, err
 	}
 	return conn, nil
@@ -639,7 +742,7 @@ func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration, wait t
 // cached flag because a cached flag would be the same mistake the settle window was: an
 // answer from a moment that has passed.
 func systemAccountReachable(ctx context.Context, cfg config.NatsConfiguration) bool {
-	conn, err := dialSystemAccount(ctx, cfg, systemAccountRecheckWait)
+	conn, err := dialSystemAccount(ctx, cfg, systemAccountRecheckWait, nil)
 	if err != nil {
 		return false
 	}
@@ -679,11 +782,19 @@ var systemAccountRecheckWait = 5 * time.Second
 // reach; polling it to a deadline is what turns the second into an answer. Without it
 // every reader of connection-derived state gets a zero value and reports its own
 // symptom — a Flush timeout, a bogus server version — instead of the cause.
+//
+// A connection the library has CLOSED is answered at once, with its last error: nats.go
+// closes it itself on the second identical authorization error, so a refused credential
+// fails the dial in about a second, naming the refusal, rather than polling a dead
+// connection for the whole window.
 func waitConnected(ctx context.Context, nc *nats.Conn, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		if nc.IsConnected() {
 			return nil
+		}
+		if nc.IsClosed() {
+			return fmt.Errorf("the system-account connection was closed: %v", nc.LastError())
 		}
 		if err := ctx.Err(); err != nil {
 			return err

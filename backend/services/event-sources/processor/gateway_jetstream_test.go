@@ -77,6 +77,8 @@ type captureHarness struct {
 	// per-tenant limiter and observe what admission actually depends on. Set it
 	// before the first handle call.
 	gate RateGate
+	// events records every event the source handed its publish callback, in order.
+	events []*model.UnresolvedEvent
 }
 
 func newCaptureHarness(t *testing.T) *captureHarness {
@@ -88,10 +90,11 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			defer h.mu.Unlock()
 			h.received++
 		},
-		func(_ string, _ string, _ *model.UnresolvedEvent, _ interface{}, seq uint64) error {
+		func(_ string, _ string, event *model.UnresolvedEvent, _ interface{}, seq uint64) error {
 			h.mu.Lock()
 			h.published++
 			h.lastSeq = seq
+			h.events = append(h.events, event)
 			h.mu.Unlock()
 			return h.publishErr
 		},
@@ -135,6 +138,13 @@ func (h *captureHarness) counts() (published, failed, received int, seq uint64) 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.published, h.failedCalls, h.received, h.lastSeq
+}
+
+// publishedEvents returns every event handed to the publish callback so far.
+func (h *captureHarness) publishedEvents() []*model.UnresolvedEvent {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]*model.UnresolvedEvent(nil), h.events...)
 }
 
 // flags returns the redelivery flag the source passed on each admission call.
@@ -652,6 +662,7 @@ func TestADeletedTenantsRedeliveryIsStillRefused(t *testing.T) {
 	h.gate = RefuseDeletedTenants(
 		func(tenant string) bool { return true }, // this tenant has been deleted
 		NewRateGate(core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
+			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
 			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)), nil),
 		nil)
 
@@ -673,6 +684,7 @@ func TestALiveTenantsRedeliveryIsStillAdmitted(t *testing.T) {
 	h.gate = RefuseDeletedTenants(
 		func(tenant string) bool { return false }, // live
 		NewRateGate(core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
+			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)),
 			core.NewTenantRateLimiter(core.StaticCeiling(1000, 1000)), nil),
 		nil)
 

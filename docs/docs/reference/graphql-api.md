@@ -98,6 +98,11 @@ Entities are named by **token** throughout, including inside the anchor. Both ti
 inclusive, they filter on `occurredTime` (the instant the device reported, not the instant the
 platform stored it), and results come back newest first. Pagination is 1-based.
 
+An event's `processedTime` is when the platform **received** it. For MQTT on the platform's broker
+this is the time the broker stored the message, which after an `event-sources` outage can be well
+before the event was processed; for other transports it is when the ingest service took the event
+in.
+
 **`measurementEvents` does not filter by measurement name.** The criteria has no `name` field, so
 "just the temperature readings for this device" is not directly expressible — either filter
 client-side on `results[].name`, or use `bucketedMeasurements`, which does take a `name` and

@@ -37,8 +37,11 @@ type JsonEvent struct {
 
 // Interface implemented by all decoders.
 type Decoder interface {
-	// Decodes a binary payload into an event.
-	Decode(payload []byte) (*model.UnresolvedEvent, interface{}, error)
+	// Decode decodes a binary payload into an event. receivedAt is when the platform
+	// received the payload: the capture stream's broker append time where the transport
+	// has one, else the zero time, read as now. It becomes the event's ProcessedTime,
+	// and the OccurredTime of an event that reports no time of its own.
+	Decode(payload []byte, receivedAt time.Time) (*model.UnresolvedEvent, interface{}, error)
 }
 
 // Create a new decoder based on the given type indicator.
@@ -476,8 +479,20 @@ func (jd *JsonDecoder) ParseEvent(payload []byte) (*JsonEvent, error) {
 	return jevent, nil
 }
 
-// Assemble an event based on json event data.
-func (jd *JsonDecoder) AssembleEvent(jevent *JsonEvent) (*model.UnresolvedEvent, error) {
+// AssembleEvent assembles an event from json event data. receivedAt is when the
+// platform received it (see Decoder.Decode); zero means now.
+//
+// 🔴 ONE instant serves as both ProcessedTime and the default OccurredTime, and the
+// pairing is load-bearing. The skew bound downstream measures a reported time against
+// ProcessedTime; a reading with no time of its own must therefore be dated at exactly
+// its receipt, or a backlog drained after an outage would be dated at decode (an outage
+// after its receipt) and clamped as a clock running ahead. Two separate time.Now() calls
+// would also make the two differ for no reason.
+func (jd *JsonDecoder) AssembleEvent(jevent *JsonEvent, receivedAt time.Time) (*model.UnresolvedEvent, error) {
+	if receivedAt.IsZero() {
+		receivedAt = time.Now()
+	}
+	receivedAt = receivedAt.UTC()
 	event := &model.UnresolvedEvent{
 		AltId:            jevent.AltId,
 		Device:           jevent.Device,
@@ -503,21 +518,21 @@ func (jd *JsonDecoder) AssembleEvent(jevent *JsonEvent) (*model.UnresolvedEvent,
 		}
 		event.OccurredTime = otime
 	} else {
-		event.OccurredTime = time.Now()
+		event.OccurredTime = receivedAt
 	}
-	event.ProcessedTime = time.Now()
+	event.ProcessedTime = receivedAt
 	return event, nil
 }
 
 // Decode a json payload into an event.
-func (jd *JsonDecoder) Decode(payload []byte) (*model.UnresolvedEvent, interface{}, error) {
+func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.UnresolvedEvent, interface{}, error) {
 	// Parse json payload.
 	jevent, err := jd.ParseEvent(payload)
 	if err != nil {
 		return nil, nil, err
 	}
 	// Assemble event from json data.
-	event, err := jd.AssembleEvent(jevent)
+	event, err := jd.AssembleEvent(jevent, receivedAt)
 	if err != nil {
 		return nil, nil, err
 	}

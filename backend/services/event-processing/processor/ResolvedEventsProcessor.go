@@ -1715,7 +1715,7 @@ type pendingDetection struct {
 }
 
 // triggerTime is the platform time of the resolved event msg carries: the lesser of the event's
-// ProcessedTime (stamped by the ingest path when it decoded the event) and msg.AppendTime (the
+// ProcessedTime (stamped by the ingest path as the time the platform received the event) and msg.AppendTime (the
 // broker time the resolved event was stored), taking whichever are non-zero, or zero when neither
 // is. The lesser, because each is a platform clock and either may run ahead of the other; the
 // earlier one is the closer bound on when the telemetry reached the platform.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -57,10 +58,10 @@ func TestAnOversizedMessageIsRefused(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			// At the ceiling is legal. The bound is inclusive, and a test that only showed
 			// the refusal could not tell an off-by-one ceiling from a correct one.
-			if _, _, err := decoder.Decode([]byte(entriesBody(kind, max))); err != nil {
+			if _, _, err := decoder.Decode([]byte(entriesBody(kind, max)), time.Time{}); err != nil {
 				t.Fatalf("%d readings is AT the ceiling and must decode: %v", max, err)
 			}
-			_, _, err := decoder.Decode([]byte(entriesBody(kind, max+1)))
+			_, _, err := decoder.Decode([]byte(entriesBody(kind, max+1)), time.Time{})
 			if err == nil {
 				t.Fatalf("%d readings is over the %d ceiling and must be refused", max+1, max)
 			}
@@ -87,10 +88,10 @@ func TestAnOversizedMessageIsRefused(t *testing.T) {
 // fan-out — the claim and the mechanism disagreeing, which is worse than having neither.
 func TestOneWideEntryIsCountedByItsReadings(t *testing.T) {
 	decoder := NewJsonDecoder(nil, 10)
-	if _, _, err := decoder.Decode([]byte(wideEntryBody(10))); err != nil {
+	if _, _, err := decoder.Decode([]byte(wideEntryBody(10)), time.Time{}); err != nil {
 		t.Fatalf("10 keys in one entry is at the ceiling and must decode: %v", err)
 	}
-	_, _, err := decoder.Decode([]byte(wideEntryBody(11)))
+	_, _, err := decoder.Decode([]byte(wideEntryBody(11)), time.Time{})
 	if err == nil {
 		t.Fatal("ONE entry holding 11 metric keys is 11 readings and must be refused")
 	}
@@ -109,7 +110,7 @@ func TestReadingsAccumulateAcrossEntries(t *testing.T) {
 	body := `{"device":"d1","eventType":"Measurement","payload":{"entries":[
 		{"measurements":{"a":"1","b":"2","c":"3"}},
 		{"measurements":{"d":"4","e":"5","f":"6"}}]}}`
-	_, _, err := decoder.Decode([]byte(body))
+	_, _, err := decoder.Decode([]byte(body), time.Time{})
 	if err == nil {
 		t.Fatal("two entries of three keys is six readings and must be refused at a ceiling of 5")
 	}
@@ -124,7 +125,7 @@ func TestReadingsAccumulateAcrossEntries(t *testing.T) {
 // returns no error at all.
 func TestAnOversizedMessageIsNotTruncated(t *testing.T) {
 	decoder := NewJsonDecoder(nil, 4)
-	_, payload, err := decoder.Decode([]byte(entriesBody("Measurement", 9)))
+	_, payload, err := decoder.Decode([]byte(entriesBody("Measurement", 9)), time.Time{})
 	if err == nil {
 		t.Fatal("an oversized message must fail, not succeed with fewer readings")
 	}

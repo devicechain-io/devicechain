@@ -37,7 +37,7 @@ The `TenantsMeteredAtPlatformDefault` alert fires only when `unreachable` keeps 
 
 ### Tenant names that cannot be confirmed {#unconfirmed-tenants}
 
-The HTTP ingest endpoint takes the tenant from the request path, before any device credential is checked. A tenant name arriving there gets an allowance of its own only if the control plane has confirmed it, or from a fixed set of 1024. Past that set, all such names share one allowance at the platform default, and the `RateLimiterOverflowInUse` alert fires. MQTT, NATS and LwM2M traffic comes from a source that is authenticated or that the operator chose to trust: the platform broker authenticates each device, LwM2M checks the device's key, and an external MQTT broker source is trusted because the operator configured it. That traffic always gets its own allowance.
+The HTTP ingest endpoint takes the tenant from the request path, before any device credential is checked. So HTTP ingest has an allowance of its own for each tenant, separate from the one the tenant's MQTT, NATS and broker presence traffic spends, and HTTP requests naming a tenant cannot use up that tenant's device traffic. Anyone who can reach the HTTP port and knows a tenant's name can still use up that tenant's HTTP allowance, because the device credential is checked only after the request is admitted. Within the HTTP allowance, a tenant name gets an allowance of its own only if the control plane has confirmed it, or from a fixed set of 1024. Past that set, all such names share one allowance at the platform default, and the `RateLimiterOverflowInUse` alert fires. MQTT, NATS and LwM2M traffic comes from a source that is authenticated or that the operator chose to trust: the platform broker authenticates each device, LwM2M checks the device's key, and an external MQTT broker source is trusted because the operator configured it. That traffic always gets its own allowance.
 
 The set bounds the service's memory, not the total admitted across invented names: up to 1024 times the platform default can be admitted across them.
 
@@ -59,6 +59,16 @@ Per-tenant overrides are audited exceptions, not the mechanism — the tier carr
 ## Ceilings are per replica {#per-replica}
 
 Every rate ceiling on this page is enforced by each running copy of the service that enforces it, with no coordination between copies. If you run two replicas of `event-sources`, `outbound-connectors` or `ai-inference` and they share a tenant's traffic, that tenant can be admitted at up to twice its ceiling, and N replicas allow up to N times. The default install runs one replica of each, and there the ceiling is exact. Two ceilings are not multiplied: the undelivered-command ceiling is a count kept in the database, and the detection engine's outbound ceiling is charged only on the replica that detects. If you scale a service out, set tier ceilings for the number of replicas you run.
+
+### When ingest can admit a tenant above its ceiling {#ingest-above-ceiling}
+
+Within one `event-sources` replica, a tenant's ingest ceiling applies to each of three allowances separately, not to the tenant as a whole:
+
+- **Live traffic**: what the tenant's devices send now over MQTT and NATS, including broker presence.
+- **Backlog**: messages the platform broker stored while `event-sources` was down or behind, metered by when they were sent as they drain. A tenant draining a backlog after an outage while also sending live can be admitted up to twice its ceiling until the drain catches up.
+- **HTTP ingest**: metered separately, so a tenant sending over HTTP and MQTT at once can be admitted up to its ceiling on each.
+
+In the worst case a tenant can be admitted at three times its ceiling on each replica, multiplied by the number of replicas as above.
 
 ## Seeing it work
 

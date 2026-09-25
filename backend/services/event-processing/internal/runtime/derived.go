@@ -80,7 +80,7 @@ type DerivedEvent struct {
 	// informational payload, NOT part of the dedup identity below.
 	Value *float64 `json:"value,omitempty"`
 	// TriggeredAt is the PLATFORM time of the input that caused this detection to be emitted: the
-	// lesser of the triggering resolved event's ProcessedTime and the broker time its message was
+	// lesser of the triggering resolved event's ProcessedTime (when the platform received it) and the broker time its message was
 	// stored at — for a watermark-fired detection (Absence, Duration, Session, Aggregate) the message
 	// that moved the frontier, and for an idle-advance firing the advance's own time. REACT's outbound
 	// gate and the outbound-connectors egress limiter both meter the detection's connector actions on

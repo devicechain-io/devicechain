@@ -31,6 +31,8 @@ type Event {
     deviceToken: String!
     eventType: Int!
     occurredTime: String
+    # When the platform RECEIVED the event: for MQTT on the platform broker, the time the
+    # broker stored the message; otherwise when the ingest path took it in.
     processedTime: String
     source: String!
     altId: String

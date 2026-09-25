@@ -243,6 +243,14 @@ las dos razones que significan que esta instancia no tiene toma que ejecutar: ni
 al broker de la plataforma, y ninguna configuración de llamadas entre servicios. Las seis ponen
 `presence_tap_off{reason}` de todos modos, que es cómo se distingue cuál se tiene.
 
+Con la toma ya en marcha, una conexión que el broker cierra definitivamente no es motivo para
+apagarla sino para reiniciar. Si el broker deja de aceptar la credencial de la cuenta de sistema,
+todos los pods de `event-sources` fallan su comprobación de actividad (liveness) más o menos a la vez
+y Kubernetes los reinicia; la ingesta HTTP no está disponible mientras se reinician, y la telemetría
+MQTT espera en el broker. Cada pod reiniciado marca con su credencial montada. Si el broker la sigue
+rechazando, la toma se apaga con el motivo `broker_unreachable` y se aplica la liberación descrita
+arriba.
+
 Tres propiedades de la liberación automática conviene conocerlas antes de depender de ella:
 
 - **Una credencial ausente y un broker inalcanzable esperan dos minutos primero.** Un arranque inicial

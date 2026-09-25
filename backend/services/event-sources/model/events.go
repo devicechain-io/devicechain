@@ -26,11 +26,16 @@ var EventTypesByName map[string]EventType
 
 // Unresolved event details.
 type UnresolvedEvent struct {
-	Source        string
-	AltId         *string
-	Device        string
-	Relationship  *string
-	OccurredTime  time.Time
+	Source       string
+	AltId        *string
+	Device       string
+	Relationship *string
+	// OccurredTime is when the device says the event happened; for an event that
+	// reports no time of its own, the same instant as ProcessedTime.
+	OccurredTime time.Time
+	// ProcessedTime is when the platform received the event: the capture stream's
+	// broker append time where there is one, else the moment it was decoded. It is
+	// identical on every redelivery of a captured message.
 	ProcessedTime time.Time
 	EventType     EventType
 	Payload       interface{}

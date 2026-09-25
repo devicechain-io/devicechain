@@ -88,7 +88,7 @@ func TestAMalformedEntryTimeIsRejectedAtTheDoor(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := decoder.Decode([]byte(tc.body))
+			_, _, err := decoder.Decode([]byte(tc.body), time.Time{})
 			if err == nil {
 				t.Fatal("a malformed timestamp must fail the decode, not be substituted")
 			}
@@ -116,7 +116,7 @@ func TestAWellFormedEntryTimeSurvivesAndAbsenceStaysAbsent(t *testing.T) {
 	_, payload, err := decoder.Decode([]byte(
 		`{"device":"d1","eventType":"Measurement","payload":{"entries":[
 			{"measurements":{"t":"1"},"occurredTime":"2026-08-09T12:00:00.123456789Z"},
-			{"measurements":{"t":"2"}}]}}`))
+			{"measurements":{"t":"2"}}]}}`), time.Time{})
 	if err != nil {
 		t.Fatalf("a well-formed body must decode: %v", err)
 	}

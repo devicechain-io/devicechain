@@ -222,6 +222,13 @@ the two reasons that mean this instance has no tap to run at all: no source poin
 broker, and no service-to-service configuration. All six set `presence_tap_off{reason}` regardless,
 which is how you tell which one you have.
 
+Once the tap is running, a connection the broker closes for good is not a reason to turn it off but a
+reason to restart. If the broker stops accepting the system-account credential, every
+`event-sources` pod fails its liveness check at about the same time and Kubernetes restarts them; HTTP
+ingest is unavailable while they restart, and MQTT telemetry waits in the broker. Each restarted pod
+dials with its mounted credential. If the broker still refuses it, the tap turns off with reason
+`broker_unreachable` and the release above applies.
+
 Three properties of the automatic release are worth knowing before relying on it:
 
 - **A missing credential and an unreachable broker wait two minutes first.** A bring-up mints that

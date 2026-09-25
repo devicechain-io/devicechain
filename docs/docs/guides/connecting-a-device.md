@@ -80,7 +80,9 @@ publish is dead-lettered rather than silently accepted.
 **One entry is one reading, taken at one instant.** An entry may carry its own `occurredTime`, and
 that is the instant the reading is stored, charted, evaluated and returned at — so a device that
 buffers readings while offline can upload a buffered run — up to the per-message ceiling below —
-and keep the history it actually recorded. An entry that carries no `occurredTime` takes the envelope's. `occurredTime` is
+and keep the history it actually recorded. An entry that carries no `occurredTime` takes the envelope's. An envelope
+with no `occurredTime` is dated at the moment the platform received the message, so a message that
+waited in the platform during an outage keeps the time it arrived, not the time it was processed. `occurredTime` is
 RFC 3339 (`2026-08-09T12:00:00.125Z`) wherever it appears; a value that is not is **rejected** with
 the offending entry named, never quietly replaced.
 
@@ -260,13 +262,17 @@ Publish at QoS 0, or QoS 1 with `altId`. An operator who genuinely needs QoS 2 c
 
 ## HTTP
 
-`event-sources` also accepts events over HTTP on port **8081**. The instance id and tenant are taken from the path `/{instanceId}/{tenant}/events` (mirroring the MQTT topic convention); the device and its credential ride in the body. `POST` returns **202 Accepted** once the event is queued — or **429 Too Many Requests** if the tenant is over its ingest rate limit (a per-tenant limiter with a platform-default ceiling shields the shared pipeline; the MQTT path drops over-limit messages instead):
+`event-sources` also accepts events over HTTP on port **8081**. The instance id and tenant are taken from the path `/{instanceId}/{tenant}/events` (mirroring the MQTT topic convention); the device and its credential ride in the body. `POST` returns **202 Accepted** once the event is queued — or **429 Too Many Requests** if the tenant is over its HTTP ingest rate limit. HTTP ingest has a per-tenant allowance of its own, separate from the one the tenant's MQTT traffic spends, so HTTP requests naming a tenant cannot use up that tenant's MQTT telemetry (see [unconfirmed tenant names](../concepts/governance.md#unconfirmed-tenants)); the MQTT path drops over-limit messages instead of answering:
 
 ```bash
 curl -X POST http://localhost:8081/devicechain/acme/events \
   -H 'Content-Type: application/json' \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
+
+:::warning Expose port 8081 only behind network controls
+HTTP ingest has no transport authentication: the device credential is in the request body and is checked after the request is admitted. Anyone who can reach port 8081 and knows a tenant's name can therefore spend that tenant's HTTP allowance. The chart's ingress does not route this port, and by default any pod in the cluster can reach it. Put it behind a NetworkPolicy, or behind an ingress or gateway that authenticates callers, before you rely on it.
+:::
 
 ### Time limits on a request
 

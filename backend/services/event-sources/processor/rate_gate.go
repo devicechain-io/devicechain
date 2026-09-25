@@ -67,9 +67,11 @@ const (
 	// a tenant always gets its own allowance.
 	OriginAuthenticated Origin = iota + 1
 	// OriginUntrusted: the tenant is a string the sender chose before any credential was
-	// checked — the HTTP ingest path segment. Such a name gets an allowance of its own
-	// only once the ceiling authority has confirmed it exists, or from a fixed pool;
-	// past the pool it shares one allowance (core.TenantRateLimiter.AllowUntrusted).
+	// checked — the HTTP ingest path segment. It is metered in the HTTP allowance, never
+	// in the one authenticated traffic spends. Within that allowance such a name gets a
+	// bucket of its own only once the ceiling authority has confirmed it exists, or from
+	// a fixed pool; past the pool it shares one bucket
+	// (core.TenantRateLimiter.AllowUntrusted).
 	//
 	// The zero Origin is neither constant and is treated as untrusted, so a transport
 	// that forgets to say is bounded, never unbounded.
@@ -128,16 +130,33 @@ func RefuseDeletedTenants(tenantDeleted func(string) bool, next RateGate, onRefu
 // either clearly is or clearly is not part of one.
 const BacklogThreshold = 5 * time.Second
 
-// NewRateGate builds the ingest gate over two per-tenant limiters, routing each
-// message to the one that meters the clock it belongs to. onShed, when non-nil,
-// is called for each shed message so the caller can account for it.
+// NewRateGate builds the ingest gate over three per-tenant limiters, routing each
+// message to the one that meters it. onShed, when non-nil, is called for each shed
+// message so the caller can account for it. A nil limiter is a construction error and
+// panics: a gate missing one of its allowances cannot meter the traffic routed to it.
 //
 // A message whose origin is not OriginAuthenticated is admitted through
-// live.AllowUntrusted: always live (an untrusted transport has no durable backlog
-// behind it), and in a bounded pool of allowances unless its tenant is confirmed. It
-// never reaches the backlog limiter.
+// untrusted.AllowUntrusted: always at now (an untrusted transport has no durable backlog
+// behind it), and in a bounded pool of buckets unless its tenant is confirmed. It never
+// reaches the live or the backlog limiter.
 //
-// # Why two limiters rather than two clocks on one
+// # Why three limiters
+//
+// The live and backlog limiters meter authenticated traffic on two clocks; the untrusted
+// limiter meters what HTTP ingest admits.
+//
+// HTTP names its tenant in a path segment BEFORE any credential is checked: the device
+// credential rides in the event body and is checked asynchronously, downstream, after
+// the message has been admitted. So anyone who can reach the HTTP port and knows a
+// tenant's name can post as that tenant. Had those posts spent the allowance the
+// tenant's authenticated traffic spends, such a caller could exhaust it and shed the
+// tenant's captured MQTT telemetry — and shedding a capture-stream message means acking
+// it away, the permanent loss of data the broker already PUBACKed to the device. With
+// an allowance of its own, what such a caller can exhaust is the tenant's HTTP
+// allowance, and nothing else. That part is unavoidable while HTTP admits before it
+// authenticates.
+//
+// # Why the live and backlog limiters are two rather than two clocks on one
 //
 // A single bucket fed BOTH wall-clock arrivals and hours-old send times cannot meter
 // either correctly. On the single-bucket design this replaced, the bucket's clock
@@ -157,12 +176,19 @@ const BacklogThreshold = 5 * time.Second
 // backwards step costs over-shedding under the limiter's mark (the older times are
 // charged at the latest time the bucket has seen), never minting.
 //
-// The residual cost is that a tenant who is simultaneously live AND draining a
-// genuine backlog may be admitted up to twice their ceiling until the drain
-// catches up. That is bounded and predictable, and smaller than the exposure the
+// # The residual
+//
+// Each limiter resolves the tenant's ceiling independently, so the ceiling is a ceiling
+// per allowance, not per tenant. A tenant simultaneously live AND draining a genuine
+// backlog may be admitted up to twice its ceiling until the drain catches up; one also
+// sending over HTTP, up to one ceiling more — three times its ceiling per replica at
+// worst. That is bounded and predictable, and it multiplies with the exposure the
 // platform already carries from running N replicas with independent limiters.
-func NewRateGate(live *core.TenantRateLimiter, backlog *core.TenantRateLimiter,
+func NewRateGate(live, backlog, untrusted *core.TenantRateLimiter,
 	onShed func(source string, tenant string)) RateGate {
+	if live == nil || backlog == nil || untrusted == nil {
+		panic("processor.NewRateGate: the live, backlog and untrusted limiters are all required")
+	}
 	return func(source string, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
 		// A redelivery already paid for its admission on delivery 1 — the broker is
 		// re-offering it because the publish failed and the settler deliberately left
@@ -185,7 +211,7 @@ func NewRateGate(live *core.TenantRateLimiter, backlog *core.TenantRateLimiter,
 		var admitted bool
 		switch {
 		case origin != OriginAuthenticated:
-			admitted = live.AllowUntrusted(tenant)
+			admitted = untrusted.AllowUntrusted(tenant)
 		case !sentAt.IsZero() && time.Since(sentAt) > BacklogThreshold:
 			admitted = backlog.AllowAt(tenant, sentAt)
 		default:

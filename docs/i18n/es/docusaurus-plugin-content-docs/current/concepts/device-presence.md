@@ -88,6 +88,16 @@ segundos a la conexión para establecerse antes de decidir, así que esto es med
 con la cuenta de sistema, no un intento fallido —tiempo suficiente para no confundir un broker que se
 está reiniciando junto a los servicios con uno que se ha ido—.
 
+**Perder esa conexión después de que la toma haya arrancado reinicia `event-sources`.** Si el broker
+cierra definitivamente la conexión de la toma una vez que esta está en marcha, por ejemplo porque ya
+no acepta la credencial de la cuenta de sistema, `event-sources` falla su comprobación de actividad
+(liveness) y Kubernetes reinicia el pod. Una credencial rechazada llega a todas las réplicas a la
+vez, así que **se reinician todos los pods de `event-sources`**, y la ingesta HTTP no está disponible
+mientras tanto; la telemetría MQTT la sigue guardando el broker y se procesa cuando vuelven. Si el
+pod reiniciado sigue sin poder iniciar sesión, la toma se apaga con el motivo `broker_unreachable`,
+libera los dispositivos que afirmaba como se describe aquí y sigue comprobando. Así que ese motivo
+cubre también un broker que está en marcha pero rechaza la credencial.
+
 **Para este motivo en concreto, la espera de dos minutos es una comprobación, no un retraso**, y esa
 diferencia es lo que impide que la liberación sobreviva a la caída que la provocó. Antes de cada
 pasada —la primera incluida— el servicio vuelve a marcar contra la cuenta de sistema. Si el broker
