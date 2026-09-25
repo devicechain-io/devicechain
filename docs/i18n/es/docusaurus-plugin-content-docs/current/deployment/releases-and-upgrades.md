@@ -1630,6 +1630,10 @@ Si enruta o silencia alertas por su nombre, se añaden dos avisos más,
 `JetStreamReplicationUnobserved` y `ConnectorDispatchRateLimited` (consulte «Dos avisos nuevos: un
 flujo que no se puede leer, y descartes de conectores que el motor de detección admitió»).
 
+el servicio de conectores tiene clientes nuevos» antes de actualizar. Si ejecuta fuentes Sparkplug, o
+tiene alertas sobre el estado en línea de un host Sparkplug, lea «Una fuente Sparkplug con un grupo
+rechazado sigue fuera de línea, y una renovación sobrevive a una caída breve».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2297,6 +2301,37 @@ No hay que hacer nada durante la actualización.
 - **`JetStreamLeaseBucketNotReplicated` tiene un resumen nuevo**, "The partition-lease bucket is
   not replicated". Su nombre, etiquetas y severidad no cambian. Actualice las rutas o los
   silencios que filtren por el texto del resumen anterior.
+
+#### Una fuente Sparkplug con un grupo rechazado sigue fuera de línea, y una renovación sobrevive a una caída breve
+
+**Sparkplug.** Si el broker acepta la conexión de una fuente Sparkplug pero rechaza su suscripción a
+cualquiera de los grupos de la fuente (lo más habitual, porque la credencial de la fuente no puede
+leer ese grupo), la fuente ya no se anuncia en línea. No ingiere ninguno de sus grupos, se
+desconecta y reintenta con una espera creciente de hasta 30 segundos hasta que se conceden todos
+los grupos. Por tanto, un solo grupo rechazado detiene toda esa fuente hasta que se corrija la ACL
+del broker. Ocurre lo mismo si el broker no confirma el propio anuncio en línea.
+
+Antes, la fuente se anunciaba en línea con el grupo ausente. Los nodos edge de ese grupo volcaban
+entonces sus datos almacenados en una suscripción que no existía, y la fuente marcaba después sus
+dispositivos como desconectados por quedarse en silencio. Un contador nuevo,
+`devicechain_sparkplugingest_subscribe_failures_total`, cuenta las sesiones abandonadas: alerte
+ante cualquier aumento. La línea de log nombra el grupo rechazado. Si vigila el estado del host
+Sparkplug, una fuente con un grupo rechazado aparece ahora fuera de línea en lugar de en línea.
+[Servicios edge](./edge-services.md) tiene los detalles.
+
+**Renovación de sesión.** Renovar una sesión gastaba antes el token de renovación antes de volver a
+comprobar la sesión. Un error de la base de datos o del broker durante esa comprobación terminaba
+entonces la sesión: la renovación fallaba como «invalid or expired token» y el token ya no se
+podía usar. Ahora la comprobación va primero. Un error del almacén deja el token válido y devuelve
+un error que se puede reintentar («the session could not be refreshed right now; try again»), y el
+endpoint de tokens de OAuth devuelve `server_error` sin el texto del error subyacente. Una renovación
+rechazada porque la sesión terminó, la membresía se eliminó o se desactivó, o el inquilino niega el
+acceso sigue gastando el token.
+
+Solo se beneficia un cliente que reintenta. La biblioteca cliente de Go que usan el simulador, las
+pruebas de carga y `dcctl` puede reintentar con el mismo token de renovación en lugar de necesitar
+un nuevo inicio de sesión con contraseña. La consola sigue cerrando la sesión del usuario ante
+cualquier fallo de renovación. No hay que hacer nada en la actualización.
 
 ### La transición única a la ingesta duradera
 
