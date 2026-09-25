@@ -170,8 +170,8 @@ type CacheEvictor interface {
 	// called post-commit by a geofence mutation that MINTED one — an edit leaving the fence
 	// set as it was mints nothing and evicts nothing, because the cached version is still
 	// exactly right. The version rides in the
-	// cached ProfileScope — the resolve path's existing per-device-type lookup — rather
-	// than in a cache of its own, so "the tenant's" here means every device type of the
+	// cached per-type ProfileResolution — the resolve path's existing per-device-type
+	// lookup — rather than in a cache of its own, so "the tenant's" here means every device type of the
 	// tenant. A missed eviction keeps stamping the previous version until the TTL, which
 	// is stale but never incoherent: those events name a version whose snapshot is on
 	// record and describes the fences they were resolved against.
@@ -298,8 +298,8 @@ func (api *Api) evictScopedGroupsExist(ctx context.Context) {
 // evictor is wired (ADR-078). No-op otherwise. Called post-commit from a geofence mutation
 // that minted a version, so the next resolved location event stamps it. A mutation that
 // changed no fence geometry mints nothing and does not call this: the cached version still
-// names the set the fences are in, so evicting would cost a tenant-wide ProfileScope miss
-// to arrive at the same answer.
+// names the set the fences are in, so evicting would cost a tenant-wide ProfileResolution
+// miss to arrive at the same answer.
 func (api *Api) evictFenceSetVersion(ctx context.Context) {
 	if api.CacheEvictor != nil {
 		api.CacheEvictor.EvictFenceSetVersion(ctx)
@@ -361,12 +361,11 @@ type DeviceManagementApi interface {
 	MetricDefinitionsById(ctx context.Context, ids []uint) ([]*MetricDefinition, error)
 	MetricDefinitionsByToken(ctx context.Context, tokens []string) ([]*MetricDefinition, error)
 	MetricDefinitions(ctx context.Context, criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error)
-	MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error)
 
-	// ProfileScopeByDeviceType resolves a device type's denormalized rule-scoping
-	// identity (device-type + active-published-profile-version tokens) for stamping
-	// onto resolved events (ADR-051).
-	ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error)
+	// ProfileResolutionByDeviceType resolves a device type's active published profile
+	// version as one value: its metric definitions and its rule-scoping identity
+	// (ADR-016/045/051). Served through the cache on the resolve path.
+	ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileResolution, error)
 
 	// LocationDeclarationByDeviceType resolves whether a device type's active PUBLISHED
 	// profile version declares that its devices report their own position (ADR-078),

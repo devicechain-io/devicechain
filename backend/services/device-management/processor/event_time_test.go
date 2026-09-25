@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
-	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/prometheus/client_golang/prometheus"
@@ -170,7 +169,6 @@ func TestADisabledBoundLetsAReportedTimeThrough(t *testing.T) {
 func resolverWithMetricDefs(t *testing.T, skew time.Duration) *EventResolver {
 	t.Helper()
 	api := new(dmtest.MockApi)
-	api.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_resolver_bound_total"})
 	policy := EventTimePolicy{MaxFutureSkew: skew, Bounded: counter}
 	return NewEventResolver(1, api, "", policy, nil, nil, nil, nil, nil, nil)

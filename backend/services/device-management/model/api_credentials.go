@@ -266,17 +266,26 @@ func (api *Api) EnabledDeviceCredentialsOfType(ctx context.Context,
 	}, nil
 }
 
-// Resolve a presented credential (type + id) to its owning device credential.
-// This is the foundational hook the future transport-auth path uses to resolve a
-// presented credential to a device identity (ADR-014). Only enabled credentials
-// match; returns gorm.ErrRecordNotFound if none.
+// Resolve a presented credential (type + id) to its owning device credential, in ONE
+// statement: the owning device comes back on the same SELECT through a LEFT JOIN, which
+// carries the device's soft-delete predicate in its ON clause, so a soft-deleted device
+// leaves Device nil rather than dropping the credential row. Only enabled credentials
+// match; returns gorm.ErrRecordNotFound if none. This is the lookup behind every
+// credential-bearing event and every MQTT connect (ADR-014).
+//
+// 🔴 THE JOINED DEVICE IS NOT TENANT-SCOPED BY THE QUERY. The tenant-scope callback adds
+// its predicate to the statement's own table only — the credential's — and nothing to a
+// joined one. The credential row is this tenant's; the device it points at is only
+// whatever its device_id names. A caller must therefore check the joined device against
+// the credential before trusting it, which is what credentialDevice does. The predicates
+// are table-qualified so a column the two tables come to share cannot make the statement
+// ambiguous.
 func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
 	found := make([]*DeviceCredential, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("Device")
-	result = result.Where("credential_type = ? and credential_id = ? and enabled = ?",
-		credentialType, credentialId, true)
-	result = result.Find(&found)
+	result := api.RDB.DB(ctx).Joins("Device").
+		Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ? AND device_credentials.enabled = ?",
+			credentialType, credentialId, true).
+		Find(&found)
 	if result.Error != nil {
 		return nil, result.Error
 	}

@@ -29,7 +29,7 @@ type mintSkipHarness struct {
 	ctx   context.Context
 	facts *captureFenceSets
 	// evictor is the package's shared CacheEvictor recorder. Its fenceSetEvicts counter is
-	// what the skip is mostly there to move: an eviction is a tenant-wide ProfileScope drop
+	// what the skip is mostly there to move: an eviction is a tenant-wide ProfileResolution drop
 	// costing the resolve hot path a miss per device type.
 	evictor *captureEvictor
 }

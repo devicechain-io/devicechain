@@ -58,7 +58,6 @@ var fixtureTime = time.Date(2026, 8, 14, 9, 15, 30, 123456789, time.UTC)
 // lenient (ADR-016). That keeps these tests on ORDER rather than on classification.
 func noMetricDefsApi() model.DeviceManagementApi {
 	api := new(dmtest.MockApi)
-	api.Mock.On("MetricDefinitionsByDeviceType").Return([]*model.MetricDefinition{}, nil)
 	return api
 }
 

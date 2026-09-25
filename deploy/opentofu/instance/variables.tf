@@ -159,21 +159,22 @@ variable "nats_jetstream_storage" {
     The MQTT gateway's own streams — which nats-server creates UNBOUNDED, and which
     the platform bounds at startup so they cannot eat the rest — add 384Mi. The KV
     buckets are bounded on the same principle (see kv.All): 6 State buckets at 128Mi
-    + 6 Cache buckets at 64Mi reserve a further 1152Mi. Total reserved: 10248Mi (10.008Gi).
+    + 5 Cache buckets at 64Mi reserve a further 1088Mi. Total reserved: 10184Mi (9.945Gi).
 
     Why 16Gi and not 12Gi: at 12Gi the ceiling is 10Gi, which left 120Mi unreserved
-    when 16Gi was chosen — BELOW the 512Mi headroom floor the budget test asserts — and
-    no longer holds the reservation at all. A PV sized to the margin
+    when 16Gi was chosen — BELOW the 512Mi headroom floor the budget test asserts. It
+    holds today's reservation with 56Mi to spare, still far below that floor. A PV sized to the margin
     has to be moved for every stream or bucket the platform adds, and the failure for
-    not doing so is the crashloop above rather than a test. 16Gi (→14Gi ceiling) leaves 4088Mi (3.992Gi), which is
+    not doing so is the crashloop above rather than a test. 16Gi (→14Gi ceiling) leaves 4152Mi (4.055Gi), which is
     room for the reservation to grow by about 40%. The extra 4Gi of disk is the
     cheapest part of this deployment; the alternative was a budget where every new
     bucket is a deploy-time landmine.
 
     NEVER shrink this independently of the stream bounds, and do NOT size the PV as
     (sum of stream ceilings) / 0.9 — the flooring above makes that formula unsafe.
-    A 10.008Gi sum / 0.9 rounds to a 12Gi PV, whose ceiling is floor(12 × 0.9) = 10Gi,
-    which is BELOW the sum and brings the crashloop back. Pick the smallest whole
+    At any sum above 10Gi, (sum) / 0.9 rounds to a 12Gi PV, whose ceiling is
+    floor(12 × 0.9) = 10Gi, which is BELOW the sum and brings the crashloop back; today's
+    9.945Gi sum clears that ceiling by only 56Mi. Pick the smallest whole
     magnitude where floor(magnitude × 0.9) >= the sum, then leave real margin above
     it. Raise it for real ingest volume.
 

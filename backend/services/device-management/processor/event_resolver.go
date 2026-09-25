@@ -229,19 +229,22 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, targets []member
 	return out, nil
 }
 
-// resolveScope denormalizes the device's rule-scoping identity (ADR-051) so
-// event-processing's DETECT engine can select the applicable rules from the wire
-// without a graph read. It is resolved through the same cached device→type→
-// profile→active-version chain the metric resolution already uses (cheap). Callers
-// resolve it BEFORE any state mutation so a transient lookup failure can never
-// leave a committed side effect (e.g. a created relationship) that a redelivery
-// would then duplicate.
-func (rez *EventResolver) resolveScope(ctx context.Context, device *model.Device) (*model.ProfileScope, uint, error) {
-	scope, err := rez.Api.ProfileScopeByDeviceType(ctx, device.DeviceTypeId)
+// resolveProfile reads the device type's active published profile ONCE per event: the
+// metric definitions that validate a measurement and stamp its classifiers, and the
+// rule-scoping identity (ADR-051) that lets event-processing's DETECT engine select the
+// applicable rules from the wire without a graph read. Everything an event takes from
+// the profile comes from this one value, so a publish landing mid-resolution cannot
+// give one event two versions — reading it twice is exactly the defect this replaces.
+//
+// Callers resolve it BEFORE any state mutation so a transient lookup failure can never
+// leave a committed side effect (e.g. a created relationship) that a redelivery would
+// then duplicate.
+func (rez *EventResolver) resolveProfile(ctx context.Context, device *model.Device) (*model.ProfileResolution, uint, error) {
+	res, err := rez.Api.ProfileResolutionByDeviceType(ctx, device.DeviceTypeId)
 	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), fmt.Errorf("could not resolve profile scope: %w", err)
+		return nil, uint(dmproto.FailureReason_ApiCallFailed), fmt.Errorf("could not resolve device profile: %w", err)
 	}
-	return scope, 0, nil
+	return res, 0, nil
 }
 
 // Create a new relationship based on an inbound event. The source is the
@@ -290,7 +293,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// device holds no prior state for a group it only now joined, so their absence tears down
 	// nothing. They land on the device's next telemetry event, which anchors the now-tracked
 	// relationship.
-	scope, reason, err := rez.resolveScope(ctx, device)
+	res, reason, err := rez.resolveProfile(ctx, device)
 	if err != nil {
 		return nil, reason, err
 	}
@@ -317,7 +320,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	anchors := []model.ResolvedAnchor{
 		{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID},
 	}
-	resolved := rez.MergeToResolveEvent(device, anchors, memberships, event, payload, scope)
+	resolved := rez.MergeToResolveEvent(device, anchors, memberships, event, payload, &res.Scope)
 
 	return []EventResolutionResults{*resolved}, 0, nil
 }
@@ -357,16 +360,13 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 // its valid siblings. Callers must have run validateMeasurements first: this drops
 // only undeclared non-numeric (and defensively, non-storable declared) values, so a
 // DECLARED numeric metric carrying a non-numeric value relies on validation having
-// already rejected it upstream.
+// already rejected it upstream. byKey is the event's one profile read, indexed by
+// metric key (ProfileResolution.MetricsByKey) — the same map validation read.
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
-	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
+	byKey map[string]*model.ResolvedMetric, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	mpayload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload)
 	if !ok {
 		return nil, fmt.Errorf("can not resolve measurements payload. invalid unresolved payload type")
-	}
-	byKey, err := rez.metricDefsByKey(ctx, device)
-	if err != nil {
-		return nil, err
 	}
 	rmpayload := &model.ResolvedMeasurementsPayload{}
 	rmsentries := make([]model.ResolvedMeasurementsEntry, 0)
@@ -396,8 +396,8 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				rmentry.Classifier = &id
 				dataType := def.DataType
 				rmentry.DataType = &dataType
-				if def.Unit.Valid {
-					unit := def.Unit.String
+				if def.Unit != nil {
+					unit := *def.Unit
 					rmentry.Unit = &unit
 				}
 				if model.MetricDataType(def.DataType) == model.MetricBoolean {
@@ -456,21 +456,6 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 	}
 	rmpayload.Entries = rmsentries
 	return rmpayload, nil
-}
-
-// metricDefsByKey loads the device profile's metric definitions keyed by MetricKey
-// (cached through the API). Returns an empty map when none are declared.
-func (rez *EventResolver) metricDefsByKey(ctx context.Context,
-	device *model.Device) (map[string]*model.MetricDefinition, error) {
-	defs, err := rez.Api.MetricDefinitionsByDeviceType(ctx, device.DeviceTypeId)
-	if err != nil {
-		return nil, err
-	}
-	byKey := make(map[string]*model.MetricDefinition, len(defs))
-	for _, d := range defs {
-		byKey[d.MetricKey] = d
-	}
-	return byKey, nil
 }
 
 // dropMeasurement logs an unstorable measurement entry that is being discarded
@@ -618,18 +603,20 @@ func parseSessionId(raw, field string) (uint64, error) {
 	return parsed, nil
 }
 
-// Convert an unresolved event payload into a resolved payload.
+// Convert an unresolved event payload into a resolved payload. metrics are the
+// declared metric definitions from the event's one profile read (see resolveProfile),
+// indexed by key; only a measurement reads them, and nil declares none.
 func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model.Device,
-	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
+	metrics map[string]*model.ResolvedMetric, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	switch event.EventType {
 	case esmodel.Location:
-		return rez.ResolveLocationsEventPayload(ctx, device, relation, event)
+		return rez.ResolveLocationsEventPayload(ctx, device, nil, event)
 	case esmodel.Measurement:
-		return rez.ResolveMeasurementsEventPayload(ctx, device, relation, event)
+		return rez.ResolveMeasurementsEventPayload(ctx, device, metrics, event)
 	case esmodel.Alert:
-		return rez.ResolveAlertsEventPayload(ctx, device, relation, event)
+		return rez.ResolveAlertsEventPayload(ctx, device, nil, event)
 	case esmodel.StateChange:
-		return rez.ResolveStateChangeEventPayload(ctx, device, relation, event)
+		return rez.ResolveStateChangeEventPayload(ctx, device, nil, event)
 	default:
 		return nil, fmt.Errorf("unable to handle resolution for payload type: %s", event.EventType.String())
 	}
@@ -642,17 +629,29 @@ func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model
 // being dropped (ADR-013 addendum 2026-07-01).
 func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
+	// The event's ONE read of its type's published profile. Validation, the classifier
+	// and unit stamp, and the version token below all come from this value, so they all
+	// name the same profile version. Reading it first changes nothing else: every read
+	// here is a read, and every failure maps to ApiCallFailed as each one did before.
+	res, reason, err := rez.resolveProfile(ctx, device)
+	if err != nil {
+		return nil, reason, err
+	}
+
 	// Validate measurements against the device's metric definitions (resolved via
 	// its type's profile, ADR-016/ADR-045): a non-conforming value routes the whole event to the dead-letter
-	// path rather than persisting bad data.
+	// path rather than persisting bad data. Only a measurement indexes the definitions;
+	// every other event type uses the read for its scope alone.
+	var metrics map[string]*model.ResolvedMetric
 	if event.EventType == esmodel.Measurement {
-		if reason, err := rez.validateMeasurements(ctx, device, event); err != nil {
+		metrics = res.MetricsByKey()
+		if reason, err := validateMeasurements(metrics, event); err != nil {
 			return nil, reason, err
 		}
 	}
 
 	// Resolve the payload once — it does not depend on the anchors.
-	resolved, err := rez.ResolveEventPayload(ctx, device, nil, event)
+	resolved, err := rez.ResolveEventPayload(ctx, device, metrics, event)
 	if err != nil {
 		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
@@ -668,22 +667,17 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 			Msg("Resolving event with no anchors (device has no tracked relationship)")
 	}
 
-	// Denormalize the rule-scoping identity (ADR-051) onto the event.
-	scope, reason, err := rez.resolveScope(ctx, device)
-	if err != nil {
-		return nil, reason, err
-	}
-
 	// Surface a position reported by a device whose profile never declared one
 	// (ADR-078). Deliberately AFTER the payload has already resolved and with no
 	// return value: it observes, it never gates. Note it does not appear next to the
 	// measurement validation above, which CAN fail the event — putting it there would
 	// invite the next reader to give it the same power.
 	if event.EventType == esmodel.Location {
-		rez.warnIfLocationUndeclared(ctx, device, scope)
+		rez.warnIfLocationUndeclared(ctx, device, &res.Scope)
 	}
 
-	result := rez.MergeToResolveEvent(device, anchors, memberships, event, resolved, scope)
+	// Denormalize the rule-scoping identity (ADR-051) onto the event.
+	result := rez.MergeToResolveEvent(device, anchors, memberships, event, resolved, &res.Scope)
 	return []EventResolutionResults{*result}, 0, nil
 }
 
@@ -798,22 +792,17 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 }
 
 // validateMeasurements enforces the device's metric definitions (resolved via its
-// type's profile, ADR-045) against an inbound measurement event (ADR-016). It returns (0, nil) when the
-// event conforms or the device type declares no metrics. A transient
-// definition-lookup failure returns FailureReason_ApiCallFailed (retryable); a
-// non-conforming value returns FailureReason_Invalid, routing the event to the
-// dead-letter path. Validation is lenient: an undeclared metric key passes
-// through (model.ValidateMeasurement), so the metric model is an additive typing
-// layer, not a strict allow-list.
-func (rez *EventResolver) validateMeasurements(ctx context.Context, device *model.Device,
-	event *esmodel.UnresolvedEvent) (uint, error) {
+// type's profile, ADR-045) against an inbound measurement event (ADR-016). byKey is the
+// event's one profile read, indexed by metric key; the read itself, and its transient
+// failure, belong to the caller. It returns (0, nil) when the event conforms or the
+// device type declares no metrics; a non-conforming value returns
+// FailureReason_Invalid, routing the event to the dead-letter path. Validation is
+// lenient: an undeclared metric key passes through (model.ValidateMeasurement), so the
+// metric model is an additive typing layer, not a strict allow-list.
+func validateMeasurements(byKey map[string]*model.ResolvedMetric, event *esmodel.UnresolvedEvent) (uint, error) {
 	payload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload)
 	if !ok {
 		return 0, nil
-	}
-	byKey, err := rez.metricDefsByKey(ctx, device)
-	if err != nil {
-		return uint(dmproto.FailureReason_ApiCallFailed), err
 	}
 	if len(byKey) == 0 {
 		return 0, nil

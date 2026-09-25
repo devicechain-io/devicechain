@@ -141,8 +141,8 @@ var compact = compactSizing{
 	// 4 MiB, down from 8, when the credential-attempt State bucket arrived: that
 	// bucket's 16 MiB took the store's headroom 16 MiB under the budget test's floor.
 	// The cache tier is where the room comes from because a full cache bucket
-	// costs a database read, where a full State bucket fails sign-in; six of
-	// them at 4 MiB give back 24.
+	// costs a database read, where a full State bucket fails sign-in; the six
+	// cache buckets there were then, at 4 MiB, gave back 24.
 	KvCacheMaxBytes: 4 << 20,
 	KvStateMaxBytes: 16 << 20,
 

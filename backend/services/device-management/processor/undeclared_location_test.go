@@ -248,7 +248,6 @@ func TestUndeclaredLocationWarnsPerDevice(t *testing.T) {
 func TestNonLocationEventDoesNotConsultTheDeclaration(t *testing.T) {
 	logs := captureWarnings(t)
 	api := locationTestApi("tracker-profile@1")
-	api.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	api.LocationDeclarationResult = nil
 	resolver := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, newUndeclaredLocationMemo())
 

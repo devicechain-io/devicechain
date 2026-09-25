@@ -218,7 +218,6 @@ func measurementEvent(key, value string) *esmodel.UnresolvedEvent {
 // tokens) is denormalized onto every resolved event so event-processing's DETECT
 // engine can select the applicable rules without a graph read (ADR-051).
 func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 	suite.API.ProfileScopeResult = &dmodel.ProfileScope{DeviceTypeToken: "sensor-type", ProfileVersionToken: "temp-profile@3"}
@@ -234,7 +233,7 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
 	assert.Equal(suite.T(), "sensor-type", results[0].Resolved.DeviceTypeToken)
 	assert.Equal(suite.T(), "temp-profile@3", results[0].Resolved.ProfileVersionToken)
 	// The resolver keys the scope on the device's TYPE id, not its row id.
-	assert.Equal(suite.T(), uint(77), suite.API.ProfileScopeArg)
+	assert.Equal(suite.T(), uint(77), suite.API.ProfileResolutionArg)
 }
 
 // The resolver stamps the DEDUPED UNION of the reporting device's and each anchor's
@@ -243,7 +242,6 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesProfileScope() {
 // a geographic (area-anchor) membership both land; a membership shared by two targets
 // appears once.
 func (suite *EventResolverTestSuite) TestResolvedEventCarriesScopeMemberships() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	// One tracked anchor: the device is located-in an area (row id 900).
 	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
@@ -282,7 +280,7 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesScopeMemberships() 
 // relationship that a redelivery would duplicate (a fresh token per attempt is not
 // idempotent). It also maps to the retryable ApiCallFailed reason (ADR-051 review).
 func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnScopeError() {
-	suite.API.ProfileScopeErr = errors.New("transient scope lookup failure")
+	suite.API.ProfileResolutionErr = errors.New("transient scope lookup failure")
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
@@ -412,7 +410,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMembe
 func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {
 	def := &dmodel.MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
 		MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+	suite.API.MetricDefsResult = []*dmodel.MetricDefinition{def}
 
 	_, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
 		context.Background(), deviceWithToken("TEST-123"), measurementEvent("temp", "150"))
@@ -427,7 +425,7 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {
 // ADR-013 addendum 2026-07-01.
 func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 	def := &dmodel.MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
+	suite.API.MetricDefsResult = []*dmodel.MetricDefinition{def}
 	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 
@@ -446,10 +444,9 @@ func (suite *EventResolverTestSuite) TestMeasurementValidationPasses() {
 func (suite *EventResolverTestSuite) TestMeasurementClassifierBound() {
 	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 42}, MetricKey: "temp", DataType: "DOUBLE",
 		Unit: sql.NullString{String: "Cel", Valid: true}}
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), nil, measurementEvent("temp", "42"))
+		context.Background(), deviceWithToken("TEST-123"), defsByKey(def), measurementEvent("temp", "42"))
 
 	assert.NoError(suite.T(), err)
 	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
@@ -470,10 +467,9 @@ func (suite *EventResolverTestSuite) TestMeasurementClassifierBound() {
 // stored 0/1 as false/true). A unit-less metric denormalizes a nil unit.
 func (suite *EventResolverTestSuite) TestMeasurementBooleanNormalized() {
 	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 7}, MetricKey: "engaged", DataType: "BOOLEAN"}
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), nil, measurementEvent("engaged", "true"))
+		context.Background(), deviceWithToken("TEST-123"), defsByKey(def), measurementEvent("engaged", "true"))
 
 	assert.NoError(suite.T(), err)
 	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
@@ -488,7 +484,6 @@ func (suite *EventResolverTestSuite) TestMeasurementBooleanNormalized() {
 // An undeclared numeric measurement resolves unclassified and unchanged (lenient),
 // carrying no denormalized unit/type.
 func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnclassified() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
 		context.Background(), deviceWithToken("TEST-123"), nil, measurementEvent("humidity", "55"))
@@ -505,7 +500,6 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnclassified() {
 // dropped rather than dead-lettering the whole event — its valid numeric siblings
 // still resolve (ADR-016).
 func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
@@ -533,7 +527,6 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped(
 // backstop, since creating such a definition is already rejected (ADR-016).
 func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped() {
 	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 9}, MetricKey: "label", DataType: "STRING"}
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{def}, nil)
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
@@ -546,13 +539,19 @@ func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped()
 	}
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), nil, event)
+		context.Background(), deviceWithToken("TEST-123"), defsByKey(def), event)
 
 	assert.NoError(suite.T(), err)
 	entries := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
 	if assert.Len(suite.T(), entries, 1) {
 		assert.Equal(suite.T(), "temp", entries[0].Name)
 	}
+}
+
+// defsByKey indexes declared definitions the way the resolver receives them: projected
+// through the one ProfileResolution the event reads.
+func defsByKey(defs ...*dmodel.MetricDefinition) map[string]*dmodel.ResolvedMetric {
+	return dmodel.NewProfileResolution(dmodel.ProfileScope{}, defs).MetricsByKey()
 }
 
 // A tracked relationship builds a device with ID 1 as source and the given target.
@@ -569,7 +568,6 @@ func trackedRel(id uint, targetType string, targetToken string) dmodel.EntityRel
 // An unassigned device resolves to exactly one anchorless event — the event
 // belongs to the device and still persists/projects (ADR-013 addendum 2026-07-01).
 func (suite *EventResolverTestSuite) TestUnassignedResolvesAnchorless() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 
@@ -584,7 +582,6 @@ func (suite *EventResolverTestSuite) TestUnassignedResolvesAnchorless() {
 
 // A single assignment anchors the one resolved event on that relationship's target.
 func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
 			trackedRel(7, "customer", "cust-3"),
@@ -603,7 +600,6 @@ func (suite *EventResolverTestSuite) TestSingleAssignmentAnchored() {
 // Several assignments yield one event carrying ALL of them as anchors, so the
 // event is queryable by every dimension (customer, area, asset) — ADR-013 addendum.
 func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
 			trackedRel(5, "area", "area-9"),
@@ -626,7 +622,6 @@ func (suite *EventResolverTestSuite) TestMultipleAssignmentsAllAnchored() {
 // A device type that declares no metric definitions skips validation entirely
 // (an undeclared/untyped fleet is unaffected).
 func (suite *EventResolverTestSuite) TestMeasurementNoDefinitionsSkipsValidation() {
-	suite.API.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 

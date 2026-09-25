@@ -27,7 +27,6 @@ import (
 func stampTestApi(t *testing.T, fenceSetVersion int32) *dmtest.MockApi {
 	t.Helper()
 	api := new(dmtest.MockApi)
-	api.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	api.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 	api.ProfileScopeResult = &dmodel.ProfileScope{

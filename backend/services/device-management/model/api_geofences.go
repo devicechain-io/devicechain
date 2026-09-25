@@ -687,8 +687,8 @@ func (api *Api) GeoFences(ctx context.Context, criteria GeoFenceSearchCriteria) 
 // honest: an event stamped 0 was resolved before any fence existed, while an event
 // stamped 7 was resolved against a fence set that is knowable even if it was empty.
 //
-// It is read on the resolve hot path through ProfileScopeByDeviceType, so it is served
-// from that lookup's existing cache rather than from a cache of its own — see
+// It is read on the resolve hot path through ProfileResolutionByDeviceType, so it is
+// served from that lookup's per-type cache entry rather than from a cache of its own — see
 // CachedApi.EvictFenceSetVersion for how a fence change invalidates it.
 func (api *Api) CurrentFenceSetVersion(ctx context.Context) (int32, error) {
 	found := make([]GeoFenceSetVersion, 0, 1)
@@ -977,7 +977,7 @@ func hydrateGeoFenceSetSnapshot(tx *gorm.DB, stored *storedGeoFenceSetSnapshot) 
 }
 
 // deviceTypeIdsForTenant returns every device type id of the tenant in context — the
-// keys of the ProfileScope cache, which is where the fence-set version is held. It is
+// keys of the ProfileResolution cache, which is where the fence-set version is held. It is
 // the tenant-wide sibling of deviceTypeIdsForProfile and exists for the eviction
 // fan-out only (see CachedApi.EvictFenceSetVersion), never on a read path.
 func (api *Api) deviceTypeIdsForTenant(ctx context.Context) ([]uint, error) {
@@ -1012,8 +1012,8 @@ func (api *Api) deviceTypeIdsForTenant(ctx context.Context) ([]uint, error) {
 //   - it consumes one of the four fence-set versions the engine retains per tenant
 //     (runtime.MaxRetainedFenceSetVersions), so four renames in a row evict a version
 //     still in use by in-flight events and force a blocking archive fetch; and
-//   - it drives evictFenceSetVersion, which is a tenant-wide ProfileScope cache eviction
-//     costing the resolve hot path a miss per device type.
+//   - it drives evictFenceSetVersion, which is a tenant-wide ProfileResolution cache
+//     eviction costing the resolve hot path a miss per device type.
 //
 // Both were paid, repeatedly, for edits that changed nothing.
 //
@@ -1036,7 +1036,7 @@ func (api *Api) deviceTypeIdsForTenant(ctx context.Context) ([]uint, error) {
 // previous fence set. Previously any later no-op edit re-published the current set and
 // repaired that by accident. It no longer does, so the designed paths — JetStream
 // redelivery, the startup reconcile, and the five-minute sweep — are now the ONLY repair
-// for a lost fact, and the ProfileScope TTL the only one for a lost eviction. All three
+// for a lost fact, and the ProfileResolution TTL the only one for a lost eviction. All three
 // exist and are bounded; none of them used to be load-bearing alone.
 //
 // 🔴 VERSION NUMBERS STAY DENSE. Skipping mints NOTHING; it never allocates a number and

@@ -50,12 +50,11 @@ func TestEveryCacheIsDeclaredInTheKvInventory(t *testing.T) {
 	// The bucket name each cache is created under — the value passed to NewCache,
 	// which is what kv.TierFor keys on.
 	used := map[string]string{
-		"DeviceByToken":         CACHE_NAME_DEVICE_BY_TOKEN,
-		"RelationshipsBySource": CACHE_NAME_RELATIONSHIPS_BY_SOURCE,
-		"MetricDefsByType":      CACHE_NAME_METRIC_DEFS_BY_TYPE,
-		"ProfileScopeByType":    CACHE_NAME_PROFILE_SCOPE_BY_TYPE,
-		"MembershipsByEntity":   CACHE_NAME_MEMBERSHIPS_BY_ENTITY,
-		"ScopedGroupsExist":     CACHE_NAME_SCOPED_GROUPS_EXIST,
+		"DeviceByToken":           CACHE_NAME_DEVICE_BY_TOKEN,
+		"RelationshipsBySource":   CACHE_NAME_RELATIONSHIPS_BY_SOURCE,
+		"ProfileResolutionByType": CACHE_NAME_PROFILE_RESOLUTION_BY_TYPE,
+		"MembershipsByEntity":     CACHE_NAME_MEMBERSHIPS_BY_ENTITY,
+		"ScopedGroupsExist":       CACHE_NAME_SCOPED_GROUPS_EXIST,
 	}
 
 	for _, f := range fields {

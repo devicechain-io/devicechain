@@ -63,7 +63,9 @@ func TestValidateMetricValue(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateMetricValue(tc.def, tc.val)
+			// Through the projection resolution caches, so a field it dropped fails here.
+			resolved := tc.def.Resolved()
+			err := ValidateMetricValue(&resolved, tc.val)
 			if tc.ok && err != nil {
 				t.Fatalf("expected valid, got error: %v", err)
 			}
@@ -77,9 +79,9 @@ func TestValidateMetricValue(t *testing.T) {
 // ValidateMeasurement is lenient: an undeclared key passes; a declared key is
 // validated against its definition.
 func TestValidateMeasurementLenient(t *testing.T) {
-	defs := map[string]*MetricDefinition{
-		"temp": {MetricKey: "temp", DataType: "DOUBLE", MaxValue: sql.NullFloat64{Float64: 100, Valid: true}},
-	}
+	temp := (&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
+		MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}).Resolved()
+	defs := map[string]*ResolvedMetric{"temp": &temp}
 	if err := ValidateMeasurement(defs, "humidity", "not-a-number"); err != nil {
 		t.Fatalf("undeclared key must pass through unvalidated, got: %v", err)
 	}

@@ -32,19 +32,26 @@ var DeviceManagementMicroservice = &core.Microservice{
 
 type MockApi struct {
 	mock.Mock
-	// ProfileScopeResult is returned by ProfileScopeByDeviceType (ADR-051). A nil
-	// value (the default) yields an empty scope, so the many resolver tests that
-	// predate the denormalization need not set it; a test asserting scope stamping
-	// sets it. A plain field (not a testify expectation) keeps it lock-free and
-	// deterministic — the suite news a fresh MockApi per test, so it never leaks.
+	// ProfileScopeResult is the scope half of what ProfileResolutionByDeviceType
+	// returns (ADR-051). A nil value (the default) yields an empty scope, so the many
+	// resolver tests that predate the denormalization need not set it; a test asserting
+	// scope stamping sets it. A plain field (not a testify expectation) keeps it
+	// lock-free and deterministic — the suite news a fresh MockApi per test, so it
+	// never leaks.
 	ProfileScopeResult *model.ProfileScope
-	// ProfileScopeArg captures the deviceTypeId last passed to
-	// ProfileScopeByDeviceType, so a test can assert the resolver keys on the
+	// MetricDefsResult is the metrics half: the published version's metric
+	// definitions, projected the way the real loader projects them. Nil (the default)
+	// declares none.
+	MetricDefsResult []*model.MetricDefinition
+	// ProfileResolutionArg captures the deviceTypeId last passed to
+	// ProfileResolutionByDeviceType, so a test can assert the resolver keys on the
 	// device's TYPE id (not, say, its row id).
-	ProfileScopeArg uint
-	// ProfileScopeErr, when set, makes ProfileScopeByDeviceType fail — so a test can
-	// assert scope resolution runs (and aborts) before any state mutation.
-	ProfileScopeErr error
+	ProfileResolutionArg uint
+	// ProfileResolutionCalls counts the reads, so a test can assert one per event.
+	ProfileResolutionCalls int
+	// ProfileResolutionErr, when set, makes ProfileResolutionByDeviceType fail — so a
+	// test can assert profile resolution runs (and aborts) before any state mutation.
+	ProfileResolutionErr error
 
 	// LocationDeclarationResult is returned by LocationDeclarationByDeviceType
 	// (ADR-078). Nil (the default) means the profile declares no location — the state
@@ -233,28 +240,26 @@ func (api *MockApi) MetricDefinitions(ctx context.Context, criteria model.Metric
 	return args.Get(0).(*model.MetricDefinitionSearchResults), args.Error(1)
 }
 
-func (api *MockApi) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*model.MetricDefinition, error) {
-	args := api.Mock.Called()
-	return args.Get(0).([]*model.MetricDefinition), args.Error(1)
-}
-
-// ProfileScopeByDeviceType (ADR-051) returns the suite-set ProfileScopeResult, or
-// an empty scope when unset (the default for tests that don't care about it).
-func (api *MockApi) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*model.ProfileScope, error) {
-	api.ProfileScopeArg = deviceTypeId
-	if api.ProfileScopeErr != nil {
-		return nil, api.ProfileScopeErr
+// ProfileResolutionByDeviceType returns the suite-set ProfileScopeResult and
+// MetricDefsResult as one resolution, or an empty one when neither is set (the default
+// for tests that don't care about it).
+func (api *MockApi) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*model.ProfileResolution, error) {
+	api.ProfileResolutionArg = deviceTypeId
+	api.ProfileResolutionCalls++
+	if api.ProfileResolutionErr != nil {
+		return nil, api.ProfileResolutionErr
 	}
+	scope := model.ProfileScope{}
 	if api.ProfileScopeResult != nil {
-		return api.ProfileScopeResult, nil
+		scope = *api.ProfileScopeResult
 	}
-	return &model.ProfileScope{}, nil
+	return model.NewProfileResolution(scope, api.MetricDefsResult), nil
 }
 
 // LocationDeclarationByDeviceType (ADR-078) returns the suite-set declaration, or nil
 // (undeclared) when unset — the default, so every resolver test that predates the
 // declaration behaves as an undeclared profile without setting anything. Plain fields
-// rather than testify expectations, matching ProfileScopeByDeviceType above: the
+// rather than testify expectations, matching ProfileResolutionByDeviceType above: the
 // resolver may call this zero or one time per event depending on its memo, and a
 // strict expectation would make the memo's own correctness look like a mock failure.
 func (api *MockApi) LocationDeclarationByDeviceType(ctx context.Context, deviceTypeId uint) (*model.LocationDeclaration, error) {

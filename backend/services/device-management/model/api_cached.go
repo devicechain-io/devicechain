@@ -12,20 +12,24 @@ import (
 )
 
 // CachedApi is a caching decorator over *Api implementing the ADR-022 review B2
-// finding: the hot inbound-event resolution path repeats two lookups for a small
+// finding: the hot inbound-event resolution path repeats the same lookups for a small
 // set of devices, so they are cached here. It embeds *Api so every method of
 // DeviceManagementApi is promoted, and overrides only the methods on (and the
-// mutations that invalidate) the two hot lookups:
+// mutations that invalidate) the hot lookups, among them:
 //
 //   - DevicesByToken: device-token -> *Device (positive hits only).
 //   - TrackedRelationshipsForDevice: a device's tracked relationships, the full set
 //     the resolver denormalizes onto every event. It is one named method rather than
 //     a recognized shape of the general relationship search; the search itself is not
 //     cached and goes to the DB by promotion.
+//   - ProfileResolutionByDeviceType: a device type's published profile — metric
+//     definitions, rule scope and fence-set version — as one entry read once per event.
 //
 // AuthenticateDevice and ResolveDeviceCredential are deliberately NOT cached:
 // credential validation is security-sensitive (caching would delay the effect of
 // revocation/expiry), so both always go straight to the DB via method promotion.
+// Each costs one indexed SELECT (credential JOIN device) per call, which is the price
+// of a disable, delete or expiry taking effect on the very next event.
 //
 // Tenant scoping: every cache key includes the tenant derived from the context, so
 // one tenant can never read another tenant's device or relationships (a
@@ -111,8 +115,8 @@ func (capi *CachedApi) EvictScopedGroupsExist(ctx context.Context) {
 }
 
 // EvictFenceSetVersion satisfies model.CacheEvictor (ADR-078): a geofence mutation minted
-// a new tenant fence-set version, and that version is carried in the cached ProfileScope,
-// so every device type of the tenant holds a stale copy.
+// a new tenant fence-set version, and that version rides in the per-type cached
+// ProfileResolution, so every device type of the tenant holds a stale copy.
 //
 // It fires only when a version was actually minted — an edit that leaves the fence set as
 // it was mints nothing and reaches neither this nor the fan-out below, because the cached
@@ -122,8 +126,11 @@ func (capi *CachedApi) EvictScopedGroupsExist(ctx context.Context) {
 // WHILE ITS CACHE KEY IS PER-TYPE. That mismatch is the deliberate cost of reusing the
 // resolve path's existing lookup instead of adding a second cache: the fan-out runs once
 // per authoring action over a set measured in tens, while the alternative would add a
-// per-event cache read and a second bucket to keep coherent. Missing a type is bounded
-// by the ProfileScope cache TTL and is stale-but-coherent (see the interface comment),
+// per-event cache read and a second bucket to keep coherent. Because the version shares
+// its entry with the type's metric definitions, the eviction costs the next event of each
+// type a FULL resolution miss (type, profile and version snapshot re-read), not a
+// scope-only one — still once per authoring action per type. Missing a type is bounded
+// by the ProfileResolution cache TTL and is stale-but-coherent (see the interface comment),
 // which is why a read failure here is swallowed rather than surfaced — the fence write
 // has already committed and must not be reported as failed over a cache sweep.
 func (capi *CachedApi) EvictFenceSetVersion(ctx context.Context) {
@@ -136,7 +143,7 @@ func (capi *CachedApi) EvictFenceSetVersion(ctx context.Context) {
 		return
 	}
 	for _, typeId := range typeIds {
-		_ = capi.caches.ProfileScopeByType.Delete(ctx, profileScopeByTypeKey(tenant, typeId))
+		_ = capi.caches.ProfileResolutionByType.Delete(ctx, profileResolutionByTypeKey(tenant, typeId))
 	}
 }
 
@@ -165,7 +172,7 @@ func (capi *CachedApi) AnyScopedGroups(ctx context.Context) (bool, error) {
 // must not query on every event). A lookup without a tenant in context bypasses the
 // cache and goes straight to the DB.
 //
-// Like the sibling read-through caches here (MetricDefsByType, ProfileScopeByType), this is
+// Like the sibling read-through cache here (ProfileResolutionByType), this is
 // cache-aside: a mutation evicts post-commit, but a read that missed and is repopulating
 // across that commit can re-store the pre-commit value, so worst-case staleness is TTL-
 // bounded, not the eviction instant. That is the accepted posture for these caches. ADR-062's
@@ -327,11 +334,11 @@ func (capi *CachedApi) CreateEntityRelationship(ctx context.Context,
 	return created, nil
 }
 
-// UpdateDeviceType forwards to the DB then evicts the type's cached metric
-// definitions. Attaching, changing, or detaching the type's profile (ADR-045)
+// UpdateDeviceType forwards to the DB then evicts the type's cached profile
+// resolution. Attaching, changing, or detaching the type's profile (ADR-045)
 // changes what the ingest path resolves for this type — the same class of
 // resolution change as a publish/rollback on the profile — so the type's cached
-// def set must be dropped. Bounded further by the cache TTL if eviction fails.
+// entry must be dropped. Bounded further by the cache TTL if eviction fails.
 func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
 	request *DeviceTypeUpdateRequest) (*DeviceType, error) {
 	updated, err := capi.Api.UpdateDeviceType(ctx, token, request)
@@ -340,74 +347,43 @@ func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
 	}
 	if updated != nil {
 		if tenant, ok := core.TenantFromContext(ctx); ok {
-			_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, updated.ID))
-			_ = capi.caches.ProfileScopeByType.Delete(ctx, profileScopeByTypeKey(tenant, updated.ID))
+			_ = capi.caches.ProfileResolutionByType.Delete(ctx, profileResolutionByTypeKey(tenant, updated.ID))
 		}
 	}
 	return updated, nil
 }
 
-// metricDefsByTypeKey builds the tenant-scoped cache key for a device type's
-// declared metric definitions, keyed by the device type row id.
-func metricDefsByTypeKey(tenant string, deviceTypeId uint) string {
+// profileResolutionByTypeKey builds the tenant-scoped cache key for a device type's
+// ProfileResolution, keyed by the device type row id.
+func profileResolutionByTypeKey(tenant string, deviceTypeId uint) string {
 	return fmt.Sprintf("%s|%d", tenant, deviceTypeId)
 }
 
-// MetricDefinitionsByDeviceType serves the ingest validation path's per-device-type
-// metric-definition lookup from cache, including empty results (an untyped device
-// type is the common case and must not query on every measurement event). A lookup
-// without a tenant in context bypasses the cache and goes straight to the DB.
-func (capi *CachedApi) MetricDefinitionsByDeviceType(ctx context.Context, deviceTypeId uint) ([]*MetricDefinition, error) {
+// ProfileResolutionByDeviceType serves the resolve path's per-device-type profile read
+// from cache, including empty resolutions (an untyped or unpublished device type is
+// common and must not query on every event). A lookup without a tenant in context
+// bypasses the cache and goes straight to the DB.
+func (capi *CachedApi) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileResolution, error) {
 	tenant, hasTenant := core.TenantFromContext(ctx)
 	if !hasTenant {
-		return capi.Api.MetricDefinitionsByDeviceType(ctx, deviceTypeId)
+		return capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
 	}
 
-	key := metricDefsByTypeKey(tenant, deviceTypeId)
-	var cached []*MetricDefinition
-	if found, err := capi.caches.MetricDefsByType.Get(ctx, key, &cached); err == nil && found {
-		return cached, nil
-	}
-
-	defs, err := capi.Api.MetricDefinitionsByDeviceType(ctx, deviceTypeId)
-	if err != nil {
-		return nil, err
-	}
-	_ = capi.caches.MetricDefsByType.Set(ctx, key, defs)
-	return defs, nil
-}
-
-// profileScopeByTypeKey builds the tenant-scoped cache key for a device type's
-// denormalized rule-scoping identity (ADR-051), keyed by the device type row id.
-func profileScopeByTypeKey(tenant string, deviceTypeId uint) string {
-	return fmt.Sprintf("%s|%d", tenant, deviceTypeId)
-}
-
-// ProfileScopeByDeviceType serves the resolve path's per-device-type scope lookup
-// (ADR-051) from cache, including empty scopes (an untyped or unpublished device
-// type is common and must not query on every event). A lookup without a tenant in
-// context bypasses the cache and goes straight to the DB.
-func (capi *CachedApi) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error) {
-	tenant, hasTenant := core.TenantFromContext(ctx)
-	if !hasTenant {
-		return capi.Api.ProfileScopeByDeviceType(ctx, deviceTypeId)
-	}
-
-	key := profileScopeByTypeKey(tenant, deviceTypeId)
-	var cached ProfileScope
-	if found, err := capi.caches.ProfileScopeByType.Get(ctx, key, &cached); err == nil && found {
+	key := profileResolutionByTypeKey(tenant, deviceTypeId)
+	var cached ProfileResolution
+	if found, err := capi.caches.ProfileResolutionByType.Get(ctx, key, &cached); err == nil && found {
 		return &cached, nil
 	}
 
-	scope, err := capi.Api.ProfileScopeByDeviceType(ctx, deviceTypeId)
+	res, err := capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
 	if err != nil {
 		return nil, err
 	}
-	_ = capi.caches.ProfileScopeByType.Set(ctx, key, scope)
-	return scope, nil
+	_ = capi.caches.ProfileResolutionByType.Set(ctx, key, res)
+	return res, nil
 }
 
-// PublishDeviceProfile forwards to the DB then evicts the cached definitions of
+// PublishDeviceProfile forwards to the DB then evicts the cached resolution of
 // every device type adopting the profile: resolution serves the active PUBLISHED
 // version (ADR-045 slice c), so a publish is exactly when the cached set changes and
 // must be dropped (a draft edit does not change resolution, so def create/update no
@@ -422,7 +398,7 @@ func (capi *CachedApi) PublishDeviceProfile(ctx context.Context, token string,
 	return version, nil
 }
 
-// RollbackDeviceProfile forwards to the DB then evicts the cached definitions of
+// RollbackDeviceProfile forwards to the DB then evicts the cached resolution of
 // every device type adopting the profile, since the active version pointer (what
 // resolution reads) just moved.
 func (capi *CachedApi) RollbackDeviceProfile(ctx context.Context, token string, version int32) (*DeviceProfile, error) {
@@ -441,8 +417,8 @@ func (capi *CachedApi) RollbackDeviceProfile(ctx context.Context, token string, 
 //
 // One used to sit here: updateDeviceProfile carried the rename in its payload token, and
 // a rename changes the denormalized ProfileVersionToken "{profileToken}@{version}"
-// (ADR-051) that resolution stamps onto every event — a dependency the metric-def cache
-// does not have — so the override dropped the cached scope of every device type adopting
+// (ADR-051) that resolution stamps onto every event — a dependency the metric definitions
+// alone did not have — so the override dropped the cached scope of every device type adopting
 // the profile.
 //
 // Two things ended that. The rename moved to its own mutation (Api.RenameDeviceProfile),
@@ -456,7 +432,7 @@ func (capi *CachedApi) RollbackDeviceProfile(ctx context.Context, token string, 
 // every ingest cache. The guard and this absence are one decision, and the guard's
 // comment in api_profiles.go is where it is argued.
 
-// evictProfileResolution drops the cached definitions of every device type adopting
+// evictProfileResolution drops the cached resolution of every device type adopting
 // the profile whose active version changed. The ingest cache is keyed by device
 // type (what the hot path has), but versioning lives on the profile (ADR-045), so
 // eviction fans back out across the adopting types. A shared profile is rare and
@@ -471,7 +447,6 @@ func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uin
 		return
 	}
 	for _, typeId := range typeIds {
-		_ = capi.caches.MetricDefsByType.Delete(ctx, metricDefsByTypeKey(tenant, typeId))
-		_ = capi.caches.ProfileScopeByType.Delete(ctx, profileScopeByTypeKey(tenant, typeId))
+		_ = capi.caches.ProfileResolutionByType.Delete(ctx, profileResolutionByTypeKey(tenant, typeId))
 	}
 }

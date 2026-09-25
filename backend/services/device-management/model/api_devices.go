@@ -57,7 +57,7 @@ func (api *Api) profileIdForDeviceType(ctx context.Context, deviceTypeId uint) (
 
 // profileTokenForDeviceType resolves a device type's adopted profile's STABLE token
 // (ADR-051 slice 4c-2) — the profile identity, not the "{profileToken}@{version}"
-// published-version token. Unlike ProfileScopeByDeviceType it does NOT require the
+// published-version token. Unlike ProfileResolutionByDeviceType it does NOT require the
 // profile to be published: a device is rostered under its profile the moment its type
 // adopts one, so a later first-publish can arm absence for it. Returns "" when the type
 // is unknown or has no profile — a roster entry with no resolvable rules, retained so a
