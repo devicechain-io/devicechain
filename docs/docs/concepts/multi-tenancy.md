@@ -4,36 +4,47 @@ title: Multi-Tenancy
 
 # Multi-Tenancy
 
-DeviceChain runs a **single shared set of microservices per instance** that serves all tenants, rather than spinning up a separate stack of pods for each tenant. Isolation is enforced at the messaging and storage layers.
+Each DeviceChain instance runs a **single shared set of microservices** that serves all of its tenants. It does not start a separate stack of pods for each tenant. Isolation between tenants is enforced at the messaging and storage layers instead.
 
 ## The instance and its tenants
 
 One Kubernetes custom resource models the platform itself:
 
-- **`Instance`** (cluster-scoped) — one per installation. Represents the platform.
+- **`Instance`** (cluster-scoped): one per installation. It represents the platform.
 
-Tenants are **not** Kubernetes resources. A tenant is a control-plane **database record** — a registry entry plus per-tenant configuration — created on demand through the instance admin API and the `/admin` console. Tenants share the instance's services and do **not** get their own pods. A fresh instance is **tenant-less**: it seeds only a superuser, who creates the first tenant from the admin console.
+Tenants are not Kubernetes resources. A tenant is a control-plane **database record**: a registry entry plus per-tenant configuration. You create tenants on demand through the instance admin API and the `/admin` console. Tenants share the instance's services and do not get their own pods.
+
+A fresh instance has no tenants. It seeds only a superuser, who creates the first tenant from the admin console.
 
 ## Isolation {#isolation}
 
-- **Storage (enforced)** — every tenant-owned row carries a `tenant_id`, and a central database scope applies a `WHERE tenant_id = …` predicate to every read and stamps it on every write. The scope is **fail-closed**: a tenant-scoped query with no tenant in context is rejected, so a missing filter cannot leak another tenant's data. The per-request tenant comes from the caller's verified JWT tenant claim, and the per-message tenant is derived from the messaging subject.
-- **Messaging (enforced)** — subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`), so a tenant's traffic is namespaced on the bus. On the **device plane** this is enforced at the broker: the MQTT/NATS listeners are TLS, a NATS auth-callout binds each device connection to its own tenant's subjects, and the messaging write/subscribe points reject a malformed tenant segment — so a device cannot publish into or subscribe to another tenant's subjects.
-- **Auth** — JWTs carry tenant claims that resolve the request tenant; services validate them locally without a per-request network call.
+- **Storage (enforced).** Every tenant-owned row carries its tenant, in a `tenant_id` column on almost every table (a few detection-engine tables name it `tenant`). A central database scope applies a `WHERE tenant_id = …` predicate, on whichever tenant column the table has, to every read and stamps the tenant on every write. If a tenant-scoped query has no tenant in context, the scope rejects it, so a missing filter cannot leak another tenant's data. For API requests, the tenant comes from the tenant claim in the caller's verified JWT (internal service calls are the one exception, described below). For messages, the tenant is derived from the messaging subject.
+- **Messaging (enforced).** Subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`), so each tenant's traffic has its own namespace on the bus. On the device plane the broker enforces this:
+  - the MQTT/NATS listeners use TLS;
+  - a NATS auth-callout, in which the broker asks the platform to authorize each connection, binds each device connection to its own tenant's subjects;
+  - the messaging write and subscribe points reject a malformed tenant segment.
+
+  As a result, a device cannot publish into or subscribe to another tenant's subjects.
+- **Auth.** JWTs carry tenant claims that resolve the request's tenant. Services validate them locally, without a network call per request.
 
 ## Deleting a tenant
 
-Because a tenant is a database record rather than a set of pods, removing one is not a
-matter of tearing down infrastructure — it is reclaiming rows, streams, cached lookups and
-uploaded objects that are spread across every storage system the instance uses, all of them
-keyed on the tenant's token. So deletion is a **lifecycle**: access is cut immediately, the
-data is reclaimed in the background, and the token stays reserved until that finishes and
-no connection predating the delete could still write under it. See
-[Tenant Deletion](../deployment/tenant-deletion.md).
+A tenant is a database record, not a set of pods, so deleting one is not a matter of tearing down infrastructure. Its data is rows, streams, cached lookups and uploaded objects, spread across every storage system the instance uses and all keyed on the tenant's token.
+
+Deletion is therefore a lifecycle:
+
+1. Access is cut immediately.
+2. The data is reclaimed in the background.
+3. The token stays reserved until reclamation finishes and no connection that predates the delete could still write under it.
+
+See [Tenant Deletion](../deployment/tenant-deletion.md).
 
 ## Why shared microservices
 
-Running one set of services for all tenants keeps the cluster footprint small and the operational model simple, while the enforced row-level scope (plus subject scoping on the bus) provides the isolation that matters. The shared services derive each request's or message's tenant and scope all data access to it automatically.
+One set of services for all tenants keeps the cluster footprint small and the operational model simple. The enforced row-level scope, plus subject scoping on the bus, provides the isolation that matters. The shared services work out the tenant of each request or message and scope all data access to it automatically.
+
+The API-path tenant is taken from the caller's verified RS256 JWT tenant claim. The one exception is an internal service-to-service call: its service token has no tenant claim, so the calling service names the tenant in a request header, which is honored only after the service token's signature is verified. The shared pod consumes every tenant's messages over a wildcard subject and derives each message's tenant from its subject. An earlier, temporary mechanism that trusted a tenant header set by a gateway has been removed.
 
 :::note Status
-Runtime tenant scoping on the data path is enforced today (fail-closed): the API-path tenant is sourced from the caller's verified RS256 JWT tenant claim, and the shared pod consumes every tenant's messages over a wildcard subject, deriving each message's tenant from its subject. The earlier temporary trusted-gateway-header seam has been removed.
+Runtime tenant scoping on the data path is enforced today. A tenant-scoped query with no tenant is rejected.
 :::
