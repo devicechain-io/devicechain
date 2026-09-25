@@ -36,7 +36,8 @@ var (
 
 	// RateLimiter meters inbound events per tenant against the platform ingest
 	// ceiling; over-limit events are shed at the receive point before decode. It
-	// meters on WALL-CLOCK arrival and serves every source that is keeping up.
+	// meters on WALL-CLOCK arrival and serves every authenticated source that is
+	// keeping up (HTTP ingest is metered in HttpRateLimiter).
 	RateLimiter *core.TenantRateLimiter
 
 	// BacklogRateLimiter meters events being drained from the capture stream well
@@ -60,11 +61,36 @@ var (
 	//
 	// The cost is that a tenant who is simultaneously live AND draining a real
 	// backlog can be admitted up to twice their ceiling for the duration of the
-	// drain. That is bounded, predictable, and strictly smaller than the exposure
-	// the platform already carries from running N replicas with independent
-	// limiters — where an unbounded, lag-scaled bypass is a different category of
+	// drain (three times, with HTTP; see HttpRateLimiter). That is bounded and
+	// predictable — where an unbounded, lag-scaled bypass is a different category of
 	// problem entirely.
 	BacklogRateLimiter *core.TenantRateLimiter
+
+	// HttpRateLimiter meters HTTP ingest, and only HTTP ingest: every message whose
+	// tenant is a string the sender chose before any credential was checked
+	// (processor.OriginUntrusted).
+	//
+	// It is separate from RateLimiter because HTTP admits a message BEFORE the device
+	// credential in its body is checked. Anyone who can reach the HTTP port and knows a
+	// tenant's name can post as that tenant; on a shared allowance such a caller could
+	// spend it and shed the tenant's captured MQTT telemetry, which the capture source
+	// acks away — permanent loss of data the broker had already PUBACKed. Separate, the
+	// most such a caller can exhaust is the tenant's HTTP allowance, which is
+	// unavoidable while HTTP admits before it authenticates.
+	//
+	// The residual: this limiter resolves the same ceiling as the other two, so a
+	// tenant sending over HTTP while its authenticated traffic is live and draining a
+	// backlog can be admitted up to three times its ceiling per replica.
+	//
+	// It alone holds the bounded pool of unconfirmed tenant names and the shared
+	// overflow bucket past it (core.TenantRateLimiter.AllowUntrusted). On an instance
+	// with no user-management no name is ever confirmed (a static ceiling confirms
+	// nothing untrusted), so during a spray of invented names past the pool a real
+	// tenant's HTTP traffic can land in the overflow too. Before this limiter existed a
+	// real tenant's own authenticated traffic promoted it to a confirmed bucket on the
+	// shared limiter; that no longer happens. Such an instance is a development
+	// topology (the chart always wires user-management) and the result is still bounded.
+	HttpRateLimiter *core.TenantRateLimiter
 
 	// ShedPriorityResolver resolves a tenant's ADR-063 shed priority (band) from
 	// user-management, cached like the ingest ceiling. It is what turns the contention
@@ -256,7 +282,7 @@ func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (in
 	}
 }
 
-// buildRateLimiter constructs the per-tenant ingest limiter. When the service
+// buildRateLimiter constructs the per-tenant ingest limiters. When the service
 // secret and user-management endpoint are configured, per-tenant overrides
 // (ADR-023) and shed priorities (ADR-063) are fetched from user-management over a
 // service token and cached, failing open to the platform default; otherwise every
@@ -264,10 +290,12 @@ func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (in
 // Either way the ceiling is a real limit — never unlimited — since ApplyDefaults
 // guarantees positive platform defaults.
 //
-// Both limiters report admissions metered at the platform default for want of a
+// All three limiters report admissions metered at the platform default for want of a
 // tenant's own ceiling to ONE counter (a message reaches exactly one of them), and the
-// live limiter — the only one HTTP ingest's unconfirmed tenant names reach — reports
-// admissions its shared overflow allowance served.
+// HTTP limiter — the only one HTTP ingest's unconfirmed tenant names reach — reports
+// admissions its shared overflow allowance served. The overflow option goes to that
+// limiter alone: nothing calls AllowUntrusted on the other two, and the counter is one
+// registration, so it belongs to exactly one limiter.
 func buildRateLimiter() {
 	unresolved := core.WithUnresolvedAdmissions(governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
 	overflow := core.WithOverflowAdmissions(governance.NewOverflowAdmissions(Microservice))
@@ -280,16 +308,17 @@ func buildRateLimiter() {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant ingest overrides disabled; metering every tenant at the platform default.")
 		flat := core.StaticCeiling(def.MessagesPerSecond, def.Burst)
 		// No user-management ⇒ no shed priorities to differentiate tenants; everyone
-		// resolves to the fail-safe bronze band. Still honor the floor on the LIVE
-		// limiter so a drill in a no-UM dev instance behaves, but nothing here reads a
+		// resolves to the fail-safe bronze band. Still honor the floor on the LIVE and
+		// HTTP limiters so a drill in a no-UM dev instance behaves, but nothing here reads a
 		// tenant's tier. The backlog limiter is NOT shed (see below).
 		// No user-management ⇒ no per-tenant priorities. Everyone resolves to the
 		// fail-safe bronze band, and it IS resolved (there is no authority to be
 		// transiently down, so the default is the real answer here — unlike the
 		// UM-backed path, where an unfetched tenant is genuinely unresolved).
 		shedPrio := func(string) (int, bool) { return governance.DefaultShedPriority, true }
-		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
+		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
+		HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
@@ -307,8 +336,12 @@ func buildRateLimiter() {
 	// shedding the backlog would retroactively discard already-accepted, already-durable
 	// data — a violation of that invariant AND of ADR-030's durability promise. So the
 	// backlog drains un-shed: contention shapes new ingress, never recovery of committed data.
-	RateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved, overflow)
+	//
+	// The HTTP limiter is shed exactly like the live one: HTTP is new ingress, judged at
+	// admission, so the backlog's exemption does not apply to it.
+	RateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved)
 	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Ceiling, unresolved)
+	HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved, overflow)
 	log.Info().Str("userManagement", umURL).Int("contentionFloor", contentionLevel()).
 		Msg("Per-tenant ingest overrides + ADR-063 shed priorities enabled (fail-open to platform default).")
 }
@@ -341,7 +374,7 @@ func buildEventSources() error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	ingestGate = processor.RefuseDeletedTenants(
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources"),
-		processor.NewRateGate(RateLimiter, BacklogRateLimiter, onRateShed),
+		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, onRateShed),
 		onTenantGone)
 
 	for _, source := range Configuration.EventSources {

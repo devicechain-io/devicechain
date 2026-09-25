@@ -1521,6 +1521,10 @@ upgrading (see "`checkpointIntervalSeconds` is capped at 30, and some silent fai
 If you write GraphQL documents by hand, read "GraphQL documents must use GraphQL's own comments and
 strings": Go-style comments, backquoted strings and single-quoted characters are now refused.
 
+If you accept device traffic over HTTP, or size tier ingest ceilings for billing, read "HTTP
+ingest has its own allowance". If you read an event's `processedTime`, or rely on windowed detection rules after an
+`event-sources` outage, read "`processedTime` now means when the platform received an event". If you watch pod restart counts, read "A lost presence connection now restarts `event-sources`".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -1989,6 +1993,78 @@ following.
   stays open.
 
 [Request limits](../reference/graphql-api.md#request-limits) has the details.
+
+#### HTTP ingest has its own allowance
+
+HTTP ingest requests are now metered against a per-tenant allowance of their own. Before this
+release they spent the same allowance as the tenant's MQTT, NATS and broker presence traffic. HTTP
+takes the tenant from the request path and checks the device credential only after the request is
+admitted, so anyone who could reach port 8081 and knew a tenant's name could use that allowance up
+and cause the tenant's MQTT telemetry to be dropped, including messages the broker had already
+acknowledged to the device. Now such a caller can use up only the tenant's HTTP allowance.
+
+This changes what a tier's ingest ceiling means. On each `event-sources` replica the ceiling
+already applied separately to live device traffic and to a backlog drained after an outage, and
+HTTP is now a third allowance beside them. A tenant can therefore be admitted at up to three times its ceiling per replica
+in the worst case ([When ingest can admit a tenant above its
+ceiling](../concepts/governance.md#ingest-above-ceiling)). If you size tier ceilings for billing or
+capacity, allow for it.
+
+Expose port 8081 only behind network controls, such as a NetworkPolicy or an ingress that
+authenticates callers. The chart does not route it through its ingress, but by default any pod in
+the cluster can reach it.
+
+#### `processedTime` now means when the platform received an event
+
+An event's `processedTime` (in GraphQL, and the `processed_time` column of the analytics `events`
+view) is now the time the platform **received** the event. For MQTT on the platform's broker, that
+is the moment the broker stored the message. Before this release it was the moment `event-sources`
+decoded it. Normally the two differ by milliseconds, but after an `event-sources` outage they
+differed by the whole outage.
+
+An event sent with no `occurredTime` is now also dated when it was received, so readings that
+waited in the platform during an outage keep the time they arrived rather than the time they were
+processed. What follows from that:
+
+- **Windowed detection rules can miss such readings after an outage.** Readings arriving over LwM2M
+  or Sparkplug keep the detection engine's frontier at the current time while `event-sources` is
+  down. When `event-sources` catches up, readings it dates an outage in the past arrive late to
+  repeating, sliding-aggregate and correlation rules: they are stored and charted, but not counted
+  in those windows, and `detect_late_samples_total` rises. Readings that carry their own
+  `occurredTime` have always behaved this way. See [what "when" means to the detection
+  engine](./detection-engine.md#timing-what-when-means).
+- **Events decoded on both sides of the upgrade can be stored twice.** An event's id is derived
+  from its content, including its `occurredTime`. A message with no `occurredTime` that was stored
+  before the upgrade and is delivered again after it now gets a different time, and so a different
+  id. This can happen only to messages that were still waiting to be acknowledged while the
+  upgrade rolled out.
+- Rows written before the upgrade are not changed.
+- Measurement rollups place a backlog in the buckets for when it was received. The rollups are
+  refreshed 30 days back, so nothing from a shorter outage is left out of them.
+- Outbound actions are metered on when their telemetry reached the platform. For telemetry that
+  waited out an `event-sources` outage, that is now when it arrived rather than when it was
+  decoded. For a tenant whose only traffic waited in the broker, the catch-up is therefore not
+  charged as one burst. A tenant that also sent telemetry over LwM2M or Sparkplug during the
+  outage has already moved its outbound meter to the present, so its backlog is still charged
+  together, as it was before.
+
+#### A lost presence connection now restarts `event-sources`
+
+`event-sources` reads MQTT connection events from the broker over a connection of its own, signed in
+with the system-account credential. If the broker closed that connection for good, for example
+because it stopped accepting the credential, the pod carried on as live and ready with broker
+presence silently frozen: nothing was asserted or released, and nothing restarted it.
+
+Now the pod fails its liveness check and Kubernetes restarts it. A refused credential reaches every
+replica at once, so **every `event-sources` pod restarts**, and HTTP ingest is unavailable while
+they do; MQTT telemetry is stored by the broker and processed when they return. If the restarted
+pods still cannot sign in, broker presence turns off with reason `broker_unreachable` and asserted
+devices return to inferred presence, as when the broker cannot be reached at startup ([Device
+presence](../concepts/device-presence.md)).
+
+If the system-account credential changes, for example during a credential rotation, a pod whose
+connection the broker drops before the pod itself is replaced restarts once. Expect that to show as
+a restart count.
 
 ### The one-time durable-ingest cutover
 

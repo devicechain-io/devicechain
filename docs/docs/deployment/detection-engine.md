@@ -219,6 +219,15 @@ by half an hour. Where that trade does not work, the answer is to shorten the up
 keep window-shaped rules off those metrics — see [connecting a
 device](../guides/connecting-a-device.md).
 
+The same applies to readings that waited **inside the platform**. While `event-sources` is down,
+the platform broker keeps storing what devices publish over MQTT, and `event-sources` works through
+that backlog when it returns. Each reading keeps its own time: one the device reported, or, for a
+reading sent with no `occurredTime`, the moment the broker received it. Only transports that
+bypass `event-sources` keep arriving in the meantime: LwM2M and Sparkplug do, and they keep the
+frontier at "now", while HTTP ingest is served by `event-sources` itself and is down with it. After an outage longer than a rule's window, the backlog therefore arrives late to the
+sliding kinds, exactly as a store-and-forward upload does: it is stored and charted normally, is
+not folded into those windows, and `detect_late_samples_total` rises.
+
 ### How quickly can an absence rule fire?
 
 An "absence" or "silence" rule cannot fire the instant a device goes quiet — nothing arrives to
@@ -330,7 +339,7 @@ timestamp may lead the platform's own clock is decided once, when the event is r
 every consumer — the stored history, the live projections, detection and replay alike —
 reads the same already-bounded value. It is configured on the device-management area as
 `maxEventFutureSkewSeconds`, in seconds, **default 300**. A reading whose reported time leads the
-server's clock by more than that is stored at the ceiling rather than refused.
+moment the platform received it by more than that is stored at the ceiling rather than refused.
 
 A **negative value is rejected at startup**, and it is worth knowing what it would have meant:
 disabling the bound entirely. One event dated years into the future then pins the device's

@@ -6,6 +6,7 @@ package processor
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/rs/zerolog/log"
@@ -31,6 +32,11 @@ type rawMessage struct {
 	// redelivery of the same captured message is stored once — see
 	// processor.DedupID (ADR-030 amendment).
 	captureSeq uint64
+	// receivedAt is the broker time the capture stream stored the message: when the
+	// platform received it. It becomes the event's ProcessedTime, and the OccurredTime
+	// of an event that reports none, and it is identical on every redelivery. Zero for
+	// a transport with none (the external-broker MQTT source), read as now.
+	receivedAt time.Time
 	// done reports the outcome of handling this message back to the source that
 	// produced it, so the source can acknowledge the broker only once the payload
 	// is durably forwarded. nil for a fire-and-forget transport, which is why every
@@ -107,7 +113,7 @@ func (wrk *DecodeWorker) Process() {
 		raw, more := <-wrk.RawMessages
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Decode handled by worker id %d", wrk.WorkerId))
-			event, payload, err := wrk.Decoder.Decode(raw.payload)
+			event, payload, err := wrk.Decoder.Decode(raw.payload, raw.receivedAt)
 			if err == nil {
 				err = checkDeviceMatchesTransport(raw, event)
 			}

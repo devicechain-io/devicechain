@@ -1621,6 +1621,11 @@ GraphQL a mano, lea «Los documentos de GraphQL deben usar los comentarios y las
 GraphQL»: los comentarios al estilo de Go, las cadenas entre comillas invertidas y los caracteres
 entre comillas simples ahora se rechazan.
 
+Si acepta tráfico de dispositivos por HTTP, o dimensiona los techos de ingesta de los niveles para
+facturar, lea «La ingesta HTTP tiene su propia asignación». Si lee el `processedTime` de un evento, o depende de reglas de detección con ventana tras una caída
+de `event-sources`, lea «`processedTime` ahora significa cuándo la plataforma recibió un evento». Si vigila los recuentos de reinicios de pods, lea «Perder la conexión de presencia ahora reinicia
+`event-sources`».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2123,6 +2128,80 @@ MCP nunca envían nada de lo siguiente.
   operación; la conexión sigue abierta.
 
 [Límites de las solicitudes](../reference/graphql-api.md#request-limits) tiene los detalles.
+
+#### La ingesta HTTP tiene su propia asignación
+
+Las peticiones de ingesta HTTP se miden ahora contra una asignación por inquilino propia. Antes de
+esta versión consumían la misma asignación que el tráfico MQTT, NATS y de presencia del broker del
+inquilino. HTTP toma el inquilino de la ruta de la petición y comprueba la credencial del
+dispositivo solo después de admitir la petición, así que cualquiera que pudiera llegar al puerto
+8081 y conociera el nombre de un inquilino podía agotar esa asignación y hacer que se descartara la
+telemetría MQTT del inquilino, incluidos mensajes que el broker ya había confirmado al dispositivo.
+Ahora quien haga eso solo puede agotar la asignación HTTP del inquilino.
+
+Esto cambia lo que significa el techo de ingesta de un nivel. En cada réplica de `event-sources` el
+techo ya se aplicaba por separado al tráfico en vivo de los dispositivos y a un atraso que se drena
+tras una caída, y HTTP es ahora una tercera asignación junto a ellas. En el peor caso, un inquilino puede
+ser admitido hasta al triple de su techo por réplica ([Cuándo la ingesta puede admitir a un
+inquilino por encima de su techo](../concepts/governance.md#ingest-above-ceiling)). Si dimensiona
+los techos de los niveles para facturar o por capacidad, téngalo en cuenta.
+
+Exponga el puerto 8081 solo detrás de controles de red, como una NetworkPolicy o un ingress que
+autentique a quien llama. El chart no lo enruta por su ingress, pero por defecto cualquier pod del
+clúster puede llegar a él.
+
+#### `processedTime` ahora significa cuándo la plataforma recibió un evento
+
+El `processedTime` de un evento (en GraphQL, y la columna `processed_time` de la vista analítica
+`events`) es ahora la hora en que la plataforma **recibió** el evento. Para MQTT en el broker de la
+plataforma, es el momento en que el broker guardó el mensaje. Antes de esta versión era el momento
+en que `event-sources` lo decodificaba. Normalmente los dos difieren en milisegundos, pero tras una
+caída de `event-sources` diferían en toda la duración de la caída.
+
+Un evento enviado sin `occurredTime` también se fecha ahora cuando se recibió, así que las
+lecturas que esperaron en la plataforma durante una caída conservan la hora en que llegaron y no
+la hora en que se procesaron. De ahí se sigue:
+
+- **Las reglas de detección con ventana pueden perder esas lecturas tras una caída.** Las lecturas
+  que llegan por LwM2M o Sparkplug mantienen la frontera del motor de detección en la hora actual
+  mientras `event-sources` está caído. Cuando `event-sources` se pone al día, las lecturas que fecha
+  una caída atrás llegan tarde a las reglas de repetición, de agregado deslizante y de correlación:
+  se almacenan y se grafican, pero no cuentan en esas ventanas, y `detect_late_samples_total` sube.
+  Las lecturas que llevan su propio `occurredTime` siempre se han comportado así. Vea [qué
+  significa «cuándo» para el motor de detección](./detection-engine.md#timing-what-when-means).
+- **Los eventos decodificados a ambos lados de la actualización pueden guardarse dos veces.** El id
+  de un evento se deriva de su contenido, incluido su `occurredTime`. Un mensaje sin `occurredTime`
+  que se guardó antes de la actualización y se entrega de nuevo después recibe ahora otra hora, y
+  por tanto otro id. Solo puede ocurrir con mensajes que seguían esperando confirmación mientras se
+  desplegaba la actualización.
+- Las filas escritas antes de la actualización no cambian.
+- Los agregados de mediciones colocan un atraso en los intervalos de cuando se recibió. Los
+  agregados se refrescan 30 días hacia atrás, así que nada de una caída más corta queda fuera.
+- Las acciones de salida se miden según cuándo su telemetría llegó a la plataforma. Para la
+  telemetría que esperó durante una caída de `event-sources`, eso es ahora cuándo llegó y no cuándo
+  se decodificó. Para un tenant cuyo único tráfico esperó en el broker, la puesta al día ya no se
+  cobra como una sola ráfaga. Un tenant que además envió telemetría por LwM2M o Sparkplug durante
+  la caída ya llevó su medidor de salida al presente, así que su atraso se sigue cobrando junto,
+  como antes.
+
+#### Perder la conexión de presencia ahora reinicia `event-sources`
+
+`event-sources` lee los eventos de conexión MQTT del broker por una conexión propia, autenticada con
+la credencial de la cuenta de sistema. Si el broker cerraba esa conexión definitivamente, por
+ejemplo porque dejaba de aceptar la credencial, el pod seguía activo y listo con la presencia del
+broker congelada en silencio: no se afirmaba ni se liberaba nada, y nada lo reiniciaba.
+
+Ahora el pod falla su comprobación de actividad (liveness) y Kubernetes lo reinicia. Una credencial
+rechazada llega a todas las réplicas a la vez, así que **se reinician todos los pods de
+`event-sources`**, y la ingesta HTTP no está disponible mientras tanto; la telemetría MQTT la guarda
+el broker y se procesa cuando vuelven. Si los pods reiniciados siguen sin poder iniciar sesión, la
+presencia del broker se apaga con el motivo `broker_unreachable` y los dispositivos afirmados vuelven
+a la presencia inferida, como cuando no se puede alcanzar el broker al arrancar ([Presencia de
+dispositivos](../concepts/device-presence.md)).
+
+Si la credencial de la cuenta de sistema cambia, por ejemplo durante una rotación de credenciales,
+un pod cuya conexión el broker corta antes de que el propio pod se sustituya se reinicia una vez.
+Cuente con verlo como un reinicio en el recuento.
 
 ### La transición única a la ingesta duradera
 

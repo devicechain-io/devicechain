@@ -155,7 +155,8 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	es.received(es.Id, body)
 
-	event, payload, err := es.Decoder.Decode(body)
+	// Received now: HTTP has no durable backlog in front of it.
+	event, payload, err := es.Decoder.Decode(body, time.Time{})
 	if err != nil {
 		es.failed(es.Id, tenant, body, err)
 		http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)

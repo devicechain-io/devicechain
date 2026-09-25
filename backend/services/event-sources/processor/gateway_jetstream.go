@@ -320,6 +320,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		payload:    msg.Value,
 		device:     deviceFromSubject(msg.Subject),
 		captureSeq: msg.StreamSeq,
+		receivedAt: msg.AppendTime,
 		done:       es.settler(msg, tenant),
 	}
 }

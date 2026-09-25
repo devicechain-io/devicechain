@@ -37,7 +37,7 @@ La alerta `TenantsMeteredAtPlatformDefault` se dispara solo cuando `unreachable`
 
 ### Nombres de inquilino que no se pueden confirmar {#unconfirmed-tenants}
 
-El endpoint de ingesta HTTP toma el inquilino de la ruta de la petición, antes de comprobar cualquier credencial de dispositivo. Un nombre de inquilino que llega por ahí obtiene una asignación propia solo si el plano de control lo ha confirmado, o de un conjunto fijo de 1024. Pasado ese conjunto, todos esos nombres comparten una única asignación con el valor por defecto de la plataforma, y se dispara la alerta `RateLimiterOverflowInUse`. El tráfico MQTT, NATS y LwM2M procede de un origen autenticado o en el que el operador decidió confiar: el broker de la plataforma autentica cada dispositivo, LwM2M comprueba la clave del dispositivo, y un broker MQTT externo es de confianza porque el operador lo configuró. Ese tráfico siempre obtiene su propia asignación.
+El endpoint de ingesta HTTP toma el inquilino de la ruta de la petición, antes de comprobar cualquier credencial de dispositivo. Por eso la ingesta HTTP tiene una asignación propia para cada inquilino, separada de la que consume el tráfico MQTT, NATS y de presencia del broker de ese inquilino, y las peticiones HTTP que nombran a un inquilino no pueden agotar el tráfico de sus dispositivos. Cualquiera que pueda llegar al puerto HTTP y conozca el nombre de un inquilino sí puede agotar la asignación HTTP de ese inquilino, porque la credencial del dispositivo solo se comprueba después de admitir la petición. Dentro de la asignación HTTP, un nombre de inquilino obtiene una asignación propia solo si el plano de control lo ha confirmado, o de un conjunto fijo de 1024. Pasado ese conjunto, todos esos nombres comparten una única asignación con el valor por defecto de la plataforma, y se dispara la alerta `RateLimiterOverflowInUse`. El tráfico MQTT, NATS y LwM2M procede de un origen autenticado o en el que el operador decidió confiar: el broker de la plataforma autentica cada dispositivo, LwM2M comprueba la clave del dispositivo, y un broker MQTT externo es de confianza porque el operador lo configuró. Ese tráfico siempre obtiene su propia asignación.
 
 El conjunto acota la memoria del servicio, no el total admitido entre nombres inventados: entre ellos se puede admitir hasta 1024 veces el valor por defecto de la plataforma.
 
@@ -59,6 +59,16 @@ Las anulaciones por inquilino son excepciones auditadas, no el mecanismo — el 
 ## Los techos son por réplica {#per-replica}
 
 Cada techo de tasa de esta página lo aplica por separado cada copia en ejecución del servicio que lo impone, sin coordinación entre copias. Si ejecuta dos réplicas de `event-sources`, `outbound-connectors` o `ai-inference` y se reparten el tráfico de un inquilino, ese inquilino puede ser admitido hasta al doble de su techo, y N réplicas permiten hasta N veces. La instalación por defecto ejecuta una réplica de cada uno, y ahí el techo es exacto. Hay dos techos que no se multiplican: el techo de comandos no entregados es un recuento que se lleva en la base de datos, y el techo de salida del motor de detección se consume solo en la réplica que detecta. Si escala un servicio, fije los techos del nivel para el número de réplicas que ejecuta.
+
+### Cuándo la ingesta puede admitir a un inquilino por encima de su techo {#ingest-above-ceiling}
+
+Dentro de una réplica de `event-sources`, el techo de ingesta de un inquilino se aplica por separado a cada una de tres asignaciones, no al inquilino en su conjunto:
+
+- **Tráfico en vivo**: lo que los dispositivos del inquilino envían ahora por MQTT y NATS, incluida la presencia del broker.
+- **Atraso (backlog)**: mensajes que el broker de la plataforma guardó mientras `event-sources` estaba caído o retrasado, medidos según cuándo se enviaron a medida que se drenan. Un inquilino que drena un atraso tras una caída mientras también envía en vivo puede ser admitido hasta al doble de su techo hasta que el drenaje se pone al día.
+- **Ingesta HTTP**: se mide por separado, así que un inquilino que envía por HTTP y por MQTT a la vez puede ser admitido hasta su techo en cada uno.
+
+En el peor caso, un inquilino puede ser admitido al triple de su techo en cada réplica, multiplicado por el número de réplicas como se indica arriba.
 
 ## Verlo funcionar
 

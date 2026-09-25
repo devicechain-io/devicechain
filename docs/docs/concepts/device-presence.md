@@ -87,6 +87,15 @@ it decides, so this is half a minute with no system-account connection rather th
 attempt — long enough that a broker restarting alongside the services is not mistaken for one that
 is gone.
 
+**Losing that connection after the tap has started restarts `event-sources`.** If the broker closes
+the tap's connection for good once the tap is running, for example because it no longer accepts the
+system-account credential, `event-sources` fails its liveness check and Kubernetes restarts the pod.
+A refused credential reaches every replica at once, so **every `event-sources` pod restarts**, and
+HTTP ingest is unavailable while they do; MQTT telemetry is still stored by the broker and processed
+when they return. If the restarted pod still cannot sign in, the tap turns off with reason
+`broker_unreachable`, releases the devices it asserted as described here, and keeps checking. So that
+reason also covers a broker that is running but refuses the credential.
+
 **For this one reason the two-minute wait is a re-check rather than a delay**, and the difference is
 what stops the release outliving the outage it was a response to. Before each pass — the first one
 included — the service re-dials the system account. If the broker answers, nothing is released: the

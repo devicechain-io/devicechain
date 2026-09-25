@@ -221,7 +221,9 @@ type ConnectorSink interface {
 // whole backlog lands at one instant — the burst passes and the rest is shed. TriggeredAt is a
 // PLATFORM time devices cannot write: DETECT stamps it from the triggering resolved event's
 // ProcessedTime and broker append time, and only event-sources, its adapter and device-state stamp
-// ProcessedTime, all with their own now(); broker grants confine a device to its own events topic.
+// ProcessedTime: event-sources with the capture stream's broker append time (else its own now()),
+// the others with their own now(). Each is a platform clock no device can write; broker grants
+// confine a device to its own events topic.
 // The core limiter's mark bounds rewinds from clock skew between pods, replay and redelivery (the
 // times fed here are not monotonic). The mark does NOT protect a forgeable clock, so TriggeredAt
 // must never be derived from device data — OccurredTime would let a tenant mint tokens.

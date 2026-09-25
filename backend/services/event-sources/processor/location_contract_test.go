@@ -32,7 +32,7 @@ import (
 // decodeLocation drives the real decoder, exactly as a transport does.
 func decodeLocation(t *testing.T, body string) (*model.UnresolvedLocationsPayload, error) {
 	t.Helper()
-	_, payload, err := NewJsonDecoder(map[string]string{}, 0).Decode([]byte(body))
+	_, payload, err := NewJsonDecoder(map[string]string{}, 0).Decode([]byte(body), time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +394,7 @@ func TestMeasurementAndAlertDecodeAlsoFailClosed(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := jd.Decode([]byte(tc.body)); err == nil {
+			if _, _, err := jd.Decode([]byte(tc.body), time.Time{}); err == nil {
 				t.Fatal("this body must be REFUSED, but it decoded successfully")
 			} else if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error %q does not mention %q", err.Error(), tc.want)
@@ -415,7 +415,7 @@ func TestTheCanonicalMeasurementAndAlertBodiesStillDecode(t *testing.T) {
 		// for — this case is what keeps the check from quietly becoming one.
 		`{"device":"d1","eventType":"Alert","payload":{"entries":[{"type":"a"}]}}`,
 	} {
-		if _, _, err := jd.Decode([]byte(body)); err != nil {
+		if _, _, err := jd.Decode([]byte(body), time.Time{}); err != nil {
 			t.Fatalf("%s must decode, got: %v", body, err)
 		}
 	}

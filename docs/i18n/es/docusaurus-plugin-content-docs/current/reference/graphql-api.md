@@ -101,6 +101,11 @@ límites de tiempo son inclusivos, filtran por `occurredTime` (el instante en qu
 reportó, no el instante en que la plataforma lo almacenó), y los resultados vuelven del más
 reciente al más antiguo. La paginación empieza en 1.
 
+El `processedTime` de un evento es cuándo la plataforma lo **recibió**. Para MQTT en el broker de
+la plataforma es la hora en que el broker guardó el mensaje, que tras una caída de `event-sources`
+puede ser bastante anterior a cuando se procesó el evento; para otros transportes es cuándo el
+servicio de ingesta tomó el evento.
+
 **`measurementEvents` no filtra por nombre de medición.** El criterio no tiene un campo `name`, así
 que "solo las lecturas de temperatura de este dispositivo" no es directamente expresable — filtra
 del lado del cliente sobre `results[].name`, o usa `bucketedMeasurements`, que sí toma un `name` y

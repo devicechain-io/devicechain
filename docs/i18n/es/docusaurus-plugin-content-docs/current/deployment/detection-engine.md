@@ -243,6 +243,17 @@ toda decisión basada en el tiempo, para todos los inquilinos. Donde ese interca
 respuesta es acortar los lotes de subida o mantener las reglas con ventana fuera de esas métricas —
 vea [conectar un dispositivo](../guides/connecting-a-device.md).
 
+Lo mismo se aplica a las lecturas que esperaron **dentro de la plataforma**. Mientras
+`event-sources` está caído, el broker de la plataforma sigue guardando lo que los dispositivos
+publican por MQTT, y `event-sources` procesa ese atraso cuando vuelve. Cada lectura conserva su
+propia hora: la que informó el dispositivo o, para una lectura enviada sin `occurredTime`, el
+momento en que el broker la recibió. Mientras tanto solo siguen llegando los transportes que no
+pasan por `event-sources`: LwM2M y Sparkplug lo hacen y mantienen la frontera en «ahora», mientras
+que la ingesta HTTP la sirve el propio `event-sources` y cae con él. Tras una caída más larga
+que la ventana de una regla, el atraso llega por tanto tarde a los tipos deslizantes, igual que una
+subida acumulada: se almacena y se grafica con normalidad, no se incorpora a esas ventanas, y
+`detect_late_samples_total` sube.
+
 ### ¿Con qué rapidez puede dispararse una regla de ausencia?
 
 Una regla de «ausencia» o «silencio» no puede dispararse en el instante en que un dispositivo se
@@ -366,8 +377,8 @@ marca de tiempo informada por el dispositivo respecto al propio reloj de la plat
 sola vez, al resolver el evento, y todos los consumidores —el historial almacenado, las proyecciones
 en vivo, la detección y la reproducción— leen ese mismo valor ya acotado. Se configura en el área
 device-management como `maxEventFutureSkewSeconds`, en segundos, **con 300 por defecto**. Una lectura
-cuya hora informada adelanta al reloj del servidor más que eso se almacena en el techo, no se
-rechaza.
+cuya hora informada adelanta al momento en que la plataforma la recibió más que eso se almacena en
+el techo, no se rechaza.
 
 Un **valor negativo se rechaza al arrancar**, y conviene saber qué habría significado: desactivar el
 límite por completo. Un evento fechado años en el futuro fija entonces la hora de última actividad

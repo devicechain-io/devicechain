@@ -30,6 +30,7 @@ func TestTheConfiguredListenerBoundsReachTheSource(t *testing.T) {
 	t.Cleanup(func() { Configuration, EventSources, Microservice = savedConfig, savedSources, savedMs })
 
 	Microservice = &core.Microservice{InstanceId: "inst-1"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 
 	// Deliberately NOT the platform defaults, so a construction site that ignored the
 	// configuration would be caught rather than accidentally agreeing.
@@ -47,6 +48,7 @@ func TestTheConfiguredListenerBoundsReachTheSource(t *testing.T) {
 		}},
 	}
 
+	buildTestRateLimiters(t)
 	if err := buildEventSources(); err != nil {
 		t.Fatalf("buildEventSources: %v", err)
 	}
@@ -93,6 +95,7 @@ func TestTheEarlyCloseCounterIsWiredToTheSource(t *testing.T) {
 			Decoder:       config.EventDecoder{Type: processor.DECODER_TYPE_JSON},
 		}},
 	}
+	buildTestRateLimiters(t)
 	if err := buildEventSources(); err != nil {
 		t.Fatalf("buildEventSources: %v", err)
 	}
@@ -150,4 +153,14 @@ func listenerAddr(t *testing.T) string {
 		t.Fatal("the started source reports no address")
 	}
 	return addr
+}
+
+// buildTestRateLimiters builds the ingest limiters the way main does, on the caller's
+// metrics registry, restoring the package's limiters afterwards. buildEventSources needs them:
+// the ingest gate refuses to be built without all three.
+func buildTestRateLimiters(t *testing.T) {
+	t.Helper()
+	savedLive, savedBacklog, savedHTTP := RateLimiter, BacklogRateLimiter, HttpRateLimiter
+	t.Cleanup(func() { RateLimiter, BacklogRateLimiter, HttpRateLimiter = savedLive, savedBacklog, savedHTTP })
+	buildRateLimiter()
 }

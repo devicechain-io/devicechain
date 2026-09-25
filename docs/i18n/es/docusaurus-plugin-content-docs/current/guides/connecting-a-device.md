@@ -84,7 +84,9 @@ de aceptarse en silencio.
 devuelve —de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir
 una serie acumulada, hasta el tope por mensaje descrito más abajo, y conservar el historial que
 realmente registró. Una entrada sin
-`occurredTime` toma la del sobre. `occurredTime` es RFC 3339 (`2026-08-09T12:00:00.125Z`) donde
+`occurredTime` toma la del sobre. Un sobre sin `occurredTime` se fecha en el momento en que la
+plataforma recibió el mensaje, así que un mensaje que esperó en la plataforma durante una caída
+conserva la hora en que llegó, no la hora en que se procesó. `occurredTime` es RFC 3339 (`2026-08-09T12:00:00.125Z`) donde
 aparezca; un valor que no lo sea es **rechazado** indicando la entrada culpable, nunca sustituido en
 silencio.
 
@@ -269,13 +271,17 @@ Publique con QoS 0, o QoS 1 con `altId`. Un operador que realmente necesite QoS 
 
 ## HTTP
 
-`event-sources` también acepta eventos por HTTP en el puerto **8081**. El id de instancia y el inquilino se toman de la ruta `/{instanceId}/{tenant}/events` (siguiendo la convención del topic MQTT); el dispositivo y su credencial viajan en el cuerpo. `POST` devuelve **202 Accepted** una vez que el evento está en cola — o **429 Too Many Requests** si el inquilino supera su límite de tasa de ingesta (un limitador por inquilino con un techo predeterminado de la plataforma protege el pipeline compartido; la ruta MQTT descarta los mensajes que exceden el límite en su lugar):
+`event-sources` también acepta eventos por HTTP en el puerto **8081**. El id de instancia y el inquilino se toman de la ruta `/{instanceId}/{tenant}/events` (siguiendo la convención del topic MQTT); el dispositivo y su credencial viajan en el cuerpo. `POST` devuelve **202 Accepted** una vez que el evento está en cola — o **429 Too Many Requests** si el inquilino supera su límite de tasa de ingesta HTTP. La ingesta HTTP tiene una asignación por inquilino propia, separada de la que consume el tráfico MQTT del inquilino, así que las peticiones HTTP que nombran a un inquilino no pueden agotar su telemetría MQTT (consulte [nombres de inquilino que no se pueden confirmar](../concepts/governance.md#unconfirmed-tenants)); la ruta MQTT descarta los mensajes que exceden el límite en lugar de responder:
 
 ```bash
 curl -X POST http://localhost:8081/devicechain/acme/events \
   -H 'Content-Type: application/json' \
   -d '{"device":"sensor-001","eventType":"Measurement","credentialType":"ACCESS_TOKEN","credentialId":"<token>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
+
+:::warning Exponga el puerto 8081 solo detrás de controles de red
+La ingesta HTTP no tiene autenticación de transporte: la credencial del dispositivo va en el cuerpo de la petición y se comprueba después de admitirla. Cualquiera que pueda llegar al puerto 8081 y conozca el nombre de un inquilino puede, por tanto, consumir la asignación HTTP de ese inquilino. El ingress del chart no enruta este puerto y, por defecto, cualquier pod del clúster puede llegar a él. Póngalo detrás de una NetworkPolicy, o de un ingress o gateway que autentique a quien llama, antes de depender de él.
+:::
 
 ### Límites de tiempo en una petición
 

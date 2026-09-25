@@ -6,6 +6,7 @@ package processor
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/stretchr/testify/require"
@@ -24,7 +25,7 @@ func TestJsonDecoderRejectsDeviceStateChange(t *testing.T) {
 	payload := []byte(`{"device":"d1","eventType":"` + model.StateChange.String() +
 		`","payload":{"state":"CONNECTED","sessionId":"18446744073709551615"}}`)
 
-	_, _, err := jd.Decode(payload)
+	_, _, err := jd.Decode(payload, time.Time{})
 	require.Error(t, err, "a device must not be able to forge a presence StateChange through ingest")
 	require.True(t, strings.Contains(err.Error(), "platform-produced"),
 		"the rejection must be the deliberate platform-producer guard, not an incidental parse error: %v", err)
@@ -49,7 +50,7 @@ func TestJsonDecoderCannotSetAuthenticatedTransport(t *testing.T) {
 	payload := []byte(`{"device":"sensor-001","eventType":"Measurement","authenticatedTransport":true,` +
 		`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`)
 
-	event, _, err := jd.Decode(payload)
+	event, _, err := jd.Decode(payload, time.Time{})
 	require.NoError(t, err)
 	require.NotNil(t, event)
 	require.False(t, event.AuthenticatedTransport,
