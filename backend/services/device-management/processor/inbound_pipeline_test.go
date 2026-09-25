@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -15,13 +16,16 @@ import (
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/mock"
 )
 
 // The publish stage of the inbound processor, driven over a real embedded JetStream broker
@@ -561,18 +565,73 @@ func TestARedeliveredSourceIsStoredOnce(t *testing.T) {
 	stopWithin(t, iproc, 30*time.Second)
 }
 
-// A failed-event record the broker refuses leaves the inbound message it is about UNACKED,
-// so it is redelivered rather than forgotten with no record anywhere.
-func TestAFailedEventRecordThatIsNotStoredLeavesItsSourceUnacked(t *testing.T) {
+// failedEntry is one of the two ways an inbound message becomes a failed-event record: it
+// does not decode (OnInvalidEvent), or it decodes but cannot be resolved at its last delivery
+// (OnUnresolvedEvent). Each ack-after-PubAck test runs over both, because each entry point
+// hands the source on separately and either could ack it on the way.
+type failedEntry struct {
+	name string
+	// source is inbound message 0 in the shape that takes this entry.
+	source func(nmgr *messaging.NatsManager, seq uint64, acks *ackLog) messaging.Message
+	// api resolves nothing for the unresolvable entry; nil where resolution is never reached.
+	api func() dmodel.DeviceManagementApi
+}
+
+func failedEntries(t *testing.T) []failedEntry {
+	t.Helper()
+	unresolvable, err := esproto.MarshalUnresolvedEvent(buildLocationsEvent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []failedEntry{
+		{
+			name: "Invalid",
+			source: func(nmgr *messaging.NatsManager, seq uint64, acks *ackLog) messaging.Message {
+				bad := gateSource(nmgr, 0, seq, acks)
+				bad.Value = undecodableMessage().Value
+				return bad
+			},
+		},
+		{
+			name: "UnresolvedAtMaxDeliver",
+			source: func(nmgr *messaging.NatsManager, seq uint64, acks *ackLog) messaging.Message {
+				src := gateSource(nmgr, 0, seq, acks)
+				src.Value = unresolvable
+				// The last delivery: only now is an unresolvable event dead-lettered rather
+				// than left for redelivery.
+				src.NumDelivered = messaging.MaxDeliver
+				return src
+			},
+			api: func() dmodel.DeviceManagementApi {
+				api := new(dmtest.MockApi)
+				api.Mock.On("DevicesByToken", mock.Anything, mock.Anything).
+					Return([]*dmodel.Device{}, errors.New("not found"))
+				return api
+			},
+		},
+	}
+}
+
+// startFailedEntryProcessor starts a processor for entry, stubs failed-events and hands it
+// the entry's source, returning the stub once it holds the record's publish request.
+func startFailedEntryProcessor(t *testing.T, e failedEntry, seq uint64, acks *ackLog) (*InboundEventsProcessor, *brokerStub) {
+	t.Helper()
 	nmgr, clientURL := startGateNats(t)
-	acks := newAckLog()
-	bad := gateSource(nmgr, 0, 6000, acks)
-	bad.Value = undecodableMessage().Value
-	iproc := startGateProcessor(t, nmgr, nil)
+	var api dmodel.DeviceManagementApi
+	if e.api != nil {
+		api = e.api()
+	}
+	iproc := newGateProcessor(t, nmgr, &sliceReader{}, api)
+	if err := iproc.Initialize(context.Background()); err != nil {
+		t.Fatalf("initialize processor: %v", err)
+	}
+	if err := iproc.Start(context.Background()); err != nil {
+		t.Fatalf("start processor: %v", err)
+	}
 	stub := stubBroker(t, nmgr, clientURL, streams.FailedEvents)
 	// Handed to the resolvers only once the stub is up, so the stub is the only thing that
 	// can answer the record's publish.
-	iproc.messages <- bad
+	iproc.messages <- e.source(nmgr, seq, acks)
 
 	deadline := time.Now().Add(10 * time.Second)
 	for stub.seen() == 0 && time.Now().Before(deadline) {
@@ -581,48 +640,89 @@ func TestAFailedEventRecordThatIsNotStoredLeavesItsSourceUnacked(t *testing.T) {
 	if stub.seen() != 1 {
 		t.Fatalf("failed-event publish requests: got %d, want 1", stub.seen())
 	}
-	stub.answer(0, true)
-	stopWithin(t, iproc, 30*time.Second)
+	return iproc, stub
+}
 
-	if got := acks.count(); got != 0 {
-		t.Errorf("sources acked although their failed-event record was refused: got %d, want 0", got)
+// A failed-event record the broker refuses leaves the inbound message it is about UNACKED,
+// so it is redelivered rather than forgotten with no record anywhere.
+func TestAFailedEventRecordThatIsNotStoredLeavesItsSourceUnacked(t *testing.T) {
+	for i, e := range failedEntries(t) {
+		t.Run(e.name, func(t *testing.T) {
+			acks := newAckLog()
+			iproc, stub := startFailedEntryProcessor(t, e, 6000+uint64(i), acks)
+			stub.answer(0, true)
+			stopWithin(t, iproc, 30*time.Second)
+
+			if got := acks.count(); got != 0 {
+				t.Errorf("sources acked although their failed-event record was refused: got %d, want 0", got)
+			}
+		})
 	}
 }
 
 // And the other half: a stored record acks its source — only after the broker stored it.
 func TestAFailedEventSourceIsAckedOnlyAfterItsRecordIsStored(t *testing.T) {
+	for i, e := range failedEntries(t) {
+		t.Run(e.name, func(t *testing.T) {
+			acks := newAckLog()
+			iproc, stub := startFailedEntryProcessor(t, e, 6100+uint64(i), acks)
+			t.Cleanup(func() {
+				stub.answerEverythingFromNowOn()
+				stopWithin(t, iproc, 30*time.Second)
+			})
+
+			time.Sleep(200 * time.Millisecond)
+			if got := acks.count(); got != 0 {
+				t.Fatalf("source acked while its failed-event record was still unacknowledged: got %d, want 0", got)
+			}
+
+			stub.answer(0, false)
+			if got := waitAcks(acks, 1, 10*time.Second); got != 1 {
+				t.Fatalf("source acked after its record was stored: got %d, want 1", got)
+			}
+			_, at := acks.snapshot()
+			if at[0].Before(stub.answeredTime(0)) {
+				t.Errorf("source acked at %v, before its record was acknowledged at %v", at[0], stub.answeredTime(0))
+			}
+		})
+	}
+}
+
+// A failed-event record is deduplicated the way a resolved event is: a redelivered source
+// whose record was stored (its PubAck lost) records the failure ONCE. Sources with no stream
+// sequence carry no id and are all recorded.
+func TestARedeliveredFailedSourceIsRecordedOnce(t *testing.T) {
 	nmgr, clientURL := startGateNats(t)
-	acks := newAckLog()
-	bad := gateSource(nmgr, 0, 6100, acks)
-	bad.Value = undecodableMessage().Value
 	iproc := startGateProcessor(t, nmgr, nil)
-	stub := stubBroker(t, nmgr, clientURL, streams.FailedEvents)
-	t.Cleanup(func() {
-		stub.answerEverythingFromNowOn()
-		stopWithin(t, iproc, 30*time.Second)
-	})
-	// Delivered through the resolvers after the stub is up, so the stub is the only thing
-	// that can answer.
-	iproc.messages <- bad
-
-	deadline := time.Now().Add(10 * time.Second)
-	for stub.seen() == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	acks := newAckLog()
+	nc, err := nats.Connect(clientURL)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if stub.seen() != 1 {
-		t.Fatalf("failed-event publish requests: got %d, want 1", stub.seen())
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond)
-	if got := acks.count(); got != 0 {
-		t.Fatalf("source acked while its failed-event record was still unacknowledged: got %d, want 0", got)
+	invalid := func(i int, seq uint64) messaging.Message {
+		src := gateSource(nmgr, i, seq, acks)
+		src.Value = undecodableMessage().Value
+		return src
 	}
-
-	stub.answer(0, false)
-	if got := waitAcks(acks, 1, 10*time.Second); got != 1 {
-		t.Fatalf("source acked after its record was stored: got %d, want 1", got)
+	// The first delivery and its redelivery, then the counterweights: a different source and
+	// two unsequenced ones.
+	for i, seq := range []uint64{91, 91, 92, 0, 0} {
+		iproc.messages <- invalid(i, seq)
+		if got := waitAcks(acks, i+1, 10*time.Second); got != i+1 {
+			t.Fatalf("sources acked after %d submissions: got %d", i+1, got)
+		}
 	}
-	_, at := acks.snapshot()
-	if at[0].Before(stub.answeredTime(0)) {
-		t.Errorf("source acked at %v, before its record was acknowledged at %v", at[0], stub.answeredTime(0))
+	info, err := js.StreamInfo(messaging.StreamName(nmgr.Microservice.InstanceId, streams.FailedEvents))
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := info.State.Msgs; got != 4 {
+		t.Errorf("failed-event records stored: got %d, want 4 (one for the redelivered source, one each for the other three)", got)
+	}
+	stopWithin(t, iproc, 30*time.Second)
 }

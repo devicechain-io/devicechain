@@ -204,6 +204,9 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageR
 // redelivered and resolved again — or, at its last delivery, recorded by the platform's
 // max-delivery recorder from the source stream. Either way the failure is recorded
 // somewhere. Acking at hand-off, as this loop once did, lost it whenever the publish failed.
+//
+// A record that was stored but whose PubAck was lost is published again when its source is
+// redelivered; the dedup id (sourceDedupID) keeps that second copy out of the stream.
 func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) bool {
 	item, more := <-iproc.failed
 	if !more {
@@ -221,6 +224,8 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 	msg := messaging.Message{
 		Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
 		Value: bytes,
+		// A source produces one record, so its fan-out position is always 0.
+		DedupID: sourceDedupID("failed", item.tenant, item.src, 0),
 	}.WithCorrelationID(item.correlation)
 	src := item.src
 	iproc.FailedEventsWriter.Publish(core.WithTenant(ctx, item.tenant), msg, func(err error) {
@@ -430,26 +435,38 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 	return false
 }
 
-// resolvedDedupID names one resolved-event publish for the broker's duplicate window, so a
-// publish that was stored but whose acknowledgement was lost — a timeout, a reconnect, a
-// leader change — is not stored a second time when its source is redelivered and published
-// again. resolved-events declares no window of its own, so the broker's default (two
-// minutes) applies, and the first redelivery comes one AckWait (60 s) after the fetch.
+// resolvedDedupID names one resolved-event publish for the broker's duplicate window; see
+// sourceDedupID.
+func resolvedDedupID(tenant string, coord *ackCoord, index int) string {
+	if coord == nil {
+		return ""
+	}
+	return sourceDedupID("resolved", tenant, coord.src, index)
+}
+
+// sourceDedupID names one publish made on behalf of inbound message src — the index-th
+// resolved event it produced, or its failed-event record — for the broker's duplicate
+// window, so a publish that was stored but whose acknowledgement was lost (a timeout, a
+// reconnect, a leader change) is not stored a second time when its source is redelivered
+// and published again. Neither resolved-events nor failed-events declares a window of its
+// own, so the broker's default (two minutes) applies, and the first redelivery comes one
+// AckWait (60 s) after the fetch.
 //
 // The id is built only from values that survive a redelivery unchanged and cannot be
-// supplied by a device: the tenant, the source's inbound stream sequence and the event's
-// position in the source's fan-out. The sequence alone is unique across tenants (one inbound
-// stream carries them all); the tenant is there because a dedup id is stream-scoped and
-// every id on a shared stream is kept tenant-scoped (see messaging.Message.DedupID).
+// supplied by a device: the tenant, the source's inbound stream sequence and the
+// publish's position in the source's fan-out. The sequence alone is unique across tenants
+// (one inbound stream carries them all); the tenant is there because a dedup id is
+// stream-scoped and every id on a shared stream is kept tenant-scoped (see
+// messaging.Message.DedupID). kind keeps the two streams' ids apart for a reader of either.
 //
 // A source with no stream sequence (broker metadata unavailable) gets NO id, never a
 // shared one: every such source would carry the same sequence, 0, and the second would
 // be discarded as a duplicate of the first.
-func resolvedDedupID(tenant string, coord *ackCoord, index int) string {
-	if coord == nil || coord.src.StreamSeq == 0 {
+func sourceDedupID(kind, tenant string, src messaging.Message, index int) string {
+	if src.StreamSeq == 0 {
 		return ""
 	}
-	return fmt.Sprintf("resolved:%s:%d:%d", tenant, coord.src.StreamSeq, index)
+	return fmt.Sprintf("%s:%s:%d:%d", kind, tenant, src.StreamSeq, index)
 }
 
 // settleResolved records the outcome of publishing one resolved event against
@@ -654,7 +671,10 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	// unacked for redelivery — before this returns, which is before the NATS drain. The
 	// publishes in flight together each wait at most the 5 s publish ceiling, and failures
 	// are no longer backed off (Draining, above); the service's teardown budget bounds the
-	// whole, and a source it cuts off is simply left unacked.
+	// whole, and a source it cuts off is simply left unacked. A source redelivered while its
+	// publish was still settling here — held past AckWait — is published again by whichever
+	// pod gets it, and the dedup id (sourceDedupID) keeps that copy out of the stream for the
+	// broker's two-minute window.
 	if iproc.ResolvedEventsWriter != nil {
 		iproc.ResolvedEventsWriter.Close()
 	}

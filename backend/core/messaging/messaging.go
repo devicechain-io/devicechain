@@ -469,9 +469,14 @@ type MessageWriter interface {
 //   - done must be quick and must not call Publish or Fail (the writer's goroutine would wait
 //     on a slot only it can free).
 //   - Publish blocks while the window is full; it never returns an error.
-//   - After a publish the broker failed or did not answer, the writer holds that window slot
-//     for a backoff before freeing it, so a failing stream is consumed no faster than a
-//     synchronous writer would retry it — until Draining is called.
+//   - After a publish the broker failed or did not answer, the writer backs off (500 ms,
+//     doubling to 2 s, reset by the first success) before freeing that slot, and until a
+//     publish succeeds it lets ONE new publish at a time into the window. Failures of
+//     publishes sent before the backoff ended — a whole window failed together by a
+//     reconnect — belong to that backoff: they are reported as they settle, without waiting
+//     again. So a failing stream is consumed at one publish per backoff, no faster than a
+//     synchronous writer retries (plus, once per outage, what was already in flight) — until
+//     Draining is called.
 //   - Close is called once, after the last Publish or Fail has returned, and returns once
 //     every done has run. Publish or Fail after Close panics.
 type OrderedWriter interface {
@@ -481,8 +486,8 @@ type OrderedWriter interface {
 	// success without a PubAck is exactly what this type exists to make impossible.
 	Fail(err error, done func(error))
 	// Draining says the submitter has stopped taking new work and is only handing over what
-	// it already holds. From then on a failure is not backed off, and a backoff in progress
-	// ends: the backoff exists to slow the consumption of a backlog, and once nothing more
+	// it already holds. From then on a failure is not backed off, a backoff in progress ends
+	// and the window is no longer held down to one publish: the backoff exists to slow the consumption of a backlog, and once nothing more
 	// is being consumed it would only hold a shutdown past its budget. It may be called from
 	// any goroutine, more than once.
 	Draining()

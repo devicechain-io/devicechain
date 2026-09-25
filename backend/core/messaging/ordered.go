@@ -39,7 +39,8 @@ const (
 // reported in submission order however the broker's replies arrive. slots bounds the
 // window: Publish and Fail take one before submitting, and the settle loop frees it only
 // after that submission's done has returned (and after any backoff), so pending can never
-// hold more than the window and the send into it never blocks.
+// hold more than the window and the send into it never blocks. During a failure episode the
+// settle loop also keeps some slots back (held); see pace.
 type orderedWriter struct {
 	nmgr   *NatsManager
 	suffix string
@@ -64,9 +65,13 @@ type orderedWriter struct {
 	started atomic.Bool
 	settled chan struct{}
 
-	// backoff is the current failure backoff; 0 after a success. Touched only by the settle
-	// goroutine.
-	backoff time.Duration
+	// The failure episode, touched only by the settle goroutine (see pace). backoff is the
+	// current backoff, 0 after a success; backedOff is when the last backoff ENDED, and a
+	// failure of a publish sent before then belongs to it; held counts the slots of such
+	// failures kept from the submitter until a success or Draining.
+	backoff   time.Duration
+	backedOff time.Time
+	held      int
 
 	// draining is closed by Draining; a closed channel ends every backoff at once.
 	draining     chan struct{}
@@ -82,7 +87,8 @@ type orderedPending struct {
 	// brokerFailed marks an err the broker side produced (the send itself failed), as
 	// opposed to a refusal decided locally; only the former is backed off.
 	brokerFailed bool
-	sent         time.Time
+	// sent is when the publish was attempted; zero for an outcome decided locally.
+	sent time.Time
 	// deadline is min(caller deadline, sent+publishWait); callerBound says which.
 	deadline    time.Time
 	callerBound bool
@@ -178,7 +184,7 @@ func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(erro
 	// deadline is enforced by awaitPubAck.)
 	fut, err := o.js.PublishMsgAsync(natsMsg(subject, msg))
 	if err != nil {
-		o.pending <- orderedPending{err: err, brokerFailed: true, done: done}
+		o.pending <- orderedPending{err: err, brokerFailed: true, sent: sent, done: done}
 		return
 	}
 	o.pending <- orderedPending{fut: fut, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
@@ -204,7 +210,8 @@ func (o *orderedWriter) Draining() {
 }
 
 // Close waits for every submission to settle. Each is bounded by its own deadline (at most
-// publishWait from its send), plus any failure backoff ahead of it unless Draining was called.
+// publishWait from its send), plus the one backoff (at most orderedBackoffMax) a failure
+// ahead of it can start, unless Draining was called.
 func (o *orderedWriter) Close() {
 	if o.busy.Load() {
 		panic("messaging: OrderedWriter.Close called while a submission is in progress")
@@ -232,40 +239,85 @@ func (o *orderedWriter) settleLoop() {
 			log.Error().Err(err).Str("suffix", o.suffix).Msg("nats write operation failed")
 		}
 		p.done(err)
-		o.pace(p.fut != nil && err == nil, brokerFailed)
-		<-o.slots
+		for n := o.pace(p.fut != nil && err == nil, brokerFailed, p.sent); n > 0; n-- {
+			<-o.slots
+		}
 	}
 }
 
-// pace applies the failure backoff before the slot of a settled submission is freed.
+// pace applies the failure backoff to a settled submission and returns how many window
+// slots to free: its own, those it releases, or none when it keeps its own back.
 //
-// 🔑 WITHOUT IT A FAILING STREAM IS DRAINED AT CPU SPEED. A publish the broker fails at once —
-// no responders while a stream leader is being elected, or the whole window failed together
-// by a reconnect — settles in microseconds and frees its slot, so the submitter pulls the
-// next source, which fails too. Each such source is left unacked and spends one of its
-// deliveries on the redelivery, so an outage of a few AckWaits would dead-letter the whole
-// inbound backlog instead of the handful a synchronous writer (which spends about 500 ms on
-// each failing publish) gets through. Holding the slot keeps the failure rate at or below
-// that, and doing it here keeps settlement in order. A success resets it, so a healthy
-// stream never pays; and once the submitter is draining (Draining) there is no backlog left
-// to protect, so it stops.
-func (o *orderedWriter) pace(succeeded, brokerFailed bool) {
+// 🔑 WITHOUT A BACKOFF A FAILING STREAM IS DRAINED AT CPU SPEED. A publish the broker fails
+// at once — no responders while a stream leader is being elected — settles in microseconds
+// and frees its slot, so the submitter pulls the next source, which fails too. Each such
+// source is left unacked and spends one of its deliveries on the redelivery, so an outage of
+// a few AckWaits would dead-letter the whole inbound backlog instead of the handful a
+// synchronous writer (which spends about 500 ms on each failing publish) gets through.
+//
+// 🔑 AND THE BACKOFF IS PAID ONCE PER EPISODE, NOT ONCE PER FAILED PUBLISH. A reconnect fails
+// every publish of the window at the same instant. Waiting again for each of them would
+// hold the window's outcomes — including those of publishes sent afterwards, which the
+// broker stores in milliseconds — for a backoff apiece: minutes at a window of 128, far
+// past AckWait, so stored sources would be redelivered. So:
+//
+//   - a failure of a publish sent AFTER the last backoff ended starts (or escalates) one:
+//     it waits, then frees its slot, so exactly one new publish — a probe — can go;
+//   - a failure of a publish sent BEFORE it ended was already in flight when the episode
+//     began: it is reported without waiting, and its slot is held back, so the submitter
+//     does not refill the window behind a broker that is still failing;
+//   - a success ends the episode and frees every held slot.
+//
+// So a failing stream is consumed at one publish per backoff, like the synchronous path,
+// plus what was already in flight when it began, and a publish sent after the failures is
+// settled within about one backoff of its PubAck.
+//
+// The residual: a stored publish is reported only after everything ahead of it settles, so
+// its source is held here for up to the publish ceiling of the publishes ahead of it plus a
+// backoff — seconds, against an AckWait of a minute. A source held past AckWait anyway (a
+// caller that stalls in done, a teardown cut short) is redelivered, possibly to another
+// pod, while still in flight here; what saves it from a second copy is the caller's
+// Message.DedupID and the stream's duplicate window, not this writer. A held slot is never the last one: the
+// publish whose failure started the latest backoff freed its own, so the probe always has
+// room. Once the submitter is draining (Draining) there is no backlog left to protect, so
+// nothing waits and nothing is held.
+func (o *orderedWriter) pace(succeeded, brokerFailed bool, sent time.Time) int {
+	select {
+	case <-o.draining:
+		return o.release()
+	default:
+	}
 	switch {
 	case succeeded:
-		o.backoff = 0
-	case brokerFailed:
-		if o.backoff == 0 {
-			o.backoff = orderedBackoffStart
-		} else {
-			o.backoff = min(2*o.backoff, orderedBackoffMax)
-		}
-		t := time.NewTimer(o.backoff)
-		defer t.Stop()
-		select {
-		case <-t.C:
-		case <-o.draining:
-		}
+		o.backoff, o.backedOff = 0, time.Time{}
+		return o.release()
+	case !brokerFailed:
+		return 1
+	case sent.Before(o.backedOff):
+		o.held++
+		return 0
 	}
+	if o.backoff == 0 {
+		o.backoff = orderedBackoffStart
+	} else {
+		o.backoff = min(2*o.backoff, orderedBackoffMax)
+	}
+	t := time.NewTimer(o.backoff)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-o.draining:
+		return o.release()
+	}
+	o.backedOff = time.Now()
+	return 1
+}
+
+// release ends the episode's hold: the settled submission's own slot plus every held one.
+func (o *orderedWriter) release() int {
+	n := o.held + 1
+	o.held = 0
+	return n
 }
 
 // awaitPubAck waits for fut's outcome until deadline.

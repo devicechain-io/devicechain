@@ -406,7 +406,10 @@ func TestLaterPublishesAreNotFailedByAnEarlierTimeout(t *testing.T) {
 // 🔑 THE BACKOFF GATE. A stream that answers every publish with "no responders" fails each
 // one at once. Without a backoff the window frees at CPU speed and the submitter pours its
 // whole backlog through it — every source failed, and a delivery spent on each. With one, a
-// failing stream is drained no faster than a synchronous writer's retries would drain it.
+// failing stream is drained no faster than a synchronous writer's retries would drain it,
+// plus the window that was already in flight: that window (8) fails together and shares the
+// first backoff (500 ms), then one probe goes per backoff (the next waits 1 s, so the one
+// after it is not reported until 3.5 s).
 func TestAFailingStreamIsNotDrainedFasterThanTheSerialPath(t *testing.T) {
 	_, nmgr := orderedManager(t)
 	const window = 8
@@ -422,9 +425,9 @@ func TestAFailingStreamIsNotDrainedFasterThanTheSerialPath(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	failed := out.count()
 	w.Draining()
-	if failed > window+8 {
+	if failed > window+3 {
 		t.Errorf("publishes failed within 2s against a stream with no responders: got %d, want at most %d",
-			failed, window+8)
+			failed, window+3)
 	}
 	if failed == 0 {
 		t.Fatal("no publish failed at all within 2s: the stream is not failing, so this proves nothing")
@@ -441,17 +444,218 @@ func TestAFailingStreamIsNotDrainedFasterThanTheSerialPath(t *testing.T) {
 	}
 }
 
-// A healthy stream pays nothing for the backoff: a success resets it.
-func TestASuccessResetsTheBackoff(t *testing.T) {
-	w := &orderedWriter{draining: make(chan struct{})}
-	w.pace(false, true)
-	if w.backoff != orderedBackoffStart {
-		t.Fatalf("backoff after one failure: got %v, want %v", w.backoff, orderedBackoffStart)
+// 🔑 THE RECONNECT GATE. A reconnect fails every publish in flight at the same instant. They
+// are ONE failure episode and share one backoff: a publish sent after them, which the broker
+// stores at once, is reported within about that backoff — not after a backoff for each of
+// the window's failures, which at a window of 128 held its source for minutes, past AckWait.
+func TestAReconnectCostsTheWindowOneBackoff(t *testing.T) {
+	srv, nmgr := orderedManager(t)
+	const window = 16
+	w := newOrdered(t, nmgr, window)
+	stub := stubPublishes(t, srv, nmgr)
+	out := newOutcomes()
+
+	for i := 0; i < window; i++ {
+		w.Publish(orderedCtx(), Message{Value: []byte(strconv.Itoa(i))}, out.done(i))
 	}
-	w.pace(true, false)
+	if got := stub.waitSeen(window); got != window {
+		t.Fatalf("requests in flight: got %d, want %d", got, window)
+	}
+	if err := nmgr.nc.ForceReconnect(); err != nil {
+		t.Fatal(err)
+	}
+	// Blocks for a slot until the first failure's backoff has run.
+	go w.Publish(orderedCtx(), Message{Value: []byte("late")}, out.done(window))
+	if got := stub.waitSeen(window + 1); got != window+1 {
+		t.Fatalf("requests after the reconnect: got %d, want %d", got, window+1)
+	}
+	stub.answer(window)
+	answered := stub.answeredTime(window)
+	if got := out.waitCount(window+1, 10*time.Second); got != window+1 {
+		t.Fatalf("outcomes: got %d, want %d", got, window+1)
+	}
+	w.Close()
+
+	out.mu.Lock()
+	defer out.mu.Unlock()
+	for i := 0; i < window; i++ {
+		if out.errs[i] == nil {
+			t.Fatalf("publish %d, in flight across the reconnect: reported a success", i)
+		}
+	}
+	if err := out.errs[window]; err != nil {
+		t.Fatalf("the publish sent after the reconnect: got %v, want nil (the stub acknowledged it)", err)
+	}
+	if lag := out.at[window].Sub(answered); lag > time.Second {
+		t.Errorf("the publish sent after the reconnect was reported %v after its PubAck, want under 1s: "+
+			"the window's failures must share one backoff", lag)
+	}
+}
+
+// The backoff's floor is the synchronous path's: nats.go retries a failing synchronous
+// publish twice, 250 ms apart, so the first backoff is at least 500 ms, and it doubles to a
+// 2 s cap. The literals are the ruling, not the constants.
+func TestTheBackoffMatchesTheSerialPath(t *testing.T) {
+	w := &orderedWriter{draining: make(chan struct{})}
+	for i, want := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 2 * time.Second} {
+		start := time.Now()
+		if n := w.pace(false, true, start); n != 1 {
+			t.Fatalf("failure %d freed %d slots, want its own", i, n)
+		}
+		if w.backoff != want {
+			t.Fatalf("backoff after failure %d: got %v, want %v", i, w.backoff, want)
+		}
+		if waited := time.Since(start); waited < want {
+			t.Fatalf("failure %d waited %v, want at least %v", i, waited, want)
+		}
+	}
+}
+
+// Failures of publishes sent before the backoff ended share it: they wait for nothing more
+// and keep their slots back, so only the probe goes. A success ends the episode, frees
+// every held slot and resets the backoff, so a healthy stream never pays.
+func TestAFailureEpisodeHoldsItsSlotsUntilASuccess(t *testing.T) {
+	w := &orderedWriter{draining: make(chan struct{})}
+	inFlight := time.Now()
+	if n := w.pace(false, true, inFlight); n != 1 {
+		t.Fatalf("the failure that starts the episode freed %d slots, want 1", n)
+	}
+	for i := 0; i < 3; i++ {
+		start := time.Now()
+		if n := w.pace(false, true, inFlight); n != 0 {
+			t.Fatalf("a failure already in flight freed %d slots, want 0 (held)", n)
+		}
+		if waited := time.Since(start); waited > 50*time.Millisecond {
+			t.Fatalf("a failure already in flight waited %v, want no wait", waited)
+		}
+	}
+	if w.backoff != 500*time.Millisecond {
+		t.Fatalf("backoff after failures that were in flight together: got %v, want 500ms (not escalated)", w.backoff)
+	}
+	if n := w.pace(false, false, time.Time{}); n != 1 {
+		t.Fatalf("a local refusal freed %d slots, want its own", n)
+	}
+	if n := w.pace(true, false, time.Now()); n != 4 {
+		t.Fatalf("the success that ends the episode freed %d slots, want 4 (its own and 3 held)", n)
+	}
 	if w.backoff != 0 {
 		t.Fatalf("backoff after a success: got %v, want 0", w.backoff)
 	}
+	if n := w.pace(false, true, inFlight); n != 1 || w.backoff != 500*time.Millisecond {
+		t.Fatalf("a failure after the success: freed %d, backoff %v; want a new episode (1, 500ms)", n, w.backoff)
+	}
+}
+
+// Draining releases what an episode held and waits for nothing.
+func TestDrainingReleasesAHeldEpisode(t *testing.T) {
+	w := &orderedWriter{draining: make(chan struct{})}
+	inFlight := time.Now()
+	w.pace(false, true, inFlight)
+	w.pace(false, true, inFlight)
+	w.pace(false, true, inFlight)
+	w.Draining()
+	start := time.Now()
+	if n := w.pace(false, true, time.Now()); n != 3 {
+		t.Fatalf("a failure while draining freed %d slots, want 3 (its own and 2 held)", n)
+	}
+	if waited := time.Since(start); waited > 50*time.Millisecond {
+		t.Fatalf("a failure while draining waited %v", waited)
+	}
+}
+
+// 🔴 NO RETRY OPTIONS. nats.go retries an async no-responders publish on a timer, re-sending
+// it BEHIND whatever went meanwhile. The stream disappears and comes back while publishes
+// sent a millisecond apart are failing: whatever reaches the stream must still be in
+// submission order, and exactly the publishes reported as successes.
+func TestAStreamThatComesBackStoresInSubmissionOrder(t *testing.T) {
+	_, nmgr := orderedManager(t)
+	const window, n = 64, 160
+	w := newOrdered(t, nmgr, window)
+	deleteStream(t, nmgr)
+	out := newOutcomes()
+
+	submitted := make(chan struct{})
+	go func() {
+		defer close(submitted)
+		for i := 0; i < n; i++ {
+			w.Publish(orderedCtx(), Message{Value: []byte(strconv.Itoa(i))}, out.done(i))
+			if i < window {
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+	// Between a retrying writer's first retry (250 ms) and its second (500 ms).
+	time.Sleep(375 * time.Millisecond)
+	if _, err := nmgr.ensureStream(streams.ResolvedEvents); err != nil {
+		t.Fatal(err)
+	}
+	<-submitted
+	w.Draining()
+	w.Close()
+
+	stream := StreamName(nmgr.Microservice.InstanceId, streams.ResolvedEvents)
+	info, err := nmgr.js.StreamInfo(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored []int
+	for seq := info.State.FirstSeq; seq <= info.State.LastSeq && info.State.Msgs > 0; seq++ {
+		raw, err := nmgr.js.GetMsg(stream, seq)
+		if err != nil {
+			t.Fatalf("stream sequence %d: %v", seq, err)
+		}
+		v, err := strconv.Atoi(string(raw.Data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored = append(stored, v)
+	}
+	var succeeded []int
+	for i := 0; i < n; i++ {
+		if out.errs[i] == nil {
+			succeeded = append(succeeded, i)
+		}
+	}
+	for i := 1; i < len(stored); i++ {
+		if stored[i] <= stored[i-1] {
+			t.Fatalf("stream order breaks at position %d: %d stored after %d", i, stored[i], stored[i-1])
+		}
+	}
+	if fmt.Sprint(stored) != fmt.Sprint(succeeded) {
+		t.Fatalf("stored %v, but the publishes reported as successes were %v", stored, succeeded)
+	}
+	// Last, so an order break is what a writer that reorders is reported for.
+	if len(succeeded) == 0 || len(succeeded) == n {
+		t.Fatalf("successes: %d of %d, want some but not all: the stream was not both absent and back", len(succeeded), n)
+	}
+}
+
+// A slot is freed only after its done has returned, so the window bounds the work done in
+// the callbacks too: with a window of one, the next publish is not sent while done runs.
+func TestASlotIsFreedOnlyAfterItsDoneReturns(t *testing.T) {
+	srv, nmgr := orderedManager(t)
+	w := newOrdered(t, nmgr, 1)
+	stub := stubPublishes(t, srv, nmgr)
+	inDone, release := make(chan struct{}), make(chan struct{})
+	w.Publish(orderedCtx(), Message{Value: []byte("0")}, func(error) {
+		close(inDone)
+		<-release
+	})
+	stub.waitSeen(1)
+	go w.Publish(orderedCtx(), Message{Value: []byte("1")}, func(error) {})
+	stub.answer(0)
+	<-inDone
+	time.Sleep(200 * time.Millisecond)
+	if got := stub.seen(); got != 1 {
+		t.Fatalf("requests sent while the first publish's done was running: got %d, want 1", got)
+	}
+	close(release)
+	if got := stub.waitSeen(2); got != 2 {
+		t.Fatalf("requests once done returned: got %d, want 2", got)
+	}
+	stub.answer(1)
+	time.Sleep(50 * time.Millisecond)
+	w.Close()
 }
 
 // A writer that is built and never used owns no goroutine, and closing it returns at once.

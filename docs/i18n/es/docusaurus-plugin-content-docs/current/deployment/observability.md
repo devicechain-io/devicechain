@@ -360,10 +360,12 @@ Ningún aviso lee la serie siguiente, pero es la que hay que mirar cuando public
   publicación en un flujo de JetStream, desde que se envía hasta que el servicio actúa sobre la
   confirmación del bróker o sobre su fallo, según el flujo al que se envió. `mode="sync"` es una
   publicación que el servicio esperó sola. `mode="pipelined"` es una de varias en curso a la vez
-  (los eventos resueltos que publica `device-management`), y su tiempo incluye la espera tras una
-  publicación anterior aún en curso, así que los dos modos no se comparan directamente. Una
-  publicación que el bróker nunca respondió se cuenta en el límite de 5 segundos, así que la cuenta
-  por encima del bucket `le="5"` son las publicaciones que llegaron a él.
+  (los eventos resueltos que publica `device-management`), y su tiempo incluye además la espera a
+  que se resuelvan todas las publicaciones anteriores, y a la pausa que el servicio hace tras una
+  fallida, así que los dos modos no se comparan directamente. Una publicación `mode="sync"` que el
+  bróker nunca respondió se cuenta en el límite de 5 segundos, así que para ese modo la cuenta por
+  encima del bucket `le="5"` son las publicaciones que llegaron a él. Una publicación
+  `mode="pipelined"` puede contarse por encima de 5 segundos sin haber llegado al límite.
 
 ## Relacionado
 

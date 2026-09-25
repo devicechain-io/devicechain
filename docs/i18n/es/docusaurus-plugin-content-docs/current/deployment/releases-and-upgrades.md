@@ -2429,10 +2429,14 @@ No hay que hacer nada en la actualización.
 - **Un evento fallido se confirma solo después de que su registro se almacene en el flujo
   failed-events.** Antes, el evento de entrada se confirmaba cuando su registro se entregaba para
   publicarlo, así que un registro que no se llegaba a publicar se perdía. Ahora el evento de entrada
-  se reentrega o, en su última entrega, se registra como mensaje fallido (dead letter).
+  se reentrega o, en su última entrega, se registra como mensaje fallido (dead letter). El registro
+  lleva el mismo tipo de identificador de detección de duplicados, así que una reentrega no registra
+  el fallo dos veces.
 - **Cuando publicar en resolved-events sigue fallando, `device-management` va más despacio** en
   lugar de hacer fallar toda su cola de entrada a máxima velocidad: tras una publicación fallida
-  espera medio segundo, duplicándose hasta dos segundos, antes de tomar la siguiente.
+  espera medio segundo, duplicándose hasta dos segundos, y hasta que una publicación tiene éxito
+  envía una cada vez. Las publicaciones que fallaron juntas, como todas las que están en curso
+  cuando se cae la conexión con el bróker, comparten una sola espera.
 - **Los eventos resueltos de un dispositivo pueden llegar al flujo ligeramente desordenados,** y ya
   podían antes: cada réplica publica, y una actualización progresiva ejecuta dos pods a la vez. El
   ajuste [`watermarkLatenessSeconds`](./detection-engine.md) de la detección lo tolera. Un evento

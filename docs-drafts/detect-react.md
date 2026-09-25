@@ -103,13 +103,14 @@ out of order. DETECT applies them in stream order; windowed rules count a late e
 allowed lateness, other kinds drop a reading older than one already seen. A failed publish is
 republished only after the inbound AckWait (60s), which is beyond the default lateness.
 
-The stream is `resolved-events` (`backend/core/streams/streams.go:176`), subject
-`{instance}.{tenant}.resolved-events`, file storage, 7-day age limit
-(`backend/core/messaging/nats.go:566-574`). **It declares no dedup window of its own** — contrast
-`inbound-events`, which declares 1800s (`streams.go:322`) — so the broker's 2-minute default
+The stream is `resolved-events` (its entry in `streams.All`, `backend/core/streams/streams.go`),
+subject `{instance}.{tenant}.resolved-events`, file storage, 7-day age limit (`ensureStream`,
+`backend/core/messaging/nats.go`). **It declares no dedup window of its own** — contrast
+`inbound-events`, whose `streams.All` entry declares 1800s — so the broker's 2-minute default
 applies. Each resolved publish carries a `Nats-Msg-Id` of tenant, inbound stream sequence and
-fan-out index (`resolvedDedupID`), stable across redelivery, so the copy published on the first
-redelivery of a source whose PubAck was lost is not stored twice.
+fan-out index (`sourceDedupID` in `device-management/processor/inbound.go`), stable across
+redelivery, so the copy published on the first redelivery of a source whose PubAck was lost is
+not stored twice.
 
 ## 2. The spine — one goroutine, and everything else marshals into it
 

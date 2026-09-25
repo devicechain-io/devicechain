@@ -136,8 +136,9 @@ type streamMetrics struct {
 	// 🔑 THE TWO MODES MEASURE DIFFERENT THINGS, which is why mode is a label rather than
 	// being folded away. publishModeSync is one request's round trip. publishModePipelined
 	// is from the send to the moment the outcome is acted on, which is after every publish
-	// submitted before it has settled — so a slow or timed-out publish at the head of the
-	// window lifts the samples of everything queued behind it. Comparing the two is
+	// submitted before it has settled, and after any failure backoff one of them started — so
+	// a slow, timed-out or failed publish at the head of the window lifts the samples of
+	// everything queued behind it. Comparing the two is
 	// comparing a latency with a latency-plus-queueing.
 	publishLatency *prometheus.HistogramVec
 }
@@ -152,7 +153,10 @@ const (
 
 // publishBuckets spans a loopback PubAck (well under a millisecond) through a replicated
 // stream's quorum commit to the publish ceiling. The top finite bucket IS publishWait, so
-// the count above it is the publishes that ran into the ceiling.
+// for publishModeSync the count above it is the publishes that ran into the ceiling. NOT for
+// publishModePipelined: its sample also holds the settlement of every earlier publish and
+// the failure backoff after one (see publishLatency), so a publish the broker acknowledged at
+// once can be counted above it.
 var publishBuckets = []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
 // durableRef names one durable consumer on one stream: a reader this service created.

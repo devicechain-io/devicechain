@@ -70,6 +70,18 @@ func TestOrderedPublishCeilingIsFiveSeconds(t *testing.T) {
 	if elapsed < ruledPublishCeiling || elapsed > ruledPublishCeiling+1500*time.Millisecond {
 		t.Errorf("outcome after %v, want the %v ceiling", elapsed, ruledPublishCeiling)
 	}
+	// And the library has forgotten it. The writer's own context carries the ceiling as the
+	// library's async timeout; without it a publish nobody answered stays pending for the life
+	// of the connection, and at the library's ceiling (4000) every later publish stalls and
+	// fails until the next reconnect.
+	js := w.(*orderedWriter).js
+	deadline := time.Now().Add(2 * time.Second)
+	for js.PublishAsyncPending() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := js.PublishAsyncPending(); got != 0 {
+		t.Errorf("publishes the library still holds after the ceiling: got %d, want 0", got)
+	}
 }
 
 func TestOrderedPublishIgnoresCancellation(t *testing.T) {

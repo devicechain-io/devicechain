@@ -2276,10 +2276,13 @@ Nothing needs doing at the upgrade.
 - **A failed event is acknowledged only after its record is stored on the failed-events stream.**
   Before, the inbound event was acknowledged when its record was handed over for publishing, so a
   record that failed to publish was lost. Now the inbound event is redelivered, or at its last
-  delivery recorded as a dead letter.
+  delivery recorded as a dead letter. The record carries the same kind of duplicate-detection id,
+  so a redelivery does not record the failure twice.
 - **When publishing to resolved-events keeps failing, `device-management` slows down** rather than
   failing its whole inbound backlog at full speed: after a failed publish it waits half a second,
-  doubling up to two seconds, before taking the next.
+  doubling up to two seconds, and until a publish succeeds it sends one at a time. Publishes that
+  failed together, as every publish in flight does when the connection to the broker drops, share
+  one wait.
 - **A device's resolved events can reach the stream slightly out of order,** and could before:
   every replica publishes, and a rolling update runs two pods at once. Detection's
   [`watermarkLatenessSeconds`](./detection-engine.md) tolerates that. An event whose publish
