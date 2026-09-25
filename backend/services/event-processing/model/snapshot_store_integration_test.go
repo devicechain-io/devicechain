@@ -145,32 +145,52 @@ func TestSnapshotLockReadOnPostgres(t *testing.T) {
 	}
 
 	// 3. The narrowed read still holds the row: a second writer waits behind it.
+	//
+	// Any t.Fatal between Begin and Commit (waitForBlockedBackend's included) would otherwise
+	// leave txA open holding the row lock and the waiting Save's goroutine parked behind it,
+	// wedging the pool when the store's cleanup closes it. This cleanup is registered after
+	// the store's, so it runs first: it releases the lock, then waits (bounded) for the
+	// goroutine, and the failure reports cleanly.
 	txA := db.WithContext(ctx).Begin()
+	released, started := false, false
+	done := make(chan error, 1)
+	t.Cleanup(func() {
+		if !released {
+			txA.Rollback()
+		}
+		if started {
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+				t.Error("the waiting Save never returned after the lock was rolled back")
+			}
+		}
+	})
 	floor, err := lockSnapshotFloor(txA, "singleton")
 	if err != nil {
-		txA.Rollback()
 		t.Fatalf("lock the floor: %v", err)
 	}
 	if floor.StreamSeq != 100 || !floor.Watermark.Equal(wm) {
-		txA.Rollback()
 		t.Fatalf("projected floor scanned as seq=%d wm=%v, want 100 / %v", floor.StreamSeq, floor.Watermark, wm)
 	}
-	done := make(chan error, 1)
+	started = true
 	go func() {
 		done <- store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 101, Watermark: wm, Payload: []byte("next")})
 	}()
 	waitForBlockedBackend(t, db)
 	select {
 	case err := <-done:
-		txA.Rollback()
+		done <- err // leave it for the cleanup's drain
 		t.Fatalf("a second Save completed (%v) while the floor was locked", err)
 	default:
 	}
+	released = true
 	if err := txA.Commit().Error; err != nil {
 		t.Fatalf("release the lock: %v", err)
 	}
 	select {
 	case err := <-done:
+		started = false // drained; nothing left for the cleanup to wait on
 		if err != nil {
 			t.Fatalf("the waiting Save failed once the lock was released: %v", err)
 		}
