@@ -303,6 +303,56 @@ explica ambos casos.
 | `RateLimiterOverflowInUse` | warning | Durante 10 minutos, la ingesta HTTP ha admitido peticiones para nombres de inquilino que no pudo confirmar a través de la única asignación que todos comparten. Llegan muchos nombres sin confirmar, lo que suele indicar peticiones que nombran inquilinos inventados. | Revise quién envía peticiones de ingesta HTTP. Consulte [nombres de inquilino que no se pueden confirmar](../concepts/governance.md#unconfirmed-tenants). |
 | `ReactShedLettersOverBudget` | warning | Durante 10 minutos, el motor de detección ha descartado acciones de salida más rápido de lo que las registra una a una, así que el exceso se resume en un mensaje no entregado por inquilino y minuto. Un inquilino supera con creces su techo de salida. | Busque el inquilino en `dcctl dead-letters` (motivo `shed`) y revise sus reglas, o suba su techo de salida si el tráfico es legítimo. Consulte [la gobernanza de salida](../concepts/outbound-connectors.md#governance). |
 | `RateMeteringClockFallback` | warning | Durante una hora, el servicio indicado por la etiqueta `job` ha medido acciones de salida según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día tras un reinicio puede volver a descartarse como una inundación. Una hora de desencadenamiento posterior a la hora del bróker del mensaje que la lleva también se mide según esa hora del bróker, pero se cuenta con el origen `capped` y no dispara este aviso: indica que los relojes del pod y del bróker no coinciden, no que falte la hora. | Compruebe que event-processing y outbound-connectors ejecutan la misma versión. |
+| `ConnectorDispatchRateLimited` | warning | Durante 15 minutos, outbound-connectors ha descartado envíos por superar la tasa de salida de su inquilino. El motor de detección mide el mismo techo sobre la misma línea de tiempo y descarta las acciones que lo superan antes de enviarlas, así que estas se admitieron en un extremo y se rechazaron en el otro. Un inquilino por encima de su techo no dispara este aviso; dispara `ReactConnectorEgressShedding` en el motor de detección. | Compruebe que la tasa de salida por defecto de la plataforma (`outboundMessagesPerSecond` y `outboundBurst`) es la misma para event-processing y outbound-connectors, y si `TenantsMeteredAtPlatformDefault` está activo para alguno de los dos. Los envíos que fallan y se reintentan también se vuelven a medir en el extremo de los conectores, así que busque también un destino que falle. Eso también significa que un solo inquilino cuyo destino falla repetidamente mientras envía cerca de su cuota puede activar este aviso por sí solo, y por eso es un aviso de tipo warning y no critical. Los envíos descartados son mensajes no entregados con el motivo `rate_limited`. |
+
+Solo el resultado `rate_limited` de `devicechain_outboundconnectors_connector_dispatch_total`
+genera un aviso. Sus otros resultados de fallo son la configuración de un solo inquilino, como un
+webhook que falla o un destino al que la plataforma se niega a conectarse. Esos envíos ya se
+registran como mensajes no entregados y aparecen en `dcctl dead-letters`, y no avisan al operador.
+
+## Replicación {#replication}
+
+Una instancia de alta disponibilidad necesita dos cosas: flujos de JetStream creados con el
+número de réplicas para el que está configurada la instancia, y un clúster de NATS lo bastante
+grande para alojarlos. Cualquiera de las dos puede fallar aunque la configuración parezca
+correcta. Por eso cada servicio informa cada 30 segundos de lo que el bróker dice sobre cada flujo
+y cada bucket KV que usa, y cinco avisos vigilan el resultado:
+
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `JetStreamNotReplicatedAsConfigured` | warning | Durante 15 minutos, un flujo ha tenido menos réplicas de las configuradas para la instancia, según el servicio indicado por la etiqueta `job`. La instancia no es de alta disponibilidad para ese flujo. | Asegúrese de que el clúster de NATS tiene servidores suficientes para `instance.config.infrastructure.nats.streamReplicas`. El aumento de réplicas solo se ejecuta cuando un servicio arranca, así que, cuando el clúster sea lo bastante grande, reinicie los Deployments afectados. |
+| `JetStreamReplicaPeersDegraded` | warning | Durante 20 minutos, un flujo ha tenido menos copias actualizadas y en línea que réplicas. Perder su líder puede perder datos o disponibilidad. La espera es larga porque las réplicas recién añadidas copian los datos del flujo antes de contar como actualizadas. | Revise el estado y la ubicación de los pods de NATS. Tres réplicas en pods que comparten un nodo no sobreviven a la pérdida de ese nodo. |
+| `JetStreamLeaseBucketNotReplicated` | critical | En una instancia configurada para más de una réplica, el bucket que decide qué pod puede escribir tiene menos de tres réplicas. Perder su servidor impide que cualquier réplica en espera tome el relevo. | Igual que para `JetStreamNotReplicatedAsConfigured`. No confíe en la conmutación por error mientras esté activo. |
+| `JetStreamClusterUnused` | warning | El bróker está en clúster, pero todos los flujos están configurados para una réplica, así que la instancia ejecuta varios servidores de NATS y no sobrevive a la pérdida de ninguno. | Ajuste `streamReplicas` al clúster (`dcctl install --ha` fija ambos), o reduzca el clúster de NATS si lo que quería era un solo servidor. |
+| `JetStreamReplicationUnobserved` | warning | Durante 15 minutos, un pod en ejecución no ha podido leer el estado de replicación de un flujo que antes sí podía leer. Mientras está activo, los avisos anteriores no pueden juzgar ese flujo para ese pod, así que su replicación es desconocida, no correcta. | Si se activa para todos los flujos a la vez, el bróker o JetStream no está disponible: revise los pods de NATS y los registros de conexión del servicio. Si es un solo flujo, lo más probable es que ese flujo haya perdido su líder: inspecciónelo con `nats stream info`. |
+
+`JetStreamReplicationUnobserved` tiene límites que conviene conocer:
+
+- Se activa para **todos los flujos en todos los pods** durante una caída del bróker. Es
+  deliberado: el aviso es correcto, y ningún otro aviso del chart informa de que el bróker no es
+  accesible. Agrupe sus notificaciones por nombre de aviso si son demasiadas.
+- Vigila cada pod por separado, así que una réplica que pierde un flujo lo activa aunque otra
+  réplica del mismo servicio todavía pueda leerlo. Un pod sustituido, y una versión que deja de
+  usar un flujo, no lo activan.
+- Solo ve un flujo que el pod ha leído al menos una vez. Un pod que no ha podido leer un flujo
+  desde que arrancó no lo activa, y eso incluye un pod de sustitución creado después de que
+  empezara el problema. Un contenedor reiniciado en el mismo pod (tras un fallo, una terminación
+  por falta de memoria o una sonda de actividad fallida) conserva el nombre del pod, así que lo que
+  leyó el proceso anterior sigue contando y el aviso se sigue activando.
+- Se resuelve seis horas después de la última lectura del flujo por el pod, aunque el flujo siga
+  sin poder leerse. Una notificación de resolución no demuestra la recuperación.
+- Un pod que no está en ejecución no exporta nada, así que no puede activarlo. Los avisos de
+  salud de los pods cubren ese caso.
+
+Los avisos leen estas series, que exporta cada servicio que usa JetStream:
+
+- **`devicechain_<area>_jetstream_replicas_desired{stream}`**, **`_replicas_actual{stream}`** y
+  **`_peers_current{stream}`**: el número de réplicas configurado, el que informa el bróker y las
+  copias actualizadas y en línea. Un servicio que no puede leer un flujo elimina las tres para ese
+  flujo en lugar de seguir informando de sus últimos valores.
+- **`devicechain_<area>_jetstream_broker_clustered`**: 1 cuando el bróker conectado está en
+  clúster y 0 en otro caso, también mientras el servicio está desconectado. Existe mientras el pod
+  está en ejecución.
 
 ## Relacionado
 

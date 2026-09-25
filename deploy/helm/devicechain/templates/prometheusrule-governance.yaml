@@ -19,7 +19,7 @@ from the request path before any credential is checked, so each name that user-m
 has not confirmed gets an allowance of its own only from a fixed set; past that set, every
 such name shares one. RateLimiterOverflowInUse fires while that shared allowance is in use.
 
-The last two watch the outbound ceiling's clock and its record. REACT and the connectors
+The next two watch the outbound ceiling's clock and its record. REACT and the connectors
 service meter a tenant's outbound actions on the time the triggering telemetry reached the
 platform, which the detection engine stamps; a dispatch without a stamp is metered on its
 broker time or on arrival and counted on <area>_rate_clock_fallback_total, and a sustained
@@ -29,6 +29,13 @@ which the alert does not watch: it is the pod's and the broker's clocks disagree
 missing stamp, and it holds steadily on a healthy install whose clocks are skewed.
 An action REACT sheds is dead-lettered within a per-tenant and a global budget; past the
 budget it is only counted and summarised (ReactShedLettersOverBudget).
+
+The outbound ceiling is enforced at BOTH ends on that same timeline, so the connectors
+service shedding a dispatch for rate means it refused what the detection engine admitted
+(ConnectorDispatchRateLimited): the two ends disagree about the ceiling, or failing sends
+are being retried and every retry is metered again at the connectors end. A tenant over
+quota is already reported where it is shed, at the source, by ReactConnectorEgressShedding
+in the event-processing group.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -90,4 +97,27 @@ spec:
           annotations:
             summary: "Outbound actions are being metered on a fallback clock"
             description: "For at least an hour, {{ "{{ $labels.job }}" }} has metered outbound actions on the {{ "{{ $labels.source }}" }} clock because they carried no trigger time. The detection engine has stopped stamping trigger times, so actions are metered on broker or arrival time and a catch-up after a restart can be shed as a flood again. An upgrade's in-flight backlog clears well inside the hour. Check that event-processing and outbound-connectors run the same release."
+        # Only rate_limited. The connectors service's other terminal outcomes (dead, blocked,
+        # invalid, unsupported) are one tenant's configuration -- a broken webhook, a private
+        # destination -- already dead-lettered and listed by `dcctl dead-letters`, and paging
+        # the operator on them would hand every tenant a switch for the operator's pager.
+        # dead_write_failed is DeadLetterWriteLost's. rate_limited is different: the source
+        # sheds over-quota actions before they are dispatched, so a sustained shed HERE means
+        # the two ends disagree about the ceiling, which is an operator's configuration, or
+        # that retries of failing sends are being charged a second time at this end.
+        # That second cause IS reachable by a tenant: one whose destination keeps failing
+        # while it sends near its quota raises this on its own. The pager argument above
+        # applies to it too, and severity=warning is what makes it acceptable -- this must
+        # never be promoted to critical while the retry cause remains.
+        # `for` is 15m to match ReactConnectorEgressShedding: a burst the smoothing wait
+        # cannot absorb is not a disagreement.
+        - alert: ConnectorDispatchRateLimited
+          expr: sum by (job, action) (rate(devicechain_outboundconnectors_connector_dispatch_total{outcome="rate_limited", namespace="{{ $ns }}"}[5m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The connectors service is shedding outbound actions the detection engine admitted"
+            description: "For at least 15 minutes, {{ "{{ $labels.job }}" }} has shed {{ "{{ $labels.action }}" }} dispatches for being over their tenant's outbound rate. The detection engine meters the same ceiling on the same timeline and sheds over-quota actions before dispatching them, so these were admitted at one end and refused at the other: the two ends disagree about the ceiling. The usual cause is the platform default configured differently for event-processing and outbound-connectors (outboundMessagesPerSecond and outboundBurst must match), or one of them metering at the default because it cannot read tenant ceilings (see TenantsMeteredAtPlatformDefault), or sends that are failing and being retried, since every retry is metered again here and only once at the source. Each shed dispatch is dead-lettered with reason rate_limited; inspect them with `dcctl dead-letters`."
 {{- end }}

@@ -293,6 +293,53 @@ HTTP ingest endpoint gives tenant names it cannot confirm a bounded set of allow
 | `RateLimiterOverflowInUse` | warning | For 10 minutes, HTTP ingest has been admitting requests for tenant names it could not confirm through the one allowance they all share. Many unconfirmed names are arriving, which usually means requests naming invented tenants. | Look at who is sending HTTP ingest requests. See [tenant names that cannot be confirmed](../concepts/governance.md#unconfirmed-tenants). |
 | `ReactShedLettersOverBudget` | warning | For 10 minutes, the detection engine has shed outbound actions faster than it records them one by one, so the excess is summarised in one dead letter per tenant per minute. A tenant is well over its outbound ceiling. | Find the tenant in `dcctl dead-letters` (reason `shed`) and check its rules, or raise its outbound ceiling if the traffic is legitimate. See [outbound governance](../concepts/outbound-connectors.md#governance). |
 | `RateMeteringClockFallback` | warning | For an hour, the service named by the `job` label has metered outbound actions on broker or arrival time because they carried no trigger time, so a catch-up after a restart can be shed as a flood again. A trigger time later than the broker time of the message carrying it is also metered on that broker time, but it is counted as source `capped` and does not fire this alert: it means the pod and broker clocks disagree, not that the time is missing. | Check that event-processing and outbound-connectors run the same release. |
+| `ConnectorDispatchRateLimited` | warning | For 15 minutes, outbound-connectors has shed dispatches for being over their tenant's outbound rate. The detection engine meters the same ceiling on the same timeline and sheds over-quota actions before dispatching them, so these were admitted at one end and refused at the other. A tenant over its ceiling does not fire this; it fires `ReactConnectorEgressShedding` in the detection engine. | Check that the platform default outbound rate (`outboundMessagesPerSecond` and `outboundBurst`) is the same for event-processing and outbound-connectors, and whether `TenantsMeteredAtPlatformDefault` is firing for either. Sends that fail and are retried are also metered again at the connectors end, so look for a failing destination too. That also means a single tenant whose destination keeps failing while it sends near its quota can raise this alert on its own, which is why it is a warning and not critical. The shed dispatches are dead letters with reason `rate_limited`. |
+
+Only the `rate_limited` outcome of `devicechain_outboundconnectors_connector_dispatch_total` is
+alerted on. Its other failure outcomes are one tenant's own configuration, such as a webhook that
+fails or a destination the platform refuses to reach. Those dispatches are already dead-lettered
+and listed by `dcctl dead-letters`, and they do not page the operator.
+
+## Replication {#replication}
+
+A highly available instance needs two things: JetStream streams created with the replica count
+the instance is configured for, and a NATS cluster large enough to hold them. Either can be wrong
+while the configuration looks right. Every service therefore reports what the broker says about
+each stream and KV bucket it uses every 30 seconds, and five alerts watch the result:
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `JetStreamNotReplicatedAsConfigured` | warning | For 15 minutes, a stream has had fewer replicas than the instance is configured for, as seen by the service named by the `job` label. The instance is not highly available for that stream. | Make sure the NATS cluster has enough servers for `instance.config.infrastructure.nats.streamReplicas`. A replica increase runs only when a service starts, so once the cluster is large enough, restart the affected Deployments. |
+| `JetStreamReplicaPeersDegraded` | warning | For 20 minutes, a stream has had fewer current, online copies than it has replicas. Losing its leader may lose data or availability. The wait is long because newly added replicas copy the stream's data before they count as current. | Check the health and placement of the NATS pods. Three replicas on pods that share one node do not survive the loss of that node. |
+| `JetStreamLeaseBucketNotReplicated` | critical | On an instance configured for more than one replica, the bucket that decides which pod may write has fewer than three replicas. Losing its server blocks every standby from taking over. | As for `JetStreamNotReplicatedAsConfigured`. Do not rely on failover while it fires. |
+| `JetStreamClusterUnused` | warning | The broker is clustered, but every stream is configured for one replica, so the instance runs several NATS servers and survives no server loss. | Set `streamReplicas` to match the cluster (`dcctl install --ha` sets both), or scale the NATS cluster down if one server is what you intended. |
+| `JetStreamReplicationUnobserved` | warning | For 15 minutes, a running pod has been unable to read the replication state of a stream it could read earlier. The alerts above cannot judge that stream for that pod while this fires, so its replication is unknown, not healthy. | If it fires for every stream at once, the broker or JetStream is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its leader: inspect it with `nats stream info`. |
+
+`JetStreamReplicationUnobserved` has limits worth knowing:
+
+- It fires for **every stream on every pod** during a broker outage. That is deliberate: the
+  alert is accurate, and no other alert in the chart reports the broker as unreachable. Group its
+  notifications by alert name if that is too many.
+- It watches each pod separately, so one replica that loses a stream fires even while another
+  replica of the same service can still read it. A pod that is replaced, and a release that stops
+  using a stream, do not fire it.
+- It only sees a stream the pod has read at least once. A pod that has never been able to read a
+  stream since it started does not fire it, and that includes a replacement pod started after the
+  problem began. A container restarted in place (after a crash, an out-of-memory kill or a failed
+  liveness probe) keeps its pod name, so what the earlier process read still counts and the alert
+  still fires.
+- It resolves six hours after the pod last read the stream, even if the stream is still
+  unreadable. A resolved notification is not proof of recovery.
+- A pod that is not running exports nothing, so it cannot fire. Pod health alerts cover that case.
+
+The alerts read these series, which every service that uses JetStream exports:
+
+- **`devicechain_<area>_jetstream_replicas_desired{stream}`**, **`_replicas_actual{stream}`** and
+  **`_peers_current{stream}`**: the configured replica count, the count the broker reports, and
+  the copies that are current and online. A service that cannot read a stream removes all three
+  for it rather than keep reporting its last values.
+- **`devicechain_<area>_jetstream_broker_clustered`**: 1 when the connected broker is clustered, 0
+  otherwise, including while the service is disconnected. It exists for as long as the pod runs.
 
 ## Related
 

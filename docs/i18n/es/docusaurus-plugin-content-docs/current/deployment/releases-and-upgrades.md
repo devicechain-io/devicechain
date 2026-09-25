@@ -1626,6 +1626,10 @@ facturar, lea «La ingesta HTTP tiene su propia asignación». Si lee el `proces
 de `event-sources`, lea «`processedTime` ahora significa cuándo la plataforma recibió un evento». Si vigila los recuentos de reinicios de pods, lea «Perder la conexión de presencia ahora reinicia
 `event-sources`».
 
+Si enruta o silencia alertas por su nombre, se añaden dos avisos más,
+`JetStreamReplicationUnobserved` y `ConnectorDispatchRateLimited` (consulte «Dos avisos nuevos: un
+flujo que no se puede leer, y descartes de conectores que el motor de detección admitió»).
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2269,6 +2273,30 @@ Lo que cambia y puedes ver:
   comandos pendientes ya no se descarta cuando el adaptador está ocupado.
 
 No hay que hacer nada durante la actualización.
+
+#### Dos avisos nuevos: un flujo que no se puede leer, y descartes de conectores que el motor de detección admitió
+
+- **`JetStreamReplicationUnobserved`** (warning, grupo `jetstream-replication`) se dispara cuando
+  un pod en ejecución lleva 15 minutos sin poder leer el estado de replicación de un flujo que
+  antes sí podía leer. Hasta ahora, un servicio que no podía leer un flujo dejaba de informar de
+  él, y los demás avisos de replicación se quedaban en silencio para ese flujo en lugar de
+  indicarlo. También se dispara para todos los flujos en todos los pods durante una caída del
+  bróker, y es deliberado: nada más en el chart informa de una. Se resuelve seis horas después de
+  la última lectura del flujo, tanto si se puede volver a leer como si no. Consulte
+  [Replicación](./observability.md#replication).
+- **`ConnectorDispatchRateLimited`** (warning, grupo `governance`) se dispara cuando
+  outbound-connectors lleva 15 minutos descartando envíos por superar la tasa de salida de su
+  inquilino. El motor de detección ya descarta las acciones que superan la cuota antes de
+  enviarlas, así que esto significa que los dos servicios no coinciden en el techo (lo más
+  habitual es que sus valores por defecto de la plataforma sean distintos) o que se reintentan
+  envíos que fallan y se vuelven a medir. Antes de actualizar, compruebe que
+  `outboundMessagesPerSecond` y `outboundBurst` tienen el mismo valor para event-processing y
+  outbound-connectors. Si no, se dispara cada vez que un inquilino medido con el valor por defecto
+  de la plataforma envía más rápido que el menor de los dos. Consulte
+  [Inquilinos medidos con el valor por defecto de la plataforma](./observability.md#tenant-ceilings).
+- **`JetStreamLeaseBucketNotReplicated` tiene un resumen nuevo**, "The partition-lease bucket is
+  not replicated". Su nombre, etiquetas y severidad no cambian. Actualice las rutas o los
+  silencios que filtren por el texto del resumen anterior.
 
 ### La transición única a la ingesta duradera
 

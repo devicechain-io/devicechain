@@ -1248,6 +1248,8 @@ declare -A rule_tests=(
   [jetstream-delivery]="$repo_root/hack/testdata/prometheus-rules-jetstream-delivery-tests.yaml"
   [governance]="$repo_root/hack/testdata/prometheus-rules-governance-tests.yaml"
   [dead-letter]="$repo_root/hack/testdata/prometheus-rules-dead-letter-tests.yaml"
+  [event-processing]="$repo_root/hack/testdata/prometheus-rules-event-processing-tests.yaml"
+  [jetstream-replication]="$repo_root/hack/testdata/prometheus-rules-replication-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop
@@ -1259,7 +1261,10 @@ declare -A rule_tests=(
 #
 # Adding a rule file therefore forces a decision. Write tests for it, or write it
 # down here as a known gap. Both are fine; drifting past the question is not.
-untested_groups=(event-processing jetstream-replication)
+#
+# EMPTY, and kept as an empty list rather than deleted: every rendered group is
+# unit-tested, and the list is what makes the next rule file answer the question.
+untested_groups=()
 
 check_group_accounting "$work" "${!rule_tests[@]}" -- "${untested_groups[@]}" ||
   fail "the rendered rule groups and the coverage lists in this script do not line up"

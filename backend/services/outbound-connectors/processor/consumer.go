@@ -419,9 +419,9 @@ func (c *DispatchConsumer) handle(ctx context.Context, msg messaging.Message) {
 			// until the ceiling changes, so retrying it would only spend the message's deliveries
 			// and churn the poison cap that the rate gate promises never to touch.
 			//
-			// Debug, not Warn: by design a rising rate_limited COUNT (the metric) is the operator
-			// signal; a per-message warn would flood the log for exactly the over-quota tenant
-			// this fires on.
+			// Debug, not Warn: by design a rising rate_limited COUNT (the metric, which the
+			// ConnectorDispatchRateLimited alert reads) is the operator signal; a per-message
+			// warn would flood the log for exactly the over-quota tenant this fires on.
 			log.Debug().Err(err).Str("rule", req.RuleID).Str("tenant", tenant).Str("action", action).
 				Msg("Connector dispatch shed: tenant over its outbound egress rate beyond the smoothing budget; dead-lettering.")
 			c.deadLetter(tctx, msg, req.RuleID, action, outcomeRateLimited)

@@ -126,7 +126,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "The ADR-070 lease bucket is not replicated"
+            summary: "The partition-lease bucket is not replicated"
             description: >-
               {{ "{{ $labels.stream }}" }} holds the partition-ownership leases that decide which
               pod may write. On an instance configured for HA it must be replicated: at one replica,
@@ -173,4 +173,78 @@ spec:
               (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets
               both from one value. If the single-server topology is what you intended, scale the
               NATS cluster back down rather than leaving it running unused.
+        # The counterweight to the four above: the stream whose replication NOBODY can read.
+        #
+        # A pod that cannot read a stream's StreamInfo DELETES that stream's triple
+        # (forgetReplication in core/messaging/stream_metrics.go) rather than leaving a
+        # frozen, healthy-looking value. That is the right thing for the series and it
+        # leaves every rule above with nothing to evaluate for that stream on that pod, so
+        # they go quiet exactly when replication stops being observable. absent() cannot
+        # close it: it needs literal labels, and the set of streams is not known here.
+        #
+        # So this asks: did THIS POD report the stream within the lookback, does it not
+        # report it now, and is the pod still up and sampling? broker_clustered is the
+        # witness for the last part. It is a plain gauge, exported from process start and
+        # written at the top of every pass whether or not any StreamInfo succeeds, so it
+        # exists exactly while the pod is being scraped. replicas_actual alone stands for
+        # the triple, which is written and deleted together.
+        #
+        # 🔴 GROUPED BY POD, not by job like the rules above, and on BOTH sides. By job,
+        # a sibling replica that can still read the stream would mask one that cannot:
+        # the `unless` would find the sibling's series. By pod on the left only, a
+        # restarted pod's old name would fire, because it has history and no current
+        # series. By pod on both sides, a pod that is gone has no broker_clustered either,
+        # so a replaced pod, a rollout, and a release that stops using a stream (new pods
+        # never report it) are all quiet, and a live replica that loses a stream fires even
+        # while its siblings can read it.
+        #
+        # What it deliberately does, and cannot do:
+        #   - A broker or JetStream outage fires it for EVERY stream on every pod once the
+        #     15m has run. That is accepted rather than suppressed: the claim is true, and
+        #     nothing else in this chart alerts on the broker being unreachable. (The pod
+        #     reports broker_clustered 0 while disconnected; the witness reads the series,
+        #     not its value, so it holds either way.)
+        #   - A stream this pod has NEVER read since it started is invisible to it: there
+        #     is no history to compare against. That includes a REPLACEMENT pod started into
+        #     the fault. A container restarted in place (crash, OOMKill, liveness failure)
+        #     keeps its pod label, so the earlier process's readings are still in the
+        #     lookback and it DOES fire.
+        #   - It resolves once the last reading falls out of the 6h lookback, whether or
+        #     not the stream is readable again.
+        #   - A pod that is entirely down exports nothing, so this is quiet; that is pod
+        #     health, and DetectHasNoLeader for the detection engine.
+        - alert: JetStreamReplicationUnobserved
+          expr: |
+            (
+              group by (stream, pod, job, namespace) (
+                last_over_time({__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}[6h])
+              )
+              unless on (stream, pod, job, namespace)
+              group by (stream, pod, job, namespace) (
+                {__name__=~"devicechain_.+_jetstream_replicas_actual", namespace="{{ $ns }}"}
+              )
+            )
+            and on (pod, job, namespace)
+            group by (pod, job, namespace) (
+              {__name__=~"devicechain_.+_jetstream_broker_clustered", namespace="{{ $ns }}"}
+            )
+          # 15m absorbs a missed pass or a NATS pod roll: a stream that is readable again
+          # on the next 30s pass has its series back long before this fires.
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A service can no longer read a JetStream stream's replication state"
+            description: >-
+              {{ "{{ $labels.pod }}" }} ({{ "{{ $labels.job }}" }}) reported the replication of
+              {{ "{{ $labels.stream }}" }} earlier and has not been able to read it for 15 minutes,
+              although the pod is still running. While this fires, the other replication alerts
+              cannot judge that stream for that pod, so its replication is UNKNOWN rather than
+              good. If it fires for every stream at once, the broker or JetStream itself is
+              unavailable: check the NATS pods and the service's connection logs. If it is one
+              stream, that stream has most likely lost its RAFT leader: check it with
+              `nats stream info`. It clears when the pod reads the stream again, and also once
+              six hours have passed since its last reading, so a resolved alert is not proof of
+              recovery.
 {{- end }}

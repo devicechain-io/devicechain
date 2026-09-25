@@ -1,0 +1,662 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the event-processing (DETECT + REACT) alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# Five of these twelve rules are about LEADERSHIP and PROGRESS, and they are written over
+# an HA pair: one replica holds the partition and the other stands by. That is what makes
+# their aggregations matter. `max(is_leader) == 0` over a healthy pair is false; `min`
+# would be true, because the standby reads 0. `max(live)` over an idle leader and its
+# standby is 1; `min` would be 0. A single-replica fixture cannot tell those apart, so
+# the healthy and idle states below are both written as pairs.
+#
+# The idle engine is the quiet case that matters most. A DETECT leader with nothing to
+# consume checkpoints nothing and has nothing pending, so every "no progress" signal is
+# flat -- and none of the progress alerts may fire on it. The checkpoint-stall alert
+# carries `and pending > 0` for exactly that reason, and the not-consuming alert reads
+# `live`, which an idle leader still reports as 1.
+#
+# The counter alerts (fan-out errors, the fence counters, geofence publishing, source
+# shedding) each get a sustained case that fires, a flat-zero case, and where the rule's
+# own comment names a legitimate burst (an upgrade roll for the archive skew), a burst
+# shorter than the `for` window that must not page.
+#
+# THE SERIES, and what is known about them:
+#
+#   - detect_is_leader, detect_live, detect_consumer_pending, detect_watermark_lag_seconds,
+#     detect_tenants_over_{rule,live_key,retained_sample}_budget -- plain gauges, exported
+#     from process start on every replica.
+#   - detect_checkpoints_total, detect_fanout_eval_errors_total and the three
+#     detect_fence_* counters -- plain counters, exported at 0 from process start. The
+#     standby's checkpoint counter does not move.
+#   - react_connector_egress_shed_total{action} -- a CounterVec whose children appear on
+#     the first shed of each action; written here at 0 where a case needs it to exist.
+#   - devicechain_devicemanagement_geofence_set_publish_failures_total -- device-management's,
+#     a plain counter at 0 from start. It lives in this group because what fails is telling
+#     the detection engine about a fence edit.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml. Naming it below is not
+# optional: promtool with no rule_files loads no rules, and every expected alert then
+# reads as "the rule does not fire" rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # A healthy, busy HA pair: the leader is live and checkpointing with a small backlog,
+  # the standby reads 0 everywhere, and every error counter and budget gauge is at 0.
+  # Nothing fires. This is the case a `max` turned into `min` fails: the standby's 0
+  # would read as "no leader", and its flat checkpoint counter as "stalled with backlog".
+  # ------------------------------------------------------------------
+  - name: a healthy busy HA pair raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0+1x60'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '200x60'
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_watermark_lag_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '5x60'
+      - series: 'devicechain_eventprocessing_detect_watermark_lag_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_geofence_set_publish_failures_total{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fence_geometry_hash_mismatch_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fence_archive_skew_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_react_connector_egress_shed_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", action="httpCall"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_react_connector_egress_shed_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", action="publish"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_retained_sample_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: DetectHasNoLeader, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectLeaderIsNotConsuming, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectConsumerBacklogHigh, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectWatermarkLagHigh, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectCheckpointsStalledWithBacklog, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFanoutEvalErrors, exp_alerts: []}
+      - {eval_time: 60m, alertname: GeoFenceSetPublishFailing, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFenceGeometryUnresolved, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFenceGeometryHashMismatch, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFenceArchiveSkew, exp_alerts: []}
+      - {eval_time: 60m, alertname: ReactConnectorEgressShedding, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectTenantOverStateBudget, exp_alerts: []}
+
+  # ------------------------------------------------------------------
+  # 🔴 THE IDLE CLUSTER, and the counterweight for this whole file: every firing case
+  # below is satisfied by a rule that always fires, and this is the case such a rule
+  # fails. The leader holds a live term and has nothing to do, so it checkpoints nothing
+  # and has nothing pending; the standby reads 0. `min(live)` would read the standby's
+  # 0 and call the idle leader stuck, and dropping `and pending > 0` would call the idle
+  # engine stalled.
+  # ------------------------------------------------------------------
+  - name: an idle HA pair raises nothing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x60'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '12x60'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_watermark_lag_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_geofence_set_publish_failures_total{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fence_geometry_hash_mismatch_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_fence_archive_skew_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_retained_sample_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x60'
+    alert_rule_test:
+      - {eval_time: 60m, alertname: DetectHasNoLeader, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectLeaderIsNotConsuming, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectConsumerBacklogHigh, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectWatermarkLagHigh, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectCheckpointsStalledWithBacklog, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFanoutEvalErrors, exp_alerts: []}
+      - {eval_time: 60m, alertname: GeoFenceSetPublishFailing, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFenceGeometryUnresolved, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFenceGeometryHashMismatch, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectFenceArchiveSkew, exp_alerts: []}
+      - {eval_time: 60m, alertname: ReactConnectorEgressShedding, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectTenantOverStateBudget, exp_alerts: []}
+
+  # ------------------------------------------------------------------
+  # Both replicas are standing by: nobody holds the partition. Pending for the 2m `for`,
+  # then firing, with no labels of the series' own (`max` folds them away).
+  # ------------------------------------------------------------------
+  - name: both replicas standing by fires DetectHasNoLeader
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x10'
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DetectHasNoLeader
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: DetectHasNoLeader
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "No replica holds the DETECT partition"
+              description: "Nothing has owned the DETECT partition for 2m, so no detection rule is being evaluated for any tenant. The absent() half is not optional: a pod in CrashLoopBackOff publishes no series at all, so a rule written only against the value would go quiet at exactly the moment it should fire."
+
+  # ------------------------------------------------------------------
+  # 🔴 NO SERIES AT ALL: every event-processing pod is in CrashLoopBackOff, so nothing
+  # exports is_leader. The absent() half fires, carrying the namespace it was asked
+  # about. The only leader series anywhere belongs to ANOTHER instance's namespace and
+  # reads 1 -- it must not stand in for this one, in either half.
+  # ------------------------------------------------------------------
+  - name: no leader series in this namespace fires DetectHasNoLeader through absent()
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-other", pod="dc-event-processing-6b7d-zzzzz", job="dci-other/event-processing"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DetectHasNoLeader
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: DetectHasNoLeader
+        exp_alerts:
+          - exp_labels:
+              namespace: dci-devicechain
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "No replica holds the DETECT partition"
+              description: "Nothing has owned the DETECT partition for 2m, so no detection rule is being evaluated for any tenant. The absent() half is not optional: a pod in CrashLoopBackOff publishes no series at all, so a rule written only against the value would go quiet at exactly the moment it should fire."
+
+  # ------------------------------------------------------------------
+  # A leader stuck building its term: it holds the partition, is not live, and commits
+  # nothing. The checkpoint increase needs two samples, so the condition holds from 1m
+  # and the 10m `for` fires it at 11m.
+  # ------------------------------------------------------------------
+  - name: a leader holding the partition without consuming fires DetectLeaderIsNotConsuming
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x30'
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '7x30'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DetectLeaderIsNotConsuming
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: DetectLeaderIsNotConsuming
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A DETECT leader is holding the partition without consuming"
+              description: "A replica owns the partition but is not inside a live term and has committed nothing for 10m — it is stuck building a term, which holds the partition against every standby while detecting nothing. The checkpoint term is what keeps this quiet during a long replay, which checkpoints as it goes."
+      - eval_time: 11m
+        alertname: DetectHasNoLeader
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A long REPLAY: the leader is not yet live, but it checkpoints as it goes. The
+  # checkpoint term is what keeps this quiet, and removing it fires here.
+  # ------------------------------------------------------------------
+  # Written as an HA pair on purpose: the standby next to the replaying leader reports
+  # zero checkpoints, so this is the case that tells max() over the checkpoint increase
+  # from min() — with min() the standby's flat counter would page on a healthy replay.
+  - name: a leader replaying and checkpointing before it goes live stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x30'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0+1x30'
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DetectLeaderIsNotConsuming
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Backlog: sustained above 50000 fires after the 10m `for`.
+  # ------------------------------------------------------------------
+  - name: a sustained backlog above the threshold fires DetectConsumerBacklogHigh
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '60000x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "DETECT consumer is falling behind"
+              description: "The resolved-events durable consumer has >50k undelivered messages for 10m; the DETECT engine is not keeping up with ingest."
+
+  # ------------------------------------------------------------------
+  # Exactly AT the threshold is not above it; and above it for less than the `for`
+  # window is a burst, not a backlog.
+  # ------------------------------------------------------------------
+  - name: a backlog exactly at the threshold stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '50000x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts: []
+  - name: a backlog above the threshold for less than the for window stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '60000x7 0x20'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DetectConsumerBacklogHigh
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Watermark lag: the same three shapes against the 300s threshold.
+  # ------------------------------------------------------------------
+  - name: a sustained watermark lag above the threshold fires DetectWatermarkLagHigh
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_watermark_lag_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '400x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DetectWatermarkLagHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DetectWatermarkLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "DETECT watermark is lagging wall-clock"
+              description: "The engine watermark is >5m behind wall-clock for 10m; time-based detections (absence/duration) will fire late."
+  - name: a watermark lag exactly at the threshold stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_watermark_lag_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '300x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DetectWatermarkLagHigh
+        exp_alerts: []
+  - name: a watermark lag above the threshold for less than the for window stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_watermark_lag_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '400x7 0x20'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: DetectWatermarkLagHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: DetectWatermarkLagHigh
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The single-writer loop is stuck: a live leader, a backlog waiting, and no checkpoint.
+  # The increase holds at 0 from 1m, so the 15m `for` fires it at 16m. The leader is
+  # live, so this is not the not-consuming alert.
+  # ------------------------------------------------------------------
+  - name: no checkpoint while a backlog waits fires DetectCheckpointsStalledWithBacklog
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '5x40'
+      - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '10x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DetectCheckpointsStalledWithBacklog
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DetectCheckpointsStalledWithBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "DETECT is not checkpointing while a backlog exists"
+              description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (broker/store outage or a halted stale writer)."
+      - eval_time: 16m
+        alertname: DetectLeaderIsNotConsuming
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Fan-out evaluation errors: sustained fires after 15m; a five-minute burst does not.
+  # The burst's rate is positive from 2m through 9m, so a `for` of 5m would fire it at
+  # 7m and still be firing at 9m -- which is why 9m is asserted.
+  # ------------------------------------------------------------------
+  - name: sustained fan-out evaluation errors fire DetectFanoutEvalErrors
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0 0 1+1x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DetectFanoutEvalErrors
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: DetectFanoutEvalErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "DETECT leaf-predicate evaluation errors"
+              description: "Rule leaf predicates are erroring during fan-out. The sample is SKIPPED, not treated as a non-match, so firings may be silently missed. This counter is unlabelled and nothing logs the rule id — use the canvas preview on each suspect rule to attribute the error."
+  - name: a brief burst of fan-out evaluation errors stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0 0 1 2 3 4 5 5x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DetectFanoutEvalErrors
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DetectFanoutEvalErrors
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # device-management cannot announce geofence edits: its own counter, its own job.
+  # ------------------------------------------------------------------
+  - name: sustained geofence-set publish failures fire GeoFenceSetPublishFailing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_geofence_set_publish_failures_total{namespace="dci-devicechain", pod="dc-device-management-5c4f-ccccc", job="devicechain/device-management"}'
+        values: '0 0 1+1x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: GeoFenceSetPublishFailing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: GeoFenceSetPublishFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Geofence edits are not being announced to the detection engine"
+              description: "device-management could not publish a geofence-set manifest — a marshal error, a broker refusal, or a transport fault. The fence edit itself succeeded and is durable; what failed is telling event-processing about it, so containment holds the previous fence set until the five-minute reconcile sweep repairs it. A sustained rate means every fence edit is taking minutes to take effect. If this started after a broker configuration change, check that infrastructure.nats.streamMaxMsgSize is not set below what a manifest needs — the service logs a warning naming both sizes at startup."
+
+  # ------------------------------------------------------------------
+  # Fence geometry the engine cannot fetch.
+  # ------------------------------------------------------------------
+  - name: sustained unresolved fence geometry fires DetectFenceGeometryUnresolved
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0 0 1+1x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: DetectFenceGeometryUnresolved
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DetectFenceGeometryUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Geofence geometry cannot be read back from device-management"
+              description: "A geofence set names fences whose geometry this service could not fetch from device-management's archive. Those fences are installed carrying their error, so containment reports unresolvable for them rather than answering — which also shows up as DetectFanoutEvalErrors. It repairs on the next reconcile sweep if the cause was transient; sustained means the archive read is failing. Check device-management's health and the service-token seam. The tenant and fence are named in event-processing's error log, never in this counter."
+      - eval_time: 12m
+        alertname: DetectFenceGeometryHashMismatch
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A geometry document that does not hash to its address. Never benign, so critical,
+  # and after only 5m. The severity is asserted: a downgrade fails here.
+  # ------------------------------------------------------------------
+  - name: a fence geometry hash mismatch fires DetectFenceGeometryHashMismatch at critical
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_fence_geometry_hash_mismatch_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0 0 1+1x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DetectFenceGeometryHashMismatch
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: DetectFenceGeometryHashMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Geofence geometry did not match the content address it was served under"
+              description: "A geometry document did not hash to the address it was requested under. This is never transient and never benign: an address IS the SHA-256 of the document stored under it, so either device-management served the wrong row, something re-encoded the document in transit, or the archive is corrupt. The affected fences are refused rather than compiled, which is why containment degrades instead of answering wrongly. Investigate before restarting anything — a restart hides the symptom and changes nothing."
+      - eval_time: 7m
+        alertname: DetectFenceGeometryUnresolved
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Archive skew: sustained means device-management is behind; a burst while an upgrade
+  # rolls is expected, and the rule's description says so. The burst below raises the
+  # counter from 2m to 9m, so its rate is positive from 2m through 12m -- eleven
+  # minutes, inside the 15m `for`. 12m is the last minute a shorter wait would fire at.
+  # ------------------------------------------------------------------
+  - name: sustained fence archive skew fires DetectFenceArchiveSkew
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_fence_archive_skew_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0 0 1+1x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DetectFenceArchiveSkew
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: DetectFenceArchiveSkew
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "device-management does not serve the geofence manifest doors"
+              description: "event-processing asked device-management for a fence-set manifest and was told the query does not exist, which means the two are running builds from either side of the manifest-delivery change. Expected briefly while an upgrade rolls, since the two services are independent Deployments and neither waits for the other. Sustained means device-management is behind — most likely rolled back on its own — and fence edits are not reaching the detection engine until it rolls forward."
+  - name: fence archive skew while an upgrade rolls stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_fence_archive_skew_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0 0 1 2 3 4 5 6 7 8 8x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DetectFenceArchiveSkew
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DetectFenceArchiveSkew
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Source-side shedding, by action: httpCall is shed steadily, publish is not. Exactly
+  # one alert, and it names httpCall -- an aggregation that folded the action away would
+  # still fire, but without saying which.
+  # ------------------------------------------------------------------
+  - name: sustained httpCall shedding fires ReactConnectorEgressShedding for httpCall only
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_react_connector_egress_shed_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", action="httpCall"}'
+        values: '0 0 1+1x40'
+      - series: 'devicechain_eventprocessing_react_connector_egress_shed_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", action="publish"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ReactConnectorEgressShedding
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: ReactConnectorEgressShedding
+        exp_alerts:
+          - exp_labels:
+              action: httpCall
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Connector actions are being shed at the source for over-quota egress"
+              description: "Sustained shedding means a tenant was over its outbound ceiling on the timeline its telemetry reached the platform. A catch-up after a restart no longer counts. Each shed action is dead-lettered with reason `shed` (kind `detection-action`) up to a per-tenant budget. Anything over the budget is counted on react_connector_shed_unlettered_total and summarised in one letter per tenant per minute. Inspect them with `dcctl dead-letters`. Detections re-published when the engine restarts are collapsed by the message bus within 30 minutes. A replay older than that can still shed and letter duplicates of actions already delivered. Raise outboundMessagesPerSecond / outboundBurst if the traffic is legitimate."
+
+  # ------------------------------------------------------------------
+  # State budgets: three arms joined by `or`, so each arm is written ALONE. Deleting any
+  # one of them fails exactly the case that holds only that gauge above zero.
+  # ------------------------------------------------------------------
+  - name: a tenant over its rule budget alone fires DetectTenantOverStateBudget
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_retained_sample_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: DetectTenantOverStateBudget
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DetectTenantOverStateBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A tenant is over its DETECT state budget"
+              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
+  - name: a tenant over its live-key budget alone fires DetectTenantOverStateBudget
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_retained_sample_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DetectTenantOverStateBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A tenant is over its DETECT state budget"
+              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
+  - name: a tenant over its retained-sample budget alone fires DetectTenantOverStateBudget
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_tenants_over_rule_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_tenants_over_retained_sample_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DetectTenantOverStateBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A tenant is over its DETECT state budget"
+              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
+
+  # ------------------------------------------------------------------
+  # Over a budget for twenty minutes and then back under it: a tenant that bursts and
+  # recovers inside the 30m `for` is not paged.
+  # ------------------------------------------------------------------
+  - name: a tenant over a budget for less than the for window stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_tenants_over_live_key_budget{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x20 0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: DetectTenantOverStateBudget
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DetectTenantOverStateBudget
+        exp_alerts: []
