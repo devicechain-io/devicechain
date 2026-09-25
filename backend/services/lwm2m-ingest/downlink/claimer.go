@@ -83,7 +83,7 @@ func NewCommandClaimer(client commandQuerier, baseURL string) *CommandClaimer {
 //   - (_, _, err)     — the claim could not be established at all (command-delivery unreachable,
 //     forbidden, a GraphQL error). The caller must NOT actuate: dispatch is irreversible and
 //     a claim we cannot confirm is a claim we do not hold. The command stays dispatchable and
-//     is retried on the device's next wake.
+//     the drain turn is retried from it shortly.
 //
 // 🔴 A WON CLAIM WITH AN EMPTY NONCE IS TREATED AS AN ERROR, NOT AS A WIN. command-delivery
 // answers null for a lost claim and a value for a won one, so an empty string is neither — a

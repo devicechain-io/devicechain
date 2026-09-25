@@ -1572,13 +1572,15 @@ func (api *Api) HeldCommands(ctx context.Context, afterId uint, limit int) ([]*C
 	return found, found[len(found)-1].ID, nil
 }
 
-// DefaultDrainLimit is how many backlogged commands one wake drains when the caller
-// names no limit. It is a bound on ONE wake, not on the backlog: a device with more
-// waiting takes the rest on its next registration, which for a queue-mode device is
-// its next wake window.
+// DefaultDrainLimit is how many backlogged commands one drainableCommands call returns
+// when the caller names no limit. It bounds ONE call, not the backlog: a caller with more
+// waiting asks again.
 //
-// 32 is the LwM2M drain's own figure, moved here because the bound is now the server's
-// to enforce — a client that asked for none used to get 1000 rows and throw away 968.
+// The LwM2M drain does not rely on it. It names its own, smaller limit on every call (it
+// refuses to send none) and keeps taking turns for as long as the device stays connected,
+// so its backlog no longer waits for a registration. 32 was that drain's per-wake figure
+// before it bounded its own turns, and it stays as the server's default because a client
+// that asked for none used to get 1000 rows and throw away 968.
 const DefaultDrainLimit = 32
 
 // DrainableCommands returns the head of a device's still-waiting backlog: HELD ∪ PARKED

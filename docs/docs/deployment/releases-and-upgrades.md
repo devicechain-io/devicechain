@@ -2095,6 +2095,40 @@ What changes that you can see:
 
 Nothing needs doing at the upgrade.
 
+#### A slow LwM2M device no longer holds up other devices' commands
+
+When an LwM2M device is slow to answer and its commands pile up, further commands for it are now
+set aside in command-delivery and delivered in order moments later. Before this release they
+stalled the whole adapter: every other LwM2M device's commands waited behind the slow one.
+Commands for a device that has no connection are set aside the same way, without taking up room
+that connected devices need.
+
+What changes that you can see:
+
+- **A connected device receives the rest of a long backlog without reconnecting.** Its waiting
+  commands used to be delivered 32 per wake, and the rest waited for the device to wake again,
+  which a device that stays connected never does. They are now delivered a few at a time, taking
+  turns with other devices' commands, until the backlog is empty.
+- **One device's commands still arrive in the order they were sent.** This now also holds when a
+  command could not be confirmed with command-delivery and is retried: the commands after it wait
+  for it. Two cases can still deliver a command after the ones sent behind it, and both need
+  command-delivery to be failing. One is an outage that outlasts the command's retries. The other
+  is a confirmation that command-delivery recorded but whose answer never reached `lwm2m-ingest`,
+  for example because the request timed out. In both cases the command stays sent but not carried
+  out until the platform finds it stranded, and it is then delivered on the device's next
+  connection, after the later commands, or expires.
+- **After a failover, commands sent while devices reconnect are delivered a moment later.** Each
+  device's waiting commands are delivered before any new one, so for that short window new
+  commands are set aside too. Expect a brief rise in command-delivery traffic after a failover.
+- **Metrics.** `lwm2m-ingest` adds `devicechain_lwm2mingest_commands_overflow_parked_total`, with a
+  `reason` label (`full`, `offline`, `bind`, `unconfirmed`),
+  `devicechain_lwm2mingest_command_overflow_blocked_total` (the adapter waited because
+  command-delivery was slow) and `devicechain_lwm2mingest_command_drain_turns_total`.
+  `devicechain_lwm2mingest_command_drain_dropped_total` is removed: a device's request for its
+  waiting commands is no longer dropped when the adapter is busy.
+
+Nothing needs doing at the upgrade.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

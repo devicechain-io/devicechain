@@ -64,10 +64,11 @@ claim**.
 ### The park path, and why it carries a nonce
 
 The park is a network round trip, so it does **not** run on the JetStream read loop — the reader
-routes an offline served device's command to that device's shard worker, which parks it there
-(`dispatcher.go`, the routing comment in the read loop). The cost is stated rather than hidden:
-offline-device commands occupy shard slots, so while `command-delivery` is unreachable a shard can
-be blocked by parks timing out. Bounded and self-healing, and preferable to a silent loss.
+hands an offline served device's command to a small **park pool** (`overflowWorkers` goroutines
+over a queue of `overflowDepth`), which parks it there (`dispatcher.go`, `route`). The pool, not
+the device's shard, carries it, so while `command-delivery` is unreachable parks timing out do not
+occupy the shards that live devices are dispatched on. The same pool parks the commands described
+under [the per-device gate](#the-per-device-gate-parking-instead-of-waiting) below.
 
 Every publish carries a **`dispatchNonce`** naming the dispatch attempt it belongs to
 (`deliveryEnvelope.DispatchNonce`), and `parkCommand` matches on it. 🔴 **The nonce is what makes
@@ -96,6 +97,14 @@ commands and dispatches them **oldest-first** over the freshly live session — 
 Read/Write/Execute mapping as the live path, on the same per-device worker (so a drain never races
 or reorders the device's live commands).
 
+The drain runs in **turns** of at most `drainTurnMax` (4) rows for one device, and the shard's
+worker alternates one live task with one turn. A device keeps getting turns for as long as it is
+live and has rows: the next turn is started by the worker itself, not by another wake, because a
+device that stays connected never sends one (a keepalive `Update` on its live connection fires no
+wake — `ConnTable.Refresh` returns early). A fetch or claim error ends the turn at that row and
+retries it after `drainRetryDelay` (5s), on a timer, so an outage neither spins the shard nor
+leaves a connected device waiting for traffic that may never come.
+
 🔴 **Every drained row is CLAIMED before it actuates** (`downlink/claimer.go` → `markCommandSent`),
 and this is L4b's correctness guarantee. A drain that ran the
 CoAP op without claiming would leave a `HELD` row `HELD`, and `HELD` is not a resting place:
@@ -104,7 +113,8 @@ present, which *this very registration* makes true. The next delivery sweep then
 the live path — for a command, a second **physical actuation**, not a duplicate log line. The claim
 is a conditional UPDATE that reports whether *this* caller won it, so the exclusion is structural:
 whoever wins actuates, everyone else declines. A claim that **errors** does not dispatch (fail
-closed — the row is still dispatchable and the device's next wake retries).
+closed — the row is still dispatchable, the turn stops at it, and the device's next turn retries it
+after `drainRetryDelay`, in order).
 
 ### The live path is claimed too
 
@@ -135,9 +145,8 @@ the nonce** and restamps `sent_time`:
 `status = SENT` is not redundant with the nonce: a park keeps the nonce, so a confirmation on the
 nonce alone would match a `PARKED` row and actuate a command the drain is also about to claim.
 
-⚠️ **A confirmation error can reorder one device's commands**: if `command-delivery` recovers before
-the unacked message redelivers, a later command for the same device can be confirmed and actuated
-first. The per-device gate that closes this belongs with the full-shard handling.
+A confirmation that errors also **gates the device** (see below): left alone, a later command for
+the same device could be confirmed and actuated before the unacked one redelivers.
 
 ⚠️ **The confirmation's latency cost is UNMEASURED.** Every live command now makes one extra
 `command-delivery` GraphQL round trip, plus one `UPDATE`, before its CoAP op — and it runs serially
@@ -151,9 +160,9 @@ replica or about this pod after a restart in any case.
 
 **Oldest-first is achieved server-side.** The drain calls `command-delivery`'s dedicated
 `drainableCommands(deviceToken:, limit:)` query, which applies the status set, the expiry horizon,
-the `ORDER BY` **and** the bound in the database, and returns a bare list. So the `limit = 32` rows
-it returns *are* the oldest 32 (`downlink/fetcher.go`). That ordering is what the FOTA runbook below
-depends on.
+the `ORDER BY` **and** the bound in the database, and returns a bare list. So the `limit` rows it
+returns (`drainTurnMax` per turn) *are* the oldest ones (`downlink/fetcher.go`). That ordering is
+what the FOTA runbook below depends on.
 
 This replaced a client-side workaround: the general `commands` query had no `ORDER BY`, so
 `pageSize=32` returned an *arbitrary* 32 rows and the fetcher had to over-fetch 1000, sort by
@@ -164,9 +173,76 @@ is **no over-fetch**, which is safe because the one way the drain loop skips a r
 describes a row that has *already left* the drainable set — a skipped row is not a slot stolen from
 a row still awaiting delivery.
 
-The 32-per-wake cap is the **device-edge flood governor**: a REACT `send-command` storm cannot slam
-a constrained radio with an unbounded burst the instant it wakes. A deeper backlog drains across
-subsequent wakes.
+The per-turn bound is the **device-edge flood governor**: a REACT `send-command` storm reaches a
+constrained radio at most `drainTurnMax` commands at a time, interleaved with the shard's live
+work, rather than in one burst the instant it wakes. It replaced a cap of 32 per wake, after which
+the rest of a deeper backlog waited for the device's next wake — which a device that stays
+connected never sends, so the remainder could sit until it expired.
+
+### The per-device gate: parking instead of waiting
+
+Commands for one device reach it by two roads: **live** (dispatched as they arrive on the delivery
+stream) and **backlog** (parked in `command-delivery`, then drained oldest-first). The moment one of
+a device's commands takes the backlog road, a later one taking the live road would overtake it. So
+the dispatcher keeps a per-device **gate** (`downlink/gate.go`): once it is up, every further live
+command for that device is parked too, and it comes down only when a drain turn has seen the
+device's backlog empty with nothing still on its way into it (no park in flight, none awaiting
+redelivery, nothing settled since the turn began).
+
+The gate goes up, and the reason is the label on `commands_overflow_parked_total{reason}`, when
+the following happens. The gate carries its LATEST cause, and a command parked behind it is counted
+under that cause, except that `offline` is used only when the command's own lookup found the device
+without a connection (so `commands_served_offline_total` never counts a connected device):
+
+| Reason | Cause |
+|---|---|
+| `full` | The device's shard queue (`workerQueueDepth`) was full. |
+| `offline` | The device had no live connection. |
+| `bind` | The device (re)connected, or a live delivery turned out to have been re-armed already (the stale-dispatch nudge). The gates are in memory and per leadership term, so a new leader cannot know what an old one parked, nor what the stranded-`SENT` pass re-armed: every device's first bind gates it until its backlog has been looked at. A connected device still gated `offline` from before it reconnected is counted here too: it is waiting for its bind's drain, not for itself. |
+| `unconfirmed` | A live confirmation errored. That command is left unacked to redeliver, and the gate holds for its redelivery, which is then parked into its original place. |
+
+🔴 **This is what removed the head-of-line convoy.** The reader used to *block* on a full shard
+queue, so one live-but-slow device (each op burning the full `opTimeout`) held the whole
+instance's command throughput to its own rate. Now the reader never waits on a device: a command
+that cannot be queued is parked and its device gated. What still back-pressures the reader is the
+park pool itself, when all its workers are busy and its queue is full — which happens only while
+`command-delivery` is slow, and is counted on `command_overflow_blocked_total`. Blocking there,
+rather than dropping or leaving the command unacked, keeps it in its place: a redelivered copy
+could otherwise arrive after a drain had served newer rows. While `command-delivery` is down the
+reader moves at `overflowWorkers` parks per service-client timeout (10s) — but no live command
+could get through then either, since its confirmation needs the same service.
+
+Costs, stated:
+
+- A command parked because its device was gated pays a park round trip plus a fetch and a claim
+  before its op, instead of just the confirmation. In steady state (no overflow) the only added
+  cost is the bind gate: a live command landing between a device's `Register` and the end of its
+  first drain turn — one fetch round trip — is parked rather than dispatched directly.
+- **After a failover every re-registering device is gated at once**, so for that first fetch
+  round trip per device every live command becomes a park — a burst of `command-delivery` writes
+  proportional to the command traffic during re-registration, visible as
+  `commands_overflow_parked_total{reason="bind"}`.
+- A park that errors holds the device's gate for up to `MaxDeliver × AckWait` (the redelivery
+  budget, overstated by up to one `AckWait` because the redelivery clock starts at the last
+  delivery). If the broker gives up on the message, the gate stops waiting for it and the rest
+  of the backlog is delivered: **one of the two places per-device order can still break**, and it
+  needs a `command-delivery` outage longer than the whole budget.
+- **The other is a live confirmation that committed but whose answer was lost** (the service
+  client's 10s timeout, a dropped connection). To this adapter it is an error, so the device is
+  gated and the command left to redeliver — but the row is already `SENT` on a nonce the adapter
+  never learned. The redelivered envelope's park quotes the old nonce, matches nothing and settles
+  as "moved on", which is indistinguishable here from the command having been answered, cancelled
+  or expired, so the gate releases it. The drain then delivers the device's later commands while
+  this one sits in `SENT` until the stranded-`SENT` pass re-arms it, after its grace; it reaches
+  the device on a later bind, after them, or not at all if it expires first. Closing this needs
+  `command-delivery` to recognise a retried confirmation; it is not closed here.
+- A live command already in the shard queue when its device's gate went up is parked as it leaves
+  the queue rather than dispatched, so it stays behind whatever gated the device.
+- Every park of a live command runs on the park pool, including the ones a shard worker decides on
+  (a command dequeued behind a gate, or one whose device dropped after it was queued): a park is a
+  `command-delivery` round trip, and on the worker it would hold every other device on the shard
+  for that long. The worker waits only when the pool is full, like the reader, and that wait is
+  counted on the same `command_overflow_blocked_total`.
 
 ### Expiry, and which terminal state a lapsed command gets
 
@@ -204,15 +280,19 @@ queue-mode case, which was systematic.)
   backlog of the previous build, and they now ride their TTL to `TIMEOUT` instead of being delivered
   on the next wake. Acceptable only because an instance is **recreated** rather than migrated pre-GA
   — stated here rather than discovered as "the drain broke" on an upgraded dev cluster.
-- ⚠️ **A park whose retries are exhausted is WORSE off than before parking existed, not equal to
-  it.** Once the retry budget is spent (`MaxDeliver` × `AckWait`, on the order of minutes), the row
-  is stuck in `SENT`, which is invisible to the drain, the sweep and a cancel alike — so it lapses
-  to `TIMEOUT`, precisely the mislabel `PARKED` exists to remove. It needs a `command-delivery`
-  outage spanning the whole budget. It is bounded, it is rare, and it is the concrete argument for
-  the **stranded-`SENT` reconciler that is filed and not built**.
-- **Wake triggers can be dropped.** `Drain` is non-blocking so a wake never stalls the CoAP read
-  loop; a full shard drops the trigger (counted on `command_drain_dropped_total`) and the device's
-  next Update re-triggers it.
+- ⚠️ **A park whose retries are exhausted is not delivered by the drain.** Once the retry budget
+  is spent (`MaxDeliver` × `AckWait`, on the order of minutes), the row sits in `SENT`, which is
+  invisible to the drain, the sweep and a cancel alike, until `command-delivery`'s stranded-`SENT`
+  pass re-arms it to `PARKED` after its grace. Meanwhile the device's gate has stopped waiting
+  for it, so this is also where per-device order can break. It needs a `command-delivery` outage
+  spanning the whole budget.
+- **A wake is never dropped.** `Drain` records the device as wanting a turn under its shard's lock
+  and nudges the worker; it neither blocks the CoAP read loop nor depends on room in the shard's
+  queue. (It used to enqueue onto that queue and drop the wake when it was full, counting it on
+  `command_drain_dropped_total` and relying on a next wake that a connected device never sends.)
+- ⚠️ **A row the stranded-`SENT` pass re-arms for a device that stays connected waits for its next
+  bind** unless a late delivery of that command arrives first (whose stale confirmation nudges a
+  drain). Nothing else here starts a turn for a device that is not gated.
 - **Tenant lifecycle gates actuation.** Both the live path and the wake drain pass through the
   ADR-077 deleted-tenant check at the shard worker's task union — the drain especially, since it can
   fire long after the tenant was deleted, from a `(tenant, token)` remembered from a registration
@@ -230,6 +310,11 @@ error. The failure modes are split so an outage cannot hide inside ordinary cont
 going undelivered), whereas `command_park_settled_total`, `command_drain_claims_lost_total` and
 `commands_stale_dispatch_total` are the mechanism *working* — the last is a duplicate actuation
 avoided. `command_park_skipped_total` should be flat zero on a configured instance.
+
+`commands_overflow_parked_total{reason}` counts live commands parked instead of dispatched, split
+by the reasons in the gate table above; `full` rising is a slow device, `bind` spiking is a
+failover. `command_overflow_blocked_total` rising means the reader or a shard worker waited on the
+park pool, i.e. `command-delivery` is slow. `command_drain_turns_total` is a load signal.
 (`command_drain_dedup_total` is gone with the cache it counted.)
 
 ## Firmware update over the air (Object 5) — a runbook
@@ -283,7 +368,10 @@ so it is not rejected), but its SenML telemetry Observe is 4.06'd until the TLV 
 ## Tuning
 
 `downlink.timeoutSeconds` (default 10) bounds one CoAP command exchange; raise it for slow cellular
-radios. `downlink.concurrency` (default 16) sets cross-device dispatch parallelism; a single device's
+radios. `drainTurnMax` (4) is chosen below `AckWait / timeoutSeconds` (60 / 10) so a live task
+queued behind one full turn is still dispatched inside its ack deadline; raising the timeout past
+15s breaks that, and a live command waiting behind a turn can then redeliver (its confirmation
+then discards the stale copy). `downlink.concurrency` (default 16) sets cross-device dispatch parallelism; a single device's
 commands always run in stream order regardless of the count.
 
 `infrastructure.commandDelivery` is **required** whenever the adapter has identities to serve: every

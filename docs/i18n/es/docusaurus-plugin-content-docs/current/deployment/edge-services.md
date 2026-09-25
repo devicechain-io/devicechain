@@ -617,6 +617,8 @@ rasparla.
 | `commands_failed_total` / `commands_not_served_total` | Comandos descendentes que no llegaron a destino. |
 | `command_live_claim_errors_total` | Comandos **no llevados a cabo** porque command-delivery no pudo confirmarlos. Cada comando se confirma con command-delivery inmediatamente antes de llegar al dispositivo, y sin esa confirmación nunca se envía. Una tasa sostenida significa que ningún comando LwM2M está llegando a su dispositivo: **es la señal sobre la que alertar.** Los comandos se reintentan, no se pierden. |
 | `commands_stale_dispatch_total` | Entregas descartadas porque la plataforma ya había rearmado o reenviado el comando. **No es un fallo**: cada una es una actuación duplicada que no ocurrió. Es de esperar que suba tras una caída o un relevo. |
+| `commands_overflow_parked_total{reason}` | Comandos apartados en command-delivery en lugar de enviarse de inmediato, y entregados en orden momentos después. `full`: la cola del dispositivo estaba llena, así que el dispositivo tarda en responder. `offline`: no tenía conexión activa. `bind`: acababa de conectarse y sus comandos pendientes aún no se habían entregado; **es de esperar un pico tras un relevo**, cuando todos los dispositivos se reconectan a la vez. `unconfirmed`: no se pudo confirmar un comando anterior a él. |
+| `command_overflow_blocked_total` | Veces que el adaptador tuvo que esperar porque no podía apartar los comandos lo bastante rápido. Solo sube mientras command-delivery está lento o inalcanzable, y entonces todos los comandos LwM2M esperan. |
 
 **Agente de borde** (`devicechain_edge_`):
 

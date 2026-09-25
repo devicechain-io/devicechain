@@ -174,27 +174,32 @@ func newDispatcher(rdr reader, pub responsePublisher, look connLookup, exec exec
 	//
 	// The claimer CONFIRMS every live dispatch: every live command is confirmed before it
 	// actuates, so a dispatcher without one would refuse every live command these tests send.
-	// The confirmation itself is tested in the live-claim block below.
-	return NewDispatcher(rdr, pub, look, exec, nil, &fakeClaimer{won: true}, Metrics{},
+	// The confirmation itself is tested in the live-claim block below. The fetcher is an empty
+	// backlog: a dispatcher with a reader must have one, since every park is drained by it.
+	return NewDispatcher(rdr, pub, look, exec, &fakeFetcher{}, &fakeClaimer{won: true}, Metrics{},
 		Options{ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 }
 
-// fakeFetcher is a stand-in wake-drain source: it returns a canned command list (or an error).
+// fakeFetcher is a stand-in drain source: it returns a canned command list (or an error),
+// truncated to the page the caller asked for, as the server's LIMIT would, and records each
+// limit it was asked for.
 type fakeFetcher struct {
-	mu    sync.Mutex
-	cmds  []DrainCommand
-	err   error
-	calls int
+	mu     sync.Mutex
+	cmds   []DrainCommand
+	err    error
+	calls  int
+	limits []int
 }
 
-func (f *fakeFetcher) Pending(_ context.Context, _, _ string) ([]DrainCommand, error) {
+func (f *fakeFetcher) Pending(_ context.Context, _, _ string, limit int) ([]DrainCommand, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.limits = append(f.limits, limit)
 	if f.err != nil {
 		return nil, f.err
 	}
-	return append([]DrainCommand(nil), f.cmds...), nil
+	return append([]DrainCommand(nil), f.cmds[:min(limit, len(f.cmds))]...), nil
 }
 
 func (f *fakeFetcher) callCount() int {
@@ -343,6 +348,12 @@ func parkMetrics() Metrics {
 		ParkErrors:    c("park_errors"),
 		ParkSettled:   c("park_settled"),
 		ParkSkipped:   c("park_skipped"),
+		OverflowParked: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "overflow_parked"},
+			[]string{"reason"}),
+		OverflowBlocked: c("overflow_blocked"),
+		DrainTurns:      c("drain_turns"),
+		Drained:         c("drained"),
+		DrainErrors:     c("drain_errors"),
 	}
 }
 
@@ -447,7 +458,7 @@ func TestDrainDispatchesHeldCommands(t *testing.T) {
 func TestDrainStopsWhenDeviceDropsMidDrain(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
-	look := &flakyLookup{conn: &fakeConn{}, liveFor: 1} // live for c1 only, offline thereafter
+	look := &flakyLookup{conn: &fakeConn{}, liveFor: 2} // live for the turn's own check and c1, offline thereafter
 	ff := &fakeFetcher{cmds: []DrainCommand{
 		{Token: "c1", Name: CommandWrite, Payload: []byte(`{"path":"/5/0/1","value":"u"}`), Status: statusParked},
 		{Token: "c2", Name: CommandExecute, Payload: []byte(`{"path":"/5/0/2"}`), Status: statusParked},
@@ -491,11 +502,13 @@ func TestDrainFetchErrorNoDispatch(t *testing.T) {
 	assert.Equal(t, 0, exec.callCount(), "a failed fetch dispatches nothing")
 }
 
-// TestDrainDisabledWhenFetcherNil: with no fetcher (command-delivery endpoint unset) the drain is a
-// safe no-op — offline commands ride TTL to TIMEOUT (the L4a behavior).
+// TestDrainDisabledWhenFetcherNil: a reader-less dispatcher with no fetcher (the disposition unit
+// tests' shape) treats a drain as a safe no-op. A dispatcher WITH a reader cannot be built this way:
+// see TestADispatcherThatReadsMustBeAbleToDrain.
 func TestDrainDisabledWhenFetcherNil(t *testing.T) {
 	exec := &fakeExecutor{}
-	d := newDispatcher(nil, &fakePublisher{}, &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}, exec)
+	d := NewDispatcher(nil, &fakePublisher{}, &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}},
+		exec, nil, &fakeClaimer{won: true}, Metrics{}, Options{})
 
 	d.drain(context.Background(), drainJob{tenant: "acme", deviceToken: "pump-1"})
 	d.Drain("acme", "pump-1") // also a no-op via the public trigger
@@ -576,8 +589,13 @@ func TestDrainDoesNotDispatchWhenTheClaimIsLost(t *testing.T) {
 
 // TestDrainDoesNotDispatchWhenTheClaimErrors is the FAIL-CLOSED direction. command-delivery
 // being unreachable means we cannot prove we own the command; dispatching anyway would be
-// irreversible, while declining costs one wake (the row is still dispatchable and the device
-// re-triggers on its next Register/Update). So: no op.
+// irreversible, while declining costs a short retry (the row is still dispatchable). So: no op.
+//
+// 🔴 AND THE TURN STOPS AT THAT ROW. This test used to assert the opposite — that a failed claim
+// skipped only its own command and the rest of the backlog was still attempted, "so one bad row
+// must not strand the queue". Attempting the rest dispatches a NEWER command while an older one
+// stays behind, which is a reorder. The queue is not stranded by stopping: the turn reports the
+// failure and is retried from the same row after drainRetryDelay (TestAFetchOrClaimErrorDefersAndRetries).
 func TestDrainDoesNotDispatchWhenTheClaimErrors(t *testing.T) {
 	exec := &fakeExecutor{result: OpResult{Op: labelWrite, Success: true}}
 	pub := &fakePublisher{}
@@ -593,8 +611,8 @@ func TestDrainDoesNotDispatchWhenTheClaimErrors(t *testing.T) {
 
 	assert.Equal(t, 0, exec.callCount(), "a claim that ERRORS must not actuate — an unconfirmed claim is not a claim")
 	assert.Empty(t, pub.responses())
-	assert.Len(t, claimer.claims(), 2,
-		"a failed claim skips only ITS command; the rest of the backlog is still attempted (one bad row must not strand the queue)")
+	assert.Equal(t, []string{"c1"}, claimer.claims(),
+		"a failed claim ends the turn: claiming c2 next could dispatch it ahead of c1")
 }
 
 // TestDrainClaimsEveryRowItDispatches is the INVERSION of a test that used to assert the
@@ -982,20 +1000,21 @@ func TestParkAbortedByEvictionLeavesTheMessageUnacked(t *testing.T) {
 		"a park aborted by eviction is not a park failure — counting it would make every failover read as an outage")
 }
 
-// TestRunRoutesAnOfflineServedDeviceToItsWorker is the ROUTING half, and it exercises the real
+// TestRunParksAnOfflineServedDeviceOnTheParkPool is the ROUTING half, and it exercises the real
 // Run loop because nothing else can.
 //
-// 🔴 The reader's route-time pre-filter used to drop BOTH non-live reachabilities. It now drops
-// only ReachNotServed, because parking is a network round trip and the JetStream read loop is
-// the one goroutine that must not make one — so an offline SERVED device is routed to its shard
-// worker, which parks it there. Every other test in this block calls dispatch() directly and
-// would pass unchanged against a reader that still dropped offline commands at the door; only
-// driving Run can tell the difference. The not-served message is carried alongside as the
-// contrast: it must still be dropped at the door and never reach a worker or the parker.
-func TestRunRoutesAnOfflineServedDeviceToItsWorker(t *testing.T) {
+// 🔴 The reader's route-time pre-filter drops only ReachNotServed. An offline SERVED device's
+// command must be parked, which is a network round trip the read loop must not make — so route
+// hands it to the park pool, which parks it there. (It used to go to the device's shard worker,
+// where a command-delivery outage let parks timing out occupy the shard; the pool keeps them off
+// it.) Every other test in this block calls dispatch() directly and would pass unchanged against a
+// reader that still dropped offline commands at the door; only driving Run can tell the
+// difference. The not-served message is carried alongside as the contrast: it must still be
+// dropped at the door and never reach a worker or the parker.
+func TestRunParksAnOfflineServedDeviceOnTheParkPool(t *testing.T) {
 	offlineAck, mqttAck := newAck(), newAck()
 	rdr := &scriptReader{msgs: []messaging.Message{
-		// A device this adapter serves, registered but asleep: must reach the worker and be parked.
+		// A device this adapter serves, registered but asleep: must be parked.
 		cmdMsgNonce("acme", "pump-1", "c1", CommandRead, `{"path":"/3/0/9"}`, "nonce-7", offlineAck),
 		// Another protocol's device: must be dropped at route time, never parked.
 		cmdMsgNonce("acme", "mqtt-dev", "c2", CommandRead, `{"path":"/3/0/9"}`, "nonce-8", mqttAck),
@@ -1004,22 +1023,20 @@ func TestRunRoutesAnOfflineServedDeviceToItsWorker(t *testing.T) {
 	look := &fakeLookup{reaches: map[string]Reach{"acme/pump-1": ReachOffline}}
 	parker := &fakeParker{parked: true}
 	m := parkMetrics()
-	d := NewDispatcher(rdr, &fakePublisher{}, look, exec, nil, nil, m,
+	d := NewDispatcher(rdr, &fakePublisher{}, look, exec, &fakeFetcher{}, nil, m,
 		Options{Parker: parker, ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { d.Run(ctx); close(done) }()
-
+	stop := runDispatcher(t, d)
 	require.Eventually(t, func() bool { return offlineAck.acked() && mqttAck.acked() }, 2*time.Second, 5*time.Millisecond)
-	cancel()
-	<-done
+	stop()
 
 	assert.Equal(t, []parkCall{{tenant: "acme", commandToken: "c1", nonce: "nonce-7"}}, parker.parks(),
-		"the offline SERVED device's command reached a worker and was parked there — the reader did not drop it")
+		"the offline SERVED device's command was parked — the reader did not drop it")
 	assert.Equal(t, 0, exec.callCount(), "neither device was actuated")
 	assert.Equal(t, 1.0, testutil.ToFloat64(m.NotServed), "the not-served command was dropped at route time")
 	assert.Equal(t, 1.0, testutil.ToFloat64(m.ServedOffline))
+	assert.Equal(t, 1.0, testutil.ToFloat64(m.OverflowParked.WithLabelValues(parkReasonOffline)),
+		"the park is counted under its reason")
 }
 
 // --- parse() poison ---------------------------------------------------------
