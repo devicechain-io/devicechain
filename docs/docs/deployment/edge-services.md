@@ -6,26 +6,28 @@ title: Running the Edge Services
 # Running the Edge Services
 
 Three DeviceChain components sit at the edge of the platform, and none of them behaves like the
-stateless services around them. [Sparkplug-B ingestion](../concepts/sparkplug.md) and
-[LwM2M ingestion](../concepts/lwm2m.md) are **presence-asserting transports** — they are *told* when a
-device connects and disconnects rather than guessing it from silence. The **edge agent** is a separate
-binary that runs on a box at a site, buffers locally when the link to the cloud is down, and forwards
-when it comes back.
+stateless services around them:
 
-All three run as a **single instance**, all three hold live state that no database holds, and what a
-restart costs differs from one to the next. This page is the operator's contract: how many run and
-why, what a failover loses, what presence does and does not guarantee, and what to watch.
+- [Sparkplug-B ingestion](../concepts/sparkplug.md) and [LwM2M ingestion](../concepts/lwm2m.md) are
+  **presence-asserting transports**. They are *told* when a device connects and disconnects, rather
+  than guessing it from silence.
+- The **edge agent** is a separate binary that runs on a box at a site. It buffers locally when the
+  link to the cloud is down, and forwards when the link comes back.
 
-If you are looking for what each protocol does or how a device maps onto the platform, start at
+All three run as a single instance, and all three hold live state that no database holds. What a
+restart costs differs for each. This page covers how many run and why, what a failover loses, what
+presence does and does not guarantee, and what to watch.
+
+For what each protocol does or how a device maps onto the platform, start at
 [Sparkplug-B](../concepts/sparkplug.md), [LwM2M](../concepts/lwm2m.md) or
 [Device Presence](../concepts/device-presence.md) instead.
 
-Both ingest services are **opt-in**. Neither is in the default set of functional areas — you enable
-them deliberately — and each hard-depends on device management, which resolves what they produce.
+Both ingest services are **opt-in**. Neither is in the default set of functional areas, so you enable
+them deliberately. Each hard-depends on device management, which resolves what they produce.
 
-## One instance each, and the reasons differ
+## Why each runs as one instance {#one-instance-each-and-the-reasons-differ}
 
-It is worth knowing that these are three separate arguments, not one policy applied three times.
+Each component runs as one instance for its own reason; this is not one policy applied three times.
 
 | Service | Why exactly one | What a second one would do |
 |---|---|---|
@@ -33,34 +35,37 @@ It is worth knowing that these are three separate arguments, not one policy appl
 | **LwM2M ingestion** | DTLS is a **stateful session over one bound UDP socket**. | A standby that also bound the socket would silently receive — and drop — the share of datagrams sent its way. Traffic disappears rather than failing loudly. |
 | **Edge agent** | It owns a local spool directory and one identity on the cloud uplink. | Two on one directory collide on file locks; two sharing an identity kick each other off the uplink in a loop. |
 
-For the two ingest services this is enforced rather than merely documented. Each takes an
-**ownership lease** with a 30-second window: a replacement pod connects nothing and binds nothing
-until it holds the lease, so the window in which two of them serve is **bounded** — by the lease
-window plus one renewal interval (about ten seconds), because a leader that has lost the lease
-evicts itself only when its next renewal notices, and then still has to unwind its broker or DTLS
-state. It is bounded, not eliminated, and **nothing fences a stale leader's writes on these two
-paths** — the lease's epoch is carried but no ingest path rejects on it. The chart also refuses to
-render either area at more than one replica, and that refusal is keyed on **the area itself**, not on
-the rollout strategy it happens to be configured with: overriding `strategy` to `RollingUpdate` does
-not get past it.
+For the two ingest services, the platform enforces this rather than only documenting it:
 
-A pod that ends **itself** — because it decided it can no longer serve, which on LwM2M ingestion
-means a leadership term it could not build or a CoAP/DTLS transport that stopped reading — releases
-the lease on its way out, so the replacement acquires it as soon as it starts rather than waiting.
-The 30-second window above is what a replacement waits after an **abrupt** loss, where nothing got
-the chance to release: a node failure, a `SIGKILL`, an out-of-memory kill.
+- **Ownership lease.** Each service takes a lease with a 30-second window. A replacement pod connects
+  nothing and binds nothing until it holds the lease.
+- **Bounded overlap.** The window in which two pods serve is bounded by the lease window plus one
+  renewal interval (about ten seconds). A leader that has lost the lease evicts itself only when its
+  next renewal notices, and then still has to unwind its broker or DTLS state. The overlap is
+  bounded, not eliminated.
+- **No write fencing.** Nothing fences a stale leader's writes on these two paths. The lease's epoch
+  is carried, but no ingest path rejects on it.
+- **Chart refusal.** The chart refuses to render either area at more than one replica. The refusal
+  is keyed on the area itself, not on its rollout strategy, so overriding `strategy` to
+  `RollingUpdate` does not get past it.
+
+A pod that ends *itself* releases the lease on its way out, so the replacement acquires it as soon as
+it starts. A pod ends itself when it decides it can no longer serve; on LwM2M ingestion that means a
+leadership term it could not build, or a CoAP/DTLS transport that stopped reading. The 30-second wait
+applies only after an **abrupt** loss, where nothing had the chance to release: a node failure, a
+`SIGKILL`, an out-of-memory kill.
 
 :::warning Neither ingest service gets a pod disruption budget
-The chart skips a disruption budget for any area running a single replica, because a budget demanding
-one available pod would block a node drain outright. Draining the node an edge service happens to be
-on therefore **stops that transport** until the pod is rescheduled and takes the lease. Recovery is
-automatic, but it is not instant — prefer a deliberate rollout over draining that node.
+The chart skips a disruption budget for any single-replica area, because a budget demanding one
+available pod would block a node drain outright. Draining the node an edge service is on therefore
+**stops that transport** until the pod is rescheduled and takes the lease. Recovery is automatic but
+not instant, so prefer a deliberate rollout over draining that node.
 :::
 
 ## What a failover costs
 
-A restart or a leadership handover is routine on both services, and both come back on their own. What
-they recover, however, is not the same.
+A restart or a leadership handover is routine on both services, and both come back on their own. They
+do not recover the same things.
 
 | | Sparkplug ingestion | LwM2M ingestion |
 |---|---|---|
@@ -70,275 +75,302 @@ they recover, however, is not the same.
 | **Recovery time** | However long the replacement pod needs to schedule and start, plus up to the 30-second lease window. | The same, plus binding the socket. |
 
 :::danger LwM2M observations are lost on failover and nothing re-creates them
+A restart, a rollout or a leadership handover loses every LwM2M observation. Presence comes back;
+telemetry does not, until each device re-registers. With the shipped default that is **up to a day
+of silence from a healthy device** that reads online the whole time. See
+[Lost observations](#lost-observations).
+:::
+
+### Lost observations {#lost-observations}
+
 This is the most surprising operational fact on this page.
 
-DeviceChain asks an LwM2M device to **Observe** its resources so the device pushes readings on its
+DeviceChain asks an LwM2M device to **Observe** its resources, so the device pushes readings on its
 own. Those observations live only for the life of the process that established them. A restart, a
 rollout or a leadership handover **loses every one of them, and nothing re-creates them.**
 
 Presence comes back. Telemetry does not. A device starts reporting again only when it next
-**re-registers** — which is the device's own behaviour on its own schedule, bounded by nothing except
-its registration lifetime. With the shipped default of `86400` seconds that is **up to a day of
+**re-registers**. That is the device's own behaviour on its own schedule, bounded by nothing except
+its registration lifetime. With the shipped default of `86400` seconds, that is **up to a day of
 silence from a perfectly healthy device**, with the device online in the console the whole time.
 
-If you cannot tolerate that, lower `maxLifetimeSeconds` (see the LwM2M settings below) — but never
-below the longest lifetime your devices actually request, or they are expired as dead on every
-handover.
-:::
+If you cannot tolerate that, lower `maxLifetimeSeconds` (see [LwM2M settings](#lwm2m-settings)). Never
+lower it below the longest lifetime your devices actually request, or they are expired as dead on
+every handover.
 
 ## What presence guarantees
 
-Every device carries a **presence source** — `INFERRED` or `ASSERTED` — and the rules around it are
+Every device carries a **presence source**, `INFERRED` or `ASSERTED`. The rules around it are
 narrower than they look.
 
 **Only the source can give a device back.** A device becomes asserted the first time an authoritative
-transport speaks for it, and no timeout, no data event and no amount of silence moves it back to
-inferred. The one thing that does is a **demotion** — a claim by the *source* that it is no longer
-speaking for the device, never a claim about the device itself. See [returning a device to inferred
+transport speaks for it. No timeout, no data event and no amount of silence moves it back to inferred.
+The one thing that does is a **demotion**: a claim by the *source* that it is no longer speaking for
+the device, never a claim about the device itself. See [returning a device to inferred
 presence](#demoting-a-device). A device that used to arrive over Sparkplug or LwM2M and now arrives
-over plain MQTT keeps its asserted source, and keeps being exempt from the inactivity sweep.
+over plain MQTT keeps its asserted source, and stays exempt from the inactivity sweep.
 
-**Ordering is by a platform-minted session identity, never by anything the device sends.** Each
-connect/disconnect pair is stamped with a session marker the platform generates. A Sparkplug
-birth/death sequence number is read only to match a death to the birth it belongs to — it is never
-compared by magnitude, because it wraps — and an LwM2M registration id is never used as the session
-identity. The consequence for you is that a delayed or replayed message from an older session cannot
-tear down a live one, on either transport.
+**Ordering is by a platform-minted session identity, never by anything the device sends.** The
+platform stamps each connect/disconnect pair with a session marker it generates. A Sparkplug
+birth/death sequence number is read only to match a death to the birth it belongs to. It is never
+compared by magnitude, because it wraps. An LwM2M registration id is never used as the session
+identity. As a result, a delayed or replayed message from an older session cannot tear down a live
+one, on either transport.
 
-Markers are minted from the clock of the broker node that accepted the connection, so across a
-multi-node cluster a new session's marker is **not** guaranteed to sort above the one before it — a
-node whose clock trails its peers mints a lower one. The platform reconciles that case rather than
-assuming it away: a device found live on a session that sorts below its stored one is re-filed onto
-the session it is actually on, so its later disconnect is still recognised.
+Markers are minted from the clock of the broker node that accepted the connection. Across a
+multi-node cluster, a new session's marker is therefore **not** guaranteed to sort above the one
+before it: a node whose clock trails its peers mints a lower one. The platform reconciles that case
+rather than assuming it away. A device found live on a session that sorts below its stored one is
+re-filed onto the session it is actually on, so its later disconnect is still recognised.
 
-**A device cannot assert its own presence.** A connect/disconnect event submitted through the ordinary
-device-facing payload path is rejected outright, not merely ignored. Only the transports themselves
-produce them. This matters because an asserted device is exempt from the inactivity sweep — a device
-able to declare itself connected could pin itself online permanently.
+**A device cannot assert its own presence.** A connect/disconnect event submitted through the
+ordinary device-facing payload path is rejected outright, not merely ignored. Only the transports
+themselves produce them. An asserted device is exempt from the inactivity sweep, so a device able to
+declare itself connected could pin itself online permanently.
 
 **The inferred timeout is ten minutes and is not adjustable.** Devices without an asserting transport
 are swept offline after ten minutes of silence, re-checked every minute. There is no per-device
-override and no setting for it today, so do not go looking for one. It is also the timeout a demoted
-device comes back under, which is most of the point of demoting one.
+override and no setting for it today. It is also the timeout a demoted device comes back under, which
+is most of the point of demoting one.
 
-## A device that reads online and is not
+## Devices stuck online {#a-device-that-reads-online-and-is-not}
 
-This is the failure mode to understand before you rely on presence for anything that pages a human.
+Understand this failure mode before you rely on presence for anything that pages a human.
 
 **An asserted device that dies without saying so can read online indefinitely.** The inactivity sweep
-deliberately skips asserted devices — the whole point of an asserting transport is that silence is not
-evidence of death — and on these two transports **nothing else has a timeout, a watchdog or a
-sweeper.** Two things clear it, and neither of them is a timeout.
+deliberately skips asserted devices, because on an asserting transport silence is not evidence of
+death. On these two transports **nothing else has a timeout, a watchdog or a sweeper.** Two things
+clear it, and neither is a timeout:
 
-The first is a new signal from the device's own transport. Devices asserted by DeviceChain's own MQTT
-broker get one without the device doing anything: a repair pass there periodically compares the
-broker's live connection list against what the platform believes and corrects the difference. See
-[Device Presence](../concepts/device-presence.md). On Sparkplug and LwM2M there is no such pass, so
-the signal has to come from the device.
+1. **A new signal from the device's own transport.** Devices asserted by DeviceChain's own MQTT
+   broker get one without the device doing anything: a repair pass there periodically compares the
+   broker's live connection list with what the platform believes, and corrects the difference. See
+   [Device Presence](../concepts/device-presence.md). Sparkplug and LwM2M have no such pass, so the
+   signal has to come from the device.
+2. **A [demotion](#demoting-a-device).** This is the answer when the first will never arrive, because
+   the source that would have to produce it is gone. It works on all three asserting transports.
 
-The second is a [demotion](#demoting-a-device), and it is the answer when the first will never
-arrive — because the source that would have to produce it is gone. It works on all three asserting
-transports.
-
-The concrete ways it happens:
+The concrete ways a device gets stuck online:
 
 - **A lost Sparkplug death certificate.** If the broker never delivers the node's DEATH, the device
-  stays online until the next reconciliation — and reconciliation runs **only when the host
-  reconnects to the broker**. A host that stays steadily connected and simply never hears from that
-  node again never re-runs it.
+  stays online until the next reconciliation. Reconciliation runs **only when the host reconnects to
+  the broker**. A host that stays steadily connected and never hears from that node again never
+  re-runs it.
 - **A node re-announcing itself.** When an edge node births a new session, its previous session's
   child devices are replaced along with it. A child device that does not re-announce under the new
-  session is left showing connected with nothing to correct it until the next reconciliation.
-- **An LwM2M registration that is simply long.** A device that vanishes is marked offline when its
-  registration lifetime lapses — with the default that is **86400 seconds**, one full day.
-- **A device whose asserting transport is removed.** Decommission the Sparkplug source or the LwM2M
-  credential a device arrived on, and nothing will ever produce another signal for it. It is stranded
-  at its last asserted state until someone [releases it](#demoting-a-device) — which is precisely
-  what that operation is for, since a source that is gone will not be telling the platform anything
-  more.
+  session keeps showing connected, with nothing to correct it until the next reconciliation.
+- **A long LwM2M registration.** A device that vanishes is marked offline when its registration
+  lifetime lapses. With the default, that is **86400 seconds**, one full day.
+- **A removed asserting transport.** Decommission the Sparkplug source or the LwM2M credential a
+  device arrived on, and nothing will ever produce another signal for it. It is stranded at its last
+  asserted state until someone [releases it](#demoting-a-device). That is what the operation is for,
+  since a source that is gone will not tell the platform anything more.
 
-**The one lever on these two transports is `maxLifetimeSeconds`**, and it applies to LwM2M only. Every
+**The one lever on these two transports is `maxLifetimeSeconds`, and it applies to LwM2M only.** Every
 registration's lifetime is clamped down to at most that value, so it directly bounds how long a dead
-LwM2M device can read online. Setting it to, say, 3600 caps that at an hour. The constraint is the one
-above: it must stay above the longest lifetime your fleet actually asks for. The MQTT path has its own
-bound — the repair pass's interval, `brokerPresence.reconcileSeconds`, five minutes by default.
+LwM2M device can read online. Setting it to, say, 3600 caps that at an hour. It must stay above the
+longest lifetime your fleet actually asks for. The MQTT path has its own bound: the repair pass's
+interval, `brokerPresence.reconcileSeconds`, five minutes by default.
 
-There is no equivalent lever on the Sparkplug path. If a Sparkplug device reading online is
-operationally load-bearing for you, pair the connectivity signal with a timeout-based
+The Sparkplug path has no equivalent lever. If a Sparkplug device reading online is operationally
+load-bearing for you, pair the connectivity signal with a timeout-based
 [absence rule](../concepts/event-processing.md), which fires on silence regardless of what presence
 says.
 
 ### Returning a device to inferred presence {#demoting-a-device}
 
 A **demotion** is the only transition from `ASSERTED` back to `INFERRED`. It is a claim by the
-source, not about the device: it says the source is releasing custody, and it asserts nothing
-whatever about connectivity. Whether the device reads online, when it last connected, when it last
-disconnected and when it last reported are all left exactly as they were.
+source, not about the device: the source is releasing custody. It asserts nothing about connectivity.
+Whether the device reads online, when it last connected, when it last disconnected and when it last
+reported are all left exactly as they were.
 
-What changes is who is allowed to correct them. An asserted device suppresses both of the platform's
-repair mechanisms; releasing it hands the device back to them, which repairs both directions of the
-freeze at once:
+What changes is who may correct them. An asserted device suppresses both of the platform's repair
+mechanisms. Releasing it hands the device back to them, which repairs both directions of the freeze
+at once:
 
-- A device frozen **online** becomes visible to the inactivity sweep again, and is marked offline ten
-  minutes after its real last activity.
-- A device frozen **offline** stops having its commands withheld. The hold is keyed on a device being
-  asserted *and* not active, so an inferred device is dispatched to; the periodic pass that re-checks
-  the withheld set releases the backlog within a couple of minutes, and the device itself reads online
-  again on its next reading. This is the direction worth fixing promptly, because held commands count
-  against a [per-tenant ceiling](../concepts/commands.md#held-command-ceiling) — devices wedged
-  offline by a departed source can eventually refuse enqueues for the healthy devices beside them.
+- **Frozen online.** The device becomes visible to the inactivity sweep again, and is marked offline
+  ten minutes after its real last activity.
+- **Frozen offline.** The device stops having its commands withheld. The hold is keyed on a device
+  being asserted *and* not active, so an inferred device is dispatched to. The periodic pass that
+  re-checks the withheld set releases the backlog within a couple of minutes, and the device reads
+  online again on its next reading. Fix this direction promptly: held commands count against a
+  [per-tenant ceiling](../concepts/commands.md#held-command-ceiling), so devices wedged offline by a
+  departed source can eventually refuse enqueues for the healthy devices beside them.
 
-There are two ways it happens.
+A demotion happens in one of two ways: a source releases its own devices, or an operator releases them
+by hand.
 
-#### A source releases its own devices when it is switched off
+#### Automatic release when a source is switched off {#a-source-releases-its-own-devices-when-it-is-switched-off}
 
-When broker-asserted MQTT presence declines to start because it was **deliberately disabled**,
-because the **NATS system-account credential is missing**, or because **the broker cannot be
-reached**, `event-sources` walks the devices it still has asserted and releases them.
+Broker-asserted MQTT presence depends on a *presence tap*: a connection `event-sources` makes to the
+broker's system account to hear its connect and disconnect notices. When the tap declines to start
+for one of these reasons, `event-sources` walks the devices it still has asserted and releases them:
 
-Those are three of the six reasons the tap can fail to start, and the line is deliberate. The first
-two are configuration, so every replica of the instance reads the same values and reaches the same
-conclusion — the release is the instance speaking rather than one replica guessing.
+- it was **deliberately disabled**;
+- the **NATS system-account credential is missing**;
+- **the broker cannot be reached**.
 
-The third is evidence of a different kind, and it is worth stating what it actually means. The tap
-gives its connection thirty seconds to reach the broker before reporting it unreachable, so this
-reason is half a minute with no system-account connection rather than one failed attempt: a broker
-that is down, or a credential it refuses. The MQTT gateway lives in that same broker, so while it is
-unreachable no device is connected through it either — the release is not a guess about the fleet,
-it is the only reading consistent with the broker being gone.
+These are three of the six reasons the tap can fail to start, and the line is deliberate. The first
+two are configuration. Every replica of the instance reads the same values and reaches the same
+conclusion, so the release is the instance speaking rather than one replica guessing.
 
-It is also the only one of the three whose truth can change while the pod is running, so it is the
-only one that keeps asking. **Every release pass re-dials the system account first, the first pass
-included. If the broker answers, nothing is released — the service exits and the pod restarts**, and
-the replacement dials the broker normally and runs its tap. A returning broker therefore shows up as
-a pod restart, not as a fleet of released devices. Without that, the release would simply continue:
-the pass walks whatever is asserted *now* on the reconcile interval, so with peers still asserting,
-the two would take turns on every row indefinitely, and in the gap between them the inactivity sweep
-would mark connected-but-quiet devices offline.
+The third is evidence of a different kind. The tap gives its connection thirty seconds to reach the
+broker before reporting it unreachable, so this reason means half a minute with no system-account
+connection, not one failed attempt: a broker that is down, or a credential it refuses. The MQTT
+gateway lives in that same broker, so while it is unreachable no device is connected through it
+either. The release is not a guess about the fleet; it is the only reading consistent with the broker
+being gone.
 
-What does **not** release is a failed subscription on a connection that did reach the broker — that
-one really is this replica's own bad luck, its peers may be reading advisories perfectly well — and
-the two reasons that mean this instance has no tap to run at all: no source pointed at the platform
-broker, and no service-to-service configuration. All six set `presence_tap_off{reason}` regardless,
-which is how you tell which one you have.
+It is also the only one of the three whose truth can change while the pod runs, so it is the only one
+that keeps asking. Every release pass re-dials the system account first, the first pass included.
+**If the broker answers, nothing is released**: the service exits and the pod restarts. The
+replacement dials the broker normally and runs its tap. A returning broker therefore shows up as a pod
+restart, not as a fleet of released devices. Without that re-check, the release would continue: the
+pass walks whatever is asserted *now* on the reconcile interval. With peers still asserting, the two
+would take turns on every row indefinitely, and in the gap between them the inactivity sweep would
+mark connected-but-quiet devices offline.
 
-Once the tap is running, a connection the broker closes for good is not a reason to turn it off but a
-reason to restart. If the broker stops accepting the system-account credential, every
-`event-sources` pod fails its liveness check at about the same time and Kubernetes restarts them; HTTP
-ingest is unavailable while they restart, and MQTT telemetry waits in the broker. Each restarted pod
-dials with its mounted credential. If the broker still refuses it, the tap turns off with reason
+These do **not** release:
+
+- a failed subscription on a connection that did reach the broker. That is this replica's own bad
+  luck; its peers may be reading advisories perfectly well.
+- the two reasons that mean this instance has no tap to run at all: no source pointed at the platform
+  broker, and no service-to-service configuration.
+
+All six reasons set `presence_tap_off{reason}` regardless, which is how you tell which one you have.
+
+Once the tap is running, a connection the broker closes for good is a reason to restart, not to turn
+the tap off. If the broker stops accepting the system-account credential, every `event-sources` pod
+fails its liveness check at about the same time and Kubernetes restarts them. HTTP ingest is
+unavailable while they restart, and MQTT telemetry waits in the broker. Each restarted pod dials with
+its mounted credential. If the broker still refuses it, the tap turns off with reason
 `broker_unreachable` and the release above applies.
 
-Three properties of the automatic release are worth knowing before relying on it:
+Know three properties of the automatic release before relying on it:
 
 - **A missing credential and an unreachable broker wait two minutes first.** A bring-up mints that
-  credential and rolls the broker in the same run that starts the services, so either can simply be a
-  race with the run rather than a standing condition. A written `enabled: false` is unambiguous, and
-  acts immediately. For the broker the wait is also a **re-check** — see above; for the credential it
+  credential and rolls the broker in the same run that starts the services, so either can be a race
+  with the run rather than a standing condition. A written `enabled: false` is unambiguous, and acts
+  immediately. For the broker, the wait is also a **re-check** (see above). For the credential it
   cannot be, because configuration is read once at startup and a change rolls the pod.
-- **It needs a gateway source and service-to-service configuration of its own** — something to emit
+- **It needs a gateway source and service-to-service configuration of its own**: something to emit
   under, and a way to enumerate tenants and read the projection. Without them it does not run at all.
-  It logs that it did not, and points at the manual door, which is then the only one.
+  It logs that it did not, and points at the manual release, which is then the only way.
 - **It is paced and self-emptying.** Releases go out at 25 devices a second, and a released device
   leaves the set being walked, so an interrupted pass resumes for free rather than starting again.
   `presence_still_asserted` is how much is left; a healthy release walks it to zero and leaves it
   there.
 
 Nothing releases Sparkplug or LwM2M devices automatically. Those sources go away because an operator
-removed them, not because a flag changed, so an operator is what releases them.
+removed them, not because a flag changed, so an operator releases them.
 
-#### An operator releases them by hand
+#### Manual release {#an-operator-releases-them-by-hand}
 
 `dcctl presence demote` walks one source's asserted devices in a tenant and releases each:
 
 ```
 dcctl presence demote --tenant acme --source sparkplug:plant-a \
+  --email ops@acme.example --password "$DC_PASSWORD" \
   --reason "plant-a gateway decommissioned"
 ```
 
 | Flag | |
 |---|---|
 | `--tenant` | Required. A demotion acts on one tenant. |
+| `--email` / `--password` | Required. The identity the demotion is authorized as. It must be a member of the tenant, or a superuser. |
+| `--server` | The instance host for API calls, `localhost` by default. Add `--tls` for HTTPS. |
 | `--source` | Required, and never inferred — the blast radius is an entire event source. Pass it exactly as the device's state reports it: the source's own configured id for MQTT and HTTP (`mqtt1`, `http1`), `sparkplug:{hostId}` for Sparkplug, `lwm2m` for LwM2M. |
 | `--device` | Repeatable. Narrows to named devices *within* the source; omit it to release the whole source. |
 | `--reason` | Required. Recorded with every event the run emits — the only record of a fleet-wide presence write. |
 | `--page` | Devices per call, `200` by default. |
 | `--dry-run` | Reports what would be released, and releases nothing. |
+| `--yes` | Skips the confirmation prompt a real run asks for. Without a terminal to confirm on, a real run is refused unless you pass it. |
 
-A source nobody uses is not an error — it simply matches nothing. So a first page that matches zero
-devices is far more likely to be a mistyped `--source` than a finished job, and the command says so
+A source nobody uses is not an error; it matches nothing. A first page that matches zero devices is
+therefore far more likely to be a mistyped `--source` than a finished job, and the command says so
 rather than reporting success.
 
 The same operation is available on the API as `device-state`'s `demoteAssertedPresence` mutation. It
-requires the `state:demote` permission, which is a write, is not part of the read-only baseline every
-member receives, and is granted to no role by default — give it explicitly to the role that needs it.
+requires the `state:demote` permission. That permission is a write, and is not part of the read-only
+baseline every member receives. The seeded `tenant-admin` role holds every tenant permission, so it
+includes this one; give it explicitly to any other role that needs it.
 
-#### A release is metered like any other presence event
+#### Release metering {#a-release-is-metered-like-any-other-presence-event}
 
-It passes the same per-tenant [ingest ceiling](../concepts/governance.md) as a connect or a
-disconnect, so a tenant already at its ceiling can have its *repair* refused along with the churn
-causing the pressure — counted in `presence_events_refused_total`. Nothing is lost: a refused release
-leaves the device asserted, so the next pass finds it again. The repair simply arrives no sooner than
-the ceiling allows.
+A release passes the same per-tenant [ingest ceiling](../concepts/governance.md) as a connect or a
+disconnect. A tenant already at its ceiling can have its *repair* refused along with the churn causing
+the pressure, counted in `presence_events_refused_total`. Nothing is lost: a refused release leaves
+the device asserted, so the next pass finds it again. The repair arrives no sooner than the ceiling
+allows.
 
 ## Tenancy on both transports
 
 **Tenancy is fixed by the connection on both transports, and is never read from device-supplied
-content.** This is the strongest property in this part of the platform and it holds on both paths.
+content.** This is the strongest property in this part of the platform.
 
 - **Sparkplug.** Every message is attributed to the tenant configured for the **broker connection it
-  arrived on**. The Sparkplug group id in the topic is a customer's own label — not globally unique
-  and settable by any publisher — so it never names a tenant. The configuration refuses two tenants on
-  one broker endpoint, because the group id would then be the only thing separating them.
+  arrived on**. The Sparkplug group id in the topic is a customer's own label, not globally unique and
+  settable by any publisher, so it never names a tenant. The configuration refuses two tenants on one
+  broker endpoint, because the group id would then be the only thing separating them.
 - **LwM2M.** Every device is bound to its tenant by the **authenticated DTLS pre-shared-key identity**
   it presented at the handshake. The endpoint name the device asserts in its own registration payload
   is never used for identity. An unprovisioned identity fails the handshake, and the refusal does not
   echo the identity back, so a probe cannot enumerate valid credentials by comparing error responses.
 
 :::caution On Sparkplug, device authentication is broker-level
-Both transports mark their traffic as authenticated by the transport, which is what lets the platform
+Under `deviceAuthMode: required`, both transports are trusted for device identity without a second
+per-event credential. On LwM2M that identity is bound to the PSK, so it is per-device. On Sparkplug
+it comes from the topic, so required device authentication does *not* stop one publisher sending as
+another device **within the same tenant**. See [Device authentication on
+Sparkplug](#device-authentication-on-sparkplug).
+:::
+
+### Device authentication on Sparkplug {#device-authentication-on-sparkplug}
+
+Both transports mark their traffic as authenticated by the transport. That is what lets the platform
 trust a device identity under `deviceAuthMode: required` without a second per-event credential. On
 LwM2M that identity is bound to the authenticated PSK, so it is genuinely per-device.
 
-**On Sparkplug it is derived from the topic, so the authentication is only as fine-grained as the
-broker connection.** Turning on required device authentication does *not* stop one publisher on a
-tenant's broker sending under a different device's identity **within that same tenant**. Cross-tenant
-is closed on both paths — a publisher can never reach another tenant — but if intra-tenant device
-identity matters to you, enforce it with per-client credentials and topic permissions **on your own
-broker**, which is where that boundary actually lives.
+On Sparkplug the identity is derived from the topic, so the authentication is only as fine-grained
+as **the broker connection**. Turning on required device authentication does *not* stop one publisher
+on a tenant's broker sending under a different device's identity within that same tenant.
+Cross-tenant is closed on both paths: a publisher can never reach another tenant. If intra-tenant
+device identity matters to you, enforce it with per-client credentials and topic permissions **on your
+own broker**, which is where that boundary actually lives.
+
+### Device identifiers on edge transports {#device-identifiers}
+
+:::danger None of the three identifiers is the one you typed
+Every device on an edge transport carries three identifiers with three different jobs, and the
+failures from confusing them are silent or misdirected. An auto-provisioned device arrives with **no
+name**, and the console cannot search for it. Read this section before provisioning.
 :::
 
-:::danger Three identifiers, three jobs — and on these transports none of them is the one you typed
-Every device on an edge transport carries **three** identifiers doing three different jobs. They
-are easy to confuse because two of them look like names and the third is generated. Get them
-straight before provisioning, because the failures are all silent or misdirected.
+Two of the identifiers look like names and the third is generated, which is why they are easy to
+confuse.
 
-**1. The tenancy anchor** — what decides which tenant the data belongs to. On Sparkplug it is the
-**broker connection**; on LwM2M it is the **authenticated PSK identity**. Never anything in the
-message. Covered above.
+| Identifier | Its job | Sparkplug | LwM2M |
+|---|---|---|---|
+| **1. Tenancy anchor** | Decides which tenant the data belongs to. Never anything in the message; covered above. | The **broker connection**. | The **authenticated PSK identity**. |
+| **2. Device-resolution key** | Decides *which device*. This is the device's **external id**, and the device does not choose it. | The topic's `group/node[/device]` string, e.g. `plant-a/line-3/press-1`. | The external id you wrote **beside the PSK identity in the service configuration** — not the endpoint name (`ep`) the device sends. |
+| **3. Device token** | What the console, the API and every event actually use. It is **generated**, not chosen. | `sp-…`, e.g. `sp-plant-a-line-3-press-1-9f2c1a8b4d3e`. | `lw-…`. |
 
-**2. The device-resolution key** — what decides *which device*. On both edge transports this is the
-device's **external id**, and it is not something the device chooses:
+On LwM2M, `ep` is logged and otherwise ignored. A device whose firmware sends `ep=urn:imei:35…` will
+never be matched by it, and nothing will say so.
 
-- On Sparkplug it is the topic's `group/node[/device]` string, e.g. `plant-a/line-3/press-1`.
-- On LwM2M it is the external id you wrote **beside the PSK identity in the service configuration**
-  — not the endpoint name (`ep`) the device sends. `ep` is logged and otherwise ignored. A device
-  whose firmware sends `ep=urn:imei:35…` will never be matched by it, and nothing will say so.
+The token is generated because the external id routinely contains `/`, `.`, spaces or non-ASCII, none
+of which a token may hold. So `plant-a/line-3/press-1` becomes something like
+`sp-plant-a-line-3-press-1-9f2c1a8b4d3e`. The suffix disambiguates two external ids that would
+otherwise reduce to the same string.
 
-**3. The device token** — what the console, the API and every event actually use. It is
-**generated**, not chosen: the external id routinely contains `/`, `.`, spaces or non-ASCII, none of
-which a token may hold. So `plant-a/line-3/press-1` becomes something like
-`sp-plant-a-line-3-press-1-9f2c1a8b4d3e` (`lw-…` for LwM2M). The suffix disambiguates two external
-ids that would otherwise reduce to the same string.
+The practical consequence is worse than it sounds: an auto-provisioned device arrives with **no name
+at all**. The registration carries only the token, the external id and the device type. The console's
+device list therefore shows the device under its generated `sp-…` / `lw-…` token, with `—` in the Name
+column. There is nothing there to recognise it by.
 
-**The practical consequence, and it is worse than it sounds:** an auto-provisioned device arrives
-with **no name at all**. The registration carries only the token, the external id and the device
-type, so the console's device list shows the device under its generated `sp-…` / `lw-…` token with
-`—` in the Name column. There is nothing there to recognise it by.
-
-And you cannot search for it. **The console's device list has no search box** — it is a plain paged
-listing of Status, Token, Name, Type, Description and Created, with no external-id column — and the
-API's device search takes only a page number, a page size and a device type. So:
+You also cannot search for it. The console's device list has **no search box**. It is a plain paged
+listing of Status, Token, Name, Type, Description and Created, with no external-id column. The API's
+device search takes only a page number, a page size and a device type. To find the device:
 
 - **In the console**, find it by its token. The generated token embeds the external id
   (`plant-a/line-3/press-1` → `sp-plant-a-line-3-press-1-…`), so paging the list and reading the
@@ -347,52 +379,66 @@ API's device search takes only a page number, a page size and a device type. So:
   devices. It is an exact-match lookup, not a search: no prefixes, no substrings. Nothing in the
   console calls it, so this is an API-only route.
 
-When a device does not appear at all, check identifier 2 before you suspect the transport — on
-LwM2M in particular, a wrong PSK identity fails at the DTLS handshake, before registration, and the
-refusal deliberately tells you nothing.
-:::
+When a device does not appear at all, check identifier 2 before you suspect the transport. On LwM2M in
+particular, a wrong PSK identity fails at the DTLS handshake, before registration, and the refusal
+deliberately tells you nothing.
 
-## LwM2M: what an operator must know
+## LwM2M operations {#lwm2m-what-an-operator-must-know}
 
 **Only SenML-JSON telemetry is decoded.** Notifications in any other content format are counted and
 discarded. The practical consequence is not obvious from the standard:
 
 :::warning A conformant LwM2M 1.0-only client gets presence and commands but no telemetry
-SenML arrived in LwM2M 1.1. A device that only speaks 1.0 will register, hold its session, drive
-presence correctly and accept Read/Write/Execute commands — and **never produce a single measurement**.
-Nothing fails loudly; the readings simply never appear.
+SenML arrived in LwM2M 1.1. A 1.0-only device registers, holds its session, drives presence and
+accepts Read/Write/Execute commands — and **never produces a single measurement**. Nothing fails
+loudly. Check **`observe_establish_refused_total`**, not
+`notify_unknown_content_format_total`. See [LwM2M 1.0-only clients](#lwm2m-10-only-clients).
+:::
+
+### LwM2M 1.0-only clients {#lwm2m-10-only-clients}
+
+A device that only speaks LwM2M 1.0 will register, hold its session, drive presence correctly and
+accept Read/Write/Execute commands, and never produce a single measurement. Nothing fails loudly; the
+readings never appear.
 
 The metric to check is **`observe_establish_refused_total`**. DeviceChain asks for SenML-JSON on the
 Observe itself, so a conformant 1.0-only client refuses the Observe with `4.06 Not Acceptable` and
-then never sends a notification at all — which is counted here, and is this counter's dominant cause.
-`notify_unknown_content_format_total` stays at **zero** for that device, because it counts the *other*
-case: a device that does notify, in a content format this adapter cannot decode.
-:::
+then never sends a notification at all. That refusal is counted here, and is this counter's dominant
+cause. `notify_unknown_content_format_total` stays at **zero** for that device, because it counts the
+*other* case: a device that does notify, in a content format this adapter cannot decode.
 
-**Observations are bounded and the bounds are not configurable.** DeviceChain establishes one
+### Observation limits {#observation-limits}
+
+**Observations are bounded, and the bounds are not configurable.** DeviceChain establishes one
 observation per object *instance*, only for objects inside a fixed IPSO range, and at most **32 per
-registration**. The object allowlist is a **fixed property of the build — there is no setting that
-adds to it.** If your fleet reports a resource outside that range, that resource will not be observed
-and no configuration will change it. Watch `observation_overflow_total` for devices exceeding the
+registration**. The object allowlist is a **fixed property of the build; no setting adds to it.** If
+your fleet reports a resource outside that range, that resource will not be observed and no
+configuration will change it. Watch `observation_overflow_total` for devices exceeding the
 per-registration cap.
 
-**Sessions are not reaped by default.** `idleTimeoutSeconds` defaults to `0`, meaning never — which is
-correct for always-connected devices. A **queue-mode** fleet should set it comfortably above the
-expected wake interval: too low and a sleeper's session keys are evicted out from under it, forcing
+### Session reaping {#session-reaping}
+
+**Sessions are not reaped by default.** `idleTimeoutSeconds` defaults to `0`, meaning never, which is
+correct for always-connected devices. For a **queue-mode** fleet, set it comfortably above the
+expected wake interval. Too low, and a sleeper's session keys are evicted out from under it, forcing
 the full re-handshake that DTLS Connection ID exists to avoid.
+
+### Exposing the LwM2M port {#exposing-the-lwm2m-port}
 
 :::danger Nothing exposes the LwM2M port outside the cluster
 The device-facing CoAP/DTLS port is **UDP 5684**, and **neither the chart nor the infrastructure
-modules expose it beyond the cluster.** Every service is cluster-internal, no session affinity is
-configured anywhere, and the shipped ingress controller handles HTTP only.
-
-External exposure is explicitly an operator decision, and there is **no shipped implementation of it**
-— so a real LwM2M fleet cannot reach the service as installed. You must provide the UDP path yourself
-(a `LoadBalancer` or `NodePort` service, or an external UDP proxy), and it must be a path that keeps
-every datagram of a session going to the one serving pod.
+modules expose it beyond the cluster.** As installed, a real LwM2M fleet cannot reach the service.
+You must provide the UDP path yourself.
 :::
 
-### LwM2M settings
+Every service is cluster-internal, no session affinity is configured anywhere, and the shipped
+ingress controller handles HTTP only.
+
+External exposure is explicitly an operator decision, and there is **no shipped implementation of
+it**. Provide the UDP path yourself (a `LoadBalancer` or `NodePort` service, or an external UDP
+proxy). It must be a path that keeps every datagram of a session going to the one serving pod.
+
+### LwM2M settings {#lwm2m-settings}
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -407,53 +453,66 @@ every datagram of a session going to the one serving pod.
 | `downlink.timeoutSeconds` | `10` | Bounds one command exchange to a device. On expiry the command is reported failed rather than left hanging. Raise it for slow cellular sleepers. |
 | `downlink.concurrency` | `16` | Cross-device command parallelism. A device's own commands always run in order regardless of this value. |
 
-## Sparkplug: what an operator must know
+## Sparkplug operations {#sparkplug-what-an-operator-must-know}
 
 **Each source is an independent outbound connection.** A source names one broker, one tenant, and the
-groups to subscribe to. A broker that is unreachable is retried on its own backing-off loop —
-**it degrades that one source, not the pod and not any other tenant's source.** Watch
-`connect_failures_total` rather than pod health for this.
+groups to subscribe to. An unreachable broker is retried on its own backing-off loop. It degrades
+**that one source**, not the pod and not any other tenant's source. Watch `connect_failures_total`
+rather than pod health for this.
 
 **One refused group stops that whole source until the broker's ACL is fixed.** A source announces a
 single online/offline state for all of its groups, so it cannot be online for some and offline for
-others. If the broker accepts the connection but refuses the subscription to any one group — most
-often because the source's credential may not read it — the source does not announce itself online,
-ingests none of its groups, disconnects, and retries on the same backing-off loop, up to 30 seconds
-apart. Announcing online with a group missing would be worse: that group's edge nodes would flush
-their buffered data into a subscription that does not exist, and the source would then mark their
-devices disconnected for staying silent. Before it disconnects, the source publishes its offline
-state itself, because a clean disconnect does not trigger its Last Will: an online announcement the
-broker stored but never acknowledged is replaced rather than left standing. Watch
-**`subscribe_failures_total`**: any increase means a
-source is down, and the log line names the group that was refused.
+others. The broker may accept the connection but refuse the subscription to one group, most often
+because the source's credential may not read it. The source then:
 
-**Reconnection is deliberately handled by the platform rather than by the MQTT client library.** Every
-reconnection opens a genuinely fresh session with a fresh timestamp, because Sparkplug requires the
-host's birth and its death certificate to carry the same timestamp so an edge node can reject a
-delayed death from a previous session. This is also why every replica shares one client id: the
-broker's own duplicate-id takeover is what evicts a zombie host.
+1. does not announce itself online;
+2. ingests none of its groups;
+3. disconnects, and retries on the same backing-off loop, up to 30 seconds apart.
+
+Announcing online with a group missing would be worse. That group's edge nodes would flush their
+buffered data into a subscription that does not exist, and the source would then mark their devices
+disconnected for staying silent. Before it disconnects, the source publishes its offline state itself,
+because a clean disconnect does not trigger its Last Will. An online announcement the broker stored
+but never acknowledged is therefore replaced rather than left standing. Watch
+**`subscribe_failures_total`**: any increase means a source is down, and the log line names the group
+that was refused.
+
+**The platform handles reconnection, not the MQTT client library.** Every reconnection opens a
+genuinely fresh session with a fresh timestamp. Sparkplug requires the host's birth and its death
+certificate to carry the same timestamp, so an edge node can reject a delayed death from a previous
+session. This is also why every replica shares one client id: the broker's own duplicate-id takeover
+is what evicts a zombie host.
 
 :::caution Neither the message rate nor the size of one message is bounded on the Sparkplug path
+Sparkplug ingestion applies **no per-tenant ingest ceiling and sheds nothing**, and no per-message
+reading ceiling. A runaway edge node on a configured broker is not throttled at the door. Bound it at
+the broker, by the groups you subscribe to, and by the metric count per publish at the edge node. See
+[Unbounded Sparkplug ingest](#unbounded-sparkplug-ingest).
+:::
+
+### Unbounded Sparkplug ingest {#unbounded-sparkplug-ingest}
+
 Unlike LwM2M and the standard device ingest paths, Sparkplug ingestion applies **no per-tenant ingest
 ceiling and sheds nothing**. The reasoning is that its exposure is a broker you deliberately chose to
-connect to, rather than an open endpoint — but the consequence is yours: a runaway edge node on a
+connect to, rather than an open endpoint. The consequence is yours: a runaway edge node on a
 configured broker is not throttled at the door. Bound it at the broker, or by the groups you subscribe
 to.
 
-**The two limits are separate, and neither applies here.** The rate limit above meters *messages*;
-the [per-message reading ceiling](../guides/connecting-a-device.md#how-much-one-message-may-carry)
+**The two limits are separate, and neither applies here.** The rate limit above meters *messages*.
+The [per-message reading ceiling](../guides/connecting-a-device.md#how-much-one-message-may-carry)
 bounds what one message may cost once admitted. A Sparkplug DDATA carrying thousands of metrics is
-one message and becomes one stored reading per metric — each its own row, state update and rule
-evaluation on the shared detection goroutine. Bound the metric count per publish at the edge node,
-the same way and for the same reason you bound its rate.
+one message, and becomes one stored reading per metric — each its own row, state update and rule
+evaluation on the detection engine every tenant shares. Bound the metric count per publish at the edge node, the
+same way and for the same reason you bound its rate.
 
-The [tenant lifecycle gate](./tenant-deletion.md) does still apply — traffic for a deleting tenant is
+The [tenant lifecycle gate](./tenant-deletion.md) still applies. Traffic for a deleting tenant is
 refused on this path like any other, and counted in `tenant_deleted_dropped_total`.
-:::
+
+### Unknown identities {#unknown-identities}
 
 **Unknown identities are a choice.** With auto-registration on, a Sparkplug identity with no matching
-device creates one. With it off, its telemetry is dropped and counted in `unknown_device_dropped_total`
-— which is the metric to check when an edge node is publishing and nothing appears.
+device creates one. With it off, its telemetry is dropped and counted in
+`unknown_device_dropped_total`. Check that metric when an edge node is publishing and nothing appears.
 
 ## The edge agent
 
@@ -464,49 +523,54 @@ why there is no agent-shaped configuration anywhere in the cloud services.
 
 **It is not a chart functional area.** It appears in no area list and no deployment profile, and it
 cannot be enabled the way a service is. It ships as static binaries and a container image, and you
-deploy it yourself — a systemd unit on a site gateway, a container, or a hand-written Kubernetes
+deploy it yourself: a systemd unit on a site gateway, a container, or a hand-written Kubernetes
 manifest at the edge.
 
+### The spool {#the-spool}
+
 **The spool is a drop-oldest ring.** The local store is a durable on-disk buffer, `1 GiB` by default.
-When it is full it drops the **oldest** un-forwarded events to admit new ones — never the newest. That
-direction is deliberate: a device is acknowledged the moment it publishes, from the agent's own
-persistence, so dropping the newest would discard exactly what the agent has just promised to keep and
-would leave you with a stale buffer at the end of an outage instead of a current one. Every drop is
-counted, as the spool's own first sequence minus the count of events this agent has forwarded and
-acknowledged — the second operand is delivery bookkeeping, and it is *persisted*, which is what lets
-the count survive a restart rather than resetting to zero. One case is not covered: when that
-persisted count is missing — a first start, or a store whose progress file was removed — it is
-seeded from the spool's current first sequence, so anything already evicted is treated as
-accounted-for and a restart in that state does reset the evidence. Keep the store directory intact
-across restarts if the drop count matters to you.
+When it is full, it drops the **oldest** un-forwarded events to admit new ones, never the newest.
+
+That direction is deliberate. A device is acknowledged the moment it publishes, from the agent's own
+persistence. Dropping the newest would discard exactly what the agent has just promised to keep, and
+would leave you with a stale buffer at the end of an outage instead of a current one.
+
+Every drop is counted, as the spool's own first sequence minus the count of events this agent has
+forwarded and acknowledged. The second operand is delivery bookkeeping, and it is *persisted*, which
+is what lets the count survive a restart rather than resetting to zero.
+
+One case is not covered. When that persisted count is missing — a first start, or a store whose
+progress file was removed — it is seeded from the spool's current first sequence. Anything already
+evicted is then treated as accounted-for, and a restart in that state does reset the evidence. Keep
+the store directory intact across restarts if the drop count matters to you.
 
 :::caution Duplicate collapse on reconnect covers JSON payloads only
 When the uplink returns, the agent re-forwards everything it buffered. For **JSON object payloads** it
-stamps a replay-stable identity and event time, so a message that was already delivered folds into the
+stamps a replay-stable identity and event time, so a message already delivered folds into the
 existing one at the cloud's uniqueness check and you see it once.
 
-**Any other payload shape is forwarded verbatim and is at-least-once.** A reconnect after a flaky link
-can genuinely deliver those twice. If you use a non-JSON decoder behind an edge agent, make what you
-do with the readings tolerant of a repeat.
+**Any other payload shape is forwarded verbatim and is at-least-once**, and a reconnect after a flaky
+link can deliver it twice. If you use a non-JSON decoder behind an edge agent, make your handling of
+the readings tolerant of a repeat.
 :::
 
-Two more things worth knowing before you deploy one:
+### Before you deploy an agent {#before-you-deploy-an-agent}
 
 - **The local MQTT listener is open unless you configure a credential.** Set `local.username` and
-  `local.passwordEnv` to require one. Leaving it open is a valid trusted-LAN posture and the agent
-  announces it with a loud warning at startup so the choice stays visible — but it is a network-access
-  control either way, not per-device identity, and over plaintext MQTT the secret crosses the LAN in
-  the clear.
-- **The metrics and health endpoint binds to loopback only.** The device MQTT port is the agent's only
-  LAN-exposed surface, by design. To scrape the agent from elsewhere you need something on the box
+  `local.passwordEnv` to require one. Leaving it open is a valid trusted-LAN posture, and the agent
+  announces it with a loud warning at startup so the choice stays visible. Either way it is a
+  network-access control, not per-device identity, and over plaintext MQTT the secret crosses the LAN
+  in the clear.
+- **The metrics and health endpoint binds to loopback only.** By design, the device MQTT port is the
+  agent's only LAN-exposed surface. To scrape the agent from elsewhere, you need something on the box
   itself to relay it.
 
 ### Edge agent settings
 
 | Setting | Default | What it does |
 |---|---|---|
-| `instanceId` | — | The cloud instance this agent forwards into. Publishes seen for a different instance are not forwarded, and are counted in `instance_mismatched_total`. |
-| `agentId` | — | This agent's identity on the uplink. **Must be unique** — two agents sharing it disconnect each other in a loop. |
+| `instanceId` | — | Required. The cloud instance this agent forwards into. Publishes seen for a different instance are not forwarded, and are counted in `instance_mismatched_total`. |
+| `agentId` | — | Required. This agent's identity on the uplink. **Must be unique** — two agents sharing it disconnect each other in a loop. |
 | `local.listenPort` | `1883` | The MQTT port site devices connect to. |
 | `local.storeDir` | — | Required. The directory holding the durable spool. One agent per directory. |
 | `local.spoolMaxBytes` | `1 GiB` | Spool budget. Beyond it, oldest events are dropped. The floor is 16 MiB. |
@@ -518,9 +582,17 @@ Two more things worth knowing before you deploy one:
 ## What to watch
 
 :::danger No alerts and no dashboards ship for any of these
-The shipped alert rules and the shipped Grafana dashboard cover the detection engine, the databases
-and replication. **Not one edge metric has an alert or a dashboard panel.** Everything in the tables
-below is emitted and scraped; nothing will page you about any of it until you write the rule yourself.
+The shipped alert rules and Grafana dashboards cover other parts of the platform, such as detection,
+command delivery, messaging, the databases and replication. **No metric in the tables below has an
+alert or a dashboard panel.** Everything below is emitted and scraped, and nothing will page you about
+it until you write the rule yourself. Start with the [no-leader alert](#no-leader-alert).
+:::
+
+All metrics carry the `devicechain_` prefix and their service's own segment:
+`devicechain_sparkplugingest_`, `devicechain_lwm2mingest_`, `devicechain_edge_`. None of them is
+labelled per device or per tenant, so none of them is a cardinality risk to scrape.
+
+### The no-leader alert {#no-leader-alert}
 
 **The first alert to author is a no-leader alert**, on each ingest service:
 
@@ -528,29 +600,26 @@ below is emitted and scraped; nothing will page you about any of it until you wr
 >
 > `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
-Zero means nobody is serving that transport and every device on it is silently unreachable. Anything
-other than one is worth waking someone. It is the most load-bearing signal on this whole surface and it
-is the one nothing tells you about today.
+Zero means nobody is serving that transport, and every device on it is silently unreachable. Anything
+other than one is worth waking someone. It is the most load-bearing signal on this whole surface, and
+nothing tells you about it today.
 
-The `absent()` half is not decoration, but it is not there for a source-less pod either. Both services
-register their `is_leader` gauge unconditionally at initialization, before either checks whether it has
-anything to serve, so a Sparkplug pod running with its sources unset publishes the series reading **0**
-for the life of the pod, and `!= 1` fires on its own. What `absent()` covers is the case where there is
-no series to sum at all — no replica came up, or none is being scraped — because `!= 1` over an empty
-result is itself empty, which is a silent alert, not a firing one. That case applies to both transports
-equally, which is why both expressions carry the pairing.
+The `absent()` half is needed, but not for a source-less pod. Both services register their
+`is_leader` gauge unconditionally at initialization, before either checks whether it has anything to
+serve. A Sparkplug pod running with its sources unset therefore publishes the series reading **0** for
+the life of the pod, and `!= 1` fires on its own. `absent()` covers the case where there is no series
+to sum at all: no replica came up, or none is being scraped. `!= 1` over an empty result is itself
+empty, which is a silent alert, not a firing one. That case applies to both transports equally, which
+is why both expressions carry the pairing.
 
-Both services' `is_leader` gauges go up when the replica **acquires** the lease, not when it
-finishes building its term, so a normal takeover does not read as leaderless while the new leader
-rebuilds its state. The state that hides in that window instead is a leader **stuck** in a build,
-and on LwM2M a second gauge is what names it — see `is_serving` below.
-:::
+Both services' `is_leader` gauges go up when the replica **acquires** the lease, not when it finishes
+building its leadership term. A normal takeover therefore does not read as leaderless while the new leader
+rebuilds its state. What hides in that window instead is a leader **stuck** in a build, and on LwM2M
+a second gauge names it: see `is_serving` below.
 
-All metrics carry the `devicechain_` prefix and their service's own segment —
-`devicechain_sparkplugingest_`, `devicechain_lwm2mingest_`, `devicechain_edge_`. None of them is
-labelled per device or per tenant, so none of them is a cardinality risk to scrape.
+### Sparkplug ingestion metrics {#sparkplug-ingestion-metrics}
 
-**Sparkplug ingestion** (`devicechain_sparkplugingest_`):
+Prefix: `devicechain_sparkplugingest_`.
 
 | Signal | Means |
 |---|---|
@@ -565,7 +634,9 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 | `decode_errors_total` / `ingest_failures_total` | Malformed payloads, and failures publishing onward. |
 | `tenant_deleted_dropped_total` | Traffic refused because its tenant is being deleted. |
 
-**LwM2M ingestion** (`devicechain_lwm2mingest_`):
+### LwM2M ingestion metrics {#lwm2m-ingestion-metrics}
+
+Prefix: `devicechain_lwm2mingest_`.
 
 | Signal | Means |
 |---|---|
@@ -588,7 +659,9 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 | `commands_overflow_parked_total{reason}` | Commands set aside in command-delivery instead of being sent straight away, and delivered in order moments later. `full`: the device's queue was full, so the device is slow to answer. `offline`: it had no live connection. `bind`: it had just connected and its waiting commands had not been delivered yet; **expect a spike after a failover**, when every device reconnects at once. `unconfirmed`: a command ahead of it could not be confirmed. |
 | `command_overflow_blocked_total` | Times the adapter had to wait because it could not set commands aside fast enough. It rises only while command-delivery is slow or unreachable, and then every LwM2M command waits. |
 
-**Edge agent** (`devicechain_edge_`):
+### Edge agent metrics {#edge-agent-metrics}
+
+Prefix: `devicechain_edge_`.
 
 | Signal | Means |
 |---|---|
@@ -601,9 +674,9 @@ labelled per device or per tenant, so none of them is a cardinality risk to scra
 | `malformed_total` | Events discarded as unforwardable rather than blocking the queue behind them. |
 | `local_auth_enabled` | 0 means the site's MQTT listener requires no credential. |
 
-## What is not validated
+## Validation limits {#what-is-not-validated}
 
-Two honest limits, so you can weigh them:
+Two limits on how these services are validated:
 
 - **No shipped rig exercises a real Sparkplug fleet.** Nothing in the project drives a third-party
   edge node or broker end to end. Sparkplug behaviour is covered by tests against the platform's own
@@ -613,5 +686,5 @@ Two honest limits, so you can weigh them:
   misbehaves cannot manufacture a pass. That suite runs on a schedule and is advisory rather than a
   release gate.
 
-The edge agent is covered by its own tests and has no in-cluster deployment validation. Treat a first
-agent rollout as something to pilot at one site before it is a fleet.
+The edge agent is covered by its own tests and has no in-cluster deployment validation. Pilot a first
+agent rollout at one site before it becomes a fleet.

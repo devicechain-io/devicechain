@@ -3,28 +3,28 @@ sidebar_position: 3
 title: Sending a Command
 ---
 
-# Sending a command
+# Sending a Command
 
-This guide covers the operator's half of two-way command dispatch: issuing a command,
-telling an accepted one from a refused one, and following it to an outcome. The device's
-half — receiving a command and reporting what happened — is in
-[Connecting a device](./connecting-a-device.md#responding-to-a-command). The lifecycle
-those two halves move a command through is in [Commands](../concepts/commands.md).
+This guide covers the operator's half of two-way command dispatch: you issue a command, tell
+an accepted one from a refused one, and follow it to an outcome. The device's half — receiving
+a command and reporting what happened — is in
+[Connecting a device](./connecting-a-device.md#responding-to-a-command). The lifecycle those
+two halves move a command through is in [Commands](../concepts/commands.md).
 
-Issuing, reading and cancelling are on the `command-delivery` endpoint,
+You issue, read and cancel commands on the `command-delivery` endpoint,
 `https://<your-host>/api/command-delivery/graphql`, with a tenant access token. Issuing and
-cancelling need the **`command:write`** authority; reading command history needs
-**`command:read`**.
+cancelling need the `command:write` authority. Reading command history needs
+`command:read`.
 
-The one exception is the first step below. Finding out what a device accepts is a
-`device-management` query — a different endpoint,
+The first step below is the one exception. Finding out what a device accepts is a
+`device-management` query. It uses a different endpoint,
 `https://<your-host>/api/device-management/graphql`, and a different authority,
-**`device:read`**.
+`device:read`.
 
 ## Find out what the device accepts {#find-out-what-the-device-accepts}
 
-A device's command vocabulary comes from its profile, so ask `device-management` rather
-than guessing:
+A device's command vocabulary comes from its profile, so ask `device-management` rather than
+guessing:
 
 ```graphql
 query {
@@ -36,20 +36,21 @@ query {
 ```
 
 :::warning `commandKey` is the identifier; `name` is a label
-A `PublishedCommand` carries both. The enqueue gate matches on **`commandKey`**, and that
-is the value you put in `createCommand`'s field — which is confusingly called `name`. The
-`name` on the vocabulary entry is a human-readable display label and is matched against
-nothing. Send the label and you get `COMMAND_NOT_IN_VOCABULARY` for a command the device
-plainly supports.
+A `PublishedCommand` carries both. The check that accepts or refuses a command matches on
+`commandKey`, and that is the value you put in `createCommand`'s field — which is confusingly
+called `name`. The vocabulary entry's `name` is a display label and is matched against nothing.
+Send the label and you get `COMMAND_NOT_IN_VOCABULARY` for a command the device plainly
+supports.
 :::
 
-**Read `constrained`, not the length of `commands`.** When `constrained` is `false` the
-list is empty and *any* command key is accepted — an empty list does not mean the device
-takes nothing, it means its profile declares no vocabulary. When `constrained` is `true`,
-the key must match one of the entries exactly, **including case**, and the payload is
-validated against that command's parameter schema.
+Read `constrained`, not the length of `commands`:
 
-## Issue it
+- **`constrained: false`** — the list is empty and *any* command key is accepted. The empty
+  list does not mean the device takes nothing; it means its profile declares no vocabulary.
+- **`constrained: true`** — the key must match one of the entries exactly, including case. The
+  payload is validated against that command's parameter schema.
+
+## Issue a command {#issue-it}
 
 ```graphql
 mutation {
@@ -66,36 +67,34 @@ mutation {
 }
 ```
 
-`token` is yours to choose and is how you refer to the command afterwards. `payload` and
-`metadata` are JSON **strings**. `expiresAt` is optional — see [Set a
-TTL](#set-a-ttl-you-can-live-with).
+- `token` is yours to choose. You use it to refer to the command afterwards.
+- `payload` and `metadata` are JSON **strings**.
+- `expiresAt` is optional. See [Set a TTL](#set-a-ttl-you-can-live-with).
 
-Re-issuing with a token already in use does not create a second command: the original is
-returned unchanged. That makes a retry after a network failure safe, which matters, because
-a command is a physical actuation and you do not want a dropped response to reboot a device
-twice.
+Re-issuing with a token already in use does not create a second command; you get the original
+back unchanged. That makes a retry after a network failure safe. It matters because a command
+is a physical actuation, and a dropped response must not reboot a device twice.
 
-That replay applies only to commands **you** own. A token held by a command the platform
-minted for a batch is refused with `TOKEN_IN_USE` rather than returned — handing you another
-device's actuation as though it were your own would be worse than saying no.
+This replay applies only to commands **you** own. If the token is held by a command the
+platform minted for a batch, you get `TOKEN_IN_USE` instead. Handing you another device's
+actuation as though it were your own would be worse than saying no.
 
 ## When an enqueue is refused {#when-an-enqueue-is-refused}
 
 :::danger Check `rejection`, not just for errors
 `createCommand` returns **exactly one** of `command` or `rejection`. A refused enqueue is a
-successful GraphQL response carrying a `rejection` — **not** a GraphQL error. A client that
-only checks the `errors` array reads a refusal as a success and reports a command that was
-never created.
+successful GraphQL response carrying a `rejection`, not a GraphQL error. A client that only
+checks the `errors` array reads a refusal as a success and reports a command that was never
+created.
 :::
 
-A rejection is a decided verdict rather than a failure, and the distinction is deliberate:
-a rejection says the request is wrong and describes exactly how, while a GraphQL error says
-the platform could not answer at all. A machine caller that cannot tell them apart retries a
-permanently-invalid command until its redelivery cap gives up — which looks identical to an
-outage.
+The distinction is deliberate. A rejection is a decided verdict: the request is wrong, and the
+rejection says exactly how. A GraphQL error means the platform could not answer at all. A
+machine caller that cannot tell them apart retries a permanently invalid command until its
+redelivery cap gives up, which looks identical to an outage.
 
-**Branch on `code`. Never on `reason`** — the reason is prose for a person and its wording
-may change.
+Branch on `code`, never on `reason`. The reason is prose for a person, and its wording may
+change.
 
 | `code` | Meaning | Retry? |
 |---|---|---|
@@ -108,20 +107,20 @@ may change.
 | `TOKEN_IN_USE` | The token is held by a command you do not own — in practice one the platform minted for a batch. | No — pick another token |
 | `COMMAND_REJECTED` | A rejection arrived carrying no classification. | No |
 
-**The list is open.** Treat a code you do not recognize as a refusal you cannot classify —
-never as a success.
+The list is open. Treat a code you do not recognize as a refusal you cannot classify, never
+as a success.
 
 Only `HELD_CEILING_EXCEEDED` is temporary. Every other code describes a request that will be
-just as wrong next time, so retrying it wastes attempts and hides a real defect from whoever
-could fix it.
+just as wrong next time. Retrying it wastes attempts and hides a real defect from whoever could
+fix it.
 
-A tenant whose fleet is entirely present can still hit the ceiling: it bounds *undelivered*
-work, and queued commands count while they wait for the next delivery tick. See [How much
-backlog a tenant may hold](../concepts/commands.md#held-command-ceiling).
+A tenant whose fleet is entirely present can still hit the ceiling. The ceiling bounds
+*undelivered* work, and queued commands count while they wait for the next delivery pass. See
+[How much backlog a tenant may hold](../concepts/commands.md#held-command-ceiling).
 
-## Follow it to an outcome
+## Follow it to an outcome {#follow-it-to-an-outcome}
 
-There is **no subscription** for commands — poll. Fetch a specific one by token:
+There is **no subscription** for commands, so poll. Fetch a specific command by token:
 
 ```graphql
 query {
@@ -131,7 +130,7 @@ query {
 }
 ```
 
-Or search, filtering on one state with `status` or a set of them with `statuses`:
+Or search, filtering on one state with `status` or on a set of states with `statuses`:
 
 ```graphql
 query {
@@ -146,17 +145,19 @@ query {
 }
 ```
 
-`statuses` is the one to reach for when what you care about is a set — "everything still in
-flight for this device" is `HELD`, `PARKED` and `SENT`: the commands withheld because the
-device is away, the ones published to a device that turned out not to be awake, and the ones
-dispatched and unanswered. An empty list is ignored rather than matching nothing.
+Use `statuses` when you care about a set. "Everything still in flight for this device" is:
 
-What each terminal state tells you is in
-[Commands](../concepts/commands.md#command-lifecycle); the pair worth internalizing is that
-**`EXPIRED` means it never got to a device and `TIMEOUT` means it did** — a run of the first
-points at dispatch, a run of the second points at the device.
+- `HELD` — withheld because the device is away.
+- `PARKED` — published to a device that turned out not to be awake.
+- `SENT` — dispatched and unanswered.
 
-## Cancel one
+An empty `statuses` list is ignored rather than matching nothing.
+
+What each terminal state tells you is in [Commands](../concepts/commands.md#command-lifecycle).
+The pair to remember: `EXPIRED` means the command never reached a device, and `TIMEOUT`
+means it did. A run of `EXPIRED` points at dispatch; a run of `TIMEOUT` points at the device.
+
+## Cancel a command {#cancel-one}
 
 ```graphql
 mutation {
@@ -164,69 +165,74 @@ mutation {
 }
 ```
 
-Legal from `QUEUED`, `HELD` and `PARKED` — the states in which the platform is still holding
-the command. Those are the useful cases: the command was withheld for an absent device, or
-published to one that turned out to be asleep, and it can be called off before the platform
-delivers it, which is much of the point of holding it rather than firing it into the dark.
-It records `CANCELLED`.
+Cancelling is legal from `QUEUED`, `HELD` and `PARKED` — the states in which the platform is
+still holding the command — and records `CANCELLED`. The useful cases are a command withheld
+for an absent device, or one published to a device that turned out to be asleep. Either can be
+called off before the platform delivers it, which is much of the point of holding it rather
+than firing it into the dark.
 
-**A `SENT` command is not cancelled.** Cancelling does not recall a dispatched command, and
-driving one to `CANCELLED` would stop no actuation — it would only make the platform discard
-the device's real answer when it arrives, so the device acts, the response vanishes, and the
-record says the operation was called off. The call therefore succeeds and returns the command
-unchanged, still `SENT`. Cancel races delivery, and losing that race is ordinary.
+A **`SENT` command is not cancelled**. Cancelling does not recall a dispatched command. Driving
+it to `CANCELLED` would stop no actuation; it would only make the platform discard the device's
+real answer when it arrives. The device would act, the response would vanish, and the record
+would say the operation was called off. So the call succeeds and returns the command unchanged,
+still `SENT`. Cancel races delivery, and losing that race is ordinary.
 
-**Cancelling an already-terminal command is not an error either.** It too is returned
-unchanged, with whatever status it reached. So a cancel that loses the race with a response
-looks like a successful call that returned `SUCCESSFUL`.
+Cancelling an already-terminal command is not an error either. It is returned unchanged,
+with whatever status it reached. A cancel that loses the race with a response therefore looks
+like a successful call that returned `SUCCESSFUL`.
 
-Both of those are the same instruction: **check the `status` you get back** rather than
-assuming the cancel took effect. A token matching no command *is* an error.
+In both cases, **check the `status` you get back** rather than assuming the cancel took effect.
+A token that matches no command *is* an error.
 
-This is exactly the brake `cancelCommandBatch` applies to a whole fleet write — same states
-cancelled, same line at `SENT`. See [Cancelling a
-batch](../concepts/commands.md#cancelling-a-batch).
+`cancelCommandBatch` applies exactly this brake to a whole fleet write: the same states are
+cancelled, and it stops at the same line, `SENT`. See
+[Cancelling a batch](../concepts/commands.md#cancelling-a-batch).
 
 ## Set a TTL you can live with {#set-a-ttl-you-can-live-with}
 
-Every command carries one. Pass `expiresAt` to set it, or the platform default of **seven
-days** applies.
+Every command carries a TTL. Pass `expiresAt` to set it; otherwise the platform default of
+**seven days** applies.
 
 Seven days is a long time to wait to learn a command failed. If your devices do not report
-outcomes, a command sits in `SENT` for the whole week before `TIMEOUT` records what you
-already suspected. Set your own `expiresAt` to whatever "still useful" means for that
-actuation — a reboot that has not landed in ten minutes is not going to.
+outcomes, a command sits in `SENT` for the whole week before `TIMEOUT` records what you already
+suspected. Set `expiresAt` to whatever "still useful" means for that actuation — a reboot that
+has not landed in ten minutes is not going to.
 
-## Commanding many devices at once
+## Commanding many devices at once {#commanding-many-devices-at-once}
 
-Everything above issues one command to one device. To send one command to a whole fleet —
-named explicitly, or resolved from an entity group — as a single operation you can audit and
-call off, see [Commanding a fleet](./commanding-a-fleet.md). It is not a loop of this
-mutation: it pins the group's membership as of the moment it fires, records which devices
-were refused and why, and cancels as one operation.
+Everything above issues one command to one device. To send one command to a whole fleet — named
+explicitly, or resolved from an entity group — as a single operation you can audit and call off,
+see [Commanding a fleet](./commanding-a-fleet.md). A fleet command is not a loop of this
+mutation. It pins the group's membership as of the moment it fires, records which devices were
+refused and why, and cancels as one operation.
 
 ## Five operations that are not for you {#operations-that-are-not-for-you}
 
 `markCommandSent`, `confirmCommandDispatch`, `releaseHeldCommands` and `parkCommand` appear on
-this schema but are gated on **system-tier** authorities (`command:claim` for the first two,
-`command:wake` and `command:park`) that a tenant access token does not carry. They exist for
-transports that own a device's connection — an LwM2M device draining its backlog over the
-session it just opened, an LwM2M adapter confirming a delivery is still current immediately
-before carrying it out, a broker reporting that a device came back, or a transport handing a
-command back because the device it was published toward turned out to be unreachable — and
-calling them from an application would fight the delivery sweep for control of a physical
-actuation.
+this schema, but they are gated on **system-tier** authorities that a tenant access token does
+not carry: `command:claim` for the first two, then `command:wake` and `command:park`. They exist
+for transports that own a device's connection:
 
-`drainableCommands` is the read those transports do first, and it is gated on
-**`command:claim`** — the same authority as `markCommandSent` rather than a fourth one of its
-own, since a caller entitled to claim a device's commands is exactly the caller entitled to
-find out which ones there are to claim. Given a device token it returns the commands still
-waiting for that device — `HELD` and `PARKED`, minus anything already past its expiry horizon
-— **oldest first**, bounded by `limit`: absent or not positive gives 32, and 1000 is the
-ceiling.
+- an LwM2M device draining its backlog over the session it just opened
+- an LwM2M adapter confirming a delivery is still current immediately before carrying it out
+- a broker reporting that a device came back
+- a transport handing a command back because the device it was published toward turned out to
+  be unreachable
 
-The ordering is the substance of the query rather than a nicety. A firmware update's write
-has to reach the device before its execute, so a backlog drained in any other order does not
-merely arrive late — it runs the rollout backwards. `command:read` does not open this query,
-and an application has no use for it in any case: to see what a device has waiting, use the
-[`commands` query](#follow-it-to-an-outcome) with `statuses: ["HELD", "PARKED"]`.
+Calling them from an application would fight the platform's own delivery process for control
+of a physical actuation.
+
+`drainableCommands` is the read those transports do first. It is gated on **`command:claim`**,
+the same authority as `markCommandSent`, rather than a fourth one of its own: a caller entitled
+to claim a device's commands is exactly the caller entitled to find out which ones there are to
+claim. Given a device token, it returns the commands still waiting for that device — `HELD` and
+`PARKED`, minus anything already past its expiry horizon — **oldest first**, bounded by `limit`.
+An absent or non-positive `limit` gives 32, and 1000 is the ceiling.
+
+The ordering is the point of the query. A firmware update's write has to reach the device
+before its execute, so a backlog drained in any other order does not merely arrive late — it
+runs the rollout backwards.
+
+`command:read` does not open this query, and an application has no use for it anyway. To see
+what a device has waiting, use the [`commands` query](#follow-it-to-an-outcome) with
+`statuses: ["HELD", "PARKED"]`.
