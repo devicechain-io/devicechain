@@ -11,6 +11,12 @@ only until it ends. That is the smaller of the two failures -- failing closed wo
 the same spray stop every password sign-in on the instance -- but it switches off a
 security control without a single request failing, so nothing else would notice. This
 alert is how an operator finds out.
+
+Devices connecting to the MQTT gateway with a password are slowed down the same way, per
+MQTT username, with the counts in a SEPARATE bucket in device-management, and the second
+alert watches that one. Separate because each bucket fails open for everything in it: a
+spray of MQTT usernames must not switch off the backoff on people's passwords, nor the
+reverse.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -47,4 +53,26 @@ spec:
           annotations:
             summary: "Password sign-ins are being checked without their per-account backoff"
             description: "The credential-attempt store is full, so user-management is checking password sign-ins WITHOUT slowing down repeated failures on any address that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 5 minutes. Sign-in itself still works -- refusing it would let whoever filled the store lock every user out -- but guessing is now limited only by the per-request field cap and the cost of each password check. The store fills when sign-ins are sent for a very large number of distinct email addresses inside ten minutes, which almost always means someone is spraying addresses. Find where the sign-in traffic comes from (the ingress logs, and user-management's rate-limited 'credential attempt store is full' warning) and block it upstream. The store drains on its own as entries expire, ten minutes after the flood stops. If the sign-in traffic is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+
+        - alert: DeviceCredentialAttemptStoreFull
+          # The DEVICE twin of the alert above, over device-management's own counter and
+          # its own bucket: MQTT password connects are slowed per username, and those
+          # counts live in a bucket of their own so that filling one store cannot switch
+          # off the other's backoff. Same expression shape, and the same reason increase()
+          # sees the first fail-open: device-management exports store_full at 0 from
+          # startup.
+          #
+          # WARNING, not critical, and on purpose. Unlike the people's store, this one
+          # also fills on LEGITIMATE traffic: every connect leaves an entry for ten
+          # minutes, successful ones included, so a large enough reconnect wave (a broker
+          # restart bringing a whole fleet back at once) fills it with nobody attacking.
+          # And a full store only returns device connects to what they were before they
+          # were slowed down at all.
+          expr: (sum(increase(devicechain_devicemanagement_credential_checks_total{namespace="{{ $ns }}", outcome="store_full"}[10m])) or vector(0)) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "MQTT password connects are being checked without their per-username backoff"
+            description: "The device credential-attempt store is full, so device-management is checking MQTT password connects WITHOUT slowing down repeated failures on any username that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 30 seconds. Connects still work -- refusing them would let whoever filled the store keep every password device off the platform -- but guessing a device's password is now limited only by how fast the broker accepts connects. Every connect, successful or not, holds an entry for ten minutes, so the store fills either when connects are sent for a very large number of distinct usernames (someone spraying usernames: find where the MQTT connects come from and block it upstream) or when a very large fleet reconnects all at once, for example after a broker restart. It drains on its own as entries expire, ten minutes after the wave stops. If the connect volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
 {{- end }}

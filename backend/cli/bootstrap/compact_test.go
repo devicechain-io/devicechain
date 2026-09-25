@@ -222,7 +222,9 @@ func TestCompactReservationFitsItsSmallerVolume(t *testing.T) {
 	// nothing in this repo measures what $MQTT_sess costs per connected session or
 	// what a durable consumer's ack state costs, so no floor here can be honestly
 	// called sized. What it does is fail if a future change eats the margin, which
-	// at the default 16Gi would go unnoticed and at 2Gi would not. C3 replaces it
+	// at the default 16Gi would go unnoticed and at compact's size would not: it is
+	// what failed, at 176 MiB, when the device credential-attempt bucket arrived
+	// against the 2Gi volume compact then had, and moved it to 3Gi. C3 replaces it
 	// with a measured number, or explains why the measurement was not worth it.
 	const minHeadroom int64 = 192 << 20
 	if headroom := ceiling - reserved; headroom < minHeadroom {
@@ -239,7 +241,7 @@ func TestCompactReservationFitsItsSmallerVolume(t *testing.T) {
 //
 // Read from infraVars rather than from compact.JetStreamStorage directly: the
 // value being checked is the one that reaches OpenTofu, and the gap between "the
-// struct says 2Gi" and "the apply passes 2Gi" is exactly where a preset stops
+// struct says 3Gi" and "the apply passes 3Gi" is exactly where a preset stops
 // being wired without any test noticing.
 func compactJetStreamStorage(t *testing.T, st *State) string {
 	t.Helper()
@@ -260,9 +262,10 @@ func compactJetStreamStorage(t *testing.T, st *State) string {
 // It must match modules/nats/main.tf exactly, and it is NOT 90% of the size: the
 // module splits the value into magnitude and unit, floors 90% of the MAGNITUDE,
 // and reattaches the unit. 12Gi yields floor(12 * 0.9) = 10 -> "10Gi", not
-// 10.8Gi. That flooring is why the compact volume is 2Gi and not 1Gi — a 1Gi
+// 10.8Gi. That flooring is why a compact volume could never be 1Gi — a 1Gi
 // volume yields floor(1 * 0.9) = 0, a zero-byte store on which nothing starts —
-// and why sizing a PV as (sum / 0.9) is unsafe.
+// why the 3Gi compact volume gives a 2Gi store rather than 2.7Gi, and why sizing
+// a PV as (sum / 0.9) is unsafe.
 func maxFileStoreFor(t *testing.T, size string) int64 {
 	t.Helper()
 

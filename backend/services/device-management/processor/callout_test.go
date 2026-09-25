@@ -8,25 +8,74 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/nats-io/jwt/v2"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 )
 
-// fakeAuthApi implements just the AuthenticateDevice method of the API interface;
-// the embedded (nil) interface satisfies the rest, none of which the responder
-// calls. authFn drives the outcome and captures what was presented.
+// fakeAuthApi implements just the two credential methods of the API interface the
+// responder calls; the embedded (nil) interface satisfies the rest. authFn drives the
+// outcome and captures what was presented.
+//
+// A password connect goes through ResolveDeviceCredential and the responder's
+// credential.Checker, so the fake has to say what the credential STORES. That is
+// secret when it is set. When it is not, the stored secret is whatever was presented,
+// so a fixture that grants keeps granting for any password, as it did before the
+// compare moved into the Checker; a test about the compare sets secret.
 type fakeAuthApi struct {
 	model.DeviceManagementApi
 	authFn func(ctx context.Context, p *model.PresentedCredential) (*model.Device, error)
+	secret string
+	// resolves counts ResolveDeviceCredential calls, when set: a call is the proof the
+	// Checker ADMITTED an attempt, since it looks the credential up only then.
+	resolves *atomic.Int32
 }
 
 func (f fakeAuthApi) AuthenticateDevice(ctx context.Context, p *model.PresentedCredential, _ time.Time) (*model.Device, error) {
 	return f.authFn(ctx, p)
+}
+
+func (f fakeAuthApi) ResolveDeviceCredential(ctx context.Context, p *model.PresentedCredential, _ time.Time) (*model.Device, string, error) {
+	if f.resolves != nil {
+		f.resolves.Add(1)
+	}
+	d, err := f.authFn(ctx, p)
+	if err != nil {
+		return nil, "", err
+	}
+	if f.secret != "" {
+		return d, f.secret, nil
+	}
+	return d, *p.Secret, nil
+}
+
+// testChecker is a real credential.Checker with the production device policy over an
+// in-memory attempt store.
+func testChecker(t *testing.T, store credential.Store, opts ...credential.Option) *credential.Checker {
+	t.Helper()
+	c, err := credential.NewChecker(store, DeviceCredentialPolicies, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// mustResponder is NewCalloutResponder for a test that has no reason to see it refuse.
+func mustResponder(t *testing.T, conn *nats.Conn, api model.DeviceManagementApi, creds *credential.Checker, seed string, gate func(string) bool) *CalloutResponder {
+	t.Helper()
+	r, err := NewCalloutResponder(conn, api, creds, seed, "inst-1", gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 func TestParseDeviceCredential(t *testing.T) {
@@ -81,7 +130,7 @@ func newTestResponder(t *testing.T, authFn func(context.Context, *model.Presente
 	}
 	// nil lifecycle gate: every tenant reads live, which is the shape every test here
 	// but the ADR-077 ones wants. TestAuthorizeRefusesADeletedTenant passes a real one.
-	r := NewCalloutResponder(nil, fakeAuthApi{authFn: authFn}, creds.IssuerSeed, "inst-1", nil)
+	r := mustResponder(t, nil, fakeAuthApi{authFn: authFn}, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, nil)
 	r.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
 	return r, creds.IssuerPublic
 }
@@ -295,7 +344,7 @@ func TestAuthorizeRefusesADeletedTenant(t *testing.T) {
 		return d, nil
 	}}
 	var asked string
-	r := NewCalloutResponder(nil, api, creds.IssuerSeed, "inst-1", func(tenant string) bool {
+	r := mustResponder(t, nil, api, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, func(tenant string) bool {
 		asked = tenant
 		return tenant == "acme-corp"
 	})
@@ -325,7 +374,7 @@ func TestAuthorizeStillGrantsWhenTheGateIsWiredAndSaysLive(t *testing.T) {
 		d.Token = "sensor-001"
 		return d, nil
 	}}
-	r := NewCalloutResponder(nil, api, creds.IssuerSeed, "inst-1", func(string) bool { return false })
+	r := mustResponder(t, nil, api, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, func(string) bool { return false })
 	r.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
 
 	userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))

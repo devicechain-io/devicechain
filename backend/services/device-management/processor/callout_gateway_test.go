@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -156,7 +158,7 @@ func TestCalloutPinsTheMqttClientIdAgainstARealBroker(t *testing.T) {
 		d.Token = "sensor-001"
 		return d, nil
 	}}
-	r := NewCalloutResponder(nc, api, creds.IssuerSeed, "inst-1", nil)
+	r := mustResponder(t, nc, api, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, nil)
 	if err := r.Start(); err != nil {
 		t.Fatalf("start responder: %v", err)
 	}
@@ -196,5 +198,69 @@ func TestCalloutPinsTheMqttClientIdAgainstARealBroker(t *testing.T) {
 	if err := mqttConnectAsDevice(t, mqttPort, anotherTenants, "acme-corp:dev1", "s3cret"); err == nil {
 		t.Fatalf("client id %q was accepted by the broker; the pin is not in force on the "+
 			"real CONNECT path", anotherTenants)
+	}
+}
+
+// The password backoff against a REAL broker, with its attempt records in a REAL
+// JetStream KV bucket on that broker, at the production policy and on the wall clock.
+// Ten wrong-password MQTT CONNECTs in a row, then the RIGHT password is refused on the
+// wire; once the first delay has passed, it connects.
+//
+// The unit tests drive authorize() over an in-memory store. This is what shows the
+// refusal reaches a device over MQTT, and that the Checker's compare-and-set works
+// against the bucket the service really uses rather than a fake of it.
+func TestCalloutThrottlesPasswordConnectsAgainstARealBroker(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc, mqttPort := startCalloutBroker(t, creds)
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket: "device_credential_attempts_e2e", TTL: credential.AttemptTTL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker, err := credential.NewChecker(attempts, DeviceCredentialPolicies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := fakeAuthApi{secret: "s3cret", authFn: func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+		d := &model.Device{}
+		d.Token = "sensor-001"
+		return d, nil
+	}}
+	r := mustResponder(t, nc, api, checker, creds.IssuerSeed, nil)
+	if err := r.Start(); err != nil {
+		t.Fatalf("start responder: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Stop() })
+
+	const clientID = "inst-1:acme-corp:sensor-001"
+	// The negative control runs first: the right password connects, so every refusal
+	// below is the backoff and not a broker that refuses everything.
+	if err := mqttConnectAsDevice(t, mqttPort, clientID, "acme-corp:dev1", "s3cret"); err != nil {
+		t.Fatalf("control: the right password was refused before any failure (%v)", err)
+	}
+	for i := 0; i < DeviceCredentialPolicy.Free; i++ {
+		if err := mqttConnectAsDevice(t, mqttPort, clientID+":bad", "acme-corp:dev1", "wrong"); err == nil {
+			t.Fatalf("wrong password %d connected", i+1)
+		}
+	}
+	failedAt := time.Now()
+	if err := mqttConnectAsDevice(t, mqttPort, clientID+":after", "acme-corp:dev1", "s3cret"); err == nil {
+		if time.Since(failedAt) < DeviceCredentialPolicy.Base {
+			t.Fatal("the right password connected inside the backoff delay that ten failures set")
+		}
+		t.Skip("the connect took longer than the delay it was meant to land inside; nothing was measured")
+	}
+
+	time.Sleep(DeviceCredentialPolicy.Base + 200*time.Millisecond)
+	if err := mqttConnectAsDevice(t, mqttPort, clientID+":later", "acme-corp:dev1", "s3cret"); err != nil {
+		t.Fatalf("the right password was still refused after the delay ended (%v)", err)
 	}
 }

@@ -15,7 +15,9 @@ import (
 )
 
 // calloutAuthLevels returns the level of every log line the auth callout wrote about
-// an AuthenticateDevice failure, keyed on the two messages the call site can emit.
+// a failed credential check, keyed on the two messages logAuthFailure writes for one.
+// (Its third, for an unreachable attempt store, is not about a credential and is
+// pinned by TestCalloutStoreUnavailableFailsClosed.)
 // It reads the LEVEL FIELD of each JSON line rather than matching a phrase alone, so
 // the test pins which level the call site chose, not merely that it logged.
 func calloutAuthLevels(t *testing.T, captured string) []string {

@@ -35,11 +35,15 @@ type compactSizing struct {
 
 	// Volume sizes, as OpenTofu quantity strings.
 	//
-	// JetStreamStorage is 2Gi and NOT 1Gi. max_file_store is floor(90% of the
-	// MAGNITUDE) with the unit reattached, so a 1Gi volume yields floor(1 * 0.9) =
-	// 0 -> "0Gi": a zero-byte store on which nothing starts at all. 2Gi is the
-	// smallest magnitude that works, and its floor(2 * 0.9) = 1 -> "1Gi" ceiling
-	// is what compactReservation is checked against.
+	// JetStreamStorage is 3Gi. max_file_store is floor(90% of the MAGNITUDE) with
+	// the unit reattached, so a 1Gi volume yields floor(1 * 0.9) = 0 -> "0Gi", a
+	// zero-byte store on which nothing starts at all, and 2Gi yields a 1Gi ceiling.
+	// 2Gi WAS the compact volume until the device credential-attempt State bucket
+	// arrived: its 16 MiB took a headroom that already sat exactly on the budget
+	// test's 192 MiB floor down to 176 MiB. The next magnitude, 3Gi, floors to a
+	// 2Gi ceiling, which is what the compact reservation is checked against, and
+	// leaves about a gigabyte over the floor, so the next stream or bucket does not
+	// have to move this volume again.
 	JetStreamStorage string
 
 	// PostgresStorage is the RELATIONAL store (dc-postgresql): devices, types,
@@ -142,7 +146,7 @@ var compact = compactSizing{
 	KvCacheMaxBytes: 4 << 20,
 	KvStateMaxBytes: 16 << 20,
 
-	JetStreamStorage:   "2Gi",
+	JetStreamStorage:   "3Gi",
 	PostgresStorage:    "2Gi",
 	TimescaleStorage:   "4Gi",
 	ObjectStoreStorage: "8Gi",

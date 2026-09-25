@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -73,6 +74,9 @@ var (
 	RaiseAlarmMetrics    processor.RaiseAlarmMetrics
 	AlarmEventMetrics    processor.AlarmEventMetrics
 	GeoFencePublishFails prometheus.Counter
+	// CredentialChecks counts the auth callout's MQTT password checks by outcome. The
+	// callout's credential.Checker exports its store_full series at zero when it is built.
+	CredentialChecks *prometheus.CounterVec
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
 	// letters are stamped with and the ONE dead_letter_lost_total both of its arms count
@@ -130,6 +134,12 @@ func buildMetrics() {
 	// core/service built it: the platform's max-delivery recorder letters under it too,
 	// and a second NewProducer here would panic on the duplicate counter.
 	DeadLetters = Svc.DeadLetters
+	CredentialChecks = Microservice.NewCounterVec("credential_checks_total",
+		"MQTT password connect checks by outcome. outcome=\"throttled\" is a connect refused "+
+			"because its username is inside a backoff delay; outcome=\"unavailable\" means the "+
+			"attempt store could not be reached and the connect was refused; outcome=\"store_full\" "+
+			"means the attempt store was full and the connect was checked WITHOUT its backoff.",
+		[]string{"kind", "outcome"})
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
@@ -500,8 +510,8 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	}
 
 	// Start the device auth-callout responder once the broker is configured for it
-	// (ADR-025): it delegates every device connect at the broker back to
-	// AuthenticateDevice. Absent an issuer seed the broker isn't running callout,
+	// (ADR-025): it authenticates every device connect at the broker against the
+	// device credential store. Absent an issuer seed the broker isn't running callout,
 	// so there is nothing to serve.
 	if seed := Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutIssuerSeed; seed != "" {
 		// The ADR-077 gate: a deleted tenant's devices hold credentials that still
@@ -511,7 +521,24 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
 		infra := Microservice.InstanceConfiguration.Infrastructure
 		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management")
-		CalloutResponder = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, seed, Microservice.InstanceId, gate)
+		// Every MQTT password connect is compared through this Checker, behind a
+		// per-username backoff whose counts every replica shares through the device
+		// credential-attempt bucket. It fails closed when that bucket cannot be reached,
+		// and OPEN, without the backoff, when it is full, since anyone can fill it by
+		// presenting enough distinct usernames (the credential package doc says why).
+		attemptsKV, err := NatsManager.DeviceCredentialAttemptStore()
+		if err != nil {
+			return err
+		}
+		creds, err := credential.NewChecker(attemptsKV, processor.DeviceCredentialPolicies,
+			credential.WithCounter(CredentialChecks))
+		if err != nil {
+			return err
+		}
+		CalloutResponder, err = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, creds, seed, Microservice.InstanceId, gate)
+		if err != nil {
+			return err
+		}
 		if err = CalloutResponder.Start(); err != nil {
 			return err
 		}

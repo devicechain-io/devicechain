@@ -5,7 +5,8 @@
 #
 # WHAT THESE ARE FOR, over and above the parse check
 #
-# CredentialAttemptStoreFull watches one outcome of a counter that moves on EVERY
+# CredentialAttemptStoreFull (and its device twin, DeviceCredentialAttemptStoreFull,
+# further down) watches one outcome of a counter that moves on EVERY
 # sign-in. The cases worth writing down are therefore the quiet ones: a sign-in flood
 # that is being throttled normally -- mismatches and throttled attempts by the thousand --
 # is the platform doing its job and must not page. Only attempts checked WITHOUT their
@@ -111,3 +112,104 @@ tests:
       - eval_time: 30m
         alertname: CredentialAttemptStoreFull
         exp_alerts: []
+      - eval_time: 30m
+        alertname: DeviceCredentialAttemptStoreFull
+        exp_alerts: []
+
+  # ==================================================================
+  # DeviceCredentialAttemptStoreFull -- the device twin, over
+  # devicechain_devicemanagement_credential_checks_total{kind="device-credential"}.
+  # device-management exports its store_full series at 0 from startup, as
+  # user-management does.
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # The device store fills: one MQTT connect checked without its backoff fires the
+  # WARNING, with no pending period, and the window lets go ten minutes later.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="store_full"}'
+        values: '0x10 1x50'
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="success"}'
+        values: '0+100x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DeviceCredentialAttemptStoreFull
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: DeviceCredentialAttemptStoreFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "MQTT password connects are being checked without their per-username backoff"
+              description: "The device credential-attempt store is full, so device-management is checking MQTT password connects WITHOUT slowing down repeated failures on any username that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 30 seconds. Connects still work -- refusing them would let whoever filled the store keep every password device off the platform -- but guessing a device's password is now limited only by how fast the broker accepts connects. Every connect, successful or not, holds an entry for ten minutes, so the store fills either when connects are sent for a very large number of distinct usernames (someone spraying usernames: find where the MQTT connects come from and block it upstream) or when a very large fleet reconnects all at once, for example after a broker restart. It drains on its own as entries expire, ten minutes after the wave stops. If the connect volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+      - eval_time: 30m
+        alertname: DeviceCredentialAttemptStoreFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE QUIET CASE: a fleet of misconfigured devices, or a guesser, being slowed
+  # down normally. Wrong passwords and throttled connects by the thousand, the device
+  # store_full series flat at zero, and nothing fires.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="store_full"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="mismatch"}'
+        values: '0+2000x60'
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="throttled"}'
+        values: '0+20000x60'
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="unavailable"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: DeviceCredentialAttemptStoreFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 EACH ALERT WATCHES ITS OWN SERVICE. A full PEOPLE's store fires only the people
+  # alert, and a full DEVICE store only the device one. This is what a copy-paste of
+  # the metric name between the two rules would break, in either direction.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="store_full"}'
+        values: '0x5 1x55'
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="store_full"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: DeviceCredentialAttemptStoreFull
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Password sign-ins are being checked without their per-account backoff"
+              description: "The credential-attempt store is full, so user-management is checking password sign-ins WITHOUT slowing down repeated failures on any address that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 5 minutes. Sign-in itself still works -- refusing it would let whoever filled the store lock every user out -- but guessing is now limited only by the per-request field cap and the cost of each password check. The store fills when sign-ins are sent for a very large number of distinct email addresses inside ten minutes, which almost always means someone is spraying addresses. Find where the sign-in traffic comes from (the ingress logs, and user-management's rate-limited 'credential attempt store is full' warning) and block it upstream. The store drains on its own as entries expire, ten minutes after the flood stops. If the sign-in traffic is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", kind="identity", outcome="store_full"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_credential_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", kind="device-credential", outcome="store_full"}'
+        values: '0x5 1x55'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CredentialAttemptStoreFull
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: DeviceCredentialAttemptStoreFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "MQTT password connects are being checked without their per-username backoff"
+              description: "The device credential-attempt store is full, so device-management is checking MQTT password connects WITHOUT slowing down repeated failures on any username that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 30 seconds. Connects still work -- refusing them would let whoever filled the store keep every password device off the platform -- but guessing a device's password is now limited only by how fast the broker accepts connects. Every connect, successful or not, holds an entry for ten minutes, so the store fills either when connects are sent for a very large number of distinct usernames (someone spraying usernames: find where the MQTT connects come from and block it upstream) or when a very large fleet reconnects all at once, for example after a broker restart. It drains on its own as entries expire, ten minutes after the wave stops. If the connect volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."

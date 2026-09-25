@@ -113,6 +113,25 @@ func CredentialAttemptsBucketName(instanceId string) string {
 	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketCredentialAttempts))
 }
 
+// DeviceCredentialAttemptsBucketName is the concrete KV bucket holding an instance's
+// device MQTT password backoff state. Instance-prefixed for the same reason as
+// CredentialAttemptsBucketName: two instances sharing a broker must not share a
+// throttle.
+func DeviceCredentialAttemptsBucketName(instanceId string) string {
+	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketDeviceCredentialAttempts))
+}
+
+// deviceCredentialStoreArea is the functional area that creates the device
+// credential-attempt bucket: device-management, when it serves the MQTT auth callout.
+const deviceCredentialStoreArea = "device-management"
+
+// deviceCredentialStoreDeployed reports whether the device credential-attempt bucket
+// must exist. A nil area set means "unknown", which resolves to REQUIRED, the strict
+// direction (see ReplicationExpectation).
+func deviceCredentialStoreDeployed(deployedAreas []string) bool {
+	return len(deployedAreas) == 0 || slices.Contains(deployedAreas, deviceCredentialStoreArea)
+}
+
 // ReplicationExpectation states, in concrete broker names, what an instance's
 // JetStream objects must look like at the given replica factor (ADR-020 A0).
 //
@@ -179,6 +198,15 @@ func ReplicationExpectation(instanceId string, replicas int, deployedAreas []str
 		// The credential-attempt store is created unconditionally by user-management
 		// too, and a full or unreplicated one fails every sign-in the same way.
 		KvStreamName(CredentialAttemptsBucketName(instanceId)),
+	}
+	// The device credential-attempt store is created by device-management when it
+	// starts the MQTT auth callout, which every instance dcctl installs does (dcctl
+	// always provisions the callout's issuer). A full one only drops the device backoff,
+	// but an unreplicated one refuses every MQTT password connect for as long as its one
+	// replica is down, so it is required by name wherever device-management runs.
+	if deviceCredentialStoreDeployed(deployedAreas) {
+		exp.StateBuckets = append(exp.StateBuckets,
+			KvStreamName(DeviceCredentialAttemptsBucketName(instanceId)))
 	}
 	for _, b := range kv.All {
 		if b.Tier != kv.Cache {

@@ -83,8 +83,8 @@ func checkJetStreamVolumeIsUpgradable(ctx context.Context, st *State) error {
 				"  3. re-run this command\n\n"+
 				"To stay on the current size instead, pass -var nats_jetstream_storage=%s to "+
 				"OpenTofu directly. Note the shipped stream and KV ceilings are sized against "+
-				"%s: at %s the reservation sits exactly on its headroom floor, so the platform "+
-				"cannot add a stream or bucket without moving this volume",
+				"%s, and at %s they may not leave the headroom the unbounded MQTT session "+
+				"store needs, or may not fit at all",
 			have.String(), want.String(),
 			natsStatefulSetName, InstanceNamespace(st.Instance), want.String(),
 			have.String(), want.String(), have.String())

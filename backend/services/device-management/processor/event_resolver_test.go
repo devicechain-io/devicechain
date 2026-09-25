@@ -85,6 +85,26 @@ func (suite *EventResolverTestSuite) TestCredentialAuthenticates() {
 	suite.API.AssertNotCalled(suite.T(), "DevicesByToken")
 }
 
+// 🔴 AN EVENT CARRYING AN MQTT PASSWORD IS AUTHENTICATED BY AuthenticateDevice, NOT BY
+// ResolveDeviceCredential. The two exist side by side on purpose: the callout compares
+// through credential.Checker, under a backoff, because it answers the device; this path
+// gives the sender no verdict, and routing it through the throttle would cost a KV round
+// trip per event and let a device's own event stream push its connects into backoff.
+// This pins the split against a later "unification" of the two.
+func (suite *EventResolverTestSuite) TestPasswordCredentialUsesAuthenticateDeviceNotTheCalloutPath() {
+	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
+	ctype, cid, secret := string(dmodel.CredentialMqttBasic), "dev1", "s3cret"
+	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location,
+		CredentialType: &ctype, CredentialId: &cid, CredentialSecret: &secret}
+
+	device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(context.Background(), event)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), "TEST-123", device.Token)
+	suite.API.AssertCalled(suite.T(), "AuthenticateDevice")
+	suite.API.AssertNotCalled(suite.T(), "ResolveDeviceCredential")
+}
+
 // A credential is also honoured when the event carries no self-asserted token.
 func (suite *EventResolverTestSuite) TestCredentialWithoutAssertedToken() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)

@@ -23,9 +23,9 @@ import (
 //     a recognized shape of the general relationship search; the search itself is not
 //     cached and goes to the DB by promotion.
 //
-// AuthenticateDevice is deliberately NOT cached: credential validation is
-// security-sensitive (caching would delay the effect of revocation/expiry), so it
-// always goes straight to the DB via method promotion.
+// AuthenticateDevice and ResolveDeviceCredential are deliberately NOT cached:
+// credential validation is security-sensitive (caching would delay the effect of
+// revocation/expiry), so both always go straight to the DB via method promotion.
 //
 // Tenant scoping: every cache key includes the tenant derived from the context, so
 // one tenant can never read another tenant's device or relationships (a

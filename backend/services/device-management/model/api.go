@@ -332,6 +332,10 @@ type DeviceManagementApi interface {
 
 	// Device authentication (transport security, ADR-014).
 	AuthenticateDevice(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error)
+	// ResolveDeviceCredential is AuthenticateDevice without the secret compare, for the
+	// MQTT auth callout, which compares through credential.Checker. What it returns is
+	// NOT authenticated until that compare succeeds.
+	ResolveDeviceCredential(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, string, error)
 
 	// Entity relationships (uniform edge model, ADR-013).
 	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)

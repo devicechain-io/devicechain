@@ -171,6 +171,11 @@ func (api *MockApi) AuthenticateDevice(ctx context.Context, presented *model.Pre
 	return args.Get(0).(*model.Device), args.Error(1)
 }
 
+func (api *MockApi) ResolveDeviceCredential(ctx context.Context, presented *model.PresentedCredential, now time.Time) (*model.Device, string, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.Device), args.String(1), args.Error(2)
+}
+
 func (api *MockApi) EntityRelationshipsById(ctx context.Context, ids []uint) ([]*model.EntityRelationship, error) {
 	args := api.Mock.Called()
 	return args.Get(0).([]*model.EntityRelationship), args.Error(1)
