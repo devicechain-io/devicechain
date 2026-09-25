@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -42,6 +43,39 @@ func NewSnapshotStore(r *rdb.RdbManager) *SnapshotStore {
 	return &SnapshotStore{rdb: r}
 }
 
+// snapshotFloor is the part of a checkpoint row the split-brain guards compare: the
+// monotonic floor (sequence, and watermark at an equal sequence). It deliberately has no
+// Payload field, so the locked read CANNOT pull the engine state, rather than merely not
+// selecting it.
+//
+// The explicit column tags are load-bearing: gorm maps a scan by column name and leaves an
+// unmatched field at its zero value, and a zero floor makes every guard in this file answer
+// "not backward", i.e. fail open. The field TYPES are load-bearing too: they are exactly
+// DetectSnapshot's (int64, time.Time), so the driver scans these columns through the same
+// path Load does, with the same precision and zone. Do not change Watermark to
+// sql.NullTime or a string here: a NULL or unparsed value would then compare as the zero
+// time, and the equal-sequence watermark guard would pass every write.
+type snapshotFloor struct {
+	StreamSeq int64     `gorm:"column:stream_seq"`
+	Watermark time.Time `gorm:"column:watermark"`
+}
+
+// lockSnapshotFloor locks the partition's checkpoint row FOR UPDATE and reads only the two
+// columns the guards compare. It is the ONE lock read for Save and Reset, so the column
+// list cannot drift between them. The row lock covers the whole tuple whatever is
+// projected, so narrowing the projection changes what is transferred (on Postgres the
+// previous payload is no longer detoasted and shipped inside the lock window), not what is
+// serialized. gorm.ErrRecordNotFound is returned as-is for the caller's absent-row branch.
+// Model(&DetectSnapshot{}) is required: without it gorm would name the table after
+// snapshotFloor.
+func lockSnapshotFloor(tx *gorm.DB, partitionId string) (snapshotFloor, error) {
+	var f snapshotFloor
+	err := tx.Model(&DetectSnapshot{}).Select("stream_seq", "watermark").
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("partition_id = ?", partitionId).Take(&f).Error
+	return f, err
+}
+
 // Save commits the snapshot for its partition, MONOTONICALLY: it refuses to move the
 // durable stream sequence backward. The row is locked FOR UPDATE and compared before
 // the write, so two engines briefly co-bound to one partition — the split-brain a
@@ -50,12 +84,11 @@ func NewSnapshotStore(r *rdb.RdbManager) *SnapshotStore {
 // acked events whose effects are then in neither the surviving snapshot nor
 // redeliverable). A stale write is refused with ErrStaleCheckpoint (the caller then leaves
 // its messages unacked and halts the losing writer). State, watermark, and sequence live in
-// one row, so the write is atomic.
+// one row, so the write is atomic. The lock reads only the compared columns (see
+// lockSnapshotFloor); the payload is written, never read, on this path.
 func (s *SnapshotStore) Save(ctx context.Context, snap *DetectSnapshot) error {
 	return s.rdb.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing DetectSnapshot
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("partition_id = ?", snap.PartitionId).First(&existing).Error
+		existing, err := lockSnapshotFloor(tx, snap.PartitionId)
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			return tx.Create(snap).Error
@@ -128,9 +161,7 @@ func (s *SnapshotStore) Save(ctx context.Context, snap *DetectSnapshot) error {
 // a write at term start, which is the trade described above.
 func (s *SnapshotStore) Reset(ctx context.Context, partitionId string, observedSeq int64) error {
 	return s.rdb.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing DetectSnapshot
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("partition_id = ?", partitionId).First(&existing).Error
+		existing, err := lockSnapshotFloor(tx, partitionId)
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			// Nothing to clear. Idempotent rather than an error: replayToHead can reach this
