@@ -560,6 +560,17 @@ así que un campo condicional cuenta tanto si se ejecuta como si no. Se cuentan 
 del documento, no solo la que selecciona `operationName`, y la regla se aplica tanto por WebSocket
 como por HTTP.
 
+**Los documentos deben usar la sintaxis propia de GraphQL.** Un documento que contenga un
+comentario `//` o `/* */`, una cadena entre comillas invertidas o un carácter entre comillas simples
+se rechaza con un error de sintaxis, y no se ejecuta nada. Usa `#` para los comentarios. También se
+rechaza una cadena de bloque cuyo `"""` de cierre sigue directamente a una barra invertida (el escape
+`\"""`). Ese escape es GraphQL válido, pero el servidor nunca lo ha leído como lo define la
+especificación, así que envía ese texto en una variable. También se rechaza una cadena seguida
+directamente de una comilla, como `"x""y"`: GraphQL la lee como dos cadenas contiguas, y el servidor
+la leía como el comienzo de una cadena de bloque. Solo `"""` abre una cadena de bloque. La misma regla se aplica por WebSocket,
+donde una suscripción que el servidor no puede leer recibe el error de sintaxis en lugar del mensaje
+de que solo se aceptan suscripciones.
+
 El límite de mutaciones es el estricto porque los campos de una mutación se ejecutan uno tras otro:
 sin él, una sola solicitud podría llevar cientos de copias con alias de una mutación costosa. La
 consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían un solo campo de

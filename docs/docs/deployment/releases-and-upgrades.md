@@ -1518,6 +1518,9 @@ no longer reach private addresses, and the connectors service has new clients" b
 If your values set `checkpointIntervalSeconds` for `event-processing` above 30, lower it before
 upgrading (see "`checkpointIntervalSeconds` is capped at 30, and some silent failures now warn").
 
+If you write GraphQL documents by hand, read "GraphQL documents must use GraphQL's own comments and
+strings": Go-style comments, backquoted strings and single-quoted characters are now refused.
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -1963,6 +1966,29 @@ its labels keep working.
 - **`DeadLetterStoreLosing` and `DeadLetterWriteLost` no longer end in `or vector(0)`.** An
   expression that returns nothing and one that returns a false comparison leave an alert in the
   same state, so the clause changed nothing. Both alerts fire and resolve exactly as before.
+
+#### GraphQL documents must use GraphQL's own comments and strings
+
+Nothing needs doing at the upgrade unless your own code or scripts write GraphQL documents by hand.
+The console, the dashboard app, the SDKs, `dcctl` and the MCP server never send any of the
+following.
+
+- **A document written with `//` or `/* */` comments, backquoted strings, or single-quoted
+  characters is now refused** with a syntax error, and nothing in it runs. Earlier releases accepted
+  these, although they are not GraphQL. Use `#` for comments and `"` for strings.
+- **A block string whose closing `"""` directly follows a backslash is refused as well**, as in
+  `\"""`. That escape is valid GraphQL, but earlier releases never read it as the specification
+  defines it: they closed the string at those three quotes and read the rest of the document from
+  there. Send such text in a variable.
+- **A string directly followed by a quote, such as `"x""y"`, is refused.** GraphQL reads that as two
+  adjacent strings, which is never a valid value; earlier releases read it as the start of a block
+  string instead. Only `"""` opens a block string, and an empty string `""` is unaffected.
+- **Over a GraphQL WebSocket, a subscription the server cannot read now gets the syntax error**, not
+  the message saying that only subscriptions are accepted. A document that names an operation it
+  does not hold gets its own error too. Both are errors for that operation only; the connection
+  stays open.
+
+[Request limits](../reference/graphql-api.md#request-limits) has the details.
 
 ### The one-time durable-ingest cutover
 

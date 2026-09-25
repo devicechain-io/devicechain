@@ -581,8 +581,16 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 	// those graphql-go executes the operation to completion inside the call and hands
 	// back a channel holding the finished result, so a check on anything it returns
 	// would come after the write it exists to prevent. A document that cannot be
-	// classified is refused the same way: an operation-level error, the socket open.
-	if kind, err := operationType(payload.Query, payload.OperationName); err != nil || kind != opSubscription {
+	// read, or names no single operation, is refused too, with the reason why rather
+	// than the subscriptions-only message (whose advice to use HTTP would be false for
+	// an unreadable subscription). Either way it is an operation-level error, and the
+	// socket stays open.
+	kind, qerr := operationType(payload.Query, payload.OperationName, c.handler.Schema.maxQueryLength)
+	if qerr != nil {
+		c.writeError(msg.ID, qerr.Message)
+		return
+	}
+	if kind != opSubscription {
 		c.writeError(msg.ID, refusedOperationMessage)
 		return
 	}

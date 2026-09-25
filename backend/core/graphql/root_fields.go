@@ -6,6 +6,8 @@ package graphql
 import (
 	"fmt"
 	"text/scanner"
+
+	gqlerrors "github.com/graph-gophers/graphql-go/errors"
 )
 
 // rootOperation is one operation of a document, as far as the work limit needs it: its
@@ -24,8 +26,55 @@ type rootSelection struct {
 	spread string
 }
 
+// readDocument is the ONE entry to the document reader: the length ceiling, then
+// readRootFields. The work limit (checkWork) and the WebSocket's operation-type gate
+// (operationType) both read through it, so neither can read a document the other
+// would have read differently, and neither can read one before its length is checked.
+func readDocument(query string, maxLen int) ([]rootOperation, map[string][][]rootSelection, *gqlerrors.QueryError) {
+	if len(query) > maxLen {
+		return nil, nil, gqlerrors.Errorf("query length %d exceeds the maximum allowed query length of %d bytes", len(query), maxLen)
+	}
+	ops, fragments, err := readRootFields(query)
+	if err != nil {
+		return nil, nil, gqlerrors.Errorf("the document could not be parsed: %s", err.Error())
+	}
+	return ops, fragments, nil
+}
+
+// selectOperation picks the operation graphql-go's getOperation would execute for
+// name: with no name, the document must hold exactly one operation; with a name, the
+// operation of that name, which an anonymous operation never matches.
+//
+// graphql-go picks the FIRST operation of a given name and relies on its validation to
+// refuse a duplicate. This refuses a duplicate outright, which can only ever be the
+// stricter answer. It is used only by the WebSocket gate, so over HTTP a duplicate
+// name is still refused by graphql-go's validation and not here.
+func selectOperation(ops []rootOperation, name string) (rootOperation, error) {
+	if name == "" {
+		if len(ops) != 1 {
+			return rootOperation{}, fmt.Errorf("the document holds %d operations and no operation name was given", len(ops))
+		}
+		return ops[0], nil
+	}
+	found := -1
+	for i, op := range ops {
+		if op.name != name {
+			continue
+		}
+		if found >= 0 {
+			return rootOperation{}, fmt.Errorf("more than one operation is named %q", name)
+		}
+		found = i
+	}
+	if found < 0 {
+		return rootOperation{}, fmt.Errorf("no operation is named %q", name)
+	}
+	return ops[found], nil
+}
+
 // readRootFields reads a document into its operations and its fragments' root-level
-// selections, or fails.
+// selections, or fails. Callers enter through readDocument, which checks the length
+// first.
 //
 // 🔴 IT IS A MIRROR OF graphql-go's OWN QUERY PARSER, OVER A LEXER THAT TOKENISES AS
 // graphql-go's DOES — not a GraphQL parser. The work limit is only worth anything if
@@ -36,22 +85,52 @@ type rootSelection struct {
 // tokens, and closes a block string at the first `"""` even after a backslash. A document
 // written to be read one way by a conformant parser and another way by graphql-go —
 // three mutations that a conformant parser reads as one field holding a block string,
-// say — would be counted as one and executed as three. So this reuses opLexer, whose
-// doc comment records why it tokenises exactly as graphql-go runs, and each function
-// below is the graphql-go function of the same shape (internal/query/query.go and
-// internal/common/{values,literals,types,directive}.go), consuming the same tokens in
-// the same order and failing where it fails.
+// say — would be counted as one and executed as three. So this reuses opLexer, which
+// copies the scanning graphql-go runs and REFUSES what graphql-go's normalising pass
+// does not also see (below), and each function here is the graphql-go function of the
+// same shape (internal/query/query.go and internal/common/{values,literals,types,
+// directive}.go), consuming the same tokens in the same order and failing where it
+// fails.
+//
+// 🔴 THE ONE LAYER OF graphql-go THIS DOES NOT COPY is the Unicode-normalising reader
+// its lexer scans through (internal/common/norm). That pass rewrites string escapes
+// (`\u{…}` to `\U…`, a surrogate pair to `\U…`, a lone surrogate to `\u{…}`), and to
+// know where strings are it keeps its own small state machine: code, `#` comment,
+// string and block string. It knows nothing of the places where text/scanner's state
+// and a GraphQL reading part ways — `//` and `/* */` comments, backquoted raw strings,
+// `'c'` literals, a block string whose closing `"""` follows a backslash (which it reads
+// as the escaped `\"""` and keeps going), and a NON-EMPTY string directly followed by a
+// quote (which graphql-go's lexer opens as a block string, since it checks only that
+// the previous token was a string, while the normalising pass reads `"x"` and then a
+// new string). Around any of them the two layers disagree about whether a byte is
+// inside a string, and the rewrites add and remove braces there: a `/* " */` puts the
+// normalising pass inside a "string" where the lexer sees bare tokens, so `-\uDC00`,
+// `-\u{aaaaaaaaa` and `-\u{41}` are each rewritten into something else before
+// graphql-go's lexer ever sees them; `"x""` followed by a `#` comment holding `""" "`
+// does the same after the newline.
+//
+// So opLexer REFUSES all five. That list is what the two layers' state machines were
+// compared for — the normalising pass's four states against the tokens text/scanner
+// can return in graphql-go's mode — and not a count a test can prove complete: the
+// fifth was found only after the first four had been written down as the whole list.
+// FuzzRootFieldLimit and FuzzOperationType are what would find a sixth. With the five
+// gone, a string opens at the same quote on both sides, a block string opens only at
+// `"""` on both sides, and a `#` comment and a block string are read rune by rune on
+// both sides. What is left are verdicts on single escapes INSIDE a string, and none of
+// them moves a token boundary, because a rewrite consumes and emits only a backslash,
+// `u`/`U`, hex digits and braces, never a quote:
+//
+//   - `\u{41}` (braced): refused here (text/scanner calls it an invalid escape),
+//     accepted by graphql-go. A false refusal.
+//   - `\uDC00` (a lone surrogate): accepted here, refused by graphql-go, which sees the
+//     rewritten `\u{DC00}`. Nothing runs.
+//   - a surrogate pair: accepted by both.
 //
 // Anything it cannot read, it refuses, and the caller refuses the document. That is the
 // safe direction: a document refused here that graphql-go would have run is a false
-// refusal; a document read here differently from graphql-go is a hole. The one place the
-// two can legitimately differ is graphql-go's Unicode-escape normalisation of string
-// literals (`\u{…}`, surrogate pairs), which this does not repeat. That rewrite starts
-// at a backslash and never introduces or removes a quote, backquote, comment delimiter
-// or line break, so inside a string, raw string or comment it cannot move a token
-// boundary; outside them the backslash is a token no GraphQL production accepts, and
-// graphql-go refuses the whole document. FuzzRootFieldLimit holds the pair to the only
-// property that matters, with graphql-go as the arbiter.
+// refusal; a document read here differently from graphql-go is a hole.
+// FuzzRootFieldLimit holds the pair to the only property that matters, with
+// graphql-go as the arbiter.
 func readRootFields(document string) (ops []rootOperation, fragments map[string][][]rootSelection, err error) {
 	r := &rootReader{l: newOpLexer(document), fragments: map[string][][]rootSelection{}}
 	defer func() {

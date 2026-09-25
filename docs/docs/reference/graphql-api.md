@@ -537,6 +537,16 @@ one field. `@skip` and `@include` are not evaluated, so a conditional field coun
 it runs. Every operation in the document is counted, not only the one `operationName` selects, and
 the rule applies over WebSocket as well as HTTP.
 
+**Documents must use GraphQL's own syntax.** A document containing a `//` or `/* */` comment, a
+backquoted string, or a single-quoted character is refused with a syntax error, and nothing runs.
+Use `#` for comments. A block string whose closing `"""` directly follows a backslash (the `\"""`
+escape) is refused too. That escape is valid GraphQL, but the server has never read it as the
+specification defines it, so send such text in a variable instead. So is a string directly followed
+by a quote, such as `"x""y"`: GraphQL reads it as two adjacent strings, and the server used to read it
+as the start of a block string. Only `"""` opens a block string. The same rule applies over
+WebSocket, where a subscription the server cannot read gets the syntax error rather than the
+subscriptions-only message.
+
 The mutation limit is the tight one because mutation fields run one after another: without it, a
 single request could carry hundreds of aliased copies of an expensive mutation. The console, the
 dashboard app, the SDKs, `dcctl` and the MCP server send one mutation field per request and at
