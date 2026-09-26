@@ -16,10 +16,12 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
-// captureConnectorWriter records the tenant the sink scoped the write to and the marshaled payload.
+// captureConnectorWriter records the tenant the sink scoped the write to, the marshaled payload and
+// the broker dedup id it was published under.
 type captureConnectorWriter struct {
 	tenant  string
 	payload []byte
+	dedupID string
 	err     error
 }
 
@@ -30,6 +32,7 @@ func (w *captureConnectorWriter) WriteMessages(ctx context.Context, msgs ...mess
 	w.tenant, _ = dccore.TenantFromContext(ctx)
 	if len(msgs) > 0 {
 		w.payload = msgs[0].Value
+		w.dedupID = msgs[0].DedupID
 	}
 	return nil
 }
@@ -147,5 +150,18 @@ func TestConnectorClientPropagatesWriteError(t *testing.T) {
 	a := rules.Action{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{URL: "https://x/y"}}
 	if err := c.Dispatch(context.Background(), connReq(a)); err == nil {
 		t.Fatal("a write failure must be returned so the dispatcher retries")
+	}
+}
+
+// The connector request is published under its idempotency token as the broker dedup id, so a
+// retry's re-publish of it is stored once by connector-dispatch instead of being executed again.
+func TestConnectorClientPublishesUnderTheRequestToken(t *testing.T) {
+	w := &captureConnectorWriter{}
+	a := rules.Action{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{URL: "https://x/y"}}
+	if err := NewConnectorClient(w).Dispatch(context.Background(), connReq(a)); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if w.dedupID != "abc123" {
+		t.Fatalf("published under dedup id %q, want the request token %q", w.dedupID, "abc123")
 	}
 }

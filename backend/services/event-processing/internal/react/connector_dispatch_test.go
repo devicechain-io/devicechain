@@ -15,11 +15,13 @@ import (
 
 // fakeConnectorSink records connector-dispatch requests and can fail.
 type fakeConnectorSink struct {
-	got  []ConnectorRequest
-	fail bool
+	got       []ConnectorRequest
+	attempted []ConnectorRequest // every call, failed or not
+	fail      bool
 }
 
 func (s *fakeConnectorSink) Dispatch(_ context.Context, req ConnectorRequest) error {
+	s.attempted = append(s.attempted, req)
 	if s.fail {
 		return errors.New("connector publish failed")
 	}

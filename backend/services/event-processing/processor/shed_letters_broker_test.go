@@ -134,7 +134,9 @@ func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
 
 	var reactReader messaging.MessageReader
 	nmgr, ms, producer := b.brokerManager(t, func(m *messaging.NatsManager) error {
-		r, err := m.NewReader(streams.DerivedEvents, messaging.ReaderWithDeliverNew())
+		// The reader main.go builds, with the term gate held open: one slot, so this also
+		// shows a one-at-a-time reader drains a replayed backlog.
+		r, err := m.NewReader(streams.DerivedEvents, ReactReaderOptions(func() bool { return true })...)
 		reactReader = r
 		return err
 	})

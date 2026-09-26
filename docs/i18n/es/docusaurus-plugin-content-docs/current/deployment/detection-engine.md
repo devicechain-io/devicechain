@@ -70,10 +70,10 @@ escribiendo.
 
 Eso incluye las acciones que disparan las detecciones: un standby no despacha nada, de modo que el
 límite de salida de un inquilino en el motor se consume una sola vez, en la réplica que detecta.
-Cuando la partición cambia de réplica, la antigua y la nueva pueden despachar a la vez durante unos
-cinco segundos como máximo, y una llamada a un conector hecha dos veces en ese intervalo llega dos
-veces a su destino: DeviceChain transmite la clave de idempotencia al destino y no deduplica por sí
-mismo las llamadas a conectores.
+Cuando la partición cambia de réplica, la antigua y la nueva pueden despachar a la vez durante un
+breve intervalo. Una actualización de alarma o una solicitud a un conector enviada por ambas se
+almacena una sola vez en el bus de mensajes, y un comando lleva una clave que impide un segundo
+encolado; eso sí, cada réplica consume su propio límite de salida en ese intervalo.
 
 Con una sola réplica no hay presupuesto de interrupción de pods, y drenar su nodo detiene la
 detección hasta que el pod se reprograma. Un standby es la forma de evitarlo.
@@ -94,7 +94,7 @@ libera la partición y se salta ambas esperas.
 |---|---|
 | **Eventos ya procesados y confirmados** | No se pierde nada. Solo se acusa recibo de los mensajes *después* de que se confirme el punto de control que los incluye, así que todo lo que no llegó a confirmarse se vuelve a entregar. |
 | **Alarmas y comandos ya enviados** | Se vuelven a derivar y se reenvían, y luego se colapsan: una alarma es una actualización idempotente, y un comando lleva una clave que impide un segundo encolado. |
-| **Webhooks salientes y publicaciones a conectores ya enviados** | Se vuelven a derivar y **se envían de nuevo**. Nada del lado de la plataforma los colapsa; vea la sección de entrega más abajo. |
+| **Webhooks salientes y publicaciones a conectores ya enviados** | También se colapsan. Una detección que se vuelve a derivar dentro de 30 minutos la reconoce el bus de mensajes y no se despacha otra vez, y una solicitud que el motor vuelve a enviar en unos diez minutos (una detección que estaba en curso cuando el pod se detuvo) se almacena una sola vez. Tras una interrupción más larga, una solicitud puede **enviarse de nuevo**; vea la sección de entrega más abajo. |
 | **Conteos de disparo de las reglas** | **Se cuentan de más.** Un reprocesamiento vuelve a incrementarlos. La hora del *último disparo* sí es correcta; trate el conteo como un mínimo, no como un total exacto. |
 | **Ventanas abiertas, sostenimientos y temporizadores** | Se restauran desde el punto de control. Un sostenimiento que iba a medias sigue a medias. |
 | **Reglas que usan un umbral dinámico (basado en atributos)** | Vea la advertencia de abajo. |
@@ -117,11 +117,14 @@ una repetición y no con exactamente una entrega.
 - La actualización de una **alarma** es idempotente: una repetición aterriza en la misma alarma.
 - Un **comando** lleva una clave derivada del disparo, así que una repetición nunca encola un
   segundo comando.
-- **Un webhook saliente o una publicación a un conector** es la única acción que un reintento puede
-  duplicar de verdad. Cada solicitud lleva un encabezado `X-DC-Idempotency-Key` derivado del
-  disparo, pero colapsar por él es tarea del **endpoint receptor**. Para destinos de cola y de
-  broker la clave viaja como metadatos, sobre los que la mayoría de los brokers no puede actuar.
-  **Diseñe los receptores de salida para que sean idempotentes.**
+- **Un webhook saliente o una publicación a un conector** que el motor vuelve a enviar en unos diez
+  minutos (cada reintento de una misma detección) lo reconoce el bus de mensajes y se almacena una
+  sola vez. Pasado ese plazo, una solicitud todavía puede llegar dos veces a su destino: un
+  reprocesamiento tras una interrupción larga, o el servicio de conectores reintentando una llamada
+  cuya respuesta perdió. Cada solicitud lleva un encabezado `X-DC-Idempotency-Key` derivado del
+  disparo, así que colapsar ese duplicado restante es tarea del **endpoint receptor**. Para destinos
+  de cola y de broker la clave viaja como metadatos, sobre los que la mayoría de los brokers no
+  puede actuar. **Diseñe los receptores de salida para que sean idempotentes.**
 
 Cuando un sistema aguas abajo no está disponible, el mensaje se deja sin acusar recibo y se
 reintenta con un temporizador, en lugar de martillear el destino. Tras cinco intentos de entrega,
@@ -129,8 +132,10 @@ repartidos en unos cuatro minutos en total:
 
 - la solicitud de un **conector de salida** se envía a la **cola de mensajes no entregados**, de
   modo que se puede inspeccionar;
-- una **detección** cuyas acciones no se pudieron despachar **también se envía a esa cola**, con un
-  error ruidoso.
+- una **detección** con acciones que aun así no se pudieron despachar **también se envía a esa
+  cola**, con un error ruidoso. El detalle del mensaje nombra cada acción que falló, o que la
+  tasa de salida rechazó, en el último intento, por tipo y clave de idempotencia. Las demás acciones de la detección se ejecutaron, o se
+  omitieron deliberadamente (excluidas por su condición, no habilitadas o rechazadas por inválidas).
 
 :::caution Enviado a la cola es quedar registrado, no reintentado
 Nada vuelve a ejecutar un mensaje de esa cola. El registro existe para que un fallo sea visible y
@@ -150,6 +155,10 @@ inquilino de aproximadamente un mensaje por segundo (60 de golpe) y diez por seg
 acciones descartadas se cuentan y se resumen en un mensaje por inquilino y minuto. Las detecciones
 que el motor vuelve a publicar tras un reinicio las reconoce el bus de mensajes y se almacenan una
 sola vez dentro de una ventana de 30 minutos, así que no se despachan ni se cobran dos veces.
+Mientras una de las acciones de una detección sigue fallando, cada reintento vuelve a cobrar sus
+acciones de webhook y de conector contra la tasa de salida del inquilino, aunque el bus de mensajes
+almacene una sola vez la solicitud reenviada; así que un fallo sostenido, como un inquilino en su
+límite de comandos retenidos, puede provocar descartes en otras reglas del mismo inquilino.
 
 Un mensaje que un servicio abandona en su último intento (un pod detenido a mitad del
 procesamiento, o un manejador que se pasó de su ventana) también queda registrado, con el motivo
@@ -183,16 +192,12 @@ almacenarlos— y la retención es configurable por despliegue.
 
 La alerta `ReactPoisonDropping` existe exactamente para ese caso y debe tratarse como urgente.
 
-:::caution Una acción que falla se lleva por delante a las que van después
-Las acciones de una regla se ejecutan en el orden en que están listadas, y una acción que falla
-detiene al resto. En cada reintento, las acciones *anteriores* a ella se vuelven a ejecutar, y las
-*posteriores* siguen sin haberse ejecutado nunca; así que, si el evento acaba abandonándose, esas
-acciones posteriores no llegaron a ocurrir en absoluto. El mensaje de la cola registra que la
-detección se disparó y que sus acciones no; no las lleva a cabo.
-
-**Ordene las acciones de una regla de modo que la importante vaya primero.** Si una regla levanta
-una alarma y además llama a un webhook, poner la alarma primero significa que un endpoint inestable
-no puede costarle la alarma.
+:::note Cada acción se despacha por separado
+Las acciones de una regla no dependen unas de otras. Cada acción se intenta en cada entrega, así que
+una que sigue fallando (un comando para un dispositivo cuyo inquilino está en su límite de comandos
+retenidos, un webhook cuyo endpoint está caído) no retiene la alarma ni las demás acciones de la
+regla. Las acciones que ya tuvieron éxito se vuelven a enviar en cada reintento y se colapsan como se
+describe arriba. No hay forma de condicionar una acción al éxito de otra.
 :::
 
 ## Tiempos: qué significa «cuándo» {#timing-what-when-means}
@@ -543,7 +548,7 @@ exigiría recorrerlo entero en cada punto de control.
 | `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, queda suprimida la detección de ausencias **por silencio**; un evento posterior sigue disparando una ausencia vencida, como se explica arriba. |
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
-| `ReactPoisonDropping` | No se están despachando acciones tras agotar sus reintentos: las alarmas y los comandos no están ocurriendo. Las detecciones se envían a la cola de mensajes no entregados para que pueda ver cuáles, pero nada las reprocesa. Trátelo como urgente. |
+| `ReactPoisonDropping` | Algunas acciones de una detección fallaron en todos los intentos de entrega; normalmente command-delivery o el bus de mensajes estuvo sin servicio varios minutos. Las demás acciones se intentaron en cada entrega; cada mensaje de la cola nombra las que fallaron. Nada las reprocesa. Trátelo como urgente. |
 | `DeadLetterWriteLost` | Algo se abandonó **y** no se pudo escribir en el flujo de mensajes no entregados. Revise el bróker y el registro del servicio: una carta que el propio servicio se negó a escribir también termina aquí, igual que un mensaje de esa cola en el que el almacén de mensajes no entregados o la reconciliación de comandos agotó sus intentos. |
 | `DeadLetterStoreLosing` | Los mensajes llegaron al flujo pero no se pudieron escribir en el almacén, así que caducarán sin quedar registrados. Revise la base de datos del operador. |
 | `ReactConnectorEgressShedding` | Un inquilino supera su tasa de salida en la línea de tiempo en que su telemetría llegó a la plataforma, y sus acciones de salida se están descartando. Cada una se envía a la cola de mensajes no entregados con motivo `shed`, dentro de un presupuesto; léalas con `dcctl dead-letters`. Una puesta al día tras un reinicio no causa esta alerta. |

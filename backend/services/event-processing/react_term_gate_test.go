@@ -194,18 +194,18 @@ func TestStandbyDoesNotSplitTheDurable(t *testing.T) {
 	require.Zero(t, info.NumAckPending)
 }
 
-// When the term is lost, the REACT reader gives up what it had buffered, so a replica
-// that later regains the term does not hand out a copy another replica has since
-// dispatched.
+// When the term is lost, the REACT reader holds nothing another replica could since have
+// dispatched, so a replica that later regains the term hands out no stale copy.
 //
-// The reader is newReactReader — the function main calls. It reads one of three messages
-// (leaving two buffered), then makes ONE read that starts with the term lost and is still
-// in flight, parked, when the term comes back after more than two gate polls. That is how
-// the dispatcher's loop sees a term loss: a parked read does not return until the gate
-// reopens, so the release at the park is the only one that can run — a read ended by a
-// context timeout would be released by the end-of-stream path instead and show nothing
-// about the park. The stale copy is sequence 2 on its FIRST delivery; what may come out is
-// a redelivery of 2 or 3 (the broker hands a released message out again) or sequence 4.
+// The reader is newReactReader — the function main calls — and it is a ONE-SLOT capacity reader,
+// so the property now holds by construction rather than by a release: while the worker holds a
+// message nothing else is fetched, so there is no batch to buffer across a term loss. (It still
+// carries ReaderWithReleaseOnPark, which gives up the one message a fetch can return just as the
+// gate closes.) The test reads one of three messages and checks the broker delivered only that
+// one; then makes ONE read that starts with the term lost and is still in flight, parked, when
+// the term comes back after more than two gate polls, and checks the parked read fetched nothing.
+// What comes out after the term returns is then sequence 2 on its first delivery — a message this
+// replica never held before the loss.
 func TestReactReaderReleasesItsBufferOnTermLoss(t *testing.T) {
 	f := startReactFixture(t)
 	nmgr := f.newManager(t)
@@ -221,9 +221,10 @@ func TestReactReaderReleasesItsBufferOnTermLoss(t *testing.T) {
 	first, err := reader.ReadMessage(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), first.StreamSeq)
+	require.Equal(t, uint64(1), f.consumer(t).Delivered.Consumer,
+		"the reader fetched past the one message its worker holds: a batch is buffered, and "+
+			"a term loss would strand it")
 	require.NoError(t, first.Ack())
-	require.Equal(t, uint64(3), f.consumer(t).Delivered.Consumer,
-		"the first read did not fetch all three, so nothing is buffered and this test shows nothing")
 
 	held.Store(false)
 	f.publish(t, nmgr, 1)
@@ -242,17 +243,15 @@ func TestReactReaderReleasesItsBufferOnTermLoss(t *testing.T) {
 		t.Fatalf("a read returned while the term was not held (err=%v)", r.err)
 	default:
 	}
+	require.Equal(t, uint64(1), f.consumer(t).Delivered.Consumer,
+		"a parked reader fetched while the term was not held")
 	held.Store(true)
 
 	r := <-done
 	require.NoError(t, r.err)
-	next := r.msg
-	require.False(t, next.StreamSeq == 2 && next.NumDelivered == 1,
-		"the reader handed out the copy it had buffered before losing the term")
-	if next.StreamSeq != 4 {
-		require.Contains(t, []uint64{2, 3}, next.StreamSeq)
-		require.Equal(t, 2, next.NumDelivered, "a buffered message came out on its first delivery")
-	}
+	require.Equal(t, uint64(2), r.msg.StreamSeq, "the term holder must resume at the next undelivered message")
+	require.Equal(t, 1, r.msg.NumDelivered)
+	r.msg.Release()
 }
 
 // A standby's dispatcher runs parked for as long as the other replica leads, so Stop has

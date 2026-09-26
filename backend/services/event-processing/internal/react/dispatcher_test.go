@@ -6,6 +6,7 @@ package react
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -25,14 +26,18 @@ func (f fakeResolver) Resolve(context.Context, string) (rules.Rule, bool, error)
 }
 
 // fakeSink records the command requests it received and can fail a bounded number of times.
+// attempted records EVERY call, failed or not, so a test can see that a failing sink was reached
+// and what it was sent.
 type fakeSink struct {
 	sent      []CommandRequest
+	attempted []CommandRequest
 	failFirst int // fail this many Send calls (transient), then succeed
 	calls     int
 }
 
 func (s *fakeSink) Send(_ context.Context, req CommandRequest) error {
 	s.calls++
+	s.attempted = append(s.attempted, req)
 	if s.calls <= s.failFirst {
 		return errors.New("command-delivery unreachable")
 	}
@@ -42,11 +47,13 @@ func (s *fakeSink) Send(_ context.Context, req CommandRequest) error {
 
 // fakeAlarmSink records alarm requests (raise and clear) and can fail.
 type fakeAlarmSink struct {
-	raised []AlarmRequest // every dispatched request, both edges — the name is historical
-	fail   bool
+	raised    []AlarmRequest // every dispatched request, both edges — the name is historical
+	attempted []AlarmRequest // every call, failed or not
+	fail      bool
 }
 
 func (s *fakeAlarmSink) Dispatch(_ context.Context, req AlarmRequest) error {
+	s.attempted = append(s.attempted, req)
 	if s.fail {
 		return errors.New("alarm dispatch failed")
 	}
@@ -386,33 +393,39 @@ func TestDispatchSendCommandDisabled(t *testing.T) {
 	}
 }
 
-// TestDispatchMultiActionPartialRetry proves that when a later action fails, the whole event Retries;
-// on the redelivery the already-sent prefix reuses its deterministic tokens (command-delivery
-// collapses them) and the failed action is reached again.
+// TestDispatchMultiActionPartialRetry proves that when the FIRST action fails, the action after it is
+// still dispatched on the same attempt, the event Retries, and the failure names the action that
+// failed. On the redelivery the already-sent action reuses its deterministic token (command-delivery
+// collapses it) and the failed one is attempted again.
 func TestDispatchMultiActionPartialRetry(t *testing.T) {
 	rule := rules.Rule{ID: "acme/p@1/r1", Name: "r", Type: rules.TypeThreshold,
 		Actions: []rules.Action{
 			{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "a"}},
 			{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "b"}},
 		}}
-	// Fail the 2nd Send once (the first action's send at call 1 succeeds, the second at call 2 fails).
-	sink := &fakeSink{failFirst: 0}
-	// Custom failure: fail only call #2.
-	failing := &failOnCallSink{failCall: 2}
-	m := newFakeMetrics()
-	d := NewDispatcher(fakeResolver{rule: rule, found: true}, failing, nil, nil, nil, m)
-	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Retry {
-		t.Fatalf("a failed 2nd action must Retry the whole event, got %v", out)
+	actionA := rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "a"}}
+	actionB := rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "b"}}
+	failing := &failOnCallSink{failCall: 1} // the FIRST action's send fails
+	d := NewDispatcher(fakeResolver{rule: rule, found: true}, failing, nil, nil, nil, newFakeMetrics())
+
+	res := d.Dispatch(context.Background(), evt())
+	if res.Outcome != Retry {
+		t.Fatalf("a failed 1st action must Retry the whole event, got %v", res.Outcome)
 	}
-	// Redelivery: action 0 re-sends (same token), action 1 now succeeds.
+	if len(failing.sent) != 1 || failing.sent[0].Command != "b" || failing.sent[0].Token != idempotencyToken(evt(), actionB) {
+		t.Fatalf("action b must be dispatched on the SAME attempt its sibling failed on: %+v", failing.sent)
+	}
+	if want := []FailedAction{{Kind: "sendCommand", Token: idempotencyToken(evt(), actionA)}}; !reflect.DeepEqual(res.Failed, want) {
+		t.Fatalf("Failed = %+v, want %+v", res.Failed, want)
+	}
+	// Redelivery: both are attempted again — a succeeds now, b re-sends under its own token.
 	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
 		t.Fatalf("redelivery should complete, got %v", out)
 	}
-	actionA := rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "a"}}
-	if failing.sent[0].Command != "a" || failing.sent[0].Token != idempotencyToken(evt(), actionA) {
-		t.Fatalf("action a must reuse its token across the retry: %+v", failing.sent[0])
+	if len(failing.sent) != 3 || failing.sent[1].Token != idempotencyToken(evt(), actionA) ||
+		failing.sent[2].Token != failing.sent[0].Token {
+		t.Fatalf("the redelivery must re-send both actions under their own tokens: %+v", failing.sent)
 	}
-	_ = sink
 }
 
 // failOnCallSink fails exactly the Nth Send call, recording the rest.

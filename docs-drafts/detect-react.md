@@ -555,17 +555,25 @@ and is not. For a guard or a template, failing closed means *skip this action an
 (`:474-481`): the side effect is permanently dropped, never retried, and the only trace is a log
 line. A rule whose template has a defect does not wedge — it silently does nothing, forever.
 
-The `Retry` path aborts at the **failing action** and returns (`:334-339`). Since the chain is
-re-resolved per attempt, a redelivery re-runs the already-dispatched prefix — which is why the
-idempotency token is **content-addressed rather than index-addressed** (`:671-688`): after an author
-reorders actions, an index key would re-send the action now at the old index under the old action's
-token, swallowing one dispatch and duplicating another. The guard string is appended to the token
-**only when non-empty** (`:706-709`) so adding guard support did not re-key every in-flight command
-at the deploy boundary.
+`Dispatch` attempts **every** action on every delivery: a sink failure is recorded in
+`Result.Failed` as `{Kind, Token}` and the loop carries on, and the outcome is `Retry` exactly when
+that list is non-empty (or the rule could not be read). A redelivery attempts every action again, and
+the ones that already succeeded collapse on their tokens: command-delivery replays a known token, and
+the alarm and connector sinks publish with the token as the broker dedup id onto streams whose
+duplicate window (`RedeliveryDuplicateWindowSeconds`, in `backend/core/streams/streams.go`) covers
+the redelivery span. The alarm's dedup id is edge-scoped (`alarmToken`), because a raise and a resolve
+of one rule can share an event time. Since the chain is re-resolved per attempt, the idempotency token
+is **content-addressed rather than index-addressed**: after an author reorders actions, an index key
+would re-send the action now at the old index under the old action's token, swallowing one dispatch
+and duplicating another. The guard string is appended to the token **only when non-empty** so adding
+guard support did not re-key every in-flight command at the deploy boundary.
 
-The consequence on the *other* side of the failing action is the one to carry away, and it is worse
-than duplication: siblings ordered **after** the failure never dispatch on any attempt, and when the
-event is finally acked at the delivery cap they are lost outright. See §14.
+The window rests on each delivery being handled within its own AckWait, and the REACT consumer makes
+that true rather than assuming it: it reads through a one-slot capacity reader
+(`ReactReaderOptions`) and bounds every sink call by the delivery's ack deadline, so an attempt
+against hung sinks ends with its delivery. At the cap the exhausted dead letter's detail names every
+action that failed (and every connector action shed) on the final attempt, as
+`kind/failed/token` / `kind/shed/token`. See §14.
 
 Guards are consulted on the rising edge only, and **never on a `raiseAlarm`'s falling edge**
 (`:408-415`) — gating the clear would strand an alarm active forever. Guards and payload templates
@@ -642,13 +650,10 @@ as an offline fleet returns. The default direction is the point: an unrecognised
 retries, whereas a wrongly-permanent classification drops an actuation outright.
 
 So a typo'd command name on a constrained profile now costs **one** attempt, not five, and its
-siblings are unaffected — a permanent rejection returns `Done`, so the chain continues past it on the
-same attempt. What follows applies to a sink failure REACT must **retry**. `Dispatch` returns at the
-failing action (`internal/react/dispatcher.go:334-339`), so a redelivery re-fires only the siblings
-ordered **before** it. Anything ordered **after** never dispatches on any attempt, and at the cap the
-event is dropped and acked with those actions never having run. Put the `raiseAlarm` first and a
-command-delivery outage costs five duplicate raises, which the contributor upsert collapses; put it
-second and the same outage means the alarm is never raised at all.
+siblings are unaffected — a permanent rejection records no failure. A sink failure REACT must
+**retry** no longer affects its siblings either: every action is attempted on every delivery, so a
+command-delivery outage costs a re-published raise per retry, which the raise-alarm stream's
+duplicate window stores once, and never costs the raise itself.
 
 ### 10c. Connector dispatch
 
@@ -799,21 +804,23 @@ it over-reaches are worth naming, because each is a real failure mode:
 | Stage | On failure | Terminal fate |
 |---|---|---|
 | DETECT applying an event | nothing acked, nothing committed | redelivered |
-| REACT, any sink failure it must **retry** | the event is left **unacked** — never negatively acknowledged, because that would burn the whole delivery cap in about a millisecond (`react_dispatcher.go:162-165`) | after the cap: **dropped, acked, counted — no dead letter** (`:155-160`) |
+| REACT, any sink failure it must **retry** | the event is left **unacked** — never negatively acknowledged, because that would burn the whole delivery cap in about a millisecond; its other actions are still attempted on the same delivery | after the cap: **dead-lettered** (reason `exhausted`, detail naming each action that failed on the final attempt), acked and counted |
 | REACT, a send-command the downstream **permanently rejected** | never enters the retry path at all: the action is dropped, logged at warn and counted on the first attempt (`internal/react/dispatcher.go:373-391`) | that one action is lost; its siblings dispatch and the event is acked |
 | device-management raise-alarm consumer | left unacked | dropped past the cap with a loud error. A dropped **raise** will not re-emit until the condition falls and re-breaches; a dropped **resolve** strands the alarm |
-| outbound-connectors | left unacked | **dead-lettered** — the only one of these three that is |
+| outbound-connectors | left unacked | **dead-lettered**, with the request kept verbatim on connector-dispatch.dead |
 
 The dead-letter path stamps a reason header so a replayable rate-shed is distinguishable from genuine
 poison, and when the dead-letter write itself fails at the cap it records an explicit alertable
 **loss** rather than the false "will retry"
 (`backend/services/outbound-connectors/processor/consumer.go:344-405`).
 
-**Connector dispatch is the one sink a REACT retry can genuinely duplicate.** Alarms are idempotent
-upserts and commands dedup on the token, but a redelivery re-publishes a *fresh* dispatch message —
-and there is no consumer-side dedup, no dedup window on the stream, and no dedup id on the producer.
-Collapsing to one execution is the remote endpoint's job, via the `X-DC-Idempotency-Key` header. For
-the MQTT and AWS targets the key is only message metadata, which those outputs cannot act on.
+**A REACT retry's connector re-publish is stored once.** The producer sets the action's token as the
+dedup id and `connector-dispatch` declares the redelivery-span window, so a retry of one detection
+does not reach the connectors service again. What remains duplicable is a replay older than
+derived-events' 30-minute window, a re-publish past connector-dispatch's own window, and the
+connectors service's own at-least-once execution (its redelivery re-runs the call). Collapsing those
+is the remote endpoint's job, via the `X-DC-Idempotency-Key` header. For the MQTT and AWS targets the
+key is only message metadata, which those outputs cannot act on.
 
 ## 12. The natural-language door
 
@@ -957,14 +964,11 @@ Ordered by what they cost.
    thing that would close this, not something that exists. `device-roster` (`:376-380`) has the same
    shape, with absence-arming for never-reported devices as the casualty.
 3. **Dynamic thresholds are not replay-deterministic** — §5.
-4. **A retryable REACT failure silently loses every action ordered after the failing one.**
-   `Dispatch` returns at the failing action (`internal/react/dispatcher.go:334-339`), so a
-   redelivery re-runs the prefix and never reaches the suffix; at the delivery cap the event is
-   dropped and acked with those actions never dispatched. This is partial **loss**, not the bounded
-   duplication the prefix re-run suggests, and it is silent: the drop is counted as one poison event,
-   not as N undelivered actions. A *permanently rejected* send-command no longer triggers this — it
-   returns `Done` and the chain continues (§10b) — which narrows the gap to failures REACT must
-   retry, and does nothing about them.
+4. **An action that fails on every delivery is lost at the cap — but only that action.** Every
+   other action of the detection is attempted on every delivery, and the exhausted dead letter names
+   the lost one by kind and token. Nothing replays it. While it keeps failing, each retry re-charges
+   the detection's connector actions against the tenant's outbound gate (the re-publish is deduped,
+   the charge is not), so a sustained failure can shed the same tenant's other connector actions.
 5. ~~**Duration's late non-matching event tears down a hold with no event-time guard.**~~ — **CLOSED.**
    A Duration series is now an event-time-ordered `durState` — an open run or the break that ended
    the last one — in `backend/services/event-processing/internal/detect/core/duration.go`

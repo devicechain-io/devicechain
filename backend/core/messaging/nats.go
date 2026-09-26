@@ -62,7 +62,11 @@ const (
 	// fields are compared against an existing durable on AddConsumer — so changing it
 	// makes a non-fresh cluster crash-loop on startup rather than reconfigure. Read it,
 	// derive from it, do not try to vary it per consumer.
-	AckWait = 60 * time.Second
+	//
+	// The number itself is declared in core/streams (ConsumerAckWaitSeconds) so that a
+	// stream's dedup window can be derived from it in that import-free leaf. This is still
+	// the one name every caller reads.
+	AckWait = time.Duration(streams.ConsumerAckWaitSeconds) * time.Second
 
 	// MaxDeliver bounds redelivery of a poison message: after this many delivery
 	// attempts the broker stops redelivering, and consumers route the message to
@@ -109,7 +113,11 @@ const (
 	// handle the arm already holds), not by remembering to update call sites.
 	// TestEveryStreamGetsTheSameRetryContract fails if the divergence is ever
 	// introduced silently.
-	MaxDeliver = 5
+	//
+	// The number itself is declared in core/streams (ConsumerMaxDeliver) so that a
+	// stream's dedup window can be derived from it in that import-free leaf. This is still
+	// the one name every caller reads.
+	MaxDeliver = streams.ConsumerMaxDeliver
 
 	// readerMaxAckPending pins the consumer's max in-flight unacked messages. It
 	// matches the value the legacy PullSubscribe path set implicitly (its delivery
