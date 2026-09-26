@@ -2635,7 +2635,8 @@ intenta en cada entrega, pase lo que pase con las demás.
 - **El motor de detección ahora obtiene del bus de mensajes una detección cada vez,** así que una
   detección nunca queda esperando detrás de otra lenta el tiempo suficiente para entregarse dos
   veces, y un intento contra un servicio que no responde termina cuando termina su entrega en lugar
-  de prolongarse.
+  de prolongarse. Cada acción recibe su parte de ese tiempo, así que los comandos a un servicio que
+  no responde no pueden agotarlo antes de que se active una alarma listada detrás de ellos.
 
 ### La transición única a la ingesta duradera
 

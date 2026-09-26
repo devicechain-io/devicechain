@@ -2461,7 +2461,9 @@ action is now attempted on every delivery, whatever happens to the others.
   `ReactPoisonDropping` alert's summary and description are reworded to match.
 - **The detection engine now fetches one detection at a time from the message bus,** so a detection
   is never left waiting behind a slow one long enough to be delivered twice, and an attempt against
-  a service that does not answer ends when its delivery does instead of running on.
+  a service that does not answer ends when its delivery does instead of running on. Each action
+  gets its share of that time, so commands to a service that does not answer cannot use it all up
+  before an alarm listed after them is raised.
 
 ### The one-time durable-ingest cutover
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -244,5 +245,60 @@ func TestARetriedDetectionChargesItsConnectorActionsOnEveryAttempt(t *testing.T)
 		if r.Token != conn.got[0].Token {
 			t.Fatalf("every re-publish must carry the one token its stream collapses on: %+v", conn.got)
 		}
+	}
+}
+
+// hangingCommandSink is a command-delivery that answers nothing: each Send waits until its context
+// ends and then fails, the way the real client does at its own timeout.
+type hangingCommandSink struct{ calls int }
+
+func (s *hangingCommandSink) Send(ctx context.Context, _ CommandRequest) error {
+	s.calls++
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// deadlineAlarmSink fails a raise whose context has already ended, the way a publish on an expired
+// context does, and records the ones it accepted.
+type deadlineAlarmSink struct{ raised int }
+
+func (s *deadlineAlarmSink) Dispatch(ctx context.Context, _ AlarmRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.raised++
+	return nil
+}
+
+// Every sink call is bounded by the delivery's deadline, and ONE deadline for the whole list would
+// let the actions listed first spend it: commands that hang to their timeout, listed before an
+// alarm, would leave the alarm an expired context on every delivery, and it would never be raised —
+// the order dependence independent dispatch removes, back under hung sinks instead of failing ones.
+// Each action gets its share of what is left, so the alarm after two hung commands is still raised,
+// and only the commands are reported failed.
+func TestAHungActionCannotSpendTheTimeOfTheActionsAfterIt(t *testing.T) {
+	second := rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "setMode"}}
+	rule := independentRule()
+	rule.Actions = []rules.Action{indCmd, second, indAlarm}
+	cmd := &hangingCommandSink{}
+	alarm := &deadlineAlarmSink{}
+	d := NewDispatcher(fakeResolver{rule: rule, found: true}, cmd, alarm, nil, nil, newFakeMetrics())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	res := d.Dispatch(ctx, evt())
+
+	if cmd.calls != 2 {
+		t.Fatalf("attempted %d commands, want both", cmd.calls)
+	}
+	if alarm.raised != 1 {
+		t.Fatalf("the alarm after two hung commands was raised %d times, want 1: the commands spent its time", alarm.raised)
+	}
+	want := []FailedAction{
+		{Kind: "sendCommand", Token: idempotencyToken(evt(), indCmd)},
+		{Kind: "sendCommand", Token: idempotencyToken(evt(), second)},
+	}
+	if !reflect.DeepEqual(res.Failed, want) {
+		t.Fatalf("Failed = %+v, want only the two commands %+v", res.Failed, want)
 	}
 }

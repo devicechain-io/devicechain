@@ -196,8 +196,11 @@ La alerta `ReactPoisonDropping` existe exactamente para ese caso y debe tratarse
 Las acciones de una regla no dependen unas de otras. Cada acción se intenta en cada entrega, así que
 una que sigue fallando (un comando para un dispositivo cuyo inquilino está en su límite de comandos
 retenidos, un webhook cuyo endpoint está caído) no retiene la alarma ni las demás acciones de la
-regla. Las acciones que ya tuvieron éxito se vuelven a enviar en cada reintento y se colapsan como se
-describe arriba. No hay forma de condicionar una acción al éxito de otra.
+regla. Lo mismo vale para un servicio que no responde en absoluto: cada intento se limita al tiempo
+que queda antes de que el mensaje se vuelva a entregar, y cada acción recibe su parte de lo que
+queda, así que las acciones listadas primero no pueden agotar el tiempo de las que van detrás. Las
+acciones que ya tuvieron éxito se vuelven a enviar en cada reintento y se colapsan como se describe
+arriba. No hay forma de condicionar una acción al éxito de otra.
 :::
 
 ## Tiempos: qué significa «cuándo» {#timing-what-when-means}

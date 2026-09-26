@@ -201,7 +201,9 @@ func TestStandbyDoesNotSplitTheDurable(t *testing.T) {
 // so the property now holds by construction rather than by a release: while the worker holds a
 // message nothing else is fetched, so there is no batch to buffer across a term loss. (It still
 // carries ReaderWithReleaseOnPark, which gives up the one message a fetch can return just as the
-// gate closes.) The test reads one of three messages and checks the broker delivered only that
+// gate closes. That path is NOT exercised here or anywhere else — no test times a gate closing
+// during a fetch — so removing the option would pass; see ReactReaderOptions for why that costs a
+// delay, not a loss.) The test reads one of three messages and checks the broker delivered only that
 // one; then makes ONE read that starts with the term lost and is still in flight, parked, when
 // the term comes back after more than two gate polls, and checks the parked read fetched nothing.
 // What comes out after the term returns is then sequence 2 on its first delivery — a message this

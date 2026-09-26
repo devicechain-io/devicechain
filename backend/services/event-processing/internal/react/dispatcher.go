@@ -396,8 +396,15 @@ func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink
 // the loop.
 //
 // ctx bounds every sink call. The consumer gives it the delivery's ack deadline, so an attempt
-// against hung sinks ends with its delivery instead of running on into the next one; an action
-// reached after that deadline fails fast and is recorded like any other failure.
+// against hung sinks ends with its delivery instead of running on into the next one. Within that
+// deadline each action gets its SHARE (actionContext): the time left divided by the actions left,
+// so a sink that hangs to its own timeout cannot spend the time of the actions listed after it. One
+// deadline for the whole list would bring the order dependence back under hung rather than failing
+// sinks: a command-delivery that answers nothing times each sendCommand out at its client's own
+// limit, and a few of those listed before a raiseAlarm would use up every delivery's deadline, so
+// the alarm would fail fast on an expired context on every attempt and never be raised. A share is
+// a ceiling, not a reservation — an action that finishes early leaves its unused time to the ones
+// after it.
 //
 // EDGE ROUTING (ADR-057). The detection's edge selects which side effects fire:
 //   - a RAISED (rising) edge dispatches every action — raiseAlarm raises/escalates, sendCommand sends.
@@ -421,8 +428,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Resu
 		return Result{Outcome: Done}
 	}
 	var res Result
-	for _, a := range rule.Actions {
-		d.dispatchAction(ctx, ev, rule, a, &res)
+	for i, a := range rule.Actions {
+		actx, cancel := actionContext(ctx, len(rule.Actions)-i)
+		d.dispatchAction(actx, ev, rule, a, &res)
+		cancel()
 	}
 	// The outcome is a function of the recorded failures, not a second channel that could
 	// disagree with them.
@@ -431,6 +440,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Resu
 		res.Outcome = Retry
 	}
 	return res
+}
+
+// actionContext bounds one action's sink call to its share of ctx's deadline: the time left divided
+// by remaining, the number of actions not yet attempted including this one. A ctx with no deadline
+// is returned as is, and so is one whose deadline has already passed, since there is nothing left
+// to share and the call fails fast on it either way.
+func actionContext(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || remaining < 1 {
+		return ctx, func() {}
+	}
+	left := time.Until(deadline)
+	if left <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, left/time.Duration(remaining))
 }
 
 // dispatchAction dispatches one action for the event's edge (see Dispatch). A sink failure is
@@ -867,6 +892,11 @@ func ruleMetric(rule rules.Rule) string {
 // resolve as a duplicate of the raise and strand the alarm ACTIVE. idempotencyToken itself is NOT
 // changed: it is durable (command-delivery stores it), and commands and connector calls fire on the
 // rising edge only, so they never need the edge.
+//
+// The token names the edge, not the request's content, so a re-send collapses even if what it
+// would carry has changed: a profile republish that changes a rule's severity between two deliveries
+// of one detection has the second delivery's raise dropped as a duplicate, and the alarm keeps the
+// severity of the first. The window is minutes and the change is the author's, so this is accepted.
 func alarmToken(ev runtime.DerivedEvent, a rules.Action) string {
 	return hashToken(idempotencyToken(ev, a) + "\x00" + edgeOrRaised(ev.Edge))
 }

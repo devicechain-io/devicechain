@@ -161,7 +161,15 @@ func (rd *ReactDispatcher) run() {
 // while its first copy was still queued, both copies would be handled, many minutes apart, and the
 // second re-publish could land past the window. One slot matches the one serial worker: a delivery
 // is fetched only when the previous one is finished, and a copy whose clock ran out in the buffer
-// is never handed out. The cost is one fetch round trip per derived event.
+// is never handed out. The cost is one fetch round trip per derived event on the one serial worker,
+// which caps REACT's drain rate at one event per round trip plus its dispatch. That ceiling has not
+// been measured against real sinks; measure it before relying on REACT to drain a large backlog.
+//
+// ReaderWithReleaseOnPark is not pinned by a test here. With one slot the reader holds at most one
+// fetched message, and the release path runs only when the term gate closes during a fetch, which
+// no test times. Removing it would leave a message fetched in that instant unacked until its
+// AckWait, not lost: the other replica cannot be handed it before then either, and the re-publishes
+// of a later delivery collapse on their tokens.
 func ReactReaderOptions(held func() bool) []messaging.ReaderOption {
 	return []messaging.ReaderOption{
 		messaging.ReaderWithDeliverNew(),
@@ -241,10 +249,16 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 	// Every sink call of this attempt is bounded by the delivery's ack deadline — the moment the
 	// broker hands the event to the next delivery. An attempt against hung sinks therefore ends with
 	// its delivery rather than running into the next one, which is what keeps the redelivery span
-	// inside the duplicate window the alarm and connector streams declare. The letters and the ack
-	// below run on tctx, WITHOUT the deadline: the dead letter is written exactly when the budget
-	// has run out, and cutting it off then would lose the one record the cap exists to keep. A
-	// message from a reader without capacity carries no deadline and dispatches on tctx as before.
+	// inside the duplicate window the alarm and connector streams declare. The deadline is for the
+	// sink calls only. The letters below are written exactly when it may have run out — the
+	// exhausted letter after a final attempt against hung sinks, a shed letter after an attempt
+	// whose sinks answered at the last moment — so they are handed tctx, which has no deadline.
+	// That is not what keeps them, though: the dead-letter sink detaches every write from its
+	// caller's deadline and cancellation (core/deadletter, detach), so a letter handed the
+	// deadlined context would be written too. The guarantee is pinned end to end, over a real
+	// broker, by TestTheExhaustedLetterOutlivesTheDeliveryDeadline and
+	// TestShedLettersOutliveTheDeliveryDeadline. A message from a reader without capacity carries
+	// no deadline and dispatches on tctx as before.
 	dctx := tctx
 	if deadline := msg.AckDeadline(); !deadline.IsZero() {
 		var cancel context.CancelFunc

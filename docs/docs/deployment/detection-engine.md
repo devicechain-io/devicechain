@@ -178,9 +178,12 @@ The `ReactPoisonDropping` alert exists for exactly that case and should be treat
 :::note Each action is dispatched on its own
 A rule's actions do not depend on each other. Every action is attempted on every delivery, so one
 that keeps failing — a command for a device whose tenant is at its held-command limit, a webhook
-whose endpoint is down — does not hold back the alarm or the rule's other actions. Actions that
-already succeeded are sent again on each retry and collapsed as described above. There is no way to
-make one action conditional on another one succeeding.
+whose endpoint is down — does not hold back the alarm or the rule's other actions. The same holds
+for a service that does not answer at all: each attempt is limited to the time before the message
+would be delivered again, and each action gets its share of what is left, so actions listed first
+cannot use up the time of the ones after them. Actions that already succeeded are sent again on each
+retry and collapsed as described above. There is no way to make one action conditional on another
+one succeeding.
 :::
 
 ## Timing: what "when" means
