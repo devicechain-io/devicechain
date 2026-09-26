@@ -3,7 +3,8 @@
 
 // Package rdbtest is support for harnesses that run a service's real database startup
 // against a throwaway PostgreSQL: integration tests, and the schema tools under
-// backend/tools.
+// backend/tools. It also holds statement-counting support (StatementCounter) for tests
+// and benchmarks that assert what a write path costs.
 //
 // 🔴 NOTHING A SERVICE RUNS MAY IMPORT IT. No service creates its database — the
 // instance database exists before any service starts, created by dcctl and owned by
