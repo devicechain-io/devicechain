@@ -491,10 +491,26 @@ func TestParkReasonFollowsTheDevicesCurrentCause(t *testing.T) {
 		require.Eventually(t, ack.acked, time.Second, time.Millisecond, "%s's park never settled", token)
 		require.Equal(t, statusParked, h.store.status(token))
 	}
+	// A park's settle asks for a drain turn, and it comes after the ack parkOffline waits for.
+	// That turn must find the device OFFLINE and leave the gate up; if the device reads live
+	// before the turn looks, the turn drains the parked command and lifts the gate, and what the
+	// subtest does next meets a device that is no longer gated. So wait until the turn has been
+	// taken, then run an op for another device on the same (only) shard: its worker starts that
+	// op only once the turn has ended. The fence's op, x1, is the first in the order.
+	parkTurnEnded := func(t *testing.T, h *harness) {
+		t.Helper()
+		require.Eventually(t, func() bool { return h.drainTaken("pump-1") }, time.Second, time.Millisecond,
+			"the park never settled into a drain turn")
+		h.look.set("pump-x", ReachLive)
+		h.send("x1", "pump-x")
+		h.waitOrder("x1")
+		require.True(t, h.gated("pump-1"), "the turn found the device offline and left its gate up")
+	}
 
 	t.Run("a command during the bind's drain", func(t *testing.T) {
 		h := newHarness(t, 1, nil)
 		parkOffline(t, h, "c1")
+		parkTurnEnded(t, h)
 		h.look.set("pump-1", ReachLive)
 		holding, release := h.holdOps()
 		defer release()
@@ -508,23 +524,14 @@ func TestParkReasonFollowsTheDevicesCurrentCause(t *testing.T) {
 		assert.Equal(t, []float64{1, 1, 1}, []float64{offline, bind, served},
 			"c1 was parked offline; c2, sent to a connected device during its bind drain, is a bind park")
 		release()
-		h.waitOrder("c1", "c2")
+		h.waitOrder("x1", "c1", "c2")
 	})
 
 	t.Run("a command after the reconnect, before its wake lands", func(t *testing.T) {
 		h := newHarness(t, 1, nil)
 		parkOffline(t, h, "c1")
-		// c1's park settle asks for a drain turn, which must find the device OFFLINE and leave the
-		// gate up. If the device reads live before that turn looks, the turn drains c1 and lifts
-		// the gate, and c2 goes straight to the device. So wait until the turn has been taken,
-		// then run an op for another device on the same (only) shard: its worker starts that op
-		// only once the turn has ended.
-		require.Eventually(t, func() bool { return h.drainTaken("pump-1") }, time.Second, time.Millisecond,
-			"c1's park never settled into a drain turn")
-		h.look.set("pump-x", ReachLive)
-		h.send("x1", "pump-x")
-		h.waitOrder("x1")
-		require.True(t, h.gated("pump-1"), "the turn found the device offline and left its gate up")
+		// Else the park's turn could drain c1, and c2 would go straight to the device.
+		parkTurnEnded(t, h)
 		h.look.set("pump-1", ReachLive) // the conn table says live; the wake has not run yet
 
 		h.send("c2", "pump-1")
