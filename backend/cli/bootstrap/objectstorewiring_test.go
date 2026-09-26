@@ -169,16 +169,21 @@ func TestTheObjectStoreRolloutBoundLeavesTimeToRollOut(t *testing.T) {
 }
 
 // 🔴 THE VALUE, NOT JUST THE KEY. splitwiring holds that the cluster root DECLARES
-// backup_object_store_deployment; a declaration whose value is `null` satisfies that
-// and switches the check off on every cluster, because null is how the root says "no
-// in-cluster store". Hold the whole chain from the Deployment to the output.
+// backup_object_store_deployment; a declaration whose value can be null satisfies
+// that and fails every install without an in-cluster store, because a null root
+// output is not stored in state and reaches dcctl as a missing one. Hold the whole
+// chain from the Deployment to the output, including the explicit "no store" arm.
 func TestTheObjectStoreOutputIsTheStoresDeployment(t *testing.T) {
 	cluster := assets.OpenTofuCluster()
 
-	body := tfBlockBody(t, readTF(t, cluster, "outputs.tf"), `output "backup_object_store_deployment"`)
-	if got, want := attrValue(body, "value"), "one(module.object_store[*].deployment)"; got != want {
-		t.Errorf("the cluster root's backup_object_store_deployment value is %q, want %q; anything "+
-			"else can read as \"no in-cluster store\" and skip the rollout check", got, want)
+	body := squash(tfBlockBody(t, readTF(t, cluster, "outputs.tf"), `output "backup_object_store_deployment"`))
+	want := `value = length(module.object_store) == 0 ? { in_cluster = false namespace = "" name = "" } : { ` +
+		`in_cluster = true namespace = module.object_store[0].deployment.namespace ` +
+		`name = module.object_store[0].deployment.name }`
+	if !strings.HasSuffix(body, want) {
+		t.Errorf("the cluster root's backup_object_store_deployment is\n  %s\nwant its value to be\n  %s\n"+
+			"a null value is dropped from state and fails every install without a store; any other "+
+			"value can read as \"no in-cluster store\" and skip the rollout check", body, want)
 	}
 
 	mod := tfBlockBody(t, readTF(t, cluster, "main.tf"), `module "object_store"`)

@@ -167,11 +167,23 @@ output "backup_bucket_tsdb" {
   value       = local.backups_on ? var.backup_bucket_tsdb : ""
 }
 
-# The object store Deployment dcctl confirms has rolled out after every apply, or
-# null when this root runs no in-cluster store (backups off, or an external
-# destination). See the module's `deployment` output for why an apply succeeding
-# is not enough.
+# The object store Deployment dcctl confirms has rolled out after every apply. See
+# the module's `deployment` output for why an apply succeeding is not enough.
+#
+# 🔴 NEVER NULL. A root output whose value is null is not stored in state, so
+# `output -json` omits it -- and dcctl reads a missing output as an error, not as
+# "no store", since that is also what a root that stopped declaring it looks like.
+# "No in-cluster store" (backups off, or an external destination) is therefore said
+# explicitly, with in_cluster = false and empty names.
 output "backup_object_store_deployment" {
-  description = "Namespace and name of the in-cluster backup object store Deployment; null when there is none."
-  value       = one(module.object_store[*].deployment)
+  description = "Whether this root runs an in-cluster backup object store, and if so the namespace and name of its Deployment. Never null."
+  value = length(module.object_store) == 0 ? {
+    in_cluster = false
+    namespace  = ""
+    name       = ""
+    } : {
+    in_cluster = true
+    namespace  = module.object_store[0].deployment.namespace
+    name       = module.object_store[0].deployment.name
+  }
 }

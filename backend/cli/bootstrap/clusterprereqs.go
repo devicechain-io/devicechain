@@ -175,9 +175,12 @@ func confirmObjectStoreRolledOut(ctx context.Context, outputs map[string]tfexec.
 // objectStoreFromOutputs reads which Deployment is the in-cluster backup object
 // store, or nil when this cluster runs none (backups off, or an external destination).
 //
-// 🔴 A MISSING OUTPUT IS AN ERROR, NOT "NO STORE". The root always declares it, null
-// when there is no store; reading its absence as null would silently skip the one
-// check that stops an install being recorded over an unready store.
+// 🔴 A MISSING OUTPUT IS AN ERROR, NOT "NO STORE". Reading its absence as "no store"
+// would silently skip the one check that stops an install being recorded over an
+// unready store, on every cluster whose root stopped declaring it. That is also why
+// "no store" is never null: a root output whose value is null is not stored in state,
+// so `output -json` omits it, and a null here would be indistinguishable from a
+// missing declaration. The root says it explicitly, with in_cluster false.
 func objectStoreFromOutputs(outputs map[string]tfexec.OutputMeta) (*deploymentRef, error) {
 	meta, ok := outputs["backup_object_store_deployment"]
 	if !ok {
@@ -185,13 +188,22 @@ func objectStoreFromOutputs(outputs map[string]tfexec.OutputMeta) (*deploymentRe
 			"output, so whether the backup object store rolled out cannot be checked")
 	}
 	var ref *struct {
+		InCluster *bool  `json:"in_cluster"`
 		Namespace string `json:"namespace"`
 		Name      string `json:"name"`
 	}
 	if err := json.Unmarshal(meta.Value, &ref); err != nil {
 		return nil, fmt.Errorf("decoding backup_object_store_deployment: %w", err)
 	}
-	if ref == nil {
+	if ref == nil || ref.InCluster == nil {
+		return nil, fmt.Errorf("backup_object_store_deployment does not say whether there is an " +
+			"in-cluster backup object store, so whether it rolled out cannot be checked")
+	}
+	if !*ref.InCluster {
+		if ref.Namespace != "" || ref.Name != "" {
+			return nil, fmt.Errorf("backup_object_store_deployment says there is no in-cluster store "+
+				"but names a Deployment (%q/%q)", ref.Namespace, ref.Name)
+		}
 		return nil, nil
 	}
 	if ref.Namespace == "" || ref.Name == "" {
