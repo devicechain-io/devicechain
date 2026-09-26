@@ -130,13 +130,9 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 		rp.ackFact(msg, "device-roster")
 		return true
 	}
-	// A device token is the row's identity and its dead-man series key, so an empty or over-long
-	// one is unusable poison (a forged/buggy-producer fact): drop-and-ack rather than persist a
-	// phantom row or wedge on a varchar overflow. A zero ExpectedSince would also defeat the
-	// monotonic guard, so it is dropped too.
-	if ev.DeviceToken == "" || !validRosterToken(ev.DeviceToken) || !validRosterToken(ev.ProfileToken) || ev.ExpectedSince.IsZero() {
-		log.Warn().Str("device", ev.DeviceToken).Str("subject", msg.Subject).
-			Msg("Dropping malformed device-roster fact (empty/over-long token or zero expected-since).")
+	if reason, bad := rosterFactPoison(ev); bad {
+		log.Warn().Str("device", ev.DeviceToken).Str("subject", msg.Subject).Str("reason", reason).
+			Msg("Dropping malformed device-roster fact.")
 		rp.ackFact(msg, "device-roster")
 		return true
 	}
@@ -157,6 +153,28 @@ func (rp *ResolvedEventsProcessor) handleRosterFact(msg messaging.Message, signa
 	}
 	rp.ackFact(msg, "device-roster")
 	return true
+}
+
+// rosterFactPoison reports why a device-roster fact is unusable, if it is. It is the ONE drop rule
+// for a roster entry: the live consumer drops-and-acks such a fact, and the fact reconcile skips a
+// device-management roster entry it would describe, so the repair path never writes a row the live
+// path refuses.
+//
+//   - an empty or over-long device token: it is the row's identity and its dead-man series key, so
+//     it is a forged/buggy-producer fact — persisting it would write a phantom row or wedge on a
+//     varchar overflow.
+//   - an over-long profile token, for the varchar reason (empty is valid: "no profile").
+//   - a zero ExpectedSince: it would defeat the monotonic guard.
+func rosterFactPoison(ev *dmmodel.DeviceRosterEvent) (string, bool) {
+	switch {
+	case ev.DeviceToken == "" || !validRosterToken(ev.DeviceToken):
+		return "empty or over-long device token", true
+	case !validRosterToken(ev.ProfileToken):
+		return "over-long profile token", true
+	case ev.ExpectedSince.IsZero():
+		return "zero expected-since", true
+	}
+	return "", false
 }
 
 // runEntityDeletedConsumer drains device-management's entity-deleted fact stream (ADR-044) as an

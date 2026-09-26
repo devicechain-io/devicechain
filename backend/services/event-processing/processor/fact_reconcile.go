@@ -101,6 +101,27 @@ func newAbsentSeen() *absentSeen {
 	}
 }
 
+// keepOnly forgets the unconfirmed deletions of every tenant not in the listing, so a tenant that
+// no longer exists does not hold its last sweep's rows until the term ends. Only a SUCCESSFUL
+// listing prunes (a failed one reconciles nothing); a tenant that reappears starts its two-sweep
+// confirmation again, which delays a tombstone and never hastens one.
+func (a *absentSeen) keepOnly(tenants []string) {
+	listed := make(map[string]bool, len(tenants))
+	for _, t := range tenants {
+		listed[t] = true
+	}
+	for t := range a.roster {
+		if !listed[t] {
+			delete(a.roster, t)
+		}
+	}
+	for t := range a.attributes {
+		if !listed[t] {
+			delete(a.attributes, t)
+		}
+	}
+}
+
 // startFactReconcile launches one fact sweep. It runs ON the single-writer loop (the ticker
 // branch) and does no I/O itself.
 //
@@ -152,6 +173,7 @@ func (rp *ResolvedEventsProcessor) reconcileFacts(ctx context.Context) bool {
 		rp.metrics.factReconcileFailed(projectionTenants)
 		return false
 	}
+	rp.factAbsent.keepOnly(tenants)
 	complete := true
 	repaired := make(map[reconcileProjection]int)
 	failed := make(map[reconcileProjection]int)
@@ -367,6 +389,12 @@ func (rp *ResolvedEventsProcessor) signalRuleRepair(ctx context.Context, tenant,
 // if its membership instant differs, because the armer's deadline only moves forward and a
 // same-profile difference re-arms nothing. That is also what keeps an upgrade quiet — rows written
 // before device-management stored the instant differ from it only in the instant.
+//
+// One residual belongs to the rolling upgrade alone: a device-management replica still on the
+// previous release re-types a device without writing expected_since, so an instant stored by an
+// earlier re-type goes stale. A LOST roster fact repaired in that window carries the stale
+// membership instant, and the dead-man can then fire without the fresh grace a re-type grants.
+// Once every replica runs this release, every re-type and re-point stores the instant.
 func (rp *ResolvedEventsProcessor) reconcileTenantRoster(ctx context.Context, tenant string, settledBefore time.Time) (map[reconcileProjection]int, error) {
 	counts := make(map[reconcileProjection]int)
 	if rp.RosterStore == nil {
@@ -388,11 +416,12 @@ func (rp *ResolvedEventsProcessor) reconcileTenantRoster(ctx context.Context, te
 	var changed []string
 	for _, e := range entries {
 		seen[e.DeviceToken] = true
-		// The same drop rule the roster consumer applies to a fact: a row the live path would
-		// refuse is not written by the repair path either.
-		if e.DeviceToken == "" || !validRosterToken(e.DeviceToken) || !validRosterToken(e.ProfileToken) || e.ExpectedSince.IsZero() {
-			log.Warn().Str("tenant", tenant).Str("device", e.DeviceToken).
-				Msg("Skipping a device-management roster entry the roster consumer would drop (empty/over-long token or zero expected-since).")
+		// The roster consumer's own drop rule: what the live path refuses, the repair path does
+		// not write.
+		if reason, bad := rosterFactPoison(&dmmodel.DeviceRosterEvent{DeviceToken: e.DeviceToken,
+			ProfileToken: e.ProfileToken, ExpectedSince: e.ExpectedSince}); bad {
+			log.Warn().Str("tenant", tenant).Str("device", e.DeviceToken).Str("reason", reason).
+				Msg("Skipping a device-management roster entry the roster consumer would drop.")
 			continue
 		}
 		observed, present := held[e.DeviceToken]

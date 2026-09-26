@@ -2829,8 +2829,11 @@ Lo que verá:
   antes.
 - `device-management` exporta `fact_publish_failures_total`, y `event-processing` exporta
   `detect_fact_reconcile_repairs_total` y `detect_fact_reconcile_failures_total`.
-- Una reversión lleva ahora el momento en que se hizo tal como lo guarda `device-management`, y ese
-  momento nunca retrocede entre réplicas cuyos relojes no coinciden.
+- Una reversión lleva ahora el momento en que se hizo tal como lo guarda `device-management`. Cada
+  publicación o reversión de un perfil queda marcada después de la anterior, aunque las réplicas que
+  las hicieron tengan relojes que no coinciden. La excepción son dos cambios del mismo perfil hechos
+  en el mismo instante: cualquiera de los dos puede quedarse con el momento anterior, y el motor de
+  detección acaba igualmente en la versión que guarda `device-management`.
 - `event-processing` llama ahora también a `user-management` para listar los inquilinos y a
   `device-management` para leer reglas, dispositivos y atributos, con el mismo secreto de servicio
   que ya usa para las geocercas. Si el secreto de servicio o alguna de las dos direcciones no está

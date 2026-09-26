@@ -19,7 +19,7 @@ import (
 //     reproduced by anyone.
 //   - devices.expected_since — when the device's membership of its current profile began, set by
 //     a re-type or a re-point of its type. NULL means "since the device was created", and the one
-//     reader (rosterEntries in the model) COALESCEs it with created_at.
+//     reader (rosterEntries in the model) resolves it to created_at, in Go.
 //
 // # Both columns are NULLABLE, with NO DEFAULT and NO BACKFILL — all three on purpose
 //
@@ -36,7 +36,7 @@ import (
 // No backfill, because NULL already has a meaning each reader resolves in ONE place, so writing
 // that meaning into every row would be a second copy of it: expected_since NULL is created_at
 // (rosterEntries), and active_since NULL is derived from the version rows by
-// activationFloorExpr — the newest version's publish time, plus a microsecond when the active
+// resolveActiveSince — the newest version's publish time, plus a microsecond when the active
 // version is not the newest (it was rolled back to, so it became active after that publish).
 // Both rules survive an old pod writing a row during the overlap, which a one-off backfill would
 // not: the backfill runs once, the overlap keeps producing NULLs.

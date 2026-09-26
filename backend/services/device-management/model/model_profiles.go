@@ -100,8 +100,9 @@ type DeviceProfile struct {
 	// detection-rules-published fact carries as PublishedAt and the detection engine's
 	// reconcile read returns. NULL on a profile never published, AND on one whose pointer was
 	// last moved before this column existed (or by an older replica during a rolling
-	// upgrade): read it only through activationFloorExpr / activeSinceOf, which resolve that
-	// NULL from the version rows, never directly.
+	// upgrade): read it only through resolveActiveSince, which resolves that NULL (or a
+	// stored value older than the version rows imply) from the version rows, never directly.
+	// UpdateDeviceProfile omits it beside ActiveVersion, so an edit never writes it back.
 	ActiveSince sql.NullTime
 
 	// The typed capability definitions the profile owns (ADR-045 slice b): the

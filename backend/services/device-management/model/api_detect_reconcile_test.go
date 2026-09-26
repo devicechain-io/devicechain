@@ -173,6 +173,114 @@ func TestActiveSinceResolvesFromTheVersionRowsWhenNotStored(t *testing.T) {
 	assert.True(t, storedActiveSince(t, api, ctx, "prof").After(want))
 }
 
+// A STORED instant older than what the version rows imply is not believed either: it is what an
+// older replica leaves behind when it moves the pointer during a rolling upgrade without writing
+// active_since. Believing it would answer an activation earlier than the active version's own
+// publish, and would lower the floor the next activation is minted above.
+func TestAStaleStoredActiveSinceLosesToTheVersionRows(t *testing.T) {
+	api, ctx, _, _, _ := newReconcileDoorApi(t)
+	seedProfileWithRule(t, api, ctx, "prof", "hot", true)
+	_, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester")
+	require.NoError(t, err)
+	v2, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester")
+	require.NoError(t, err)
+	stale := v2.CreatedAt.Add(-time.Hour)
+	setStale := func(active int32) {
+		require.NoError(t, api.RDB.DB(ctx).Model(&DeviceProfile{}).Where("token = ?", "prof").
+			UpdateColumns(map[string]any{"active_since": stale, "active_version": active}).Error)
+	}
+
+	setStale(2)
+	door := allActiveProfileRules(t, api, ctx, MaxActiveProfileRulesPageSize)
+	require.Len(t, door, 1)
+	assert.True(t, door[0].ActiveSince.Equal(v2.CreatedAt), "active = newest: got %s, want %s", door[0].ActiveSince, v2.CreatedAt)
+
+	setStale(1)
+	door = allActiveProfileRules(t, api, ctx, MaxActiveProfileRulesPageSize)
+	require.Len(t, door, 1)
+	want := v2.CreatedAt.Add(time.Microsecond)
+	assert.True(t, door[0].ActiveSince.Equal(want), "rolled back by an older replica: got %s, want %s", door[0].ActiveSince, want)
+}
+
+// A draft edit must not write the activation instant back from the value it loaded, any more than
+// the version pointer beside it (the Omit in UpdateDeviceProfile). As in
+// TestAssetTypeUpdateDoesNotWriteBackTheVersionPointer, the interleaving is the test: a gorm
+// callback moves the pointer and its instant — the way a concurrent rollback would — after
+// UpdateDeviceProfile's own read and before its own Save.
+func TestProfileUpdateDoesNotWriteBackTheActivationInstant(t *testing.T) {
+	api, ctx, _, _, _ := newReconcileDoorApi(t)
+	seedProfileWithRule(t, api, ctx, "prof", "hot", true)
+	_, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester")
+	require.NoError(t, err)
+	_, err = api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester")
+	require.NoError(t, err)
+	before := storedActiveSince(t, api, ctx, "prof")
+	rolledBackAt := before.Add(time.Minute).Truncate(time.Microsecond)
+
+	fired := false
+	db := api.RDB.Database
+	require.NoError(t, db.Callback().Update().Before("gorm:update").
+		Register("test:concurrent_rollback", func(tx *gorm.DB) {
+			if fired || tx.Statement.Table != "device_profiles" {
+				return
+			}
+			fired = true
+			// On the statement's own connection: each connection to an in-memory SQLite database
+			// is a separate, empty database.
+			if err := tx.Session(&gorm.Session{NewDB: true}).Exec(`UPDATE device_profiles SET active_version = 1, active_since = ? WHERE token = ?`,
+				rolledBackAt, "prof").Error; err != nil {
+				t.Errorf("simulated concurrent rollback failed: %v", err)
+			}
+		}), "register the concurrent-rollback callback")
+	t.Cleanup(func() { _ = db.Callback().Update().Remove("test:concurrent_rollback") })
+
+	_, err = api.UpdateDeviceProfile(ctx, "prof", &DeviceProfileUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
+	require.NoError(t, err)
+	require.True(t, fired, "the callback never ran; this test would pass vacuously")
+
+	p, err := api.deviceProfileByToken(ctx, "prof")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, p.ActiveVersion.Int32, "an edit reverted the version pointer")
+	require.True(t, p.ActiveSince.Valid)
+	assert.True(t, p.ActiveSince.Time.Equal(rolledBackAt),
+		"an edit wrote back the stale activation instant %s over the rollback's %s", p.ActiveSince.Time, rolledBackAt)
+	assert.Equal(t, "Renamed", p.Name.String, "the edit itself still landed")
+}
+
+// The same race for a device: an edit that is not a re-type must not write back the membership
+// instant a concurrent re-point of its type stamped.
+func TestDeviceUpdateDoesNotWriteBackTheMembershipInstant(t *testing.T) {
+	api, ctx, _, _, _ := newReconcileDoorApi(t)
+	seedType(t, api, ctx, "sensor", "sensor-profile")
+	_, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: "d1", DeviceTypeToken: "sensor"})
+	require.NoError(t, err)
+	repointedAt := time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond)
+
+	fired := false
+	db := api.RDB.Database
+	require.NoError(t, db.Callback().Update().Before("gorm:update").
+		Register("test:concurrent_repoint", func(tx *gorm.DB) {
+			if fired || tx.Statement.Table != "devices" {
+				return
+			}
+			fired = true
+			if err := tx.Session(&gorm.Session{NewDB: true}).Exec(`UPDATE devices SET expected_since = ? WHERE token = ?`, repointedAt, "d1").Error; err != nil {
+				t.Errorf("simulated concurrent re-point failed: %v", err)
+			}
+		}), "register the concurrent-repoint callback")
+	t.Cleanup(func() { _ = db.Callback().Update().Remove("test:concurrent_repoint") })
+
+	_, err = api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{Name: dcgraphql.OptionalStringOf("Renamed")})
+	require.NoError(t, err)
+	require.True(t, fired, "the callback never ran; this test would pass vacuously")
+
+	var d Device
+	require.NoError(t, api.RDB.DB(ctx).Where("token = ?", "d1").First(&d).Error)
+	require.True(t, d.ExpectedSince.Valid, "an edit wrote back the NULL membership instant it loaded")
+	assert.True(t, d.ExpectedSince.Time.Equal(repointedAt), "got %s, want %s", d.ExpectedSince.Time, repointedAt)
+	assert.Equal(t, "Renamed", d.Name.String, "the edit itself still landed")
+}
+
 // rosterTriple is a roster entry without its row id, for set comparison.
 type rosterTriple struct {
 	device, profile string
@@ -413,7 +521,7 @@ func TestSameRuleDefinition(t *testing.T) {
 		{"jsonb rendering", compact, `{"name": "hot", "type": "threshold", "when": {"op": "gt", "value": 30, "metric": "temp"}}`, true},
 		{"number spelling", `{"v":1}`, `{"v":1.0}`, true},
 		{"exponent spelling", `{"v":100}`, `{"v":1e2}`, true},
-		{"unicode escape", `{"s":"é"}`, `{"s":"é"}`, true},
+		{"unicode escape", `{"s":"\u00e9"}`, `{"s":"é"}`, true},
 		{"changed value", compact, `{"name":"hot","type":"threshold","when":{"metric":"temp","op":"gt","value":31}}`, false},
 		{"big integers stay exact", `{"v":12345678901234567890}`, `{"v":12345678901234567891}`, false},
 		{"array order matters", `{"a":[1,2]}`, `{"a":[2,1]}`, false},

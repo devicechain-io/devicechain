@@ -2643,8 +2643,11 @@ What you will see:
   comparison — so it fires after the upgrade only if notifications had in fact been lost before it.
 - `device-management` exports `fact_publish_failures_total`, and `event-processing` exports
   `detect_fact_reconcile_repairs_total` and `detect_fact_reconcile_failures_total`.
-- A rollback now carries the moment it was made as stored by `device-management`, and that moment
-  never moves backwards across replicas whose clocks disagree.
+- A rollback now carries the moment it was made as stored by `device-management`. Each publish or
+  rollback of a profile is stamped later than the one before it, even when the replicas that made
+  them have clocks that disagree. Two changes to the same profile made at the same instant are the
+  exception: either may keep the earlier moment, and the detection engine still ends up on the
+  version `device-management` stores.
 - `event-processing` now also calls `user-management` to list tenants, and `device-management` to
   read rules, devices and attributes, with the service secret it already uses for geofences. If the
   service secret or either address is not configured, the comparison is off and the service logs a

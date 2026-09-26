@@ -99,13 +99,17 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	}
 	found.LocationDeclaration = location
 
-	// Omit active_version: a draft/metadata edit must never write the version pointer
-	// back. `found` was loaded before this Save, so writing it whole would let an edit
-	// racing a concurrent PublishDeviceProfile/RollbackDeviceProfile silently revert
-	// the active pointer — the version devices resolve — to its stale value. The
+	// Omit active_version AND active_since: a draft/metadata edit must never write the
+	// version pointer back. `found` was loaded before this Save, so writing it whole would
+	// let an edit racing a concurrent PublishDeviceProfile/RollbackDeviceProfile silently
+	// revert the active pointer — the version devices resolve — to its stale value. The
 	// pointer is moved only by publish/rollback (same class of race as ADR-062's
 	// EntityGroup update; fixed here too since it is the identical latent bug).
-	result := api.RDB.DB(ctx).Omit("ActiveVersion").Save(found)
+	// active_since is the pointer's other half — publish and rollback write the two in one
+	// statement — so it is omitted with it: writing back a stale instant beside a current
+	// version would make the reconcile door answer an activation the fact never carried, and
+	// would lower the floor the next activation is minted above.
+	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince").Save(found)
 	if result.Error != nil {
 		return nil, result.Error
 	}

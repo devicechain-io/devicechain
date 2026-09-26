@@ -589,3 +589,118 @@ func TestTheSameRuleInAnotherByteFormKeepsItsState(t *testing.T) {
 		t.Fatal("a changed threshold reads as the same rule")
 	}
 }
+
+// A lost rollback to a version whose rules are ALREADY held changes only which version is active —
+// no rule row differs — and that repair must still reach the running dead-man armer, which arms
+// under the active version's absence rules. Repairing the durable row alone would leave the armer
+// on the superseded version until the next term build.
+func TestALostRollbackReachesTheDeadManArmer(t *testing.T) {
+	dm := newDmWorld(t)
+	dm.profile("p", map[string]string{"dead": deadRule})
+	dm.deviceType("sensor", "p")
+	dm.device("d1", "sensor")
+	dm.publish("p") // p@1: silence after 10s
+	dm.rule("p", "dead", `{"name":"dead","type":"absence","timeout":"1000s"}`)
+	dm.publish("p")     // p@2: silence after 1000s
+	dm.rollback("p", 1) // this fact is lost
+	rig := newReconcileRig(t, dm)
+	rig.deliverRules(0, 1)
+	rig.deliverRoster(0)
+
+	rig.sweep()
+
+	active, _, err := rig.rp.ProfileActiveStore.Load(context.Background(), "acme", "p")
+	if err != nil || active.ActiveVersionToken != "p@1" {
+		t.Fatalf("control: active version %q (err %v), want the repaired p@1", active.ActiveVersionToken, err)
+	}
+	if got := rig.repairs(projectionRules); got != 0 {
+		t.Fatalf("control: repairs{rules} = %v, want 0 — this test is about a repair of the active version ALONE", got)
+	}
+	id := runtime.PublishedRuleID("acme", "p@1", "dead")
+	if !deadmanFires(rig.rp.engine, id, "d1", dm.activeSince("p").Add(11*time.Second)) {
+		t.Fatal("the rollback was repaired in the store but the dead-man armer still arms the superseded p@2")
+	}
+}
+
+// A held rule with the right body and the WRONG group scope evaluates over the wrong membership
+// set, so scope is half of what makes a held rule current.
+func TestARuleHeldUnderTheWrongScopeIsRepaired(t *testing.T) {
+	dm := newDmWorld(t)
+	dm.profile("p", map[string]string{"hot": hotRule})
+	dm.publish("p")
+	rig := newReconcileRig(t, dm)
+	rig.deliverRules(0)
+	ctx := context.Background()
+	id := runtime.PublishedRuleID("acme", "p@1", "hot")
+	if err := rig.rp.RuleStore.Upsert(ctx, []model.DetectRule{{RuleId: id, Tenant: "acme", ProfileVersionToken: "p@1",
+		RuleToken: "hot", Definition: hotRule, EntityGroupToken: "floor-3", EntityGroupVersion: 2}}); err != nil {
+		t.Fatal(err)
+	}
+
+	rig.sweep()
+
+	row, found, err := rig.rp.RuleStore.LoadByID(dccore.WithTenant(ctx, "acme"), id)
+	if err != nil || !found {
+		t.Fatalf("rule row found=%v err=%v", found, err)
+	}
+	if row.EntityGroupToken != "" || row.EntityGroupVersion != 0 {
+		t.Fatalf("the rule is still scoped to %q v%d; device-management publishes it unscoped",
+			row.EntityGroupToken, row.EntityGroupVersion)
+	}
+	if got := rig.repairs(projectionRules); got != 1 {
+		t.Fatalf("repairs{rules} = %v, want 1", got)
+	}
+}
+
+// NEGATIVE CONTROL for the erasure fence: a device deleted here after device-management's read (its
+// deletion fence is newer than the attribute) must not get a live attribute row back from the
+// sweep. The repair write honours the fence exactly as a delivered fact does.
+func TestTheSweepDoesNotRecreateAnErasedDevicesAttribute(t *testing.T) {
+	dm := newDmWorld(t)
+	dm.profile("p", map[string]string{"hot": dynamicRule})
+	dm.deviceType("sensor", "p")
+	dm.device("d1", "sensor")
+	dm.setAttr("d1", "SHARED", "tempLimit", "80") // this fact is lost
+	rig := newReconcileRig(t, dm)
+	ctx := context.Background()
+	if err := rig.rp.AttributeStore.PurgeDevice(ctx, "acme", "d1", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	rig.sweep()
+
+	if d := rig.dump(); len(d.Attributes) != 0 {
+		t.Fatalf("the sweep wrote %d attribute rows for a device erased after the value was set: %+v", len(d.Attributes), d.Attributes)
+	}
+	if got := rig.repairs(projectionAttributes); got != 0 {
+		t.Fatalf("repairs{attributes} = %v, want 0 — a fenced write is not a repair", got)
+	}
+	if got, ok := rig.rp.attrView.For("acme", "d1")["tempLimit"]; ok {
+		t.Fatalf("the view holds %v for an erased device", got)
+	}
+	// CONTROL: the value IS in device-management's answer, so the sweep did try.
+	if rig.src.callsTo("deviceThresholdAttributePage") == 0 {
+		t.Fatal("the sweep never read the attributes; this control proved nothing")
+	}
+}
+
+// A sweep forgets the unconfirmed deletions of tenants no longer listed, rather than holding them
+// until the term ends.
+func TestASweepForgetsTenantsNoLongerListed(t *testing.T) {
+	dm := newDmWorld(t)
+	rig := newReconcileRig(t, dm)
+	rig.rp.factAbsent.roster["gone"] = map[string]model.DeviceRoster{"d1": {}}
+	rig.rp.factAbsent.attributes["gone"] = map[attributeKey]model.DeviceAttribute{{device: "d1"}: {}}
+
+	rig.sweep()
+
+	if _, ok := rig.rp.factAbsent.roster["gone"]; ok {
+		t.Fatal("a sweep kept the roster sightings of a tenant it did not list")
+	}
+	if _, ok := rig.rp.factAbsent.attributes["gone"]; ok {
+		t.Fatal("a sweep kept the attribute sightings of a tenant it did not list")
+	}
+	if _, ok := rig.rp.factAbsent.roster["acme"]; !ok {
+		t.Fatal("control: the listed tenant's sightings were not recorded; the sweep did not run")
+	}
+}

@@ -411,13 +411,37 @@ func (r *reconcileRig) deliverAttrs(indices ...int) {
 	r.pump()
 }
 
+// sweepDeadline bounds one rig sweep. A sweep over these fixtures takes well under a second; one
+// that has not finished in this long is stuck, and the test fails rather than hanging until go
+// test's own timeout.
+const sweepDeadline = time.Minute
+
 // sweep runs one fact reconcile the way the ticker does — through startFactReconcile, joined —
-// and then lets the loop apply what it handed over.
+// applying what it hands the loop WHILE it runs, as the loop would. Draining only after the join
+// would deadlock a sweep that signals more than the channels buffer (a mass tombstone), which is
+// exactly the regression a partial-walk bug produces: it must fail fast, not hang CI.
 func (r *reconcileRig) sweep() {
 	r.t.Helper()
 	r.rp.startFactReconcile()
-	r.rp.readerWG.Wait()
-	r.pump()
+	done := make(chan struct{})
+	go func() { r.rp.readerWG.Wait(); close(done) }()
+	deadline := time.NewTimer(sweepDeadline)
+	defer deadline.Stop()
+	for {
+		select {
+		case upd := <-r.rp.ruleUpdates:
+			r.rp.applyRuleUpdate(upd)
+		case au := <-r.rp.armUpdates:
+			r.rp.applyArmRecheck(au)
+		case at := <-r.rp.attrUpdates:
+			r.rp.applyAttrRecheck(at)
+		case <-done:
+			r.pump()
+			return
+		case <-deadline.C:
+			r.t.Fatalf("a fact sweep did not finish within %s", sweepDeadline)
+		}
+	}
 }
 
 // measure feeds one resolved temperature reading for a device under a profile version, checkpoints,

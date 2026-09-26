@@ -649,7 +649,16 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		updated.ExpectedSince = sql.NullTime{Time: time.Now().UTC().Truncate(time.Microsecond), Valid: true}
 	}
 
-	result := api.RDB.DB(ctx).Save(updated)
+	// expected_since is written only by a re-type. Without one it is omitted, because
+	// `updated` was loaded before this Save: writing it whole would let an edit racing a
+	// concurrent re-point of the device's type (UpdateDeviceType stamps expected_since on
+	// every device of the type) put the stale membership instant back, and the roster page
+	// would then disagree with the fact that re-point emitted.
+	db := api.RDB.DB(ctx)
+	if !retyped {
+		db = db.Omit("ExpectedSince")
+	}
+	result := db.Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}
