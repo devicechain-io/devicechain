@@ -21,7 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
-	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"gorm.io/gorm"
 )
 
@@ -394,8 +394,8 @@ type hookedKV struct {
 	after func()
 }
 
-func (h *hookedKV) Get(key string) (nats.KeyValueEntry, error) {
-	entry, err := h.MemoryKV.Get(key)
+func (h *hookedKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	entry, err := h.MemoryKV.Get(ctx, key)
 	h.after()
 	return entry, err
 }
