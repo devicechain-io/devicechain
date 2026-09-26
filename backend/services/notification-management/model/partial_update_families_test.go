@@ -54,10 +54,17 @@ var channelSeed = struct {
 	Name:        "Original name",
 	Description: "Original description",
 	ChannelType: ChannelTypeSMTP,
-	Config:      `{"host":"smtp.example.invalid","port":587}`,
-	Secret:      "seeded-secret",
-	Metadata:    `{"fleet":"north"}`,
-	Enabled:     true,
+	// A config that is valid for BOTH channel types, on purpose. The channelType property
+	// below flips SMTP to webhook ALONE — the harness drives one field at a time — and a
+	// webhook's config is judged on save: it must parse (url) and declare `auth`, and the
+	// declared bearer must be satisfied by Secret. SMTP ignores the extra keys. The secret's
+	// clear property runs while the type is SMTP, which has no pairing. PairedWith(channelType,
+	// config) is not usable here: config is clearable and channelType required, so clearing
+	// the pair would null a required field.
+	Config:   `{"host":"smtp.example.invalid","port":587,"url":"https://hook.example.invalid/a","auth":"bearer"}`,
+	Secret:   "seeded-secret",
+	Metadata: `{"fleet":"north"}`,
+	Enabled:  true,
 }
 
 var policySeed = struct {

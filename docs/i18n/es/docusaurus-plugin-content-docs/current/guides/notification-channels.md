@@ -19,7 +19,7 @@ Un **canal** es un endpoint de entrega que configura tu inquilino: una instancia
 
 Un canal divide su configuración en dos:
 
-- **`config`**: la configuración de conexión no secreta, como un documento JSON (host/puerto/from de SMTP; URL/método/encabezados del webhook).
+- **`config`**: la configuración de conexión no secreta, como un documento JSON (host/puerto/from de SMTP; URL/método/encabezados del webhook y cómo se autentica).
 - **`secret`**: la credencial, como la contraseña de SMTP o un token de autenticación del webhook. Se almacena en el **almacén de secretos** cifrado por sobre (envelope-encrypted) de la plataforma y es de **solo escritura**. La envías al crear, y nunca se devuelve al leer; el canal solo expone un booleano `hasSecret`.
 
 En una **actualización**, el campo `secret` se comporta así:
@@ -27,8 +27,9 @@ En una **actualización**, el campo `secret` se comporta así:
 - **Omítelo** para dejar el secreto existente sin cambios. Nunca necesitas reenviarlo.
 - Envía un valor no nulo para reemplazarlo.
 - Envía `null` o una cadena vacía para borrarlo.
+- En un canal webhook cuya configuración declara `bearer` o `header`, borrar el secreto se rechaza. Cambia `auth` a `none` en la misma solicitud si quieres que el endpoint sea anónimo.
 
-Si tu cliente enlaza una variable por campo, una variable no suministrada llega como un `null` explícito y **borra el secreto**. Envía la solicitud completa como una sola variable y deja fuera la clave `secret`.
+Si tu cliente enlaza una variable por campo, una variable no suministrada llega como un `null` explícito y **borra el secreto**. En un canal webhook que declara `bearer` o `header`, ese mismo `null` hace fallar la actualización entera, incluso una que solo pretendía renombrar el canal. Envía la solicitud completa como una sola variable y deja fuera la clave `secret`.
 
 ### Crear un canal SMTP
 
@@ -47,9 +48,36 @@ mutation {
 
 ### Crear un canal webhook
 
-Un canal webhook realiza un POST de la notificación renderizada a una URL. Créalo de la misma manera, con `channelType: "webhook"` y una configuración que lleve la `url` y, opcionalmente, `method` y encabezados adicionales en `headers`. El único `method` aceptado es `POST`, que también es el predeterminado; cualquier otro método falla en la entrega.
+Un canal webhook realiza un POST de la notificación renderizada a una URL. Créalo de la misma manera, con `channelType: "webhook"` y una configuración que lleve la `url`, un modo `auth` y, opcionalmente, `method` y encabezados adicionales en `headers`. El único `method` aceptado es `POST`, que también es el predeterminado; cualquier otro método se rechaza al guardar el canal.
 
-De forma predeterminada, el secreto se presenta como `Authorization: Bearer <secret>`. Para usar en su lugar un encabezado personalizado, configura `authHeader`/`authScheme` en la configuración.
+`auth` es obligatorio e indica cómo se autentica el canal:
+
+| `auth` | Qué se envía | `secret` |
+| --- | --- | --- |
+| `none` | Ningún encabezado de credencial. Úsalo cuando la propia URL lleva la credencial, como en un webhook entrante de Slack. | No debe configurarse |
+| `bearer` | `Authorization: Bearer <secret>` | Obligatorio |
+| `header` | El secreto en el encabezado indicado por `authHeader`, precedido por `authScheme` y un espacio si lo configuras. Por ejemplo, `"authHeader":"X-API-Key"` envía el token tal cual, y `"authHeader":"Authorization","authScheme":"Token"` envía `Authorization: Token <secret>`. | Obligatorio |
+
+`authHeader` y `authScheme` solo se leen con `header`. Con `none` o `bearer`, omítelos: un canal que los configura se rechaza en lugar de ignorarlos en silencio.
+
+Un canal cuyo `auth` y `secret` no concuerdan se rechaza al guardarlo, no cuando se dispara una alarma. Eso incluye que falte `auth`, `bearer` o `header` sin secreto, y `none` con secreto. Para convertir un canal `bearer` en anónimo, envía `auth` `none` y `secret: null` en la misma actualización. Una actualización que solo renombra, describe o desactiva un canal no se comprueba, así que siempre puedes desactivar un canal mal configurado; activarlo sí se comprueba.
+
+Si un canal llega a la entrega en ese estado de todos modos, por ejemplo uno guardado antes de que existiera `auth`, no se envía. La entrega se rechaza en su primer intento y no se reintenta, y el servicio de notificaciones registra el inquilino, el token del canal y el motivo. El rechazo se cuenta en `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`, sobre el que puedes crear una alerta.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "oncall-hook",
+    name: "On-call webhook",
+    channelType: "webhook",
+    config: "{\"url\":\"https://hooks.example.com/alarms\",\"auth\":\"bearer\"}",
+    secret: "<token>",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`.
 
 ## Políticas
 
@@ -99,7 +127,7 @@ En una actualización, las `rules` de la solicitud **reemplazan** el conjunto de
 
 ## Verificar la ruta de extremo a extremo
 
-1. **Crea un canal** (como arriba). Confirma `hasSecret: true` y `enabled: true` en el resultado.
+1. **Crea un canal** (como arriba). Confirma `enabled: true` en el resultado, y que `hasSecret` es `true` para un canal SMTP con usuario o un webhook que declara `bearer` o `header`, y `false` para un webhook que declara `none`.
 2. **Crea una política** cuyas reglas mapeen las severidades que te interesan a ese canal.
 3. **Levanta una alarma real.** Dispara una regla de detección en un dispositivo de prueba (consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md)) y confirma que llega el correo o la llamada al webhook.
 4. **Inspecciona el estado de entrega.** El servicio mantiene un registro de solo lectura por alarma de lo que ha hecho. Consulta `notificationStatesByAlarmToken(alarmTokens: [...])`, o busca con `notificationStates`. Revisa `firstNotifiedAt` y `notifyCount` y, una vez que la alarma ha permanecido sin reconocer más allá de la ventana de escalado, `escalationLevel`.

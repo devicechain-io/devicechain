@@ -32,7 +32,7 @@ func TestDefaultClientRefusesAPrivateDestinationBeforeConnecting(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := Send(context.Background(), nil, Request{URL: srv.URL, Body: []byte("{}")})
+	err := Send(context.Background(), nil, Request{URL: srv.URL, Body: []byte("{}"), Auth: Auth{Mode: AuthNone}})
 
 	require.Error(t, err, "a loopback destination must be refused")
 	assert.ErrorIs(t, err, egress.ErrBlocked)
@@ -55,7 +55,7 @@ func TestAGuardedClientWithAnAllowanceStillDelivers(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{Transport: loopbackAllowedTransport()}
-	require.NoError(t, Send(context.Background(), client, Request{URL: srv.URL, Body: []byte("{}")}))
+	require.NoError(t, Send(context.Background(), client, Request{URL: srv.URL, Body: []byte("{}"), Auth: Auth{Mode: AuthNone}}))
 	assert.True(t, reached)
 }
 
@@ -64,29 +64,31 @@ func TestAGuardedClientWithAnAllowanceStillDelivers(t *testing.T) {
 func TestAuthHeaderRejectsInternalServiceIdentity(t *testing.T) {
 	for _, name := range []string{"X-DC-Service-Secret", "x-dc-tenant", "X-Dc-Idempotency-Key", "X-DC-Anything"} {
 		t.Run(name, func(t *testing.T) {
-			err := Auth{Header: name}.Validate()
+			err := Auth{Mode: AuthHeader, Header: name}.Validate()
 			require.Error(t, err, "an X-DC-* auth header carries internal service identity")
 			assert.Contains(t, err.Error(), "reserved")
+			assert.ErrorIs(t, err, ErrAuthRefused)
 		})
 	}
 }
 
 // 🔴 The counterweight that stops the obvious "fix" of reusing IsReservedHeader here.
-// IsReservedHeader rejects Authorization, which is this field's legitimate default and the
-// header the zero Auth writes. A validator built on it would refuse the common case.
+// IsReservedHeader rejects Authorization, which is a legitimate header here: the one
+// AuthBearer writes, and a valid AuthHeader target (a "Token" scheme, say). A validator
+// built on it would refuse the common case.
 func TestAuthHeaderStillAllowsTheHeadersThatAreThePoint(t *testing.T) {
 	require.True(t, IsReservedHeader("Authorization"),
 		"precondition: IsReservedHeader rejects Authorization, so it must not be reused for this")
 
-	assert.NoError(t, Auth{}.Validate(), "the zero value means Authorization: Bearer and must pass")
-	assert.NoError(t, Auth{Header: "Authorization", Scheme: "Bearer"}.Validate())
-	assert.NoError(t, Auth{Header: "X-API-Key"}.Validate())
-	assert.NoError(t, Auth{Header: "X-Custom-Token", Scheme: "Token"}.Validate())
+	assert.NoError(t, Auth{Mode: AuthBearer}.Validate(), "bearer writes Authorization and must pass")
+	assert.NoError(t, Auth{Mode: AuthHeader, Header: "Authorization", Scheme: "Bearer"}.Validate())
+	assert.NoError(t, Auth{Mode: AuthHeader, Header: "X-API-Key"}.Validate())
+	assert.NoError(t, Auth{Mode: AuthHeader, Header: "X-Custom-Token", Scheme: "Token"}.Validate())
 }
 
 func TestAuthHeaderRejectsAMalformedName(t *testing.T) {
-	assert.Error(t, Auth{Header: "Bad Header"}.Validate())
-	assert.Error(t, Auth{Header: "X-Evil\r\nInjected"}.Validate())
+	assert.ErrorIs(t, Auth{Mode: AuthHeader, Header: "Bad Header"}.Validate(), ErrAuthRefused)
+	assert.ErrorIs(t, Auth{Mode: AuthHeader, Header: "X-Evil\r\nInjected"}.Validate(), ErrAuthRefused)
 }
 
 // Send must refuse rather than drop. Dropping would deliver the payload with no credential
@@ -105,10 +107,13 @@ func TestSendRefusesAReservedAuthHeaderRatherThanDroppingIt(t *testing.T) {
 	err := Send(context.Background(), srv.Client(), Request{
 		URL:    srv.URL,
 		Secret: "the-real-service-secret",
-		Auth:   Auth{Header: "X-DC-Service-Secret"},
+		Auth:   Auth{Mode: AuthHeader, Header: "X-DC-Service-Secret"},
 	})
 
+	// The mode is stated, so the refusal cannot come from ErrAuthModeUnstated above the
+	// reserved-header check — the text is what proves which check answered.
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved")
 	assert.False(t, reached, "the request was sent; the secret left the process")
 	assert.Empty(t, gotIdentity)
 }
@@ -126,7 +131,7 @@ func TestSendStillDeliversWithACustomAuthHeader(t *testing.T) {
 	require.NoError(t, Send(context.Background(), srv.Client(), Request{
 		URL:    srv.URL,
 		Secret: "tok-abc",
-		Auth:   Auth{Header: "X-API-Key"},
+		Auth:   Auth{Mode: AuthHeader, Header: "X-API-Key"},
 	}))
 	assert.Equal(t, "tok-abc", got)
 }

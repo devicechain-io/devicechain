@@ -242,10 +242,14 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			// Build every Prometheus instrument this service exports, before the notifier (which
+			// counts refused deliveries) and the NATS manager that consume them. This callback
+			// runs once, in the initialize phase, which is what makes it the safe place.
+			buildMetrics()
 			Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
 				Configuration.DeliveryTimeout(),
 				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management"),
-				egressGuard)
+				egressGuard, NotifyMetrics)
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
 			// the notification state stays bounded (ADR-017 N.C). A negative interval disables
@@ -270,10 +274,6 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					return err
 				}
 			}
-
-			// Build every Prometheus instrument this service exports, before the NATS
-			// manager that consumes them.
-			buildMetrics()
 			return nil
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},

@@ -80,6 +80,11 @@ func channelSecretValue(t *testing.T, api *Api, ctx context.Context, token strin
 
 func strPtr(s string) *string { return &s }
 
+// anonymousWebhookConfig is the smallest webhook config the save-time check accepts with no
+// secret: a url and an explicit `"auth":"none"`. Fixtures that need A webhook, and are not
+// about its credential, use it.
+const anonymousWebhookConfig = `{"url":"https://hook.example.invalid/a","auth":"none"}`
+
 func tenantCtx(tenant string) context.Context {
 	return core.WithTenant(context.Background(), tenant)
 }
@@ -331,6 +336,12 @@ func TestUpdateChannelRefusesTheWholeUpdateBeforeWriting(t *testing.T) {
 			Name:     dcgraphql.OptionalStringOf("Renamed"),
 			Metadata: dcgraphql.OptionalStringOf("{nope"),
 		},
+		// The SMTP seed's config has no url and no auth, so as a webhook it is refused —
+		// and that refusal must land before the rename does.
+		"webhook credential check": {
+			Name:        dcgraphql.OptionalStringOf("Renamed"),
+			ChannelType: dcgraphql.OptionalStringOf(ChannelTypeWebhook),
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			api := newTestApi(t)
@@ -372,8 +383,11 @@ func TestUpdateChannelAcceptsAKnownChannelType(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	// The config travels with the type: an SMTP channel's (absent) config is not a webhook
+	// config, and flipping the type alone is refused for that reason, not for the type.
 	if _, err := api.UpdateNotificationChannel(ctx, "chan-a", &NotificationChannelUpdateRequest{
 		ChannelType: dcgraphql.OptionalStringOf(ChannelTypeWebhook),
+		Config:      dcgraphql.OptionalStringOf(anonymousWebhookConfig),
 	}); err != nil {
 		t.Fatalf("a known channel type was refused: %v", err)
 	}

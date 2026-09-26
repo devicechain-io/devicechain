@@ -349,7 +349,7 @@ lo establece.
 
 | Campo | Qué ocurre al omitirlo |
 | --- | --- |
-| `secret` en `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Se conserva.** Un valor lo rota; `null` — o una cadena vacía — lo borra. No puedes leer un secreto de vuelta, así que omitirlo es como se dice «deja la credencial como está» |
+| `secret` en `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Se conserva.** Un valor lo rota; `null` — o una cadena vacía — lo borra. No puedes leer un secreto de vuelta, así que omitirlo es como se dice «deja la credencial como está». Un canal de notificación cuya configuración de webhook declara `bearer` o `header` rechaza quedarse sin él |
 | `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `null` o `{}` para limpiarlo |
 | `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
 | `definition` en `updateDashboard` | **Se conserva** al omitirlo, que es como se renombra un panel sin reenviar su documento. Igual que `selector` arriba, no se puede *limpiar*: `null` se rechaza, porque un panel sin definición no es nada. Una definición malformada rechaza la actualización completa, así que un renombrado enviado con ella tampoco se aplica |
@@ -363,7 +363,8 @@ lo establece.
 
 :::danger Una cadena vacía no significa «deja esto como está»
 En todos los campos `secret` de solo escritura, **`""` borra la credencial almacenada**, y la mutación
-devuelve éxito. Un cliente que rellena todos los campos borra una credencial que nunca quiso tocar, y
+devuelve éxito. (La única excepción es un canal de notificación cuya configuración de webhook declara
+`bearer` o `header`: ahí se rechaza la actualización entera.) Un cliente que rellena todos los campos borra una credencial que nunca quiso tocar, y
 un conector cuya credencial ha desaparecido falla la autenticación en cada envío saliente. **Deja el
 campo fuera.** Consulta [Secretos y cadenas vacías](#secrets-and-empty-strings).
 :::

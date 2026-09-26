@@ -61,7 +61,7 @@ func TestRenameChannel_ABlankNewTokenIsRefused(t *testing.T) {
 			api := newTestApi(t)
 			ctx := tenantCtx("A")
 			if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
-				Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
+				Token: "chan-a", ChannelType: ChannelTypeWebhook, Config: strPtr(anonymousWebhookConfig), Enabled: true,
 			}); err != nil {
 				t.Fatalf("create: %v", err)
 			}
@@ -87,7 +87,7 @@ func TestRenameChannel_ADifferingTokenMovesTheRecord(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
-		Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Config: strPtr(anonymousWebhookConfig), Enabled: true,
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestRenameChannel_TheSameTokenIsANoOpSuccess(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
-		Token: "chan-a", ChannelType: ChannelTypeWebhook, Name: strPtr("Original"), Enabled: true,
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Config: strPtr(anonymousWebhookConfig), Name: strPtr("Original"), Enabled: true,
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestRenameChannel_ATakenTokenIsRefusedByName(t *testing.T) {
 	ctx := tenantCtx("A")
 	for _, tok := range []string{"chan-a", "chan-b"} {
 		if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
-			Token: tok, ChannelType: ChannelTypeWebhook, Name: strPtr("Original " + tok), Enabled: true,
+			Token: tok, ChannelType: ChannelTypeWebhook, Config: strPtr(anonymousWebhookConfig), Name: strPtr("Original " + tok), Enabled: true,
 		}); err != nil {
 			t.Fatalf("create %q: %v", tok, err)
 		}
@@ -197,7 +197,7 @@ func TestRenameChannel_TheCollisionCheckIsTenantScoped(t *testing.T) {
 	ctxA, ctxB := tenantCtx("A"), tenantCtx("B")
 
 	if _, err := api.CreateNotificationChannel(ctxA, &NotificationChannelCreateRequest{
-		Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Config: strPtr(anonymousWebhookConfig), Enabled: true,
 	}); err != nil {
 		t.Fatalf("create in A: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestUpdateChannel_CannotMoveTheToken(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
-		Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Config: strPtr(anonymousWebhookConfig), Enabled: true,
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}

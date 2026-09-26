@@ -14,10 +14,12 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/egress"
+	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 )
@@ -128,15 +130,37 @@ type PolicyNotifier struct {
 	// directly: the test fixtures in this package build a PolicyNotifier by struct
 	// literal, so the constructor is not the only way one comes into existence.
 	TenantDeleted func(tenant string) bool
+
+	// refused counts deliveries refused as terminal, by reason (refusalReasonEgress,
+	// refusalReasonCredential). A refused delivery is acked, not redelivered and not
+	// dead-lettered, so without this its only trace is a log line — and a credential
+	// refusal is what every webhook channel saved without `auth` hits on its first alarm.
+	// MAY BE NIL (struct-literal test fixtures); read it through countRefusal.
+	refused *prometheus.CounterVec
+}
+
+// The reasons devicechain_notificationmanagement_deliveries_refused_total is labelled with. A closed set: the
+// label is never fed from an error string.
+const (
+	refusalReasonEgress     = "egress"
+	refusalReasonCredential = "credential"
+)
+
+// countRefusal records one terminal refusal, tolerating a notifier built without metrics.
+func (n *PolicyNotifier) countRefusal(reason string) {
+	if n.refused != nil {
+		n.refused.WithLabelValues(reason).Inc()
+	}
 }
 
 // NewPolicyNotifier builds the dispatcher over the persistence API and the secret
 // store (ADR-059, from which each channel's delivery secret is resolved server-
 // internal at delivery time), with attempts per-channel delivery tries and timeout
 // bounding a single attempt. tenantDeleted is the ADR-077 lifecycle gate (nil disables
-// the refusal).
+// the refusal). metrics supplies the refused-delivery counter; build it once, in the
+// initialize phase (see NewNotifyMetrics).
 func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, timeout time.Duration,
-	tenantDeleted func(string) bool, guard *egress.Guard) *PolicyNotifier {
+	tenantDeleted func(string) bool, guard *egress.Guard, metrics NotifyMetrics) *PolicyNotifier {
 	if attempts < 1 {
 		attempts = 1
 	}
@@ -157,6 +181,7 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 		timeout:       timeout,
 		budget:        dispatchBudget,
 		TenantDeleted: tenantDeleted,
+		refused:       metrics.deliveriesRefused,
 	}
 }
 
@@ -336,18 +361,20 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// we must ack (return nil) so redelivery can't double-send the ones that worked.
 	//
 	// 🔴 Unless every target was REFUSED rather than failed. Redelivery exists to ride
-	// out an endpoint being down; it cannot make a private address public. Returning an
-	// error here would churn the redelivery budget to reach the same refusal and then
-	// dead-letter it as an ordinary exhausted delivery — which tells an operator the
-	// endpoint is unreachable when the truth is that the channel is pointed somewhere
-	// this platform will not go. A mix still redelivers, because the failed ones deserve
+	// out an endpoint being down; it cannot make a private address public, or supply a
+	// credential a channel does not have. Returning an error here would churn the
+	// redelivery budget to reach the same refusal and then dead-letter it as an ordinary
+	// exhausted delivery — which tells an operator the endpoint is unreachable when the
+	// truth is that the channel is pointed somewhere this platform will not go, or its
+	// credential is refused. A mix still redelivers, because the failed ones deserve
 	// the retry the refused ones do not — and so does a channel the budget never let us
 	// try, which is why unattempted counts against the ack too.
 	if tally.delivered == 0 {
 		if tally.retryable() == 0 && tally.refused > 0 {
 			log.Error().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("channels", tally.refused).
-				Msg("Every channel for this alarm points at an address outbound traffic is not " +
-					"permitted to reach; acking rather than redelivering, because redelivery cannot change that.")
+				Msg("Every channel for this alarm was refused (a destination outbound traffic may not " +
+					"reach, or a refused credential configuration); acking rather than redelivering, " +
+					"because redelivery cannot change that.")
 			return nil
 		}
 		return fmt.Errorf("all %d channel deliveries failed for alarm %q", len(deliveries), event.AlarmToken)
@@ -587,8 +614,8 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 		// delays the same answer. The tier has already been claimed either way.
 		if tally.retryable() == 0 && tally.refused > 0 {
 			log.Error().Str("alarm", state.AlarmToken).Int("channels", tally.refused).
-				Msg("Every escalation channel points at an address outbound traffic is not " +
-					"permitted to reach; acking rather than redelivering.")
+				Msg("Every escalation channel was refused (a destination outbound traffic may not " +
+					"reach, or a refused credential configuration); acking rather than redelivering.")
 			return nil
 		}
 		return fmt.Errorf("all %d escalation deliveries failed for alarm %q after claiming the tier",
@@ -708,8 +735,9 @@ const (
 	deliveryOK deliveryResult = iota
 	// deliveryFailed — a transient failure worth redelivering.
 	deliveryFailed
-	// deliveryRefused — the destination is one this platform will not connect to.
-	// Terminal by construction.
+	// deliveryRefused — the destination is one this platform will not connect to, or the
+	// channel's credential configuration is refused (a declared credential is missing, or
+	// a secret is stored that the channel never presents). Terminal by construction.
 	deliveryRefused
 )
 
@@ -739,6 +767,7 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 	}
 
 	adapter := n.adapters[d.channel.ChannelType]
+	tenant, _ := core.TenantFromContext(ctx)
 	for attempt := 1; attempt <= n.attempts; attempt++ {
 		dctx, cancel := context.WithTimeout(ctx, n.timeout)
 		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
@@ -752,8 +781,21 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 		// "exhausted attempts" when the truth is "this channel points somewhere it may
 		// not go". Stop on the first one and say so.
 		if errors.Is(err, egress.ErrBlocked) {
-			log.Error().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
+			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
 				Msg("Notification channel points at an address outbound traffic is not permitted to reach; not retrying.")
+			n.countRefusal(refusalReasonEgress)
+			return deliveryRefused
+		}
+		// A refused credential configuration is terminal for the same reason: redelivery sends
+		// the same config and the same (missing, or unwanted) secret. It says what is wrong
+		// instead of "exhausted attempts". The tenant is logged because a channel token is
+		// unique only within its tenant — on a shared instance, the token alone names nothing.
+		if errors.Is(err, httpsink.ErrAuthRefused) {
+			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
+				Msg("Notification channel's credential configuration is refused (a declared credential " +
+					"is missing, or a secret is stored that the channel never presents); not retrying. " +
+					"Fix the channel's config or secret.")
+			n.countRefusal(refusalReasonCredential)
 			return deliveryRefused
 		}
 		log.Warn().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
@@ -802,10 +844,11 @@ func logBudgetCut(d delivery, attempt, attempts int) {
 
 // resolveChannelSecret returns the channel's delivery secret from the store, keyed
 // by the tenant-scoped channel handle (ADR-059), under its OWN bounded timeout. A ref for
-// which no secret is stored yields an empty string (the channel simply has no secret)
-// rather than an error, so a secretless channel delivers normally; a genuine store error
-// is returned so the caller can treat it as a transient delivery failure and let
-// redelivery retry.
+// which no secret is stored yields an empty string rather than an error, and the channel's
+// declared auth decides whether that is right: a webhook declaring bearer or header is
+// refused by httpsink, and an SMTP channel with a username is refused by its adapter, both
+// terminally. A genuine store error is returned so the caller can treat it as a transient
+// delivery failure and let redelivery retry.
 //
 // 🔴 THE TIMEOUT IS LOAD-BEARING. This ran on whatever context the caller held, and for
 // the durable consumer that is a worker's context.Background(), which never fires — while

@@ -14,7 +14,9 @@ import (
 )
 
 // CreateNotificationChannel creates a delivery channel. The channel type must be
-// in the catalog; config (if given) must be a well-formed JSON object. A non-empty
+// in the catalog; config (if given) must be a well-formed JSON object. A webhook's config
+// must also parse as one and declare `auth` (none | bearer | header), and the secret must
+// agree with it: bearer and header need one, none must not have one. A non-empty
 // request.Secret is sealed into the secret store under the channel's handle (never a
 // column); a nil or empty Secret stores no secret.
 func (api *Api) CreateNotificationChannel(ctx context.Context,
@@ -26,6 +28,10 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 		return nil, err
 	}
 	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
+		return nil, err
+	}
+	if err := validateChannelCredential(request.Token, request.ChannelType, request.Config,
+		request.Secret != nil && *request.Secret != ""); err != nil {
 		return nil, err
 	}
 
@@ -68,7 +74,9 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 		// masked; the original secret error is what the caller needs.
 		if delErr := api.RDB.DB(ctx).Unscoped().Delete(created).Error; delErr != nil {
 			log.Warn().Err(delErr).Str("token", request.Token).
-				Msg("Failed to roll back channel row after secret write failure; channel may exist without a secret")
+				Msg("Failed to roll back channel row after secret write failure; channel may exist without a " +
+					"secret, and if its config declares bearer or header auth it will refuse to deliver until a " +
+					"secret is set")
 		}
 		return nil, err
 	}
@@ -84,10 +92,10 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 // is where a rename lives now.
 //
 // 🔴 EVERYTHING THAT CAN REFUSE RESOLVES BEFORE ANYTHING IS WRITTEN. A channel type
-// outside the catalog, malformed config, malformed metadata and a cleared `enabled` all
-// fail the WHOLE update rather than landing after `name` has already been saved: this is
-// the alarm→human last mile, and a half-applied edit is a channel in a state no caller
-// asked for.
+// outside the catalog, malformed config, malformed metadata, a cleared `enabled` and a
+// webhook whose declared auth and secret disagree all fail the WHOLE update rather than
+// landing after `name` has already been saved: this is the alarm→human last mile, and a
+// half-applied edit is a channel in a state no caller asked for.
 func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	request *NotificationChannelUpdateRequest) (*NotificationChannel, error) {
 	matches, err := api.NotificationChannelsByToken(ctx, []string{token})
@@ -133,6 +141,29 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	metadataJSON, err := rdb.JSONInputOf("metadata", metadata)
 	if err != nil {
 		return nil, err
+	}
+	// A webhook's declared auth and its secret must agree. The pairing is judged only when
+	// the request touches something it depends on — the type, the config, the secret — or
+	// switches the channel ON. That mirrors the catalog check above: a rename or a disable of
+	// a channel saved before `auth` was required must still go through, because refusing
+	// `enabled: false` on a broken channel would refuse the one edit that stops it failing
+	// every alarm. Enabling one is judged, because that is the moment it would start to.
+	//
+	// 🔴 THIS IS THE SAVE-TIME HALF, NOT THE GUARANTEE. The secret write below runs after the
+	// row is saved and outside its transaction, and two concurrent updates can each read a
+	// store the other is about to change, so a channel can still end up declaring bearer
+	// with no secret. Delivery re-checks the same rule (httpsink.Send) and refuses such a
+	// channel terminally; this check exists so the caller hears about the mistake now, from
+	// the request that made it, rather than from a page that never arrived.
+	if channelType == ChannelTypeWebhook && (request.ChannelType.Set || request.Config.Set ||
+		request.Secret.Set || (request.Enabled.Set && enabled)) {
+		hasSecret, err := api.channelHasSecretAfter(ctx, updated.ID, request.Secret)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateChannelCredential(token, channelType, config, hasSecret); err != nil {
+			return nil, err
+		}
 	}
 
 	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
@@ -280,6 +311,20 @@ func (api *Api) applyChannelSecret(ctx context.Context, id uint, secret *string)
 		return api.Secrets.Delete(ctx, ref)
 	}
 	return api.Secrets.Put(ctx, ref, []byte(*secret))
+}
+
+// channelHasSecretAfter answers "will this channel hold a secret once this update lands":
+// the request's value when it names the field (null or "" clears, as applyChannelSecret
+// does), otherwise the store.
+func (api *Api) channelHasSecretAfter(ctx context.Context, id uint, requested dcgraphql.OptionalString) (bool, error) {
+	if requested.Set {
+		return requested.Value != nil && *requested.Value != "", nil
+	}
+	ref, err := ChannelSecretRef(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return api.Secrets.Exists(ctx, ref)
 }
 
 // NotificationChannelsById loads channels by numeric id.

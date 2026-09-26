@@ -2515,6 +2515,46 @@ message. [A value that must be unique](../reference/graphql-api.md#unique-values
 - **These are not duplicates and do not carry `CONFLICT`:** creating a tenant at a deleted tenant's
   reserved token, and a save refused because the record changed since it was read.
 
+#### Webhook notification channels must say how they authenticate
+
+A webhook channel's config now needs an `auth` key: `none`, `bearer` or `header`. Before, the
+channel sent `Authorization: Bearer <secret>` when a secret was stored and **no credential at all**
+when none was, so a channel whose secret was missing or had been cleared kept posting
+unauthenticated, and nothing reported it. [Configuring notification
+channels](../guides/notification-channels.md) has the details.
+
+- **A webhook channel saved before this release has no `auth`, and it stops delivering at the
+  upgrade**, including one that works today. Each delivery to it is refused on the first attempt
+  and not retried, for every alarm and every escalation that routes to it, and the alarm is not
+  redelivered for that channel. The notification service logs the tenant, the channel's token and
+  the reason, and counts it on
+  `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`.
+- **Find the channels to fix before you upgrade.** In each tenant, run
+  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } pagination { totalRecords } }`
+  and look for a `config` with no `auth`. If `totalRecords` is more than 100, repeat with the next
+  `pageNumber` until you have read them all.
+- **Add `auth` before you upgrade.** The current release accepts the key and ignores it, so there
+  is no gap. Use `bearer` for a channel that has a secret (`hasSecret: true`) and `none` for one
+  that has none and should not, such as a Slack incoming webhook. A channel that set `authHeader`
+  needs `header`. One that set only `authScheme` (for example `Token`) needs
+  `"auth":"header","authHeader":"Authorization"`. With `bearer` or `none`, remove `authHeader` and
+  `authScheme`: this release refuses them there rather than ignoring them. With `none`, send
+  `secret: null` in the same update if the channel has a secret.
+- **A channel whose `auth` and secret disagree is refused when it is saved.** This covers
+  `bearer` or `header` with no secret, `none` with a secret, and clearing the secret of a `bearer`
+  or `header` channel. Rotating the secret of a channel that has no `auth` yet is refused too, until
+  `auth` is added in the same request. An update that only renames, describes or disables a channel
+  is not checked, so you can disable a broken channel without fixing it first; enabling one is
+  checked.
+- **An SMTP channel with a username and no secret** is now refused before the platform connects to
+  the mail server, and it is not retried. Before, it connected, then gave up without
+  authenticating, and retried every attempt.
+- **An `httpCall` action whose secret handle names no stored secret** is dead-lettered once with
+  the outcome `invalid` and not retried. Before, it was retried until the redelivery limit and
+  dead-lettered as exhausted, so a secret stored during that window could still let the call
+  through. Nothing replays a dead letter, so that firing's call is not made; correct the action's
+  secret handle so later firings authenticate. The call is never sent without its credential.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

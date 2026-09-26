@@ -522,7 +522,7 @@ func TestAnUnconfiguredGateDelivers(t *testing.T) {
 // and with nothing covering that, deleting `TenantDeleted: tenantDeleted` from the
 // constructor would disable the gate in production with this whole file still green.
 func TestTheConstructorWiresTheLifecycleGate(t *testing.T) {
-	n := NewPolicyNotifier(nil, nil, 3, time.Second, func(tenant string) bool { return tenant == "acme" }, nil)
+	n := NewPolicyNotifier(nil, nil, 3, time.Second, func(tenant string) bool { return tenant == "acme" }, nil, NotifyMetrics{})
 	fa := &fakeAdapter{}
 	n.adapters = map[string]ChannelAdapter{model.ChannelTypeSMTP: fa}
 	d := delivery{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"ops@x.com"}}

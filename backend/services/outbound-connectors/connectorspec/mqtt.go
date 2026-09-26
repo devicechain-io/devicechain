@@ -136,7 +136,10 @@ func parseMQTT(config []byte) (Target, error) {
 }
 
 // withMQTTSecret attaches the broker password. It is optional: an anonymous broker has
-// none.
+// none. A username with no password is a SUPPORTED shape too — brokers that take a token as
+// the username — and it is deliberately not refused the way Kafka SASL (kafka.go) and AWS
+// (aws.go) refuse a missing secret. TestMQTTUsernameWithoutPasswordIsAccepted pins it, so a
+// later "consistency" change has to fail a test to reverse it.
 func withMQTTSecret(t Target, secret string) (Target, error) {
 	m := t.(MQTTTarget)
 	m.Password = secret

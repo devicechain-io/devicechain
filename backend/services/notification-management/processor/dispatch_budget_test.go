@@ -510,7 +510,7 @@ func TestASpentBudgetStillAcks(t *testing.T) {
 // and with nothing covering that, dropping the assignment would leave production on
 // whatever the fallback happened to be.
 func TestTheConstructorSetsTheBudgetFromTheConstant(t *testing.T) {
-	n := NewPolicyNotifier(nil, nil, 3, 10*time.Second, nil, nil)
+	n := NewPolicyNotifier(nil, nil, 3, 10*time.Second, nil, nil, NotifyMetrics{})
 	if n.budget != dispatchBudget {
 		t.Fatalf("constructor set budget = %v, want dispatchBudget (%v)", n.budget, dispatchBudget)
 	}

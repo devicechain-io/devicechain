@@ -2692,6 +2692,47 @@ detalles.
 - **Estos no son duplicados y no llevan `CONFLICT`:** crear un inquilino con el token reservado de
   un inquilino eliminado, y un guardado rechazado porque el registro cambió desde que se leyó.
 
+#### Los canales de notificación webhook deben indicar cómo se autentican
+
+La configuración de un canal webhook necesita ahora una clave `auth`: `none`, `bearer` o `header`.
+Antes, el canal enviaba `Authorization: Bearer <secret>` cuando había un secreto guardado y
+**ninguna credencial** cuando no lo había, así que un canal cuyo secreto faltaba o se había borrado
+seguía publicando sin autenticación, y nada lo indicaba. [Configuración de canales de
+notificación](../guides/notification-channels.md) tiene los detalles.
+
+- **Un canal webhook guardado antes de esta versión no tiene `auth` y deja de entregar con la
+  actualización**, incluido uno que hoy funciona. Cada entrega a él se rechaza en el primer intento
+  y no se reintenta, para cada alarma y cada escalado que se dirija a él, y la alarma no se vuelve
+  a entregar para ese canal. El servicio de notificaciones registra el inquilino, el token del
+  canal y el motivo, y lo cuenta en
+  `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`.
+- **Localice los canales que hay que corregir antes de actualizar.** En cada inquilino, ejecute
+  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } pagination { totalRecords } }`
+  y busque un `config` sin `auth`. Si `totalRecords` es mayor que 100, repita con el siguiente
+  `pageNumber` hasta haberlos leído todos.
+- **Añada `auth` antes de actualizar.** La versión actual acepta la clave y la ignora, así que no
+  hay interrupción. Use `bearer` para un canal con secreto (`hasSecret: true`) y `none` para uno
+  sin secreto que no debe tenerlo, como un webhook entrante de Slack. Un canal que fijaba
+  `authHeader` necesita `header`. Uno que solo fijaba `authScheme` (por ejemplo `Token`) necesita
+  `"auth":"header","authHeader":"Authorization"`. Con `bearer` o `none`, quite `authHeader` y
+  `authScheme`: esta versión los rechaza ahí en lugar de ignorarlos. Con `none`, envíe
+  `secret: null` en la misma actualización si el canal tiene secreto.
+- **Un canal cuyo `auth` y secreto no concuerdan se rechaza al guardarlo.** Esto incluye `bearer`
+  o `header` sin secreto, `none` con secreto, y borrar el secreto de un canal `bearer` o `header`.
+  Rotar el secreto de un canal que aún no tiene `auth` también se rechaza, hasta que se añada `auth`
+  en la misma solicitud. Una actualización que solo renombra, describe o desactiva un canal no se
+  comprueba, así que puede desactivar un canal roto sin arreglarlo antes; activarlo sí se comprueba.
+- **Un canal SMTP con usuario y sin secreto** se rechaza ahora antes de que la plataforma conecte
+  con el servidor de correo, y no se reintenta. Antes conectaba, desistía sin autenticarse y
+  reintentaba en cada intento.
+- **Una acción `httpCall` cuyo manejador de secreto no tiene ningún secreto guardado** se registra
+  una vez en la cola de mensajes no entregados con el resultado `invalid` y no se reintenta. Antes
+  se reintentaba hasta el límite de reentregas y se registraba como agotada, así que un secreto
+  guardado durante ese intervalo aún podía dejar pasar la llamada. Nada vuelve a reproducir un
+  mensaje no entregado, así que la llamada de ese disparo no se hace; corrija el manejador de
+  secreto de la acción para que los disparos posteriores se autentiquen. La llamada nunca se envía
+  sin su credencial.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

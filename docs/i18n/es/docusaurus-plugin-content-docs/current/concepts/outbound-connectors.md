@@ -30,7 +30,7 @@ El selector de acciones del generador de formularios solo ofrece *levantar alarm
 
 `httpCall` envía una solicitud HTTP directamente a un endpoint que tú especificas. El cuerpo de la solicitud se moldea con una **expresión CEL** sobre el disparo, de modo que envías exactamente los campos que el receptor espera. La URL, el método, los encabezados y la plantilla del cuerpo viven en la propia acción, así que un webhook puntual no necesita ninguna configuración aparte.
 
-La autenticación es opcional y usa un **manejador de secreto**. El token se guarda en el **almacén de secretos** y se presenta en el momento del envío como un encabezado `Authorization: Bearer <token>`. El nombre del encabezado y el esquema no son configurables, así que por esta vía no puedes autenticarte ante un receptor que espera un encabezado de clave de API personalizado.
+La autenticación es opcional y usa un **manejador de secreto**. El token se guarda en el **almacén de secretos** y se presenta en el momento del envío como un encabezado `Authorization: Bearer <token>`. El nombre del encabezado y el esquema no son configurables, así que por esta vía no puedes autenticarte ante un receptor que espera un encabezado de clave de API personalizado. Si la acción nombra un manejador pero no hay ningún secreto guardado con él, la llamada nunca se envía sin su credencial: se registra una vez en la cola de mensajes no entregados con el resultado `invalid` y no se reintenta. Nada la vuelve a reproducir, así que la llamada de ese disparo no se hace; corrige el manejador de secreto de la acción para que los disparos posteriores se autentiquen.
 
 La entrega de webhooks está reforzada de estas maneras:
 

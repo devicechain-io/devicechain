@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
@@ -17,8 +18,10 @@ import (
 // webhookAdapter delivers a notification by POSTing its rendered JSON payload to an
 // HTTP endpoint (ADR-017). A Slack incoming-webhook URL is one such endpoint — the
 // payload carries a "text" field, which is what Slack renders — so Slack rides this
-// adapter rather than a vendor SDK. The channel's Config holds the URL/method/headers;
-// the channel's Secret (optional) is an auth token added as a header. The outbound
+// adapter rather than a vendor SDK. The channel's Config holds the URL/method/headers and
+// states `auth` (none | bearer | header); the channel's Secret must agree with it, and
+// httpsink.Send refuses a channel whose secret does not (terminally — see deliverWithRetry).
+// The parser is model.ParseWebhookConfig, shared with channel create/update. The outbound
 // hardening (no-redirect client, reserved-header dropping, response-body suppression)
 // lives in core/httpsink, shared with the ADR-060 connector sinks.
 type webhookAdapter struct {
@@ -28,24 +31,12 @@ type webhookAdapter struct {
 	client *http.Client
 }
 
-// webhookConfig is the webhook channel's non-secret settings. AuthHeader/AuthScheme
-// control how the channel's Secret is presented: by default the secret goes out as
-// "Authorization: Bearer <secret>"; set AuthScheme to "" and AuthHeader to a custom
-// header (e.g. "X-API-Key") to send the raw token instead.
-type webhookConfig struct {
-	URL        string            `json:"url"`
-	Method     string            `json:"method"`
-	Headers    map[string]string `json:"headers"`
-	AuthHeader string            `json:"authHeader"`
-	AuthScheme string            `json:"authScheme"`
-}
-
 // Deliver POSTs the rendered payload as JSON to the configured endpoint. recipients
 // is ignored for a webhook (the endpoint is the destination), but a rule may still
 // carry recipients for a downstream consumer, so they are threaded into the payload.
 func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
 	secret string, recipients []string, msg *RenderedNotification) error {
-	cfg, err := parseWebhookConfig(channel)
+	cfg, err := model.ParseWebhookConfig(channel.Token, dcgraphql.MetadataStr(channel.Config))
 	if err != nil {
 		return err
 	}
@@ -73,7 +64,9 @@ func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.Notificatio
 		Headers: headers,
 		Body:    body,
 		Secret:  secret,
-		Auth:    httpsink.Auth{Header: cfg.AuthHeader, Scheme: cfg.AuthScheme},
+		// No adapter-side secret check: Send judges the declared mode against the secret for
+		// every caller, before a request exists, and that is where the rule lives.
+		Auth: cfg.HTTPAuth(),
 	}); err != nil {
 		return fmt.Errorf("webhook channel %q: %w", channel.Token, err)
 	}
@@ -91,43 +84,4 @@ func webhookBody(recipients []string, msg *RenderedNotification) map[string]any 
 		body["recipients"] = recipients
 	}
 	return body
-}
-
-// parseWebhookConfig unmarshals and defaults/validates the channel's webhook config.
-// The http/https scheme guard is shared with the connector sinks (httpsink.ValidateURL);
-// webhook delivery is POST-only, since an unbounded method choice widens the SSRF
-// surface (a tenant-authored PUT/DELETE against an internal service) for no benefit.
-func parseWebhookConfig(channel *model.NotificationChannel) (*webhookConfig, error) {
-	cfg := &webhookConfig{}
-	if channel.Config != nil {
-		if err := json.Unmarshal([]byte(*channel.Config), cfg); err != nil {
-			return nil, fmt.Errorf("webhook channel %q has invalid config: %w", channel.Token, err)
-		}
-	}
-	if cfg.URL == "" {
-		return nil, fmt.Errorf("webhook channel %q config is missing url", channel.Token)
-	}
-	if _, err := httpsink.ValidateURL(cfg.URL); err != nil {
-		return nil, fmt.Errorf("webhook channel %q has an %w", channel.Token, err)
-	}
-	if cfg.Method == "" {
-		cfg.Method = http.MethodPost
-	}
-	if cfg.Method != http.MethodPost {
-		return nil, fmt.Errorf("webhook channel %q method %q is not supported (POST only)", channel.Token, cfg.Method)
-	}
-	// authHeader had no validation anywhere until now — not here, not at channel-create.
-	// It is written to the wire AFTER httpsink's reserved-header drop loop, so an X-DC-*
-	// name reached the request having passed through no filter at all.
-	//
-	// 🔴 This is NOT an authoring-time check, and calling it one would be worse than not
-	// having it. parseWebhookConfig runs from Deliver and nowhere else; CreateNotificationChannel
-	// checks only that Config is a JSON object. So a bad authHeader is still accepted at
-	// save time and still surfaces as a delivery failure. What this buys is the failure
-	// arriving with a message that names the field, next to the URL and method checks that
-	// share the same limitation — not an earlier one.
-	if err := (httpsink.Auth{Header: cfg.AuthHeader, Scheme: cfg.AuthScheme}).Validate(); err != nil {
-		return nil, fmt.Errorf("webhook channel %q has an invalid auth header: %w", channel.Token, err)
-	}
-	return cfg, nil
 }
