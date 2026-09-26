@@ -138,8 +138,7 @@ func (g *Guest) Connect(ctx context.Context) error {
 	// goroutine, so it starves every other purging tenant in the pass, and because the
 	// coordinator stops by cancelling a context and joining, it stalls pod SHUTDOWN for
 	// the same two minutes. A context-less wait is not something a caller can get out of.
-	db, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn}),
-		&gorm.Config{DisableAutomaticPing: true})
+	db, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn}), guestGormConfig())
 	if err != nil {
 		return fmt.Errorf("connecting to the %q database: %w", g.name, err)
 	}
@@ -168,6 +167,13 @@ func (g *Guest) Connect(ctx context.Context) error {
 
 // guestConnectTimeoutSeconds bounds a single connection attempt. See computeGuestDsn.
 const guestConnectTimeoutSeconds = "5"
+
+// guestGormConfig is the gorm configuration of a guest connection: the same logger as an
+// owned one (see ownedGormConfig), no NamingStrategy and no automatic ping, for the
+// reasons given where Connect opens it.
+func guestGormConfig() *gorm.Config {
+	return &gorm.Config{Logger: newGormLogger(), DisableAutomaticPing: true}
+}
 
 // computeGuestDsn builds the connection string, and the two ways it differs from an owned
 // connection's are the two ways an RdbManager pointed at another service's cluster would

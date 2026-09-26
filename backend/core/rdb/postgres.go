@@ -170,6 +170,9 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	// Note this is deliberately NOT inside the retry: an invalid sslMode is a
 	// config verdict, and retrying it just turns a clear startup error into a
 	// crash-loop that reads like the database is unreachable.
+	//
+	// Everything gorm logs on this connection goes through gormLogger (ownedGormConfig),
+	// so it lands in the service's JSON log under the configured level.
 	dsn, err := rdb.computePostgresDsn(pgconf)
 	if err != nil {
 		return err
@@ -179,11 +182,7 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		var oerr error
 		db, oerr = gorm.Open(postgres.New(postgres.Config{
 			DSN: dsn,
-		}), &gorm.Config{
-			NamingStrategy: schema.NamingStrategy{
-				TablePrefix:   fmt.Sprintf("%s.", rdb.Microservice.FunctionalArea),
-				SingularTable: false,
-			}})
+		}), ownedGormConfig(rdb.Microservice.FunctionalArea))
 		return oerr
 	}); err != nil {
 		return err
@@ -253,6 +252,20 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	}
 
 	return applyPoolSizing(rdb.Database, rdb.MicroserviceConfig, log.Info())
+}
+
+// ownedGormConfig is the gorm configuration of every connection a service opens on its
+// OWN storage. Its logger is gormLogger, never gorm's default: that one writes coloured,
+// unstructured text to stdout, outside the service's JSON log and its configured level,
+// with every bound value filled into the statement it prints.
+func ownedGormConfig(functionalArea string) *gorm.Config {
+	return &gorm.Config{
+		Logger: newGormLogger(),
+		NamingStrategy: schema.NamingStrategy{
+			TablePrefix:   fmt.Sprintf("%s.", functionalArea),
+			SingularTable: false,
+		},
+	}
 }
 
 // applyPoolSizing configures a connection pool from the per-microservice datastore

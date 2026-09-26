@@ -98,9 +98,25 @@ service logs a short hash of it instead (`config_sha256`, the first 16 hexadecim
 characters of its SHA-256). To check which configuration a pod is running, hash that
 service's entry in the rendered configuration ConfigMap and compare the two.
 
-SQL statement logging is a separate, per-service switch: `sqlDebug` in a service's
-datastore configuration. The database layer writes it through its own logger, so it is
-neither enabled nor suppressed by `infrastructure.logging.level`.
+### Database messages
+
+Database activity is logged through the same logger as everything else: JSON lines carrying
+the service's `instance` and `area` fields, filtered by the configured
+`infrastructure.logging.level`. A statement that fails is logged at `error` (`database
+statement failed`, with the database's message in `error`), and one that takes longer than
+200 ms at `warn` (`slow database statement`). Each line carries the statement (`sql`), the
+rows it affected (`rows`), its duration in milliseconds (`elapsed_ms`) and the code that
+issued it (`caller`). A query that finds no rows has not failed, so it is never logged as a
+failure; it is logged only if it is slow, or when `sqlDebug` is on.
+
+Logging every statement is a separate, per-service switch: `sqlDebug` in a service's
+datastore configuration. Its lines are written at `info`, so a level of `warn` or `error`
+hides them.
+
+The `sql` field shows a statement's placeholders (`$1`, `$2`, …), never the values bound to
+them, at every level and with `sqlDebug` on. The database's own error message is logged as
+it is, and some of those quote the value they rejected (for example, `invalid input syntax
+for type uuid: "…"`).
 
 ## The monitoring stack
 
