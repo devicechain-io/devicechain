@@ -128,6 +128,13 @@ const (
 // that covers the whole redelivery span, and this package cannot import messaging. Declaring the
 // inputs here makes that window a constant expression rather than a second literal that could
 // drift from them.
+//
+// They also have a reader outside Go. A write that fails while a database primary is being
+// replaced is left unacked, so an event is abandoned only by an outage longer than
+// (ConsumerMaxDeliver-1) x ConsumerAckWaitSeconds; the database's stop window (stopDelay and
+// switchoverDelay in the cnpg-cluster chart) is sized inside that. hack/check-cnpg-chart-schema.sh
+// reads both constants from this file by their `Name = <int>` lines, so lowering either one, or
+// computing it instead of writing it as a literal, fails that check.
 const (
 	// ConsumerAckWaitSeconds is how long the broker waits for an ack before redelivering.
 	ConsumerAckWaitSeconds = 60

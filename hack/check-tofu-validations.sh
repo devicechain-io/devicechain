@@ -651,6 +651,36 @@ run_assertions() {
   evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=true
   evaluates '"30"' 'module.cnpg_tsdb.node_loss_toleration_seconds' -var ha=false
 
+  # --- the database chart reaches an EXISTING release ----------------------------
+  #
+  # 🔴 A LOCAL CHART IS INVISIBLE TO THE PLAN UNLESS IT MOVES THE VALUES. The helm
+  # provider recomputes a release only when its chart path, values or Chart.yaml
+  # version change; it does not diff the rendered manifest. So without a digest of
+  # the chart in the values, an edited template is an EMPTY PLAN on every existing
+  # instance -- the apply is green and the live Cluster keeps the old spec. That is
+  # how new shutdown timings reached no existing database while the docs said
+  # `dcctl install` applied them.
+  #
+  # The expected digest is recomputed HERE from the files on disk, not read from the
+  # configuration, so a digest that stops covering the templates (a narrower glob),
+  # stops reaching the values, or is dropped outright fails this on both stores.
+  # The format mirrors the module's: "<path> <sha256>" per file, sorted by path,
+  # joined by newlines, hashed.
+  cnpg_chart="$repo_root/deploy/opentofu/modules/cnpg-cluster/chart"
+  chart_digest_lines=()
+  while IFS= read -r f; do
+    chart_digest_lines+=("$f $(sha256sum "$cnpg_chart/$f" | cut -d' ' -f1)")
+  done < <(cd "$cnpg_chart" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)
+  # A floor on what was hashed: an empty or truncated listing would make the
+  # expectation match a digest of nothing.
+  if ((${#chart_digest_lines[@]} < 3)); then
+    echo "FAIL  found ${#chart_digest_lines[@]} file(s) under $cnpg_chart; the chart digest assertion would compare against a digest of (almost) nothing" >&2
+    failures=$((failures + 1))
+  fi
+  want_chart_digest="$(IFS=$'\n'; printf '%s' "${chart_digest_lines[*]}" | sha256sum | cut -d' ' -f1)"
+  evaluates "\"$want_chart_digest\"" 'module.cnpg_rdb.chart_digest'
+  evaluates "\"$want_chart_digest\"" 'module.cnpg_tsdb.chart_digest'
+
   # --- the CNPG control plane's own availability (ADR-020 A1.5) ----------------
   #
   # 🔴 THE OPERATOR IS IN THE DATABASE FAILOVER PATH. CloudNativePG cannot

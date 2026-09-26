@@ -683,6 +683,57 @@ idempotente. `statement_timeout` **no** acota esa espera, porque la espera ocurr
 commit y no durante la sentencia.
 :::
 
+#### Cuando se detiene la primaria de una base de datos {#ha-database-failover}
+
+Una instancia de base de datos se detiene cuando se elimina su pod, cuando se drena su nodo y
+cuando se despliega un cambio en su configuración. La instancia primero escribe un checkpoint,
+después deja de aceptar conexiones nuevas y concede cinco segundos a los clientes conectados
+para que se desconecten. Los servicios de la plataforma mantienen abiertas sus conexiones a la
+base de datos mientras se ejecutan, así que esperar más solo retrasaría lo que viene después.
+Pasados esos cinco segundos, la instancia cierra todas las conexiones abiertas y se detiene.
+Las escrituras que estaban en curso fallan, y los servicios las reintentan.
+
+Con `--ha`, se promueve una réplica en espera en cuanto la antigua primaria se ha detenido, y
+`dc-postgresql` o `dc-timescaledb-single` pasa a apuntar a ella. En las pruebas, la nueva
+primaria aceptaba escrituras entre 20 y 25 segundos después de que la antigua cerrara sus
+conexiones, aproximadamente medio minuto después de eliminar el pod. En una base de datos que
+tiene esta configuración, desplegar un cambio de configuración no reinicia la primaria en su
+sitio: primero se reinician las réplicas en espera, después el papel de primaria se traspasa a
+una réplica al día, y la antigua primaria se reinicia como réplica. En las pruebas, ese
+traspaso interrumpió las escrituras durante unos diez segundos. Un almacén de eventos creado
+antes de que existiera esta configuración mantiene el reinicio en su sitio hasta que se le
+aplica el parche descrito en las
+[notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds).
+
+Una instalación de una sola instancia no tiene ninguna réplica que promover. Su base de datos
+no está disponible hasta que la instancia se ha reiniciado, y las escrituras esperan. En las
+pruebas, con una base de datos pequeña, las escrituras se reanudaron unos 15 segundos después
+de detenerse; un reinicio con más registro de escritura anticipada que reproducir tarda más.
+
+En ambos casos, la capa de mensajería conserva los eventos hasta que se almacenan. Cada uno se
+entrega hasta cinco veces, con un minuto entre entregas, antes de abandonarlo y
+[registrarlo como no entregado](./observability.md#max-delivery-records). Por eso una
+interrupción de la base de datos de menos de unos cuatro minutos no deja ningún evento sin
+entregar.
+
+Una instancia que se está deteniendo dispone como máximo de dos minutos en total. Si para
+entonces no se ha detenido, se detiene de forma forzosa y se elimina su pod. El motivo más
+probable es que siga intentando copiar su último registro de escritura anticipada (WAL) a un
+almacén de copias de seguridad inaccesible. Los datos confirmados siguen donde se
+confirmaron, pero puede faltar parte del archivo de copias de seguridad: puede que una
+restauración a un momento concreto no alcance un instante dentro de ese hueco, y la alerta
+`PostgresWALArchivingFailing` ya está activa. Las restauraciones a momentos posteriores a la
+siguiente copia base no se ven afectadas. Una copia base que esté en curso cuando se detiene la
+primaria se abandona, y la siguiente copia programada se ejecuta con normalidad.
+
+Con `--ha`, una primaria que se está degradando (por un traspaso, o porque está fallando)
+también se detiene de forma abrupta si no se ha apagado en dos minutos. En el almacén relacional
+eso no pierde nada, porque cada commit se retiene hasta que una réplica lo tiene. El almacén de
+eventos no espera a una réplica cuando no hay ninguna disponible, así que un commit hecho
+mientras no había ninguna réplica conectada solo existe en su primaria, y se pierde si esa
+primaria se sustituye antes de que una réplica se ponga al día. Es la concesión sobre el punto
+de recuperación descrita más arriba, y una parada abrupta es una vía más para llegar a ella.
+
 #### Cómo verificarlo {#verifying-it}
 
 Una afirmación de alta disponibilidad vale solo lo que el broker realmente sostiene, así que

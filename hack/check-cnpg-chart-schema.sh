@@ -273,6 +273,11 @@ rendered+=("$(render_case analytics-roles "${base[@]}" --set instances=1 \
   --set 'extraRoles[2].connectionLimit=5' \
   --set 'extraRoles[2].inRoles[0]=analytics_reader')")
 
+# The shutdown fast-phase floor, exactly at its boundary: stopDelay leaves 15s after
+# smartShutdownTimeout, which the chart must accept (its refusal at 14s is below).
+rendered+=("$(render_case fast-phase-floor "${base[@]}" --set instances=3 --set synchronous.enabled=true \
+  --set smartShutdownTimeout=5 --set stopDelay=20)")
+
 # --- the configurations the chart must REFUSE ---------------------------------
 say "checking the render-time guards"
 
@@ -337,6 +342,30 @@ refuses analytics-roles-over-budget "the extra roles ask for" \
   "${base[@]}" --set instances=1 --set reservedApplicationConnections=40 \
   --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true' \
   --set 'extraRoles[0].connectionLimit=60'
+
+# SHUTDOWN TIMING. Each floor is a `fail`, so the coverage control below demands a
+# case for it. The unset and the 0 cases are both here because they reach
+# CloudNativePG differently -- null is turned into 0 by the template's `int`, and 0
+# is what its getters read as 1800 / 3600 -- and a guard that caught only one
+# spelling would let the other restore the hour-long demotion bound.
+refuses smart-shutdown-unset "smartShutdownTimeout must be 0 or more seconds" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set smartShutdownTimeout=null
+refuses smart-shutdown-negative "smartShutdownTimeout must be 0 or more seconds" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set smartShutdownTimeout=-1
+refuses stop-delay-unset "stopDelay must be at least 1 second" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set stopDelay=null
+refuses stop-delay-zero "stopDelay must be at least 1 second" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set stopDelay=0
+refuses switchover-delay-unset "switchoverDelay must be at least 1 second" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set switchoverDelay=null
+refuses switchover-delay-zero "switchoverDelay must be at least 1 second" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set switchoverDelay=0
+# The fast-phase floor AT its boundary: 14s left is refused, and 15s left renders
+# (the `fast-phase-floor` positive case above). A case far below the floor would
+# let the threshold drift anywhere under it with this still green.
+refuses shutdown-fast-phase-too-short "seconds for the fast shutdown" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true \
+  --set smartShutdownTimeout=5 --set stopDelay=19
 
 # COVERAGE: every `fail` in the templates must have been tripped by a case above.
 # A guard nothing exercises is indistinguishable from one that has stopped firing,
@@ -799,3 +828,130 @@ print("    %d optional block(s) exercised: %s" % (
 PY
 
 note "every rendered field exists in the pinned CRD schemas"
+
+# --- the shutdown timing, against the redelivery budget ------------------------
+#
+# 🔴 THIS IS A CHECK OF VALUES, NOT OF FIELD NAMES, and it reads an ABSENT field at
+# the CRD's own default -- because absent is not "no timeout", it is CloudNativePG's
+# 180 / 1800 / 3600, and that is exactly the shape that shipped before: a deleted or
+# drained primary sat 180s in a smart shutdown waiting for pooled connections that
+# never close, a new primary took 3m24s, and the whole outage sat inside a 4-minute
+# redelivery budget with seconds to spare. Deleting a line from the template brings
+# that back with every other check green; this is what notices. A stopDelay or
+# switchoverDelay at or below 0 is read at the default too, because that is how
+# CloudNativePG reads it (see `effective` below).
+#
+# The budget is not restated here. It is read from the constants the consumers use
+# (backend/core/streams/streams.go): a transiently failing write is left unacked, so
+# a message is abandoned only once all ConsumerMaxDeliver deliveries have fallen
+# inside the outage, i.e. an outage longer than (MaxDeliver-1) x AckWait.
+#
+# The over-budget render passes every chart guard and must FAIL here -- the proof
+# that this check can fail on a render the chart itself accepts. It is not added to
+# `rendered`, so the schema walk above does not see it; it needs none, its fields
+# are the ones the positive renders already validate.
+say "checking the shutdown timing against the redelivery budget"
+over_budget="$(render_case over-budget "${base[@]}" --set instances=3 --set synchronous.enabled=true \
+  --set stopDelay=1800 --set switchoverDelay=1800)"
+
+python3 - "$crds" "$repo_root/backend/core/streams/streams.go" "$over_budget" "${rendered[@]}" <<'PY'
+import re, sys, yaml
+
+crd_path, streams_go, over_budget, rendered = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+
+FIELDS = ("smartShutdownTimeout", "stopDelay", "switchoverDelay", "primaryUpdateMethod")
+
+# The CRD's own defaults, from the Cluster CRD's STORAGE version -- matched on group
+# as well as kind, because the concatenated file also carries the plugin's CRDs.
+defaults = None
+for doc in yaml.safe_load_all(open(crd_path)):
+    if not doc or doc.get("kind") != "CustomResourceDefinition":
+        continue
+    if doc["spec"]["group"] != "postgresql.cnpg.io" or doc["spec"]["names"]["kind"] != "Cluster":
+        continue
+    for version in doc["spec"]["versions"]:
+        if version.get("storage"):
+            props = version["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
+            missing = [f for f in FIELDS if "default" not in props.get(f, {})]
+            if missing:
+                sys.exit("the pinned Cluster CRD declares no default for %s; an absent field "
+                         "could not be read at its real value" % ", ".join(missing))
+            defaults = {f: props[f]["default"] for f in FIELDS}
+if not defaults:
+    sys.exit("no postgresql.cnpg.io Cluster CRD storage version found; the budget check would read nothing")
+
+src = open(streams_go).read()
+def const(name):
+    m = re.findall(r"(?m)^\s*%s\s*=\s*(\d+)\s*$" % name, src)
+    if len(m) != 1:
+        sys.exit("expected exactly one `%s = <int>` in %s, found %d" % (name, streams_go, len(m)))
+    return int(m[0])
+
+ack_wait, max_deliver = const("ConsumerAckWaitSeconds"), const("ConsumerMaxDeliver")
+budget = (max_deliver - 1) * ack_wait  # an outage longer than this abandons events
+
+# From the end of a primary's stop to a new primary taking writes. Measured at
+# 23-24s on both stores (fast shutdown -> promotion); 60 leaves room for a slower one.
+PROMOTION_ALLOWANCE = 60
+# The smart phase never completes while the services are connected, so every second
+# of it is added to the failover. This is the most of it the check tolerates.
+SMART_WAIT_MAX = 15
+
+# 🔴 ABSENT IS NOT THE ONLY SPELLING OF THE DEFAULT. stopDelay and switchoverDelay
+# are plain int32 fields, and CloudNativePG's getters (GetMaxStopDelay,
+# GetMaxSwitchoverDelay) return the default for anything at or below 0 -- so a
+# rendered `switchoverDelay: 0` is an hour, not no wait. smartShutdownTimeout is a
+# pointer and its 0 is honoured.
+DEFAULT_AT_OR_BELOW_ZERO = ("stopDelay", "switchoverDelay")
+
+def effective(spec, f):
+    v = spec.get(f)
+    if v is None or (f in DEFAULT_AT_OR_BELOW_ZERO and int(v) <= 0):
+        return defaults[f]
+    return v
+
+def violations(cluster):
+    spec = cluster.get("spec") or {}
+    eff = {f: effective(spec, f) for f in FIELDS}
+    out = []
+    if eff["smartShutdownTimeout"] > SMART_WAIT_MAX:
+        out.append("smartShutdownTimeout %d > %d: a stopping primary waits that long for "
+                   "clients that never leave" % (eff["smartShutdownTimeout"], SMART_WAIT_MAX))
+    for f in ("stopDelay", "switchoverDelay"):
+        if eff[f] + PROMOTION_ALLOWANCE > budget:
+            out.append("%s %d + %ds promotion exceeds the %ds redelivery budget"
+                       % (f, eff[f], PROMOTION_ALLOWANCE, budget))
+    if int(spec.get("instances", 1)) > 1 and eff["primaryUpdateMethod"] != "switchover":
+        out.append("primaryUpdateMethod %r at %s instances: a roll deletes the primary and waits "
+                   "for it with no standby promoted" % (eff["primaryUpdateMethod"], spec.get("instances")))
+    return out
+
+def clusters(path):
+    cs = [d for d in yaml.safe_load_all(open(path)) if d and d.get("kind") == "Cluster"]
+    if not cs:
+        sys.exit("%s rendered no Cluster; the budget check would pass over nothing" % path)
+    return cs
+
+# Self-test 1: an absent field is read at the CRD default and fails. No chart render
+# can exercise this path while the template `required`s the fields, so it is planted.
+if len(violations({"spec": {"instances": 3}})) != 4:
+    sys.exit("a 3-instance Cluster with no shutdown fields did not fail on all four counts; "
+             "an absent field is not being read at the CRD default")
+# Self-test 1b: a stopDelay / switchoverDelay of 0 is read at the CRD default, as
+# CloudNativePG reads it, and fails -- the chart refuses 0, so this too is planted.
+if len(violations({"spec": {"instances": 3, "smartShutdownTimeout": 5, "stopDelay": 0,
+                            "switchoverDelay": 0, "primaryUpdateMethod": "switchover"}})) != 2:
+    sys.exit("a Cluster with stopDelay and switchoverDelay at 0 did not fail on both; a 0 is "
+             "being read as no wait, but CloudNativePG reads it as 1800 / 3600")
+# Self-test 2: a render that passes every chart guard but blows the budget must fail.
+if not any(violations(c) for c in clusters(over_budget)):
+    sys.exit("the over-budget render passed; this check cannot fail")
+
+bad = [(p, v) for p in rendered for c in clusters(p) for v in violations(c)]
+for p, v in bad:
+    sys.stderr.write("SHUTDOWN BUDGET: %s: %s\n" % (p.rsplit("/", 1)[-1], v))
+if bad:
+    sys.exit("%d shutdown-timing violation(s). An outage longer than (ConsumerMaxDeliver-1) x "
+             "ConsumerAckWaitSeconds = %ds abandons events after their last delivery." % (len(bad), budget))
+print("    shutdown timing inside the %ds redelivery budget in %d render(s)" % (budget, len(rendered)))
+PY

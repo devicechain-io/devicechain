@@ -570,8 +570,11 @@ module "cnpg_rdb" {
   # default-profile instances, and `dcctl install --max-connections` is the knob.
   #
   # 🔑 RAISE THIS BEFORE RAISING `replicas` OR THE POOL CAP, and note that changing
-  # it is applied by CNPG as a rolling in-place restart (~2.5 min on the rig), not a
-  # reload.
+  # it is applied by CNPG as a rolling restart, not a reload: the standbys first,
+  # then the primary -- by switchover above one instance, in place at one (see
+  # primaryUpdateMethod in the cnpg-cluster chart). The ~2.5 min once measured on
+  # the rig predates the chart's shutdown timing, when every stop spent 180s waiting
+  # for clients that never disconnect; it has not been re-measured.
   #
   # 🔑 THE FOOTPRINT COST IS SMALL, AND IT WAS MEASURED RATHER THAN ASSUMED, because
   # `--compact` exists for small nodes and the instances request only 256Mi with no

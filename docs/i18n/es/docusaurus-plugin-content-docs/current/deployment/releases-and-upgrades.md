@@ -2911,6 +2911,77 @@ datos que escribió el servidor anterior.
 No hay nada que configurar. Si dirige los respaldos a su propio almacén de objetos con
 `--backup-credentials-file`, no cambia nada para usted.
 
+#### La primaria de una base de datos conmuta en segundos {#database-primary-failover-in-seconds}
+
+Eliminar el pod de la primaria de una base de datos, drenar su nodo o desplegar un cambio en ella
+retenía la conmutación por error durante tres minutos: la primaria esperaba a que todos los
+clientes se desconectaran, y los servicios de la plataforma nunca lo hacen. Ahora concede cinco
+segundos a los clientes y después se detiene, de modo que con `--ha` una réplica en espera toma
+el relevo en bastante menos de un minuto. Vea
+[Cuando se detiene la primaria de una base de datos](./bootstrap.md#ha-database-failover).
+
+- **Una base de datos de varias instancias renueva ahora su primaria mediante un traspaso.** Las
+  versiones anteriores reiniciaban la primaria en su sitio y la esperaban, sin promover ninguna
+  réplica, lo que convertía cada uno de esos despliegues en una interrupción completa de las
+  escrituras.
+- **Una instancia de base de datos que se está deteniendo se detiene de forma forzosa a los dos
+  minutos**, en lugar de a los treinta. Un pod de base de datos que podía quedarse en
+  `Terminating` hasta media hora después de haberse detenido su base de datos, dejando al clúster
+  con una réplica de menos, ahora se elimina en dos minutos como máximo.
+- **Si el almacén de copias de seguridad es inaccesible cuando se detiene una instancia**, esta
+  ya no espera hasta treinta minutos a que se archive su último registro de escritura
+  anticipada: espera como máximo dos. Los datos confirmados no se ven afectados, pero el archivo
+  puede tener un hueco, como se describe en la página enlazada arriba.
+
+**Las instancias del almacén relacional se reinician una vez cuando `dcctl install` actualiza el
+clúster.** Con `--ha` primero se reinician las réplicas en espera y después el papel de primaria
+se traspasa a una de ellas, lo que supone una breve interrupción de las escrituras. Una
+instalación de una sola instancia reinicia su única instancia en su sitio, y el almacén
+relacional no está disponible hasta que termina el reinicio. Las escrituras de ese intervalo se
+reintentan.
+
+**El almacén de eventos de una instancia existente conserva la configuración anterior.**
+`dcctl upgrade` no vuelve a aplicar las bases de datos de una instancia, así que solo las
+instancias creadas con esta versión reciben la nueva configuración en su almacén de eventos.
+Para dar la misma configuración al almacén de eventos de una instancia existente, aplique un
+parche a su clúster de base de datos con UNO de estos comandos. Esto reinicia sus instancias
+una vez, como se describe arriba:
+
+```bash
+# con --ha: el ajuste de traspaso va en el MISMO parche que los tiempos
+kubectl -n dci-<instance> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"primaryUpdateMethod":"switchover","smartShutdownTimeout":5,"stopDelay":120,"switchoverDelay":120}}'
+# una instalación de una sola instancia
+kubectl -n dci-<instance> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"smartShutdownTimeout":5,"stopDelay":120,"switchoverDelay":120}}'
+```
+
+Con `--ha`, no divida el primer comando en dos parches aplicando primero los tiempos. Cambiar
+`stopDelay` inicia el reinicio de inmediato y, si el ajuste de traspaso aún no está aplicado, la
+primaria se reinicia en su sitio sin promover ninguna réplica, que es la interrupción larga que
+esta versión elimina.
+
+**Con `--ha`, un cambio de imagen de la base de datos y un cambio de parámetros de la base de
+datos deben aplicarse por separado.** Con el ajuste de traspaso aplicado, el operador de la base
+de datos rechaza una actualización que cambia a la vez la imagen de la base de datos y cualquier
+parámetro de la base de datos. Por tanto, se rechaza una sola ejecución de `dcctl install` que
+pase a una versión con una nueva imagen de base de datos y cambie además `--max-connections`.
+Ejecute primero `dcctl install` sin el cambio de `--max-connections` y después otra vez con él.
+
+:::caution El reinicio que aplica esta configuración aún tiene el antiguo límite de treinta minutos
+El límite de dos minutos pertenece a cada pod de base de datos, así que llega con el reinicio que
+sustituye el pod, y los pods que se sustituyen todavía tienen treinta minutos. Si un pod de base
+de datos se queda en `Terminating` más de dos minutos durante ese reinicio, y su registro muestra
+`failed waiting for all runnables to end within grace period of 30s`, su base de datos ya se ha
+detenido y el pod no va a terminar por sí solo. Elimínelo, y el operador lo vuelve a crear:
+
+```bash
+# los pods del almacén relacional son dc-rdb-<n> en dc-system,
+# los del almacén de eventos son dc-tsdb-<n> en dci-<instance>
+kubectl -n dc-system delete pod dc-rdb-1 --grace-period=0 --force
+```
+:::
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

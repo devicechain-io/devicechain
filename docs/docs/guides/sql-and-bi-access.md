@@ -320,6 +320,10 @@ assumption that every one of those connections may be running a long query.
   refused. Two tools on one tenant share the connection limit and the position decision, and cannot
   be revoked separately. Size `connection_limit` for all of them together, and set `reads_location`
   if *any* of them needs a map.
+- **A database restart ends a reader's session after five seconds.** When the event store's primary
+  stops (a failover, a node drain, a configuration rollout), connected clients get five seconds
+  before their sessions are ended, so a long query running at that moment fails. Reconnect and run
+  it again. See [when a database primary stops](../deployment/bootstrap.md#ha-database-failover).
 - **A reader survives a schema change but does not automatically gain from one.** The views expose a
   fixed set of columns. A column added to the platform later appears on the analytics surface when it
   is deliberately added there, not before.
