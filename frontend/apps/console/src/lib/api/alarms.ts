@@ -38,7 +38,6 @@ const ALARMS = graphql(`
         acknowledgedTime
         acknowledgedBy
         lastValue
-        message
       }
       pagination {
         pageStart
@@ -131,7 +130,6 @@ export const ALARM_STREAM = graphql(`
       acknowledged
       acknowledgedBy
       lastValue
-      message
       raisedTime
       occurredTime
     }

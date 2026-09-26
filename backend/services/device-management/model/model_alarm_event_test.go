@@ -76,7 +76,6 @@ func TestNewAlarmStateChangeEvent(t *testing.T) {
 		RaisedTime:     raised,
 		AcknowledgedBy: sql.NullString{String: "op@example.com", Valid: true},
 		LastValue:      sql.NullFloat64{Float64: 123.5, Valid: true},
-		Message:        sql.NullString{String: "too hot", Valid: true},
 	}
 	ev := newAlarmStateChangeEvent(a, AlarmEventEscalated, string(AlarmSeverityMajor), a.RaisedTime)
 	if ev.EventType != AlarmEventEscalated || ev.AlarmToken != "alarm-tok" ||
@@ -95,9 +94,6 @@ func TestNewAlarmStateChangeEvent(t *testing.T) {
 	if ev.LastValue == nil || *ev.LastValue != 123.5 {
 		t.Errorf("lastValue = %v, want 123.5", ev.LastValue)
 	}
-	if ev.Message == nil || *ev.Message != "too hot" {
-		t.Errorf("message = %v, want 'too hot'", ev.Message)
-	}
 
 	// A cleared, never-acknowledged alarm leaves the nullable pointers nil.
 	b := &Alarm{
@@ -106,7 +102,7 @@ func TestNewAlarmStateChangeEvent(t *testing.T) {
 		Severity:       string(AlarmSeverityWarning),
 	}
 	evb := newAlarmStateChangeEvent(b, AlarmEventCleared, "", b.ClearedTime.Time)
-	if evb.AcknowledgedBy != nil || evb.LastValue != nil || evb.Message != nil {
+	if evb.AcknowledgedBy != nil || evb.LastValue != nil {
 		t.Errorf("expected nil nullable pointers, got %+v", evb)
 	}
 	if evb.PreviousSeverity != "" {

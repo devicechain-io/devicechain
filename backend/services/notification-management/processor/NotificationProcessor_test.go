@@ -61,7 +61,6 @@ func newTestProcessor(n Notifier) *NotificationProcessor {
 // validEventBytes marshals a representative alarm state-change envelope.
 func validEventBytes(t *testing.T) []byte {
 	t.Helper()
-	msg := "temperature above threshold"
 	val := 42.5
 	bytes, err := dmproto.MarshalAlarmStateChangeEvent(&dmmodel.AlarmStateChangeEvent{
 		EventType:      dmmodel.AlarmEventRaised,
@@ -73,7 +72,6 @@ func validEventBytes(t *testing.T) []byte {
 		State:          "ACTIVE",
 		Severity:       "CRITICAL",
 		LastValue:      &val,
-		Message:        &msg,
 		RaisedTime:     time.Unix(1_700_000_000, 0).UTC(),
 		OccurredTime:   time.Unix(1_700_000_000, 0).UTC(),
 	})

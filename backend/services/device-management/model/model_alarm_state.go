@@ -76,16 +76,6 @@ type Alarm struct {
 	// column as it was rather than NULLing it, so one contributor resolving does not erase a
 	// co-contributor's real reading.
 	LastValue sql.NullFloat64
-	// Message is DEAD: nothing in this service, or any other, ever writes it. It was the retired
-	// measurement evaluator's human-readable summary; the ADR-057 contributor fold that replaced the
-	// evaluator has no equivalent, because a multi-contributor alarm has no single rule to phrase a
-	// summary from. It is still declared, still exposed as Alarm.message in the GraphQL schema, still
-	// resolved, still copied onto every AlarmEvent — and always reads null through all of them,
-	// including the console's alarm list, which renders it when present and therefore never renders
-	// it. Kept rather than removed only because dropping a column is a schema change and the
-	// baselines are frozen; it is a follow-up, not an intentional extension point. Do NOT start
-	// writing it without deciding what a summary means for a contributor SET.
-	Message sql.NullString
 
 	// Contributors is the ADR-057 contributor set: the JSON-encoded {ruleID → AlarmContributor} map
 	// the DETECT+REACT integrator reference-counts to derive State + Severity (raise adds/updates a

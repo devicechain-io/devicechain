@@ -82,7 +82,6 @@ type AlarmStateChangeEvent struct {
 
 	AcknowledgedBy *string
 	LastValue      *float64
-	Message        *string
 
 	// RaisedTime is when the current alarm cycle began (the row's RaisedTime). Paired
 	// with OccurredTime it lets a subscriber show how long an alarm was active without
@@ -156,10 +155,6 @@ func newAlarmStateChangeEvent(a *Alarm, etype AlarmEventType, prevSeverity strin
 	if a.LastValue.Valid {
 		v := a.LastValue.Float64
 		ev.LastValue = &v
-	}
-	if a.Message.Valid {
-		m := a.Message.String
-		ev.Message = &m
 	}
 	return ev
 }

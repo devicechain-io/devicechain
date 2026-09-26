@@ -126,7 +126,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                       <td style={cell}>
                         <OriginatorCell alarm={alarm} drillTo={drillTo} />
                       </td>
-                      <td style={cell} title={alarm.message ?? undefined}>
+                      <td style={cell}>
                         {alarm.alarmKey}
                       </td>
                       <td style={{ ...cell, textAlign: 'right' }}>

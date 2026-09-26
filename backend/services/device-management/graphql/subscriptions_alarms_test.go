@@ -62,7 +62,6 @@ func TestAlarmEventResolverFields(t *testing.T) {
 	occurred := time.Date(2026, 7, 4, 10, 42, 17, 0, time.UTC)
 	by := "op@example.com"
 	last := 123.5
-	msg := "too hot"
 	r := &AlarmEventResolver{E: &model.AlarmStateChangeEvent{
 		EventType:        model.AlarmEventEscalated,
 		AlarmToken:       "alarm-tok",
@@ -76,7 +75,6 @@ func TestAlarmEventResolverFields(t *testing.T) {
 		Acknowledged:     true,
 		AcknowledgedBy:   &by,
 		LastValue:        &last,
-		Message:          &msg,
 		RaisedTime:       raised,
 		OccurredTime:     occurred,
 	}}
@@ -97,8 +95,7 @@ func TestAlarmEventResolverFields(t *testing.T) {
 		t.Errorf("raisedTime = %v", r.RaisedTime())
 	}
 	if r.AcknowledgedBy() == nil || *r.AcknowledgedBy() != by ||
-		r.LastValue() == nil || *r.LastValue() != last ||
-		r.Message() == nil || *r.Message() != msg {
+		r.LastValue() == nil || *r.LastValue() != last {
 		t.Errorf("nullable passthrough mismatch: %+v", r)
 	}
 
@@ -108,7 +105,7 @@ func TestAlarmEventResolverFields(t *testing.T) {
 		OccurredTime: occurred,
 	}}
 	if bare.PreviousSeverity() != nil || bare.AcknowledgedBy() != nil ||
-		bare.LastValue() != nil || bare.Message() != nil || bare.RaisedTime() != nil {
+		bare.LastValue() != nil || bare.RaisedTime() != nil {
 		t.Errorf("expected nils on a bare event, got %+v", bare)
 	}
 }

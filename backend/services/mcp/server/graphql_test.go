@@ -34,8 +34,8 @@ func TestGraphQLClient_ForwardsTokenAndUnmarshalsData(t *testing.T) {
 	var out struct {
 		Ping string `json:"ping"`
 	}
-	err := testClient(ts.URL).Query(context.Background(), "device-management", "the-token",
-		"query { ping }", map[string]any{"x": 1}, &out)
+	err := testClient(ts.URL).Query(context.Background(),
+		document{area: "device-management", text: "query { ping }"}, "the-token", map[string]any{"x": 1}, &out)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestGraphQLClient_GraphQLErrorSurfaces(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := testClient(ts.URL).Query(context.Background(), "device-management", "t", "q", nil, nil)
+	err := testClient(ts.URL).Query(context.Background(), document{area: "device-management", text: "q"}, "t", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error from the GraphQL errors array")
 	}
@@ -70,7 +70,7 @@ func TestGraphQLClient_HTTPErrorSurfaces(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := testClient(ts.URL).Query(context.Background(), "device-management", "t", "q", nil, nil)
+	err := testClient(ts.URL).Query(context.Background(), document{area: "device-management", text: "q"}, "t", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error from the 401 status")
 	}

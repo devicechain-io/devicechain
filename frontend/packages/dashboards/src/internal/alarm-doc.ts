@@ -56,7 +56,6 @@ export const ALARMS_QUERY = `
         acknowledgedTime
         acknowledgedBy
         lastValue
-        message
       }
       pagination {
         totalRecords

@@ -737,7 +737,6 @@ type Alarm implements Model & TokenReference & MetadataEntity {
     acknowledgedTime: String
     acknowledgedBy: String
     lastValue: Float
-    message: String
     metadata: String
 }
 
@@ -2548,7 +2547,6 @@ type AlarmEvent {
     acknowledged: Boolean!
     acknowledgedBy: String
     lastValue: Float
-    message: String
     # When the current alarm cycle began (pairs with occurredTime for "active 42m").
     raisedTime: String
     # The event time that drove the transition (measurement time, or operation time

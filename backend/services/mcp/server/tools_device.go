@@ -23,11 +23,11 @@ type GetDeviceOutput struct {
 	Devices []DeviceSummary `json:"devices"`
 }
 
-const getDeviceQuery = `query GetDevice($tokens: [String!]!) {
+var getDeviceQuery = newDocument("device-management", `query GetDevice($tokens: [String!]!) {
   devicesByToken(tokens: $tokens) {
     token name description externalId deviceType { token }
   }
-}`
+}`)
 
 // GetDevice resolves one or more devices by token.
 func (t *Tools) GetDevice(ctx context.Context, req *mcp.CallToolRequest, in GetDeviceInput) (*mcp.CallToolResult, GetDeviceOutput, error) {
@@ -49,7 +49,7 @@ func (t *Tools) GetDevice(ctx context.Context, req *mcp.CallToolRequest, in GetD
 			} `json:"deviceType"`
 		} `json:"devicesByToken"`
 	}
-	if err := t.gql.Query(ctx, "device-management", token, getDeviceQuery, map[string]any{"tokens": in.Tokens}, &resp); err != nil {
+	if err := t.gql.Query(ctx, getDeviceQuery, token, map[string]any{"tokens": in.Tokens}, &resp); err != nil {
 		return nil, GetDeviceOutput{}, err
 	}
 	out := GetDeviceOutput{}
@@ -92,11 +92,11 @@ type GetDeviceStateOutput struct {
 	States []DeviceStateSummary `json:"states"`
 }
 
-const getDeviceStateQuery = `query GetDeviceState($deviceTokens: [String!]!) {
+var getDeviceStateQuery = newDocument("device-state", `query GetDeviceState($deviceTokens: [String!]!) {
   deviceStatesByDeviceToken(deviceTokens: $deviceTokens) {
     deviceToken active lastConnectTime lastDisconnectTime lastActivityTime inactivityTimeout presenceSource
   }
-}`
+}`)
 
 // GetDeviceState reads the live last-known connectivity state per device.
 func (t *Tools) GetDeviceState(ctx context.Context, req *mcp.CallToolRequest, in GetDeviceStateInput) (*mcp.CallToolResult, GetDeviceStateOutput, error) {
@@ -110,7 +110,7 @@ func (t *Tools) GetDeviceState(ctx context.Context, req *mcp.CallToolRequest, in
 	var resp struct {
 		DeviceStatesByDeviceToken []DeviceStateSummary `json:"deviceStatesByDeviceToken"`
 	}
-	if err := t.gql.Query(ctx, "device-state", token, getDeviceStateQuery, map[string]any{"deviceTokens": in.DeviceTokens}, &resp); err != nil {
+	if err := t.gql.Query(ctx, getDeviceStateQuery, token, map[string]any{"deviceTokens": in.DeviceTokens}, &resp); err != nil {
 		return nil, GetDeviceStateOutput{}, err
 	}
 	return nil, GetDeviceStateOutput{States: resp.DeviceStatesByDeviceToken}, nil
@@ -134,11 +134,11 @@ type GetLatestMeasurementsOutput struct {
 	Measurements []LatestMeasurement `json:"measurements"`
 }
 
-const latestMeasurementsQuery = `query LatestMeasurements($deviceToken: String!) {
+var latestMeasurementsQuery = newDocument("device-state", `query LatestMeasurements($deviceToken: String!) {
   latestMeasurements(deviceToken: $deviceToken) {
     name value unit dataType occurredTime
   }
-}`
+}`)
 
 // GetLatestMeasurements reads the last-known value of each metric for a device.
 func (t *Tools) GetLatestMeasurements(ctx context.Context, req *mcp.CallToolRequest, in GetLatestMeasurementsInput) (*mcp.CallToolResult, GetLatestMeasurementsOutput, error) {
@@ -152,7 +152,7 @@ func (t *Tools) GetLatestMeasurements(ctx context.Context, req *mcp.CallToolRequ
 	var resp struct {
 		LatestMeasurements []LatestMeasurement `json:"latestMeasurements"`
 	}
-	if err := t.gql.Query(ctx, "device-state", token, latestMeasurementsQuery, map[string]any{"deviceToken": in.DeviceToken}, &resp); err != nil {
+	if err := t.gql.Query(ctx, latestMeasurementsQuery, token, map[string]any{"deviceToken": in.DeviceToken}, &resp); err != nil {
 		return nil, GetLatestMeasurementsOutput{}, err
 	}
 	return nil, GetLatestMeasurementsOutput{Measurements: resp.LatestMeasurements}, nil
@@ -201,7 +201,7 @@ type GetDeviceCapabilitiesOutput struct {
 // Metrics still read the profile's DRAFT definitions; commands read the device's
 // published vocabulary, which device-management resolves against the same snapshot the
 // enqueue gate validates against. Both are fetched in one request.
-const deviceCapabilitiesQuery = `query DeviceCapabilities($tokens: [String!]!, $deviceToken: String!) {
+var deviceCapabilitiesQuery = newDocument("device-management", `query DeviceCapabilities($tokens: [String!]!, $deviceToken: String!) {
   devicesByToken(tokens: $tokens) {
     token
     deviceType {
@@ -216,7 +216,7 @@ const deviceCapabilitiesQuery = `query DeviceCapabilities($tokens: [String!]!, $
     constrained
     commands { commandKey name description parameterSchema }
   }
-}`
+}`)
 
 // GetDeviceCapabilities reports what a device can measure and what it can be told to do.
 //
@@ -258,7 +258,7 @@ func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequ
 		} `json:"deviceCommandVocabulary"`
 	}
 	vars := map[string]any{"tokens": []string{in.DeviceToken}, "deviceToken": in.DeviceToken}
-	if err := t.gql.Query(ctx, "device-management", token, deviceCapabilitiesQuery, vars, &resp); err != nil {
+	if err := t.gql.Query(ctx, deviceCapabilitiesQuery, token, vars, &resp); err != nil {
 		return nil, GetDeviceCapabilitiesOutput{}, err
 	}
 	if len(resp.DevicesByToken) == 0 {

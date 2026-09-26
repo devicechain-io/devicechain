@@ -218,7 +218,10 @@ message PAlarmStateChangeEvent {
     optional string previous_severity = 10;
     optional string acknowledged_by = 11;
     optional double last_value = 12;
-    optional string message = 13;
+    // 13 was message, a summary nothing ever set. Reserved by number and name so neither is
+    // reused for a field of a different meaning that an older decoder would misread.
+    reserved 13;
+    reserved "message";
     string occurred_time = 14;
     string raised_time = 15;
 }

@@ -100,8 +100,6 @@ func (r *AlarmResolver) AcknowledgedBy() *string { return util.NullStr(r.M.Ackno
 
 func (r *AlarmResolver) LastValue() *float64 { return nullFloat(r.M.LastValue) }
 
-func (r *AlarmResolver) Message() *string { return util.NullStr(r.M.Message) }
-
 // ---------------------------
 // Alarm search results resolver
 // ---------------------------

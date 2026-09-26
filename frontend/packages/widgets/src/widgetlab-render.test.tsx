@@ -144,7 +144,6 @@ const alarmRow: AlarmRow = {
   acknowledgedTime: null,
   acknowledgedBy: null,
   lastValue: 31.5,
-  message: 'over temperature',
 };
 
 // A completed command round trip, as a RENDER INPUT: this asserts the widget draws

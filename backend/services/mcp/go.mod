@@ -8,6 +8,7 @@ replace github.com/devicechain-io/dc-microservice => ../../core
 
 require (
 	github.com/devicechain-io/dc-microservice v0.0.0-00010101000000-000000000000
+	github.com/graph-gophers/graphql-go v1.10.2
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/stretchr/testify v1.12.1
@@ -26,7 +27,6 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
-	github.com/graph-gophers/graphql-go v1.10.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect

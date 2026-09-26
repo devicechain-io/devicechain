@@ -284,11 +284,6 @@ export default function AlarmsPage() {
                   <DataTableCell>
                     <div className="font-medium text-foreground">{a.alarmKey}</div>
                     <div className="font-mono text-xs text-muted-foreground">{a.metricKey}</div>
-                    {a.message && (
-                      <div className="max-w-xs truncate text-xs text-muted-foreground" title={a.message}>
-                        {a.message}
-                      </div>
-                    )}
                   </DataTableCell>
                   <DataTableCell className="text-right tabular-nums text-foreground">
                     {a.lastValue ?? '—'}

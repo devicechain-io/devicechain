@@ -1650,6 +1650,10 @@ Si usa reglas de duración, sobre todo en dispositivos que suben lecturas acumul
 `detect_late_samples_total` o las claves vivas por inquilino, lea «Las reglas de duración colocan
 las lecturas tardías según su propia hora».
 
+Si consulta alarmas mediante la API de GraphQL, las herramientas de alarmas de MCP,
+`@devicechain/dashboards` o `@devicechain/widgets`, o procesa webhooks de notificación, lea «Se
+elimina el campo `message` de las alarmas».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2557,6 +2561,44 @@ Un punto de control escrito antes de la actualización se restaura sin cambios, 
 alarma de duración elevada en ese momento. Volver después a la versión anterior no convierte los
 registros nuevos en alarmas: solo lee del punto de control las rachas abiertas e ignora el resto. No hay que hacer nada en
 la actualización.
+
+#### Se elimina el campo `message` de las alarmas
+
+Las alarmas tenían un campo `message` que nada rellenaba nunca: siempre era nulo. Se elimina en
+todos los sitios donde aparecía:
+
+- **GraphQL:** desaparecen `Alarm.message` y `AlarmEvent.message` (la suscripción `alarmStream`).
+  Una consulta o suscripción que siga seleccionando `message` ahora se rechaza con
+  `Cannot query field "message"`. Quítelo de sus propios documentos antes de actualizar.
+- **`@devicechain/dashboards` y `@devicechain/widgets`:** `AlarmRow` ya no tiene `message`, así que
+  el código que lee `AlarmRow.message` ya no compila. El widget de tabla de alarmas ya no muestra
+  una descripción emergente sobre la clave de la alarma, y la vista previa del editor de paneles ya
+  no muestra mensajes de alarma inventados. Las versiones de estos paquetes anteriores a esta
+  versión siguen seleccionando `message`, así que el servidor actualizado rechaza su lista de
+  alarmas y los widgets de alarmas dejan de cargar: actualice los paquetes junto con la plataforma.
+- **Notificaciones:** los correos de alarma ya no tienen una línea `Message` y las cargas de los
+  webhooks ya no tienen una clave `message`. Ninguna de las dos apareció nunca, porque el valor
+  siempre estaba vacío.
+- **MCP:** `list_alarms` y `get_alarm` ya no devuelven `message`.
+- **Base de datos:** la columna vacía `message` se elimina de la tabla de alarmas cuando arranca
+  device-management.
+
+Mientras se despliega la actualización:
+
+- Una pestaña de la consola abierta antes de la actualización, y un pod de la consola, de paneles o
+  de MCP que siga en la versión anterior, dan un error en las listas de alarmas hasta que se recarga
+  la pestaña o se sustituye el pod.
+- Un pod de `device-management` que siga en la versión anterior no puede guardar una alarma nueva.
+  La alarma se reintenta aproximadamente una vez por minuto y normalmente la guarda un pod ya
+  actualizado. Si los pods de la versión anterior siguen en marcha más de unos cinco minutos, por
+  ejemplo porque un pod nuevo nunca llega a estar listo, la alarma se abandona y se registra como
+  carta muerta, y solo se genera cuando su condición desaparece y vuelve a darse.
+  Mantenga corto el despliegue y, después, revise
+  `dcctl dead-letters list --kind detection-action --source device-management` para ver las
+  alarmas que no se generaron.
+- Las listas de alarmas, y los reconocimientos y borrados de alarmas, que atiende un pod de
+  `device-management` que siga en la versión anterior pueden fallar una vez por conexión a la base
+  de datos. Repetir la petición funciona.
 
 ### La transición única a la ingesta duradera
 

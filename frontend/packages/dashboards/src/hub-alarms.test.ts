@@ -45,7 +45,6 @@ function alarmRow(over: Partial<AlarmRow> = {}): AlarmRow {
     acknowledgedTime: null,
     acknowledgedBy: null,
     lastValue: 90,
-    message: null,
     ...over,
   };
 }

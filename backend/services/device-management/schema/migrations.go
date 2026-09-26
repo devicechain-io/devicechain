@@ -34,5 +34,6 @@ var (
 		NewGeoFenceSnapshotBackfill(),
 		NewDeviceReplacementsSchema(),
 		NewAssetPropertySchemaSchema(),
+		NewDropAlarmMessageSchema(),
 	}
 )

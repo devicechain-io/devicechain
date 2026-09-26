@@ -335,7 +335,6 @@ export interface AlarmRow {
   acknowledgedTime: string | null;
   acknowledgedBy: string | null;
   lastValue: number | null;
-  message: string | null;
 }
 
 // ---- Locations (location channel) -------------------------------------------

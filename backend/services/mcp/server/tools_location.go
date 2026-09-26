@@ -72,12 +72,12 @@ type QueryLocationsOutput struct {
 	TotalRecords int             `json:"totalRecords"`
 }
 
-const queryLocationsQuery = `query QueryLocations($criteria: EventSearchCriteria!) {
+var queryLocationsQuery = newDocument("event-management", `query QueryLocations($criteria: EventSearchCriteria!) {
   locationEvents(criteria: $criteria) {
     results { deviceToken latitude longitude elevation accuracy speed heading occurredTime }
     pagination { totalRecords }
   }
-}`
+}`)
 
 // QueryLocations returns a device's reported positions, newest first (paged,
 // bounded), forwarding the caller's token so the result is exactly what that user
@@ -106,7 +106,7 @@ func (t *Tools) QueryLocations(ctx context.Context, req *mcp.CallToolRequest, in
 			} `json:"pagination"`
 		} `json:"locationEvents"`
 	}
-	if err := t.gql.Query(ctx, "event-management", token, queryLocationsQuery,
+	if err := t.gql.Query(ctx, queryLocationsQuery, token,
 		map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, QueryLocationsOutput{}, err
 	}

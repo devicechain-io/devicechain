@@ -108,7 +108,6 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 	occurred := time.Date(2026, 7, 4, 10, 42, 17, 987654321, time.UTC)
 	by := "op@example.com"
 	last := 123.5
-	msg := "temperature above 100"
 
 	event := &model.AlarmStateChangeEvent{
 		EventType:        model.AlarmEventEscalated,
@@ -123,7 +122,6 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 		Acknowledged:     true,
 		AcknowledgedBy:   &by,
 		LastValue:        &last,
-		Message:          &msg,
 		RaisedTime:       raised,
 		OccurredTime:     occurred,
 	}
@@ -159,7 +157,6 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, gotBare.AcknowledgedBy)
 	assert.Nil(t, gotBare.LastValue)
-	assert.Nil(t, gotBare.Message)
 	assert.Equal(t, "", gotBare.PreviousSeverity)
 }
 
