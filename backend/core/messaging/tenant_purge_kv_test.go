@@ -53,7 +53,7 @@ func bucketKeys(t *testing.T, store nats.KeyValue) []string {
 // TestKvPurgeCoversBothKeyLayouts is the assertion that matters, and the second bucket is
 // the reason it exists.
 //
-// 🔴 THE LAYOUTS ARE NOT UNIFORM. Five cache buckets key on "{tenant}|something";
+// 🔴 THE LAYOUTS ARE NOT UNIFORM. Every other cache bucket keys on "{tenant}|something";
 // scoped-groups-exist keys on the BARE tenant with no separator. An implementation that
 // split on "|" and took the first field would miss that bucket entirely — and silently,
 // because a bucket with no matching keys looks exactly like one that was already clean.
@@ -175,7 +175,7 @@ func TestAKeyThisPlatformDidNotWriteStopsThePurge(t *testing.T) {
 // TestEveryTenantScopedBucketIsInTheInventory is the coverage claim, and it is the honest
 // stand-in rather than a derivation.
 //
-// 🔴 IT CANNOT TELL ANYONE THE PLATFORM GREW A SEVENTH TENANT-KEYED BUCKET. Nothing derives
+// 🔴 IT CANNOT TELL ANYONE THE PLATFORM GREW ANOTHER TENANT-KEYED BUCKET. Nothing derives
 // the tenant-scoped set from the code that writes the keys. What it CAN do is make removing
 // one a failing test rather than a silent change — a bucket dropped from the inventory is
 // never scanned, and its absence looks exactly like a bucket that reported clean.
@@ -187,7 +187,9 @@ func TestEveryTenantScopedBucketIsInTheInventory(t *testing.T) {
 
 	for _, want := range []string{
 		kv.BucketDeviceByToken, kv.BucketRelationshipsBySource, kv.BucketMembershipsByEntity,
-		kv.BucketMetricDefsByType, kv.BucketProfileScopeByType, kv.BucketScopedGroupsExist,
+		kv.BucketProfileResolutionByType, kv.BucketScopedGroupsExist,
+		// Retired this release and still purged for one more — see tenantScopedBuckets.
+		"metric-defs-by-type", "profile-scope-by-type",
 	} {
 		assert.Truef(t, got[want], "%s keys on a tenant and is not in the purge inventory, so a "+
 			"deleted tenant's entries in it are never scanned", want)
@@ -226,14 +228,17 @@ func TestEveryBucketInTheInventoryIsActuallyReached(t *testing.T) {
 	_, js := purgeRig(t)
 
 	// Written out on purpose — see above. "device-management" is the area that calls
-	// NewCache for all six (device-management/model/cache.go).
+	// NewCache for the live five (device-management/model/cache.go), and the area whose
+	// previous release created the two retired ones, which are written as literals because
+	// the kv constants that named them are gone.
 	expected := []struct{ area, logical string }{
 		{"device-management", kv.BucketDeviceByToken},
 		{"device-management", kv.BucketRelationshipsBySource},
 		{"device-management", kv.BucketMembershipsByEntity},
-		{"device-management", kv.BucketMetricDefsByType},
-		{"device-management", kv.BucketProfileScopeByType},
+		{"device-management", kv.BucketProfileResolutionByType},
 		{"device-management", kv.BucketScopedGroupsExist},
+		{"device-management", "metric-defs-by-type"},
+		{"device-management", "profile-scope-by-type"},
 	}
 	require.Len(t, tenantScopedBuckets, len(expected),
 		"the inventory gained or lost a bucket; this test's independent list has to follow, and "+

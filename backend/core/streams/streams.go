@@ -399,7 +399,7 @@ const (
 // The arithmetic, at the shipped defaults: the declared streams reserve 8712 MiB
 // (7 Hot x 1 GiB + 10 Cold x 128 MiB + this capped capture stream at 256 MiB + the
 // max-delivery capture capped at 8 MiB), the MQTT gateway stores 384 MiB and the KV
-// buckets 1152 MiB (6 State x 128 + 6 Cache x 64) — 10.008 GiB reserved against the
+// buckets 1088 MiB (6 State x 128 + 5 Cache x 64) — 9.945 GiB reserved against the
 // 14 GiB max_file_store a 16Gi PV yields.
 // (Recount when a stream is added: this sentence said "8 Cold / 9.5 GiB" while the
 // tree held nine, and it is the sentence anyone weighing a new stream reads.) Every

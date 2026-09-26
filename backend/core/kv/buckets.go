@@ -166,15 +166,12 @@ var All = []Bucket{
 			"it scales with fleet size.",
 	},
 	{
-		Name: BucketMetricDefsByType,
+		Name: BucketProfileResolutionByType,
 		Tier: Cache,
-		Why: "One entry per device TYPE (ADR-016/045), so it scales with the type " +
-			"catalog rather than the fleet.",
-	},
-	{
-		Name: BucketProfileScopeByType,
-		Tier: Cache,
-		Why:  "One entry per device TYPE (ADR-051), scaling with the type catalog.",
+		Why: "One entry per device TYPE: the active published profile version's metric " +
+			"definitions and rule-scoping identity (with the tenant's fence-set version), " +
+			"read once per resolved event (ADR-016/045/051). Scales with the type catalog, " +
+			"not the fleet.",
 	},
 	{
 		Name: BucketScopedGroupsExist,
@@ -200,8 +197,7 @@ const (
 	BucketDeviceByToken            = "device-by-token"
 	BucketRelationshipsBySource    = "relationships-by-source"
 	BucketMembershipsByEntity      = "memberships-by-entity"
-	BucketMetricDefsByType         = "metric-defs-by-type"
-	BucketProfileScopeByType       = "profile-scope-by-type"
+	BucketProfileResolutionByType  = "profile-resolution-by-type"
 	BucketScopedGroupsExist        = "scoped-groups-exist"
 )
 

@@ -65,9 +65,12 @@ type DeviceManagementConfiguration struct {
 	// Hot inbound-event resolution path caches (ADR-022 review B2).
 	// DeviceCacheTtlSeconds bounds the device-by-token cache;
 	// RelationshipCacheTtlSeconds bounds the tracked-relationships-by-source-device
-	// cache; MetricDefCacheTtlSeconds bounds the per-device-type metric-definition
-	// cache used by ingest-time metric validation (ADR-016). All are NATS KV bucket
-	// TTLs, in seconds (ADR-007).
+	// cache; MetricDefCacheTtlSeconds bounds the per-device-type profile-resolution
+	// cache — the published version's metric definitions used by ingest-time metric
+	// validation (ADR-016), plus the rule scope and fence-set version stamped onto every
+	// event (ADR-051/078). Its name predates that cache holding more than the metric
+	// definitions, and is kept because a rename would reject every existing values file.
+	// All are NATS KV bucket TTLs, in seconds (ADR-007).
 	DeviceCacheTtlSeconds       int
 	RelationshipCacheTtlSeconds int
 	MetricDefCacheTtlSeconds    int

@@ -1638,6 +1638,10 @@ el servicio de conectores tiene clientes nuevos» antes de actualizar. Si ejecut
 tiene alertas sobre el estado en línea de un host Sparkplug, lea «Una fuente Sparkplug con un grupo
 rechazado sigue fuera de línea, y una renovación sobrevive a una caída breve».
 
+Si dimensiona usted mismo el volumen de JetStream, lea «device-management usa un solo bucket de
+caché por tipo de dispositivo en lugar de dos»: la actualización añade la reserva de un bucket de
+caché, y el total baja de su nivel anterior solo cuando borre los dos buckets que ya no usa.
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2374,6 +2378,38 @@ repetidas se ralentizan](../guides/device-credentials.md#connect-backoff) tiene 
 - **Una alerta nueva, `DeviceCredentialAttemptStoreFull`** (aviso), se dispara cuando ese bucket
   se llena. Las conexiones siguen funcionando, pero sin la ralentización. Una ola de reconexiones
   muy grande puede llenarlo igual que un ataque.
+
+#### device-management usa un solo bucket de caché por tipo de dispositivo en lugar de dos
+
+Las definiciones de métricas y el alcance de reglas de un tipo de dispositivo que se guardan en
+caché son ahora un único bucket clave-valor, `<instance>_device-management_profile-resolution-by-type`,
+de modo que cada evento de medición lee el perfil publicado de su tipo de dispositivo una vez en
+lugar de tres, y un evento ya no puede validarse contra una versión del perfil y etiquetarse con
+otra. No hay nada que hacer salvo que dimensione usted mismo el volumen de JetStream o gestione los
+buckets a mano.
+
+- **La actualización añade un bucket de caché a la reserva de JetStream** (64 MiB por defecto,
+  4 MiB en el preset compacto). device-management crea el bucket nuevo al arrancar, y los dos que
+  reemplaza conservan su reserva hasta que los borre (vea el punto siguiente). Si el volumen de
+  JetStream tiene menos espacio libre que un bucket de caché, la creación del bucket nuevo falla
+  por falta de almacenamiento y device-management no arranca. Una vez borrados los dos buckets
+  antiguos, la reserva queda un bucket de caché por debajo de la de antes de la actualización, que
+  es también lo que reserva una instalación nueva.
+- **Una instancia actualizada conserva los dos buckets que este reemplaza**:
+  `<instance>_device-management_metric-defs-by-type` y
+  `<instance>_device-management_profile-scope-by-type`. Nada escribe en ellos tras la
+  actualización, y sus entradas caducan dentro del TTL de caché con el que se crearon los buckets
+  (60 segundos salvo que se cambiara `metricDefCacheTtlSeconds` antes de esta actualización), pero
+  cada uno sigue reservando su techo hasta que lo borre. Borrarlos requiere la CLI `nats` con un
+  inicio de sesión que pueda administrar JetStream en la cuenta de la plataforma; `dcctl` no tiene
+  un comando para ello: `nats stream rm KV_<instance>_device-management_metric-defs-by-type` y
+  `nats stream rm KV_<instance>_device-management_profile-scope-by-type`. Dejarlos solo cuesta esa
+  reserva. Borrar un inquilino los sigue limpiando durante una versión más.
+- **Mientras la actualización está en curso**, un perfil publicado o revertido, o una edición de
+  geocercas, puede tardar hasta un TTL de caché en llegar a todas las réplicas de
+  device-management: una réplica de la versión anterior limpia solo los buckets antiguos, y una de
+  esta solo el bucket nuevo. Si una edición de geocercas se pierde así, los eventos de ubicación se
+  marcan con el conjunto de geocercas anterior durante hasta ese TTL.
 
 ### La transición única a la ingesta duradera
 

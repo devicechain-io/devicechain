@@ -331,13 +331,13 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 // caller which usernames exist: what differs is only the returned error, which the
 // caller logs and never sends.
 //
-// 🔴 The TIMING still can, and this does not claim otherwise. The lookup costs more
-// for a username that exists: DeviceCredentialByCredentialId's Preload("Device") runs
-// its second query only when the first found a row, and the device is then resolved
-// before the compare. So an existing username costs at least one more database round
-// trip on every admitted attempt, and the free attempts are samples enough to measure
-// it. That predates the throttle (AuthenticateDevice has the same shape); the backoff
-// bounds how many samples a caller gets per username, it does not equalize them.
+// 🔴 The TIMING still can, and this does not claim otherwise, though the gap is narrower
+// than it was. The lookup is ONE statement whether or not the username exists (the owning
+// device comes back on a JOIN), so an existing username no longer costs an extra database
+// round trip. A row that comes back still costs more than an empty result: it is decoded,
+// and its expiry and stored secret are read before the compare, and the free attempts are
+// samples enough to measure that. AuthenticateDevice has the same shape. The backoff
+// bounds how many samples a caller gets per username; it does not equalize them.
 //
 // Two connects for one username that race (a reconnect overlapping a stale session)
 // are both evaluated: the one whose charge loses the compare-and-set re-reads the

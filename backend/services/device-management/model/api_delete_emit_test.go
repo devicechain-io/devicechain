@@ -92,7 +92,7 @@ type captureEvictor struct {
 	scopedGroupsEvicts int
 	// fenceSetEvicts counts EvictFenceSetVersion calls (ADR-078). Shared by the geofence
 	// tests, which assert every fence mutation evicts exactly once — the fence-set version
-	// rides in the cached ProfileScope, so a missed eviction keeps stamping the old one.
+	// rides in the cached ProfileResolution, so a missed eviction keeps stamping the old one.
 	fenceSetEvicts int
 }
 

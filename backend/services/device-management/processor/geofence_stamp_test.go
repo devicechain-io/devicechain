@@ -17,8 +17,8 @@ import (
 // denormalized onto resolved LOCATION events, which is what makes containment
 // replay-correct without a time-travel lookup.
 //
-// The seam on the other side of the mock — that a fence write actually moves what
-// ProfileScopeByDeviceType returns — is pinned by
+// The seam on the other side of the mock — that a fence write actually moves the fence-set
+// version ProfileResolutionByDeviceType returns — is pinned by
 // model.TestProfileScopeCarriesCurrentFenceSetVersion. Without that test these would be
 // asserting the resolver faithfully copies a number nothing produces.
 
@@ -27,7 +27,6 @@ import (
 func stampTestApi(t *testing.T, fenceSetVersion int32) *dmtest.MockApi {
 	t.Helper()
 	api := new(dmtest.MockApi)
-	api.Mock.On("MetricDefinitionsByDeviceType").Return([]*dmodel.MetricDefinition{}, nil)
 	api.Mock.On("TrackedRelationshipsForDevice").Return(
 		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
 	api.ProfileScopeResult = &dmodel.ProfileScope{

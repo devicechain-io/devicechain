@@ -19,7 +19,7 @@ import (
 )
 
 // newGeoFenceTestApi builds a sqlite-backed Api with the geofence tables and the
-// device-type/profile chain ProfileScopeByDeviceType walks, so the stamp can be
+// device-type/profile chain ProfileResolutionByDeviceType walks, so the stamp can be
 // followed all the way from a fence write to what the resolve path would read.
 func newGeoFenceTestApi(t *testing.T) *Api {
 	t.Helper()
@@ -308,7 +308,7 @@ func TestGeoFenceSetSnapshotFreezesGeometry(t *testing.T) {
 	}
 }
 
-// 🔴 The resolve path reads the fence-set version through ProfileScopeByDeviceType, so
+// 🔴 The resolve path reads the fence-set version through ProfileResolutionByDeviceType, so
 // this is the seam between "a fence changed" and "a location event gets a new stamp".
 // Without it the processor-level stamp test would be asserting against a fiction.
 func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
@@ -322,25 +322,25 @@ func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
 	}
 
 	// No fences yet: the scope resolves, and its fence version is 0.
-	scope, err := api.ProfileScopeByDeviceType(ctx, dt.ID)
+	scope, err := api.ProfileResolutionByDeviceType(ctx, dt.ID)
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
-	if scope.DeviceTypeToken != "excavator" {
-		t.Fatalf("scope device type = %q, want excavator", scope.DeviceTypeToken)
+	if scope.Scope.DeviceTypeToken != "excavator" {
+		t.Fatalf("scope device type = %q, want excavator", scope.Scope.DeviceTypeToken)
 	}
-	if scope.FenceSetVersion != 0 {
-		t.Fatalf("fence set version = %d before any fence, want 0", scope.FenceSetVersion)
+	if scope.Scope.FenceSetVersion != 0 {
+		t.Fatalf("fence set version = %d before any fence, want 0", scope.Scope.FenceSetVersion)
 	}
 
 	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{Token: "yard", Geometry: yardGeometry}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	afterCreate, err := api.ProfileScopeByDeviceType(ctx, dt.ID)
+	afterCreate, err := api.ProfileResolutionByDeviceType(ctx, dt.ID)
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
-	if afterCreate.FenceSetVersion == 0 {
+	if afterCreate.Scope.FenceSetVersion == 0 {
 		t.Fatal("the scope still reports version 0 after a fence was created")
 	}
 
@@ -348,29 +348,29 @@ func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
 	if _, err := api.UpdateGeoFence(ctx, "yard", geoFenceEdit(edited)); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	afterEdit, err := api.ProfileScopeByDeviceType(ctx, dt.ID)
+	afterEdit, err := api.ProfileResolutionByDeviceType(ctx, dt.ID)
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
-	if afterEdit.FenceSetVersion == afterCreate.FenceSetVersion {
-		t.Errorf("the scope did not follow the fence edit (still %d)", afterEdit.FenceSetVersion)
+	if afterEdit.Scope.FenceSetVersion == afterCreate.Scope.FenceSetVersion {
+		t.Errorf("the scope did not follow the fence edit (still %d)", afterEdit.Scope.FenceSetVersion)
 	}
 
 	// A device whose TYPE is unknown still gets the tenant's real fence version — it
 	// reports positions like any other, and stamping 0 would claim the tenant has no
 	// fences.
-	orphan, err := api.ProfileScopeByDeviceType(ctx, 999999)
+	orphan, err := api.ProfileResolutionByDeviceType(ctx, 999999)
 	if err != nil {
 		t.Fatalf("orphan scope: %v", err)
 	}
-	if orphan.FenceSetVersion != afterEdit.FenceSetVersion {
+	if orphan.Scope.FenceSetVersion != afterEdit.Scope.FenceSetVersion {
 		t.Errorf("orphan-type scope fence version = %d, want %d",
-			orphan.FenceSetVersion, afterEdit.FenceSetVersion)
+			orphan.Scope.FenceSetVersion, afterEdit.Scope.FenceSetVersion)
 	}
 }
 
 // Every fence mutation drops the caches holding the fence-set version, and a mutation
-// that changed nothing does not. The version rides in the cached ProfileScope, so a
+// that changed nothing does not. The version rides in the cached ProfileResolution, so a
 // missed eviction keeps stamping the previous version for a whole TTL.
 func TestGeoFenceMutationsEvictFenceSetVersion(t *testing.T) {
 	api := newGeoFenceTestApi(t)

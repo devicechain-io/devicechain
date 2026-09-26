@@ -165,7 +165,7 @@ func (api *Api) AuthenticateDevice(ctx context.Context, presented *PresentedCred
 	if err := evaluateCredential(cred, presented, now); err != nil {
 		return nil, err
 	}
-	return api.credentialDevice(ctx, cred)
+	return credentialDevice(cred)
 }
 
 // ResolveDeviceCredential is AuthenticateDevice WITHOUT the secret compare, for a
@@ -199,7 +199,7 @@ func (api *Api) ResolveDeviceCredential(ctx context.Context, presented *Presente
 	if err != nil {
 		return nil, "", err
 	}
-	device, err := api.credentialDevice(ctx, cred)
+	device, err := credentialDevice(cred)
 	if err != nil {
 		return nil, "", err
 	}
@@ -225,19 +225,28 @@ func (api *Api) lookupPresentedCredential(ctx context.Context, presented *Presen
 	return cred, nil
 }
 
-// credentialDevice is the device a resolved credential belongs to. The lookup
-// preloads it; reload defensively if absent so a resolved credential always yields a
-// device.
-func (api *Api) credentialDevice(ctx context.Context, cred *DeviceCredential) (*Device, error) {
-	if cred.Device != nil {
-		return cred.Device, nil
-	}
-	devices, err := api.DevicesById(ctx, []uint{cred.DeviceId})
-	if err != nil {
-		return nil, err
-	}
-	if len(devices) == 0 {
+// credentialDevice is the device a resolved credential belongs to, from the lookup's
+// JOIN. The joined row is accepted only if it is the credential's own device (by id) in
+// the credential's own tenant.
+//
+// 🔴 THE TENANT CHECK IS REQUIRED, NOT DEFENSIVE. The join carries the soft-delete
+// predicate but NOT the tenant predicate — the scope callback qualifies only the
+// statement's own table — so a device_id that points across tenants (corrupt data: a
+// normal create resolves the device inside the tenant) would otherwise authenticate as
+// the other tenant's device. The tenant-scoped preload this replaced refused it; this
+// refuses it the same way. The tenant check also refuses a soft-deleted or missing device
+// if the scan ever allocates an empty Device instead of leaving it nil (gorm leaves it nil
+// when the joined columns are NULL, but that depends on how each column scans, and a
+// future Device field with a serializer could change it): an empty Device's TenantId is "".
+//
+// The id check is belt-and-braces, and no test reaches it: the join's ON clause already
+// pins devices.id to the credential's device_id, and the only other way to get a
+// mismatched id — an empty Device — is refused by the tenant check first. It stays because
+// it states what the joined row must be at the one place that trusts it.
+func credentialDevice(cred *DeviceCredential) (*Device, error) {
+	d := cred.Device
+	if d == nil || d.ID != cred.DeviceId || d.TenantId != cred.TenantId {
 		return nil, ErrCredentialNotResolved
 	}
-	return devices[0], nil
+	return d, nil
 }

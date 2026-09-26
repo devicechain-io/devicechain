@@ -36,7 +36,7 @@ import (
 // area that creates them — the concrete bucket name folds the area in, so it cannot be
 // derived from the logical name alone.
 //
-// 🔴 THE LAYOUTS DIFFER AND ONE OF THEM HAS NO SEPARATOR. Five of these key on
+// 🔴 THE LAYOUTS DIFFER AND ONE OF THEM HAS NO SEPARATOR. All but one of these key on
 // "{tenant}|something"; scoped-groups-exist keys on the BARE tenant. An implementation that
 // split on "|" and took the first field would miss that bucket entirely — silently, because
 // a bucket with no matching keys is indistinguishable from one that was already clean. That
@@ -46,10 +46,31 @@ var tenantScopedBuckets = []struct{ area, logical string }{
 	{"device-management", kv.BucketDeviceByToken},
 	{"device-management", kv.BucketRelationshipsBySource},
 	{"device-management", kv.BucketMembershipsByEntity},
-	{"device-management", kv.BucketMetricDefsByType},
-	{"device-management", kv.BucketProfileScopeByType},
+	{"device-management", kv.BucketProfileResolutionByType},
 	{"device-management", kv.BucketScopedGroupsExist},
+	{"device-management", retiredBucketMetricDefsByType},
+	{"device-management", retiredBucketProfileScopeByType},
 }
+
+// The two per-device-type caches that profile-resolution-by-type replaced. Nothing creates
+// or writes them any more, and they are not in the kv inventory, but they stay in the purge
+// for ONE release, then go.
+//
+// 🔴 THEY ARE HERE FOR THE ROLLOUT, NOT FOR THE ORPHANS AFTER IT. The purge runs in
+// user-management, and during an upgrade it can run while device-management pods of the
+// previous release are still filling these buckets with the tenant's resolutions. Dropping
+// them from this list the same release they were retired would let a tenant deletion in
+// that window report clean over entries it never scanned, which then outlive it for the TTL
+// the bucket was created with — and that TTL is fixed at creation and has no upper bound.
+// Scanning a bucket that no longer exists costs nothing: purgeBucket treats it as empty.
+//
+// They are literals rather than kv constants on purpose: the inventory must not list a
+// bucket nothing creates, and the constants were deleted so that no live code can reach
+// them by name.
+const (
+	retiredBucketMetricDefsByType   = "metric-defs-by-type"
+	retiredBucketProfileScopeByType = "profile-scope-by-type"
+)
 
 // KvPurgeResult is what one key-value purge removed.
 type KvPurgeResult struct {

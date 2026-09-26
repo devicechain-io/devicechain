@@ -431,9 +431,17 @@ func (api *Api) activeProfileSnapshot(ctx context.Context, profileId uint) (*Pro
 	if len(profiles) == 0 || !profiles[0].ActiveVersion.Valid {
 		return parseProfileSnapshot(nil)
 	}
-	var version DeviceProfileVersion
+	return api.profileVersionSnapshot(ctx, profileId, profiles[0].ActiveVersion.Int32)
+}
+
+// profileVersionSnapshot returns the parsed capability snapshot of ONE published version
+// of a profile. It takes the version rather than reading the profile's active-version
+// pointer itself, so a caller that has already read the pointer — and derived anything
+// else from it — gets the snapshot of exactly that version.
+func (api *Api) profileVersionSnapshot(ctx context.Context, profileId uint, version int32) (*ProfileSnapshot, error) {
+	var row DeviceProfileVersion
 	result := api.RDB.DB(ctx).Where("device_profile_id = ? AND version = ?",
-		profileId, profiles[0].ActiveVersion.Int32).First(&version)
+		profileId, version).First(&row)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			// The pointer references a version that no longer exists. This should be
@@ -442,13 +450,13 @@ func (api *Api) activeProfileSnapshot(ctx context.Context, profileId uint) (*Pro
 			// a botched upgrade. Resolve nothing rather than error the hot ingest
 			// path, but log it: silent device inertness is exactly the failure a
 			// "can't happen" branch must make visible.
-			log.Warn().Uint("profile", profileId).Int32("activeVersion", profiles[0].ActiveVersion.Int32).
+			log.Warn().Uint("profile", profileId).Int32("activeVersion", version).
 				Msg("device profile active_version references a missing version row; resolving empty capability")
 			return parseProfileSnapshot(nil)
 		}
 		return nil, result.Error
 	}
-	return parseProfileSnapshot(version.Snapshot)
+	return parseProfileSnapshot(row.Snapshot)
 }
 
 // ProfileScope is a device's denormalized rule-scoping identity (ADR-051): the
@@ -464,10 +472,11 @@ type ProfileScope struct {
 	// FenceSetVersion is the tenant's ACTIVE geofence-set version at resolve time
 	// (ADR-078), stamped onto resolved LOCATION events only. It rides here rather than in
 	// a cache of its own precisely because the resolve path already fetches this struct
-	// once per event: adding a field costs nothing on the hot path, while a second
-	// per-tenant lookup would be a second cache to keep coherent. The price is that a
-	// fence change must evict the scope of every device type of the tenant, which is an
-	// authoring-time fan-out over a small set (CachedApi.EvictFenceSetVersion).
+	// once per event, inside the per-device-type ProfileResolution: adding a field costs
+	// nothing on the hot path, while a second per-tenant lookup would be a second cache to
+	// keep coherent. The price is that a fence change must evict the resolution of every
+	// device type of the tenant, which is an authoring-time fan-out over a small set
+	// (CachedApi.EvictFenceSetVersion).
 	//
 	// It is NOT part of the "rule-scoping identity" the rest of this struct denormalizes,
 	// and deliberately so: it changes on a fence edit, which is not a profile publish.
@@ -475,14 +484,15 @@ type ProfileScope struct {
 	FenceSetVersion int32
 }
 
-// ProfileScopeByDeviceType resolves a device type to its ProfileScope (ADR-051).
-// It walks the same device→type→profile→active-version chain the ingest path
-// already uses for metric resolution, so it is cheap and cache-friendly (the
-// cached decorator keys it by device type, evicted on the same publish/rollback/
-// reprofile events as the metric-definition cache). A missing type or an
-// unpublished/absent profile yields an empty ProfileVersionToken rather than an
-// error: the device simply has no resolvable rules.
-func (api *Api) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileScope, error) {
+// ProfileResolutionByDeviceType resolves a device type to its ProfileResolution. It walks
+// the device→type→profile→active-version chain once: the profile's active-version pointer
+// is read ONCE, and both the version token and the metric definitions come from exactly
+// that version, so a publish racing this read cannot mix two versions into one result.
+//
+// A missing type, a type with no profile, or an unpublished profile yields an empty
+// version token and no metrics rather than an error: the device simply has no resolvable
+// rules and no declared metrics.
+func (api *Api) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileResolution, error) {
 	// The fence-set version (ADR-078) is resolved FIRST and on every path, including the
 	// "no such device type" early return below. A device whose type has been deleted still
 	// reports positions, and stamping it with 0 would claim the tenant has no fences when
@@ -491,24 +501,31 @@ func (api *Api) ProfileScopeByDeviceType(ctx context.Context, deviceTypeId uint)
 	if err != nil {
 		return nil, err
 	}
+	scope := ProfileScope{FenceSetVersion: fenceSetVersion}
 	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
 	if err != nil {
 		return nil, err
 	}
 	if len(types) == 0 {
-		return &ProfileScope{FenceSetVersion: fenceSetVersion}, nil
+		return NewProfileResolution(scope, nil), nil
 	}
-	scope := &ProfileScope{DeviceTypeToken: types[0].Token, FenceSetVersion: fenceSetVersion}
+	scope.DeviceTypeToken = types[0].Token
 	if types[0].ProfileId == nil {
-		return scope, nil
+		return NewProfileResolution(scope, nil), nil
 	}
-	profiles, err := api.DeviceProfilesById(ctx, []uint{*types[0].ProfileId})
+	profileId := *types[0].ProfileId
+	profiles, err := api.DeviceProfilesById(ctx, []uint{profileId})
 	if err != nil {
 		return nil, err
 	}
 	if len(profiles) == 0 || !profiles[0].ActiveVersion.Valid {
-		return scope, nil
+		return NewProfileResolution(scope, nil), nil
 	}
-	scope.ProfileVersionToken = fmt.Sprintf("%s@%d", profiles[0].Token, profiles[0].ActiveVersion.Int32)
-	return scope, nil
+	version := profiles[0].ActiveVersion.Int32
+	snap, err := api.profileVersionSnapshot(ctx, profileId, version)
+	if err != nil {
+		return nil, err
+	}
+	scope.ProfileVersionToken = fmt.Sprintf("%s@%d", profiles[0].Token, version)
+	return NewProfileResolution(scope, snap.Metrics), nil
 }

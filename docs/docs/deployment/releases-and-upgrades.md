@@ -1535,6 +1535,10 @@ the detection engine admitted").
 If you run Sparkplug sources, or alert on a Sparkplug host's online state, read "A Sparkplug source
 with a refused group stays offline, and a refresh survives a brief outage".
 
+If you size the JetStream volume yourself, read "device-management keeps one cache bucket per
+device type instead of two": the upgrade adds one cache bucket's reservation, and the total drops
+below its previous level only once you delete the two buckets it no longer uses.
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2223,6 +2227,37 @@ down](../guides/device-credentials.md#connect-backoff) has the details.
 - **A new alert, `DeviceCredentialAttemptStoreFull`** (warning), fires when that bucket fills.
   Connects keep working, but without the slow-down. A very large reconnect wave can fill it as well
   as an attack can.
+
+#### device-management keeps one cache bucket per device type instead of two
+
+The cached metric definitions and rule scope of a device type are now one key-value bucket,
+`<instance>_device-management_profile-resolution-by-type`, so each measurement event reads its
+device type's published profile once instead of three times, and one event can no longer be
+validated against one profile version and labelled with another. Nothing needs doing unless you
+size the JetStream volume yourself or manage buckets by hand.
+
+- **The upgrade adds one cache bucket to the JetStream reservation** (64 MiB by default, 4 MiB on
+  the compact preset). device-management creates the new bucket when it starts, and the two it
+  replaces keep their reservation until you delete them (see the next item). If the JetStream
+  volume has less free room than one cache bucket, creating the new bucket fails for lack of
+  storage and device-management does not start. Once the two old buckets are deleted, the
+  reservation is one cache bucket lower than before the upgrade, which is also what a fresh
+  install reserves.
+- **An upgraded instance keeps the two buckets this one replaces**:
+  `<instance>_device-management_metric-defs-by-type` and
+  `<instance>_device-management_profile-scope-by-type`. Nothing writes to them after the upgrade,
+  and their entries expire within the cache TTL the buckets were created with (60 seconds unless
+  `metricDefCacheTtlSeconds` was changed before this upgrade), but each keeps reserving its
+  ceiling until you delete it. Deleting them needs the `nats` CLI with a login that can manage
+  JetStream in the platform's account; `dcctl` has no command for it:
+  `nats stream rm KV_<instance>_device-management_metric-defs-by-type` and
+  `nats stream rm KV_<instance>_device-management_profile-scope-by-type`. Leaving them costs only
+  that reservation. A tenant deletion still clears them for one more release.
+- **While the upgrade is rolling**, a profile published or rolled back, or a geofence edit, can take
+  up to one cache TTL to reach every device-management replica: a replica of the previous release
+  clears only the old buckets, and a replica of this one only the new bucket. A geofence edit
+  missed this way means location events are stamped with the previous fence set for up to that
+  TTL.
 
 ### The one-time durable-ingest cutover
 
