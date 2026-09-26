@@ -5,6 +5,10 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"os"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -12,20 +16,55 @@ import (
 // raw is a JSON literal written the way a server would send it.
 func raw(s string) json.RawMessage { return json.RawMessage(s) }
 
-// The five non-zero codes are what a rig branches on, so two of them colliding
-// would make one control silently assert the other's outcome — and the control
-// would still pass, because the number it compares against would still match.
+// exitCodes is every code, by the name printExitCodes gives it. The codes are what a
+// rig branches on, so two of them colliding would make one control silently assert
+// the other's outcome — and the control would still pass, because the number it
+// compares against would still match.
+var exitCodes = map[string]int{
+	"OK": exitOK, "SETUP": exitSetup, "MISSING": exitMissing,
+	"MISMATCH": exitMismatch, "REFUSED": exitRefused, "SHAPE": exitShape,
+	"UNREADABLE": exitUnreadable, "COVERAGE": exitCoverage, "DENIED": exitDenied,
+}
+
 func TestEveryExitCodeIsDistinct(t *testing.T) {
-	named := map[string]int{
-		"OK": exitOK, "SETUP": exitSetup, "MISSING": exitMissing,
-		"MISMATCH": exitMismatch, "REFUSED": exitRefused, "SHAPE": exitShape,
-	}
 	seen := map[int]string{}
-	for name, code := range named {
+	for name, code := range exitCodes {
 		if other, clash := seen[code]; clash {
 			t.Errorf("%s and %s are both %d", name, other, code)
 		}
 		seen[code] = name
+	}
+}
+
+// The table above is only a check if it is the whole vocabulary: it once named six
+// of the eight codes the tool prints. So it is compared against what printExitCodes
+// actually prints — what the rig sources — name for name and value for value.
+func TestPrintedCodesMatchTheTable(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stdout
+	os.Stdout = w
+	printExitCodes()
+	os.Stdout = saved
+	_ = w.Close()
+	printed, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(string(printed)), "\n") {
+		name, value, ok := strings.Cut(strings.TrimPrefix(line, "APIPROBE_EXIT_"), "=")
+		code, err := strconv.Atoi(value)
+		if !ok || err != nil || !strings.HasPrefix(line, "APIPROBE_EXIT_") {
+			t.Fatalf("unparseable line %q", line)
+		}
+		got[name] = code
+	}
+	if !reflect.DeepEqual(got, exitCodes) {
+		t.Fatalf("printExitCodes prints %v; the table holds %v", got, exitCodes)
 	}
 }
 

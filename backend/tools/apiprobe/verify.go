@@ -6,21 +6,39 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"time"
 )
 
 func runVerify(ctx context.Context, argv []string) error {
+	return verifyTo(ctx, argv, os.Stdout)
+}
+
+// verifyTo is runVerify writing its report — the per-row lines, the coverage summary
+// and any retry the session took — to out, so a test can read what the operator reads.
+func verifyTo(ctx context.Context, argv []string, out io.Writer) error {
 	fs := flagSetFor("verify")
 	var c connection
 	c.bind(fs)
 	var receipt string
 	fs.StringVar(&receipt, "receipt", "", "path to the receipt seed wrote (required)")
+	var window time.Duration
+	fs.DurationVar(&window, "auth-window", 0,
+		"retry budget, measured from the start of verify, for a read refused with 401 or a sign-in the "+
+			"platform refused; each retry signs in again. 0 (the default) retries nothing. Only an "+
+			"upgrade that replaces the signing key needs one")
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
 	if strings.TrimSpace(receipt) == "" {
 		return failWith(exitSetup, "--receipt is required")
+	}
+	if window < 0 {
+		return failWith(exitSetup, "--auth-window %s is negative; 0 is how to allow no retries", window)
 	}
 
 	rec, err := readReceipt(receipt)
@@ -32,7 +50,7 @@ func runVerify(ctx context.Context, argv []string) error {
 	// false FINDING rather than a setup error, and the loudest possible way to
 	// mislead someone mid-upgrade.
 	c.tenant = rec.Tenant
-	session := c.session(rec.Identity)
+	session := newRotationTolerant(func() signedInQuerier { return c.session(rec.Identity) }, window, out)
 
 	// byName lets a receipt be verified against the current table even if the
 	// table has since grown: an entity the receipt does not carry was not seeded
@@ -65,6 +83,14 @@ func runVerify(ctx context.Context, argv []string) error {
 
 		var envelope map[string]json.RawMessage
 		if err := session.Query(ctx, c.areaURL(e.Area), e.readDoc(), readVars, &envelope); err != nil {
+			// 🔴 A verdict the session already reached passes through as it is: a token
+			// refused past the window (exitDenied), a sign-in that failed (exitSetup).
+			// Wrapping it below would hide it, because codeOf resolves the OUTERMOST
+			// code, and a refused token would be reported as a schema that moved.
+			var decided *codedError
+			if errors.As(err, &decided) {
+				return err
+			}
 			// The server rejected the QUERY. The row may be perfectly intact; a
 			// field this tool selects no longer exists on the type. Reporting
 			// that as missing data sends a reader into the migrations hunting for
@@ -91,13 +117,14 @@ func runVerify(ctx context.Context, argv []string) error {
 		}
 
 		checked++
-		fmt.Printf("  ok      %-26s %s\n", r.Name, r.Token)
+		fmt.Fprintf(out, "  ok      %-26s %s\n", r.Name, r.Token)
 	}
 
 	// A pass is only worth reading if it says how much it covered. "verified"
 	// with no number is how a run that checked nothing reads exactly like one
 	// that checked everything.
-	fmt.Print(coverageSummary(rec, checked))
+	fmt.Fprint(out, coverageSummary(rec, checked))
+	fmt.Fprint(out, session.settledNote())
 	return nil
 }
 

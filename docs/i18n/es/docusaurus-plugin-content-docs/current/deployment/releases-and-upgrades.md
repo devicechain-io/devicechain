@@ -1745,7 +1745,10 @@ Esto surte efecto cuando termina el despliegue, no en el momento en que empieza 
 Hasta que se detiene el último pod antiguo de user-management, sigue firmando tokens con la clave
 antigua y publicándola para que los demás servicios verifiquen con ella. `helm upgrade` y
 `dcctl upgrade` sustituyen todos los pods, así que la clave antigua deja de ser de confianza cuando
-terminan.
+terminan. Mientras ese pod antiguo se detiene, una petición hecha en los primeros segundos del
+despliegue puede rechazarse con `401 invalid or expired token`, y un inicio de sesión con
+`invalid or expired token`, incluso para un token emitido momentos antes; cuando el pod antiguo
+de user-management se ha detenido, volver a iniciar sesión y reintentar funciona.
 
 Las copias de seguridad y el registro de escritura anticipada archivado **antes** de la
 actualización siguen conteniendo las claves antiguas. Esas claves ya no son de confianza en ninguna

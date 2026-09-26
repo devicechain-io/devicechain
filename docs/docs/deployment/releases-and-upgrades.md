@@ -1633,7 +1633,11 @@ new key when it starts. As a result:
 This takes effect once the rollout completes, not the moment the upgrade starts. Until the last
 old user-management pod has stopped, it keeps signing tokens with the old key and publishing
 that key for other services to verify against. `helm upgrade` and `dcctl upgrade` replace every
-pod, so the old key stops being trusted when they finish.
+pod, so the old key stops being trusted when they finish. While that old pod is stopping, a
+request made in the first seconds of the rollout can be refused with
+`401 invalid or expired token`, and a sign-in with `invalid or expired token`, even for a token
+issued moments earlier; once the old user-management pod has stopped, signing in again and
+retrying succeeds.
 
 Backups and archived write-ahead log taken **before** the upgrade still contain the old keys.
 Those keys are no longer trusted anywhere once the rollout completes, but the files are still
