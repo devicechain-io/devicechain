@@ -1566,6 +1566,10 @@ If you search or alert on database messages in service logs, or turn on `sqlDebu
 messages are structured log lines, and a query that finds nothing is no longer logged as a
 failure".
 
+If you use the default in-cluster backup store, read "The in-cluster backup store pulls from a
+maintained image": a fresh install failed without it, your nodes now pull that image from
+`cgr.dev`, and an existing cluster restarts that pod once.
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2683,6 +2687,38 @@ and hid real failures.
 
 If you matched the old text (for example `record not found` or `SLOW SQL`), match the `message`
 field instead. Nothing needs configuring.
+
+#### The in-cluster backup store pulls from a maintained image
+
+The object store that `dcctl install` runs in `dc-system` to hold database backups pulled its
+MinIO image from `quay.io/minio/minio`. Those images are no longer published: the registry refuses
+an anonymous pull, so on a machine that had not already cached the image, `dcctl install` stopped
+with the object store in `ImagePullBackOff`. Clusters that already had the image cached kept
+running, but only while the object-store pod stayed on a node that had it: a pod moved to another
+node — by a drain, an eviction or a replaced node — could not start, and archiving stopped until it
+could. Upgrading removes that exposure.
+
+This release pulls `cgr.dev/chainguard/minio`, pinned by digest: a build of a maintained fork of
+the same MinIO server, still licensed AGPL-3.0. It reads the data the previous server wrote as it
+is.
+
+- **Before upgrading, make sure your nodes can pull from `cgr.dev`** — allow it through any egress
+  rules, or mirror `cgr.dev/chainguard/minio` at the digest this release pins. If the pull fails,
+  the object store stays down and the databases keep their write-ahead log locally until it
+  returns.
+- **A fresh install works again** with the default backup destination.
+- **On an existing cluster, `dcctl install` restarts the object-store pod once** onto the new
+  image. Stored backups and write-ahead log are kept. While the pod restarts, archiving pauses and
+  the databases hold write-ahead log locally, for as long as the new image takes to pull and start.
+- **This cannot be undone by installing an earlier release.** An earlier release's `dcctl install`
+  would stop the object store and then fail to pull the image it names, and archiving would stop
+  until this release's `dcctl install` runs again.
+- **If `dcctl install` failed on an earlier release because of this**, a re-run can still stop on
+  the object store that attempt left behind. On a local cluster, delete the cluster and its record
+  under `~/.devicechain/clusters/`, then install again with this release.
+
+Nothing needs configuring. If you point backups at your own object store with
+`--backup-credentials-file`, nothing changes for you.
 
 ### The one-time durable-ingest cutover
 

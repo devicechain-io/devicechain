@@ -1672,6 +1672,11 @@ Si busca o alerta sobre mensajes de la base de datos en los registros de los ser
 `sqlDebug`, lea «Los mensajes de la base de datos son líneas de registro estructuradas, y una
 consulta que no encuentra nada ya no se registra como un fallo».
 
+Si usa el almacén de respaldos predeterminado dentro del clúster, lea «El almacén de respaldos
+dentro del clúster se descarga de una imagen mantenida»: sin este cambio una instalación nueva
+fallaba, sus nodos descargan ahora esa imagen de `cgr.dev`, y en un clúster existente ese pod se
+reinicia una vez.
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2871,6 +2876,40 @@ error, y con un ritmo de eventos alto ocupaba la mayor parte del registro y ocul
 
 Si buscaba el texto anterior (por ejemplo `record not found` o `SLOW SQL`), busque en su lugar el
 campo `message`. No hay nada que configurar.
+
+#### El almacén de respaldos dentro del clúster se descarga de una imagen mantenida
+
+El almacén de objetos que `dcctl install` ejecuta en `dc-system` para guardar los respaldos de las
+bases de datos descargaba su imagen de MinIO de `quay.io/minio/minio`. Esas imágenes ya no se
+publican: el registro rechaza una descarga anónima, de modo que en una máquina que no tuviera ya la
+imagen en caché, `dcctl install` se detenía con el almacén en `ImagePullBackOff`. Los clústeres
+que ya tenían la imagen en caché siguieron funcionando, pero solo mientras el pod del almacén
+permaneciera en un nodo que la tuviera: un pod trasladado a otro nodo —por un drenaje, un desalojo
+o un nodo sustituido— no podía arrancar, y el archivado se detenía hasta que pudiera. Actualizar
+elimina esa exposición.
+
+Esta versión descarga `cgr.dev/chainguard/minio`, fijada por digest: una compilación de una
+bifurcación mantenida del mismo servidor MinIO, que sigue bajo licencia AGPL-3.0. Lee tal cual los
+datos que escribió el servidor anterior.
+
+- **Antes de actualizar, asegúrese de que sus nodos pueden descargar de `cgr.dev`**: permítalo en
+  sus reglas de salida, o replique `cgr.dev/chainguard/minio` con el digest que fija esta versión.
+  Si la descarga falla, el almacén sigue caído y las bases de datos conservan localmente su log de
+  escritura anticipada hasta que vuelva.
+- **Una instalación nueva vuelve a funcionar** con el destino de respaldo predeterminado.
+- **En un clúster existente, `dcctl install` reinicia una vez el pod del almacén** con la nueva
+  imagen. Los respaldos y el log de escritura anticipada guardados se conservan. Mientras el pod se
+  reinicia, el archivado se detiene y las bases de datos retienen el log localmente, durante el
+  tiempo que la nueva imagen tarde en descargarse y arrancar.
+- **Esto no se deshace instalando una versión anterior.** El `dcctl install` de una versión
+  anterior detendría el almacén y después no podría descargar la imagen que indica, y el archivado
+  se detendría hasta volver a ejecutar el `dcctl install` de esta versión.
+- **Si `dcctl install` falló por esto en una versión anterior**, volver a ejecutarlo puede
+  detenerse aún en el almacén que dejó aquel intento. En un clúster local, elimine el clúster y su
+  registro en `~/.devicechain/clusters/`, e instale de nuevo con esta versión.
+
+No hay nada que configurar. Si dirige los respaldos a su propio almacén de objetos con
+`--backup-credentials-file`, no cambia nada para usted.
 
 ### La transición única a la ingesta duradera
 

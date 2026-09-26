@@ -31,7 +31,8 @@
 #   A. ASSIGNMENT. A variable whose name contains "image" and whose value carries
 #      a literal `name:tag` must also carry `@sha256:`. This is where the pinned
 #      references in this tree actually live (migration-diff, integration-tests,
-#      check-prometheus-rules, dr-rig), so it is the rule that does most of the
+#      check-prometheus-rules; dr-rig reads the object store module's default
+#      instead of holding a literal), so it is the rule that does most of the
 #      work.
 #
 #   B. INLINE. A `docker run` / `pull` / `create` command must not carry a bare
@@ -49,7 +50,10 @@
 #     an operator, so they take the pin without the bumper.
 #   - That the digest resolves. That needs the network at check time, which would
 #     put someone else's registry back in front of a green gate — the failure this
-#     script is a response to.
+#     script is a response to. hack/check-image-pulls.sh does check it, but only
+#     from the weekly .github/workflows/ko-base-image.yml run, whose heartbeat
+#     hack/check-ko-base-pin.sh reads: a withdrawn image reaches pull requests
+#     through that, never as a registry call on the pull request itself.
 #   - Go, or anything that is not a tracked *.sh. dcctl starts the same local
 #     registry container from backend/cli/bootstrap/steps.go, and that constant is
 #     pinned by TestLocalRegistryImageIsDigestPinned in that package rather than

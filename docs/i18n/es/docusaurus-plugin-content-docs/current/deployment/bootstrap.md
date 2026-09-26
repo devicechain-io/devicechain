@@ -410,9 +410,11 @@ de verdad, en lugar de instancias que llevan un plugin de respaldo sin ningún s
 escribir.
 
 :::info El destino de respaldo predeterminado es un componente AGPL
-MinIO se distribuye bajo licencia AGPL-3.0, y la edición comunitaria de MinIO entró en modo de
-mantenimiento en diciembre de 2025 y se archivó en abril de 2026, por lo que la imagen fijada
-no recibe más parches de seguridad. Para evitar ambas cosas, apunta los respaldos a un
+MinIO se distribuye bajo licencia AGPL-3.0. La edición comunitaria de MinIO se archivó en abril de
+2026 y sus propias imágenes ya no se publican, así que DeviceChain ejecuta una compilación de una
+bifurcación mantenida (`cgr.dev/chainguard/minio`), fijada por digest, que tus nodos descargan de
+`cgr.dev`. Una compilación con parches llega a tu clúster solo cuando una versión de DeviceChain
+mueve esa fijación. Para evitar tanto la licencia como esa dependencia, apunta los respaldos a un
 almacenamiento fuera del clúster.
 :::
 

@@ -53,7 +53,7 @@
 # direction.
 #
 # LICENSE. The MinIO server is AGPL-3.0 while DeviceChain is Apache-2.0, and this
-# does NOT affect DeviceChain's own licensing: we REFERENCE an upstream image and
+# does NOT affect DeviceChain's own licensing: we REFERENCE a third-party image and
 # never build, modify or redistribute it, and the platform reaches it over the S3
 # HTTP API, so there is no combined work at any point. What it DOES affect is the
 # adopter, because this is the DEFAULT — a stock bootstrap plants an AGPL server
@@ -63,14 +63,16 @@
 # `backup_destination = "external"` is the opt-out, and is the recommended
 # production configuration regardless.
 #
-# MAINTENANCE. Community MinIO entered maintenance mode in December 2025 and the
-# repository was archived read-only in April 2026; development continues only in
-# the commercial AIStor product. The consequence lands on the pin below, which is
-# now terminal rather than a version we periodically move — see the `image`
-# variable. Replacing MinIO outright is post-GA work and is gated on
-# `hack/dr-rig.sh`, because swapping to an S3 implementation the Barman plugin has
-# never been tested against trades a licensing problem for a restore-correctness
-# problem, and that is strictly the worse of the two.
+# MAINTENANCE. Community MinIO entered maintenance mode in December 2025, was
+# archived read-only in April 2026, and its published images were then withdrawn:
+# quay.io/minio/minio and docker.io/minio/minio both refuse an anonymous pull. The
+# image below is Chainguard's build of a maintained fork of the same code, so the
+# server, its on-disk format and its S3 behaviour are the ones this module was
+# written and measured against -- a volume written by the last community release
+# opens under it unchanged. Replacing MinIO outright is still post-GA work and
+# still gated on `hack/dr-rig.sh`, because swapping to an S3 implementation the
+# Barman plugin has never been tested against trades a supply problem for a
+# restore-correctness problem, and that is strictly the worse of the two.
 
 terraform {
   required_providers {
@@ -102,19 +104,42 @@ variable "image" {
     an outage -- it is backups that stop being written while everything reports
     healthy.
 
-    🔴 That pin is now TERMINAL, which is not the situation it was written for.
-    The reasoning above assumed a release stream we were declining to follow
-    automatically; community MinIO is archived, so there is no newer release to
-    move to at all. This tag will accrue unpatched CVEs indefinitely, in a
-    component sitting on the backup path in every default install.
+    🔴 WHY THIS IMAGE AND NOT UPSTREAM. Community MinIO is archived and its
+    published images were withdrawn: quay.io/minio/minio and docker.io/minio/minio
+    both answer an anonymous pull with 401, by tag and by digest. Nodes that had
+    the old image cached kept running it, which is how every FRESH install came to
+    fail with Init:ImagePullBackOff while existing ones looked fine. This is
+    Chainguard's build of a maintained fork of the same server
+    (github.com/chainguard-forks/minio), linux/amd64 + linux/arm64. The free tier
+    publishes only `latest`, so the tag half is `latest` -- the same shape as
+    .ko.yaml's base image. To see which MinIO release a digest is, run
+    `docker run --rm <this ref> --version`; it is deliberately not written here,
+    because the digest moves and a version in prose would not.
 
-    🔴 Nothing will tell you when that happens. A container tag in a Tofu
-    variable default is invisible to Dependabot -- the same blind spot the
-    graphql-go fork carries -- so a MinIO advisory raises no alert in this
-    repository. Re-check it by hand when reviewing storage-layer CVEs.
+    🔴 THE PIN IS MOVED BY THE SAME BUMPER AS THE BASE IMAGE. Chainguard rebuilds
+    this image as fixes land, and a digest nobody advances is a frozen server
+    reading as "pinned". .github/workflows/ko-base-image.yml resolves `latest`
+    every week and pushes a new digest to its bump branch, and
+    hack/check-ko-base-pin.sh fails every pull request once a bump has waited too
+    long -- the same arrangement, for the same reason, as the base image. A
+    container reference in a Tofu variable default is invisible to Dependabot,
+    so a MinIO advisory still raises no alert here: re-check by hand when
+    reviewing storage-layer CVEs.
+
+    🔴 AN OLD DIGEST CAN STILL DISAPPEAR. Chainguard makes no retention promise
+    for free-tier digests. The same weekly run pulls every digest-pinned image in
+    the repository anonymously (hack/check-image-pulls.sh) and fails when one is
+    gone, which stops the heartbeat that hack/check-ko-base-pin.sh reads -- so a
+    withdrawal shows up on pull requests instead of as a failed install.
+
+    Not exposed by the cluster root, so there is no operator override: an
+    air-gapped or mirrored install, or the next withdrawal, needs a release that
+    moves this default. hack/dr-rig.sh reads this default (through
+    hack/lib/object-store-image.sh), so the DR drill runs the same bytes a
+    default install runs.
   EOT
   type        = string
-  default     = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+  default     = "cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1"
 }
 
 variable "buckets" {
@@ -183,9 +208,14 @@ variable "resources" {
   })
   default = {
     cpu = "50m"
-    # 🔴 512Mi, and the 256Mi it replaces was MEASURED to be wrong: the pinned
-    # image idles at ~213 MiB RSS with zero objects stored, i.e. 83% of the old
-    # request before a single upload.
+    # 🔴 512Mi, and the 256Mi it replaced was MEASURED to be wrong: the image this
+    # was first measured on idled at ~213 MiB RSS with zero objects stored, i.e.
+    # 83% of that request before a single upload. The Chainguard build first
+    # pinned in its place idled far lower when measured on 2026-09-26
+    # (standalone, empty) -- a figure for that one digest, not for whatever the
+    # weekly bump has moved the pin to since -- and the request stays anyway:
+    # what it has to cover is the peak while a base backup uploads, which no
+    # idle number measures.
     #
     # Under-requesting does not throttle anything -- there is no limit -- but the
     # kubelet ranks Burstable pods for eviction by usage ABOVE request, so a pod
@@ -290,9 +320,11 @@ resource "kubernetes_deployment_v1" "this" {
 
       spec {
         security_context {
-          # The upstream image runs as uid 1000. Naming it makes the volume's
-          # ownership deterministic rather than inherited from whatever the image
-          # currently does.
+          # 1000, NOT the image's own user (65532). The pod has always run as
+          # 1000 with fs_group 1000, so every existing data volume is owned by
+          # 1000; naming it here keeps those volumes writable across an image
+          # change and keeps ownership deterministic rather than inherited from
+          # whatever the image currently does.
           run_as_user = 1000
           fs_group    = 1000
         }
@@ -376,8 +408,10 @@ resource "kubernetes_deployment_v1" "this" {
           #
           # An earlier version of this used `/ready` and claimed it "reports
           # whether the backend can actually serve object operations". That is
-          # false. Against the pinned image, with the drive taken fully offline
-          # (`Read quorum could not be established ... drives-online: 0`):
+          # false. Against the image this was written for, and again against the
+          # current pin, with the drive taken fully offline (`Read quorum could
+          # not be established ... drives-online: 0`) -- the table was identical
+          # both times:
           #
           #     /minio/health/live      healthy 200   backend dead 200
           #     /minio/health/ready     healthy 200   backend dead 200
