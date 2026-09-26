@@ -139,7 +139,7 @@ type PolicyNotifier struct {
 	refused *prometheus.CounterVec
 }
 
-// The reasons notification_deliveries_refused_total is labelled with. A closed set: the
+// The reasons devicechain_notificationmanagement_deliveries_refused_total is labelled with. A closed set: the
 // label is never fed from an error string.
 const (
 	refusalReasonEgress     = "egress"

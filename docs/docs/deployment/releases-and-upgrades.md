@@ -2530,8 +2530,9 @@ channels](../guides/notification-channels.md) has the details.
   the reason, and counts it on
   `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`.
 - **Find the channels to fix before you upgrade.** In each tenant, run
-  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } }`
-  and look for a `config` with no `auth`.
+  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } pagination { totalRecords } }`
+  and look for a `config` with no `auth`. If `totalRecords` is more than 100, repeat with the next
+  `pageNumber` until you have read them all.
 - **Add `auth` before you upgrade.** The current release accepts the key and ignores it, so there
   is no gap. Use `bearer` for a channel that has a secret (`hasSecret: true`) and `none` for one
   that has none and should not, such as a Slack incoming webhook. A channel that set `authHeader`
@@ -2546,8 +2547,8 @@ channels](../guides/notification-channels.md) has the details.
   is not checked, so you can disable a broken channel without fixing it first; enabling one is
   checked.
 - **An SMTP channel with a username and no secret** is now refused before the platform connects to
-  the mail server, and it is not retried. Before, it connected, was refused, and retried each
-  attempt.
+  the mail server, and it is not retried. Before, it connected, then gave up without
+  authenticating, and retried every attempt.
 - **An `httpCall` action whose secret handle names no stored secret** is dead-lettered once with
   the outcome `invalid` and not retried. Before, it was retried until the redelivery limit and
   dead-lettered as exhausted, so a secret stored during that window could still let the call

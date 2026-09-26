@@ -2707,8 +2707,9 @@ notificación](../guides/notification-channels.md) tiene los detalles.
   canal y el motivo, y lo cuenta en
   `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`.
 - **Localice los canales que hay que corregir antes de actualizar.** En cada inquilino, ejecute
-  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } }`
-  y busque un `config` sin `auth`.
+  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } pagination { totalRecords } }`
+  y busque un `config` sin `auth`. Si `totalRecords` es mayor que 100, repita con el siguiente
+  `pageNumber` hasta haberlos leído todos.
 - **Añada `auth` antes de actualizar.** La versión actual acepta la clave y la ignora, así que no
   hay interrupción. Use `bearer` para un canal con secreto (`hasSecret: true`) y `none` para uno
   sin secreto que no debe tenerlo, como un webhook entrante de Slack. Un canal que fijaba
@@ -2722,8 +2723,8 @@ notificación](../guides/notification-channels.md) tiene los detalles.
   en la misma solicitud. Una actualización que solo renombra, describe o desactiva un canal no se
   comprueba, así que puede desactivar un canal roto sin arreglarlo antes; activarlo sí se comprueba.
 - **Un canal SMTP con usuario y sin secreto** se rechaza ahora antes de que la plataforma conecte
-  con el servidor de correo, y no se reintenta. Antes conectaba, era rechazado y reintentaba en cada
-  intento.
+  con el servidor de correo, y no se reintenta. Antes conectaba, desistía sin autenticarse y
+  reintentaba en cada intento.
 - **Una acción `httpCall` cuyo manejador de secreto no tiene ningún secreto guardado** se registra
   una vez en la cola de mensajes no entregados con el resultado `invalid` y no se reintenta. Antes
   se reintentaba hasta el límite de reentregas y se registraba como agotada, así que un secreto

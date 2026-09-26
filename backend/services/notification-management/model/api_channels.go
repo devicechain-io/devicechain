@@ -93,9 +93,9 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 //
 // 🔴 EVERYTHING THAT CAN REFUSE RESOLVES BEFORE ANYTHING IS WRITTEN. A channel type
 // outside the catalog, malformed config, malformed metadata, a cleared `enabled` and a
-// webhook whose declared auth and secret disagree all fail the WHOLE update rather than landing after `name` has already been saved: this is
-// the alarm→human last mile, and a half-applied edit is a channel in a state no caller
-// asked for.
+// webhook whose declared auth and secret disagree all fail the WHOLE update rather than
+// landing after `name` has already been saved: this is the alarm→human last mile, and a
+// half-applied edit is a channel in a state no caller asked for.
 func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	request *NotificationChannelUpdateRequest) (*NotificationChannel, error) {
 	matches, err := api.NotificationChannelsByToken(ctx, []string{token})
