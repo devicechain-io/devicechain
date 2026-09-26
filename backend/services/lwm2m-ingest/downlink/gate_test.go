@@ -56,14 +56,18 @@ func overflowOneDevice(t *testing.T, h *harness, n int) (release func(), acks []
 // nonce its envelope carried (the store's Park refuses any other).
 func TestAFullShardDoesNotBlockTheReader(t *testing.T) {
 	h := newHarness(t, 1, nil)
-	release, _ := overflowOneDevice(t, h, workerQueueDepth+3)
+	release, acks := overflowOneDevice(t, h, workerQueueDepth+3)
 	defer release()
 
 	require.Eventually(t, func() bool { return h.rdr.count() == workerQueueDepth+4 }, time.Second, time.Millisecond,
 		"the reader must not wait behind one device's full queue; it read %d of %d", h.rdr.count(), workerQueueDepth+4)
-	require.Eventually(t, func() bool {
-		return h.store.status("c9") == statusParked && h.store.status("c10") == statusParked && h.store.status("c11") == statusParked
-	}, time.Second, time.Millisecond, "the overflow must be parked with the nonces its envelopes carried")
+	// A park moves the row to PARKED before it counts the park and acks the message, so wait for
+	// the acks, the last thing each park does, before reading the counter.
+	require.Eventually(t, func() bool { return acks[9].acked() && acks[10].acked() && acks[11].acked() },
+		time.Second, time.Millisecond, "the overflow must be parked and settled")
+	for _, tok := range []string{"c9", "c10", "c11"} {
+		assert.Equal(t, statusParked, h.store.status(tok), "%s is parked with the nonce its envelope carried", tok)
+	}
 	assert.Equal(t, 3.0, testutil.ToFloat64(h.m.OverflowParked.WithLabelValues(parkReasonFull)),
 		"all three overflow parks are counted as full: the first set the gate, the others followed it")
 	assert.Equal(t, []string{"c0"}, h.exec.order(), "nothing else ran while the op was held")
@@ -85,6 +89,10 @@ func TestOverflowPreservesPerDeviceOrder(t *testing.T) {
 	release()
 
 	h.waitOrder(tokens("c", 0, 11)...)
+	// The order is recorded as an op starts; Drained counts it once it has returned and been
+	// answered. Wait for the count, not only for c11 to start.
+	require.Eventually(t, func() bool { return testutil.ToFloat64(h.m.Drained) >= 11 }, time.Second, time.Millisecond,
+		"c1..c11 were delivered by the drain")
 	for i, a := range acks {
 		assert.Equal(t, 1, a.count(), "c%d is settled exactly once", i)
 	}
@@ -478,31 +486,52 @@ func TestParkReasonFollowsTheDevicesCurrentCause(t *testing.T) {
 	parkOffline := func(t *testing.T, h *harness, token string) {
 		t.Helper()
 		h.look.set("pump-1", ReachOffline)
-		h.send(token, "pump-1")
-		require.Eventually(t, func() bool { return h.store.status(token) == statusParked }, time.Second, time.Millisecond)
+		ack := h.send(token, "pump-1")
+		// The ack follows the park's counters; the row goes PARKED before them.
+		require.Eventually(t, ack.acked, time.Second, time.Millisecond, "%s's park never settled", token)
+		require.Equal(t, statusParked, h.store.status(token))
+	}
+	// A park's settle asks for a drain turn, and it comes after the ack parkOffline waits for.
+	// That turn must find the device OFFLINE and leave the gate up; if the device reads live
+	// before the turn looks, the turn drains the parked command and lifts the gate, and what the
+	// subtest does next meets a device that is no longer gated. So wait until the turn has been
+	// taken, then run an op for another device on the same (only) shard: its worker starts that
+	// op only once the turn has ended. The fence's op, x1, is the first in the order.
+	parkTurnEnded := func(t *testing.T, h *harness) {
+		t.Helper()
+		require.Eventually(t, func() bool { return h.drainTaken("pump-1") }, time.Second, time.Millisecond,
+			"the park never settled into a drain turn")
+		h.look.set("pump-x", ReachLive)
+		h.send("x1", "pump-x")
+		h.waitOrder("x1")
+		require.True(t, h.gated("pump-1"), "the turn found the device offline and left its gate up")
 	}
 
 	t.Run("a command during the bind's drain", func(t *testing.T) {
 		h := newHarness(t, 1, nil)
 		parkOffline(t, h, "c1")
+		parkTurnEnded(t, h)
 		h.look.set("pump-1", ReachLive)
 		holding, release := h.holdOps()
 		defer release()
 		h.d.Drain("acme", "pump-1")
 		require.Equal(t, "c1", recv(t, holding, "c1's drained op to start"))
 
-		h.send("c2", "pump-1")
-		require.Eventually(t, func() bool { return h.store.status("c2") == statusParked }, time.Second, time.Millisecond)
+		c2 := h.send("c2", "pump-1")
+		require.Eventually(t, c2.acked, time.Second, time.Millisecond, "c2's park never settled")
+		require.Equal(t, statusParked, h.store.status("c2"))
 		offline, bind, served := counts(h)
 		assert.Equal(t, []float64{1, 1, 1}, []float64{offline, bind, served},
 			"c1 was parked offline; c2, sent to a connected device during its bind drain, is a bind park")
 		release()
-		h.waitOrder("c1", "c2")
+		h.waitOrder("x1", "c1", "c2")
 	})
 
 	t.Run("a command after the reconnect, before its wake lands", func(t *testing.T) {
 		h := newHarness(t, 1, nil)
 		parkOffline(t, h, "c1")
+		// Else the park's turn could drain c1, and c2 would go straight to the device.
+		parkTurnEnded(t, h)
 		h.look.set("pump-1", ReachLive) // the conn table says live; the wake has not run yet
 
 		h.send("c2", "pump-1")
@@ -515,7 +544,7 @@ func TestParkReasonFollowsTheDevicesCurrentCause(t *testing.T) {
 		assert.Equal(t, []float64{1, 1, 1}, []float64{offline, bind, served},
 			"the device's own lookup said live, so the gate it is parked behind is its bind, not its absence")
 		h.d.Drain("acme", "pump-1")
-		h.waitOrder("c1", "c2")
+		h.waitOrder("x1", "c1", "c2")
 	})
 
 	// A live task queued before the device dropped is parked on the gate as it leaves the queue,
@@ -537,14 +566,15 @@ func TestParkReasonFollowsTheDevicesCurrentCause(t *testing.T) {
 			defer release()
 			h.send("x1", "pump-x")
 			require.Equal(t, "x1", recv(t, holding, "x1's op to start"))
-			h.send("d1", "pump-1")
+			d1 := h.send("d1", "pump-1")
 			require.Eventually(t, func() bool { return h.queuedLive() == 1 }, time.Second, time.Millisecond)
 			parkOffline(t, h, "d2")
 
 			h.look.set("pump-1", tc.reach)
 			release()
-			require.Eventually(t, func() bool { return h.store.status("d1") == statusParked || len(h.exec.order()) > 2 },
-				time.Second, time.Millisecond)
+			// d1 is acked on every path it can take (a park acks after its counters), and the
+			// counts below say which path that was.
+			require.Eventually(t, d1.acked, time.Second, time.Millisecond, "d1 never settled")
 			offline, bind, served := counts(h)
 			assert.Equal(t, []float64{tc.wantOffline, tc.wantBind, tc.wantOffline}, []float64{offline, bind, served})
 
@@ -568,15 +598,25 @@ func TestAWorkerParkDoesNotHoldItsShard(t *testing.T) {
 	holding, release := h.holdOps()
 	h.send("x1", "pump-x")
 	require.Equal(t, "x1", recv(t, holding, "x1's op to start"))
-	h.send("a1", "pump-a")
+	a1 := h.send("a1", "pump-a")
 	h.send("b1", "pump-b")
 	require.Eventually(t, func() bool { return h.queuedLive() == 2 }, time.Second, time.Millisecond)
 	h.look.set("pump-a", ReachOffline)
 	release()
 
+	// b1 runs while a1's park cannot have returned: its hold is still open. That is the claim.
 	h.waitOrder("x1", "b1")
-	assert.Equal(t, []string{"a1"}, h.store.parked(), "a1's park is still in flight while b1 runs")
+	// The park is handed to the pool, which reaches command-delivery on its own goroutine, so wait
+	// for it to get there rather than reading the call list the moment b1 has run.
+	require.Eventually(t, func() bool { return len(h.store.parked()) >= 1 }, time.Second, time.Millisecond,
+		"a1's park never reached command-delivery")
+	assert.Equal(t, []string{"a1"}, h.store.parked(), "a1, and only a1, is parked")
+	assert.Equal(t, "SENT", h.store.status("a1"), "a1's park is still in flight while b1 runs")
+	assert.Equal(t, 0, a1.count(), "a1 is not settled while its park is in flight")
+
 	close(hold)
-	require.Eventually(t, func() bool { return h.store.status("a1") == statusParked }, time.Second, time.Millisecond)
+	// The ack is the last thing a park does, after its counters: wait for it, not for the row.
+	require.Eventually(t, a1.acked, time.Second, time.Millisecond, "a1's park never settled")
+	assert.Equal(t, statusParked, h.store.status("a1"))
 	assert.Equal(t, 1.0, testutil.ToFloat64(h.m.ServedOffline))
 }

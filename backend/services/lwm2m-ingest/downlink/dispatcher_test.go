@@ -1177,10 +1177,13 @@ func TestWakeDrainEndToEnd(t *testing.T) {
 	// A Register wake: Bind installs the live conn AND fires onLive → Drain.
 	connTable.Bind("acme", "pump-1", "id-1", 100, newFakeConn(1))
 
-	require.Eventually(t, func() bool { return exec.callCount() == 2 }, 2*time.Second, 5*time.Millisecond,
-		"both held commands are drained to the device on its wake")
+	// A response is published after its op returns, so the op count reaches 2 before c2's answer
+	// exists. Wait for the answers, which are what this test reads.
+	require.Eventually(t, func() bool { return len(pub.responses()) >= 2 }, 2*time.Second, 5*time.Millisecond,
+		"both held commands are drained to the device on its wake and answered")
 	resp := pub.responses()
 	require.Len(t, resp, 2)
+	assert.Equal(t, 2, exec.callCount(), "each drained command ran exactly once")
 	assert.Equal(t, "c1", resp[0].CommandToken, "drained oldest-first")
 	assert.Equal(t, "c2", resp[1].CommandToken)
 

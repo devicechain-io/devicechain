@@ -428,6 +428,25 @@ func (h *harness) gated(device string) bool {
 	return g != nil && g.gated
 }
 
+// drainTaken reports whether the drain turn a device's last park settle asked for has been taken
+// off the shard's ready list: no park of its is still on its way, and it is not waiting for a
+// turn. The turn may still be running; an op for another device on the same shard starting after
+// this is what shows it has ended (the worker runs one thing at a time). Both halves are needed
+// for that: while the device is still wanted, a worker that has just been nudged can take the
+// other device's task off its queue before it takes the turn. That window is only as wide as the
+// worker's wake-up, so no test here opens it on demand.
+//
+// A device with no entry has nothing in flight and nothing wanted, so its turn is taken too: the
+// entry is dropped only once it holds nothing, which a turn that lifted the gate leaves behind.
+// Answering false there would hide that lifted gate behind a timeout.
+func (h *harness) drainTaken(device string) bool {
+	s := h.shard()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.devs[deviceKey{"acme", device}]
+	return g == nil || (g.parksInFlight == 0 && !g.wanted)
+}
+
 // holdOps makes every op block until the returned release is called (and none after it). The
 // returned channel receives the token of each op as it starts.
 func (h *harness) holdOps() (holding <-chan string, release func()) {
