@@ -4,13 +4,11 @@
 package rdb
 
 import (
-	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/config"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 // The writer bound is the pool the service will actually open: the configured size, or
@@ -50,20 +48,19 @@ func TestCheckWriterCountBoundsWritersBelowTheEffectivePool(t *testing.T) {
 // More than half the pool is allowed and logged; half or fewer is not logged. The boundary
 // is exact: on the default pool of 20, 10 writers are quiet and 11 are logged.
 func TestCheckWriterCountLogsWritersOverHalfThePool(t *testing.T) {
-	saved := log.Logger
-	defer func() { log.Logger = saved }()
 	for _, tc := range []struct {
 		writers int
 		logged  bool
 	}{{1, false}, {10, false}, {11, true}, {19, true}} {
-		var buf bytes.Buffer
-		log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
-		if err := CheckWriterCount("w", tc.writers, config.MicroserviceDatastoreConfiguration{}); err != nil {
-			t.Fatalf("CheckWriterCount(%d) = %v; want nil", tc.writers, err)
-		}
-		got := strings.Contains(buf.String(), "More than half the connection pool")
-		if got != tc.logged {
-			t.Errorf("%d writers on a pool of 20: logged = %v; want %v (log: %q)", tc.writers, got, tc.logged, buf.String())
-		}
+		t.Run(fmt.Sprint(tc.writers), func(t *testing.T) {
+			logs := logSink.Capture(t)
+			if err := CheckWriterCount("w", tc.writers, config.MicroserviceDatastoreConfiguration{}); err != nil {
+				t.Fatalf("CheckWriterCount(%d) = %v; want nil", tc.writers, err)
+			}
+			got := strings.Contains(logs.String(), "More than half the connection pool")
+			if got != tc.logged {
+				t.Errorf("%d writers on a pool of 20: logged = %v; want %v (log: %q)", tc.writers, got, tc.logged, logs.String())
+			}
+		})
 	}
 }
