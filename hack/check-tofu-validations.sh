@@ -55,8 +55,8 @@
 # Usage:
 #   hack/check-tofu-validations.sh
 #
-# Requires tofu (or terraform) on PATH and a completed `tofu init -backend=false`
-# in deploy/opentofu; it runs the init itself if the working directory is cold.
+# Requires tofu (or terraform) on PATH and network access to the provider registry;
+# it runs `init -upgrade -backend=false` in every root itself.
 
 set -euo pipefail
 
@@ -122,10 +122,15 @@ fi
 # is the whole risk of a skip-based design: a renamed variable would be
 # not-applicable in every root and would vanish from the suite while it kept
 # printing green. never_applicable below is what refuses that.
+#
+# 🔴 INIT RUNS EVERY TIME, WITH -upgrade. The roots pin their providers exactly, and a
+# checkout that ran tofu before holds a machine-local lock file on whatever it resolved
+# then. Skipping init because .terraform/ exists (as this used to) left that lock in
+# force after a pin moved, and every console assertion below then failed on the
+# inconsistent lock -- a wall of FAILs naming the wrong cause. -upgrade moves the lock
+# onto the pins, exactly as dcctl does on every run.
 for _root in "${tofu_roots[@]}"; do
-  if [[ ! -d "$_root/.terraform" ]]; then
-    (cd "$_root" && "$TF" init -backend=false >/dev/null)
-  fi
+  (cd "$_root" && "$TF" init -upgrade -backend=false >/dev/null)
 done
 
 failures=0

@@ -108,6 +108,7 @@ func TestEveryOutputDcctlReadsIsDeclaredByTheRootItIsReadFrom(t *testing.T) {
 	}{
 		{"tofu.go", "applyInstanceInfra", "instance", assets.OpenTofuInstance(), 4},
 		{"clusterprereqs.go", "clusterOutputs", "cluster", assets.OpenTofuCluster(), 4},
+		{"clusterprereqs.go", "objectStoreFromOutputs", "cluster", assets.OpenTofuCluster(), 1},
 	} {
 		t.Run(tc.fn, func(t *testing.T) {
 			declared := rootDeclaredOutputs(t, tc.root, tc.rootName)

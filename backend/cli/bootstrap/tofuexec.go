@@ -184,8 +184,24 @@ func (t *tofuExec) streaming(ctx context.Context, run func() error) error {
 	return runUntilAbandoned(ctx, t.abandonBudget, run)
 }
 
-func (t *tofuExec) Init(ctx context.Context, opts ...tfexec.InitOption) error {
-	return t.streaming(ctx, func() error { return t.Terraform.Init(ctx, opts...) })
+// Init initialises the root and moves its lock file onto the provider versions the
+// embedded configuration pins.
+//
+// 🔴 -upgrade IS NOT OPTIONAL HERE, AND THERE IS NO WAY TO PASS AN OPTION THAT TURNS
+// IT OFF. The lock file is machine-local (nothing ships one), so without -upgrade it
+// freezes whatever the FIRST init on this machine resolved, and a dcctl that needs a
+// newer provider then fails every command on every existing cluster with "locked
+// provider ... does not match configured version constraint" -- install, upgrade and
+// destroy alike. That was not hypothetical: the kubernetes provider a cluster first
+// resolved (2.38.0) is the one that makes a failed install unrecoverable, so the
+// clusters the newer pin exists for are exactly the ones whose lock holds the old one.
+// The versions.tf pins are exact, so -upgrade selects exactly them and moves nothing
+// the shipped configuration did not move.
+//
+// The cost is that every init asks the provider registry (or a configured mirror)
+// which versions exist, including a destroy whose providers are already cached.
+func (t *tofuExec) Init(ctx context.Context) error {
+	return t.streaming(ctx, func() error { return t.Terraform.Init(ctx, tfexec.Upgrade(true)) })
 }
 
 func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error {

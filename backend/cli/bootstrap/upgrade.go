@@ -598,7 +598,7 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 		// this function reports as the limit is not the limit it enforced.
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return fmt.Errorf("the operator did not finish rolling over within %s: %s", timeout, pending)
+			return fmt.Errorf("the rollout did not finish within %s: %s", timeout, pending)
 		}
 		wait := rolloutPollInterval
 		if remaining < wait {
