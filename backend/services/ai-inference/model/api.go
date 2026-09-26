@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -39,6 +40,11 @@ var ErrInvalidEndpoint = errors.New("provider endpoint must be an absolute http(
 
 // ErrConflict is returned by UpdateAIProvider when the caller passes the version it
 // edited (expectedUpdatedAt) and the row has moved on since — a concurrent edit.
+//
+// 🔴 DESPITE THE NAME, IT MUST NEVER BECOME A conflict.Error. That type's code, CONFLICT,
+// means "a value that must be unique is already in use", and a client (dcctl among them)
+// may treat it as "already exists, carry on" — which, for a lost update, would report a
+// save that never happened as done.
 var ErrConflict = errors.New("provider was modified by another writer; reload and try again")
 
 // Api is the ai-inference persistence surface: the instance-scoped AIProvider list
@@ -346,8 +352,9 @@ func (api *Api) RenameAIProvider(ctx context.Context, token string, newToken str
 	// say the same sentence, and the reason is that the transaction does NOT close the
 	// race. At READ COMMITTED a Count that matches nothing takes no lock — there is no
 	// row to lock — so two concurrent renames onto one free token both see it free and
-	// the loser is stopped by the index instead. Without the translation below it is
-	// handed `SQLSTATE 23505` and an index name, which is not what this API promises.
+	// the loser is stopped by the index instead. Without the translation below it would
+	// get the GraphQL boundary's NEUTRAL conflict sentence (with code CONFLICT) rather than
+	// this rename's own sentence, which is not what this API promises.
 	//
 	// The provider list is INSTANCE-global, so this counts across the whole instance,
 	// matching uix_ai_providers_token's own scope.
@@ -377,8 +384,9 @@ func (api *Api) RenameAIProvider(ctx context.Context, token string, newToken str
 		// writes the same single column and keeps it.
 		if err := tx.Model(current).Update("token", newToken).Error; err != nil {
 			// THE LOSING RACER ARRIVES HERE rather than through the Count above, and it
-			// must read exactly as the uncontended refusal does.
-			if rdb.IsUniqueViolation(err, aiProviderTokenIndexName, "ai_providers.token") {
+			// must read exactly as the uncontended refusal does. Any uniqueness conflict
+			// on this write is the token's: it changes that one column and no other.
+			if conflict.Is(err) {
 				return ErrAIProviderTokenTaken(token, newToken)
 			}
 			return err
@@ -394,21 +402,12 @@ func (api *Api) RenameAIProvider(ctx context.Context, token string, newToken str
 // ErrAIProviderTokenTaken is the ONE sentence a caller gets when the token they asked for
 // belongs to another provider — whether the pre-write lookup found it or the unique index
 // did. Both paths are made to say this, because a client cannot be asked to write two
-// handlers for one condition that differ only by timing.
+// handlers for one condition that differ only by timing. It is a conflict.Error, so it
+// carries extensions.code CONFLICT on either path.
 func ErrAIProviderTokenTaken(token, newToken string) error {
-	return fmt.Errorf("cannot rename ai provider %q to %q: that token is already in use "+
+	return conflict.Errorf("cannot rename ai provider %q to %q: that token is already in use "+
 		"by another provider", token, newToken)
 }
-
-// aiProviderTokenIndexName is the INSTANCE-global partial unique index the baseline creates
-// on ai_providers (token) among live rows. Postgres names it in the text of a unique
-// violation, and that name is what distinguishes "this token is taken" from any other write
-// failure.
-//
-// Unlike every tenant-scoped table's index this one is spelled as a literal in
-// schema/baseline.go rather than derived from a naming rule, so
-// TestAIProviderTokenIndexNameMatchesTheMigration compares the two literals directly.
-const aiProviderTokenIndexName = "uix_ai_providers_token"
 
 // providerParamsStr renders a stored params column as the *string the three-state fold
 // takes: nil for a NULL column, so the ABSENT reading of a request that says nothing

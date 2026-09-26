@@ -633,6 +633,9 @@ func (c *wsConnection) startOperation(authedCtx context.Context, msg wsMessage) 
 			if !c.opActive(msg.ID) {
 				return
 			}
+			// The same conflict answer Schema.Exec gives, applied here because a
+			// subscription's responses are typed only on this side of the channel.
+			answerConflicts(r.Errors)
 			raw, mErr := json.Marshal(r)
 			if mErr != nil {
 				continue

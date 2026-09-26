@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -38,6 +39,11 @@ var ErrConfigTooLarge = errors.New("connector config exceeds the maximum size")
 // ErrConflict is returned by UpdateConnector/PublishConnector when the caller passes
 // the version it edited (expectedUpdatedAt) and the row has moved on since — a
 // concurrent edit (a second tab / another writer). The caller should reload and retry.
+//
+// 🔴 DESPITE THE NAME, IT MUST NEVER BECOME A conflict.Error. That type's code, CONFLICT,
+// means "a value that must be unique is already in use", and a client (dcctl among them)
+// may treat it as "already exists, carry on" — which, for a lost update, would report a
+// save that never happened as done.
 var ErrConflict = errors.New("connector was modified by another writer; reload and try again")
 
 // Api is the outbound-connectors persistence surface: the versioned Connector entity
@@ -296,10 +302,11 @@ func (api *Api) RenameConnector(ctx context.Context, token string, newToken stri
 	// say the same sentence, and the reason is that the transaction does NOT close the
 	// race. At READ COMMITTED a Count that matches nothing takes no lock — there is no
 	// row to lock — so two concurrent renames onto one free token both see it free and
-	// the loser is stopped by the index instead. Without the translation below it is
-	// handed `SQLSTATE 23505` and an index name, which is not what this API promises and
-	// not something a caller can act on: they cannot write two handlers for one condition
-	// that differ only by which of them got there first.
+	// the loser is stopped by the index instead. Without the translation below it would
+	// get the GraphQL boundary's NEUTRAL conflict sentence (with code CONFLICT) rather
+	// than this rename's own sentence, which is not what this API promises: a caller
+	// cannot write two handlers for one condition that differ only by which of them got
+	// there first.
 	//
 	// The tenant predicate on the Count is the scoping callback's, so it counts within
 	// the caller's tenant; the index carries the same predicate plus `deleted_at IS NULL`,
@@ -321,8 +328,9 @@ func (api *Api) RenameConnector(ctx context.Context, token string, newToken stri
 		// tenant-scope callback.
 		if err := tx.Model(current).Update("token", newToken).Error; err != nil {
 			// THE LOSING RACER ARRIVES HERE rather than through the Count above, and it
-			// must read exactly as the uncontended refusal does.
-			if rdb.IsUniqueViolation(err, connectorTokenIndexName, "connectors.token") {
+			// must read exactly as the uncontended refusal does. Any uniqueness conflict
+			// on this write is the token's: it changes that one column and no other.
+			if conflict.Is(err) {
 				return ErrConnectorTokenTaken(token, newToken)
 			}
 			return err
@@ -338,22 +346,12 @@ func (api *Api) RenameConnector(ctx context.Context, token string, newToken stri
 // ErrConnectorTokenTaken is the ONE sentence a caller gets when the token they asked for
 // belongs to another connector — whether the pre-write lookup found it or the unique index
 // did. Both paths are made to say this, because a client cannot be asked to write two
-// handlers for one condition that differ only by timing.
+// handlers for one condition that differ only by timing. It is a conflict.Error, so it
+// carries extensions.code CONFLICT on either path.
 func ErrConnectorTokenTaken(token, newToken string) error {
-	return fmt.Errorf("cannot rename connector %q to %q: that token is already in use "+
+	return conflict.Errorf("cannot rename connector %q to %q: that token is already in use "+
 		"by another connector in this tenant", token, newToken)
 }
-
-// connectorTokenIndexName is the per-tenant partial unique index the baseline creates on
-// connectors (tenant_id, token) among live rows. Postgres names it in the text of a unique
-// violation, and that name is what distinguishes "this token is taken" from any other write
-// failure.
-//
-// It mirrors schema/baseline.go's createTenantTokenIndex naming rule, "uix_" + the bare
-// table name + "_tenant_token". The rule is spelled in two places because that helper is a
-// deliberate copy inside the migration and is unexported;
-// TestConnectorTokenIndexNameMatchesTheMigration is what keeps the two from drifting.
-const connectorTokenIndexName = "uix_connectors_tenant_token"
 
 // updatedSecret folds the three states of the write-only `secret` field onto the
 // *string applyConnectorSecret takes, which has only two: nil means PRESERVE, and a

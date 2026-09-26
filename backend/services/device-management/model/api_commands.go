@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -24,6 +25,9 @@ import (
 //
 // excludeId (0 for a create) is the definition being updated, so re-saving a
 // definition without changing its key is not a self-collision.
+//
+// The refusal is a conflict.Error: a key that must be unique is already taken, so it
+// carries extensions.code CONFLICT with this sentence.
 func (api *Api) assertCommandKeyUnused(ctx context.Context, profileId uint, commandKey string, excludeId uint) error {
 	if profileId == 0 {
 		return nil
@@ -37,7 +41,7 @@ func (api *Api) assertCommandKeyUnused(ctx context.Context, profileId uint, comm
 		return err
 	}
 	if len(existing) > 0 {
-		return fmt.Errorf("device profile already declares a command %q; command keys must be unique per profile", commandKey)
+		return conflict.Errorf("device profile already declares a command %q; command keys must be unique per profile", commandKey)
 	}
 	return nil
 }

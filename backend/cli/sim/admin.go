@@ -6,8 +6,8 @@ package sim
 import (
 	"context"
 	"fmt"
-	"strings"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
@@ -163,52 +163,31 @@ func (a *Admin) DeleteTenant(ctx context.Context, token string) (bool, error) {
 	return out.DeleteTenant, nil
 }
 
-// tolerateExists returns nil when inner reports an already-exists/duplicate
-// condition (so create is idempotent), and wrapped otherwise. inner is the raw
-// error; wrapped is the contextualized one to return on a real failure. A pre-GA
-// pragmatism: the admin schema has no assure-mutations, so idempotency is by
-// error-shape until it does.
+// tolerateExists returns nil when inner is the server's CONFLICT refusal (so create is
+// idempotent), and wrapped otherwise. inner is the raw error; wrapped is the
+// contextualized one to return on a real failure. A pre-GA pragmatism: the admin schema
+// has no assure-mutations, so idempotency is by the refusal's code until it does.
 //
-// The match is by POSITIVE phrase — "already exists" / "duplicate" / "unique" — not
-// the bare substring "exist", which would also swallow a "does NOT exist" error and
-// report a broken create as success.
+// 🔴 IT READS THE SERVER'S MACHINE-READABLE CODE, NEVER THE MESSAGE. An earlier version
+// matched phrases ("already exists", "duplicate", "unique") in the text, and prose made
+// a poor vote: the membership refusal used none of the phrases, so a re-run stopped at
+// that step, and the server echoes the caller's own identifiers into its messages, so a
+// sim's NAME could decide whether a failure counted as success. The text, including any
+// identifiers echoed in it, no longer has a say.
 //
-// 🔴 QUOTED SEGMENTS ARE STRIPPED BEFORE MATCHING, and that is not a nicety. The
-// server interpolates the caller's own identifiers into its errors (`create tenant
-// %q: ...`), so without this the SIM'S NAME decides whether a failure counts as
-// success: `dcctl sim create unique1` produces `create tenant "sim-unique1": <any
-// error at all>`, which contains "unique" and is swallowed. Every real refusal —
-// unknown tier, connection refused, and ADR-077's reserved-token refusal — would be
-// reported as ✅ for that one name. The phrases this function looks for are the
-// SERVER'S prose about what went wrong; anything inside quotes is the caller's own
-// input echoed back, and input must never be able to vote on its own outcome.
+// WHY CONFLICT IS SOUND TO TOLERATE HERE, AND ONLY HERE. CONFLICT means "a value that
+// must be unique is already in use", which does not by itself mean "the record you asked
+// for exists". It does for exactly the three mutations this wraps: createTenant,
+// createIdentity and addMembership can only collide on a value the CALLER chose — the
+// tenant token, the identity's email, the (identity, tenant) pair. A deleted tenant's
+// reserved token is refused WITHOUT the code (user-management pins that), because
+// carrying on there would mint access to a tenant nobody can enter.
+//
+// EVERY error in the response must carry the code (userclient.AllHaveCode): one
+// CONFLICT beside an uncoded real failure is not a benign refusal.
 func tolerateExists(wrapped, inner error) error {
-	if inner == nil {
+	if inner == nil || userclient.AllHaveCode(inner, conflict.Code) {
 		return nil
 	}
-	m := strings.ToLower(stripQuoted(inner.Error()))
-	for _, s := range []string{"already exists", "duplicate", "unique"} {
-		if strings.Contains(m, s) {
-			return nil
-		}
-	}
 	return wrapped
-}
-
-// stripQuoted removes double-quoted spans, which is where an error puts the values it
-// was given. An unterminated quote drops the rest of the message: the tail is
-// unattributable, and dropping it can only make this function LESS willing to call a
-// failure a success.
-func stripQuoted(s string) string {
-	var b strings.Builder
-	inQuote := false
-	for _, r := range s {
-		switch {
-		case r == '"':
-			inQuote = !inQuote
-		case !inQuote:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }

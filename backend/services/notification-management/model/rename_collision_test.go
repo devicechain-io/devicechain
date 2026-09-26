@@ -5,10 +5,12 @@ package model
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
 
@@ -18,21 +20,20 @@ import (
 // THAT IS WHAT THESE TESTS EXIST FOR. At READ COMMITTED a SELECT cannot lock a row that
 // does not exist, so two renames onto one token — or a rename racing a create — both see
 // zero rows, and the second UPDATE discovers the collision at the partial unique index
-// instead. Without a translation the loser is handed
-// `duplicate key value violates unique constraint "uix_notification_channels_tenant_token"
-// (SQLSTATE 23505)`, which is not something a client can write a handler against and is not
+// instead. Without a translation the loser would get the GraphQL boundary's NEUTRAL
+// conflict sentence (code CONFLICT) instead of this rename's own sentence, which is not
 // what the served API reference promises.
 //
 // The uncontended refusal is covered by TestRenameChannel_ATakenTokenIsRefusedByName in
-// api_token_argument_test.go. What is here is the contended one, and it is driven three
-// ways, because no single one of them is enough on its own:
+// api_token_argument_test.go. What is here is the contended one, driven two ways:
 //
-//  1. against a REAL unique index, through the REAL RenameNotificationChannel, with the
-//     colliding row appearing in exactly the window the race opens — the end-to-end claim;
-//  2. against the real Postgres message text, spelled out, so the branch production takes
-//     is exercised even though these tests run on SQLite;
-//  3. against the index NAME the migration builds, so the constant this all hangs on cannot
-//     drift away from the schema in silence.
+//  1. through the REAL rename against a REAL unique index, with the colliding row
+//     appearing in exactly the window the race opens — the end-to-end claim;
+//  2. through a bare write onto the same planted collision, to show what the
+//     translation replaces.
+//
+// Which driver errors count as a collision (Postgres 23505, SQLite's unique codes) is
+// conflict.As's question, and its own tests own both drivers.
 
 // newCollisionApi is newTestApi plus the per-tenant partial unique index the real migration
 // creates. The ordinary fixture deliberately omits it (see newTestApi), which is why the
@@ -40,9 +41,7 @@ import (
 func newCollisionApi(t *testing.T) *Api {
 	t.Helper()
 	api := newTestApi(t)
-	if err := api.RDB.Database.Exec(
-		"CREATE UNIQUE INDEX " + channelTokenIndexName +
-			" ON notification_channels (tenant_id, token) WHERE deleted_at IS NULL").Error; err != nil {
+	if err := rdb.CreateTenantTokenIndex(api.RDB.Database, &NotificationChannel{}); err != nil {
 		t.Fatalf("create the tenant/token index: %v", err)
 	}
 	return api
@@ -108,7 +107,11 @@ func TestRenameChannel_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 	if err.Error() != want {
 		t.Fatalf("the losing racer got:\n  %v\nwant exactly the uncontended refusal:\n  %s", err, want)
 	}
-	for _, leak := range []string{"SQLSTATE", "23505", "constraint", channelTokenIndexName} {
+	if !conflict.Is(err) {
+		t.Fatalf("the losing racer's refusal is not a conflict, so it would reach the caller "+
+			"without extensions.code CONFLICT: %v", err)
+	}
+	for _, leak := range []string{"SQLSTATE", "23505", "UNIQUE constraint", "constraint", "uix_"} {
 		if strings.Contains(err.Error(), leak) {
 			t.Errorf("the refusal still carries driver detail (%q): %v", leak, err)
 		}
@@ -125,77 +128,79 @@ func TestRenameChannel_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 	}
 }
 
-// THE COUNTERWEIGHT. The translation must not swallow an unrelated write failure into "that
-// token is taken", which would be a worse lie than the driver text: it names a cause the
-// caller can act on, and acting on it would not help.
-//
-// 🔴 IT IS ALSO WHAT KEEPS THE MOVE INTO core HONEST. The matcher is now
-// rdb.IsUniqueViolation, which recognises a violation from EITHER piece of evidence — the
-// index name alone, or the marker plus every named column. Recognising more spellings is
-// only safe while it still refuses these, and the last two rows are the ones a looser
-// matcher passes: the same VIOLATION on another table, and another INDEX on this one.
+// 🔴 THE NEGATIVE CONTROL. The raw racer IS a conflict — the GraphQL boundary would give it
+// the code and the neutral sentence on its own — but it is NOT this rename's sentence, which
+// is what the test above is worth: remove the translation and the caller gets the boundary's
+// generic wording instead of the one the API promises. It drives the SAME planted collision
+// through a bare write, so a reader can see the two side by side.
+func TestRenameChannel_TheRawRacerIsAConflictButNotTheSentence(t *testing.T) {
+	api := newCollisionApi(t)
+	ctx := tenantCtx("A")
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	rows, _ := api.NotificationChannelsByToken(ctx, []string{"chan-a"})
+	insertOnFirstUpdate(t, api, ctx, "A", "chan-b")
+
+	raw := api.RDB.DB(ctx).Model(rows[0]).Update("token", "chan-b").Error
+	if raw == nil {
+		t.Fatal("the untranslated write succeeded, so this control proves nothing about what " +
+			"the translation is protecting the caller from")
+	}
+	if !conflict.Is(raw) {
+		t.Fatalf("the raw failure is not the collision this suite is about: %v", raw)
+	}
+	if raw.Error() == ErrChannelTokenTaken("chan-a", "chan-b").Error() {
+		t.Fatal("the raw driver error already reads as the API's sentence, so the end-to-end " +
+			"test above would pass with the translation removed")
+	}
+}
+
+// THE COUNTERWEIGHT, driven through the REAL rename. The translation must not swallow an
+// unrelated write failure into "that token is taken", which would be a worse lie than the
+// driver text: it names a cause the caller can act on, and acting on it would not help.
 func TestRenameChannel_AnUnrelatedWriteFailureIsNotReportedAsACollision(t *testing.T) {
-	for name, err := range map[string]error{
-		"connection lost":              fmt.Errorf("driver: bad connection"),
-		"another table":                fmt.Errorf(`UNIQUE constraint failed: notification_policies.tenant_id, notification_policies.token`),
-		"a different index":            fmt.Errorf(`duplicate key value violates unique constraint "uix_notification_policies_tenant_token" (SQLSTATE 23505)`),
-		"another index on this table":  fmt.Errorf(`duplicate key value violates unique constraint "uix_notification_channels_tenant_name" (SQLSTATE 23505)`),
-		"another column on this table": fmt.Errorf(`UNIQUE constraint failed: notification_channels.tenant_id, notification_channels.name`),
-		"no error":                     nil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			if isChannelTokenCollision(err) {
-				t.Fatalf("%v was classified as a channel-token collision", err)
-			}
-		})
+	api := newCollisionApi(t)
+	db := api.RDB.Database
+	ctx := tenantCtx("A")
+	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
+		Token: "chan-a", ChannelType: ChannelTypeWebhook, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	failOnFirstUpdate(t, db, "notification_channels")
+
+	_, err := api.RenameNotificationChannel(ctx, "chan-a", "chan-b")
+	if err == nil {
+		t.Fatal("the rename succeeded, so the injected failure never reached it")
+	}
+	if err.Error() == ErrChannelTokenTaken("chan-a", "chan-b").Error() {
+		t.Fatalf("an unrelated write failure was reported as a token collision: %v", err)
+	}
+	if conflict.Is(err) {
+		t.Fatalf("an unrelated write failure was classified as a conflict: %v", err)
+	}
+	if !strings.Contains(err.Error(), "driver: bad connection") {
+		t.Fatalf("the rename did not return the write's own failure: %v", err)
 	}
 }
 
-// THE PRODUCTION BRANCH, which the SQLite fixture above cannot reach.
-//
-// 🔴 THE MESSAGE IS SPELLED OUT IN FULL RATHER THAN BUILT FROM channelTokenIndexName, AND
-// THAT IS THE WHOLE VALUE OF THIS TEST. A fixture assembled from the constant matches the
-// constant whatever the constant says, so it would pass just as happily after a typo moved
-// the name away from the index the migration actually creates. Written out, a drifting
-// constant fails here.
-func TestRenameChannel_ThePostgresUniqueViolationIsRecognised(t *testing.T) {
-	pgError := fmt.Errorf(`ERROR: duplicate key value violates unique constraint ` +
-		`"uix_notification_channels_tenant_token" (SQLSTATE 23505)`)
-	if !isChannelTokenCollision(pgError) {
-		t.Fatalf("the Postgres unique violation was not recognised, so production — which runs "+
-			"on Postgres, not on this test's SQLite — would hand the loser raw driver text:\n  %v",
-			pgError)
+// failOnFirstUpdate makes the next UPDATE on table fail with an error that is not a
+// uniqueness violation.
+func failOnFirstUpdate(t *testing.T, db *gorm.DB, table string) {
+	t.Helper()
+	fired := false
+	name := "test:fail_first_update"
+	if err := db.Callback().Update().Before("gorm:update").Register(name, func(tx *gorm.DB) {
+		if fired || tx.Statement.Table != table {
+			return
+		}
+		fired = true
+		_ = tx.AddError(errors.New("driver: bad connection"))
+	}); err != nil {
+		t.Fatalf("register the failing callback: %v", err)
 	}
-	sqliteError := fmt.Errorf("UNIQUE constraint failed: notification_channels.tenant_id, " +
-		"notification_channels.token")
-	if !isChannelTokenCollision(sqliteError) {
-		t.Fatalf("the SQLite unique violation was not recognised, so the end-to-end test above "+
-			"would be passing for a reason other than the translation:\n  %v", sqliteError)
-	}
-}
-
-// 🔴 THE CONSTANT MUST NAME THE INDEX THE MIGRATION ACTUALLY BUILDS, and the two are spelled
-// in different packages because schema/baseline.go's createTenantTokenIndex is unexported.
-// This re-derives the name by that helper's own rule — "uix_" + table + "_tenant_token" —
-// from GORM's table name for the live model, which is the same table the migration parses.
-// A rename of the table moves both together and this still passes, correctly; a constant
-// edited by hand away from the rule does not.
-func TestRenameCollisionIndexNameMatchesTheTable(t *testing.T) {
-	api := newTestApi(t)
-	stmt := &gorm.Statement{DB: api.RDB.Database}
-	if err := stmt.Parse(&NotificationChannel{}); err != nil {
-		t.Fatalf("parse the channel model: %v", err)
-	}
-	// The migration strips any schema qualifier before building the name; mirrored here so
-	// the two agree under production's TablePrefix as well as under the bare fixture.
-	bare := stmt.Table
-	if i := strings.LastIndex(bare, "."); i >= 0 {
-		bare = bare[i+1:]
-	}
-	want := "uix_" + bare + "_tenant_token"
-	if channelTokenIndexName != want {
-		t.Fatalf("channelTokenIndexName is %q but the migration's naming rule builds %q for "+
-			"table %q — a losing racer would then get raw driver text, and nothing else in this "+
-			"suite would notice", channelTokenIndexName, want, bare)
-	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(name) })
 }

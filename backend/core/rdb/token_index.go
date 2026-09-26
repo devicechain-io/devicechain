@@ -80,9 +80,9 @@ func CreatePartialUniqueIndex(tx *gorm.DB, model any, name string, columns ...st
 // The name it derives, uix_<table>_tenant_token, matches what those migrations build,
 // because gorm hands back an UNQUALIFIED stmt.Table even under the production
 // NamingStrategy's "<functional-area>." TablePrefix — the qualified form goes to
-// stmt.TableExpr instead. Nothing here would notice a gorm release changing that: these
-// fixtures only ever run on SQLite, where IsUniqueViolation matches on COLUMNS rather
-// than on the index name, so a fixture index that started carrying the prefix would be
+// stmt.TableExpr instead. Nothing here would notice a gorm release changing that:
+// conflict classification (conflict.As) reads the driver's error type and code, never
+// an index name, so a fixture index that started carrying the prefix would be
 // invisible to every test that installs one. The caller that WOULD notice is
 // CreatePartialUniqueIndex inside the secrets migration, whose ON clause quotes
 // stmt.Table: a prefix left in place there collapses into one dotted identifier and the

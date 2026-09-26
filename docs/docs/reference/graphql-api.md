@@ -275,8 +275,9 @@ All four follow one contract:
   addressable by nothing.
 - Renaming a record to the token it already has is an idempotent success that returns the
   record, so retrying after a partial failure is safe.
-- A token another record of that kind already holds is refused by name, rather than surfacing as
-  a constraint violation.
+- A token another record of that kind already holds is refused by name, with `extensions.code` set
+  to `CONFLICT`, whether the refusal comes from the lookup or from a concurrent rename that got
+  there first. See [A value that must be unique](#unique-values).
 - The required authority is the one the matching update takes: a rename is an edit of the record,
   not a new kind of act.
 
@@ -536,6 +537,42 @@ token you choose and keep the device's own identifier alongside it.
 
 The console mints tokens for you from a per-entity-type template, so this rarely comes up there. It
 bites first on the API and in scripted provisioning.
+
+### A value that must be unique {#unique-values}
+
+Some values must be unique: a token within its tenant, a device's `externalId`, a command key
+within a profile, an identity's email, one membership per identity and tenant. A create, update or
+rename that would repeat one is refused, and the error carries `extensions.code` set to `CONFLICT`:
+
+```json
+{
+  "errors": [{
+    "message": "the request conflicts with an existing record: a value that must be unique is already in use",
+    "path": ["createDeviceType"],
+    "extensions": { "code": "CONFLICT" }
+  }]
+}
+```
+
+Branch on the code, not on the message. Where the service has more to say, the message is its own
+sentence instead, for example a rename onto a token already in use, and the code is the same. The
+database's own wording for the collision is replaced by the sentence above, so the message does not
+name a database index or column. A service's own sentence may repeat the token you sent.
+
+`CONFLICT` means the write collided with a value that must be unique. That is usually a value you
+sent, but it can be one the server assigns during the write, such as the next version number when
+two publishes of the same record run at once, and then a retry succeeds. So the code does not by
+itself mean that the record you asked for already exists. It means that only where the one unique
+value involved is yours, such as the token of a tenant you are creating.
+
+Some refusals look similar and do not carry `CONFLICT`:
+
+- A save refused because the record changed since you read it ("modified by another writer; reload
+  and try again") is a stale write, not a duplicate.
+- A deleted tenant's token is reserved until the deletion finishes. Creating a tenant at it is
+  refused without `CONFLICT`, because the token is not held by a tenant you could use.
+- Creating a command with a token already in use is not refused at all: you get the original
+  command back. See [Issue a command](../guides/sending-commands.md#issue-it).
 
 ## Request limits {#request-limits}
 

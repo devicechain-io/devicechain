@@ -5,12 +5,12 @@ package model
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
 
@@ -20,19 +20,20 @@ import (
 // WHAT THESE TESTS EXIST FOR. At READ COMMITTED a SELECT cannot lock a row that does not
 // exist, so two renames onto one token — or a rename racing a create — both see zero rows,
 // and the second UPDATE discovers the collision at the partial unique index instead.
-// Without a translation the loser is handed `duplicate key value violates unique constraint
-// "uix_connectors_tenant_token" (SQLSTATE 23505)`, which is not something a client can write
-// a handler against and is not what the served API reference promises.
+// Without a translation the loser would get the GraphQL boundary's NEUTRAL conflict
+// sentence (code CONFLICT) instead of this rename's own sentence, which is not what the
+// served API reference promises.
 //
 // The uncontended refusal is covered by TestRenameConnector_RefusesATokenAlreadyInUse. What
-// is here is the contended one, driven three ways because no single one is enough alone:
+// is here is the contended one, driven two ways:
 //
-//  1. against a REAL unique index, through the REAL RenameConnector, with the colliding row
+//  1. through the REAL rename against a REAL unique index, with the colliding row
 //     appearing in exactly the window the race opens — the end-to-end claim;
-//  2. against the real Postgres message text, spelled out, so the branch production takes is
-//     exercised even though these tests run on SQLite;
-//  3. against the index NAME the migration builds, so the constant this hangs on cannot
-//     drift away from the schema in silence.
+//  2. through a bare write onto the same planted collision, to show what the
+//     translation replaces.
+//
+// Which driver errors count as a collision (Postgres 23505, SQLite's unique codes) is
+// conflict.As's question, and its own tests own both drivers.
 
 // insertOnFirstConnectorUpdate reproduces the race window deterministically: a one-shot
 // callback that runs just before the UPDATE and inserts the colliding row through the SAME
@@ -93,7 +94,11 @@ func TestRenameConnector_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 	if err.Error() != want {
 		t.Fatalf("the losing racer got:\n  %v\nwant exactly the uncontended refusal:\n  %s", err, want)
 	}
-	for _, leak := range []string{"SQLSTATE", "23505", "constraint", connectorTokenIndexName} {
+	if !conflict.Is(err) {
+		t.Fatalf("the losing racer's refusal is not a conflict, so it would reach the caller "+
+			"without extensions.code CONFLICT: %v", err)
+	}
+	for _, leak := range []string{"SQLSTATE", "23505", "UNIQUE constraint", "constraint", "uix_"} {
 		if strings.Contains(err.Error(), leak) {
 			t.Errorf("the refusal still carries driver detail (%q): %v", leak, err)
 		}
@@ -110,11 +115,12 @@ func TestRenameConnector_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 	}
 }
 
-// 🔴 THE NEGATIVE CONTROL. Without the translation the loser gets the raw driver text — this
-// is what the test above is worth, stated by showing the untranslated outcome rather than
-// asserting it is impossible. It drives the SAME planted collision through a bare write, so
-// a reader can see the two messages side by side.
-func TestRenameConnector_WithoutTheTranslationTheRacerGetsDriverText(t *testing.T) {
+// 🔴 THE NEGATIVE CONTROL. The raw racer IS a conflict — the GraphQL boundary would give it
+// the code and the neutral sentence on its own — but it is NOT this rename's sentence, which
+// is what the test above is worth: remove the translation and the caller gets the boundary's
+// generic wording instead of the one the API promises. It drives the SAME planted collision
+// through a bare write, so a reader can see the two side by side.
+func TestRenameConnector_TheRawRacerIsAConflictButNotTheSentence(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 	if _, err := api.CreateConnector(ctx, &ConnectorCreateRequest{
@@ -130,7 +136,7 @@ func TestRenameConnector_WithoutTheTranslationTheRacerGetsDriverText(t *testing.
 		t.Fatal("the untranslated write succeeded, so this control proves nothing about what " +
 			"the translation is protecting the caller from")
 	}
-	if !rdb.IsUniqueViolation(raw, connectorTokenIndexName, "connectors.token") {
+	if !conflict.Is(raw) {
 		t.Fatalf("the raw failure is not the collision this suite is about: %v", raw)
 	}
 	if raw.Error() == ErrConnectorTokenTaken("conn-a", "conn-b").Error() {
@@ -139,69 +145,49 @@ func TestRenameConnector_WithoutTheTranslationTheRacerGetsDriverText(t *testing.
 	}
 }
 
-// THE COUNTERWEIGHT. The translation must not swallow an unrelated write failure into "that
-// token is taken", which would be a worse lie than the driver text: it names a cause the
-// caller can act on, and acting on it would not help.
+// THE COUNTERWEIGHT, driven through the REAL rename. The translation must not swallow an
+// unrelated write failure into "that token is taken", which would be a worse lie than the
+// driver text: it names a cause the caller can act on, and acting on it would not help.
 func TestRenameConnector_AnUnrelatedWriteFailureIsNotReportedAsACollision(t *testing.T) {
-	for name, err := range map[string]error{
-		"connection lost": fmt.Errorf("driver: bad connection"),
-		"another table":   fmt.Errorf(`UNIQUE constraint failed: connector_versions.connector_id, connector_versions.version`),
-		"a different index": fmt.Errorf(`duplicate key value violates unique constraint ` +
-			`"uix_connector_versions_connector_version" (SQLSTATE 23505)`),
-		"no error": nil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			if rdb.IsUniqueViolation(err, connectorTokenIndexName, "connectors.token") {
-				t.Fatalf("%v was classified as a connector-token collision", err)
-			}
-		})
-	}
-}
-
-// THE PRODUCTION BRANCH, which the SQLite fixture above cannot reach.
-//
-// 🔴 THE MESSAGE IS SPELLED OUT IN FULL RATHER THAN BUILT FROM connectorTokenIndexName, AND
-// THAT IS THE WHOLE VALUE OF THIS TEST. A fixture assembled from the constant matches the
-// constant whatever the constant says, so it would pass just as happily after a typo moved
-// the name away from the index the migration actually creates. Written out, a drifting
-// constant fails here.
-func TestRenameConnector_ThePostgresUniqueViolationIsRecognised(t *testing.T) {
-	pgError := fmt.Errorf(`ERROR: duplicate key value violates unique constraint ` +
-		`"uix_connectors_tenant_token" (SQLSTATE 23505)`)
-	if !rdb.IsUniqueViolation(pgError, connectorTokenIndexName, "connectors.token") {
-		t.Fatalf("the Postgres unique violation was not recognised, so production — which runs "+
-			"on Postgres, not on this test's SQLite — would hand the loser raw driver text:\n  %v",
-			pgError)
-	}
-	sqliteError := fmt.Errorf("UNIQUE constraint failed: connectors.tenant_id, connectors.token")
-	if !rdb.IsUniqueViolation(sqliteError, connectorTokenIndexName, "connectors.token") {
-		t.Fatalf("the SQLite unique violation was not recognised, so the end-to-end test above "+
-			"would be passing for a reason other than the translation:\n  %v", sqliteError)
-	}
-}
-
-// 🔴 THE CONSTANT MUST NAME THE INDEX THE MIGRATION ACTUALLY BUILDS, and the two are spelled
-// in different packages because schema/baseline.go's createTenantTokenIndex is unexported.
-// This re-derives the name by that helper's own rule — "uix_" + the bare table + "_tenant_token"
-// — from GORM's table name for the live model, which is the same table the migration parses.
-// A rename of the table moves both together and this still passes, correctly; a constant
-// edited by hand away from the rule does not.
-func TestConnectorTokenIndexNameMatchesTheMigration(t *testing.T) {
 	api := newTestApi(t)
-	stmt := &gorm.Statement{DB: api.RDB.Database}
-	if err := stmt.Parse(&Connector{}); err != nil {
-		t.Fatalf("parse the connector model: %v", err)
+	db := api.RDB.Database
+	ctx := core.WithTenant(context.Background(), "acme")
+	if _, err := api.CreateConnector(ctx, &ConnectorCreateRequest{
+		Token: "conn-a", Type: string(ConnectorTypeMQTT), Config: mqttConfig,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	// The migration strips any schema qualifier before building the name; mirrored here so
-	// the two agree under production's TablePrefix as well as under the bare fixture.
-	bare := stmt.Table
-	if i := strings.LastIndex(bare, "."); i >= 0 {
-		bare = bare[i+1:]
+	failOnFirstUpdate(t, db, "connectors")
+
+	_, err := api.RenameConnector(ctx, "conn-a", "conn-b")
+	if err == nil {
+		t.Fatal("the rename succeeded, so the injected failure never reached it")
 	}
-	want := "uix_" + bare + "_tenant_token"
-	if connectorTokenIndexName != want {
-		t.Fatalf("connectorTokenIndexName is %q but the migration's naming rule builds %q for "+
-			"table %q — a losing racer would then get raw driver text, and nothing else in this "+
-			"suite would notice", connectorTokenIndexName, want, bare)
+	if err.Error() == ErrConnectorTokenTaken("conn-a", "conn-b").Error() {
+		t.Fatalf("an unrelated write failure was reported as a token collision: %v", err)
 	}
+	if conflict.Is(err) {
+		t.Fatalf("an unrelated write failure was classified as a conflict: %v", err)
+	}
+	if !strings.Contains(err.Error(), "driver: bad connection") {
+		t.Fatalf("the rename did not return the write's own failure: %v", err)
+	}
+}
+
+// failOnFirstUpdate makes the next UPDATE on table fail with an error that is not a
+// uniqueness violation.
+func failOnFirstUpdate(t *testing.T, db *gorm.DB, table string) {
+	t.Helper()
+	fired := false
+	name := "test:fail_first_update"
+	if err := db.Callback().Update().Before("gorm:update").Register(name, func(tx *gorm.DB) {
+		if fired || tx.Statement.Table != table {
+			return
+		}
+		fired = true
+		_ = tx.AddError(errors.New("driver: bad connection"))
+	}); err != nil {
+		t.Fatalf("register the failing callback: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(name) })
 }
