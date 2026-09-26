@@ -6,6 +6,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -271,6 +272,35 @@ func TestCacheReadsStayFastWhenAReplicaGoesSilent(t *testing.T) {
 	// its callers are not held.
 	if reads.reads < 200 {
 		t.Errorf("only %d reads completed in 10 s with one replica silent; the cache is stalling its callers", reads.reads)
+	}
+}
+
+// A cache WRITE must not wait out a JetStream request timeout when the bucket's leader has
+// gone silent either, and it matters more than for a read: any replica can answer a read,
+// but only the leader can accept a put, so with the leader silent every write goes to it.
+// A timed-out write opens the breaker like a timed-out read does.
+func TestCacheWriteIsBoundedWhenTheLeaderGoesSilent(t *testing.T) {
+	rig := newSilentReplicaRig(t)
+
+	rig.faults.Silence(rig.leader)
+	start := time.Now()
+	err := rig.cache.Set(context.Background(), rig.keys[0], silentRigValue(rig.keys[0]))
+	took := time.Since(start)
+
+	if held := rig.faults.Held(rig.leader); held == 0 {
+		t.Fatal("the silence held back no bytes, so the write never went to the leader and the test proves nothing")
+	}
+	if err == nil {
+		t.Fatal("a write to a silent leader succeeded; the silence did not take effect")
+	}
+	if took >= 1500*time.Millisecond {
+		t.Fatalf("a write to a silent leader took %s (%v); it must give up well before a JetStream request "+
+			"timeout (5 s), because each one it waits out holds its caller that long", took, err)
+	}
+	var got string
+	if _, err := rig.cache.Get(context.Background(), rig.keys[0], &got); !errors.Is(err, ErrCacheUnavailable) {
+		t.Fatalf("the read after a timed-out write = %v, want ErrCacheUnavailable: the write's timeout "+
+			"must open the breaker", err)
 	}
 }
 
