@@ -2804,8 +2804,9 @@ See [Event persistence](./observability.md#event-persistence).
 - **A writer count must be below the service's connection pool.** A value out of range stops the
   service from starting, and the error names the setting. The default of 5 is refused only if you
   set `tsdbConfiguration.maxOpenConnections` for `event-management`, or
-  `rdbConfiguration.maxOpenConnections` for `device-state`, to 5 or fewer: raise the pool, or set
-  the writer count below it, before upgrading.
+  `rdbConfiguration.maxOpenConnections` for `device-state`, to 5 or fewer. Before upgrading, set
+  the writer count below the pool, or raise the pool no further than its default of 20: the
+  platform's database connection limits are sized for that default.
 - **`device-state` does not batch.** Its live-state projection still merges one event per
   transaction, so on a replicated database it can still fall behind a sustained high event rate,
   and a device's live state can lag its stored events. Raising `projection.writers` is the way to

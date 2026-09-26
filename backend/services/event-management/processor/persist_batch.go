@@ -18,6 +18,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -40,8 +41,10 @@ import (
 //     exactly as it was before batching existed.
 //   - A refused message does not take its batch-mates with it. When the failure belongs to
 //     one message, that message goes the per-message path and the others are committed
-//     again as a batch without it; only a failure no message can be blamed for (BEGIN,
-//     COMMIT, a lost connection) sends every message down the per-message path.
+//     again as a batch without it. When the erasure fence refused it, every message of its
+//     tenant goes the per-message path, since the fence refuses them all. Only a failure no
+//     message can be blamed for (BEGIN, COMMIT, a lost connection) sends every message
+//     down the per-message path.
 //   - Replaying is safe: every insert carries an ON CONFLICT arbiter and the event id is
 //     derived from the content, so a message written again after a rollback — or after a
 //     COMMIT whose outcome was lost — adds nothing twice.
@@ -206,13 +209,25 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 			}
 			return
 		}
-		log.Warn().Err(err).Int("events", len(batch)).Str("tenant", batch[failedAt].tenant).
+		// The message to blame is set aside. When the erasure fence refused it, the fence
+		// refuses every other message of that tenant too — it is per tenant, not per
+		// message — so all of them are set aside together. Setting them aside one failed batch at a
+		// time would re-run every live batch-mate ahead of each, which for a deleted tenant
+		// still sending grows with the square of its share of the batch.
+		refused := batch[failedAt].tenant
+		wholeTenant := errors.Is(err, rdb.ErrTenantPurged)
+		log.Warn().Err(err).Int("events", len(batch)).Str("tenant", refused).Bool("tenantPurged", wholeTenant).
 			Msg("An event in a batch was refused; persisting it on its own and committing the rest without it")
-		ep.persistOne(batch[failedAt])
 		// A fresh slice: the remainder must not alias the batch it came from.
 		rest := make([]pendingEvent, 0, len(batch)-1)
-		rest = append(rest, batch[:failedAt]...)
-		batch = append(rest, batch[failedAt+1:]...)
+		for i, p := range batch {
+			if i == failedAt || (wholeTenant && p.tenant == refused) {
+				ep.persistOne(p)
+				continue
+			}
+			rest = append(rest, p)
+		}
+		batch = rest
 	}
 	if len(batch) == 1 {
 		ep.persistOne(batch[0])

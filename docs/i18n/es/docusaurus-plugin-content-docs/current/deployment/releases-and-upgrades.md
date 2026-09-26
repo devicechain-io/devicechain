@@ -3003,8 +3003,10 @@ defecto `5`). Consulte [Persistencia de eventos](./observability.md#event-persis
 - **El número de escritores debe ser menor que el pool de conexiones del servicio.** Un valor fuera
   de rango impide que el servicio arranque, y el error nombra el ajuste. El valor por defecto de 5
   solo se rechaza si ha fijado `tsdbConfiguration.maxOpenConnections` para `event-management`, o
-  `rdbConfiguration.maxOpenConnections` para `device-state`, en 5 o menos: aumente el pool, o fije
-  el número de escritores por debajo de él, antes de actualizar.
+  `rdbConfiguration.maxOpenConnections` para `device-state`, en 5 o menos. Antes de actualizar,
+  fije el número de escritores por debajo del pool, o aumente el pool como máximo hasta su valor por
+  defecto de 20: los límites de conexiones a la base de datos de la plataforma están dimensionados
+  para ese valor.
 - **`device-state` no usa lotes.** Su proyección del estado en vivo sigue fusionando un evento por
   transacción, así que en una base de datos replicada todavía puede quedarse atrás ante un ritmo de
   eventos alto y sostenido, y el estado en vivo de un dispositivo puede ir por detrás de sus eventos

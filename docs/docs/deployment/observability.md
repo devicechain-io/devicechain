@@ -334,7 +334,7 @@ batch pays that wait once.
 | Metric | What it tells you |
 | --- | --- |
 | `devicechain_eventmanagement_persist_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. Batches at the limit mean they are working at full capacity. |
-| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were written again. An occasional increase is one refused event. A steady rate means something is refusing writes repeatedly, such as a deleted tenant whose devices are still sending: each of its events costs its batch one extra transaction. Those events show up in `persist_messages_total` under `failed` or `retry`. |
+| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were written again. An occasional increase is one refused event. A steady rate means something is refusing writes repeatedly, such as a deleted tenant whose devices are still sending: each batch that holds its events costs one extra transaction, however many of them it holds. Those events show up in `persist_messages_total` under `failed` or `retry`. |
 | `devicechain_eventmanagement_persist_inflight` | Events writers hold, including those waiting for their batch to commit. |
 
 `persist_duration_seconds` measures each event from when a writer takes it until its batch commits.

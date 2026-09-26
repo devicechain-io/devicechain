@@ -5,6 +5,11 @@ package processor
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +20,9 @@ import (
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus"
 	"gorm.io/gorm"
 )
@@ -382,12 +389,14 @@ func TestAFencedTenantInABatchIsRefusedAndItsBatchMatesAreStored(t *testing.T) {
 			if got := tenantEvents(t, r.db, "gone"); got != 0 {
 				t.Errorf("stored %d events for the purged tenant; want none", got)
 			}
-			// 4 failed batches, each refused message on its own, and the live four together.
-			if got := r.api.txs.Load(); got != 9 {
-				t.Errorf("took %d transactions; want 9", got)
+			// One failed batch, which sets aside every message of the purged tenant at once;
+			// each of those on its own; and the live four together. Setting them aside one
+			// failed batch at a time would take 4 + 4 + 1 = 9.
+			if got := r.api.txs.Load(); got != 6 {
+				t.Errorf("took %d transactions; want 6", got)
 			}
-			if got := r.metric(t, metricFallbacks, "", ""); got != 4 {
-				t.Errorf("fallbacks = %v; want 4", got)
+			if got := r.metric(t, metricFallbacks, "", ""); got != 1 {
+				t.Errorf("fallbacks = %v; want 1", got)
 			}
 			for i := 0; i < 8; i += 2 {
 				if acked[i] != 1 {
@@ -444,6 +453,138 @@ func TestASinglePurgedTenantMessageCostsItsBatchTwoTransactions(t *testing.T) {
 	}
 	if got := len(r.acks.acked()); got != 31 {
 		t.Errorf("%d acknowledged; want the 31 live messages", got)
+	}
+}
+
+// A purged tenant sending half of every batch costs each batch one failed transaction, not
+// one per purged message: 16 of 32 messages from it take 1 + 16 + 1 = 18 transactions.
+// Setting its messages aside one failed batch at a time would take 16 + 16 + 1 = 33, and
+// roll back about 16 x 16 / 2 live writes on the way.
+func TestAPurgedTenantIsSetAsideFromItsBatchAllAtOnce(t *testing.T) {
+	r := newBatchRig(t, 32)
+	plantFence(t, r.db, "gone")
+	var msgs []messaging.Message
+	for i := 0; i < 32; i++ {
+		tenant := fenceCostTenant
+		if i%2 == 1 {
+			tenant = "gone"
+		}
+		msgs = append(msgs, consumed(t, r.acks, i, tenant, 1, batchEvent(i, true, batchT0)))
+	}
+	r.run(msgs)
+
+	if got := r.api.txs.Load(); got != 18 {
+		t.Errorf("took %d transactions; want 18", got)
+	}
+	if got := r.metric(t, metricFallbacks, "", ""); got != 1 {
+		t.Errorf("fallbacks = %v; want 1", got)
+	}
+	if got := tenantEvents(t, r.db, fenceCostTenant); got != 16 {
+		t.Errorf("stored %d live events; want 16", got)
+	}
+	if got := tenantEvents(t, r.db, "gone"); got != 0 {
+		t.Errorf("stored %d events for the purged tenant; want none", got)
+	}
+	if got := r.metric(t, metricMessages, "result", core.ResultRetry); got != 16 {
+		t.Errorf("recorded %v retries; want the purged tenant's 16", got)
+	}
+	acked := r.acks.acked()
+	for i := 0; i < 32; i++ {
+		want := 1 - i%2
+		if acked[i] != want {
+			t.Errorf("message %d acknowledged %d times; want %d", i, acked[i], want)
+		}
+	}
+}
+
+// A connection that fails at one message's statement blames no message: every message is
+// written again on its own, and the one whose statement kept failing is left for
+// redelivery. Setting it aside and re-batching the rest instead would, through an outage,
+// cost connection attempts on every re-batch of every batch. The control is a transient
+// refusal that is NOT a connection failure: the same message is set aside and the other
+// seven commit together, and it is left for redelivery just the same.
+func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		connection bool
+	}{
+		{"connection exception, SQLSTATE 08006", &pgconn.PgError{Code: "08006", Message: "injected: connection failure"}, true},
+		{"server shutting down, SQLSTATE 57P01", &pgconn.PgError{Code: "57P01", Message: "injected: admin shutdown"}, true},
+		{"a bad connection", fmt.Errorf("injected: %w", driver.ErrBadConn), true},
+		{"a network error", &net.OpError{Op: "read", Net: "tcp", Err: errors.New("injected: connection reset")}, true},
+		{"control: serialization failure, SQLSTATE 40001", &pgconn.PgError{Code: "40001", Message: "injected: could not serialize"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newBatchRig(t, 8)
+			r.api.failAnchorsFor = "dev-3"
+			r.api.anchorErrFor = tc.err
+			r.run(r.messages(t, 8, fenceCostTenant, true))
+
+			// The failed batch, then each message on its own; or, for the control, the
+			// failed batch, dev-3 on its own and the other seven together.
+			wantTxs := int64(3)
+			if tc.connection {
+				wantTxs = 9
+			}
+			if got := r.api.txs.Load(); got != wantTxs {
+				t.Errorf("took %d transactions; want %d", got, wantTxs)
+			}
+			if got := r.metric(t, metricFallbacks, "", ""); got != 1 {
+				t.Errorf("fallbacks = %v; want 1", got)
+			}
+			if e, _, _ := rowCounts(t, r.db); e != 7 {
+				t.Errorf("stored %d events; want 7", e)
+			}
+			if e, m := eventsFor(t, r.db, "dev-3"); e != 0 || m != 0 {
+				t.Errorf("the failing message left %d/%d event/measurement rows; want none", e, m)
+			}
+			acked := r.acks.acked()
+			for i := 0; i < 8; i++ {
+				want := 1
+				if i == 3 {
+					want = 0
+				}
+				if acked[i] != want {
+					t.Errorf("message %d acknowledged %d times; want %d", i, acked[i], want)
+				}
+			}
+			if got := r.metric(t, metricMessages, "result", core.ResultRetry); got != 1 {
+				t.Errorf("recorded %v retries; want 1", got)
+			}
+			if got := r.metric(t, metricMessages, "result", core.ResultOK); got != 7 {
+				t.Errorf("recorded %v ok; want 7", got)
+			}
+			if got := len(r.reported()); got != 0 {
+				t.Errorf("reported %d failures; want none", got)
+			}
+		})
+	}
+}
+
+// connectionFailure sorts errors by what they say about the connection, however wrapped.
+func TestConnectionFailureRecognisesConnectionErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{&pgconn.PgError{Code: "08006"}, true},
+		{&pgconn.PgError{Code: "08001"}, true},
+		{&pgconn.PgError{Code: "57P01"}, true},
+		{&pgconn.PgError{Code: "57P03"}, true},
+		{fmt.Errorf("wrapped: %w", driver.ErrBadConn), true},
+		{io.ErrUnexpectedEOF, true},
+		{context.DeadlineExceeded, true},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}, true},
+		{&pgconn.PgError{Code: "22003"}, false},
+		{&pgconn.PgError{Code: "40001"}, false},
+		{&pgconn.PgError{Code: "57014"}, false},
+		{fmt.Errorf("%w (tenant %q)", rdb.ErrTenantPurged, "gone"), false},
+		{errors.New("some statement error"), false},
+	} {
+		if got := connectionFailure(tc.err); got != tc.want {
+			t.Errorf("connectionFailure(%v) = %v; want %v", tc.err, got, tc.want)
+		}
 	}
 }
 
@@ -599,6 +740,10 @@ func TestABatchSizeOfOneIsOneTransactionPerMessage(t *testing.T) {
 	}
 	if got := len(r.acks.acked()); got != 64 {
 		t.Errorf("%d acknowledged; want 64", got)
+	}
+	// Each per-message commit is a batch of one to the histogram, as the docs read it.
+	if got, sum := r.metric(t, metricBatchSize, "", ""), r.histogramSum(t, metricBatchSize); got != 64 || sum != 64 {
+		t.Errorf("batch-size histogram holds %v observations summing to %v; want 64 summing to 64", got, sum)
 	}
 }
 

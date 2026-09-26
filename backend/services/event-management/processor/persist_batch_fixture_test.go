@@ -49,6 +49,10 @@ type txApi struct {
 	// failAnchorsFor refuses the anchor insert of any message from this device with a
 	// class-22 error, i.e. AFTER that message's parent and payload rows were written.
 	failAnchorsFor string
+
+	// anchorErrFor, when failAnchorsFor is set, is the error its anchor insert returns on
+	// every attempt; nil means the class-22 refusal above.
+	anchorErrFor error
 }
 
 func newTxApi(ep *EventPersistenceWorker) *txApi {
@@ -83,6 +87,9 @@ func (a *txApi) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) err
 
 func (a *txApi) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*model.EventAnchor) error {
 	if a.failAnchorsFor != "" && len(anchors) > 0 && anchors[0].DeviceToken == a.failAnchorsFor {
+		if a.anchorErrFor != nil {
+			return a.anchorErrFor
+		}
 		return &pgconn.PgError{Code: "22003", Message: "injected: numeric field overflow"}
 	}
 	return a.Api.CreateEventAnchors(ctx, db, anchors)

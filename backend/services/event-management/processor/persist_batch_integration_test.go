@@ -148,7 +148,9 @@ func TestAFencedTenantInABatchOnPostgres(t *testing.T) {
 			}
 			r.run(msgs)
 
-			wantGone, wantAcks, wantTxs := int64(0), 4, int64(9)
+			// One failed batch sets the purged tenant's four aside together; each is then
+			// refused on its own, and the live four commit together.
+			wantGone, wantAcks, wantTxs := int64(0), 4, int64(6)
 			if !fenced {
 				wantGone, wantAcks, wantTxs = 4, 8, 1
 			}
