@@ -218,22 +218,42 @@ dimensionar el ajuste:
   ventana es una afirmación sobre un intervalo de tiempo, y una lectura de fuera del intervalo que
   la regla cubre en ese momento no es evidencia sobre ese intervalo. Contarla permitiría que «tres
   lecturas por encima de 80 en diez segundos» se disparara con lecturas separadas por una hora.
-- **Las reglas sin ventana la siguen evaluando** — umbral, duración, ventana de conteo y tasa. Cada
-  una compara una lectura con la anterior o con un límite fijo, así que no hay intervalo del que una
+- **Las reglas de duración descartan una lectura que cumple la condición y llega más atrás de la
+  frontera que su tiempo de sostenimiento.** Una lectura así solo podría cambiar un sostenimiento
+  que el motor ya decidió. Una lectura dentro de ese intervalo se coloca según su propia hora, no
+  según cuándo llegó. Una lectura tardía que muestra que la condición se interrumpió a mitad de una
+  racha reinicia la racha desde la lectura más reciente que la cumplía, y una lectura tardía que
+  cumple la condición nunca reabre una racha por encima de una interrupción que el motor ya vio, así
+  que una lectura tardía no puede elevar una alarma de duración que las lecturas no respaldan. Una
+  lectura que no cumple la condición termina una alarma de duración elevada por tarde que llegue,
+  salvo que sea anterior a la alarma: una lectura tardía de antes de que se elevara la alarma, que
+  llega después, no la retira.
+- **Las reglas sin ventana la siguen evaluando** — umbral, ventana de conteo y tasa. Cada una
+  compara una lectura con la anterior o con un límite fijo, así que no hay intervalo del que una
   lectura tardía pueda quedar fuera.
 
-En ambos casos la lectura se **almacena y grafica con normalidad**; esto afecta solo a la detección.
+En todos los casos la lectura se **almacena y grafica con normalidad**; esto afecta solo a la detección.
 
 Dentro de la tolerancia no cambia nada: una lectura fuera de orden que aún cae dentro de la ventana
 se incorpora con normalidad, que es para lo que existe la tolerancia. Como consecuencia la ventana
 puede estirarse hasta la tolerancia — eso es lo que significa tolerar la llegada fuera de orden —
 pero no más.
 
-Los tipos deslizantes **cuentan lo que descartan**. `detect_late_samples_total` sube cada vez que
-una lectura llega después de que haya pasado la ventana a la que pertenecía, de modo que una flota
-cuyas reglas con ventana se han quedado calladas tiene algo que mirar en lugar de silencio; una
-subida acumulada es la causa habitual. Los agregados de ventana fija y las reglas de sesión
-descartan en silencio y no aparecen ahí.
+Los tipos deslizantes y las reglas de duración **cuentan lo que descartan**, una vez por cada
+regla que descarta una lectura. `detect_late_samples_total` sube cada vez que una lectura llega
+después de que haya pasado la ventana a la que pertenecía, cuando una regla de duración descarta una
+lectura que cumple la condición y queda más atrás de la frontera que su tiempo de sostenimiento, y
+cuando una lectura de antes de que se elevara una alarma de duración llega después. Así, una flota
+cuyas reglas se han quedado calladas tiene algo que mirar en lugar de silencio; una subida acumulada
+es la causa habitual. Los agregados de ventana fija y las reglas de sesión descartan en silencio y
+no aparecen ahí.
+
+Una regla de duración eleva su alarma cuando la frontera pasa el final del sostenimiento, y la
+frontera va por detrás de la lectura más reciente en la tolerancia de retraso. Una lectura que
+muestra que la condición cesó y llega antes de ese momento termina la racha sin elevar la alarma,
+aunque todas las lecturas lleguen en orden y la condición se haya cumplido durante todo el tiempo de
+sostenimiento. Por eso un episodio solo es seguro que eleve la alarma si dura su tiempo de
+sostenimiento más la tolerancia de retraso.
 
 Una propiedad hace que la tolerancia sea menos palanca de lo que parece: **la frontera es compartida
 por toda la instancia**, no se lleva por dispositivo. Así que los dispositivos activos de una flota
@@ -250,9 +270,9 @@ propia hora: la que informó el dispositivo o, para una lectura enviada sin `occ
 momento en que el broker la recibió. Mientras tanto solo siguen llegando los transportes que no
 pasan por `event-sources`: LwM2M y Sparkplug lo hacen y mantienen la frontera en «ahora», mientras
 que la ingesta HTTP la sirve el propio `event-sources` y cae con él. Tras una caída más larga
-que la ventana de una regla, el atraso llega por tanto tarde a los tipos deslizantes, igual que una
-subida acumulada: se almacena y se grafica con normalidad, no se incorpora a esas ventanas, y
-`detect_late_samples_total` sube.
+que la ventana de una regla, el atraso llega por tanto tarde a los tipos deslizantes, y a las reglas de
+duración cuando es más antiguo que su tiempo de sostenimiento, igual que una subida acumulada: se
+almacena y se grafica con normalidad, esas reglas no lo usan, y `detect_late_samples_total` sube.
 
 ### ¿Con qué rapidez puede dispararse una regla de ausencia?
 
@@ -376,9 +396,12 @@ explican casi todos los resultados sorprendentes:
 - No aplica la **delimitación a un grupo**: una regla delimitada se previsualiza sobre todo el
   perfil.
 - No puede armar la ausencia para un dispositivo que **nunca ha reportado**.
+- Se ejecuta **sin tolerancia de retraso**, así que no usa una lectura que llega más atrás del resto
+  del historial reproducido que una ventana deslizante o el tiempo de sostenimiento de una regla de
+  duración.
 
 Cuando la previsualización se trunca —porque la ventana quedó fuera de la retención o porque se
-alcanzó un límite de escaneo—, se lo indica en lugar de devolver en silencio un resultado corto. Lea
+alcanzó un límite de escaneo— o aparta lecturas por tardías, se lo indica en lugar de devolver en silencio un resultado corto. Lea
 ese aviso antes de concluir que una regla no se dispara.
 
 ## Configuración {#configuration}
@@ -407,7 +430,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
-| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, y las demás reglas ignoran una lectura más antigua que otra que ya han visto. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
+| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, una regla de duración lo coloca según su propia hora, y las demás reglas ignoran una lectura más antigua que otra que ya han visto. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
 | `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
 | `checkpointIntervalSeconds` | 10 | Tiempo máximo entre puntos de control, para que un flujo tranquilo también confirme. **Como máximo 30**: un punto de control es lo que confirma el flujo, así que un intervalo cercano o superior a la ventana de confirmación de 60 segundos del broker hace que los mensajes de un flujo tranquilo se vuelvan a entregar. 30 deja margen para el propio punto de control, y el servicio rechaza al arrancar cualquier valor mayor. |

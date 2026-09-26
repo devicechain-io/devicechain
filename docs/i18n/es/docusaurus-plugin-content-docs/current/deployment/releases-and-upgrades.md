@@ -1646,6 +1646,10 @@ Si escribe reglas de umbral o de duración en CEL que leen atributos de disposit
 condición de umbral o de duración que es verdadera para todo dispositivo sin un atributo ahora se
 rechaza».
 
+Si usa reglas de duración, sobre todo en dispositivos que suben lecturas acumuladas, o vigila
+`detect_late_samples_total` o las claves vivas por inquilino, lea «Las reglas de duración colocan
+las lecturas tardías según su propia hora».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2487,6 +2491,66 @@ publicar el perfil. Consulte
 También se corrige la documentación de la previsualización. La previsualización no resuelve
 atributos de dispositivo, así que un respaldo CEL se previsualiza con su respaldo en todos los
 dispositivos; no se previsualiza como que nunca se dispara.
+
+#### Las reglas de duración colocan las lecturas tardías según su propia hora
+
+Una regla de duración («temperatura por encima de 80 durante 10 minutos») ahora coloca cada lectura
+según la hora en que se tomó, no según el orden en que llegó, y descarta una lectura que cumple su
+condición pero queda más atrás de la frontera del motor de detección que el tiempo de sostenimiento
+de la regla. Antes de esta versión, una lectura tardía se aplicaba como si fuera la más reciente:
+
+- **Una lectura tardía que no cumplía la condición cancelaba un sostenimiento que lecturas más
+  recientes seguían respaldando.** Un dispositivo que sube lecturas acumuladas podía retrasar una
+  alarma de duración hasta un sostenimiento completo cada vez, o impedir que se elevara mientras la
+  condición se cumplía todo el tiempo. Ahora se ignora una lectura tardía anterior a la racha, y una
+  que muestra que la condición se interrumpió a mitad reinicia la racha desde la lectura más reciente
+  que la cumplía.
+- **Una lectura tardía que cumplía la condición podía abrir una racha por encima de una interrupción
+  que el motor ya había visto**, y elevar una alarma que las lecturas no respaldaban. Ahora se ignora.
+- **Una lectura de mucho antes de la frontera podía abrir una racha cuyo sostenimiento ya había
+  pasado**, y elevar la alarma con el siguiente evento. Ahora se descarta y se cuenta en
+  `detect_late_samples_total`, cuya descripción ahora nombra las reglas de duración junto a los
+  tipos deslizantes.
+
+Una lectura que no cumple la condición sigue terminando una alarma de duración elevada por tarde que
+llegue, salvo que sea anterior a la alarma: una lectura tardía de antes de que se elevara la alarma,
+que llega después, no la retira, y se cuenta en `detect_late_samples_total`. Como ahora las lecturas
+se colocan donde corresponde, una alarma de duración puede elevarse más pronto o más tarde que antes, según
+el orden en que llegaron sus lecturas; ya no se eleva sobre una racha que las lecturas muestran
+interrumpida. Como hasta ahora, un episodio solo es seguro que eleve la alarma si dura su tiempo de
+sostenimiento más la tolerancia de retraso. Consulte [qué significa «cuándo» para el motor de
+detección](./detection-engine.md#timing-what-when-means).
+
+La previsualización del lienzo se ejecuta sin tolerancia de retraso, así que descarta una lectura
+tardía sin margen. Ahora indica cuántas lecturas apartó por tardías, para las reglas de duración y
+los tipos deslizantes.
+
+**Lo que cuesta.** Para distinguir una lectura tardía de una interrupción, una regla de duración
+ahora guarda un pequeño registro y un temporizador de caducidad por cada dispositivo que envía la
+métrica de la regla sin cumplir su condición, hasta un tiempo de sostenimiento después de la lectura
+más reciente de ese tipo. Antes, un dispositivo así no ocupaba nada. Para un dispositivo que reporta
+al menos una vez por sostenimiento, el registro es por tanto permanente mientras siga reportando:
+
+- **Dos claves vivas por dispositivo y regla de duración**, que cuentan en el techo de claves vivas
+  por inquilino, que se mide y no se impone. Un inquilino con 100 000 dispositivos que reportan bajo
+  cinco reglas de duración alcanza solo con esto el `maxLiveKeysPerTenant` por defecto de 1 000 000,
+  y entonces se dispara el aviso `DetectTenantOverStateBudget`. Suba `maxLiveKeysPerTenant` si esa
+  es su flota.
+- **Unos 290 bytes de punto de control de detección por dispositivo y regla de duración**
+  (`detect_snapshot_bytes`), medidos en proceso con un identificador de regla de 26 caracteres y
+  tokens de dispositivo de 19 caracteres. Crece con la longitud de ambos.
+- **La frontera avanza en cada intervalo de inactividad.** Esos temporizadores de caducidad son
+  trabajo pendiente, así que una instancia con una regla de duración y algún dispositivo que reporta
+  su métrica avanza la frontera y guarda un punto de control con el flujo en calma, en lugar de
+  quedarse en reposo.
+
+Un dispositivo con la alarma elevada también conserva su racha hasta que la condición cesa, cuando
+antes la soltaba al elevarse la alarma.
+
+Un punto de control escrito antes de la actualización se restaura sin cambios, incluida cualquier
+alarma de duración elevada en ese momento. Volver después a la versión anterior no convierte los
+registros nuevos en alarmas: solo lee del punto de control las rachas abiertas e ignora el resto. No hay que hacer nada en
+la actualización.
 
 ### La transición única a la ingesta duradera
 

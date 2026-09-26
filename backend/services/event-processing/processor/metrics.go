@@ -133,7 +133,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine."),
 		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out."),
 		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match)."),
-		lateSamplesTotal:  ms.NewCounter("detect_late_samples_total", "Samples that arrived after their own trailing window had passed the watermark and so were not folded into a sliding-window rule (Repeating, SlidingAgg, Correlation). A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
+		lateSamplesTotal:  ms.NewCounter("detect_late_samples_total", "Samples that arrived too far behind the watermark to be used, counted once per rule that declined them: after their own trailing window had passed it (Repeating, SlidingAgg, Correlation), or, for a Duration rule, a matching reading more than the rule's hold behind it or a non-matching reading older than an alarm already raised. A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
 		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037)."),
 		derivedRejected:   ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
 

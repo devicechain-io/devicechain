@@ -200,6 +200,7 @@ than accidental:
 | SlidingAgg | accepted — binary-search insert at the sorted position | `state.go:89-102` |
 | Correlation | accepted, but never regresses a member's timestamp | `internal/detect/core/correlation.go:44-47` |
 | Repeating | accepted; eviction is by event time, not watermark | `window.go:203` |
+| Duration | a match more than the hold behind the frontier is refused and counted; otherwise ordered by event time — a break inside the run restarts it at the newest match, a match at or before a kept break is ignored | `internal/detect/core/duration.go` (`applyDuration`) |
 | Absence, Session timers | cannot *shrink* a deadline (`scheduleForward`) | `internal/detect/core/timers.go:103-108` |
 | a **value-kind** falling edge | refused if it predates the raise | `engine.go:1144-1148` |
 
@@ -964,11 +965,12 @@ Ordered by what they cost.
    not as N undelivered actions. A *permanently rejected* send-command no longer triggers this — it
    returns `Done` and the chain continues (§10b) — which narrows the gap to failures REACT must
    retry, and does nothing about them.
-5. **Duration's late non-matching event tears down a hold with no event-time guard.**
-   `engine.go:776-783` deletes the active run and cancels the timer unconditionally, with no
-   comparison against the run's own start, so a bounded-late non-matching event can tear down a hold
-   armed by a *newer* matching event. Only the trailing `resolve` on that path is stale-guarded — the
-   teardown that happens first is not. Untested.
+5. ~~**Duration's late non-matching event tears down a hold with no event-time guard.**~~ — **CLOSED.**
+   A Duration series is now an event-time-ordered `durState` — an open run or the break that ended
+   the last one — in `backend/services/event-processing/internal/detect/core/duration.go`
+   (`applyDuration`), and a matching sample more than the hold behind the frontier is refused and
+   counted. Pinned by `TestDurationStaleNonMatchDoesNotCancelTheHold` and
+   `TestDurationLateMatchCannotReopenAcrossABreak`.
 6. **A `connectivity` rule cannot be authored from the console**, in either door — and the gap is in
    the **frontend twin of the catalog**, not in the compiler. The backend canvas knows the node
    (`backend/services/event-processing/internal/rules/graph/schema.go:66`, catalog entry at

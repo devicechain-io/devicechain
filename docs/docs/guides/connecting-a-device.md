@@ -93,16 +93,16 @@ How the device finds out depends on the transport:
 Operators see every refusal on the `total_msg_too_many_readings` counter. The ceiling is an operator setting (`maxReadingsPerMessage`) for an instance whose fleet genuinely needs a different one. Lowering it does not rewrite history, but it does apply to anything still queued: messages already captured and not yet decoded are refused on the new value.
 
 :::caution A deeply buffered batch is stored in full, but detection may not see all of it
-Storage holds every reading at its own instant, without qualification. Detection is different: a device that was offline and then uploads its whole run at once can have its older readings discarded by rules that use a time window, with no log or alarm. See [Buffered uploads and windowed rules](#buffered-uploads-and-windowed-rules).
+Storage holds every reading at its own instant, without qualification. Detection is different: a device that was offline and then uploads its whole run at once can have its older readings discarded by rules that use a time window or a hold time, with no log or alarm. See [Buffered uploads and windowed rules](#buffered-uploads-and-windowed-rules).
 :::
 
 #### Buffered uploads and windowed rules {#buffered-uploads-and-windowed-rules}
 
-The detection engine tracks a single frontier across the whole instance and advances it from each message's own time. A device that was offline for a while and then uploads its whole run at once can have its older readings arrive behind that frontier. Rules with a time window discard a reading whose window has already passed the frontier: tumbling-window aggregates, session/gap rules, and the sliding kinds (repeating, sliding aggregates and correlation). No log and no alarm records the discard.
+The detection engine tracks a single frontier across the whole instance and advances it from each message's own time. A device that was offline for a while and then uploads its whole run at once can have its older readings arrive behind that frontier. Rules with a time window discard a reading whose window has already passed the frontier: tumbling-window aggregates, session/gap rules, and the sliding kinds (repeating, sliding aggregates and correlation). Duration rules discard a reading that meets their condition and is further behind the frontier than the rule's hold time, and place the rest by their own time. No log and no alarm records the discard.
 
-The sliding kinds count what they discard on the `detect_late_samples_total` metric. Tumbling-window aggregates and session/gap rules discard silently and do not appear in it.
+The sliding kinds and duration rules count what they discard on the `detect_late_samples_total` metric. Tumbling-window aggregates and session/gap rules discard silently and do not appear in it.
 
-Threshold, duration, count-window and rate rules still evaluate those readings.
+Threshold, count-window and rate rules still evaluate those readings.
 
 The tolerance is [`watermarkLatenessSeconds`](../deployment/detection-engine.md) (default 5 seconds). Raising it helps only up to a point: the frontier is shared, so busy devices keep carrying it forward regardless of how long your quiet one was away.
 

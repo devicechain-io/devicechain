@@ -57,6 +57,7 @@ func scenario() ([]Rule, []step) {
 		{ID: "rSlideSum", Kind: SlidingAgg, Window: 5 * time.Second, Agg: AggSum, Op: GT, Thresh: 1.0},
 		{ID: "rCorr", Kind: Correlation, Window: 10 * time.Second, Count: 3, MemberCap: 100},
 		{ID: "rAbs2", Kind: Absence, Timeout: 10 * time.Second},
+		{ID: "rDurLate", Kind: Duration, Hold: 8 * time.Second},
 	}
 	steps := []step{
 		evStep(1, "rAbs", "dev1", 0, true),   // arm dead-man -> deadline 10
@@ -138,6 +139,19 @@ func scenario() ([]Rule, []step) {
 		evValStep(51, "rSlideSum", "dev11", 220, 0.4), // cutoff 215 evicts 210-212 -> sum 0.4 -> re-arm
 		evValStep(52, "rSlideSum", "dev11", 221, 0.4), // sum 0.8, no
 		evValStep(53, "rSlideSum", "dev11", 222, 0.4), // sum 1.2 > 1.0 -> FIRE @222
+
+		// Duration placed by EVENT time. dev12: a late break inside a run restarts it at the newest
+		// match, so the hold is measured from 236, not from 230 and not from the stale match at 231.
+		evStep(54, "rDurLate", "dev12", 230, true),  // run opens at 230 -> deadline 238
+		evStep(55, "rDurLate", "dev12", 236, true),  // newest match 236
+		evStep(56, "rDurLate", "dev12", 233, false), // LATE break inside the run -> restart at 236, deadline 244
+		evStep(57, "rDurLate", "dev12", 231, true),  // older than the newest match: no change
+		advStep(243), // wm=243: 244 > 243 -> NO fire (the stale match must not re-open at 231 -> 239)
+		advStep(245), // wm=245: FIRE duration dev12 @244
+		// dev13: a late match at or before a break the engine already saw must not open a run.
+		evStep(58, "rDurLate", "dev13", 246, false), // kept break at 246
+		evStep(59, "rDurLate", "dev13", 245, true),  // before the kept break -> ignored (would raise @253)
+		advStep(260), // wm=260: the kept break expires; nothing fires
 	}
 	return rules, steps
 }
@@ -165,6 +179,7 @@ func expected() map[Detection]bool {
 		{RuleID: "rAbs2", Series: "dev10", Kind: Absence, At: at(160)}:        true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(212)}: true,
 		{RuleID: "rSlideSum", Series: "dev11", Kind: SlidingAgg, At: at(222)}: true,
+		{RuleID: "rDurLate", Series: "dev12", Kind: Duration, At: at(244)}:    true,
 
 		// Resolved edges (ADR-057 falling edges), each balancing an earlier raise when the series'
 		// condition ceased:
@@ -236,7 +251,7 @@ func TestDetectionValueCarried(t *testing.T) {
 		evValStep(5, "rAgg", "d", 6, 120),   // pane avg (90+120)/2 = 105
 		advStep(12),                         // close pane -> Aggregate value 105
 		evStep(6, "rAbs", "d", 1, true),     // arm dead-man
-		evStep(7, "rDur", "d", 1, true),     // arm duration
+		evStep(7, "rDur", "d", 13, true),    // arm duration (inside its hold of the frontier at 12)
 		advStep(30),                         // fire Absence + Duration (silence-driven, no value)
 	}
 	got := map[Detection]Detection{} // identity -> full
@@ -260,8 +275,8 @@ func TestDetectionValueCarried(t *testing.T) {
 	check("rThr", Threshold, at(1), true, 42.5)
 	check("rDelta", DeltaRate, at(4), true, 100)
 	check("rAgg", Aggregate, at(10), true, 105)
-	check("rAbs", Absence, at(11), false, 0) // deadline: armed at 1 + 10s timeout
-	check("rDur", Duration, at(6), false, 0) // deadline: held from 1 + 5s hold
+	check("rAbs", Absence, at(11), false, 0)  // deadline: armed at 1 + 10s timeout
+	check("rDur", Duration, at(18), false, 0) // deadline: held from 13 + 5s hold
 }
 
 // TestReplayRestoresValue guards the value payload across a snapshot/restore, coverage the

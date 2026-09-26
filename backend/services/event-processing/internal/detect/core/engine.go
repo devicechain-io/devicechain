@@ -222,7 +222,7 @@ type Engine struct {
 	wheel    *timerWheel
 	wm       watermark                      // logical clock: bounded-out-of-order event-time frontier
 	lastSeq  uint64                         // seq of the last event whose effect is in the state
-	active   map[SeriesKey]time.Time        // Duration: when the current matched run began
+	runs     map[SeriesKey]durState         // Duration: the open run or the kept break (duration.go)
 	sliding  map[SeriesKey][]time.Time      // Repeating: trailing matching-event times
 	panes    map[paneKey]*paneAgg           // Aggregate: open tumbling window panes
 	closes   closeHeap                      // Aggregate: pending pane closes, ordered by end
@@ -247,7 +247,9 @@ type Engine struct {
 	presenceState map[SeriesKey]presence.Prior
 	out           []Detection
 	// lateSamples counts samples the sliding kinds declined to fold in because they arrived
-	// after their own trailing window had passed the frontier (foldsIn). It is TELEMETRY, not
+	// after their own trailing window had passed the frontier (foldsIn), and samples a Duration
+	// rule refused as more than its hold behind the frontier or as a break older than a raise
+	// already decided (applyDuration). It is TELEMETRY, not
 	// state: nothing reads it to decide anything, it is deliberately absent from the snapshot,
 	// and a replay legitimately re-counts the samples it re-processes. It exists so a
 	// store-and-forward fleet whose windowed rules quietly stop firing has something to look at.
@@ -298,7 +300,7 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		rules:         m,
 		wheel:         newTimerWheel(),
 		wm:            watermark{lateness: allowedLateness},
-		active:        map[SeriesKey]time.Time{},
+		runs:          map[SeriesKey]durState{},
 		sliding:       map[SeriesKey][]time.Time{},
 		panes:         map[paneKey]*paneAgg{},
 		lastVal:       map[SeriesKey]deltaState{},
@@ -380,7 +382,7 @@ func (e *Engine) RemoveMatching(match func(ruleID string) bool) int {
 			n++
 		}
 	}
-	n += deleteSeriesKeysMatching(e.active, match)
+	n += deleteSeriesKeysMatching(e.runs, match)
 	n += deleteSeriesKeysMatching(e.sliding, match)
 	n += deleteSeriesKeysMatching(e.lastVal, match)
 	n += deleteSeriesKeysMatching(e.counts, match)
@@ -489,7 +491,7 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 // invalidated entry never reaches durability and popDue discards it when its deadline passes.
 func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n := 0
-	n += dropOneKey(e.active, key)
+	n += dropOneKey(e.runs, key)
 	n += dropOneKey(e.sliding, key)
 	n += dropOneKey(e.lastVal, key)
 	n += dropOneKey(e.counts, key)
@@ -548,9 +550,11 @@ func countSeriesKeys[V any](counts map[string]int, m map[SeriesKey]V) {
 //
 // It counts ENTRIES (a memory proxy), NOT distinct series: a timer-bearing key is counted BOTH in
 // its state map AND in the timer wheel's LIVE set, because each is a real, separately-allocated entry
-// — a Duration or Session key holds an active/session accumulator plus a wheel timer (two entries,
-// ~two units of memory). Crucially, counting the wheel is what captures an ABSENCE rule armed by a
-// device REPORTING: that heartbeat timer lives ONLY in the wheel (no state-map entry — see apply's
+// — a Duration key holds its run or kept break plus a wheel timer, and a Session key its accumulator
+// plus a timer (two entries, ~two units of memory). A Duration kept break exists for every device
+// that sent the rule's metric without meeting its condition within the last hold, so a fleet reporting
+// normal values holds two entries per (device, duration rule) while it keeps reporting.
+// Crucially, counting the wheel is what captures an ABSENCE rule armed by a device REPORTING: that heartbeat timer lives ONLY in the wheel (no state-map entry — see apply's
 // Absence case), so a state-maps-only count would report 0 live keys for the common absence case and
 // blind the budget to the flagship feature's memory. A Correlation series is counted as its anchor
 // key PLUS its live distinct-member set (each member is a retained entry), so a correlation rule is
@@ -564,7 +568,7 @@ func countSeriesKeys[V any](counts map[string]int, m map[SeriesKey]V) {
 // single-writer loop (no lock, no hot-path cost).
 func (e *Engine) LiveKeyCounts() map[string]int {
 	counts := make(map[string]int)
-	countSeriesKeys(counts, e.active)
+	countSeriesKeys(counts, e.runs)
 	countSeriesKeys(counts, e.sliding)
 	countSeriesKeys(counts, e.lastVal)
 	countSeriesKeys(counts, e.counts)
@@ -654,6 +658,9 @@ func (e *Engine) RetainedSampleCounts() map[string]int {
 // mean walking the whole heap on every checkpoint (O(pq), the very thing that is large when this
 // matters); Len() is O(1). An operator who sees this climb finds the offender through the rule
 // inventory, not through a label.
+//
+// A Duration kept break does NOT grow it per event: its expiry re-arms lazily when it fires
+// (fireDuration), so a device reporting non-matching values pushes at most one timer per hold.
 func (e *Engine) PendingTimerCount() int { return e.wheel.pq.Len() }
 
 // SetExpected arms (or refreshes) the dead-man absence timer for a series the runtime resolved
@@ -753,8 +760,10 @@ func (e *Engine) HeartbeatAbsenceKeys() []SeriesKey {
 }
 
 // HasPendingWork reports whether any timer or pane close is scheduled — i.e. whether a
-// wall-clock advance could fire ANYTHING. Every frontier-triggered firing goes through the
-// timer wheel (Absence/Duration/Session) or the pane close-heap (Aggregate); the other kinds
+// wall-clock advance could fire ANYTHING. A Duration kept break holds an expiry timer, so an
+// instance with a duration rule and any device reporting its metric has pending work while that
+// device keeps reporting, and idle advances then move (and checkpoint) the frontier. Every
+// frontier-triggered firing goes through the timer wheel (Absence/Duration/Session) or the pane close-heap (Aggregate); the other kinds
 // are event-triggered and never fire on a bare advance. So when this is false, an idle advance
 // would only move the watermark with nothing to fire — and with no timer/window state, a later
 // event re-derives the frontier itself, so leaving it at rest is replay-safe. Idle-advance
@@ -771,10 +780,10 @@ func (e *Engine) Drain() []Detection {
 	return out
 }
 
-// DrainLateSamples returns and clears the count of samples the sliding kinds declined as late
-// (foldsIn). Drain-and-reset like Drain, so the caller adds whatever it gets to a counter
-// without tracking a delta. It is off the correctness path entirely: no decision reads it and
-// it is not snapshotted, so calling it, or never calling it, changes nothing the engine does.
+// DrainLateSamples returns and clears the count of samples the sliding kinds (foldsIn) and
+// Duration (applyDuration) declined as late. Drain-and-reset like Drain, so the caller adds
+// whatever it gets to a counter without tracking a delta. It is off the correctness path
+// entirely: no decision reads it and it is not snapshotted, so calling it, or never calling it, changes nothing the engine does.
 func (e *Engine) DrainLateSamples() uint64 {
 	n := e.lateSamples
 	e.lateSamples = 0
@@ -815,8 +824,9 @@ func (e *Engine) ProcessEvent(ev Event) {
 // CONTRACT RATHER THAN AN OVERSIGHT. Since samples carry their own instants, a
 // store-and-forward device uploading half an hour of buffered readings presents events well
 // behind the frontier, and a window whose pane has already closed refuses them
-// (applyAggregate). Reordering this to apply-before-advance would not change that: the
-// watermark is engine-wide, so any live device has already carried it past a quiet device's
+// (applyAggregate), and a duration rule refuses a matching sample more than its hold behind
+// the frontier (applyDuration). Reordering this to apply-before-advance would not change that:
+// the watermark is engine-wide, so any live device has already carried it past a quiet device's
 // buffered samples. The honest statement is that windowed rules see what arrived inside
 // their lateness budget; the stored history keeps everything either way.
 //
@@ -894,24 +904,7 @@ func (e *Engine) apply(ev Event) {
 		e.resolve(r, ev.Key, ev.Time)
 		e.wheel.scheduleForward(ev.Key, ev.Time.Add(r.Timeout))
 	case Duration:
-		if ev.Match {
-			// Open a matched run and arm one hold timer — but only while NOT already raised: once
-			// the hold elapses and raises the alarm (fire), further matches sustain it with no
-			// re-arm and no re-fire (the raised latch holds the alarm until the run breaks).
-			_, held := e.active[ev.Key]
-			_, alreadyRaised := e.raised[ev.Key]
-			if !held && !alreadyRaised {
-				e.active[ev.Key] = ev.Time
-				e.wheel.schedule(ev.Key, ev.Time.Add(r.Hold))
-			}
-		} else {
-			// The matched run broke: cancel a pending (pre-raise) hold and resolve a raised alarm.
-			// resolve is a no-op when the run never matured, so a cancelled-before-hold run emits
-			// nothing — matching the old evaluator, which only cleared an alarm it had raised.
-			delete(e.active, ev.Key)
-			e.wheel.cancel(ev.Key)
-			e.resolve(r, ev.Key, ev.Time)
-		}
+		e.applyDuration(ev, r)
 	case Repeating:
 		e.applyRepeating(ev, r)
 	case Aggregate:
@@ -1038,12 +1031,7 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 		// path that sets a deadline directly and never consults the expected entry at all.
 		// one-shot: the wheel already consumed the timer; next heartbeat re-arms.
 	case Duration:
-		// The hold elapsed with the run intact: raise (latched). active is consumed — the raised
-		// latch now holds the alarm until the run breaks (apply's non-match branch resolves it).
-		if _, held := e.active[key]; held {
-			e.emit(r, key, deadline)
-			delete(e.active, key)
-		}
+		e.fireDuration(r, key, deadline)
 	case Session:
 		// The gap elapsed: the session is closed. Evaluate its aggregate — a satisfied close raises
 		// (latched across sessions), an unsatisfied close resolves a prior raise (ADR-057 falling
@@ -1158,15 +1146,16 @@ func (e *Engine) resolve(r Rule, key SeriesKey, at time.Time) {
 // suppress every later raise for the series even though downstream never saw the first (review
 // H2/F5). Emitting no Resolved is correct: downstream never observed a Raise, so it is owed no
 // Resolve. Called on the single-writer loop.
-func (e *Engine) ClearRaised(key SeriesKey) { delete(e.raised, key) }
+//
+// It also drops a Duration series' run. The run is kept after its raise (fireDuration) and its
+// hold timer is spent, so without this a series whose raise was dropped would sit in an open run
+// with no timer and never raise again; dropped, the next match opens a fresh run.
+func (e *Engine) ClearRaised(key SeriesKey) {
+	delete(e.raised, key)
+	e.dropRun(key)
+}
 
 // --- snapshot / restore (atomic-with-sequence in the real store; bytes here) ---
-
-type snapActive struct {
-	Rule   string    `json:"rule"`
-	Series string    `json:"series"`
-	Since  time.Time `json:"since"`
-}
 
 // snapExpected persists one dead-man arming: the (rule, series) and its grace base. The base is
 // the entire state — it is both the armed deadline's origin and the forward-only epoch marker that
@@ -1206,7 +1195,8 @@ type snapPresence struct {
 type snapshot struct {
 	Watermark time.Time      `json:"watermark"`
 	LastSeq   uint64         `json:"lastSeq"`
-	Active    []snapActive   `json:"active"`
+	Active    []snapRun      `json:"active"`
+	Breaks    []snapBreak    `json:"durationBreaks"`
 	Timers    []snapTimer    `json:"timers"`
 	Gens      []snapGen      `json:"gens"`
 	Sliding   []snapSliding  `json:"sliding"`
@@ -1232,16 +1222,7 @@ type snapshot struct {
 // signals). The checkpoint loop (ADR-051 slice 2a) upholds this by draining on every event.
 func (e *Engine) Snapshot() ([]byte, error) {
 	timers, gens := e.wheel.snapshot()
-	active := make([]snapActive, 0, len(e.active))
-	for k, since := range e.active {
-		active = append(active, snapActive{Rule: k.Rule, Series: k.Series, Since: since})
-	}
-	sort.Slice(active, func(i, j int) bool {
-		if active[i].Rule != active[j].Rule {
-			return active[i].Rule < active[j].Rule
-		}
-		return active[i].Series < active[j].Series
-	})
+	active, breaks := e.snapshotRuns()
 	sliding, panes := e.snapshotWindows()
 	expected := make([]snapExpected, 0, len(e.expected))
 	for k, st := range e.expected {
@@ -1279,6 +1260,7 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		Watermark: e.wm.now,
 		LastSeq:   e.lastSeq,
 		Active:    active,
+		Breaks:    breaks,
 		Timers:    timers,
 		Gens:      gens,
 		Sliding:   sliding,
@@ -1305,9 +1287,6 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 	e := NewEngine(rules, allowedLateness)
 	e.wm.now = s.Watermark
 	e.lastSeq = s.LastSeq
-	for _, a := range s.Active {
-		e.active[SeriesKey{Rule: a.Rule, Series: a.Series}] = a.Since
-	}
 	e.wheel = restoreTimerWheel(s.Timers, s.Gens)
 	e.restoreWindows(s.Sliding, s.Panes)
 	e.restoreDeltas(s.Deltas)
@@ -1321,6 +1300,7 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 	for _, x := range s.Raised {
 		e.raised[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
 	}
+	e.restoreRuns(s.Active, s.Breaks) // after the latch: a raise written without its run gets one
 	for _, x := range s.Presence {
 		e.presenceState[SeriesKey{Rule: x.Rule, Series: x.Series}] = presence.Prior{
 			SessionId: x.Session, Time: x.At, HasTime: x.HasTime, Connected: x.Connected,
