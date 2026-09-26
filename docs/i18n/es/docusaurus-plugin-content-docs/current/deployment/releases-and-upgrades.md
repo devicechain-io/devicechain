@@ -1668,6 +1668,10 @@ Si enruta o silencia alertas por su nombre, se añaden tres avisos más, y un av
 dispositivo o atributo ya no requiere volver a publicar: lea «Los cambios perdidos de reglas,
 dispositivos y atributos se reparan solos».
 
+Si busca o alerta sobre mensajes de la base de datos en los registros de los servicios, o activa
+`sqlDebug`, lea «Los mensajes de la base de datos son líneas de registro estructuradas, y una
+consulta que no encuentra nada ya no se registra como un fallo».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2839,6 +2843,34 @@ Lo que verá:
   que ya usa para las geocercas. Si el secreto de servicio o alguna de las dos direcciones no está
   configurado, la comparación queda desactivada y el servicio registra un aviso al arrancar, como
   ocurre con la evaluación de geocercas.
+
+#### Los mensajes de la base de datos son líneas de registro estructuradas, y una consulta que no encuentra nada ya no se registra como un fallo
+
+Las versiones anteriores imprimían los mensajes de la base de datos en un formato propio: texto de
+varias líneas y en color, escrito fuera del registro JSON del servicio, sin los campos `instance`
+ni `area`, fuera cual fuera el valor de `infrastructure.logging.level`. Cada servicio que escribe
+datos de inquilinos imprimía uno de esos bloques, con el texto `record not found`, por cada
+transacción de base de datos que los escribía; en `event-management` era uno por cada evento
+guardado. Ese bloque era la respuesta normal a una comprobación previa a cada escritura, no un
+error, y con un ritmo de eventos alto ocupaba la mayor parte del registro y ocultaba fallos reales.
+
+- **Los mensajes de la base de datos son ahora líneas de registro JSON**, en `error` cuando una
+  sentencia falló (`database statement failed`) y en `warn` cuando tardó más de 200 ms
+  (`slow database statement`), con los campos `sql`, `rows`, `elapsed_ms` y `caller`. Una consulta
+  que no encuentra filas ya no se registra como un fallo. Eso incluye la comprobación previa a cada
+  escritura.
+- **El campo `sql` ya no muestra los valores con los que se envió una sentencia.** Muestra sus
+  marcadores (`$1`, `$2`, …). Las versiones anteriores incluían los valores, también en la línea de
+  una escritura fallida. El mensaje de error de la propia base de datos se sigue registrando tal
+  cual, y algunos citan el valor que rechazaron.
+- **`sqlDebug` sigue ahora el nivel de registro.** Sus líneas por sentencia se escriben en `info`,
+  así que una instancia con nivel `warn` o `error` ya no las muestra.
+- **Un servicio que no puede alcanzar su propia base de datos al arrancar registra cada intento
+  fallido en `error`**, como `failed to initialize database, got error …`. Las versiones anteriores
+  lo imprimían como texto fuera del registro JSON.
+
+Si buscaba el texto anterior (por ejemplo `record not found` o `SLOW SQL`), busque en su lugar el
+campo `message`. No hay nada que configurar.
 
 ### La transición única a la ingesta duradera
 

@@ -1562,6 +1562,10 @@ If you route or silence alerts by name, three more warnings are added, and a los
 attribute notification no longer needs a republish: read "Lost rule, device and attribute changes
 are repaired automatically".
 
+If you search or alert on database messages in service logs, or turn on `sqlDebug`, read "Database
+messages are structured log lines, and a query that finds nothing is no longer logged as a
+failure".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2652,6 +2656,33 @@ What you will see:
   read rules, devices and attributes, with the service secret it already uses for geofences. If the
   service secret or either address is not configured, the comparison is off and the service logs a
   warning at startup, as geofence evaluation does.
+
+#### Database messages are structured log lines, and a query that finds nothing is no longer logged as a failure
+
+Earlier releases printed database messages in a format of their own: coloured, multi-line text
+written outside the service's JSON log, with no `instance` or `area` field, whatever
+`infrastructure.logging.level` was set to. Every service that writes tenant data printed one such
+block, reading `record not found`, for each database transaction that wrote it; in
+`event-management` that was one for every event stored. The block was the ordinary answer to a
+check made before each write, not an error, and at a high event rate it made up most of the log
+and hid real failures.
+
+- **Database messages are now JSON log lines**, at `error` when a statement failed
+  (`database statement failed`) and at `warn` when one took longer than 200 ms
+  (`slow database statement`), with the fields `sql`, `rows`, `elapsed_ms` and `caller`. A query
+  that finds no rows is no longer logged as a failure. That includes the check before each write.
+- **The `sql` field no longer shows the values a statement was sent with.** It shows the
+  statement's placeholders (`$1`, `$2`, …). Earlier releases filled the values in, including in
+  the line for a failed write. The database's own error message is still logged as it is, and some
+  of those quote the value they rejected.
+- **`sqlDebug` now follows the log level.** Its per-statement lines are written at `info`, so an
+  instance whose level is `warn` or `error` no longer shows them.
+- **A service that cannot reach its own database at startup logs each failed attempt at
+  `error`**, as `failed to initialize database, got error …`. Earlier releases printed it as text
+  outside the JSON log.
+
+If you matched the old text (for example `record not found` or `SLOW SQL`), match the `message`
+field instead. Nothing needs configuring.
 
 ### The one-time durable-ingest cutover
 

@@ -98,9 +98,25 @@ primeros 16 caracteres hexadecimales de su SHA-256). Para comprobar qué configu
 ejecutando un pod, calcule el hash de la entrada de ese servicio en el ConfigMap de
 configuración renderizado y compare ambos.
 
-El registro de sentencias SQL es un interruptor aparte, por servicio: `sqlDebug` en la
-configuración del almacén de datos de un servicio. La capa de base de datos lo escribe con su
-propio registrador, así que `infrastructure.logging.level` ni lo activa ni lo suprime.
+### Mensajes de la base de datos
+
+La actividad de la base de datos se registra con el mismo registrador que todo lo demás:
+líneas JSON con los campos `instance` y `area` del servicio, filtradas por el
+`infrastructure.logging.level` configurado. Una sentencia que falla se registra en `error`
+(`database statement failed`, con el mensaje de la base de datos en `error`), y una que tarda
+más de 200 ms en `warn` (`slow database statement`). Cada línea lleva la sentencia (`sql`),
+las filas afectadas (`rows`), su duración en milisegundos (`elapsed_ms`) y el código que la
+emitió (`caller`). Una consulta que no encuentra filas no ha fallado, así que nunca se registra
+como un fallo; solo se registra si es lenta, o con `sqlDebug` activado.
+
+El registro de todas las sentencias es un interruptor aparte, por servicio: `sqlDebug` en la
+configuración del almacén de datos de un servicio. Sus líneas se escriben en `info`, así que un
+nivel `warn` o `error` las oculta.
+
+El campo `sql` muestra los marcadores de una sentencia (`$1`, `$2`, …), nunca los valores
+asociados a ellos, en cualquier nivel y con `sqlDebug` activado. El mensaje de error de la
+propia base de datos se registra tal cual, y algunos citan el valor que rechazaron (por
+ejemplo, `invalid input syntax for type uuid: "…"`).
 
 ## La pila de monitoreo
 

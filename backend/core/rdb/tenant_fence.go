@@ -5,7 +5,6 @@ package rdb
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -227,28 +226,33 @@ func tenantFenceCheck(db *gorm.DB) {
 	// The marker tells the transaction wrapper that this statement READS the fence, so it
 	// is not mistaken for one that might have written it (see fenceTx.forgetIfFence).
 	session := db.Session(&gorm.Session{NewDB: true, Context: context.WithValue(ctx, fenceReadKey{}, true)})
+	// Find, not Take. Take answers "no row" — the ordinary, per-write answer here — with
+	// ErrRecordNotFound, and that is a statement ERROR to every logger gorm hands the
+	// statement to: gorm's default logger printed one "record not found" block for every
+	// transaction that wrote tenant data. Find answers it with a nil error and no rows.
 	var standing PurgedTenant
-	err := session.Model(&PurgedTenant{}).
+	res := session.Model(&PurgedTenant{}).
 		Where("completed_at IS NULL").
 		Where("token IN ?", ask).
-		Limit(1).Take(&standing).Error
+		Limit(1).Find(&standing)
 	switch {
-	case err == nil:
-		_ = db.AddError(fmt.Errorf("%w (tenant %q)", ErrTenantPurged, standing.Token))
-	case errors.Is(err, gorm.ErrRecordNotFound), errors.Is(err, sql.ErrNoRows):
-		// No fence stands for any tenant in this statement. This is the ordinary answer,
-		// the only one that lets the write proceed, and the only one remembered.
-		if memo != nil {
-			memo.prove(ask, gen)
-		}
-	default:
+	case res.Error != nil:
 		// 🔴 FAIL CLOSED. An unreadable fence is not an absent one, and the whole reason
 		// this check is local is that "I could not ask" and "the answer is no" are the
 		// same sentence to a remote gate. The fence table lives in the same schema, on
 		// the same connection, inside the same transaction as the write being checked —
 		// so a query that cannot answer means the write cannot succeed either, and
-		// refusing costs nothing that was going to work.
-		_ = db.AddError(fmt.Errorf("reading the erasure fence: %w", err))
+		// refusing costs nothing that was going to work. This arm comes first so that
+		// "no rows" below can only ever mean a read that answered.
+		_ = db.AddError(fmt.Errorf("reading the erasure fence: %w", res.Error))
+	case res.RowsAffected > 0:
+		_ = db.AddError(fmt.Errorf("%w (tenant %q)", ErrTenantPurged, standing.Token))
+	default:
+		// No fence stands for any tenant in this statement. This is the ordinary answer,
+		// the only one that lets the write proceed, and the only one remembered.
+		if memo != nil {
+			memo.prove(ask, gen)
+		}
 	}
 }
 
