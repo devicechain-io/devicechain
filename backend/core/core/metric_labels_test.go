@@ -37,7 +37,7 @@ var labelNamesArg = reflect.TypeOf([]string(nil))
 // real: NewCounterVec sits twenty lines below NewCounter with the identical parameter
 // list, which makes the shorter signature look like an oversight rather than the point.
 //
-// The two Vec rows are the counterweight. Without them this test would be satisfied by
+// The Vec rows are the counterweight. Without them this test would be satisfied by
 // removing label support from the library altogether.
 func TestUnlabelledMetricConstructorsTakeNoLabelNames(t *testing.T) {
 	cases := []struct {
@@ -52,6 +52,7 @@ func TestUnlabelledMetricConstructorsTakeNoLabelNames(t *testing.T) {
 		{"NewGauge", (*Microservice).NewGauge, false, "prometheus.Gauge, one series with no dimensions"},
 		{"NewCounterVec", (*Microservice).NewCounterVec, true, "*prometheus.CounterVec"},
 		{"NewGaugeVec", (*Microservice).NewGaugeVec, true, "*prometheus.GaugeVec"},
+		{"NewHistogramVec", (*Microservice).NewHistogramVec, true, "*prometheus.HistogramVec"},
 	}
 
 	for _, tc := range cases {

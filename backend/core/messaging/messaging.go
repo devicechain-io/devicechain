@@ -447,6 +447,53 @@ type MessageWriter interface {
 	HandleResponse(err error)
 }
 
+// OrderedWriter publishes to one stream with several publishes awaiting the broker's
+// acknowledgement at once, and reports every outcome IN THE ORDER IT WAS SUBMITTED, on one
+// goroutine the writer owns. It is for a hot producer that must act on each outcome — ack a
+// source, latch a failure — and must not do so concurrently. Build one with
+// NatsManager.NewOrderedWriter.
+//
+// ctx supplies the tenant and a deadline, as for MessageWriter: each publish waits at most
+// until the earlier of ctx's deadline and 5 s, measured from when it is SENT; cancelling ctx
+// without a deadline does not cut it short; an expired deadline sends nothing and reports
+// context.DeadlineExceeded; the 5 s ceiling reports nats.ErrTimeout. The deadline bounds the
+// publish, not the wait for room in the window: Publish can block for a slot for longer than
+// ctx allows, until an earlier publish settles.
+//
+// Contract:
+//   - ONE goroutine submits (Publish and Fail). Overlapping calls panic: the order outcomes
+//     are reported in IS the order of the calls, and two submitters have none.
+//   - done is called exactly once per submission, on the writer's goroutine, after every done
+//     submitted before it has returned. It receives nil ONLY after the broker's PubAck —
+//     which a publish carrying a Message.DedupID the stream has already stored also gets.
+//   - done must be quick and must not call Publish or Fail (the writer's goroutine would wait
+//     on a slot only it can free).
+//   - Publish blocks while the window is full; it never returns an error.
+//   - After a publish the broker failed or did not answer, the writer backs off (500 ms,
+//     doubling to 2 s, reset by the first success) before freeing that slot, and until a
+//     publish succeeds it lets ONE new publish at a time into the window. Failures of
+//     publishes sent before the backoff ended — a whole window failed together by a
+//     reconnect — belong to that backoff: they are reported as they settle, without waiting
+//     again. So a failing stream is consumed at one publish per backoff, no faster than a
+//     synchronous writer retries (plus, once per outage, what was already in flight) — until
+//     Draining is called.
+//   - Close is called once, after the last Publish or Fail has returned, and returns once
+//     every done has run. Publish or Fail after Close panics.
+type OrderedWriter interface {
+	Publish(ctx context.Context, msg Message, done func(error))
+	// Fail submits an outcome decided without publishing (for example a message that could not
+	// be encoded), so it reaches done in order with everything else. err must be non-nil: a
+	// success without a PubAck is exactly what this type exists to make impossible.
+	Fail(err error, done func(error))
+	// Draining says the submitter has stopped taking new work and is only handing over what
+	// it already holds. From then on a failure is not backed off, a backoff in progress ends
+	// and the window is no longer held down to one publish: the backoff exists to slow the consumption of a backlog, and once nothing more
+	// is being consumed it would only hold a shutdown past its budget. It may be called from
+	// any goroutine, more than once.
+	Draining()
+	Close()
+}
+
 // ParseTenantFromSubject extracts the tenant id from a messaging subject built
 // as "{instanceId}.{tenantId}.{suffix}" (and the ADR-006/ADR-048 MQTT mapping
 // "{instanceId}.{tenant}.devices.{token}.events" — the tenant is the second

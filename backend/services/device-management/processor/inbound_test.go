@@ -49,8 +49,8 @@ func (suite *InboundEventsProcessorTestSuite) SetupTest() {
 	suite.IP = NewInboundEventsProcessor(
 		dmtest.DeviceManagementMicroservice,
 		suite.Inbound,
-		suite.Resolved,
-		suite.Failed,
+		msgtest.InlineOrderedWriter{W: suite.Resolved},
+		msgtest.InlineOrderedWriter{W: suite.Failed},
 		core.NewNoOpLifecycleCallbacks(),
 		suite.API,
 		config.AuthModeOptional,

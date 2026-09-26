@@ -516,6 +516,12 @@ var All = []Stream{
 	// sequence from its last committed checkpoint — so a checkpoint outage that exhausts its
 	// deliveries loses no event (see ReplayCovered for the split-brain residual).
 	// device-state and event-management are not: their exhausted deliveries are lettered.
+	//
+	// It declares no duplicate window, so the broker's default (two minutes) applies — and
+	// something relies on that default: device-management stamps every resolved publish with
+	// a Nats-Msg-Id that a redelivery of its source reproduces (processor.resolvedDedupID), so
+	// the copy published on the first redelivery, one inbound AckWait after the fetch, is
+	// dropped rather than stored twice. A declared window shorter than that would switch it off.
 	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
 		ReplayCovered: []string{"event-processing"},
 		Why:           "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},

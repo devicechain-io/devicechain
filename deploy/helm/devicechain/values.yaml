@@ -996,6 +996,12 @@ functionalAreas:
     #       sweepSeconds: 3600    # how often the retention sweep runs. A negative value
     #                             # disables it: the table then grows, which is visible,
     #                             # rather than something being lost, which is not.
+  # device-management scales horizontally: replicas is a throughput lever for event
+  # resolution. Every replica consumes the inbound stream and publishes resolved events,
+  # so one device's events can reach the resolved stream slightly out of order.
+  # Detection applies events in stream order and tolerates that small reorder within its
+  # allowed lateness (event-processing watermarkLatenessSeconds); an event whose publish
+  # failed is republished only after the inbound AckWait (60 s), beyond that lateness.
   device-management:
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)

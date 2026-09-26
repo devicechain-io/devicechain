@@ -45,7 +45,7 @@ const (
 //	Safe — they behave as they do on a constructed Microservice:
 //	  Banner, Mux, RegisterProbes, Live, MarkNotLive, NewHttpServer, MetricsSubsystem,
 //	  MetricsRegisterer, MetricsHandler, UseMetricsRegistry, NewCounter, NewCounterVec, NewGauge,
-//	  NewGaugeVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
+//	  NewGaugeVec, NewHistogramVec, NewProcessorMetrics, NewPeriodicTaskMetrics, LoadInstanceConfiguration,
 //	  LoadInstanceConfigurationFrom, LoadMicroserviceConfiguration,
 //	  LoadMicroserviceConfigurationFrom, ExecuteInitialize,
 //	  ExecuteStart, ExecuteStop, ExecuteTerminate, InitializeAndStart, Run, ShutDownNow,
@@ -926,6 +926,20 @@ func (ms *Microservice) NewGaugeVec(name string, help string, labels []string) *
 		Subsystem: sub,
 		Name:      name,
 		Help:      help,
+	}, labels)
+}
+
+// NewHistogramVec builds a histogram vector with the namespace and subsystem auto-filled
+// based on microservice, observed into the given bucket upper bounds. It panics if name
+// cannot appear in a Prometheus metric name (see requireMetricName).
+func (ms *Microservice) NewHistogramVec(name string, help string, labels []string, buckets []float64) *prometheus.HistogramVec {
+	sub, name := ms.requireMetricName("NewHistogramVec", name)
+	return promauto.With(ms.MetricsRegisterer()).NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: METRICS_NAMESPACE,
+		Subsystem: sub,
+		Name:      name,
+		Help:      help,
+		Buckets:   buckets,
 	}, labels)
 }
 

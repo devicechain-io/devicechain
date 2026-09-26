@@ -983,6 +983,7 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 		return nil, err
 	}
 	w := &natsWriter{nmgr: nmgr, suffix: suffix}
+	nmgr.metrics.initPublish(suffix, publishModeSync)
 	nmgr.writers = append(nmgr.writers, w)
 	log.Info().Str("suffix", suffix).Msg("Added new NATS writer")
 	return w, nil
@@ -1006,13 +1007,23 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 // Each publish waits at most until the earlier of ctx's deadline and publishWait;
 // cancelling ctx without a deadline does not cut it short (see publishContext).
 func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
+	if err := refuseTenantWide(w.suffix); err != nil {
+		return err
+	}
+	return w.publish(ctx, "", msgs...)
+}
+
+// refuseTenantWide reports why suffix cannot be published to on its tenant-wide subject, or
+// nil when it can. Both writers ask it — WriteMessages per call, NewOrderedWriter once at
+// construction — so the two cannot disagree about which streams have a publish path.
+func refuseTenantWide(suffix string) error {
 	// A per-device suffix has no meaningful tenant-wide subject: publishing there
 	// would land outside the stream (which captures one more level) and, if it
 	// somehow matched, would broadcast one device's message to every device. Refuse
 	// rather than let the addressing be decided by which method a caller happened to
 	// reach for.
-	if IsPerDeviceSuffix(w.suffix) {
-		return fmt.Errorf("messaging: %q is a per-device subject; use WriteToDevice", w.suffix)
+	if IsPerDeviceSuffix(suffix) {
+		return fmt.Errorf("messaging: %q is a per-device subject; use WriteToDevice", suffix)
 	}
 	// A capture stream's producer is the DEVICE, via the broker's MQTT gateway
 	// (ADR-030 amendment). Its suffix appears in no subject, so publishing here
@@ -1020,16 +1031,16 @@ func (w *natsWriter) WriteMessages(ctx context.Context, msgs ...Message) error {
 	// stream, which JetStream reports as a publish error only because the stream
 	// lookup fails, and which a caller ignoring the error would lose silently.
 	// Refuse it outright: there is no correct way to write to this stream.
-	if streams.ShapeOf(w.suffix) == streams.ShapeDeviceEvents {
+	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
 		return fmt.Errorf("messaging: %q is a device-events capture stream written by the broker's "+
-			"MQTT gateway, not by the platform; it has no publish path", w.suffix)
+			"MQTT gateway, not by the platform; it has no publish path", suffix)
 	}
 	// The same for the advisory capture: its producer is nats-server itself, and its
 	// subjects are the broker's, not a tenant's.
-	if streams.ShapeOf(w.suffix) == streams.ShapeAdvisory {
-		return fmt.Errorf("messaging: %q captures the broker's own advisories; it has no publish path", w.suffix)
+	if streams.ShapeOf(suffix) == streams.ShapeAdvisory {
+		return fmt.Errorf("messaging: %q captures the broker's own advisories; it has no publish path", suffix)
 	}
-	return w.publish(ctx, "", msgs...)
+	return nil
 }
 
 // WriteToDevice publishes to the per-device subject for deviceToken, under the same
@@ -1047,40 +1058,59 @@ func (w *natsWriter) WriteToDevice(ctx context.Context, deviceToken string, msgs
 	return w.publish(ctx, deviceToken, msgs...)
 }
 
+// tenantSubject is the subject a publish from ctx addresses: the tenant's subject for
+// suffix, or deviceToken's under it when one is given. It fails closed on a missing or
+// malformed tenant. Both writers build their subjects here.
+func (nmgr *NatsManager) tenantSubject(ctx context.Context, suffix string, deviceToken string) (string, error) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return "", core.ErrNoTenant
+	}
+	if err := core.ValidateToken(tenant); err != nil {
+		return "", fmt.Errorf("messaging: refusing to publish to a subject for an invalid tenant: %w", err)
+	}
+	if deviceToken != "" {
+		return DeviceScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix, deviceToken), nil
+	}
+	return ScopedSubject(nmgr.Microservice.InstanceId, tenant, suffix), nil
+}
+
+// natsMsg builds the wire message for m on subject: its value plus headers — the
+// correlation id (generated when the producer did not propagate one), the dedup id, and the
+// caller's own headers. Key is not transmitted (see Message). Both writers build their
+// messages here, so a header rule cannot hold for one and not the other.
+func natsMsg(subject string, m Message) *nats.Msg {
+	nm := &nats.Msg{Subject: subject, Data: m.Value, Header: nats.Header{}}
+	// Carry the correlation id, generating one when the producer did not
+	// propagate it, so any message can be followed across the pipeline (E15).
+	cid := m.CorrelationID()
+	if cid == "" {
+		cid = uuid.NewString()
+	}
+	nm.Header.Set(HeaderCorrelationID, cid)
+	// The dedup id goes on before the caller's own headers are copied, and the
+	// copy skips it, so a producer cannot set Nats-Msg-Id by hand through the
+	// Headers map and bypass the reasoning on Message.DedupID.
+	if m.DedupID != "" {
+		nm.Header.Set(nats.MsgIdHdr, m.DedupID)
+	}
+	for k, v := range m.Headers {
+		if k != HeaderCorrelationID && k != nats.MsgIdHdr {
+			nm.Header.Set(k, v)
+		}
+	}
+	return nm
+}
+
 // publish resolves the subject and writes. An empty deviceToken means the
 // tenant-scoped subject.
 func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Message) error {
-	tenant, ok := core.TenantFromContext(ctx)
-	if !ok {
-		return core.ErrNoTenant
-	}
-	if err := core.ValidateToken(tenant); err != nil {
-		return fmt.Errorf("messaging: refusing to publish to a subject for an invalid tenant: %w", err)
-	}
-	subject := ScopedSubject(w.nmgr.Microservice.InstanceId, tenant, w.suffix)
-	if deviceToken != "" {
-		subject = DeviceScopedSubject(w.nmgr.Microservice.InstanceId, tenant, w.suffix, deviceToken)
+	subject, err := w.nmgr.tenantSubject(ctx, w.suffix, deviceToken)
+	if err != nil {
+		return err
 	}
 	for i := range msgs {
-		nm := &nats.Msg{Subject: subject, Data: msgs[i].Value, Header: nats.Header{}}
-		// Carry the correlation id, generating one when the producer did not
-		// propagate it, so any message can be followed across the pipeline (E15).
-		cid := msgs[i].CorrelationID()
-		if cid == "" {
-			cid = uuid.NewString()
-		}
-		nm.Header.Set(HeaderCorrelationID, cid)
-		// The dedup id goes on before the caller's own headers are copied, and the
-		// copy skips it, so a producer cannot set Nats-Msg-Id by hand through the
-		// Headers map and bypass the reasoning on Message.DedupID.
-		if msgs[i].DedupID != "" {
-			nm.Header.Set(nats.MsgIdHdr, msgs[i].DedupID)
-		}
-		for k, v := range msgs[i].Headers {
-			if k != HeaderCorrelationID && k != nats.MsgIdHdr {
-				nm.Header.Set(k, v)
-			}
-		}
+		nm := natsMsg(subject, msgs[i])
 		// A fresh ceiling for each message: a batch is not one publish, and the
 		// ceiling bounds how long ONE unanswered request is waited on.
 		pctx, callerBound, cancel := publishContext(ctx)
@@ -1090,7 +1120,12 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 		// on the client's internals alone.
 		err := pctx.Err()
 		if err == nil {
+			// Timed around the request alone, success or failure: a publish the
+			// expired-deadline guard above never sent is not a publish, and counting it
+			// would put a zero-latency sample into the fastest bucket.
+			start := time.Now()
 			_, err = w.nmgr.js.PublishMsg(nm, nats.Context(pctx))
+			w.nmgr.metrics.observePublish(w.suffix, publishModeSync, time.Since(start))
 		}
 		cancel()
 		if err != nil && !callerBound && errors.Is(err, context.DeadlineExceeded) {

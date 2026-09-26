@@ -2259,6 +2259,37 @@ size the JetStream volume yourself or manage buckets by hand.
   missed this way means location events are stamped with the previous fence set for up to that
   TTL.
 
+#### Resolved events are published several at a time
+
+Nothing needs doing at the upgrade.
+
+- **`device-management` keeps up to 128 resolved-event publishes waiting for the broker at once,**
+  instead of waiting for each before sending the next, so one pod's resolution is no longer held
+  to one publish round trip at a time. An inbound event is still acknowledged only after every
+  resolved event it produced has been stored, and one whose publish fails is still left for
+  redelivery.
+- **A resolved event is stored once when its inbound event is redelivered.** Each resolved publish
+  carries a duplicate-detection id derived from its inbound event, so when a publish was stored but
+  its acknowledgement was lost, the copy published on redelivery is dropped by the broker rather
+  than stored twice. The broker keeps each id for two minutes, which costs NATS memory for every
+  resolved event published in that window, about 100 bytes each as measured in-process.
+- **A failed event is acknowledged only after its record is stored on the failed-events stream.**
+  Before, the inbound event was acknowledged when its record was handed over for publishing, so a
+  record that failed to publish was lost. Now the inbound event is redelivered, or at its last
+  delivery recorded as a dead letter. The record carries the same kind of duplicate-detection id,
+  so a redelivery does not record the failure twice.
+- **When publishing to resolved-events keeps failing, `device-management` slows down** rather than
+  failing its whole inbound backlog at full speed: after a failed publish it waits half a second,
+  doubling up to two seconds, and until a publish succeeds it sends one at a time. Publishes that
+  failed together, as every publish in flight does when the connection to the broker drops, share
+  one wait.
+- **A device's resolved events can reach the stream slightly out of order,** and could before:
+  every replica publishes, and a rolling update runs two pods at once. Detection's
+  [`watermarkLatenessSeconds`](./detection-engine.md) tolerates that. An event whose publish
+  failed is published again at least 60 seconds later, which is beyond the default.
+- **A new histogram, `devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`,**
+  measures every JetStream publish. [Observability](./observability.md) describes it.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

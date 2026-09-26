@@ -156,6 +156,12 @@ func TestStructLiteralMicroserviceMethods(t *testing.T) {
 				gv.WithLabelValues("v").Set(1)
 			}
 		}},
+		{name: "NewHistogramVec", call: func(t *testing.T, ms *Microservice) {
+			hv := ms.NewHistogramVec("literal_histogram_vec", "h", []string{"l"}, []float64{1})
+			if assert.NotNil(t, hv) {
+				hv.WithLabelValues("v").Observe(1)
+			}
+		}},
 		{name: "NewProcessorMetrics", call: func(t *testing.T, ms *Microservice) {
 			pm := ms.NewProcessorMetrics("literal")
 			if assert.NotNil(t, pm) {

@@ -35,15 +35,18 @@ type EventResolver struct {
 	Api        model.DeviceManagementApi
 	AuthMode   string
 	Unresolved <-chan messaging.Message
-	Invalid    func(error, messaging.Message)
+	// Invalid is handed a message that could not be decoded. It owns the message's ack
+	// from then on: the source is acked once its failed-event record is stored.
+	Invalid func(error, messaging.Message)
 	// Resolved is handed the source message so its ack can be coordinated across
 	// the 1->N resolved-event fan-out (the source is acked only once every
 	// resolved event it produced has been durably published; ADR-022 review A3).
 	Resolved func(messaging.Message, string, []EventResolutionResults)
-	// Failed is handed the inbound message's correlation id (final argument) so
-	// the outbound failed event it produces is stamped with it and stays
-	// traceable end to end (ADR-022 review E15).
-	Failed func(string, uint, esmodel.UnresolvedEvent, error, string)
+	// Failed is handed the inbound message (first argument) and owns its ack from
+	// then on, exactly as Invalid does. The message also supplies the correlation id
+	// the outbound failed event is stamped with, so it stays traceable end to end
+	// (ADR-022 review E15).
+	Failed func(messaging.Message, string, uint, esmodel.UnresolvedEvent, error)
 	// metrics records RED instrumentation for the resolve loop (ADR-022 review
 	// E13). It is shared across all workers and may be nil in tests; Start() is
 	// nil-safe so a nil value no-ops.
@@ -116,7 +119,7 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 	unrez <-chan messaging.Message,
 	invalid func(error, messaging.Message),
 	resolved func(messaging.Message, string, []EventResolutionResults),
-	failed func(string, uint, esmodel.UnresolvedEvent, error, string),
+	failed func(messaging.Message, string, uint, esmodel.UnresolvedEvent, error),
 	metrics *core.ProcessorMetrics,
 	locationMemo *undeclaredLocationMemo) *EventResolver {
 	if locationMemo == nil {
@@ -968,9 +971,10 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			event, err := esproto.UnmarshalUnresolvedEvent(unresolved.Value)
 			if err != nil {
 				// Unparseable payload routes to the failed-events dead-letter path
-				// and is acked (terminal; redelivery cannot help).
+				// (terminal; redelivery cannot help). The source is acked there, once
+				// its record is stored, not here: a record whose publish failed would
+				// otherwise be lost with its source already gone.
 				rez.Invalid(err, unresolved)
-				_ = unresolved.Ack()
 				done(core.ResultInvalid)
 				continue
 			}
@@ -996,11 +1000,11 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			if err != nil {
 				// Resolution failed. Retry via redelivery (a transient lookup error
 				// may clear, and a not-yet-registered device may appear) until the
-				// delivery cap, then route to the failed-events dead-letter path and
-				// ack so a permanently-unresolvable event stops looping (A4).
+				// delivery cap, then route to the failed-events dead-letter path, which
+				// acks the source once the record is stored so a permanently-
+				// unresolvable event stops looping (A4).
 				if unresolved.NumDelivered >= messaging.MaxDeliver {
-					rez.Failed(tenant, reason, *event, err, correlation)
-					_ = unresolved.Ack()
+					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
 				} else {
 					// Transient: leave it UNACKED (do not nak) so AckWait paces
