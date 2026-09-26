@@ -1642,6 +1642,10 @@ Si dimensiona usted mismo el volumen de JetStream, lea «device-management usa u
 caché por tipo de dispositivo en lugar de dos»: la actualización añade la reserva de un bucket de
 caché, y el total baja de su nivel anterior solo cuando borre los dos buckets que ya no usa.
 
+Si escribe reglas de umbral o de duración en CEL que leen atributos de dispositivo, lea «Una
+condición de umbral o de duración que es verdadera para todo dispositivo sin un atributo ahora se
+rechaza».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2444,6 +2448,45 @@ No hay que hacer nada en la actualización.
   defecto.
 - **Un histograma nuevo, `devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`,**
   mide cada publicación en JetStream. [Observabilidad](./observability.md) lo describe.
+
+#### Una condición de umbral o de duración que es verdadera para todo dispositivo sin un atributo ahora se rechaza
+
+**Reglas de detección.** Una condición de umbral o de duración escrita en CEL que sería verdadera en
+todos los eventos de todos los dispositivos a los que les faltan los atributos que lee, sea cual sea
+el contenido del evento, ahora se rechaza al publicar el perfil. La forma habitual es una prueba de
+presencia negada unida con `||`, por ejemplo
+`!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]`, o una prueba de presencia negada sola.
+Una regla así levantaba una alarma para cada dispositivo sin el atributo, informara lo que
+informara, y la mantenía levantada mientras le faltara el atributo. Eso incluye los dispositivos
+cuyo atributo se estableció con algo que no es un número o con alcance `CLIENT`, no solo los que
+nunca lo establecieron.
+
+Qué verá:
+
+- Publicar un perfil que contenga una regla así falla, y el error nombra la condición y el motivo.
+- Una regla con esta forma publicada antes de la actualización, incluida una publicada mientras la
+  actualización se está desplegando, **deja de ejecutarse** con la actualización. El estado de la
+  regla la muestra como `COMPILE_ERROR` con el mismo motivo, y el registro de `event-processing`
+  anota una línea que empieza por `Published detection rule failed to compile; skipping`.
+- **Las alarmas que esa regla ya había levantado siguen activas hasta que las limpie.** La regla ya
+  no se ejecuta, así que nada las resuelve.
+- Revertir un perfil a una versión publicada antes de la actualización trae de vuelta esa regla como
+  `COMPILE_ERROR`. Publique una versión corregida en su lugar.
+
+No se ven afectados los umbrales dinámicos creados en el formulario o en el lienzo; las condiciones
+CEL que siguen evaluando el evento, como `!("tempLimit" in attr) && m["temp"] > 80.0`; ni una
+condición usada como filtro en una regla de repetición, de tasa de cambio, de agregado en ventana o
+de correlación de área, como `!("maint" in attr)`.
+
+Para corregir una regla rechazada, compruebe el atributo en positivo o escriba el respaldo como su
+propia comparación
+(`"temp" in m && ("tempLimit" in attr ? m["temp"] > attr["tempLimit"] : m["temp"] > 80.0)`) y vuelva a
+publicar el perfil. Consulte
+[Umbrales dinámicos en una expresión CEL](../concepts/event-processing.md#dynamic-thresholds-in-cel).
+
+También se corrige la documentación de la previsualización. La previsualización no resuelve
+atributos de dispositivo, así que un respaldo CEL se previsualiza con su respaldo en todos los
+dispositivos; no se previsualiza como que nunca se dispara.
 
 ### La transición única a la ingesta duradera
 

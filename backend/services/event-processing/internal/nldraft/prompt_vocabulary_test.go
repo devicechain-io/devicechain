@@ -164,20 +164,39 @@ func TestPromptsLegalityClaimsMatchTheCompiler(t *testing.T) {
 		return err
 	}
 
+	// Each constant is required VERBATIM in the prompt and compiled as-is: a Contains on a
+	// prefix of the constant would let the prompt say something other than what is compiled —
+	// which is how the prompt once recommended `attr["tempC"] > 5`, an int literal against a
+	// double map that the type checker refuses, while this test compiled `> 5.0`.
 	const forbidden = `geo.inFence("restricted") && m["tempC"] > 5.0`
-	require.Contains(t, systemPromptBase, `geo.inFence("restricted") && m["tempC"] > 5`,
+	require.Contains(t, systemPromptBase, forbidden,
 		"the prompt no longer shows the fence+measurement construct it warns against; if the "+
 			"warning moved, move this test with it rather than deleting it")
 	assert.Errorf(t, compile(forbidden),
 		"the prompt tells models this construct is REJECTED, and it compiled. Either the "+
 			"compiler stopped refusing it or the prompt is now wrong: %s", forbidden)
 
-	const recommended = `geo.inFence("restricted") && attr["tempC"] > 5.0`
-	require.Contains(t, systemPromptBase, `geo.inFence("restricted") && attr["tempC"] > 5`,
-		"the prompt no longer recommends the attribute form")
+	const recommended = `geo.inFence("restricted") && "tempC" in attr && attr["tempC"] > 5.0`
+	require.Contains(t, systemPromptBase, recommended,
+		"the prompt no longer recommends the presence-guarded attribute form")
 	assert.NoErrorf(t, compile(recommended),
 		"the prompt tells models to use this instead, and it does not compile — the prompt is "+
 			"steering every geofence-plus-condition draft into a guaranteed rejection: %s", recommended)
+
+	// The attribute-absence refusal: the prompt names the shape the compiler refuses on a
+	// threshold rule and the fallback form it accepts instead.
+	const rejectedAttr = `!("tempLimit" in attr) || m["tempC"] > attr["tempLimit"]`
+	require.Contains(t, systemPromptBase, rejectedAttr,
+		"the prompt no longer shows the always-true-without-the-attribute shape it warns against")
+	assert.ErrorIsf(t, compile(rejectedAttr), predicate.ErrTrueWithoutAttributes,
+		"the prompt tells models this condition is REJECTED because it is true for every device "+
+			"without the attribute, and it was not refused for that reason: %s", rejectedAttr)
+
+	const fallback = `"tempC" in m && ("tempLimit" in attr ? m["tempC"] > attr["tempLimit"] : m["tempC"] > 80.0)`
+	require.Contains(t, systemPromptBase, fallback,
+		"the prompt no longer shows the per-device-limit-else-literal fallback form")
+	assert.NoErrorf(t, compile(fallback),
+		"the prompt tells models to write the fallback this way, and it does not compile: %s", fallback)
 
 	// And the plain containment case, so a compiler change that refused ALL fence rules could
 	// not satisfy the assertion above by making everything fail.

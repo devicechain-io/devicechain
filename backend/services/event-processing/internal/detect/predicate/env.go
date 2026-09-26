@@ -46,16 +46,23 @@ const (
 	//
 	// WHAT AN EMPTY attr MEANS, AND WHY IT IS STILL THE INTERESTING CASE. attr is empty for any
 	// device that has set no numeric SERVER/SHARED attribute, and on the scaffold path where no
-	// view is wired — so "empty" is a normal steady state, not a pre-go-live one. Because the
-	// STRUCTURED generator only ever emits a POSITIVE presence guard (`"k" in attr && …`), a
-	// structured dynamic rule cleanly does NOT fire against an empty map: it cannot mis-fire on
-	// absent state. A RAW-CEL leaf is not bound by that. An author who writes a NEGATED presence
-	// (`!("k" in attr) && …`) gets an always-true guard for exactly the devices that have not set
-	// the attribute, so the rule fires across the part of the fleet that has no bound — and stops
-	// firing per-device as each one's attribute arrives. That is live behaviour today, not a
-	// transitional window that closes. It is the same "raw-CEL author owns totality" contract the
-	// Duration trap documents (compile.go): the structured path is the safe one; a raw leaf
-	// referencing attr owns its own correctness on devices where the key is absent.
+	// view is wired — so "empty" is a normal steady state, not a pre-go-live one. A key is also
+	// absent when the attribute was overwritten with a non-number, set with CLIENT scope, or set
+	// so recently that the change has not reached this service. Because the STRUCTURED generator
+	// only ever emits a POSITIVE presence guard (`"k" in attr && …`), a structured dynamic rule
+	// cleanly does NOT fire against an empty map: it cannot mis-fire on absent state.
+	//
+	// A RAW-CEL leaf is not bound by that, so the absent case is analysed at compile
+	// (TrueWithoutAttributes, attributes.go):
+	//   - a leaf that is true for every event from every device lacking the attributes it reads
+	//     (`!("k" in attr) || …`, a bare `!("k" in attr)`) is REFUSED by rules.Compile when it is
+	//     the alarm condition itself (threshold, duration) — ErrTrueWithoutAttributes. As an
+	//     optional gate on a counting kind it is accepted: it is narrower than the empty gate.
+	//   - a negated guard that still tests the event (`!("k" in attr) && m["t"] > 80.0`, the
+	//     fallback idiom) is ACCEPTED. It fires wherever the reading crosses 80 on a device where
+	//     k is absent, in all four senses of "absent" above, not only where k was never set.
+	//   - not detected: a per-key shape (`"a" in attr && !("b" in attr)`) and a shape narrowed by
+	//     identity (`!("k" in attr) && device == "d1"`). See TrueWithoutAttributes for why.
 	VarAttr = "attr"
 	// VarGeo is the event's GEO BINDING: an OPAQUE value carrying the reporting device's
 	// position and the frozen fence set of the fence-set version stamped on that event (ADR-078).

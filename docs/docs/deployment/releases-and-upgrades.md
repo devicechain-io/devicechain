@@ -1539,6 +1539,9 @@ If you size the JetStream volume yourself, read "device-management keeps one cac
 device type instead of two": the upgrade adds one cache bucket's reservation, and the total drops
 below its previous level only once you delete the two buckets it no longer uses.
 
+If you write threshold or duration rules in CEL that read device attributes, read "A threshold or
+duration condition that is true for every device without an attribute is now refused".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2289,6 +2292,41 @@ Nothing needs doing at the upgrade.
   failed is published again at least 60 seconds later, which is beyond the default.
 - **A new histogram, `devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`,**
   measures every JetStream publish. [Observability](./observability.md) describes it.
+
+#### A threshold or duration condition that is true for every device without an attribute is now refused
+
+**Detection rules.** A threshold or duration condition written in CEL that would be true on every
+event from every device that lacks the attributes it reads, whatever the event carries, is now
+refused when the profile is published. The shape is usually a negated presence test joined with
+`||`, for example `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]`, or a negated presence
+test on its own. Such a rule raised an alarm for every device without the attribute, whatever the
+device reported, and kept it raised for as long as the attribute was missing. That includes devices
+whose attribute was set to something other than a number or with `CLIENT` scope, not only devices
+that never set one.
+
+What you will see:
+
+- Publishing a profile containing such a rule fails, and the error names the condition and says why.
+- A rule of this shape that was published before the upgrade, including one published while the
+  upgrade is rolling out, **stops running** at the upgrade. Rule health reports it as
+  `COMPILE_ERROR` with the same reason, and the `event-processing` log records a line beginning
+  `Published detection rule failed to compile; skipping`.
+- **Alarms such a rule had already raised stay active until you clear them.** The rule no longer
+  runs, so nothing resolves them.
+- Rolling a profile back to a version published before the upgrade brings such a rule back as
+  `COMPILE_ERROR`. Publish a fixed version instead.
+
+Not affected: dynamic thresholds built on the form or the canvas; CEL conditions that still test the
+event, such as `!("tempLimit" in attr) && m["temp"] > 80.0`; and a condition used as a filter on a
+repeating, rate-of-change, windowed-aggregate or area-correlation rule, such as `!("maint" in attr)`.
+
+To fix a refused rule, test the attribute positively, or write the fallback as its own comparison
+(`"temp" in m && ("tempLimit" in attr ? m["temp"] > attr["tempLimit"] : m["temp"] > 80.0)`), then
+publish the profile again. See
+[Dynamic thresholds in a CEL expression](../concepts/event-processing.md#dynamic-thresholds-in-cel).
+
+The preview documentation is corrected too. Preview resolves no device attributes, so a CEL fallback
+previews its fallback on every device; it does not preview as never firing.
 
 ### The one-time durable-ingest cutover
 

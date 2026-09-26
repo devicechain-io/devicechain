@@ -27,13 +27,18 @@ func PublishedRuleID(tenant, profileVersionToken, ruleToken string) string {
 // from the tenant (which rode the fact's subject) and the fact's version token; the stored
 // definition carries no id (the token is assigned at this fact-emit boundary, ADR-051 slice
 // 4b-1). Rules compile under rules.DefaultLimits, the SAME budget the ADR-044 publish gate
-// enforced (slice 4b-2), so a rule that passed the gate compiles here too. The raw definition
+// enforced (slice 4b-2), so a rule that passed the gate compiles here too — unless the gate has
+// since been TIGHTENED by an upgrade, in which case a rule published under the earlier, looser gate
+// stops compiling here (e.g. a condition refused as true for every device without an attribute,
+// predicate.ErrTrueWithoutAttributes). The raw definition
 // rides on the ScopedRule so a change under a reused id is detectable (applyRuleUpdate) even
 // when the lowered core.Rule is unchanged (the difference is in the predicate).
 //
 // A rule that fails to Decode/Compile is logged LOUDLY and skipped, not fatal: the publish
 // gate should have rejected it before the version was frozen, so a failure here is a
-// gate/consumer contract violation (or a hand-edited stream) — the offending rule does not
+// gate/consumer contract violation, a hand-edited stream, or a rule published under a gate an
+// upgrade has since tightened (including one published by a not-yet-upgraded replica during a
+// rolling upgrade) — the offending rule does not
 // run (fail-closed) while every other rule in the fact still loads. The returned count of
 // such failures lets the caller surface the anomaly.
 func CompilePublishedRules(tenant, profileVersionToken string, published []dmmodel.PublishedDetectionRule) ([]ScopedRule, int) {
@@ -64,7 +69,7 @@ func CompilePublishedRules(tenant, profileVersionToken string, published []dmmod
 		if err != nil {
 			failed++
 			log.Error().Err(err).Str("tenant", tenant).Str("profileVersion", profileVersionToken).
-				Str("rule", p.Token).Msg("Published detection rule failed to compile; skipping (publish gate should have rejected it).")
+				Str("rule", p.Token).Msg("Published detection rule failed to compile; skipping (publish gate should have rejected it, or it was published under an earlier, looser gate).")
 			continue
 		}
 		// ADR-062 S4 fail-closed guard: a group scope is only meaningful for an event-driven,

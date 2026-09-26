@@ -295,7 +295,7 @@ no cumplida, lo que puede no ocurrir nunca.
 **El patrón previsto es emparejar una regla así con una regla de ausencia**, para que un dispositivo
 que deja de reportar levante una señal distinta y accionable en lugar de dejar una obsoleta en pie.
 
-Dos causas más que conviene revisar:
+Tres causas más que conviene revisar:
 
 - **Un «limpiar» de un operador no elimina la condición subyacente.** Si la condición sigue siendo
   cierta, el siguiente evento reactiva la misma alarma. Limpiar es un acuse de que la ha visto, no
@@ -303,6 +303,10 @@ Dos causas más que conviene revisar:
 - **Un dispositivo que sale del alcance de una regla y luego se queda en silencio** conserva su
   alarma levantada. Los cambios de alcance surten efecto en el siguiente evento del dispositivo, y
   un dispositivo en silencio no tiene siguiente evento.
+- **La regla que la levantó ya no se ejecuta.** Una regla que se omite al cargarse —la pestaña
+  **Rule Health** del perfil la muestra como un error de compilación— no se evalúa, así que nada
+  resuelve la alarma que levantó antes. Limpie la alarma a mano cuando haya corregido o retirado la
+  regla.
 
 ## Una regla que no se dispara
 
@@ -319,11 +323,18 @@ Por orden de frecuencia con la que resulta ser la respuesta:
 4. **La regla está delimitada a un grupo en el que el dispositivo no está actualmente.** La
    membresía se registra en cada evento a medida que se resuelve, así que un dispositivo recién
    añadido se incorpora en su siguiente evento.
-5. **Un umbral dinámico no tiene atributo definido en ese dispositivo.** La regla lee el atributo
-   del propio dispositivo; un dispositivo que no lo tiene no dispara.
+5. **Un umbral dinámico no tiene atributo definido en ese dispositivo.** Un umbral creado en el
+   formulario lee el atributo del propio dispositivo, y un dispositivo sin un valor numérico
+   `SERVER` o `SHARED` para él no dispara. Un valor que no es un número, o uno establecido con
+   alcance `CLIENT`, cuenta como no definido. Una expresión CEL con un
+   [respaldo](../concepts/event-processing.md#dynamic-thresholds-in-cel) dispara según su respaldo.
 6. **La regla falla en el momento de la evaluación.** Este es el caso difícil; vea más abajo.
 7. **La notificación de publicación se perdió.** Es raro, pero no deja rastro en ninguno de los
    sitios donde uno lo buscaría.
+8. **La regla dejó de compilar tras una actualización.** Una actualización puede rechazar una regla
+   que una versión anterior aceptaba. Esa regla se omite cuando el motor la carga, y la pestaña
+   **Rule Health** del perfil la muestra como un error de compilación con el motivo. Las notas de la
+   versión enumeran cada uno de esos cambios.
 
 :::warning Una notificación de publicación perdida silencia un perfil sin dejar error en ninguna parte
 Cuando se publica una versión de perfil, las reglas que contiene se entregan al motor de detección
@@ -357,8 +368,11 @@ explican casi todos los resultados sorprendentes:
 
 - Arranca **en frío** al principio de la ventana. Un sostenimiento o una ventana que empezó antes es
   invisible, y una ventana de agregación que cruza el final nunca se cierra.
-- **No resuelve ningún atributo de dispositivo**, así que una regla con umbral dinámico se
-  previsualiza como que nunca se dispara.
+- **No resuelve ningún atributo de dispositivo**: cada dispositivo se previsualiza como si no
+  tuviera ninguno. Por eso un umbral dinámico creado en el formulario se previsualiza como que nunca
+  se dispara, y una expresión CEL con
+  [respaldo](../concepts/event-processing.md#dynamic-thresholds-in-cel) previsualiza su respaldo en
+  todos los dispositivos, incluidos los que sí tienen el atributo.
 - No aplica la **delimitación a un grupo**: una regla delimitada se previsualiza sobre todo el
   perfil.
 - No puede armar la ausencia para un dispositivo que **nunca ha reportado**.

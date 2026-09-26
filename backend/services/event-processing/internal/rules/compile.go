@@ -276,6 +276,23 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	}
 	cr.Predicate = pred
 
+	// Refuse an alarm condition that is true on every event from every device lacking the
+	// attributes it reads (see predicate.ErrTrueWithoutAttributes): for threshold and duration the
+	// leaf IS the alarm, so it would raise one for each such device, fleet-wide. Every other kind
+	// that takes a `when` uses it as an optional per-event gate in front of a counting core (or
+	// AND-guards it with a value metric, which already makes it depend on the event), and a gate
+	// that passes every event from those devices is narrower than the empty gate — `true` — those
+	// kinds accept. Refusing it there would refuse a legitimate "not in maintenance" filter while
+	// accepting the broader rule with no filter at all.
+	if (cr.Type == TypeThreshold || cr.Type == TypeDuration) && pred.TrueWithoutAttributes() {
+		return nil, &ValidationError{
+			RuleID: r.ID,
+			Field:  "when",
+			Msg:    fmt.Sprintf("condition %q: %v", leafSrc, predicate.ErrTrueWithoutAttributes),
+			Err:    predicate.ErrTrueWithoutAttributes,
+		}
+	}
+
 	// Metric-scope a RAW-CEL threshold/duration leaf the structured lowering left unscoped
 	// (GateMetric empty). ScopableMetrics returns the metrics the runtime may safely gate the feed
 	// on — the leaf's referenced measurements, but ONLY when the leaf is provably false without

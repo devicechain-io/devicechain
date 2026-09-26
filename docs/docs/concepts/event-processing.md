@@ -67,6 +67,20 @@ If the form opens a stored rule it cannot hold completely — a field it does no
 
 A threshold can be a **fixed value** on the rule, or **dynamic**: the name of a device **attribute** the rule reads at evaluation time. A dynamic threshold lets one rule adapt per device. The profile defines the rule once, and each device carries its own limit as a `SERVER`- or `SHARED`-scoped attribute (server-set values take precedence). Change the attribute and the effective threshold changes, with no rule edit.
 
+#### Dynamic thresholds in a CEL expression {#dynamic-thresholds-in-cel}
+
+In a CEL expression, the event's measurements are the map `m` and the device's attributes are the map `attr`, both from a key to a number. A key is in `attr` only while the device has a **numeric** value for it at `SERVER` or `SHARED` scope. It is absent when the attribute was never set, when it was set to something other than a number, when it was set with `CLIENT` scope, and for a short time after it is set, until the change reaches the detection engine.
+
+Test presence before you read a value. A dynamic threshold built on the form compiles to `"tempLimit" in attr && "temp" in m && m["temp"] > attr["tempLimit"]`, which does not fire for a device without the attribute. The form has no fallback value. To fall back to a fixed limit, write the fallback as its own comparison:
+
+```
+"temp" in m && ("tempLimit" in attr ? m["temp"] > attr["tempLimit"] : m["temp"] > 80.0)
+```
+
+A threshold or duration condition that would be true on every event from **every** device without the attributes it reads, whatever the event carries, is refused when the profile is published. For example, `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` would raise an alarm for every such device, whatever it reported, for as long as the attribute was missing. A condition that still depends on the reading, such as `!("tempLimit" in attr) && m["temp"] > 80.0`, is accepted. Remember that it also applies to devices whose attribute has the wrong type or scope, not only to devices that never set one.
+
+On a repeating, rate-of-change, windowed-aggregate or area-correlation rule the condition is a filter on which events count, so a filter such as `!("maint" in attr)` ("devices not in maintenance") is accepted there.
+
 ## Automated actions {#automated-actions}
 
 When a rule fires, its actions run. The built-in actions are:

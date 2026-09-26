@@ -4,6 +4,9 @@
 package rules
 
 import (
+	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -370,5 +373,64 @@ func TestCompileRejections(t *testing.T) {
 				t.Fatalf("expected %q to be rejected", tc.name)
 			}
 		})
+	}
+}
+
+// TestCompileRefusesAlarmConditionTrueWithoutAttributes proves a threshold or duration condition
+// that is true on every event from every device lacking the attributes it reads is refused at
+// compile, anchored to the rule's `when` and carrying predicate.ErrTrueWithoutAttributes. Such a
+// condition would raise an alarm for every device without a numeric SERVER/SHARED value for the
+// attribute, whatever the device reports.
+func TestCompileRefusesAlarmConditionTrueWithoutAttributes(t *testing.T) {
+	const bad = `!("lim" in attr) || m["t"] > attr["lim"]`
+	refused := map[string]Rule{
+		"threshold": {ID: "th", Name: "n", Type: TypeThreshold, When: Condition{CEL: bad}},
+		"threshold bare": {ID: "tb", Name: "n", Type: TypeThreshold,
+			When: Condition{CEL: `!("lim" in attr)`}},
+		"duration": {ID: "du", Name: "n", Type: TypeDuration, Hold: Duration(time.Minute),
+			When: Condition{CEL: bad}},
+	}
+	for name, r := range refused {
+		_, err := Compile(r, testLimits)
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Field != "when" {
+			t.Fatalf("%s: want a ValidationError on field \"when\", got %v", name, err)
+		}
+		if !errors.Is(err, predicate.ErrTrueWithoutAttributes) {
+			t.Fatalf("%s: want predicate.ErrTrueWithoutAttributes, got %v", name, err)
+		}
+		if !strings.Contains(err.Error(), strconv.Quote(r.When.CEL)) {
+			t.Fatalf("%s: the message must name the refused condition %q, got %v", name, r.When.CEL, err)
+		}
+	}
+}
+
+// TestCompileKeepsConditionsThatAreNotAFleetWideAlarm is the counterweight: the refusal is by
+// what the condition DOES in its rule kind, not by its text naming `attr`.
+func TestCompileKeepsConditionsThatAreNotAFleetWideAlarm(t *testing.T) {
+	// The maintenance-exclusion filter: true for every device without `maint`, but as an optional
+	// per-event gate it is narrower than the empty gate these kinds accept.
+	const gate = `!("maint" in attr) || attr["maint"] == 0.0`
+	kept := map[string]Rule{
+		"structured dynamic threshold": {ID: "a", Name: "n", Type: TypeThreshold,
+			When: Condition{Metric: "t", Op: OpGt, ThresholdAttr: "lim"}},
+		"threshold fallback idiom": {ID: "b", Name: "n", Type: TypeThreshold,
+			When: Condition{CEL: `!("lim" in attr) && "t" in m && m["t"] > 80.0`}},
+		"duration recommended fallback": {ID: "c", Name: "n", Type: TypeDuration, Hold: Duration(time.Minute),
+			When: Condition{CEL: `"t" in m && ("lim" in attr ? m["t"] > attr["lim"] : m["t"] > 80.0)`}},
+		"repeating gate": {ID: "d", Name: "n", Type: TypeRepeating, Count: 5, Window: Duration(10 * time.Minute),
+			When: Condition{CEL: gate}},
+		"correlation gate": {ID: "e", Name: "n", Type: TypeCorrelation, AnchorType: "site", Count: 3,
+			Window: Duration(time.Minute), When: Condition{CEL: gate}},
+		"count aggregate gate": {ID: "f", Name: "n", Type: TypeAggregate, Mode: ModeTumbling, Agg: AggCount,
+			Op: OpGe, Threshold: ptr(3), Window: Duration(time.Minute), When: Condition{CEL: gate}},
+		"deltaRate value-guarded gate": {ID: "g", Name: "n", Type: TypeDeltaRate, Metric: "t", Op: OpGt,
+			Threshold: ptr(1), When: Condition{CEL: `!("lim" in attr)`}},
+		"absence": {ID: "h", Name: "n", Type: TypeAbsence, Ttl: Duration(time.Minute)},
+	}
+	for name, r := range kept {
+		if _, err := Compile(r, testLimits); err != nil {
+			t.Errorf("%s: must compile, got %v", name, err)
+		}
 	}
 }

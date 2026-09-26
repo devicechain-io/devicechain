@@ -345,10 +345,10 @@ Generated CEL is **never string-spliced from author input**
 emits its attribute-presence guard **first** (`:52-82`), so the common "device never set the
 attribute" case short-circuits before the metric is examined.
 
-The rule author's whole vocabulary is five **declared variables** — `device`, `anchors`, `occurred`,
-`m`, `attr` — plus the `cel.bind` macro
-(`backend/services/event-processing/internal/detect/predicate/env.go:26-60`, declared at `:84-97`).
-Five is the count of declarations, not of what an author may write: cel-go's standard library rides
+The rule author's whole vocabulary is six **declared variables** — `device`, `anchors`, `occurred`,
+`m`, `attr`, `geo` — plus the `cel.bind` macro and `geo`'s one function, `inFence`
+(`backend/services/event-processing/internal/detect/predicate/env.go:26-74`, declared at `:116-155`).
+Six is the count of declarations, not of what an author may write: cel-go's standard library rides
 along unconditionally, so `has()`, `size()`, the comprehension macros and the timestamp accessors are
 all available and none of them appears in that list.
 
@@ -367,12 +367,6 @@ What the compiler does **not** check, stated because each has bitten someone:
   `m["typo"] > 5` is an unguarded index on a missing key, which **errors**; the runtime treats a leaf
   eval error as a *skip*, and for a Duration rule a skip preserves the hold rather than cancelling it
   (`cel_gen.go:60-66`). The rule that "never fires" may therefore be one whose state is frozen;
-- a raw-CEL leaf's totality over devices that have set nothing. The structured generator only ever
-  emits a **positive** presence guard, so a structured dynamic rule cannot mis-fire on absent state.
-  An author who writes the negation — `!("k" in attr) && …` — gets an always-true guard for exactly
-  the devices with no bound, so the rule fires across the un-configured part of the fleet and stops
-  firing per-device as each attribute arrives. `predicate/env.go` states this as live behaviour, not
-  a transitional window that closes;
 - a `sendCommand` action's command name against the profile's command vocabulary, and its payload against the
   command's parameter schema — both are checked, but downstream at enqueue (§10b), not here;
 - a `publish` action's connector reference. A dangling one is not a drop-and-log: outbound-connectors
@@ -381,6 +375,24 @@ What the compiler does **not** check, stated because each has bitten someone:
   **dead-lettered and acked on its first delivery** (`consumer.go:333-339`) — zero retries, and
   nothing surfaces it to the rule's author. The rule keeps firing and every firing goes straight to
   the dead-letter stream.
+
+What it **does** check about absent attributes. A device has no entry in `attr` when the attribute
+was never set, was overwritten with a non-number (the projection tombstones the key), was set with
+CLIENT scope (never projected), or was set so recently that the change has not arrived. The structured
+generator only ever emits a **positive** presence guard, so a structured dynamic rule cannot mis-fire
+on absent state; a raw-CEL leaf can. So `predicate.Compile` records, for every leaf that names `attr`,
+whether the leaf is **definitely true** with `attr` bound empty and every other variable held unknown
+(`backend/services/event-processing/internal/detect/predicate/attributes.go`, `TrueWithoutAttributes`),
+and `rules.Compile` refuses such a leaf with `ErrTrueWithoutAttributes` **for threshold and duration
+only** — the kinds whose leaf IS the alarm, where it would raise one per device without the attribute.
+On a counting kind the leaf is an optional gate, and a gate that passes every event from those devices
+is narrower than the empty gate, so `!("maint" in attr)` as a maintenance filter is accepted there.
+What it accepts on purpose: the fallback idiom `!("k" in attr) && m["t"] > 80.0` (unknown, not true —
+it still tests the event). What it cannot see: a per-key shape (`"a" in attr && !("b" in attr)`),
+because cel-go makes the bare `attr` wholly unknown once any attribute pattern names it, and a shape
+narrowed by identity (`!("k" in attr) && device == "d1"`). A rule published before this check that
+it now refuses stops loading (`runtime/publish.go`'s skip path) and shows as `COMPILE_ERROR` in rule
+health; the alarm it raised is left raised, since nothing now evaluates the rule to resolve it.
 
 ## 7. Three authoring doors, one compiler
 
@@ -1043,8 +1055,9 @@ isolated instance that takes no store and no writer
 (`backend/services/event-processing/internal/preview/preview.go:12-21`, `:117-228`). Its limits are
 stated in the package doc and are worth repeating because a preview that shows nothing is usually one
 of them: it starts **cold** at the window, so a hold that began earlier is invisible and a pane
-straddling the end never closes; it resolves **no device attributes**, so every dynamic-threshold rule
-previews as non-firing; it runs at zero lateness with no future-skew clamp. That last one is a
+straddling the end never closes; it resolves **no device attributes**, so every device previews as having none
+— a structured dynamic threshold previews as non-firing, and a raw-CEL fallback previews its fallback
+on every device; it runs at zero lateness with no future-skew clamp. That last one is a
 property of the **caller**, not of the package — `Run` takes lateness as a parameter (`:117-118`) and
 it is zero only because the one production caller passes zero
 (`backend/services/event-processing/graphql/resolvers_preview_rule.go:143`). Worth knowing before
