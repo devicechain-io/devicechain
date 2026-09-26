@@ -171,6 +171,13 @@ var errArchiveSkew = errors.New("device-management does not serve the geofence m
 // has to appear alongside the complaint — so an unrelated validation error is NOT reported as
 // version skew, which would send an operator looking at deployments over a typo.
 func isArchiveSkew(err error) bool {
+	return peerLacksQuery(err, "geoFenceSetManifest", "currentGeoFenceSetManifest", "geoFenceGeometry")
+}
+
+// peerLacksQuery reports whether a query error is the peer's GraphQL validation refusing one of
+// the named fields — the peer is running a build that does not serve it. It is the one reading of
+// that answer; isArchiveSkew and the fact reconcile's client each name their own fields.
+func peerLacksQuery(err error, fields ...string) bool {
 	if err == nil {
 		return false
 	}
@@ -178,7 +185,7 @@ func isArchiveSkew(err error) bool {
 	if !strings.Contains(text, "Cannot query field") && !strings.Contains(text, "no such field") {
 		return false
 	}
-	for _, field := range []string{"geoFenceSetManifest", "currentGeoFenceSetManifest", "geoFenceGeometry"} {
+	for _, field := range fields {
 		if strings.Contains(text, field) {
 			return true
 		}

@@ -27,19 +27,22 @@ type PublishedDetectionRule struct {
 }
 
 // DetectionRulesPublishedEvent is the envelope emitted post-commit when a device
-// profile is published (ADR-051 slice 4b-3), carrying the ENABLED detection rules
-// frozen into the new immutable version so event-processing's DETECT engine can run
-// them. The rules are keyed on the immutable ProfileVersionToken
+// profile is published or rolled back (ADR-051 slice 4b-3 / 4c-2), carrying the
+// ENABLED detection rules frozen into the now-active version so event-processing's
+// DETECT engine can run them. The rules are keyed on the immutable ProfileVersionToken
 // ("{profileToken}@{version}", ADR-045) — the same token a resolved event
-// denormalizes — so the engine scopes them read-free and a rollback needs no new
-// fact (the target version's rules stay loaded). Disabled rules are omitted: they
+// denormalizes — so the engine scopes them read-free; a rollback re-emits the target
+// version's fact so the engine learns which version is active. Disabled rules are omitted: they
 // ride the frozen snapshot but are inert until a later publish enables them. The
 // tenant is not a field: it travels on the per-tenant NATS subject.
 type DetectionRulesPublishedEvent struct {
 	ProfileVersionToken string
 	Rules               []PublishedDetectionRule
-	// PublishedAt is the version's commit time (ADR-051 slice 4c-2): the moment this
-	// rule set became active. event-processing uses it as the rule-activation half of
+	// PublishedAt is the profile's STORED activation instant, active_since (ADR-051 slice
+	// 4c-2): the moment this rule set became active — by publish, or by rollback to it. It is
+	// stored rather than read off the clock at send time so event-processing's reconcile
+	// against this service reproduces exactly the value this fact carries. event-processing
+	// uses it as the rule-activation half of
 	// the dead-man grace-period base — a never-reported device's absence deadline is
 	// max(device-created, rule-published) + timeout, so publishing an absence rule
 	// gives an already-existing quiet device one timeout of grace before firing rather
@@ -54,9 +57,9 @@ type DetectionRulesPublishedEvent struct {
 // never surfaced to the caller — a NATS hiccup must not fail or retry the profile publish.
 // The emit is at-most-once (ADR-044 async-fact posture): a DELIVERED fact is durably
 // persisted by event-processing's consumer (persist-before-ack) and so survives a restart,
-// but a fact that never reaches the stream is NOT recovered by replay — it relies on a
-// subsequent publish or the planned reconciliation sweep, exactly like a missed
-// entity-deleted event. Implementations must be safe for concurrent use.
+// but a fact that never reaches the stream is NOT recovered by replay — it is repaired by
+// event-processing's reconcile against this service (ActiveProfileRules, at the start of its
+// DETECT term and every five minutes). Implementations must be safe for concurrent use.
 type DetectionRulesPublishedPublisher interface {
 	PublishDetectionRulesPublished(ctx context.Context, event *DetectionRulesPublishedEvent)
 }

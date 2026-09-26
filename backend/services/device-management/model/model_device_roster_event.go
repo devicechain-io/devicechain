@@ -19,8 +19,9 @@ import (
 // published version at arming time. It is empty when the type has no profile (a roster
 // entry with no resolvable rules, retained so a later re-type re-homes it).
 //
-// ExpectedSince is the device's creation time: the base of the dead-man clock for a
-// never-reported device. The tenant is not a field — it travels on the per-tenant NATS
+// ExpectedSince is when the device's membership of that profile began — its creation, or the
+// stored instant of its last re-type or its type's last re-point (devices.expected_since) — the
+// base of the dead-man clock for a never-reported device. The tenant is not a field — it travels on the per-tenant NATS
 // subject, exactly like the detection-rules-published and entity-deleted facts.
 type DeviceRosterEvent struct {
 	DeviceToken   string
@@ -34,9 +35,10 @@ type DeviceRosterEvent struct {
 // surfaced to the caller — a NATS hiccup must not fail or retry the device create/update.
 // Emission is at-most-once (ADR-044 async-fact posture): a DELIVERED fact is durably
 // persisted by event-processing's consumer (persist-before-ack) and so survives a
-// restart, but a fact that never reaches the stream is NOT recovered by replay — it
-// relies on a subsequent re-type or the planned reconciliation sweep, exactly like a
-// missed entity-deleted event. Implementations must be safe for concurrent use.
+// restart, but a fact that never reaches the stream is NOT recovered by replay — it is
+// repaired by event-processing's reconcile against this service (DeviceRosterPage, at the
+// start of its DETECT term and every five minutes). Implementations must be safe for
+// concurrent use.
 type DeviceRosterPublisher interface {
 	PublishDeviceRoster(ctx context.Context, event *DeviceRosterEvent)
 }

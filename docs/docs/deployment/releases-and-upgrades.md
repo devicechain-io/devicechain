@@ -1558,6 +1558,10 @@ now answers with the code `CONFLICT`".
 If a device's MQTT password begins or ends with a space or a newline, or your own code reads a
 tier's `color` from the admin API, read "Credential values are stored exactly as sent".
 
+If you route or silence alerts by name, three more warnings are added, and a lost rule, device or
+attribute notification no longer needs a republish: read "Lost rule, device and attribute changes
+are repaired automatically".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2608,6 +2612,46 @@ sign-in straight after an upgrade could fail this way.
   during a key change apart from a token that is simply not valid.
 
 Nothing needs configuring.
+
+#### Lost rule, device and attribute changes are repaired automatically
+
+Publishing or rolling back a device profile, creating or re-typing a device, re-pointing a device
+type at another profile, and setting a threshold attribute each notify the detection engine once.
+Before this release a lost notification was never retried: a newly published profile version ran
+**no rules at all**, a device that never reported was never watched for silence, and a dynamic
+threshold kept its old value — with nothing marked failed and no alert. The documented remedy was
+to publish the profile again.
+
+`event-processing` now compares its copy of each tenant's published rules, active profile versions,
+devices and threshold attributes with `device-management` when it takes over detection and every
+five minutes after, and corrects what differs. A lost change is repaired within about seven
+minutes, and a deleted device or attribute within about ten. You no longer need to republish
+after a broker disruption.
+
+What you will see:
+
+- **The upgrade adds two columns to `device-management`'s database**: when each profile's active
+  version became active, and when each device's current profile membership began. Both are
+  nullable and filled in by use, so the migration is quick on any fleet size and a replica of the
+  previous release keeps working during the rollout. A profile whose active version was chosen
+  before the upgrade is treated as active since that version was published — or, if it was rolled
+  back to, since just after the newest version was published.
+- **Three new warnings**: `DeviceFactPublishFailing` (notifications are failing to send),
+  `DetectFactsRepaired` (the engine corrected something it had not been told about) and
+  `DetectFactReconcileFailing` (the comparison itself is failing). `DetectFactsRepaired` counts
+  only a real loss — a change whose notification is merely still on its way is left for the next
+  comparison — so it fires after the upgrade only if notifications had in fact been lost before it.
+- `device-management` exports `fact_publish_failures_total`, and `event-processing` exports
+  `detect_fact_reconcile_repairs_total` and `detect_fact_reconcile_failures_total`.
+- A rollback now carries the moment it was made as stored by `device-management`. Each publish or
+  rollback of a profile is stamped later than the one before it, even when the replicas that made
+  them have clocks that disagree. Two changes to the same profile made at the same instant are the
+  exception: either may keep the earlier moment, and the detection engine still ends up on the
+  version `device-management` stores.
+- `event-processing` now also calls `user-management` to list tenants, and `device-management` to
+  read rules, devices and attributes, with the service secret it already uses for geofences. If the
+  service secret or either address is not configured, the comparison is off and the service logs a
+  warning at startup, as geofence evaluation does.
 
 ### The one-time durable-ingest cutover
 

@@ -99,6 +99,14 @@ type DetectMetrics struct {
 	tenantsOverRuleBudget           prometheus.Gauge
 	tenantsOverLiveKeyBudget        prometheus.Gauge
 	tenantsOverRetainedSampleBudget prometheus.Gauge
+
+	// The fact reconcile against device-management (fact_reconcile.go). factRepairs counts
+	// projection rows actually repaired — a write that applied, never an attempt — by projection;
+	// factFailures counts reconcile attempts that did not complete, by projection (plus "tenants",
+	// the tenant listing). Bounded cardinality: the label is the fixed reconcileProjection enum,
+	// never a tenant.
+	factRepairs  *prometheus.CounterVec
+	factFailures *prometheus.CounterVec
 }
 
 // NewDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -111,7 +119,7 @@ type DetectMetrics struct {
 // again whenever that callback is entered again — which any start retried after a
 // failed one does — and MustRegister panics on the first duplicate.
 func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
-	return &DetectMetrics{
+	m := &DetectMetrics{
 		checkpointsTotal:    ms.NewCounter("detect_checkpoints_total", "Committed DETECT snapshot checkpoints."),
 		eventsAppliedTotal:  ms.NewCounter("detect_events_applied_total", "Resolved events fed into the DETECT engine."),
 		appliedStreamSeq:    ms.NewGauge("detect_applied_stream_seq", "Highest JetStream stream sequence captured in the committed snapshot."),
@@ -153,7 +161,39 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		retainedSamples:                 ms.NewGauge("detect_retained_samples", "Total per-sample records retained by window-shaped rules across all tenants (repeating/sliding-aggregate windows and correlation members)."),
 		pendingTimers:                   ms.NewGauge("detect_pending_timers", "Entries in the timer wheel's pending-deadline heap. Grows per EVENT for absence/session rules (a deadline reset pushes a new entry and the superseded one lingers until its deadline), so neither of the two gauges above can see it."),
 		tenantsOverRetainedSampleBudget: ms.NewGauge("detect_tenants_over_retained_sample_budget", "Tenants currently exceeding the per-tenant retained-sample budget (ADR-023)."),
+
+		factRepairs: ms.NewCounterVec("detect_fact_reconcile_repairs_total",
+			"Projection rows the detection engine repaired from device-management because the notification for a change never arrived, by projection (rules, profile_active, roster, attributes). Each one is a change that had not reached detection until the reconcile found it.",
+			[]string{"projection"}),
+		factFailures: ms.NewCounterVec("detect_fact_reconcile_failures_total",
+			"Reconcile attempts against device-management that did not complete, by projection (tenants, rules, roster, attributes). The projection is left exactly as it was — a failed read never deletes — and the next sweep retries.",
+			[]string{"projection"}),
 	}
+	// Every label value exists from startup, so an alert on the rate sees a zero series rather
+	// than no series on a healthy instance.
+	for _, p := range repairProjections {
+		m.factRepairs.WithLabelValues(string(p)).Add(0)
+	}
+	for _, p := range failureProjections {
+		m.factFailures.WithLabelValues(string(p)).Add(0)
+	}
+	return m
+}
+
+// factRepaired counts n projection rows the fact reconcile actually repaired. Nil-safe.
+func (m *DetectMetrics) factRepaired(p reconcileProjection, n int) {
+	if m == nil || n == 0 {
+		return
+	}
+	m.factRepairs.WithLabelValues(string(p)).Add(float64(n))
+}
+
+// factReconcileFailed counts one fact-reconcile attempt that did not complete. Nil-safe.
+func (m *DetectMetrics) factReconcileFailed(p reconcileProjection) {
+	if m == nil {
+		return
+	}
+	m.factFailures.WithLabelValues(string(p)).Inc()
 }
 
 // recordStateBudget publishes the per-tenant state-budget gauges at a checkpoint (slice 6c): the

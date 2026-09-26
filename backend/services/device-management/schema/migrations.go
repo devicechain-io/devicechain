@@ -35,5 +35,6 @@ var (
 		NewDeviceReplacementsSchema(),
 		NewAssetPropertySchemaSchema(),
 		NewDropAlarmMessageSchema(),
+		NewDetectReconcileInstantsSchema(),
 	}
 )

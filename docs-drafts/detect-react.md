@@ -794,10 +794,12 @@ stage with a dead-letter path.** Both halves of that sentence are narrower than 
 ("everything is at-least-once, nothing is at-most-once, one stage dead-letters"), and the two places
 it over-reaches are worth naming, because each is a real failure mode:
 
-- Two of the **control-plane** streams are declared **at-most-once**, deliberately:
-  `detection-rules-published` and `device-roster` (`backend/core/streams/streams.go:372-380`). They
-  carry a human authoring action rather than device traffic, and the producer treats a publish
-  failure as a log line. What that costs is §14's second entry.
+- Three of the **control-plane** streams are declared **at-most-once**, deliberately:
+  `detection-rules-published`, `device-roster` and `device-attribute`
+  (`backend/core/streams/streams.go`). They carry an authoring or provisioning action rather than
+  device traffic, and the producer treats a publish failure as a log line and a counted metric
+  (`fact_publish_failures_total`). What repairs a lost one is not replay but the leader's fact
+  reconcile — §14's second entry.
 - The platform has **four** dead-letter paths, not one. Three of them are upstream of DETECT and one
   is downstream of REACT: failed-decode in the ingest gateway
   (`backend/services/event-sources/processor/gateway_jetstream.go:352-377`), failed-events at
@@ -958,18 +960,26 @@ Ordered by what they cost.
    but is all credential and redirect defence: no redirects, scheme allowlist, URL-credential
    rejection, reserved-header stripping, response suppression when a secret is attached, and
    header-grammar validation at publish — the last of which holds on this path only (see 14 below).
-2. 🔴 **A lost rule-publish notification permanently silences a published profile's rules.**
-   `detection-rules-published` is declared **at-most-once** (`backend/core/streams/streams.go:372-374`)
-   and the producer is fire-and-forget: a publish failure is logged and the method returns
-   (`backend/services/device-management/processor/detection_rules_publisher.go:41-52`). The publish
-   transaction has already committed by then, so the profile shows active and published and its rules
-   show enabled. But event-processing's durable projection — which §6 calls the restart source of
-   truth — is built from that fact, so it never gets them, and `reconcileRegistry` re-reads only the
-   projection. There is no retry, no dead letter, no reconcile against device-management, and no
-   alert. The rules simply never run, and the only recovery is republishing the profile. The producer
-   comment names "the planned reconcile" as the answer, which is worth reading as what it is: the
-   thing that would close this, not something that exists. `device-roster` (`:376-380`) has the same
-   shape, with absence-arming for never-reported devices as the casualty.
+2. **A lost rule, roster or attribute notification is repaired by a reconcile, a few minutes late —
+   not replayed.** The three facts are at-most-once and fire-and-forget
+   (`backend/services/device-management/processor/detection_rules_publisher.go`), so a broker
+   refusal or a restart between commit and send loses one. Until the fact reconcile existed that
+   silenced a newly published profile outright (every device resolves the new version token; the
+   registry held nothing under it), left a never-reporting device unwatched, and kept a dynamic
+   threshold stale — with no retry and no alert. Now the DETECT leader compares its four projections
+   with device-management at the start of every term and every five minutes
+   (`startFactReconcile` / `reconcileFacts` in
+   `backend/services/event-processing/processor/fact_reconcile.go`), reading three keyset doors
+   (`ActiveProfileRules`, `DeviceRosterPage`, `DeviceThresholdAttributePage` in
+   `backend/services/device-management/model/api_detect_reconcile.go`) built from the same code as
+   the facts. What to know about it: it compares IDENTITY (which version is active, which profile a
+   device is on, which value an attribute holds — rule bodies through `SameRuleDefinition`, never
+   bytes, because jsonb re-renders them); every repair is a write conditional on the row it read, so
+   a live fact landing mid-sweep wins; a divergence younger than `factSettle` is left alone and a
+   deletion must be seen by two sweeps, so the repairs counter means "lost", not "in flight"; and a
+   failed or partial read changes nothing. The residual is a split brain: a projection row a zombie
+   wrote CORRECTLY after the new leader's catch-up differs from nothing, so the reconcile never
+   re-reads it into the live views, and it lasts until the next term build.
 3. **Dynamic thresholds are not replay-deterministic** — §5.
 4. **An action that fails on every delivery is lost at the cap — but only that action.** Every
    other action of the detection is attempted on every delivery, and the exhausted dead letter names

@@ -99,8 +99,9 @@ type Api struct {
 	// engine can run them. Injected at wiring time (the concrete publisher owns a NATS
 	// writer) and may be nil — in tests, or before wiring — disabling emission. Emission is
 	// post-commit and best-effort (at-most-once): a DELIVERED fact is durably persisted by
-	// event-processing, but a fact that never reaches the stream is recovered by a later
-	// publish or the planned reconcile, not by replay.
+	// event-processing, and a fact that never reaches the stream is repaired by
+	// event-processing's reconcile against this service (ActiveProfileRules, at the start of
+	// its DETECT term and every five minutes), not by replay.
 	DetectionRulesPublishedPublisher DetectionRulesPublishedPublisher
 
 	// DeviceRosterPublisher emits device-roster events (ADR-051 slice 4c-2) when a device

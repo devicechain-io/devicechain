@@ -199,6 +199,14 @@ type Device struct {
 
 	DeviceTypeId uint
 	DeviceType   *DeviceType
+
+	// ExpectedSince is when the device's membership of its current profile began — the base
+	// of the detection engine's never-reported dead-man clock. A re-type of the device, or a
+	// re-point of its type onto another profile, stamps it; NULL means "since the device was
+	// created". It is never read directly: rosterEntries is the one reader, and it resolves
+	// NULL to created_at, so the roster facts this service emits and the roster page the
+	// engine reconciles from cannot disagree about it.
+	ExpectedSince sql.NullTime
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token

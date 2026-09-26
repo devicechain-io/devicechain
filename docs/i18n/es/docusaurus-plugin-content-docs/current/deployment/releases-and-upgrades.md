@@ -1664,6 +1664,10 @@ Si la contraseña MQTT de un dispositivo empieza o termina con un espacio o un s
 propio código lee el `color` de un nivel desde la API de administración, lea «Los valores de las
 credenciales se guardan exactamente como se envían».
 
+Si enruta o silencia alertas por su nombre, se añaden tres avisos más, y un aviso perdido de regla,
+dispositivo o atributo ya no requiere volver a publicar: lea «Los cambios perdidos de reglas,
+dispositivos y atributos se reparan solos».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2792,6 +2796,49 @@ pasaban los 30 segundos. Un inicio de sesión justo después de una actualizaci�
   simplemente no es válido.
 
 No hay nada que configurar.
+
+#### Los cambios perdidos de reglas, dispositivos y atributos se reparan solos
+
+Publicar o revertir un perfil de dispositivo, crear un dispositivo o cambiar su tipo, apuntar un tipo
+de dispositivo a otro perfil, y establecer un atributo de umbral avisan al motor de detección una
+sola vez. Antes de esta versión un aviso perdido nunca se reintentaba: una versión de perfil recién
+publicada **no ejecutaba ninguna regla**, un dispositivo que nunca informaba no se vigilaba por
+silencio y un umbral dinámico conservaba su valor anterior, sin nada marcado como fallido y sin
+alerta. El remedio documentado era volver a publicar el perfil.
+
+`event-processing` compara ahora su copia de las reglas publicadas, las versiones activas de perfil,
+los dispositivos y los atributos de umbral de cada inquilino con `device-management` cuando asume la
+detección y cada cinco minutos después, y corrige lo que difiera. Un cambio perdido se repara
+en unos siete minutos como máximo, y un dispositivo o atributo eliminado en unos diez. Ya no hace falta
+volver a publicar tras una interrupción del broker.
+
+Lo que verá:
+
+- **La actualización añade dos columnas a la base de datos de `device-management`**: cuándo pasó a
+  estar activa la versión activa de cada perfil, y cuándo empezó la pertenencia de cada dispositivo
+  a su perfil actual. Ambas admiten nulos y se rellenan con el uso, así que la migración es rápida
+  con cualquier tamaño de flota y una réplica de la versión anterior sigue funcionando durante el
+  despliegue. Un perfil cuya versión activa se eligió antes de la actualización se trata como
+  activo desde que se publicó esa versión o, si se revirtió a ella, desde justo después de publicarse
+  la versión más reciente.
+- **Tres avisos nuevos**: `DeviceFactPublishFailing` (los avisos no se están enviando),
+  `DetectFactsRepaired` (el motor corrigió algo de lo que no se le había avisado) y
+  `DetectFactReconcileFailing` (la propia comparación está fallando). `DetectFactsRepaired` cuenta
+  solo una pérdida real —un cambio cuyo aviso simplemente sigue en camino se deja para la siguiente
+  comparación—, así que tras la actualización solo se dispara si de verdad se habían perdido avisos
+  antes.
+- `device-management` exporta `fact_publish_failures_total`, y `event-processing` exporta
+  `detect_fact_reconcile_repairs_total` y `detect_fact_reconcile_failures_total`.
+- Una reversión lleva ahora el momento en que se hizo tal como lo guarda `device-management`. Cada
+  publicación o reversión de un perfil queda marcada después de la anterior, aunque las réplicas que
+  las hicieron tengan relojes que no coinciden. La excepción son dos cambios del mismo perfil hechos
+  en el mismo instante: cualquiera de los dos puede quedarse con el momento anterior, y el motor de
+  detección acaba igualmente en la versión que guarda `device-management`.
+- `event-processing` llama ahora también a `user-management` para listar los inquilinos y a
+  `device-management` para leer reglas, dispositivos y atributos, con el mismo secreto de servicio
+  que ya usa para las geocercas. Si el secreto de servicio o alguna de las dos direcciones no está
+  configurado, la comparación queda desactivada y el servicio registra un aviso al arrancar, como
+  ocurre con la evaluación de geocercas.
 
 ### La transición única a la ingesta duradera
 

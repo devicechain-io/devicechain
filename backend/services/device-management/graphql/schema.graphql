@@ -647,6 +647,69 @@ type GeoFenceSnapshotEntry {
     geometry: String!
 }
 
+# One enabled detection rule of a published profile version, as the detection engine
+# receives it.
+type PublishedProfileRule {
+    # The rule's authoring token, unique within the profile.
+    token: String!
+    # The rule definition document.
+    definition: String!
+    # The published entity group the rule is scoped to; empty for a profile-wide rule.
+    entityGroupToken: String!
+    # The version of that group; 0 for a profile-wide rule.
+    entityGroupVersion: Int!
+}
+
+# A published profile's active version, as the detection engine should hold it.
+type ActiveProfileRules {
+    profileToken: String!
+    # "{profileToken}@{version}" — the token resolved events carry and rules are keyed on.
+    versionToken: String!
+    # When this version became active (published, or rolled back to).
+    activeSince: String!
+    rules: [PublishedProfileRule!]!
+}
+
+type ActiveProfileRulesPage {
+    entries: [ActiveProfileRules!]!
+    # The cursor to pass as afterId for the next page; null when the walk is complete.
+    # Treat it as opaque.
+    nextCursor: String
+}
+
+# One device as the detection engine's roster holds it.
+type DeviceRosterEntry {
+    deviceToken: String!
+    # The token of the profile the device's type adopts; empty when it adopts none.
+    profileToken: String!
+    # When the device's membership of that profile began: its creation, or the last
+    # re-type of the device or re-point of its type.
+    expectedSince: String!
+}
+
+type DeviceRosterPage {
+    entries: [DeviceRosterEntry!]!
+    # The cursor to pass as afterId for the next page; null when the walk is complete.
+    nextCursor: String
+}
+
+# One numeric device attribute a dynamic detection threshold can read.
+type DeviceThresholdAttribute {
+    deviceToken: String!
+    # SHARED or SERVER.
+    scope: String!
+    key: String!
+    value: Float!
+    # When the attribute was last written.
+    updatedAt: String!
+}
+
+type DeviceThresholdAttributePage {
+    entries: [DeviceThresholdAttribute!]!
+    # The cursor to pass as afterId for the next page; null when the walk is complete.
+    nextCursor: String
+}
+
 # The MANIFEST of one fence-set version: which fences it holds, and the content address of
 # each one's geometry. It carries no geometry, which is what makes its size a function of the
 # fence COUNT alone — so unlike geoFenceSetSnapshot it needs no pagination, at any fence count.
@@ -2159,6 +2222,26 @@ type Query {
     # answering "empty" would read as "no fences" rather than "cannot know". A negative
     # version is refused outright rather than sharing version 0's known-empty answer.
     geoFenceSetManifest(version: Int!): GeoFenceSetManifest!
+    # ---- Detection-engine reconcile reads ------------------------------------------------
+    # What the detection engine's copy of this tenant's rules, devices and thresholds is
+    # checked against. event-processing reads them over a service token when it takes the
+    # DETECT partition and every five minutes after, and corrects whatever differs — which
+    # is how a rule, device or attribute change whose notification was lost still reaches
+    # detection. Each is a keyset page: pass the previous page's nextCursor as afterId, and
+    # stop when it is null. A limit outside 1..the door's maximum is refused.
+    #
+    # One page of the tenant's PUBLISHED profiles, each with its active version, the
+    # instant that version became active and the version's enabled detection rules. A
+    # profile whose frozen snapshot cannot be read fails the whole page rather than
+    # answering with no rules.
+    activeProfileRules(afterId: String, limit: Int!): ActiveProfileRulesPage!
+    # One page of the device roster: every device, the profile its type adopts (empty when
+    # none) and when that membership began.
+    deviceRosterPage(afterId: String, limit: Int!): DeviceRosterPage!
+    # One page of the numeric SHARED and SERVER device attributes a dynamic detection
+    # threshold can read. A page may hold fewer entries than its limit and still have a
+    # nextCursor; only a null cursor ends the walk.
+    deviceThresholdAttributePage(afterId: String, limit: Int!): DeviceThresholdAttributePage!
     # The manifest of the tenant's CURRENT version — the version and its fences read from
     # one row, so the two cannot disagree across a concurrent fence edit. Reading the
     # version and the manifest as two queries would be two questions about a moving target.
