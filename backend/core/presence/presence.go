@@ -168,7 +168,7 @@ type Decision struct {
 // max over (session, time) with a death-wins tiebreak — so any interleaving of the same
 // events converges to the same state. A compare-and-set cannot be that, by definition:
 // its whole purpose is to depend on what the state currently is. device-state merges
-// with five parallel workers and no per-device ordering
+// with parallel writers (projection.writers, 5 by default) and no per-device ordering
 // (device-state/processor/StateProcessor.go), so the property that actually has to hold
 // there is not commutativity but SAFETY UNDER REORDERING, which this rule keeps:
 //

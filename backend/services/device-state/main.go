@@ -93,6 +93,17 @@ func buildMetrics() {
 	InactivitySweepMetrics = Microservice.NewPeriodicTaskMetrics("inactivity_sweep")
 }
 
+// newStateProcessor assembles the state processor from this service's globals: its writers
+// sized by the loaded configuration, and the instruments built once in
+// afterMicroserviceInitialized — handed in because a collector belongs to the process while
+// everything the NATS callback builds belongs to the connection, and a second registration
+// of the same collector panics. It is a function of its own so a test can check the
+// configuration reaches the processor, which nothing else exercises.
+func newStateProcessor(reader messaging.MessageReader) *processor.StateProcessor {
+	return processor.NewStateProcessor(Microservice, reader, core.NewNoOpLifecycleCallbacks(), Api,
+		StateMetrics, InactivitySweepMetrics, processor.WithWriters(Configuration.Projection.Writers))
+}
+
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for resolved events (wildcard across tenants). This is a
@@ -119,12 +130,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	InboundEventsWriter = inbound
 	Api.SetDemotionEmitter(model.NewDemotionEmitter(InboundEventsWriter, time.Now))
 
-	// Add and initialize device state processor. Its instruments were built once in
-	// afterMicroserviceInitialized and are handed in, because a collector belongs to
-	// the process while everything this callback builds belongs to the connection, and
-	// a second registration of the same collector panics.
-	StateProcessor = processor.NewStateProcessor(Microservice, ResolvedEventsReader,
-		core.NewNoOpLifecycleCallbacks(), Api, StateMetrics, InactivitySweepMetrics)
+	// Add and initialize device state processor.
+	StateProcessor = newStateProcessor(ResolvedEventsReader)
 	err = StateProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

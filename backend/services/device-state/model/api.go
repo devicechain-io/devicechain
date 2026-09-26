@@ -156,7 +156,7 @@ func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransi
 // ASSERTED device it advances activity but NEVER flips Active — a stray data event
 // can't resurrect a device the platform knows is dead.
 func (api *Api) MergeDeviceState(ctx context.Context, deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) (*DeviceState, error) {
-	// The 5 decode workers can process two events for the same device
+	// The projection writers can process two events for the same device
 	// concurrently. Read-modify-write the row inside a transaction that takes a
 	// row lock (SELECT … FOR UPDATE), so same-device merges serialize and a later
 	// write can't regress LastActivityTime or clobber a reconnect.
@@ -376,7 +376,7 @@ func (api *Api) MergeLatestMeasurements(ctx context.Context, deviceToken string,
 // 🔴 THE PROJECTION MUST NOT GO BACKWARDS, and that is the whole reason this is a
 // read-modify-write under a row lock rather than a blind upsert. The resolved-events
 // stream redelivers (an unacked message comes back) and does not guarantee order across
-// the five merge workers, so "last write wins" would let a redelivered old fix teleport
+// the parallel projection writers, so "last write wins" would let a redelivered old fix teleport
 // a device back to where it used to be — silently, and indistinguishably from the device
 // actually having returned there. The guard is therefore on the fix's OCCURRED time, not
 // on arrival: a fix is applied only when it is STRICTLY newer than the stored one, which

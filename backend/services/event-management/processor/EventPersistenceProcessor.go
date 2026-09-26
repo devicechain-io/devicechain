@@ -8,18 +8,24 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
+	emconfig "github.com/devicechain-io/dc-event-management/config"
 	emmodel "github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	WORKER_COUNT              = 5   // Number of event persisters running in parallel
-	MESSAGE_BACKLOG_SIZE      = 100 // Number of messages that can be read and waiting to be processed
+	// MESSAGE_BACKLOG_SIZE is how many read messages can wait for a writer. It is not
+	// scaled with the batch size: a writer drains what is waiting and the reader refills
+	// the buffer while the writer commits, so a deeper buffer would hold more messages in
+	// memory without making a batch any fuller.
+	MESSAGE_BACKLOG_SIZE      = 100
 	FAILED_EVENT_BACKLOG_SIZE = 100 // Number of failed events that can be waiting to publish
 )
 
@@ -44,9 +50,14 @@ type EventPersistenceProcessor struct {
 	failed   chan failedItem
 	workers  []*EventPersistenceWorker
 
+	// persistence sizes the writers: how many run and how many events each commits in one
+	// transaction. Defaulted in the constructor by the configuration's own ApplyDefaults.
+	persistence emconfig.PersistenceConfiguration
+
 	// metrics records RED-style instrumentation (rate/errors/duration) for the
-	// persist loop (ADR-022 E13); shared by reference across all workers.
-	metrics *core.ProcessorMetrics
+	// persist loop (ADR-022 E13) and the batch signals; shared by reference across all
+	// workers.
+	metrics *PersistMetrics
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
 	// let ExecuteStop drain senders before closing the channels they feed, so a
@@ -74,6 +85,42 @@ func (eproc *EventPersistenceProcessor) pacer() *core.ReadPacer {
 	return eproc.readPacer
 }
 
+// PersistMetrics is the persist loop's instrumentation: the per-message RED metrics every
+// processing loop exports, plus what only a batching writer has to say.
+type PersistMetrics struct {
+	// messages is persist_messages_total, _duration_seconds and _inflight. A message is
+	// in flight from when a writer takes it until its disposition, which includes the
+	// time it waits for its batch to commit.
+	messages *core.ProcessorMetrics
+	// batchSize is persist_batch_size: events committed per transaction.
+	batchSize prometheus.Observer
+	// fallbacks is persist_batch_fallbacks_total: batch transactions that did not commit.
+	fallbacks prometheus.Counter
+}
+
+// start marks one message in flight. Nil-safe, like everything on this type, because
+// tests build workers by literal without metrics.
+func (m *PersistMetrics) start() func(result string) {
+	if m == nil {
+		return func(string) {}
+	}
+	return m.messages.Start()
+}
+
+// committed records one committed transaction holding n events.
+func (m *PersistMetrics) committed(n int) {
+	if m != nil {
+		m.batchSize.Observe(float64(n))
+	}
+}
+
+// fallback records one batch transaction that did not commit.
+func (m *PersistMetrics) fallback() {
+	if m != nil {
+		m.fallbacks.Inc()
+	}
+}
+
 // NewPersistMetrics builds this processor's RED instrumentation.
 //
 // 🔴 IT IS SEPARATE FROM THE CONSTRUCTOR BECAUSE THE TWO RUN IN DIFFERENT PHASES.
@@ -83,8 +130,25 @@ func (eproc *EventPersistenceProcessor) pacer() *core.ReadPacer {
 // registered only once, or the second registration panics. So the caller builds this in
 // the INITIALIZE phase and hands the same instruments to every processor that callback
 // builds.
-func NewPersistMetrics(ms *core.Microservice) *core.ProcessorMetrics {
-	return ms.NewProcessorMetrics("persist")
+func NewPersistMetrics(ms *core.Microservice) *PersistMetrics {
+	return &PersistMetrics{
+		messages: ms.NewProcessorMetrics("persist"),
+		batchSize: ms.NewHistogramVec("persist_batch_size", "Events committed per persistence transaction.",
+			nil, []float64{1, 2, 4, 8, 16, 32, 64}).WithLabelValues(),
+		fallbacks: ms.NewCounter("persist_batch_fallbacks_total",
+			"Batch transactions that did not commit, after which their events were written again."),
+	}
+}
+
+// ProcessorOption configures an EventPersistenceProcessor.
+type ProcessorOption func(*EventPersistenceProcessor)
+
+// WithPersistence sizes the writers from the service's configuration. Without it the
+// processor runs the configuration's defaults.
+func WithPersistence(cfg emconfig.PersistenceConfiguration) ProcessorOption {
+	return func(eproc *EventPersistenceProcessor) {
+		eproc.persistence = cfg
+	}
 }
 
 // Create a new inbound events processor.
@@ -94,7 +158,7 @@ func NewPersistMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 // and the instruments are not.
 func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.MessageReader,
 	failed messaging.MessageWriter, callbacks core.LifecycleCallbacks, api emmodel.EventManagementApi,
-	metrics *core.ProcessorMetrics) *EventPersistenceProcessor {
+	metrics *PersistMetrics, opts ...ProcessorOption) *EventPersistenceProcessor {
 	eproc := &EventPersistenceProcessor{
 		Microservice:         ms,
 		ResolvedEventsReader: resolved,
@@ -102,6 +166,12 @@ func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.Mess
 		Api:                  api,
 		metrics:              metrics,
 	}
+	for _, opt := range opts {
+		opt(eproc)
+	}
+	// The same defaulting the configuration load runs, so a processor built without the
+	// option, or with a configuration assembled in code, cannot disagree with it.
+	eproc.persistence.ApplyDefaults()
 
 	// Create lifecycle manager.
 	ipname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "event-persist-proc")
@@ -190,10 +260,12 @@ func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint
 func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx context.Context) {
 	// Make channels and workers for distributed processing.
 	eproc.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
-	eproc.workers = make([]*EventPersistenceWorker, 0)
-	for w := 1; w <= WORKER_COUNT; w++ {
+	eproc.workers = make([]*EventPersistenceWorker, 0, eproc.persistence.Writers)
+	for w := 1; w <= eproc.persistence.Writers; w++ {
 		resolver := NewEventPersistenceWorker(w, eproc.Api, eproc.messages,
 			eproc.OnInvalidEvent, eproc.OnFailedEvent, eproc.metrics)
+		resolver.MaxBatch = eproc.persistence.MaxBatch
+		resolver.Linger = eproc.persistence.Linger()
 		eproc.workers = append(eproc.workers, resolver)
 		// Workers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to
@@ -204,6 +276,25 @@ func (eproc *EventPersistenceProcessor) initializeEventPersistenceWorkers(ctx co
 			r.Process(context.Background())
 		}(resolver)
 	}
+	// The operator's way to confirm a setting took.
+	log.Info().Int("writers", eproc.persistence.Writers).Int("max_batch", eproc.persistence.MaxBatch).
+		Dur("linger", eproc.persistence.Linger()).Msg("Event persistence writers started")
+}
+
+// WriterSettings is what one started writer runs with.
+type WriterSettings struct {
+	MaxBatch int
+	Linger   time.Duration
+}
+
+// Writers reports the writers Initialize started, one entry each, so a caller can confirm
+// its configuration reached them.
+func (eproc *EventPersistenceProcessor) Writers() []WriterSettings {
+	out := make([]WriterSettings, 0, len(eproc.workers))
+	for _, w := range eproc.workers {
+		out = append(out, WriterSettings{MaxBatch: w.MaxBatch, Linger: w.Linger})
+	}
+	return out
 }
 
 // Initialize outbound processing.

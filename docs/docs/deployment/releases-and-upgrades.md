@@ -1570,6 +1570,9 @@ If you use the default in-cluster backup store, read "The in-cluster backup stor
 maintained image": a fresh install failed without it, your nodes now pull that image from
 `cgr.dev`, and an existing cluster restarts that pod once.
 
+If you watch `event-management`'s persistence metrics, or set a service's connection pool to 5 or
+fewer, read "Events are persisted in batches".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2783,6 +2786,34 @@ stopped and the pod is not going to finish on its own. Remove it, and the operat
 kubectl -n dc-system delete pod dc-rdb-1 --grace-period=0 --force
 ```
 :::
+
+#### Events are persisted in batches
+
+`event-management` now commits the events waiting for a writer together, in one transaction, instead
+of one transaction per event. On a replicated event store each commit waits for a standby, and that
+wait, not the database's work, was what limited how fast events could be stored. A batch pays it
+once. Which events are stored does not change, and an event is still acknowledged only after it has
+been stored. An event that is refused is written again on its own, so it is retried or reported
+exactly as before, and the rest of its batch is committed without it.
+
+Three settings are new, all optional: `persistence.writers` (default `5`, the number that was fixed
+before), `persistence.maxBatch` (default `32`; `1` restores one transaction per event) and
+`persistence.lingerMillis` (default `0`). `device-state` gains `projection.writers` (default `5`).
+See [Event persistence](./observability.md#event-persistence).
+
+- **A writer count must be below the service's connection pool.** A value out of range stops the
+  service from starting, and the error names the setting. The default of 5 is refused only if you
+  set `tsdbConfiguration.maxOpenConnections` for `event-management`, or
+  `rdbConfiguration.maxOpenConnections` for `device-state`, to 5 or fewer: raise the pool, or set
+  the writer count below it, before upgrading.
+- **`device-state` does not batch.** Its live-state projection still merges one event per
+  transaction, so on a replicated database it can still fall behind a sustained high event rate,
+  and a device's live state can lag its stored events. Raising `projection.writers` is the way to
+  give it more capacity, within its connection pool.
+- **If you chart the persistence metrics:** `persist_inflight` can now exceed the number of
+  writers, because it counts events waiting for their batch to commit, and
+  `persist_duration_seconds` now includes that wait. Two metrics are new, `persist_batch_size` and
+  `persist_batch_fallbacks_total`.
 
 ### The one-time durable-ingest cutover
 

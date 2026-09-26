@@ -1677,6 +1677,9 @@ dentro del clúster se descarga de una imagen mantenida»: sin este cambio una i
 fallaba, sus nodos descargan ahora esa imagen de `cgr.dev`, y en un clúster existente ese pod se
 reinicia una vez.
 
+Si vigila las métricas de persistencia de `event-management`, o ha fijado el pool de conexiones de
+un servicio en 5 o menos, lea «Los eventos se persisten por lotes».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2981,6 +2984,36 @@ detenido y el pod no va a terminar por sí solo. Elimínelo, y el operador lo vu
 kubectl -n dc-system delete pod dc-rdb-1 --grace-period=0 --force
 ```
 :::
+
+#### Los eventos se persisten por lotes
+
+`event-management` confirma ahora juntos, en una sola transacción, los eventos que esperan a un
+escritor, en lugar de usar una transacción por evento. En un almacén de eventos replicado cada
+confirmación espera a una réplica, y era esa espera, no el trabajo de la base de datos, lo que
+limitaba la velocidad a la que se almacenaban los eventos. Un lote la paga una sola vez. No cambia
+qué eventos se almacenan, y un evento se sigue reconociendo solo después de haberse almacenado. Un
+evento rechazado se vuelve a escribir por separado, así que se reintenta o se notifica exactamente
+como antes, y el resto de su lote se confirma sin él.
+
+Hay tres ajustes nuevos, todos opcionales: `persistence.writers` (por defecto `5`, el número que
+antes era fijo), `persistence.maxBatch` (por defecto `32`; `1` vuelve a una transacción por evento)
+y `persistence.lingerMillis` (por defecto `0`). `device-state` incorpora `projection.writers` (por
+defecto `5`). Consulte [Persistencia de eventos](./observability.md#event-persistence).
+
+- **El número de escritores debe ser menor que el pool de conexiones del servicio.** Un valor fuera
+  de rango impide que el servicio arranque, y el error nombra el ajuste. El valor por defecto de 5
+  solo se rechaza si ha fijado `tsdbConfiguration.maxOpenConnections` para `event-management`, o
+  `rdbConfiguration.maxOpenConnections` para `device-state`, en 5 o menos: aumente el pool, o fije
+  el número de escritores por debajo de él, antes de actualizar.
+- **`device-state` no usa lotes.** Su proyección del estado en vivo sigue fusionando un evento por
+  transacción, así que en una base de datos replicada todavía puede quedarse atrás ante un ritmo de
+  eventos alto y sostenido, y el estado en vivo de un dispositivo puede ir por detrás de sus eventos
+  almacenados. Aumentar `projection.writers` es la forma de darle más capacidad, dentro de su pool
+  de conexiones.
+- **Si representa las métricas de persistencia:** `persist_inflight` puede superar ahora el número
+  de escritores, porque cuenta los eventos que esperan a que su lote se confirme, y
+  `persist_duration_seconds` incluye ahora esa espera. Hay dos métricas nuevas,
+  `persist_batch_size` y `persist_batch_fallbacks_total`.
 
 ### La transición única a la ingesta duradera
 

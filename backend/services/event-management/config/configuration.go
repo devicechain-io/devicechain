@@ -5,8 +5,10 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // Default data-lifecycle policy values (ADR-026). Compression is on by default
@@ -15,6 +17,30 @@ import (
 const (
 	DefaultChunkIntervalHours = 24
 	DefaultCompressAfterDays  = 7
+)
+
+// Event persistence sizing. See PersistenceConfiguration.
+const (
+	// DefaultPersistenceWriters is the number of writers when none is configured. It is
+	// the count that was fixed in code before it was configurable, kept because batching,
+	// not more writers, is what carries capacity on a replicated event store. Measured
+	// in-process (BenchmarkPersistBatch) with a synchronous standby: 5 writers committing up
+	// to 32 events per transaction stored about 1400 events a second against about 160 at
+	// one event per transaction, while doubling the writers at one event per transaction
+	// reached about 290. And every writer holds a pooled connection for the whole of its
+	// transaction.
+	DefaultPersistenceWriters = 5
+	// DefaultPersistenceMaxBatch is the most events one writer commits in one transaction.
+	// 32 is the measured knee: going to 64 bought little or nothing more at 5 writers
+	// (about 1400 events a second either way with a synchronous standby), for twice the
+	// transaction length.
+	DefaultPersistenceMaxBatch = 32
+	// MaxPersistenceMaxBatch caps the batch. Past the knee a bigger batch buys little and
+	// costs a longer writing transaction — which is how long the erasure fence's answer
+	// is remembered for, and how much a batch that cannot commit has to replay.
+	MaxPersistenceMaxBatch = 64
+	// MaxPersistenceLingerMillis caps how long a writer may wait for a batch to fill.
+	MaxPersistenceLingerMillis = 1000
 )
 
 type EventManagementConfiguration struct {
@@ -32,6 +58,68 @@ type EventManagementConfiguration struct {
 	// service's event hypertables (ADR-026): chunk sizing, columnar compression,
 	// and retention. Policies are reconciled idempotently at startup.
 	Lifecycle LifecycleConfiguration
+
+	// Persistence sizes the event writers: how many run, and how many events each
+	// commits in one transaction.
+	Persistence PersistenceConfiguration
+}
+
+// PersistenceConfiguration sizes the writers that persist resolved events. Each writer
+// takes the events already waiting for it, up to MaxBatch, and commits them in ONE
+// transaction; an event is acknowledged only after that transaction commits. Every value
+// has a default, and 0 means "use it".
+type PersistenceConfiguration struct {
+	// Writers is the number of writers running in parallel, each holding one pooled
+	// connection while it writes. Unset (0) defaults to DefaultPersistenceWriters. It must
+	// be below the event store's connection pool, which the GraphQL reads and the anchor
+	// sweep share.
+	Writers int
+
+	// MaxBatch is the most events one transaction commits, 1 to MaxPersistenceMaxBatch.
+	// Unset (0) defaults to DefaultPersistenceMaxBatch; 1 turns batching off, so every
+	// event gets a transaction of its own.
+	MaxBatch int
+
+	// LingerMillis is how long a writer holding a batch that is not full waits for more
+	// events before committing it, 0 to MaxPersistenceLingerMillis. 0 (the default) takes
+	// only what is already waiting, which adds no latency: under light load a writer finds
+	// one event and commits it alone, and batches grow by themselves once events arrive
+	// faster than single commits keep up with.
+	LingerMillis int
+}
+
+// ApplyDefaults fills the writer count and the batch size when they are unset. It is the
+// ONE definition of those defaults: the configuration load calls it, and so does the
+// processor for a value built in code.
+func (p *PersistenceConfiguration) ApplyDefaults() {
+	if p.Writers == 0 {
+		p.Writers = DefaultPersistenceWriters
+	}
+	if p.MaxBatch == 0 {
+		p.MaxBatch = DefaultPersistenceMaxBatch
+	}
+}
+
+// Validate refuses a value no reading makes sense of. pool is the event store's datastore
+// configuration, whose connection pool the writers draw from; rdb.CheckWriterCount is the
+// bound, shared with every other service that sizes its writers.
+func (p PersistenceConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration) error {
+	if err := rdb.CheckWriterCount("persistence.writers", p.Writers, pool); err != nil {
+		return err
+	}
+	if p.MaxBatch < 1 || p.MaxBatch > MaxPersistenceMaxBatch {
+		return fmt.Errorf("persistence.maxBatch must be between 1 and %d, got %d", MaxPersistenceMaxBatch, p.MaxBatch)
+	}
+	if p.LingerMillis < 0 || p.LingerMillis > MaxPersistenceLingerMillis {
+		return fmt.Errorf("persistence.lingerMillis must be between 0 and %d, got %d",
+			MaxPersistenceLingerMillis, p.LingerMillis)
+	}
+	return nil
+}
+
+// Linger is LingerMillis as a duration.
+func (p PersistenceConfiguration) Linger() time.Duration {
+	return time.Duration(p.LingerMillis) * time.Millisecond
 }
 
 // LifecycleConfiguration is the operator-facing surface for the TimescaleDB
@@ -100,8 +188,8 @@ func NewEventManagementConfiguration() *EventManagementConfiguration {
 // ApplyDefaults is the ADR-022 decision-1 defaulting hook for this service. It
 // defaults the reconciliation-sweep interval to hourly when unset (a value of -1
 // can be used to disable it explicitly without leaving the field at its zero value),
-// and fills the data-lifecycle policy defaults (ADR-026): 24h chunks, compression
-// after 7 days, retention off.
+// fills the data-lifecycle policy defaults (ADR-026): 24h chunks, compression
+// after 7 days, retention off, and fills the persistence writer defaults.
 func (c *EventManagementConfiguration) ApplyDefaults() {
 	if c.AnchorSweepIntervalSeconds == 0 {
 		c.AnchorSweepIntervalSeconds = 3600
@@ -116,6 +204,7 @@ func (c *EventManagementConfiguration) ApplyDefaults() {
 		d := DefaultCompressAfterDays
 		c.Lifecycle.CompressAfterDays = &d
 	}
+	c.Persistence.ApplyDefaults()
 }
 
 // Validate is the ADR-022 decision-1 validation hook for this service. It rejects
@@ -154,5 +243,5 @@ func (c *EventManagementConfiguration) Validate() error {
 		return fmt.Errorf("lifecycle.locationRetentionDays cannot be negative, got %d",
 			*c.Lifecycle.LocationRetentionDays)
 	}
-	return nil
+	return c.Persistence.Validate(c.TsdbConfiguration)
 }

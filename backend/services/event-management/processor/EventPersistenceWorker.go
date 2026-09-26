@@ -5,14 +5,13 @@ package processor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -30,10 +29,19 @@ type EventPersistenceWorker struct {
 	Unpersisted <-chan messaging.Message
 	Invalid     func(error, messaging.Message)
 	Failed      func(string, uint, dmmodel.ResolvedEvent, error, string)
+
+	// MaxBatch is the most messages this worker commits in one transaction. 1 or less —
+	// the zero value included, so a worker built by literal keeps the per-message path —
+	// gives every message a transaction of its own.
+	MaxBatch int
+	// Linger is how long a batch that is not full waits for more messages before it is
+	// committed. Zero takes only what is already waiting.
+	Linger time.Duration
+
 	// metrics records RED-style instrumentation for each message handled by this
-	// worker (ADR-022 E13). Shared by reference with sibling workers; may be nil
-	// in tests, so it is only ever touched via the nil-safe Start().
-	metrics *core.ProcessorMetrics
+	// worker (ADR-022 E13) and the batch signals. Shared by reference with sibling
+	// workers; may be nil in tests, so it is only ever touched via its nil-safe methods.
+	metrics *PersistMetrics
 }
 
 // Results of event persistence process.
@@ -56,7 +64,7 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 	unpersisted <-chan messaging.Message,
 	invalid func(error, messaging.Message),
 	failed func(string, uint, dmmodel.ResolvedEvent, error, string),
-	metrics *core.ProcessorMetrics) *EventPersistenceWorker {
+	metrics *PersistMetrics) *EventPersistenceWorker {
 	return &EventPersistenceWorker{
 		WorkerId:    workerId,
 		Api:         api,
@@ -297,10 +305,36 @@ func (ep *EventPersistenceWorker) PersistStateChangeEvents(ctx context.Context, 
 	return &EventPersistenceResults{Events: events, Deduped: affected == 0}, nil
 }
 
-// Persists a resolved event to the datastore. The event's relationship anchors
-// (ADR-013) are stored as a set of event_anchors rows alongside the base event,
-// so the same reading is queryable by each of the device's assignment dimensions.
+// Persists a resolved event to the datastore, in a transaction of its own. The event's
+// relationship anchors (ADR-013) are stored as a set of event_anchors rows alongside the
+// base event, so the same reading is queryable by each of the device's assignment
+// dimensions.
 func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
+	pevent, err := ep.baseEvent(ctx, event)
+	if err != nil {
+		return nil, err
+	}
+	// All of a single message's inserts run inside one transaction so the
+	// message's events are persisted all-or-nothing (ADR-022 E5): a mid-message
+	// failure rolls the whole message back rather than leaving some rows
+	// committed while the message routes to the failed-events path. Every statement
+	// writeEvent makes binds ctx itself, so the global tenant-scope create callback
+	// fires on every batched insert.
+	var results *EventPersistenceResults
+	err = ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
+		var werr error
+		results, werr = ep.writeEvent(ctx, tx, pevent, event)
+		return werr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// baseEvent derives a message's base event row, including its content-derived identity,
+// under the tenant in ctx.
+func (ep *EventPersistenceWorker) baseEvent(ctx context.Context, event dmmodel.ResolvedEvent) (model.Event, error) {
 	pevent := model.Event{
 		DeviceToken:   event.SourceDeviceToken,
 		OccurredTime:  event.OccurredTime,
@@ -322,27 +356,34 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 	// redelivery a new event and defeat the dedup this exists to protect.
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
-		return nil, core.ErrNoTenant
+		return model.Event{}, core.ErrNoTenant
 	}
 	eventId, ierr := model.DeriveEventIdForPayload(tenant, &pevent, event.Payload)
 	if ierr != nil {
-		return nil, ierr
+		return model.Event{}, ierr
 	}
 	pevent.EventId = eventId
-	// All of a single message's inserts run inside one transaction so the
-	// message's events are persisted all-or-nothing (ADR-022 E5): a mid-message
-	// failure rolls the whole message back rather than leaving some rows
-	// committed while the message routes to the failed-events path. The
-	// transaction handle (tx) carries the tenant-scoped ctx, so the global
-	// tenant-scope create callback still fires on every batched insert.
+	return pevent, nil
+}
+
+// writeEvent runs one message's statements on tx, each bound to ctx — the MESSAGE's
+// tenant-scoped context, never the transaction's. That is what lets one transaction carry
+// several messages, from several tenants: tenant scope and the erasure fence both read the
+// tenant from the statement, and the statement's is this message's.
+//
+// Every write it makes is idempotent: the event id is derived from the content and every
+// insert carries an ON CONFLICT DO NOTHING arbiter, so replaying a message — a
+// redelivery, or a batch that rolled back and is written again — adds nothing twice.
+func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, pevent model.Event,
+	event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
 	var results *EventPersistenceResults
-	err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
+	err := func() error {
 		// Idempotent ingestion: a redelivered resolved event carrying an
 		// alternateId that was already persisted is a no-op, so the at-least-once
-		// consume path (ADR-022 Wave-2 redelivery) does not double-write. The
-		// (tenant_id, alt_id, occurred_time) partial unique index is the backstop
-		// for a concurrent-redelivery race; this check skips the common sequential
-		// case without erroring. Events without an alternateId are not deduped.
+		// consume path (ADR-022 Wave-2 redelivery) does not double-write. It is a
+		// shortcut, not the guard: without an alternateId (or racing a concurrent
+		// redelivery) the content-derived event id and the ON CONFLICT arbiters are
+		// what keep a replay from writing twice.
 		if event.AltId != nil {
 			exists, derr := ep.Api.EventExistsByAltId(ctx, tx, *event.AltId, event.OccurredTime)
 			if derr != nil {
@@ -411,7 +452,7 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 		// Persist the event's anchor set in the same transaction, so the event and
 		// its queryable dimensions commit atomically (ADR-013 addendum 2026-07-01).
 		return ep.persistEventAnchors(ctx, tx, pevent.EventId, event)
-	})
+	}()
 	if err != nil {
 		return nil, err
 	}
@@ -440,81 +481,16 @@ func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *g
 	return ep.Api.CreateEventAnchors(ctx, db, anchors)
 }
 
-// Converts unresolved events into resolved events.
+// Process persists what arrives on Unpersisted until the channel is closed: it collects a
+// batch, commits it, and repeats. The last batch is persisted before it returns, so a
+// shutdown drains the buffer rather than dropping it.
 func (ep *EventPersistenceWorker) Process(ctx context.Context) {
 	for {
-		unpersisted, more := <-ep.Unpersisted
-		if more {
-			// Mark the message in-flight and record its result+duration on every
-			// disposition path below (ADR-022 E13). Start() is nil-safe.
-			done := ep.metrics.Start()
-
-			log.Debug().Int("worker", ep.WorkerId).Str("correlation", unpersisted.CorrelationID()).
-				Msg("Event persistence handled by worker")
-
-			// Derive the per-message tenant from the message subject and build a
-			// tenant-scoped context. Without a parseable tenant the message can
-			// not be persisted safely (fail-closed) so it is skipped rather than
-			// written without a tenant. The tenant string is carried onto the
-			// persisted/failed channels so the downstream producer scopes its
-			// publish to the same tenant.
-			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unpersisted.Subject)
-			if !ok {
-				log.Warn().Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unpersisted.Subject))
-				// Poison message: a message with no parseable tenant can not be
-				// persisted and redelivery can not help, so ack it to drop it.
-				unpersisted.Ack()
-				done(core.ResultInvalid)
-				continue
-			}
-
-			// Attempt to unmarshal event.
-			event, err := dmproto.UnmarshalResolvedEvent(unpersisted.Value)
-			if err != nil {
-				ep.Invalid(err, unpersisted)
-				// Terminal: reported on the failed-events stream (which nothing
-				// consumes — see ErrDeterministic), so ack to drop it.
-				unpersisted.Ack()
-				done(core.ResultInvalid)
-				continue
-			}
-
-			if log.Debug().Enabled() {
-				jevent, err := json.MarshalIndent(event, "", "  ")
-				if err == nil {
-					log.Debug().Msg(fmt.Sprintf("Received %s event:\n%s", event.EventType.String(), jevent))
-				}
-			}
-
-			// Persist the event using the per-message tenant context.
-			if _, err := ep.PersistEvent(msgctx, *event); err != nil {
-				err = classifyPersistFailure(err)
-				// A deterministic failure (bad data) can never succeed on redelivery,
-				// so give up on the first failure (ADR-024). A transient failure is
-				// retried via redelivery up to the cap and then given up on the same
-				// way. Both report the event on the failed-events stream, which is a
-				// report and not a queue — see ErrDeterministic.
-				switch {
-				case errors.Is(err, ErrDeterministic):
-					ep.Failed(tenant, uint(dmproto.FailureReason_Invalid), *event, err, unpersisted.CorrelationID())
-					unpersisted.Ack()
-					done(core.ResultFailed)
-				case unpersisted.NumDelivered >= messaging.MaxDeliver:
-					ep.Failed(tenant, uint(dmproto.FailureReason_ApiCallFailed), *event, err, unpersisted.CorrelationID())
-					unpersisted.Ack()
-					done(core.ResultFailed)
-				default:
-					// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery —
-					// an immediate nak would burn MaxDeliver in ~1.4ms inside a Postgres
-					// outage. Reference disposition: event-sources' settler (ADR-030).
-					done(core.ResultRetry)
-				}
-			} else {
-				// Durably persisted: ack so the message is not redelivered.
-				unpersisted.Ack()
-				done(core.ResultOK)
-			}
-		} else {
+		batch, open := ep.collect(ctx)
+		if len(batch) > 0 {
+			ep.persistBatch(ctx, batch)
+		}
+		if !open {
 			log.Debug().Msg("Event persister received shutdown signal.")
 			return
 		}

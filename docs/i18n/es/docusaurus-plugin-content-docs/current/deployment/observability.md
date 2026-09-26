@@ -326,6 +326,50 @@ genera un aviso. Sus otros resultados de fallo son la configuración de un solo 
 webhook que falla o un destino al que la plataforma se niega a conectarse. Esos envíos ya se
 registran como mensajes no entregados y aparecen en `dcctl dead-letters`, y no avisan al operador.
 
+## Persistencia de eventos {#event-persistence}
+
+`event-management` escribe los eventos por lotes. Cada escritor toma los eventos que ya lo esperan,
+hasta un límite, y los confirma en una sola transacción. Un evento se reconoce solo después de que
+la transacción que lo contiene se haya confirmado. Si se rechaza un evento de un lote, no se
+conserva nada de esa transacción: el evento rechazado se vuelve a escribir por separado, y se
+reintenta o se notifica exactamente como sin lotes. El resto del lote se vuelve a confirmar sin él.
+Si la transacción falla por una causa que no se debe a ningún evento concreto, como una conexión
+perdida con la base de datos, cada uno de sus eventos se vuelve a escribir por separado.
+
+Con poco tráfico, un escritor encuentra un único evento esperando y lo confirma solo, así que el
+procesamiento por lotes no añade retraso. Los lotes crecen solo cuando los eventos llegan más rápido
+de lo que las confirmaciones individuales pueden absorber, que es cuando ayudan: en un almacén de
+eventos replicado, la mayor parte de cada confirmación se va en esperar a la réplica, y un lote paga
+esa espera una sola vez.
+
+| Métrica | Qué indica |
+| --- | --- |
+| `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. Lotes en el límite indican que trabajan a plena capacidad. |
+| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada uno de sus eventos le cuesta a su lote una transacción adicional. Esos eventos aparecen en `persist_messages_total` como `failed` o `retry`. |
+| `devicechain_eventmanagement_persist_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
+
+`persist_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se
+confirma.
+
+### Ajustarlo
+
+| Ajuste (configuración de `event-management`) | Valor por defecto | Qué hace |
+| --- | --- | --- |
+| `persistence.writers` | `5` | Escritores en paralelo. Cada uno ocupa una conexión a la base de datos mientras escribe, así que debe ser menor que el pool de conexiones del servicio (`tsdbConfiguration.maxOpenConnections`, 20 si no se indica). Se permite más de la mitad del pool, y se registra al arrancar, porque entonces las lecturas compiten con los escritores por el resto. |
+| `persistence.maxBatch` | `32` | Máximo de eventos confirmados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
+| `persistence.lingerMillis` | `0` | Cuánto espera un escritor a más eventos antes de confirmar un lote incompleto, hasta `1000`. `0` confirma lo que ya está esperando. |
+
+Suba `maxBatch` antes que `writers`. En un almacén de eventos replicado, los lotes aumentan el
+rendimiento mucho más que los escritores adicionales, y no usan conexiones extra. Un valor fuera de
+rango impide que el servicio arranque, y el error nombra el ajuste. El servicio registra los
+valores que usa al arrancar.
+
+`device-state` tiene un ajuste equivalente, `projection.writers` (por defecto `5`, menor que su
+pool `rdbConfiguration.maxOpenConnections`). No usa lotes: la fusión de cada evento en el estado en
+vivo de un dispositivo sigue siendo una transacción, así que el número de escritores es su única
+palanca. Las fusiones de un mismo dispositivo se esperan entre sí, así que los escritores adicionales
+solo ayudan mientras los eventos procedan de más dispositivos que escritores haya.
+
 ## Replicación {#replication}
 
 Una instancia de alta disponibilidad necesita dos cosas: flujos de JetStream creados con el

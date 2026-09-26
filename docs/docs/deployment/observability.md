@@ -316,6 +316,47 @@ alerted on. Its other failure outcomes are one tenant's own configuration, such 
 fails or a destination the platform refuses to reach. Those dispatches are already dead-lettered
 and listed by `dcctl dead-letters`, and they do not page the operator.
 
+## Event persistence {#event-persistence}
+
+`event-management` writes events in batches. Each writer takes the events already waiting for it,
+up to a limit, and commits them in one transaction. An event is acknowledged only after the
+transaction holding it has committed. If an event in a batch is refused, nothing in that
+transaction is kept: the refused event is written again on its own, and is retried or reported
+exactly as it would be without batching. The rest of the batch is committed again without it.
+If the transaction fails for a reason no single event caused, such as a lost database
+connection, every event in it is written again on its own.
+
+When traffic is light a writer finds a single event waiting and commits it alone, so batching adds
+no delay. Batches grow only when events arrive faster than single commits can keep up, which is when
+they help: on a replicated event store most of each commit is spent waiting for the standby, and a
+batch pays that wait once.
+
+| Metric | What it tells you |
+| --- | --- |
+| `devicechain_eventmanagement_persist_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. Batches at the limit mean they are working at full capacity. |
+| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were written again. An occasional increase is one refused event. A steady rate means something is refusing writes repeatedly, such as a deleted tenant whose devices are still sending: each of its events costs its batch one extra transaction. Those events show up in `persist_messages_total` under `failed` or `retry`. |
+| `devicechain_eventmanagement_persist_inflight` | Events writers hold, including those waiting for their batch to commit. |
+
+`persist_duration_seconds` measures each event from when a writer takes it until its batch commits.
+
+### Tuning it
+
+| Setting (`event-management` config) | Default | What it does |
+| --- | --- | --- |
+| `persistence.writers` | `5` | Writers running in parallel. Each holds one database connection while it writes, so it must be below the service's connection pool (`tsdbConfiguration.maxOpenConnections`, 20 unless set). More than half the pool is allowed, and logged at startup, because reads then compete with the writers for the rest. |
+| `persistence.maxBatch` | `32` | Most events committed in one transaction, from `1` to `64`. `1` turns batching off. |
+| `persistence.lingerMillis` | `0` | How long a writer waits for more events before committing a batch that is not full, up to `1000`. `0` commits what is already waiting. |
+
+Raise `maxBatch` before `writers`. On a replicated event store, batching raises throughput far more
+than extra writers do, and it uses no extra connections. Out-of-range values stop the service from
+starting, and the error names the setting. The service logs the values it is using when it starts.
+
+`device-state` has a matching `projection.writers` setting (default `5`, below its
+`rdbConfiguration.maxOpenConnections` pool). It does not batch: each event's merge into a
+device's live state is still one transaction, so its writer count is its only lever. Merges for the
+same device wait for each other, so extra writers help only while events come from more devices than
+there are writers.
+
 ## Replication {#replication}
 
 A highly available instance needs two things: JetStream streams created with the replica count
