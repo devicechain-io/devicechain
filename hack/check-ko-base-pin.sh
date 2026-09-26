@@ -34,7 +34,10 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-KO_FILE=".ko.yaml"
+# shellcheck source=lib/ko-base-image.sh
+. hack/lib/ko-base-image.sh
+
+KO_FILE="$KO_BASE_FILE_REL"
 # Every file the bumper rewrites. The waiting-bump check dates a waiting bump
 # from the most recent change to ANY of them on main.
 PINNED_FILES=("$KO_FILE" "deploy/opentofu/modules/object-store/main.tf")
@@ -81,19 +84,11 @@ usage() {
 }
 
 # ---------------------------------------------------------------------------
-# base_ref: the defaultBaseImage value, read from a file given as $1.
+# base_ref: the defaultBaseImage value, read from a file given as $1, through
+# the one shared reader (hack/lib/ko-base-image.sh).
 # ---------------------------------------------------------------------------
-# Strips the key and surrounding whitespace rather than splitting on ':' — an
-# image reference contains colons of its own (the tag, and the digest's algorithm
-# prefix), so a field split returns a truncated ref that then fails the digest
-# check for the wrong reason. The self-test's "a correct pin passes" case is what
-# caught that.
 base_ref() {
-  awk '/^defaultBaseImage:/ {
-         sub(/^defaultBaseImage:[[:space:]]*/, "")
-         sub(/[[:space:]]*$/, "")
-         print; exit
-       }' "$1"
+  ko_base_image_from "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -198,7 +193,7 @@ latest_run_note() {
 # bump_verdict: the decision, as a pure function of two numbers.
 # ---------------------------------------------------------------------------
 # $1 = commits the bump branch is ahead of main (0 = nothing waiting)
-# $2 = days since main's .ko.yaml last changed
+# $2 = days since the most recent change on main to any pinned file (newest_epoch)
 #
 # Split out from the API call deliberately. The reading half needs a token and a
 # network; the DECIDING half is where a mistake would hide, and this way the
@@ -243,6 +238,29 @@ bump_verdict() {
 }
 
 # ---------------------------------------------------------------------------
+# newest_epoch EPOCH... -> the largest, i.e. the most recent change.
+# ---------------------------------------------------------------------------
+# The wait is dated from the MOST RECENT change to ANY pinned file on main. Both
+# pins ride one branch, so a bump that moved only one of them must not be dated
+# from the other file's older history: taking the OLDEST would call a fresh
+# .ko.yaml bump stale because the object store's pin had not moved in months,
+# and that is a false alarm on every pull request.
+#
+# 🔴 The cost, which is real: the date is per FILE, not per pin line, so ANY
+# commit that touches either file — an edit to the object store module's
+# resources, a comment in .ko.yaml — restarts the clock, and a bump can wait
+# past the limit unreported for as long as such edits keep landing. The API
+# has no per-line history, and the liveness half does not bound this either.
+# This errs toward silence; it is not a "conservative" reading.
+newest_epoch() {
+  local e max=0
+  for e in "$@"; do
+    [ "$e" -gt "$max" ] && max="$e"
+  done
+  printf '%s\n' "$max"
+}
+
+# ---------------------------------------------------------------------------
 # check_waiting_bump: read the two numbers, then decide.
 # ---------------------------------------------------------------------------
 check_waiting_bump() {
@@ -271,12 +289,11 @@ check_waiting_bump() {
     "" | *[!0-9]*) ahead=0 ;;
   esac
 
-  local last pin_age file epoch last_epoch=0
+  local last pin_age file epoch epochs=()
   # Read main's last change to each pinned file through the API rather than
   # `git log`: actions/checkout is shallow by default, so the local history
-  # usually does not contain the commit that moved it. The MOST RECENT of them
-  # dates the wait: both pins ride one branch, so taking it moves whichever
-  # changed, and the conservative reading never calls a bump stale early.
+  # usually does not contain the commit that moved it. newest_epoch says which
+  # of them dates the wait, and what that choice costs.
   for file in "${PINNED_FILES[@]}"; do
     last="$(gh api "repos/${REPO}/commits?path=${file}&sha=main&per_page=1" \
               --jq '.[0].commit.committer.date' 2>/dev/null || true)"
@@ -286,9 +303,9 @@ check_waiting_bump() {
       echo "  NOTE: could not read the last change to ${file} on main; skipping the wait check."
       return 0
     fi
-    [ "$epoch" -gt "$last_epoch" ] && last_epoch="$epoch"
+    epochs+=("$epoch")
   done
-  pin_age=$(( ( $(date -u +%s) - last_epoch ) / 86400 ))
+  pin_age=$(( ( $(date -u +%s) - $(newest_epoch "${epochs[@]}") ) / 86400 ))
 
   bump_verdict "$ahead" "$pin_age"
 }
@@ -306,7 +323,7 @@ run_checks() {
 # everything" would satisfy the test.
 # ---------------------------------------------------------------------------
 self_test() {
-  local tmp rc
+  local tmp rc got
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
 
@@ -430,6 +447,17 @@ self_test() {
   [ "$rc" -eq 0 ] && grep -q '::warning::.*failure.*https://example.invalid/2' <<<"$out" || {
     echo "FAIL: a failed latest run was not warned about, or failed the guard (rc=$rc): $out" >&2; return 1; }
   echo "  ok: a failed latest run is a warning with its link; a successful one is silent"
+
+  # Case 15 — the wait is dated from the NEWEST change, in whichever position
+  # it arrives: taking the first or the oldest would date a fresh bump of one
+  # pin from the other file's old history.
+  got="$(newest_epoch 100 300 200)"
+  [ "$got" = 300 ] || { echo "FAIL: newest_epoch 100 300 200 = $got, want 300" >&2; return 1; }
+  got="$(newest_epoch 100 200)"
+  [ "$got" = 200 ] || { echo "FAIL: newest_epoch 100 200 = $got, want 200" >&2; return 1; }
+  got="$(newest_epoch 200 100)"
+  [ "$got" = 200 ] || { echo "FAIL: newest_epoch 200 100 = $got, want 200" >&2; return 1; }
+  echo "  ok: the wait is dated from the most recent change to either pinned file"
 
   echo "==> Self-test passed"
 }

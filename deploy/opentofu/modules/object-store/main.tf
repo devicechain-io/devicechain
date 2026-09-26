@@ -210,10 +210,12 @@ variable "resources" {
     cpu = "50m"
     # 🔴 512Mi, and the 256Mi it replaced was MEASURED to be wrong: the image this
     # was first measured on idled at ~213 MiB RSS with zero objects stored, i.e.
-    # 83% of that request before a single upload. The current build idles far
-    # lower (~60 MiB, standalone, empty) and the request stays anyway: what it has
-    # to cover is the peak while a base backup uploads, which neither idle number
-    # measures.
+    # 83% of that request before a single upload. The Chainguard build first
+    # pinned in its place idled far lower when measured on 2026-09-26
+    # (standalone, empty) -- a figure for that one digest, not for whatever the
+    # weekly bump has moved the pin to since -- and the request stays anyway:
+    # what it has to cover is the peak while a base backup uploads, which no
+    # idle number measures.
     #
     # Under-requesting does not throttle anything -- there is no limit -- but the
     # kubelet ranks Burstable pods for eviction by usage ABOVE request, so a pod

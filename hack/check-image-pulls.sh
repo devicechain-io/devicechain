@@ -53,7 +53,10 @@
 #   scripts, .ko.yaml, Go constants, Tofu defaults — found by pattern rather than
 #   from a list, so a new pin is covered the day it lands. Excluded: _legacy/
 #   (archived, not built), docs/ (prose quotes references, it does not pull them)
-#   and *_test.go (fixtures).
+#   and *_test.go (fixtures). Two members are REQUIRED of the result, read from
+#   their own files by their own one readers: the object store's image (in
+#   deploy/) and .ko.yaml's base (at the root). One would prove only that the
+#   search reached deploy/; a search narrowed to it would still find that one.
 #
 # WHAT IT DOES NOT COVER
 #
@@ -83,6 +86,8 @@ cd "$(git rev-parse --show-toplevel)"
 
 # shellcheck source=lib/object-store-image.sh
 . hack/lib/object-store-image.sh
+# shellcheck source=lib/ko-base-image.sh
+. hack/lib/ko-base-image.sh
 
 IMAGE_PULL_TIMEOUT="${IMAGE_PULL_TIMEOUT:-30}"
 IMAGE_PULL_ATTEMPTS="${IMAGE_PULL_ATTEMPTS:-3}"
@@ -119,6 +124,19 @@ object_store_ref() {
   ref="$(object_store_image_from "$OBJECT_STORE_MODULE_REL")"
   if ! [[ "$ref" =~ $OBJECT_STORE_IMAGE_PATTERN ]]; then
     echo "::error::could not read a digest-pinned image from $OBJECT_STORE_MODULE_REL (read \"$ref\")" >&2
+    return 1
+  fi
+  printf '%s\n' "$ref"
+}
+
+# ko_base_ref prints .ko.yaml's defaultBaseImage, or fails: it is the one pin
+# the enumeration must reach OUTSIDE deploy/, so a read that finds nothing is a
+# broken check, not a clean tree.
+ko_base_ref() {
+  local ref
+  ref="$(ko_base_image_from "$KO_BASE_FILE_REL")"
+  if ! [[ "$ref" =~ $OBJECT_STORE_IMAGE_PATTERN ]]; then
+    echo "::error::could not read a digest-pinned image from $KO_BASE_FILE_REL (read \"$ref\")" >&2
     return 1
   fi
   printf '%s\n' "$ref"
@@ -224,19 +242,24 @@ probe() {
   [ "$rc" -eq 0 ]
 }
 
-# check_enumeration: the list is non-empty, contains the object store's image,
-# and contains no all-zero digest (which could only be a planted negative control
+# check_enumeration REFS REQUIRED...: the list is non-empty, contains every
+# REQUIRED reference (the object store's image and .ko.yaml's base — one in
+# deploy/, one at the root, so a search narrowed to either cannot pass), and
+# contains no all-zero digest (which could only be a planted negative control
 # that escaped into the tree, and would fail every run).
 check_enumeration() {
-  local refs="$1" os_ref="$2"
+  local refs="$1" want
+  shift
   if [ -z "$refs" ]; then
     echo "::error::found no digest-pinned image references — the enumeration is broken, not the tree" >&2
     return 1
   fi
-  if ! grep -qxF -- "$os_ref" <<<"$refs"; then
-    echo "::error::the enumeration did not find the object store's image ($os_ref) — it is not reading the tree it claims to" >&2
-    return 1
-  fi
+  for want in "$@"; do
+    if ! grep -qxF -- "$want" <<<"$refs"; then
+      echo "::error::the enumeration did not find $want, which a tracked file pins — it is not reading the tree it claims to" >&2
+      return 1
+    fi
+  done
   if grep -qE '@sha256:0{64}$' <<<"$refs"; then
     echo "::error::a tracked file carries an all-zero digest — a negative control written as a literal" >&2
     return 1
@@ -244,10 +267,11 @@ check_enumeration() {
 }
 
 run_checks() {
-  local refs os_ref ref n=0 bad=0
+  local refs os_ref ko_ref ref n=0 bad=0
   os_ref="$(object_store_ref)"
+  ko_ref="$(ko_base_ref)"
   refs="$(enumerate || true)"
-  check_enumeration "$refs" "$os_ref"
+  check_enumeration "$refs" "$os_ref" "$ko_ref"
   while IFS= read -r ref; do
     n=$((n + 1))
     probe "$ref" || bad=$((bad + 1))
@@ -303,6 +327,8 @@ case "$STUB_MODE" in
     fi ;;
   # A withdrawn image: even the anonymous token is refused the manifest.
   refuse) challenge; exit 0 ;;
+  # A registry serving every image but the one at $STUB_REFUSE_URL.
+  refuse-one) [ "$url" = "$STUB_REFUSE_URL" ] && { challenge; exit 0; } ;;
   # An address that has spent its anonymous allowance.
   ratelimit) [ "$auth" = "Bearer anon" ] && { printf 429; exit 0; } ;;
 esac
@@ -314,7 +340,7 @@ STUB
 }
 
 self_test_offline() {
-  local tmp out rc refs os_ref zero_ref digest ref want got
+  local tmp out rc refs os_ref ko_ref zero_ref digest ref want got extra
   tmp="$(mktemp -d)"
   # shellcheck disable=SC2064
   trap "rm -rf '$tmp'" RETURN
@@ -394,23 +420,27 @@ EOF
   }
   echo "  ok: a registry that never answers is TIMED OUT, not ok"
 
-  # 6. The enumeration finds the real tree's object store image, and refuses an
-  #    empty list, a list without it, and a planted all-zero digest.
+  # 6. The real tree's enumeration contains both required pins — the object
+  #    store's in deploy/ and .ko.yaml's at the root — and the check refuses an
+  #    empty list, a list missing either one, and a planted all-zero digest.
   os_ref="$(object_store_ref)"
+  ko_ref="$(ko_base_ref)"
   refs="$(enumerate)"
-  check_enumeration "$refs" "$os_ref" || {
+  check_enumeration "$refs" "$os_ref" "$ko_ref" || {
     echo "FAIL: the real tree's enumeration was refused" >&2; return 1; }
-  echo "  ok: the enumeration finds $(wc -l <<<"$refs") references, the object store's among them"
-  rc=0; check_enumeration "" "$os_ref" >/dev/null 2>&1 || rc=$?
+  echo "  ok: the enumeration finds $(wc -l <<<"$refs") references, the object store's and .ko.yaml's among them"
+  rc=0; check_enumeration "" "$os_ref" "$ko_ref" >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ] || { echo "FAIL: an empty enumeration was accepted" >&2; return 1; }
-  rc=0; check_enumeration "$(grep -vxF -- "$os_ref" <<<"$refs")" "$os_ref" >/dev/null 2>&1 || rc=$?
-  [ "$rc" -ne 0 ] || { echo "FAIL: an enumeration missing the object store image was accepted" >&2; return 1; }
+  for want in "$os_ref" "$ko_ref"; do
+    rc=0; check_enumeration "$(grep -vxF -- "$want" <<<"$refs")" "$os_ref" "$ko_ref" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -ne 0 ] || { echo "FAIL: an enumeration missing $want was accepted" >&2; return 1; }
+  done
   # Built, never written: a literal all-zero digest in this file would be
   # enumerated by the real run and fail it every week.
   zero_ref="$(printf 'cgr.dev/chainguard/minio:latest@sha256:%064d' 0)"
-  rc=0; check_enumeration "$refs"$'\n'"$zero_ref" "$os_ref" >/dev/null 2>&1 || rc=$?
+  rc=0; check_enumeration "$refs"$'\n'"$zero_ref" "$os_ref" "$ko_ref" >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ] || { echo "FAIL: a planted all-zero digest was accepted" >&2; return 1; }
-  echo "  ok: an empty list, a list without the object store, and a zero digest are each refused"
+  echo "  ok: an empty list, a list missing either required pin, and a zero digest are each refused"
 
   # 7. The one reader of the module default returns nothing — which its callers
   #    refuse — for a module whose image variable has no default, or when the
@@ -421,7 +451,41 @@ EOF
   printf 'variable "other" {\n  default = "a:b@sha256:%064d"\n}\n' 1 >"$tmp/other.tf"
   [ -z "$(object_store_image_from "$tmp/other.tf")" ] || {
     echo "FAIL: another variable's default was read as the image" >&2; return 1; }
-  echo "  ok: the module reader returns nothing for a missing default or another variable's"
+  # The block end is what stops the read: an image block with no default,
+  # followed by a later variable whose default is pin-shaped. Read past the
+  # `}` and that default would pass every pattern check downstream.
+  printf 'variable "image" {\n  type = string\n}\n\nvariable "other" {\n  default = "a:b@sha256:%064d"\n}\n' 1 >"$tmp/after.tf"
+  [ -z "$(object_store_image_from "$tmp/after.tf")" ] || {
+    echo "FAIL: a later variable's default was read through the end of the image block" >&2; return 1; }
+  echo "  ok: the module reader returns nothing for a missing default, another variable's, or one past the block"
+
+  # 8. run_checks end to end: the tally is what turns a refused image into a
+  #    failed run, and so into a stopped heartbeat. The enumeration is replaced
+  #    (in a subshell) by the two required pins plus one more; the stub
+  #    registry refuses only that one. The counterweight: with nothing refused
+  #    the same run is ok, so the failure is the refusal's and not the harness's.
+  extra="example.invalid/withdrawn:1@$digest"
+  : >"$tmp/calls"
+  rc=0
+  out="$(
+    enumerate() { printf '%s\n' "$os_ref" "$ko_ref" "$extra"; }
+    STUB_MODE=refuse-one STUB_CALLS="$tmp/calls" STUB_REFUSE_URL="$(manifest_url "$extra")" \
+      IMAGE_PULL_ATTEMPTS=1 IMAGE_PULL_RETRY_DELAY=0 PATH="$tmp:$PATH" run_checks 2>&1
+  )" || rc=$?
+  [ "$rc" -ne 0 ] && grep -qF "UNPULLABLE  $extra" <<<"$out" &&
+    grep -qxF "FAIL: 1 of 3 digest-pinned images cannot be pulled anonymously" <<<"$out" &&
+    ! grep -q '^OK:' <<<"$out" || {
+    echo "FAIL: a run with one refused image did not fail with its tally (rc=$rc): $out" >&2; return 1; }
+  : >"$tmp/calls"
+  rc=0
+  out="$(
+    enumerate() { printf '%s\n' "$os_ref" "$ko_ref" "$extra"; }
+    STUB_MODE=ok STUB_CALLS="$tmp/calls" IMAGE_PULL_ATTEMPTS=1 IMAGE_PULL_RETRY_DELAY=0 \
+      PATH="$tmp:$PATH" run_checks 2>&1
+  )" || rc=$?
+  [ "$rc" -eq 0 ] && grep -qxF "OK: all 3 digest-pinned images can be pulled anonymously" <<<"$out" || {
+    echo "FAIL: a run with every image served did not pass (rc=$rc): $out" >&2; return 1; }
+  echo "  ok: one refused image fails the whole run with its tally; none refused passes it"
 }
 
 self_test_network() {

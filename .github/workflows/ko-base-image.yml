@@ -147,10 +147,10 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           }
 
-          # The base image, read from its one line of .ko.yaml.
-          ko="$(awk '/^defaultBaseImage:/ {
-                       sub(/^defaultBaseImage:[[:space:]]*/, "")
-                       sub(/[[:space:]]*$/, ""); print; exit }' "$KO_FILE")"
+          # The base image, read from its one line of .ko.yaml by the ONE
+          # shell reader of it (check-ko-base-pin and the pull check use it too).
+          . hack/lib/ko-base-image.sh
+          ko="$(ko_base_image_from "$KO_FILE")"
           if [ -z "$ko" ]; then
             echo "::error::no defaultBaseImage in $KO_FILE"; exit 1
           fi
@@ -268,6 +268,14 @@ jobs:
       # — the current pin, or the one just written — must start and name its
       # version. Its entrypoint is the minio binary, so `--version` is a real
       # execution of it, on the runner's architecture, from the pinned index.
+      #
+      # 🔴 `--version` is not all the platform asks of this image. The
+      # create-buckets init container runs `/bin/sh -c 'mkdir -p ...'` as uid
+      # 1000, and hack/dr-rig.sh probes readiness with bash's /dev/tcp because
+      # the image has no curl. A rebuild without a shell would pass `--version`,
+      # be pushed as smoke-tested, and break every fresh install's init
+      # container, so both are run here too. (Measured against a shell-less
+      # image, cgr.dev/chainguard/static: the first check refuses it.)
       - name: Smoke-run the object-store image
         run: |
           set -euo pipefail
@@ -277,6 +285,25 @@ jobs:
           docker run --rm "$ref" --version | tee "${RUNNER_TEMP}/minio-version.txt"
           grep -q '^minio version RELEASE\.' "${RUNNER_TEMP}/minio-version.txt" ||
             { echo "::error::${ref} did not report a MinIO release"; exit 1; }
+          # The init container: /bin/sh and mkdir, as uid 1000.
+          docker run --rm --user 1000 --entrypoint /bin/sh "$ref" \
+            -c 'mkdir -p /tmp/smoke/bucket && test -d /tmp/smoke/bucket' ||
+            { echo "::error::${ref} cannot run the init container's /bin/sh + mkdir as uid 1000"; exit 1; }
+          # dr-rig's readiness probe: bash's /dev/tcp, an unsigned S3 request,
+          # and the 403 a ready server answers it with.
+          status="$(docker run --rm --user 1000 --entrypoint bash "$ref" -c '
+            minio server /tmp/data --address 127.0.0.1:9000 >/dev/null 2>&1 &
+            for _ in {1..30}; do
+              if (exec 3<>/dev/tcp/127.0.0.1/9000) 2>/dev/null; then
+                exec 3<>/dev/tcp/127.0.0.1/9000
+                printf "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3
+                IFS=" " read -r -t 5 _ status _ <&3 && printf %s "$status"
+                exit 0
+              fi
+              sleep 1
+            done' || true)"
+          [ "$status" = "403" ] ||
+            { echo "::error::${ref} did not answer bash's /dev/tcp probe with 403 (got '${status}')"; exit 1; }
 
       - name: Push the bump to its branch
         if: steps.resolve.outputs.ko_changed == 'true' || steps.resolve.outputs.objectstore_changed == 'true'
