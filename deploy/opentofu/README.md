@@ -93,15 +93,18 @@ same code path production uses. For real disaster recovery, point `backup_destin
 storage outside the cluster. The `database_backup_survives_cluster_loss` output states
 which of the two an instance has, so nothing downstream has to infer it.
 
-🔴 **The in-cluster store is MinIO, which is AGPL-3.0 and no longer maintained upstream.**
+🔴 **The in-cluster store is MinIO, which is AGPL-3.0; upstream is archived and DeviceChain runs a
+maintained fork's build.**
 Neither fact changes DeviceChain's own Apache-2.0 licensing — the image is referenced, never
 built, modified or redistributed, and the platform reaches it over the S3 HTTP API — but
 both are yours to accept, because `in-cluster` is the **default**: a stock bootstrap puts an
 AGPL server in your cluster. If your organisation does not permit AGPL components, set
-`backup_destination = "external"`. Community MinIO also entered maintenance mode in December
-2025 and was archived in April 2026, so the pinned image receives no further security
-patches; `external` avoids that too, which is one more reason it is the recommended
-production configuration.
+`backup_destination = "external"`. Community MinIO was archived in April 2026 and its images
+withdrawn; the default is Chainguard's build of a maintained fork (`cgr.dev/chainguard/minio`),
+pinned by digest in `modules/object-store`. The weekly base-image bumper moves that digest onto a
+branch, but a patched build reaches your cluster only with a release that takes it; `external`
+avoids that dependency too, which is one more reason it is the recommended production
+configuration.
 
 There is deliberately **no** value meaning "backups on, destination none". That state —
 plugin installed, flag reading `true`, nothing archived — is the one this configuration

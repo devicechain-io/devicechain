@@ -381,9 +381,11 @@ whose write-ahead log is genuinely being archived, rather than instances carryin
 plugin with nowhere to put anything.
 
 :::info The default backup destination is an AGPL component
-MinIO is licensed AGPL-3.0, and community MinIO entered maintenance mode in December 2025 and
-was archived in April 2026, so the pinned image receives no further security patches. To avoid
-both, point backups at storage outside the cluster.
+MinIO is licensed AGPL-3.0. Community MinIO was archived in April 2026 and its own images are no
+longer published, so DeviceChain runs a build of a maintained fork (`cgr.dev/chainguard/minio`),
+pinned by digest, which your nodes pull from `cgr.dev`. A patched build reaches your cluster only
+when a DeviceChain release moves that pin. To avoid both the licence and that dependency, point
+backups at storage outside the cluster.
 :::
 
 Neither issue affects DeviceChain's own Apache-2.0 licensing. The image is referenced, never

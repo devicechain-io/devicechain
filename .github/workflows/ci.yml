@@ -1078,6 +1078,17 @@ jobs:
       - name: every image a script pulls is pinned by digest
         run: hack/check-image-pins.sh
 
+      # A digest pin can still be withdrawn by its registry: the object store's
+      # was, and every fresh install failed while cached nodes looked fine. The
+      # anonymous pull check itself runs weekly in ko-base-image.yml, not here —
+      # a registry call on every pull request is what check-image-pins.sh exists
+      # to avoid — and a failure there stops the heartbeat the guard above reads.
+      # What runs here is its OFFLINE self-test: no network, and it proves each
+      # verdict (ok, UNPULLABLE, RATE LIMITED, TIMED OUT) can be reached and that
+      # its enumeration still finds the object store's pin.
+      - name: image-pull check self-test (offline)
+        run: hack/check-image-pulls.sh --self-test-offline
+
       # Every setup-go must take its version from go.work, not a module go.mod.
       # setup-go pins GOTOOLCHAIN=local, so a module's LANGUAGE floor (routinely
       # lower than the workspace's) installs a toolchain that `go build` inside

@@ -372,17 +372,37 @@ backup_creds_file="$work/backup-credentials.json"
 # The off-cluster object store. A container on the `kind` docker network, so the
 # cluster can reach it by name and it survives `kind delete cluster`.
 minio_container="devicechain-dr-minio"
-# 🔴 PINNED BY DIGEST, tag kept beside it so a reader can see the release. A
-# RELEASE.* tag reads like an immutable version and is not one — it is a name the
-# publisher can repoint, so an unpinned tag is a third-party dependency that can
-# move under a drill with no commit here to show for it. This rig's whole claim is
-# that a secret seeded before a restore still decrypts after one; that claim is
-# only about a known object store if the object store is the same bytes twice.
+# 🔴 THE SAME IMAGE A DEFAULT INSTALL RUNS IN-CLUSTER, read from the object store
+# module's own default rather than copied. This rig's whole claim is that a secret
+# seeded before a restore still decrypts after one; that claim is only about a
+# known object store if the store is the same bytes twice, and a drill of
+# different bytes proves nothing about the ones production runs. A second copy of
+# the pin is exactly how that went wrong before: this file held its own digest of
+# an image the registry later withdrew, and the drill could not start.
 #
-# hack/check-image-pins.sh enforces the shape. To move the pin: resolve the digest
-# from the tag you want (`crane digest quay.io/minio/minio:<release>`) and write
-# both.
-minio_image="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"
+# hack/lib/object-store-image.sh is the one shell reader of that default. It is
+# called HERE, in the main shell, not inside `$(...)`: `fail` in a command
+# substitution kills only the subshell (see the store-table note below), and the
+# drill would then go on to hand docker an empty reference far from the cause.
+# shellcheck source=lib/object-store-image.sh
+. "$repo_root/hack/lib/object-store-image.sh"
+object_store_module="$repo_root/$OBJECT_STORE_MODULE_REL"
+read_object_store_image() {
+  minio_image="$(object_store_image_from "$object_store_module")"
+  [[ "$minio_image" =~ $OBJECT_STORE_IMAGE_PATTERN ]] ||
+    fail "could not read a digest-pinned image from the object store module ($object_store_module);
+read \"$minio_image\". The drill runs the image a default install runs, so it will not guess one."
+}
+read_object_store_image
+# Data on a named volume, never the container's own filesystem: the image ships
+# /data/.minio.sys inside its layers, and MinIO run on that reports "Rename across
+# devices not allowed ... drive may be faulty" at start. A DR drill must not start
+# on a store logging that. The volume is created from the image's /data (docker
+# copies it in), which is also what makes /data writable for the image's user —
+# do NOT add volume-nocopy. `down` removes it with the container. Same bytes is
+# not same runtime: this container runs as the image's own user (65532), the
+# in-cluster pod as 1000, which is immaterial to what the drill measures.
+minio_volume="${minio_container}-data"
 minio_network="kind"
 bucket_rdb="$instance-rdb"
 bucket_tsdb="$instance-tsdb"
@@ -586,17 +606,28 @@ minio_up() {
   # `rm -f` and created an empty one, destroying the only off-site copy without
   # the "run down first" refusal the rig gives everywhere else.
   if docker ps -a --format '{{.Names}}' | grep -qx "$minio_container"; then
+    # 🔴 Reuse only the SAME image. A container created by an earlier version of
+    # this rig runs whatever it was created from, and starting it would run the
+    # drill against bytes a default install no longer runs — silently. Refused
+    # rather than recreated: the container may hold the only off-site archive.
+    local running_image
+    running_image="$(docker inspect -f '{{.Config.Image}}' "$minio_container")"
+    [[ "$running_image" == "$minio_image" ]] ||
+      fail "object store $minio_container exists but runs $running_image,
+not $minio_image — the image a default install runs. Run 'hack/dr-rig.sh down' first."
     say "object store $minio_container already exists; reusing it"
     docker start "$minio_container" >/dev/null 2>&1 || true
   else
     say "starting the off-cluster object store"
     docker run -d --name "$minio_container" --network "$minio_network" \
       --env-file "$minio_env_file" \
-      "$minio_image" server /data --console-address :9001 >/dev/null
+      --mount "type=volume,src=$minio_volume,dst=/data" \
+      "$minio_image" server /data >/dev/null
   fi
 
-  # A bucket is a directory under /data. There is no `mc` in this image and no
-  # reason to pull a second one for mkdir.
+  # A bucket is a directory under /data. There is no `mc` or `curl` in this image,
+  # and no reason to pull a second one: mkdir makes a bucket, and bash's /dev/tcp
+  # makes the probe below.
   docker exec "$minio_container" mkdir -p "/data/$bucket_rdb" "/data/$bucket_tsdb"
 
   wait_for_minio
@@ -612,11 +643,15 @@ minio_up() {
 wait_for_minio() {
   local code waited=0
   while true; do
-    # `|| true`, NOT `|| echo 000`. See the note on wait_for_api: curl already
-    # prints 000 when the connection fails, so appending another one produces the
-    # two-line string "000\n000", which matches no case and is read as an answer.
-    code="$(docker exec "$minio_container" \
-      curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:9000/ 2>/dev/null || true)"
+    # bash's /dev/tcp, because the image has no curl. The status line's second
+    # field is the code; a refused connection prints nothing, which reads as "not
+    # yet" below. 🔴 `Host:` is REQUIRED: without it MinIO answers 400 (measured),
+    # and this loop would wait out its 30 tries on a store that was ready.
+    # `|| true`, NOT `|| echo 000`: see the note on wait_for_api.
+    code="$(docker exec "$minio_container" bash -c '
+      exec 3<>/dev/tcp/127.0.0.1/9000 || exit 0
+      printf "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3
+      IFS=" " read -r -t 5 _ status _ <&3 && printf %s "$status"' 2>/dev/null || true)"
     [[ "${code:-000}" == "403" ]] && return 0
     waited=$((waited + 1))
     [[ $waited -lt 30 ]] || fail "the object store never answered an S3 request (last status $code)"
@@ -628,8 +663,8 @@ wait_for_minio() {
 #
 # A leftover base backup and WAL would satisfy the completeness gate below without
 # this run having archived anything — and the restore would then recover somebody
-# else's data and report a pass. `down` clears this; so does removing the
-# container.
+# else's data and report a pass. `down` clears this; removing the container alone
+# does NOT — the archive is on the $minio_volume volume, which outlives it.
 assert_bucket_empty() {
   # 🔴 EVERY store's bucket. Checking only the relational one left the event
   # store's archive able to survive into a new run, where it would satisfy the
@@ -655,6 +690,9 @@ minio_down() {
     say "removing the object store $minio_container"
     docker rm -f "$minio_container" >/dev/null
   fi
+  # Outside the `if`: a volume orphaned by a container removed by hand, or by a
+  # `down` interrupted between these two lines, is still cleared by the next one.
+  docker volume rm "$minio_volume" >/dev/null 2>&1 || true
 }
 
 # archive_base_backups / archive_wal_segments list what is actually in the bucket

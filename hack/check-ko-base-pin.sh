@@ -21,12 +21,23 @@
 # 🔴 Checking only (1) would be the comfortable half. A perfectly-formed digest
 # pin from eight months ago passes it and is precisely the thing we are trying
 # not to ship.
+#
+# The same workflow now also advances the object store's image (the `image`
+# default in deploy/opentofu/modules/object-store/main.tf) onto the same branch,
+# and ends by pulling every digest-pinned image anonymously
+# (hack/check-image-pulls.sh). So the liveness and waiting-bump halves below
+# cover that pin too, and a withdrawn image stops the heartbeat they read. Its
+# STRUCTURE — a digest, with its tag — is guarded by
+# deploy/objectstore_image_test.go, in Go, where the module is embedded.
 
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
 KO_FILE=".ko.yaml"
+# Every file the bumper rewrites. The waiting-bump check dates a waiting bump
+# from the most recent change to ANY of them on main.
+PINNED_FILES=("$KO_FILE" "deploy/opentofu/modules/object-store/main.tf")
 WORKFLOW="ko-base-image.yml"
 REPO="${GH_REPO:-devicechain-io/devicechain}"
 
@@ -50,7 +61,7 @@ MAX_BUMPER_SILENCE_DAYS="${MAX_BUMPER_SILENCE_DAYS:-40}"
 # refreshes whether or not anyone took the bump. It would never fire.
 #
 # Neither half is a defect alone. A branch ahead of main is the normal state for
-# the days between a bump and its merge. And `.ko.yaml` standing still is
+# the days between a bump and its merge. And the pinned files standing still is
 # correct whenever Chainguard has not rebuilt. Together they are exactly the
 # thing worth failing on: a bump has been ready, and nobody has taken it.
 BUMP_BRANCH="${BUMP_BRANCH:-ci/ko-base-image}"
@@ -144,14 +155,43 @@ check_liveness() {
 
   if [ "$age" -gt "$MAX_BUMPER_SILENCE_DAYS" ]; then
     echo "::error::${WORKFLOW} last succeeded ${age} days ago (limit ${MAX_BUMPER_SILENCE_DAYS})."
-    echo "  The base-image pin is therefore frozen: it is no longer picking up"
-    echo "  Chainguard's rebuilds, which is how that base ships its CVE fixes."
+    echo "  The pinned images are therefore frozen: they are no longer picking up"
+    echo "  Chainguard's rebuilds, which is how those images ship their CVE fixes."
     echo "  Either the workflow is broken/disabled, or its pull requests are not"
     echo "  being merged. A digest pin nobody advances is worse than the tag it"
     echo "  replaced."
     return 1
   fi
   echo "  ok: ${WORKFLOW} succeeded ${age} day(s) ago (limit ${MAX_BUMPER_SILENCE_DAYS})"
+
+  # The liveness window is forty days, which is right for "the bumper died" and
+  # far too slow for "an image we pin was withdrawn" — the weekly run fails on
+  # that at once, and until now nothing but its own page said so. So the MOST
+  # RECENT run is read too, and a failed one is announced on every pull request
+  # as a warning. Not a failure: a registry blip would otherwise block every
+  # merge until someone reran it, and the heartbeat above is still the gate.
+  local latest
+  latest="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --limit 1 \
+              --json conclusion,url -q '.[0] | "\(.conclusion) \(.url)"' 2>/dev/null || true)"
+  latest_run_note "$latest"
+}
+
+# ---------------------------------------------------------------------------
+# latest_run_note: "<conclusion> <url>" of the most recent run -> a line.
+# ---------------------------------------------------------------------------
+# A pure function of its input, so the self-test can drive it. Never fails:
+# see the note at its call site.
+latest_run_note() {
+  local conclusion="${1%% *}" url="${1#* }"
+  case "$conclusion" in
+    success | "") return 0 ;;
+    # Still running: no conclusion yet, and `gh` prints an empty one.
+    null) return 0 ;;
+  esac
+  echo "::warning::the latest ${WORKFLOW} run concluded '${conclusion}': ${url}"
+  echo "  That run also pulls every digest-pinned image anonymously. If an image"
+  echo "  was refused, a fresh install that needs it may be failing now: read the"
+  echo "  run's last step. A blip clears on the next run."
 }
 
 # ---------------------------------------------------------------------------
@@ -187,14 +227,14 @@ bump_verdict() {
 
   if [ "$pin_age" -le "$MAX_BUMP_WAIT_DAYS" ]; then
     echo "  ok: a base-image bump is waiting on ${BUMP_BRANCH} (${ahead} commit(s) ahead);"
-    echo "      ${KO_FILE} on main last moved ${pin_age} day(s) ago (limit ${MAX_BUMP_WAIT_DAYS})"
+    echo "      the pinned files on main last moved ${pin_age} day(s) ago (limit ${MAX_BUMP_WAIT_DAYS})"
     return 0
   fi
 
-  echo "::error::a base-image bump has been waiting ${pin_age} days on ${BUMP_BRANCH} (limit ${MAX_BUMP_WAIT_DAYS})."
-  echo "  ${BUMP_BRANCH} is ${ahead} commit(s) ahead of main and ${KO_FILE} has not"
-  echo "  moved in ${pin_age} days, so a rebuilt base has been ready that long and"
-  echo "  nothing has taken it. Chainguard's rebuilds are how that base ships its"
+  echo "::error::a pinned-image bump has been waiting ${pin_age} days on ${BUMP_BRANCH} (limit ${MAX_BUMP_WAIT_DAYS})."
+  echo "  ${BUMP_BRANCH} is ${ahead} commit(s) ahead of main and none of ${PINNED_FILES[*]}"
+  echo "  has moved in ${pin_age} days, so a rebuilt image has been ready that long and"
+  echo "  nothing has taken it. Chainguard's rebuilds are how these images ship their"
   echo "  CVE fixes, so the pin is now serving a knowingly stale image."
   echo
   echo "  Open a pull request from ${BUMP_BRANCH} — it was smoke-built before it"
@@ -231,19 +271,23 @@ check_waiting_bump() {
     "" | *[!0-9]*) ahead=0 ;;
   esac
 
-  local last pin_age
-  # Read main's last change to .ko.yaml through the API rather than `git log`:
-  # actions/checkout is shallow by default, so the local history usually does
-  # not contain the commit that moved it.
-  last="$(gh api "repos/${REPO}/commits?path=${KO_FILE}&sha=main&per_page=1" \
-            --jq '.[0].commit.committer.date' 2>/dev/null || true)"
-  # Same trap as above: a 404 body would satisfy a bare non-empty test, so the
-  # value has to actually parse as a date before it is arithmetic.
-  local last_epoch
-  if [ -z "$last" ] || [ "$last" = "null" ] || ! last_epoch="$(date -u -d "$last" +%s 2>/dev/null)"; then
-    echo "  NOTE: could not read the last change to ${KO_FILE} on main; skipping the wait check."
-    return 0
-  fi
+  local last pin_age file epoch last_epoch=0
+  # Read main's last change to each pinned file through the API rather than
+  # `git log`: actions/checkout is shallow by default, so the local history
+  # usually does not contain the commit that moved it. The MOST RECENT of them
+  # dates the wait: both pins ride one branch, so taking it moves whichever
+  # changed, and the conservative reading never calls a bump stale early.
+  for file in "${PINNED_FILES[@]}"; do
+    last="$(gh api "repos/${REPO}/commits?path=${file}&sha=main&per_page=1" \
+              --jq '.[0].commit.committer.date' 2>/dev/null || true)"
+    # Same trap as above: a 404 body would satisfy a bare non-empty test, so the
+    # value has to actually parse as a date before it is arithmetic.
+    if [ -z "$last" ] || [ "$last" = "null" ] || ! epoch="$(date -u -d "$last" +%s 2>/dev/null)"; then
+      echo "  NOTE: could not read the last change to ${file} on main; skipping the wait check."
+      return 0
+    fi
+    [ "$epoch" -gt "$last_epoch" ] && last_epoch="$epoch"
+  done
   pin_age=$(( ( $(date -u +%s) - last_epoch ) / 86400 ))
 
   bump_verdict "$ahead" "$pin_age"
@@ -375,6 +419,17 @@ self_test() {
   case "$ahead_probe" in "" | *[!0-9]*) ahead_probe=0 ;; esac
   [ "$ahead_probe" = "0" ] && echo "  ok: a 404 body is read as 'no bump waiting', not as a count" || {
     echo "FAIL: a 404 body survived the integer sanitiser" >&2; return 1; }
+
+  # Case 14 — the latest-run note speaks only for a run that did not succeed,
+  # and never fails the guard (a warning, by design).
+  out="$(latest_run_note "success https://example.invalid/1")"
+  [ -z "$out" ] || { echo "FAIL: a successful latest run produced a note: $out" >&2; return 1; }
+  out="$(latest_run_note "")"
+  [ -z "$out" ] || { echo "FAIL: an unreadable latest run produced a note: $out" >&2; return 1; }
+  rc=0; out="$(latest_run_note "failure https://example.invalid/2")" || rc=$?
+  [ "$rc" -eq 0 ] && grep -q '::warning::.*failure.*https://example.invalid/2' <<<"$out" || {
+    echo "FAIL: a failed latest run was not warned about, or failed the guard (rc=$rc): $out" >&2; return 1; }
+  echo "  ok: a failed latest run is a warning with its link; a successful one is silent"
 
   echo "==> Self-test passed"
 }
