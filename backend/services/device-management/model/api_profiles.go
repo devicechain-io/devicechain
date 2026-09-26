@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -187,8 +188,9 @@ func (api *Api) RenameDeviceProfile(ctx context.Context, token string, newToken 
 	// say the same sentence, and the reason is that the transaction does NOT close the
 	// race. At READ COMMITTED a Count that matches nothing takes no lock — there is no
 	// row to lock — so two concurrent renames onto one free token both see it free and
-	// the loser is stopped by the index instead. Without the translation below it is
-	// handed `SQLSTATE 23505` and an index name, which is not what this API promises.
+	// the loser is stopped by the index instead. Without the translation below it would
+	// get the GraphQL boundary's NEUTRAL conflict sentence (with code CONFLICT) rather than
+	// this rename's own sentence, which is not what this API promises.
 	//
 	// The tenant predicate on the Count is the scoping callback's, so it counts within
 	// the caller's tenant; the index carries the same predicate plus `deleted_at IS NULL`,
@@ -216,8 +218,9 @@ func (api *Api) RenameDeviceProfile(ctx context.Context, token string, newToken 
 		// the old token to the one naming the new.
 		if err := tx.Model(found).Update("token", newToken).Error; err != nil {
 			// THE LOSING RACER ARRIVES HERE rather than through the Count above, and it
-			// must read exactly as the uncontended refusal does.
-			if rdb.IsUniqueViolation(err, deviceProfileTokenIndexName, "device_profiles.token") {
+			// must read exactly as the uncontended refusal does. Any uniqueness conflict
+			// on this write is the token's: it changes that one column and no other.
+			if conflict.Is(err) {
 				return ErrDeviceProfileTokenTaken(token, newToken)
 			}
 			return err
@@ -233,22 +236,12 @@ func (api *Api) RenameDeviceProfile(ctx context.Context, token string, newToken 
 // ErrDeviceProfileTokenTaken is the ONE sentence a caller gets when the token they asked
 // for belongs to another profile — whether the pre-write lookup found it or the unique
 // index did. Both paths are made to say this, because a client cannot be asked to write two
-// handlers for one condition that differ only by timing.
+// handlers for one condition that differ only by timing. It is a conflict.Error, so it
+// carries extensions.code CONFLICT on either path.
 func ErrDeviceProfileTokenTaken(token, newToken string) error {
-	return fmt.Errorf("cannot rename device profile %q to %q: that token is already in "+
+	return conflict.Errorf("cannot rename device profile %q to %q: that token is already in "+
 		"use by another device profile in this tenant", token, newToken)
 }
-
-// deviceProfileTokenIndexName is the per-tenant partial unique index the baseline creates
-// on device_profiles (tenant_id, token) among live rows. Postgres names it in the text of a
-// unique violation, and that name is what distinguishes "this token is taken" from any
-// other write failure.
-//
-// It mirrors schema/baseline.go's createTenantTokenIndex naming rule, "uix_" + the bare
-// table name + "_tenant_token". The rule is spelled in two places because that helper is a
-// deliberate copy inside the migration and is unexported;
-// TestDeviceProfileTokenIndexNameMatchesTheMigration is what keeps the two from drifting.
-const deviceProfileTokenIndexName = "uix_device_profiles_tenant_token"
 
 // Get device profiles by id.
 func (api *Api) DeviceProfilesById(ctx context.Context, ids []uint) ([]*DeviceProfile, error) {

@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,8 +133,9 @@ func Refresh(ctx context.Context, httpc *http.Client, userGraphQL, refreshToken 
 
 // graphqlPost executes one GraphQL operation against url, applies any extra headers
 // (e.g. Authorization), and decodes the response "data" object into out. A non-2xx
-// status or a non-empty GraphQL "errors" array becomes an error. It mirrors
-// svcclient's envelope handling so both clients surface failures identically.
+// status is an error, and a non-empty GraphQL "errors" array is a *GraphQLError. It
+// mirrors svcclient's envelope handling, except that Codes here is parallel to Messages
+// (see GraphQLError).
 func graphqlPost(ctx context.Context, httpc *http.Client, url string, headers map[string]string, query string, variables map[string]any, out any) error {
 	if strings.TrimSpace(url) == "" {
 		return fmt.Errorf("userclient: endpoint URL is required")
@@ -172,18 +174,26 @@ func graphqlPost(ctx context.Context, httpc *http.Client, url string, headers ma
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
-			Message string `json:"message"`
+			Message    string `json:"message"`
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("userclient: decode response: %w", err)
 	}
 	if len(envelope.Errors) > 0 {
-		msgs := make([]string, 0, len(envelope.Errors))
-		for _, e := range envelope.Errors {
-			msgs = append(msgs, e.Message)
+		gqlErr := &GraphQLError{
+			URL:      url,
+			Messages: make([]string, 0, len(envelope.Errors)),
+			Codes:    make([]string, 0, len(envelope.Errors)),
 		}
-		return fmt.Errorf("userclient: %s: %s", url, strings.Join(msgs, "; "))
+		for _, e := range envelope.Errors {
+			gqlErr.Messages = append(gqlErr.Messages, e.Message)
+			gqlErr.Codes = append(gqlErr.Codes, e.Extensions.Code)
+		}
+		return gqlErr
 	}
 	if out != nil && len(envelope.Data) > 0 {
 		if err := json.Unmarshal(envelope.Data, out); err != nil {
@@ -191,6 +201,42 @@ func graphqlPost(ctx context.Context, httpc *http.Client, url string, headers ma
 		}
 	}
 	return nil
+}
+
+// GraphQLError is graphqlPost's answer when the server returned a GraphQL response
+// carrying a non-empty "errors" array: the server was reached and refused. Codes is
+// PARALLEL to Messages — Codes[i] is error i's extensions.code, "" where it set none —
+// so a caller can ask a question about EVERY error, not just about whether some error
+// carried a code.
+type GraphQLError struct {
+	URL      string
+	Messages []string
+	Codes    []string
+}
+
+// Error is "userclient: <url>: <m1>; <m2>", the text this client has always produced.
+func (e *GraphQLError) Error() string {
+	return fmt.Sprintf("userclient: %s: %s", e.URL, strings.Join(e.Messages, "; "))
+}
+
+// AllHaveCode reports whether err's chain holds a *GraphQLError in which EVERY error
+// carried extensions.code == code.
+//
+// 🔴 EVERY, NOT ANY. A caller uses this to decide that a refusal is benign — dcctl
+// treats CONFLICT as "already exists, carry on" — and a response carrying one CONFLICT
+// beside an uncoded real failure is not benign. Answering on "any" would let the one
+// swallow the other.
+func AllHaveCode(err error, code string) bool {
+	var gqlErr *GraphQLError
+	if code == "" || !errors.As(err, &gqlErr) || len(gqlErr.Codes) == 0 {
+		return false
+	}
+	for _, c := range gqlErr.Codes {
+		if c != code {
+			return false
+		}
+	}
+	return true
 }
 
 // parseExpiry reads an RFC3339 expiry string (the authoritative access/identity token

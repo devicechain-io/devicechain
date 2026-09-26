@@ -126,9 +126,9 @@ type prefixedThing struct {
 // These helpers derive their index name from stmt.Table, which gorm hands back
 // UNQUALIFIED even when the NamingStrategy prefixes the schema — the qualified form
 // lands in stmt.TableExpr instead. Nothing else here would notice a gorm release
-// changing that: the fixtures only ever run on SQLite, where IsUniqueViolation matches
-// on columns rather than on the index name, so a fixture index that started carrying
-// the prefix would be invisible to every test that installs one.
+// changing that: conflict classification (conflict.As) reads the driver's error type
+// and code, never an index name, so a fixture index that started carrying the prefix
+// would be invisible to every test that installs one.
 //
 // Where it would surface is CreatePartialUniqueIndex's ON clause, which quotes
 // stmt.Table: a prefix left in place there collapses into a single dotted identifier

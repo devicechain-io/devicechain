@@ -1552,6 +1552,9 @@ If you query alarms through the GraphQL API, the MCP alarm tools, `@devicechain/
 If you edit detection rules on the automation canvas, read "The automation canvas authors
 Connectivity rules, and will not save over a rule it cannot show in full".
 
+If your code or scripts recognise a duplicate by reading a GraphQL error message, read "A duplicate
+now answers with the code `CONFLICT`".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2488,6 +2491,29 @@ Nothing needs doing at the upgrade.
   and saves it unchanged.
 - **A canvas save no longer clears a rule's name or description** when the rule's definition does
   not carry them. They are sent only when you edit them on the canvas.
+
+#### A duplicate now answers with the code `CONFLICT`
+
+Nothing needs doing unless your own code or scripts recognise a duplicate by reading the error
+message. [A value that must be unique](../reference/graphql-api.md#unique-values) has the details.
+
+- **A create, update or rename that repeats a value that must be unique** now carries
+  `extensions.code` set to `CONFLICT`. Branch on the code. It means the write collided with a
+  unique value, which is not always one you sent: two publishes of the same record racing for the
+  next version number collide too, and a retry then succeeds.
+- **The database's own wording is replaced.** Where a message used to end in
+  `duplicate key value violates unique constraint "…" (SQLSTATE 23505)` or `UNIQUE constraint
+  failed: …`, it now ends in `the request conflicts with an existing record: a value that must be
+  unique is already in use`, which names no database index or column.
+- **Refusals that already had their own wording keep it and gain the code:** renaming onto a token
+  already in use, adding a second membership in the same tenant, and declaring a command key the
+  profile already has.
+- **`dcctl sim create` recognises an existing tenant, identity or membership by the code,** so
+  re-running it with the same name completes. Before, a re-run stopped at the membership step. Use a
+  `dcctl` from this release with an instance of this release: an older instance does not send the
+  code, and this `dcctl` then reports the duplicate as an error.
+- **These are not duplicates and do not carry `CONFLICT`:** creating a tenant at a deleted tenant's
+  reserved token, and a save refused because the record changed since it was read.
 
 ### The one-time durable-ingest cutover
 

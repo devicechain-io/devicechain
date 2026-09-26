@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
@@ -33,6 +34,14 @@ const (
 
 func newPurgeTestService(t *testing.T) *Service {
 	t.Helper()
+	s, _ := newPurgeTestServiceDB(t)
+	return s
+}
+
+// newPurgeTestServiceDB is newPurgeTestService, also handing back the database, for a
+// test that has to reach under the Service.
+func newPurgeTestServiceDB(t *testing.T) (*Service, *gorm.DB) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
@@ -42,7 +51,7 @@ func newPurgeTestService(t *testing.T) *Service {
 		&iam.TenantPurge{}, &iam.TenantPurgeStore{}))
 	s := NewService(iam.NewStore(&rdb.RdbManager{Database: db}), testSettle, testTokenHold, nil)
 	seedTiers(t, s)
-	return s
+	return s, db
 }
 
 func createTenant(t *testing.T, s *Service, token string) {
@@ -112,33 +121,71 @@ func TestCreateTenantRefusesAReservedToken(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// 🔴 The refusal must not read like an "already exists".
+// 🔴 The reservation refusal must never be a CONFLICT.
 //
-// dcctl's sim flow wraps createTenant in tolerateExists (backend/cli/sim/admin.go),
-// which swallows any error whose text contains "already exists", "duplicate" or
-// "unique" so that re-running `sim create` is idempotent. A reservation refusal
-// phrased with any of those words would be silently treated as success by the caller
-// most likely to hit it — dcctl would report ✅, having minted an identity and a
-// membership against a tenant nobody can enter, and the sim would then fail at login
-// with nothing pointing back here. (Not a disclosure: resolveTenantGrant refuses a
-// deleted tenant, so the layer below still holds. A silent, misattributed break.)
+// dcctl's sim flow tolerates a createTenant refusal carrying extensions.code CONFLICT
+// (backend/cli/sim/admin.go) so that re-running `sim create` is idempotent. A
+// reservation refusal carrying that code would be silently treated as success by the
+// caller most likely to hit it — dcctl would report ✅, having minted an identity and a
+// membership against a tenant nobody can enter. (Not a disclosure: resolveTenantGrant
+// refuses a deleted tenant, so the layer below still holds. A silent, misattributed
+// break.) The dcctl half lives in backend/cli/sim/admin_conflict_test.go.
 //
-// The coupling is real and cross-module, so it is asserted on both sides; the dcctl
-// half lives in backend/cli/sim/admin_test.go.
-func TestTenantTokenReservedIsNotMistakenForAnAlreadyExistsError(t *testing.T) {
+// The wording is still kept clear of the three phrases a dcctl from BEFORE the code
+// existed matched on, because such a binary may still be pointed at this server.
+func TestTenantTokenReservedIsNotAConflict(t *testing.T) {
+	s := newPurgeTestService(t)
+	ctx := context.Background()
+	createTenant(t, s, "acme")
+	_, err := s.DeleteTenant(ctx, "acme")
+	require.NoError(t, err)
+
+	_, err = s.CreateTenant(ctx, TenantInput{Token: "acme", TierToken: iam.TierSilverToken})
+	require.ErrorIs(t, err, ErrTenantTokenReserved)
+	require.False(t, conflict.Is(err), "the reservation refusal is a conflict: %v", err)
+
 	msg := strings.ToLower(ErrTenantTokenReserved.Error())
 	for _, tolerated := range []string{"already exists", "duplicate", "unique"} {
 		require.NotContainsf(t, msg, tolerated,
-			"the reservation refusal contains %q, which dcctl's tolerateExists swallows as success", tolerated)
+			"the reservation refusal contains %q, which an older dcctl swallows as success", tolerated)
 	}
-	// And it has to actually say something, or the check above passes over an empty
-	// string and proves nothing.
 	require.Contains(t, msg, "reserved")
 }
 
-// An ACTIVE tenant at the same token still collides the old way, and that is
-// deliberate: callers rely on tolerating a duplicate-key error to make create
-// idempotent, so the reservation must not swallow the ordinary re-create path.
+// A deletion that lands between CreateTenant's reservation lookup and its insert
+// leaves the reserved row for the insert to collide with. That collision is answered
+// as the reservation too, never as a conflict.
+func TestCreateTenantRacingADeletionIsAnsweredAsTheReservation(t *testing.T) {
+	s, db := newPurgeTestServiceDB(t)
+	ctx := context.Background()
+	createTenant(t, s, "acme")
+
+	fired := false
+	name := "test:delete_before_tenant_create"
+	// Before the create's own transaction begins, so the deletion is COMMITTED — as a
+	// concurrent deleter's would be — rather than rolled back with the failed insert.
+	require.NoError(t, db.Callback().Create().Before("gorm:begin_transaction").Register(name, func(tx *gorm.DB) {
+		if fired || !strings.HasSuffix(tx.Statement.Table, "tenants") {
+			return
+		}
+		fired = true
+		if _, err := tx.Statement.ConnPool.ExecContext(tx.Statement.Context,
+			"UPDATE "+tx.Statement.Table+" SET purge_state = ? WHERE token = ?",
+			string(iam.PurgePurging), "acme"); err != nil {
+			t.Errorf("could not mark the tenant deleted, so the race never happened: %v", err)
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Create().Remove(name) })
+
+	_, err := s.CreateTenant(ctx, TenantInput{Token: "acme", TierToken: iam.TierSilverToken})
+	require.True(t, fired, "the insert never ran, so the race was never exercised")
+	require.ErrorIs(t, err, ErrTenantTokenReserved)
+	require.False(t, conflict.Is(err), "the raced reservation reads as a conflict: %v", err)
+}
+
+// An ACTIVE tenant at the same token still collides, and that is deliberate: the
+// collision is a CONFLICT, which is what dcctl tolerates to make create idempotent, so
+// the reservation must not swallow the ordinary re-create path.
 func TestCreateTenantStillCollidesOnAnActiveToken(t *testing.T) {
 	s := newPurgeTestService(t)
 	ctx := context.Background()
@@ -148,6 +195,7 @@ func TestCreateTenantStillCollidesOnAnActiveToken(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrTenantTokenReserved,
 		"an active duplicate is an already-exists, not a reservation")
+	require.True(t, conflict.Is(err), "an active duplicate must be a conflict: %v", err)
 }
 
 // A deleted tenant takes no new members. Without this, DeleteTenant's zero-membership

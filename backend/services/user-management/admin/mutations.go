@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -19,7 +20,10 @@ var (
 	ErrIdentityNotFound   = errors.New("identity not found")
 	ErrMembershipNotFound = errors.New("membership not found")
 	ErrTenantNotFound     = errors.New("tenant not found")
-	ErrAlreadyMember      = errors.New("identity already has a membership in this tenant")
+	// ErrAlreadyMember is a uniqueness conflict (one membership per identity and
+	// tenant), so it carries extensions.code CONFLICT. dcctl's sim flow tolerates that
+	// code on a re-run, which is what makes adding the membership idempotent.
+	ErrAlreadyMember error = conflict.New("identity already has a membership in this tenant")
 )
 
 // CreateIdentityInput is the data to create a global identity (ADR-033). Password

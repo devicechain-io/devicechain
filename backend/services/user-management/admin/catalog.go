@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/governance"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -35,15 +36,16 @@ var (
 	// old one's data. The reservation lasts exactly as long as the purge: reclamation
 	// removes the tenant row, and the token is then free.
 	//
-	// 🔴 THE WORDING IS LOAD-BEARING, and not for style. dcctl's sim flow wraps its
-	// createTenant call in tolerateExists (backend/cli/sim/admin.go), which swallows any
-	// error whose text contains "already exists", "duplicate" or "unique" so that a
-	// re-create is idempotent. If this refusal read like one of those, the caller most
-	// likely to hit it would report success and carry on — minting an identity and a
-	// membership against a tenant it cannot actually enter, then failing at login with
-	// nothing pointing back here. (It is not a disclosure: resolveTenantGrant refuses a
-	// deleted tenant, so the layer below still holds. It is a silent, misattributed
-	// break.) Keep those three phrases out of it — both sides have tests.
+	// 🔴 IT MUST NEVER BE A conflict.Error. dcctl's sim flow tolerates a createTenant
+	// refusal carrying extensions.code CONFLICT (backend/cli/sim/admin.go) so that a
+	// re-create is idempotent. If this refusal carried that code, the caller most likely
+	// to hit it would report success and carry on — minting an identity and a membership
+	// against a tenant it cannot actually enter, then failing with nothing pointing back
+	// here. (It is not a disclosure: resolveTenantGrant refuses a deleted tenant, so the
+	// layer below still holds. It is a silent, misattributed break.)
+	// TestTenantTokenReservedIsNotAConflict pins that. Its wording also stays clear of
+	// "already exists", "duplicate" and "unique", which a dcctl from before the code
+	// existed matched on instead.
 	// ErrTenantDeleted refuses a write against a tenant that has been through the delete
 	// door — it exists only to hold its token, and nothing may be attached to it.
 	ErrTenantDeleted = errors.New("that tenant has been deleted and no longer accepts changes")
@@ -472,13 +474,14 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	}
 
 	// The token reservation (ADR-077). Checked explicitly rather than left to the unique
-	// index: a raw constraint violation names a column, reads as "already exists" to
-	// every tolerant client, and would let a caller conclude the tenant it just tried to
-	// create is the one it now holds.
+	// index: the index's violation is answered as CONFLICT, which reads as "already
+	// exists" to every tolerant client, and would let a caller conclude the tenant it just
+	// tried to create is the one it now holds.
 	//
 	// An ACTIVE tenant at this token still falls through to the create below and its
-	// duplicate-key error, which is deliberate — that IS an already-exists, and callers
-	// rely on tolerating it to make create idempotent.
+	// duplicate-key error, which is deliberate — that IS an already-exists: the unique
+	// index's violation is answered as CONFLICT at the GraphQL boundary, which is what
+	// makes a re-create idempotent for dcctl.
 	existing, lookupErr := s.iam.TenantByToken(ctx, in.Token)
 	switch {
 	case lookupErr == nil && existing.PurgeState.Deleted():
@@ -498,6 +501,14 @@ func (s *Service) CreateTenant(ctx context.Context, in TenantInput) (*iam.Tenant
 	}
 	in.applyTo(t)
 	if err := s.iam.CreateTenant(ctx, t); err != nil {
+		// A deletion that landed between the lookup above and this insert leaves the
+		// reserved row to collide with, and that collision must not read as an
+		// already-exists either: re-read, and answer the reservation.
+		if conflict.Is(err) {
+			if again, lerr := s.iam.TenantByToken(ctx, in.Token); lerr == nil && again.PurgeState.Deleted() {
+				return nil, fmt.Errorf("create tenant %q: %w", in.Token, ErrTenantTokenReserved)
+			}
+		}
 		return nil, err
 	}
 	return s.iam.TenantByToken(ctx, in.Token)

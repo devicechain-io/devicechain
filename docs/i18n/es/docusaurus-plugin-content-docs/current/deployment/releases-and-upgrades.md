@@ -1657,6 +1657,9 @@ elimina el campo `message` de las alarmas».
 Si edita reglas de detección en el lienzo de automatización, lea «El lienzo de automatización autora
 reglas de Conectividad y no guarda sobre una regla que no puede mostrar por completo».
 
+Si su código o sus scripts reconocen un duplicado leyendo el mensaje de un error de GraphQL, lea
+«Un duplicado responde ahora con el código `CONFLICT`».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2663,6 +2666,31 @@ No hace falta hacer nada en la actualización.
   modo de solo lectura y la guarda sin cambios.
 - **Guardar desde el lienzo ya no borra el nombre ni la descripción de una regla** cuando su
   definición no los contiene. Solo se envían cuando los edita en el lienzo.
+
+#### Un duplicado responde ahora con el código `CONFLICT`
+
+No hay que hacer nada salvo que su propio código o sus scripts reconozcan un duplicado leyendo el
+mensaje de error. [Un valor que debe ser único](../reference/graphql-api.md#unique-values) tiene los
+detalles.
+
+- **Una creación, actualización o renombrado que repite un valor que debe ser único** lleva ahora
+  `extensions.code` igual a `CONFLICT`. Decida por el código. Significa que la escritura chocó con
+  un valor único, que no siempre es uno que usted envió: dos publicaciones del mismo registro que
+  compiten por el siguiente número de versión también chocan, y entonces un reintento funciona.
+- **Se sustituye el texto propio de la base de datos.** Donde un mensaje terminaba en
+  `duplicate key value violates unique constraint "…" (SQLSTATE 23505)` o `UNIQUE constraint failed:
+  …`, ahora termina en `the request conflicts with an existing record: a value that must be unique is
+  already in use`, que no nombra ningún índice ni columna de la base de datos.
+- **Los rechazos que ya tenían su propia frase la conservan y ganan el código:** renombrar a un
+  token que ya está en uso, añadir una segunda membresía en el mismo inquilino y declarar una clave
+  de comando que el perfil ya tiene.
+- **`dcctl sim create` reconoce por el código un inquilino, una identidad o una membresía que ya
+  existen,** así que volver a ejecutarlo con el mismo nombre termina. Antes, una nueva ejecución se
+  detenía en el paso de la membresía. Use un `dcctl` de esta versión con una instancia de esta
+  versión: una instancia anterior no envía el código, y este `dcctl` informa entonces del duplicado
+  como un error.
+- **Estos no son duplicados y no llevan `CONFLICT`:** crear un inquilino con el token reservado de
+  un inquilino eliminado, y un guardado rechazado porque el registro cambió desde que se leyó.
 
 ### La transición única a la ingesta duradera
 

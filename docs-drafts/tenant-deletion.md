@@ -87,9 +87,11 @@ once over an instance's life. Everything durable keys on `(token, epoch)`:
 
 The tenant row itself is the token reservation: a unique index on the token keeps it taken while the
 row exists. An operator trying to recreate a tenant at that token gets a message saying so
-explicitly — and that message is worded to avoid the words *"already exists"*, *"duplicate"* and
-*"unique"*, because `dcctl`'s teardown tolerates errors containing those and would swallow it
-(`backend/services/user-management/admin/catalog.go`).
+explicitly, and that refusal is never a `CONFLICT`: `dcctl`'s `sim create` tolerates a
+`CONFLICT` refusal on a re-create, so a reservation carrying the code would be swallowed as
+success (`backend/services/user-management/admin/catalog.go`; `TestTenantTokenReservedIsNotAConflict`
+pins it). A deletion landing between `CreateTenant`'s lookup and its insert collides on the unique
+index instead, and that collision is re-read and answered as the reservation too.
 
 ## 3. The coordinator
 

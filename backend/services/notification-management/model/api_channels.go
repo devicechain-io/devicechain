@@ -5,8 +5,8 @@ package model
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -223,7 +223,9 @@ func (api *Api) RenameNotificationChannel(ctx context.Context, token string,
 			// The losing side of a race gets here rather than through the lookup above.
 			// It must read the same as the uncontended refusal, because a caller cannot
 			// write two error handlers for one condition that only differ by timing.
-			if isChannelTokenCollision(err) {
+			// Any uniqueness conflict on this Save is the token's: the row was loaded in
+			// this transaction, so every other column rewrites a value it already held.
+			if conflict.Is(err) {
 				return ErrChannelTokenTaken(token, newToken)
 			}
 			return err
@@ -246,56 +248,16 @@ func (api *Api) RenameNotificationChannel(ctx context.Context, token string,
 // second UPDATE then blocks on the partial unique index until the first commits and fails
 // with a driver-level unique violation. Nothing is corrupted — the index predicate
 // (deleted_at IS NULL) covers exactly the set the lookup queries, and channels are
-// hard-deleted anyway — but without the translation below the loser is handed
-// `SQLSTATE 23505` and an index name, which is not something a client can act on and is not
-// what this API promises.
+// hard-deleted anyway — but without the translation below the loser would get the
+// GraphQL boundary's NEUTRAL conflict sentence (with code CONFLICT) rather than this
+// rename's own sentence, which is not what this API promises.
 //
 // So the lookup is the fast, common path and the index is the authority, and both are made
-// to say the same sentence.
+// to say the same sentence. It is a conflict.Error, so it carries extensions.code CONFLICT
+// on either path.
 func ErrChannelTokenTaken(token, newToken string) error {
-	return fmt.Errorf("cannot rename notification channel %q to %q: that token is already "+
+	return conflict.Errorf("cannot rename notification channel %q to %q: that token is already "+
 		"in use by another channel in this tenant", token, newToken)
-}
-
-// channelTokenIndexName is the per-tenant partial unique index the migration creates on
-// notification_channels (tenant_id, token). Postgres names it in the text of a unique
-// violation, and that name is the only thing distinguishing "this token is taken" from any
-// other write failure — GORM's TranslateError is not enabled anywhere in core, so the raw
-// driver message is what arrives here.
-//
-// It mirrors schema/baseline.go's createTenantTokenIndex naming rule, "uix_" + table +
-// "_tenant_token". That rule is spelled in two places because the migration's helper is
-// unexported and this package cannot reach it;
-// TestRenameCollisionIndexNameMatchesTheTable is what keeps the two from drifting apart.
-const channelTokenIndexName = "uix_notification_channels_tenant_token"
-
-// isChannelTokenCollision reports whether a write failed because another channel already
-// holds the token, as opposed to failing for any other reason.
-//
-// # THE MATCHING LIVES IN core; WHAT IS HERE IS THE EVIDENCE THIS TABLE OFFERS
-//
-// The two databases report a unique violation differently — Postgres names the INDEX,
-// SQLite names the COLUMNS — and rdb.IsUniqueViolation is the one place on the platform
-// that knows both spellings. This service wrote its own matcher first, before that
-// function existed; three other renames have since arrived at the same code, which is how
-// four call sites come to disagree about what counts as a collision.
-//
-// Naming the ONE column that distinguishes this index, rather than the pair the index
-// declares, is deliberate: it does not depend on the order the index lists them in, and it
-// is still table-specific, so an unrelated collision — a policy token, a version number —
-// is not translated into "that token is already in use".
-//
-// # 🔴 IT IS STILL A NAMED FUNCTION, AND NOT FOR TIDINESS
-//
-// The other renames call rdb.IsUniqueViolation inline at their write. Here the arguments
-// have tests of their own — TestRenameChannel_ThePostgresUniqueViolationIsRecognised drives
-// production's Postgres branch, which the SQLite fixture cannot reach, and
-// TestRenameChannel_AnUnrelatedWriteFailureIsNotReportedAsACollision is its counterweight —
-// and a test that spelled the index and the column out for itself would keep passing after
-// the call site's arguments moved away from it. One function means the tests and the write
-// ask the same question with the same evidence.
-func isChannelTokenCollision(err error) bool {
-	return rdb.IsUniqueViolation(err, channelTokenIndexName, "notification_channels.token")
 }
 
 // applyChannelSecret writes the channel's delivery secret to the store to match the

@@ -5,10 +5,11 @@ package model
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -19,9 +20,9 @@ import (
 // IS WHAT THESE TESTS EXIST FOR. At READ COMMITTED a SELECT cannot lock a row that does not
 // exist, so two renames onto one token — or a rename racing a create — both see zero rows,
 // and the second UPDATE discovers the collision at the partial unique index instead.
-// Without a translation the loser is handed `duplicate key value violates unique constraint
-// "uix_device_profiles_tenant_token" (SQLSTATE 23505)`, which is not something a client can
-// write a handler against and is not what the served API reference promises.
+// Without a translation the loser would get the GraphQL boundary's
+// NEUTRAL conflict sentence (code CONFLICT) instead of this rename's own sentence, which
+// is not what the served API reference promises.
 //
 // The uncontended refusal is covered by TestRenameDeviceProfile_RefusesATokenAlreadyInUse.
 // What is here is the contended one.
@@ -36,9 +37,7 @@ import (
 func newProfileCollisionApi(t *testing.T) *Api {
 	t.Helper()
 	api := newPartialUpdateApi(t, deviceProfileTables...)
-	if err := api.RDB.Database.Exec(
-		"CREATE UNIQUE INDEX " + deviceProfileTokenIndexName +
-			" ON device_profiles (tenant_id, token) WHERE deleted_at IS NULL").Error; err != nil {
+	if err := rdb.CreateTenantTokenIndex(api.RDB.Database, &DeviceProfile{}); err != nil {
 		t.Fatalf("create the tenant/token index: %v", err)
 	}
 	return api
@@ -99,7 +98,11 @@ func TestRenameDeviceProfile_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 	if err.Error() != want {
 		t.Fatalf("the losing racer got:\n  %v\nwant exactly the uncontended refusal:\n  %s", err, want)
 	}
-	for _, leak := range []string{"SQLSTATE", "23505", "constraint", deviceProfileTokenIndexName} {
+	if !conflict.Is(err) {
+		t.Fatalf("the losing racer's refusal is not a conflict, so it would reach the caller "+
+			"without extensions.code CONFLICT: %v", err)
+	}
+	for _, leak := range []string{"SQLSTATE", "23505", "UNIQUE constraint", "constraint", "uix_"} {
 		if strings.Contains(err.Error(), leak) {
 			t.Errorf("the refusal still carries driver detail (%q): %v", leak, err)
 		}
@@ -113,10 +116,12 @@ func TestRenameDeviceProfile_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 	}
 }
 
-// 🔴 THE NEGATIVE CONTROL. Without the translation the loser gets the raw driver text — this
-// is what the test above is worth, stated by showing the untranslated outcome rather than
-// asserting it is impossible.
-func TestRenameDeviceProfile_WithoutTheTranslationTheRacerGetsDriverText(t *testing.T) {
+// 🔴 THE NEGATIVE CONTROL. The raw racer IS a conflict — the GraphQL boundary would give it
+// the code and the neutral sentence on its own — but it is NOT this rename's sentence, which
+// is what the test above is worth: remove the translation and the caller gets the boundary's
+// generic wording instead of the one the API promises. It drives the SAME planted collision
+// through a bare write, so a reader can see the two side by side.
+func TestRenameDeviceProfile_TheRawRacerIsAConflictButNotTheSentence(t *testing.T) {
 	api := newProfileCollisionApi(t)
 	ctx := partialUpdateCtx()
 	seedDeviceProfile(t, api, ctx, "prof")
@@ -128,7 +133,7 @@ func TestRenameDeviceProfile_WithoutTheTranslationTheRacerGetsDriverText(t *test
 		t.Fatal("the untranslated write succeeded, so this control proves nothing about what " +
 			"the translation is protecting the caller from")
 	}
-	if !rdb.IsUniqueViolation(raw, deviceProfileTokenIndexName, "device_profiles.token") {
+	if !conflict.Is(raw) {
 		t.Fatalf("the raw failure is not the collision this suite is about: %v", raw)
 	}
 	if raw.Error() == ErrDeviceProfileTokenTaken("prof", "prof2").Error() {
@@ -137,72 +142,45 @@ func TestRenameDeviceProfile_WithoutTheTranslationTheRacerGetsDriverText(t *test
 	}
 }
 
-// THE COUNTERWEIGHT. The translation must not swallow an unrelated write failure into "that
-// token is taken", which would be a worse lie than the driver text: it names a cause the
-// caller can act on, and acting on it would not help. This service has more unique indexes
-// than any other, so the wrong-index case is the one that matters most here.
+// THE COUNTERWEIGHT, driven through the REAL rename. The translation must not swallow an
+// unrelated write failure into "that token is taken", which would be a worse lie than the
+// driver text: it names a cause the caller can act on, and acting on it would not help.
 func TestRenameDeviceProfile_AnUnrelatedWriteFailureIsNotReportedAsACollision(t *testing.T) {
-	for name, err := range map[string]error{
-		"connection lost": fmt.Errorf("driver: bad connection"),
-		"another table":   fmt.Errorf(`UNIQUE constraint failed: device_types.tenant_id, device_types.token`),
-		"a version index": fmt.Errorf(`duplicate key value violates unique constraint ` +
-			`"uix_device_profile_versions_profile_version" (SQLSTATE 23505)`),
-		"the external-id index on another table": fmt.Errorf(`duplicate key value violates unique ` +
-			`constraint "uix_devices_tenant_external_id" (SQLSTATE 23505)`),
-		"no error": nil,
-	} {
-		t.Run(name, func(t *testing.T) {
-			if rdb.IsUniqueViolation(err, deviceProfileTokenIndexName, "device_profiles.token") {
-				t.Fatalf("%v was classified as a device-profile-token collision", err)
-			}
-		})
+	api := newProfileCollisionApi(t)
+	db := api.RDB.Database
+	ctx := partialUpdateCtx()
+	seedDeviceProfile(t, api, ctx, "prof")
+	failOnFirstUpdate(t, db, "device_profiles")
+
+	_, err := api.RenameDeviceProfile(ctx, "prof", "prof2")
+	if err == nil {
+		t.Fatal("the rename succeeded, so the injected failure never reached it")
+	}
+	if err.Error() == ErrDeviceProfileTokenTaken("prof", "prof2").Error() {
+		t.Fatalf("an unrelated write failure was reported as a token collision: %v", err)
+	}
+	if conflict.Is(err) {
+		t.Fatalf("an unrelated write failure was classified as a conflict: %v", err)
+	}
+	if !strings.Contains(err.Error(), "driver: bad connection") {
+		t.Fatalf("the rename did not return the write's own failure: %v", err)
 	}
 }
 
-// THE PRODUCTION BRANCH, which the SQLite fixture above cannot reach.
-//
-// 🔴 THE MESSAGE IS SPELLED OUT IN FULL RATHER THAN BUILT FROM deviceProfileTokenIndexName,
-// AND THAT IS THE WHOLE VALUE OF THIS TEST. A fixture assembled from the constant matches
-// the constant whatever the constant says, so it would pass just as happily after a typo
-// moved the name away from the index the migration actually creates.
-func TestRenameDeviceProfile_ThePostgresUniqueViolationIsRecognised(t *testing.T) {
-	pgError := fmt.Errorf(`ERROR: duplicate key value violates unique constraint ` +
-		`"uix_device_profiles_tenant_token" (SQLSTATE 23505)`)
-	if !rdb.IsUniqueViolation(pgError, deviceProfileTokenIndexName, "device_profiles.token") {
-		t.Fatalf("the Postgres unique violation was not recognised, so production — which runs "+
-			"on Postgres, not on this test's SQLite — would hand the loser raw driver text:\n  %v",
-			pgError)
+// failOnFirstUpdate makes the next UPDATE on table fail with an error that is not a
+// uniqueness violation.
+func failOnFirstUpdate(t *testing.T, db *gorm.DB, table string) {
+	t.Helper()
+	fired := false
+	name := "test:fail_first_update"
+	if err := db.Callback().Update().Before("gorm:update").Register(name, func(tx *gorm.DB) {
+		if fired || tx.Statement.Table != table {
+			return
+		}
+		fired = true
+		_ = tx.AddError(errors.New("driver: bad connection"))
+	}); err != nil {
+		t.Fatalf("register the failing callback: %v", err)
 	}
-	sqliteError := fmt.Errorf("UNIQUE constraint failed: device_profiles.tenant_id, " +
-		"device_profiles.token")
-	if !rdb.IsUniqueViolation(sqliteError, deviceProfileTokenIndexName, "device_profiles.token") {
-		t.Fatalf("the SQLite unique violation was not recognised, so the end-to-end test above "+
-			"would be passing for a reason other than the translation:\n  %v", sqliteError)
-	}
-}
-
-// 🔴 THE CONSTANT MUST NAME THE INDEX THE MIGRATION ACTUALLY BUILDS, and the two are spelled
-// in different packages because schema/baseline.go's createTenantTokenIndex is unexported.
-// This re-derives the name by that helper's own rule — "uix_" + the bare table +
-// "_tenant_token" — from GORM's table name for the live model, which is the same table the
-// migration parses. A rename of the table moves both together and this still passes,
-// correctly; a constant edited by hand away from the rule does not.
-func TestDeviceProfileTokenIndexNameMatchesTheMigration(t *testing.T) {
-	api := newPartialUpdateApi(t, deviceProfileTables...)
-	stmt := &gorm.Statement{DB: api.RDB.Database}
-	if err := stmt.Parse(&DeviceProfile{}); err != nil {
-		t.Fatalf("parse the device profile model: %v", err)
-	}
-	// The migration strips any schema qualifier before building the name; mirrored here so
-	// the two agree under production's TablePrefix as well as under the bare fixture.
-	bare := stmt.Table
-	if i := strings.LastIndex(bare, "."); i >= 0 {
-		bare = bare[i+1:]
-	}
-	want := "uix_" + bare + "_tenant_token"
-	if deviceProfileTokenIndexName != want {
-		t.Fatalf("deviceProfileTokenIndexName is %q but the migration's naming rule builds %q "+
-			"for table %q — a losing racer would then get raw driver text, and nothing else in "+
-			"this suite would notice", deviceProfileTokenIndexName, want, bare)
-	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove(name) })
 }

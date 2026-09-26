@@ -287,8 +287,9 @@ Las cuatro siguen un mismo contrato:
   nada que lo direccione.
 - Renombrar un registro al token que ya tiene es un éxito idempotente que devuelve el registro, así
   que reintentar tras un fallo parcial es seguro.
-- Un token que ya tiene otro registro de esa clase se rechaza por su nombre, en lugar de aflorar como
-  una violación de restricción.
+- Un token que ya tiene otro registro de esa clase se rechaza por su nombre, con `extensions.code`
+  igual a `CONFLICT`, tanto si el rechazo viene de la búsqueda como de un renombrado concurrente que
+  llegó antes. Consulta [Un valor que debe ser único](#unique-values).
 - La autoridad requerida es la que exige la actualización correspondiente: renombrar es editar el
   registro, no un acto de otra naturaleza.
 
@@ -565,6 +566,46 @@ identificador propio del dispositivo.
 
 La consola acuña los tokens por ti a partir de una plantilla por tipo de entidad, así que allí esto
 rara vez aparece. Es en la API y en el aprovisionamiento por script donde muerde primero.
+
+### Un valor que debe ser único {#unique-values}
+
+Algunos valores deben ser únicos: un token dentro de su inquilino, el `externalId` de un
+dispositivo, una clave de comando dentro de un perfil, el correo de una identidad, una sola
+membresía por identidad e inquilino. Una creación, actualización o renombrado que repetiría uno se
+rechaza, y el error lleva `extensions.code` igual a `CONFLICT`:
+
+```json
+{
+  "errors": [{
+    "message": "the request conflicts with an existing record: a value that must be unique is already in use",
+    "path": ["createDeviceType"],
+    "extensions": { "code": "CONFLICT" }
+  }]
+}
+```
+
+Decide por el código, no por el mensaje. Cuando el servicio tiene algo más que decir, el mensaje es
+su propia frase, por ejemplo al renombrar a un token que ya está en uso, y el código es el mismo. El
+texto propio de la base de datos sobre la colisión se sustituye por la frase de arriba, así que el
+mensaje no nombra ningún índice ni columna de la base de datos. La frase propia de un servicio
+puede repetir el token que enviaste.
+
+`CONFLICT` significa que la escritura chocó con un valor que debe ser único. Suele ser un valor que
+enviaste, pero puede ser uno que el servidor asigna durante la escritura, como el siguiente número
+de versión cuando dos publicaciones del mismo registro se ejecutan a la vez, y entonces un reintento
+funciona. Por eso el código no significa por sí solo que el registro que pediste ya exista. Solo lo
+significa cuando el único valor único en juego es tuyo, como el token de un inquilino que estás
+creando.
+
+Algunos rechazos parecen similares y no llevan `CONFLICT`:
+
+- Un guardado rechazado porque el registro cambió desde que lo leíste ("modified by another writer;
+  reload and try again") es una escritura obsoleta, no un duplicado.
+- El token de un inquilino eliminado queda reservado hasta que termina la eliminación. Crear un
+  inquilino con él se rechaza sin `CONFLICT`, porque el token no lo tiene un inquilino que puedas
+  usar.
+- Crear un comando con un token que ya está en uso no se rechaza: recibes el comando original.
+  Consulta [Emite un comando](../guides/sending-commands.md#issue-it).
 
 ## Límites de las solicitudes {#request-limits}
 

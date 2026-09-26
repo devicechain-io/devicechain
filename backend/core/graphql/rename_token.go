@@ -55,10 +55,10 @@ import (
 //
 // This is the floor, not the contract. A rename also has to be idempotent on its own
 // token, has to refuse a token another row holds — under contention as well as
-// without it, which is what rdb.IsUniqueViolation is for — and may carry a rule of
-// its own: updateDeviceProfile's rename is refused outright once the profile is
-// published or adopted, because published rules and dead-man rosters key on the
-// token from that point on. None of that can live here; all of it lives with the
+// without it (a raced loser is recognised by conflict.Is and answered with the
+// rename's own sentence) — and may carry a rule of its own: updateDeviceProfile's
+// rename is refused outright once the profile is published or adopted, because
+// published rules and dead-man rosters key on the token from that point on. None of that can live here; all of it lives with the
 // mutation.
 //
 // # 🔴 THE CALLERS ARE NOT LISTED, AND THAT IS DELIBERATE

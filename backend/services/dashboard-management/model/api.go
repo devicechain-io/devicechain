@@ -32,6 +32,11 @@ var ErrDefinitionTooLarge = errors.New("dashboard definition exceeds the maximum
 // ErrConflict is returned by UpdateDashboard when the caller passes the version it
 // edited (expectedUpdatedAt) and the row has moved on since — a concurrent edit
 // (a second tab / another writer). The caller should reload and re-apply.
+//
+// 🔴 DESPITE THE NAME, IT MUST NEVER BECOME A conflict.Error. That type's code, CONFLICT,
+// means "a value that must be unique is already in use", and a client (dcctl among them)
+// may treat it as "already exists, carry on" — which, for a lost update, would report a
+// save that never happened as done.
 var ErrConflict = errors.New("dashboard was modified by another writer; reload and try again")
 
 type Api struct {
