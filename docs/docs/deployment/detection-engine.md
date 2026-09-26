@@ -218,9 +218,10 @@ tolerance as a result — that is what tolerating out-of-order arrival means —
 The sliding kinds and duration rules **count what they discard**, once for each rule that
 discards a reading. `detect_late_samples_total` rises every time a reading arrives after the window
 it belonged to has passed, when a duration rule discards a matching reading further behind the
-frontier than its hold time, and when a reading from before a duration alarm was raised arrives
-after it. A fleet whose rules have gone quiet therefore has something to look at rather than
-silence; a store-and-forward upload is the usual cause. Tumbling-window and session rules discard
+frontier than its hold time, and when a reading that does not meet a duration rule's condition
+arrives after its alarm was raised but was taken inside the run that raised it, before the raise.
+A late reading older than the whole run is ignored and not counted: the run began after it. A
+fleet whose rules have gone quiet therefore has something to look at rather than silence; a store-and-forward upload is the usual cause. Tumbling-window and session rules discard
 silently and do not appear in it.
 
 A duration rule raises its alarm when the frontier passes the end of the hold, and the frontier
@@ -236,6 +237,12 @@ half-hour store-and-forward upload would mean delaying every time-based decision
 by half an hour. Where that trade does not work, the answer is to shorten the upload batches or to
 keep window-shaped rules off those metrics — see [connecting a
 device](../guides/connecting-a-device.md).
+
+The shared frontier also applies to **device clocks**. A device whose timestamps consistently trail
+the rest of the fleet by more than a duration rule's hold time plus the lateness tolerance, whether
+from a slow clock or a slow path to the platform, never raises that rule: every reading of it that
+meets the condition is discarded as late and counted on `detect_late_samples_total`. Correct the
+device's clock, or give the rule a hold time longer than the lag.
 
 The same applies to readings that waited **inside the platform**. While `event-sources` is down,
 the platform broker keeps storing what devices publish over MQTT, and `event-sources` works through

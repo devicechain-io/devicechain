@@ -1147,12 +1147,22 @@ func (e *Engine) resolve(r Rule, key SeriesKey, at time.Time) {
 // H2/F5). Emitting no Resolved is correct: downstream never observed a Raise, so it is owed no
 // Resolve. Called on the single-writer loop.
 //
-// It also drops a Duration series' run. The run is kept after its raise (fireDuration) and its
-// hold timer is spent, so without this a series whose raise was dropped would sit in an open run
-// with no timer and never raise again; dropped, the next match opens a fresh run.
+// It also drops a Duration series' open run once its hold timer is spent. The run is kept after its
+// raise (fireDuration), so without this a series whose raise was dropped would sit in an open run
+// with no timer and never raise again; dropped, the next match opens a fresh run. Nothing else is
+// dropped: the raise and the break that ended or restarted its run can land in the same drain, and
+// by the time the raise is cleared the series already holds that break's state. A kept break must
+// survive, or a late match older than it would open a run across it and raise falsely; a restarted
+// run's hold timer is still live and will raise on its own.
 func (e *Engine) ClearRaised(key SeriesKey) {
 	delete(e.raised, key)
-	e.dropRun(key)
+	st, ok := e.runs[key]
+	if !ok || !st.running {
+		return
+	}
+	if r, known := e.rules[key.Rule]; !known || !st.since.Add(r.Hold).After(e.wm.now) {
+		e.dropRun(key)
+	}
 }
 
 // --- snapshot / restore (atomic-with-sequence in the real store; bytes here) ---

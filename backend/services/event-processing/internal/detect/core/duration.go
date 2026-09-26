@@ -31,7 +31,13 @@ type durState struct {
 //   - on a RAISED series, at or after the raise, it is the falling edge and is still the current
 //     word: it resolves the alarm and drops the run. Refusing it would make the alarm immortal for
 //     a device whose readings always arrive that late. No kept break is needed afterwards: a match
-//     it could be crossed by is older still, so the admission rule already refuses it.
+//     it could be crossed by is older still, so the admission rule already refuses it. The run is
+//     dropped even when the break is older than the run's newest match, i.e. the newest reading
+//     shows the condition resumed. Restarting at lastMatch, as a break inside the budget does,
+//     would be the consistent answer; dropping is the conservative one: the alarm clears while the
+//     newest reading still supports it, and re-raises only once a match arriving afterwards has
+//     held for the hold. It
+//     can delay a raise, never invent one.
 //   - otherwise it can change nothing, so it is ignored. An open run it falls inside has a
 //     deadline at or before t+Hold <= watermark, so its hold timer already fired (advance runs
 //     before apply) and the series is raised; a kept break it would extend already refuses, via
@@ -43,7 +49,7 @@ type durState struct {
 //	match      open run                            lastMatch = max(lastMatch, t); never extends a run backwards
 //	match      kept break, t <= lastBreak          ignored: the break is the newer word
 //	match      kept break with t > lastBreak, none open a run since = lastMatch = t, hold timer at t+Hold
-//	non-match  raised, t < raisedAt                ignored and counted (see below)
+//	non-match  raised, t < raisedAt                ignored; counted only inside the run, t >= since (see 3)
 //	non-match  open run, t < since                 ignored: the run began after it
 //	non-match  open run, since <= t < lastMatch    RESTART: resolve at t, since = lastMatch, hold timer at lastMatch+Hold
 //	non-match  open run, t >= lastMatch            BREAK: resolve at t, kept break at t, expiry timer at t+Hold
@@ -68,7 +74,9 @@ type durState struct {
 //     it is counted in lateSamples so the contradiction is visible. This includes a break carried
 //     in the SAME message as the reading whose envelope moved the frontier past the deadline. So
 //     the guarantee is: a break that reaches the engine before the frontier passes the deadline
-//     is always honoured; one that arrives later is counted, not applied.
+//     is always honoured; one that arrives later is counted, not applied. A late break older than
+//     the run itself is neither applied nor counted: the run began after it, so it contradicts
+//     nothing.
 //  4. It is conservative. Restarting at lastMatch (not at the first match after the break, which
 //     is not retained) and never extending a run backwards can only delay a raise.
 //

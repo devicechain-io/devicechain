@@ -2514,12 +2514,18 @@ de la regla. Antes de esta versión, una lectura tardía se aplicaba como si fue
 
 Una lectura que no cumple la condición sigue terminando una alarma de duración elevada por tarde que
 llegue, salvo que sea anterior a la alarma: una lectura tardía de antes de que se elevara la alarma,
-que llega después, no la retira, y se cuenta en `detect_late_samples_total`. Como ahora las lecturas
+que llega después, no la retira, y se cuenta en `detect_late_samples_total` cuando se tomó dentro de
+la racha que elevó la alarma (una anterior a toda la racha se ignora). Como ahora las lecturas
 se colocan donde corresponde, una alarma de duración puede elevarse más pronto o más tarde que antes, según
 el orden en que llegaron sus lecturas; ya no se eleva sobre una racha que las lecturas muestran
 interrumpida. Como hasta ahora, un episodio solo es seguro que eleve la alarma si dura su tiempo de
 sostenimiento más la tolerancia de retraso. Consulte [qué significa «cuándo» para el motor de
 detección](./detection-engine.md#timing-what-when-means).
+
+Como la frontera es compartida por toda la instancia, un dispositivo cuyas marcas de tiempo van
+sistemáticamente por detrás del resto de la flota más que el tiempo de sostenimiento de una regla de
+duración más la tolerancia de retraso, por un reloj lento o un camino lento, nunca eleva esa regla: cada lectura suya que cumple
+la condición se descarta y se cuenta como tardía. Antes de esta versión esas lecturas se aplicaban.
 
 La previsualización del lienzo se ejecuta sin tolerancia de retraso, así que descarta una lectura
 tardía sin margen. Ahora indica cuántas lecturas apartó por tardías, para las reglas de duración y

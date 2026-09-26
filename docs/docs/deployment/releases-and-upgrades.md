@@ -2353,11 +2353,17 @@ late reading was applied as if it were the newest one:
 
 A reading that does not meet the condition still ends a raised duration alarm however late it
 arrives, unless it is older than the alarm: a late reading from before the alarm was raised,
-arriving after it, does not withdraw it, and is counted on `detect_late_samples_total`. Because
+arriving after it, does not withdraw it, and is counted on `detect_late_samples_total` when it was
+taken inside the run that raised the alarm (one older than the whole run is ignored). Because
 readings are now placed where they belong, a duration alarm can raise earlier or later than it did
 before, depending on the order its readings arrived in; it no longer raises on a run the readings
 show was broken. As before, an episode is certain to raise only if it lasts its hold time plus the
 lateness tolerance. See [what "when" means to the detection engine](./detection-engine.md#timing-what-when-means).
+
+Because the frontier is shared by the whole instance, a device whose timestamps consistently trail
+the rest of the fleet by more than a duration rule's hold time plus the lateness tolerance, from a
+slow clock or a slow path, never raises that rule: each of its readings that meets the condition is discarded and counted as
+late. Before this release such readings were applied.
 
 The canvas preview runs with no lateness tolerance, so it discards a late reading with no margin.
 It now says how many readings it set aside as late, for duration rules and the sliding kinds.

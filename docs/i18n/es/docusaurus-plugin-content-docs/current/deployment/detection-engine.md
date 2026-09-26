@@ -243,8 +243,10 @@ Los tipos deslizantes y las reglas de duración **cuentan lo que descartan**, un
 regla que descarta una lectura. `detect_late_samples_total` sube cada vez que una lectura llega
 después de que haya pasado la ventana a la que pertenecía, cuando una regla de duración descarta una
 lectura que cumple la condición y queda más atrás de la frontera que su tiempo de sostenimiento, y
-cuando una lectura de antes de que se elevara una alarma de duración llega después. Así, una flota
-cuyas reglas se han quedado calladas tiene algo que mirar en lugar de silencio; una subida acumulada
+cuando una lectura que no cumple la condición de una regla de duración llega después de que se
+elevara su alarma pero se tomó dentro de la racha que la elevó, antes de la elevación. Una lectura
+tardía anterior a toda la racha se ignora y no se cuenta: la racha empezó después de ella. Así, una
+flota cuyas reglas se han quedado calladas tiene algo que mirar en lugar de silencio; una subida acumulada
 es la causa habitual. Los agregados de ventana fija y las reglas de sesión descartan en silencio y
 no aparecen ahí.
 
@@ -262,6 +264,13 @@ subir la tolerancia para cubrir una subida acumulada de media hora significaría
 toda decisión basada en el tiempo, para todos los inquilinos. Donde ese intercambio no funcione, la
 respuesta es acortar los lotes de subida o mantener las reglas con ventana fuera de esas métricas —
 vea [conectar un dispositivo](../guides/connecting-a-device.md).
+
+La frontera compartida también afecta a los **relojes de los dispositivos**. Un dispositivo cuyas
+marcas de tiempo van sistemáticamente por detrás del resto de la flota más que el tiempo de
+sostenimiento de una regla de duración más la tolerancia de retraso, ya sea por un reloj lento o por
+un camino lento hasta la plataforma, nunca eleva esa regla: cada lectura suya que cumple la condición se descarta por tardía
+y se cuenta en `detect_late_samples_total`. Corrija el reloj del dispositivo o dé a la regla un
+tiempo de sostenimiento mayor que el retraso.
 
 Lo mismo se aplica a las lecturas que esperaron **dentro de la plataforma**. Mientras
 `event-sources` está caído, el broker de la plataforma sigue guardando lo que los dispositivos

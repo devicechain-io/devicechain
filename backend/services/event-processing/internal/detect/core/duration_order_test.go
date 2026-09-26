@@ -336,3 +336,47 @@ func TestClearRaisedLetsADurationRaiseAgain(t *testing.T) {
 	expectDetections(t, "m@11", send(e, 2, "d", 11, true))
 	expectDetections(t, "hold again", advanceTo(e, 21), raisedAt("d", 21))
 }
+
+// A late break that predates the run of a raised alarm contradicts nothing: it is ignored and NOT
+// counted as late. Only a break inside the run it arrives behind is counted
+// (TestDurationBreakOlderThanTheRaiseIsIgnored pins that side).
+func TestDurationBreakOlderThanTheRaisedRunIsNotCounted(t *testing.T) {
+	e := durEngine(30*time.Second, 10*time.Second)
+	send(e, 1, "d", 20, true)
+	expectDetections(t, "m@65", send(e, 2, "d", 65, true), raisedAt("d", 30))
+	expectDetections(t, "late non@15", send(e, 3, "d", 15, false))
+	expectLate(t, e, 0)
+	// Positive control: a break inside the run, equally late, is counted.
+	expectDetections(t, "late non@22", send(e, 4, "d", 22, false))
+	expectLate(t, e, 1)
+}
+
+// ClearRaised leaves a KEPT BREAK alone. The raise and the break that ended its run can land in one
+// drain: here a message stamped 16 moves the frontier to 11 (firing the hold at 10) and carries
+// non@12. When the runtime then drops that raise, the break at 12 must survive, or a late m@11
+// inside the budget would open a run across it and raise falsely at 21.
+func TestClearRaisedKeepsABreakFromTheSameDrain(t *testing.T) {
+	e := durEngine(5*time.Second, 10*time.Second)
+	send(e, 1, "d", 0, true)
+	e.ProcessResolved(2, at(16), []Event{{Seq: 2, Key: SeriesKey{Rule: "r", Series: "d"}, Time: at(12), Match: false}})
+	expectDetections(t, "batch at 16 carrying non@12", e.Drain(), raisedAt("d", 10), resolvedAt("d", 12))
+	e.ClearRaised(SeriesKey{Rule: "r", Series: "d"})
+	expectDetections(t, "late m@11", send(e, 3, "d", 11, true))
+	expectDetections(t, "frontier 30", advanceTo(e, 35))
+	// Positive control: a match after the break still opens a run and raises.
+	expectDetections(t, "m@36", send(e, 4, "d", 36, true))
+	expectDetections(t, "frontier 46", advanceTo(e, 51), raisedAt("d", 46))
+}
+
+// ClearRaised leaves a RESTARTED run alone: its hold timer is still live, so it raises on its own.
+// Here the raise at 10 and a restart at the newest match (13) land in one drain.
+func TestClearRaisedKeepsARestartedRunsLiveHold(t *testing.T) {
+	e := durEngine(5*time.Second, 10*time.Second)
+	send(e, 1, "d", 0, true)
+	k := SeriesKey{Rule: "r", Series: "d"}
+	e.ProcessResolved(2, at(16), []Event{{Seq: 2, Key: k, Time: at(13), Match: true}, {Seq: 2, Key: k, Time: at(12), Match: false}})
+	expectDetections(t, "batch at 16 carrying m@13, non@12", e.Drain(), raisedAt("d", 10), resolvedAt("d", 12))
+	e.ClearRaised(k)
+	expectDetections(t, "frontier 22", advanceTo(e, 27))
+	expectDetections(t, "frontier 23", advanceTo(e, 28), raisedAt("d", 23))
+}
