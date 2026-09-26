@@ -1680,6 +1680,9 @@ reinicia una vez.
 Si vigila las métricas de persistencia de `event-management`, o ha fijado el pool de conexiones de
 un servicio en 5 o menos, lea «Los eventos se persisten por lotes».
 
+Si vigila los registros o las métricas de `device-management`, o ejecuta NATS en clúster, lea
+«device-management sigue resolviendo eventos cuando un servidor NATS se cae de la red».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -3037,6 +3040,24 @@ como planifica su pérdida.
 
 El desalojo a los 30 segundos de los pods de los servicios cuando se pierde un nodo no cambia y
 es deliberado, y ahora se comprueba en cada pod que renderiza el chart, incluida la consola.
+
+#### device-management sigue resolviendo eventos cuando un servidor NATS se cae de la red
+
+No hay nada que hacer en la actualización.
+
+- **Una búsqueda en una de las cachés de clave-valor de `device-management` espera como máximo
+  medio segundo,** en lugar de los cinco segundos que se permiten a una petición NATS. Cuando un
+  servidor NATS se caía de la red sin cerrar sus conexiones, parte de estas búsquedas se le
+  enviaba y cada una esperaba los cinco segundos completos, así que la resolución de eventos bajaba
+  a unos pocos eventos por segundo durante cerca de un minuto, sin registrar nada.
+- **Una caché que agota el tiempo, o por la que no responde ningún servidor, se omite durante
+  cinco segundos,** y sus búsquedas van a la base de datos. `device-management` registra una
+  advertencia cuando eso empieza y una línea cuando la caché vuelve a responder. Consulte
+  [Cachés que dejan de responder](./observability.md#kv-caches) para las cuatro métricas nuevas.
+- **Eliminar una entrada de la caché tras un cambio nunca se omite,** y una eliminación que falla
+  ahora se registra (`A key-value cache eviction failed`); antes, un fallo pasaba en silencio.
+- **Resolver un evento que tarda más de cinco segundos ahora se registra como advertencia**
+  (`Event resolution is slow`), como máximo una vez cada 30 segundos.
 
 ### La transición única a la ingesta duradera
 

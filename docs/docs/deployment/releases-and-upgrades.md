@@ -1573,6 +1573,9 @@ maintained image": a fresh install failed without it, your nodes now pull that i
 If you watch `event-management`'s persistence metrics, or set a service's connection pool to 5 or
 fewer, read "Events are persisted in batches".
 
+If you watch `device-management`'s logs or metrics, or run NATS as a cluster, read
+"device-management keeps resolving events when a NATS server drops off the network".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2834,6 +2837,24 @@ the way you plan its loss.
 
 The 30-second node-loss eviction on the services' pods is unchanged and deliberate, and is now
 checked on every pod the chart renders, the console included.
+
+#### device-management keeps resolving events when a NATS server drops off the network
+
+Nothing needs doing at the upgrade.
+
+- **A lookup in one of `device-management`'s key-value caches waits at most half a second,**
+  instead of the five seconds a NATS request is allowed. When a NATS server dropped off the
+  network without closing its connections, some of these lookups were sent to it and each waited
+  the full five seconds, so event resolution slowed to a few events a second for about a minute,
+  and nothing was logged.
+- **A cache that times out, or that no server answers for, is skipped for five seconds,** and its
+  lookups go to the database. `device-management` logs a warning when that starts and a line when
+  the cache answers again. See [Caches that stop answering](./observability.md#kv-caches) for the
+  four new metrics.
+- **Removing a cache entry after a change is never skipped,** and a removal that fails is now
+  logged (`A key-value cache eviction failed`); before, a failure was silent.
+- **Resolving an event that takes longer than five seconds is now logged as a warning**
+  (`Event resolution is slow`), at most once every 30 seconds.
 
 ### The one-time durable-ingest cutover
 

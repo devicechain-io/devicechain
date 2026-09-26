@@ -141,7 +141,21 @@ type streamMetrics struct {
 	// everything queued behind it. Comparing the two is
 	// comparing a latency with a latency-plus-queueing.
 	publishLatency *prometheus.HistogramVec
+
+	// The key-value caches (cache.go), by the cache's name in the kv inventory — a
+	// platform-declared set of a handful, never a tenant. They answer the question a cache
+	// that has stopped answering raises: is it being skipped (cacheUnavailable), since when
+	// and why (cacheFailures), what that is costing the database (cacheBypassed), and how
+	// long the operations that did run took (cacheLatency).
+	cacheLatency     *prometheus.HistogramVec
+	cacheFailures    *prometheus.CounterVec
+	cacheBypassed    *prometheus.CounterVec
+	cacheUnavailable *prometheus.GaugeVec
 }
+
+// cacheBuckets spans a loopback KV answer to the Get/Set budget. Nothing lands above it
+// except a Delete, whose budget is longer (see cacheDeleteTimeout).
+var cacheBuckets = []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1}
 
 const (
 	// publishModeSync is a MessageWriter publish: one request, waited on.
@@ -220,9 +234,88 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"behind an earlier publish still in flight. A publish the broker never answered is counted "+
 				"at the 5 s ceiling.",
 			[]string{"suffix", "mode"}, publishBuckets),
+		cacheLatency: ms.NewHistogramVec("kv_cache_request_duration_seconds",
+			"Time a key-value cache operation took. A get or set is cut off at 0.5 s; a delete at 5 s.",
+			[]string{"cache", "op"}, cacheBuckets),
+		cacheFailures: ms.NewCounterVec("kv_cache_failures_total",
+			"Key-value cache operations that timed out (reason=timeout) or failed (reason=error). A timeout, "+
+				"or a cache nobody answers for, opens the cache's 5 s bypass.",
+			[]string{"cache", "op", "reason"}),
+		cacheBypassed: ms.NewCounterVec("kv_cache_bypassed_total",
+			"Key-value cache reads and writes skipped because the cache was bypassed; they went to the database.",
+			[]string{"cache", "op"}),
+		cacheUnavailable: ms.NewGaugeVec("kv_cache_unavailable",
+			"1 while the key-value cache is bypassed after an operation timed out or could not reach it.",
+			[]string{"cache"}),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
+}
+
+// cacheObserver records one Cache's metrics. Every method is a no-op on a nil receiver,
+// which is what a Cache built over a test double, or by a manager with no metrics, has.
+type cacheObserver struct {
+	m     *streamMetrics
+	cache string
+}
+
+// cacheObserver returns the recorder for the named cache, or nil when there are no metrics.
+func (m *streamMetrics) cacheObserver(name string) *cacheObserver {
+	if m == nil || m.cacheLatency == nil {
+		return nil
+	}
+	return &cacheObserver{m: m, cache: name}
+}
+
+// init creates the cache's series at 0 when the cache is opened, for the reason
+// initDurable gives: a counter that first appears at a nonzero value has nothing for
+// increase() to start from, and "none yet" should not read the same as "not measured".
+func (o *cacheObserver) init() {
+	if o == nil {
+		return
+	}
+	for _, op := range []string{"get", "set", "delete"} {
+		o.m.cacheLatency.WithLabelValues(o.cache, op)
+		for _, reason := range []string{"timeout", "error"} {
+			o.m.cacheFailures.WithLabelValues(o.cache, op, reason).Add(0)
+		}
+	}
+	for _, op := range []string{"get", "set"} {
+		o.m.cacheBypassed.WithLabelValues(o.cache, op).Add(0)
+	}
+	o.m.cacheUnavailable.WithLabelValues(o.cache).Set(0)
+}
+
+func (o *cacheObserver) observe(op string, d time.Duration) {
+	if o == nil {
+		return
+	}
+	o.m.cacheLatency.WithLabelValues(o.cache, op).Observe(d.Seconds())
+}
+
+func (o *cacheObserver) failure(op, reason string) {
+	if o == nil {
+		return
+	}
+	o.m.cacheFailures.WithLabelValues(o.cache, op, reason).Inc()
+}
+
+func (o *cacheObserver) bypassed(op string) {
+	if o == nil {
+		return
+	}
+	o.m.cacheBypassed.WithLabelValues(o.cache, op).Inc()
+}
+
+func (o *cacheObserver) setUnavailable(unavailable bool) {
+	if o == nil {
+		return
+	}
+	v := 0.0
+	if unavailable {
+		v = 1
+	}
+	o.m.cacheUnavailable.WithLabelValues(o.cache).Set(v)
 }
 
 // initPublish creates a writer's latency series at count 0 when the writer is built, for the

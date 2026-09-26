@@ -427,6 +427,45 @@ Ningún aviso lee la serie siguiente, pero es la que hay que mirar cuando public
   encima del bucket `le="5"` son las publicaciones que llegaron a él. Una publicación
   `mode="pipelined"` puede contarse por encima de 5 segundos sin haber llegado al límite.
 
+## Cachés que dejan de responder {#kv-caches}
+
+`device-management` guarda las búsquedas que repite para cada evento (un dispositivo por su
+token, las relaciones seguidas del dispositivo, el perfil publicado de su tipo y las pertenencias
+a grupos) en buckets de clave-valor de NATS. Cada búsqueda espera como máximo medio segundo. Un
+bucket que no responde a tiempo, o por el que no responde ningún servidor, se omite durante cinco
+segundos: sus búsquedas van directamente a la base de datos, que contiene los mismos datos, y
+después se vuelve a intentar una búsqueda. Solo cuando esa búsqueda obtiene respuesta el bucket
+deja de omitirse. El servicio registra una advertencia cuando un bucket se omite por primera vez
+(`A key-value cache stopped answering`) y una línea cuando vuelve a responder (`A key-value cache
+is answering again`), con cuánto tiempo pasó y cuántas búsquedas y escrituras fueron a la base de
+datos mientras tanto. Un error con el que responde el bucket, como un bucket lleno que rechaza una
+escritura, se cuenta pero no hace que se omita.
+
+La causa habitual es un servidor NATS que se ha caído de la red sin cerrar sus conexiones. Todas
+las réplicas de un bucket responden lecturas, así que hasta que los demás servidores notan el
+silencio, lo que tarda entre un minuto y un minuto y medio, parte de las lecturas se envía al
+servidor que ya no está. Durante ese tiempo los eventos se siguen resolviendo, a costa de más
+lecturas de la base de datos.
+
+Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
+Espera hasta cinco segundos, porque solo el líder del bucket puede aceptarlo. Si aun así falla, el
+servicio registra `A key-value cache eviction failed`, y la entrada antigua puede servirse hasta
+que caduque, que es el tiempo de vida configurado de la caché.
+
+- **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 mientras el bucket se está
+  omitiendo.
+- **`devicechain_devicemanagement_kv_cache_failures_total{cache, op, reason}`**: operaciones que
+  agotaron el tiempo (`reason="timeout"`) o fallaron (`reason="error"`).
+- **`devicechain_devicemanagement_kv_cache_bypassed_total{cache, op}`**: búsquedas y escrituras que
+  fueron a la base de datos en su lugar.
+- **`devicechain_devicemanagement_kv_cache_request_duration_seconds{cache, op}`**: cuánto tardó
+  cada operación. Una búsqueda o una escritura se corta a medio segundo, una eliminación a cinco
+  segundos.
+
+Por otra parte, resolver un evento que tarda más de cinco segundos, por la razón que sea, se
+registra como advertencia (`Event resolution is slow`): la primera vez de inmediato y después como
+máximo una línea cada 30 segundos, con cuántas hubo y la más lenta.
+
 ## Relacionado
 
 - **[Arrancar una instancia](./bootstrap.md#install)** — `dcctl install`, el comando que

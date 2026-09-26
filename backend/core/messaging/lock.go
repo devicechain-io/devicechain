@@ -58,8 +58,10 @@ func (nmgr *NatsManager) NewDistributedLock(ttl time.Duration) (*DistributedLock
 // the backoff between acquisition attempts, which returns the context error rather
 // than sleeping out the wait, and logic itself, which is handed the same context. The
 // KV round trips — Create here, Delete in the release — do NOT observe it, because
-// the nats.go v1 KeyValue interface takes no context; see the note on Cache. So
-// cancelling shortens the RETRYING, not an individual attempt.
+// the lock holds the legacy nats.go KeyValue handle, whose calls take no context, so
+// each is bounded only by the JetStream request timeout. (Cache has moved to the
+// jetstream package's KeyValue, whose calls do; the lock has not.) So cancelling
+// shortens the RETRYING, not an individual attempt.
 func (l *DistributedLock) WithLock(ctx context.Context, name string, logic func(ctx context.Context) error) error {
 	key := kvKey(name)
 	holder := uuid.NewString()
