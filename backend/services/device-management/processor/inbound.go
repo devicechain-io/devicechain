@@ -520,6 +520,9 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	// would bound the undeclared-position warning per worker and report the same
 	// misconfiguration once per worker instead of once.
 	locationMemo := newUndeclaredLocationMemo()
+	// ONE slow-resolve reporter for the pool, for the same reason: a stall holds every
+	// worker at once, and a reporter per worker would log it once per worker.
+	slow := newSlowResolveReporter()
 	// ONE counter for the whole pool, for the same reason as the memo above: the
 	// workers share the inbound channel, so a per-worker counter would report a
 	// fleet's clock skew as N unrelated series. It comes from the instruments built in
@@ -538,6 +541,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, eventTime, iproc.messages,
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics.red,
 			locationMemo)
+		resolver.slow = slow
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to
