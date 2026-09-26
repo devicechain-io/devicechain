@@ -578,7 +578,10 @@ var All = []Stream{
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
 	// SHARED/SERVER, DOUBLE/LONG) is upserted or deleted, so a DYNAMIC detection
 	// threshold can read the device's own attribute instead of a compile-time
-	// literal. At-most-once; consumer keeps a durable projection.
+	// literal. At-most-once; the consumer keeps a durable projection, and a fact
+	// that never reaches the stream is repaired by event-processing's reconcile
+	// against device-management (at every DETECT term start and every five
+	// minutes), not by replay.
 	{Suffix: DeviceAttribute, Areas: []string{"device-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
 
 	// PER-DEVICE: the concrete subject carries the target device's token as a
@@ -646,14 +649,21 @@ var All = []Stream{
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
 
-	// Emitted post-commit on profile publish, carrying the ENABLED rules frozen
-	// into the new version, keyed on profile-version token. At-most-once.
+	// Emitted post-commit on profile publish and rollback, carrying the ENABLED
+	// rules of the now-active version, keyed on profile-version token, and the
+	// stored activation instant. At-most-once; the consumer keeps a durable
+	// projection, and a fact that never reaches the stream is repaired by
+	// event-processing's reconcile against device-management (at every DETECT term
+	// start and every five minutes), not by replay.
 	{Suffix: DetectionRulesPublished, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
 
 	// Emitted post-commit when a device is created or re-typed, naming the device
 	// and the stable profile token its type adopts, so DETECT can arm absence for
 	// a device that has NEVER reported (the dead-man roster). Removal rides the
-	// entity-deleted fact rather than this one. At-most-once.
+	// entity-deleted fact rather than this one. At-most-once; the consumer keeps a
+	// durable projection, and a fact that never reaches the stream is repaired by
+	// event-processing's reconcile against device-management (at every DETECT term
+	// start and every five minutes), not by replay.
 	{Suffix: DeviceRoster, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that

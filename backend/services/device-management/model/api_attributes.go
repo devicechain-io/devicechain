@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -124,13 +125,16 @@ func dynamicThresholdEligible(entityType, scope string) bool {
 	if entity.Type(entityType) != entity.TypeDevice {
 		return false
 	}
-	switch AttributeScope(scope) {
-	case AttributeScopeShared, AttributeScopeServer:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(thresholdAttributeScopes, scope)
 }
+
+// thresholdAttributeScopes are the platform-set scopes a dynamic threshold reads — the one list
+// both the emit (dynamicThresholdEligible) and the reconcile door's SQL narrow on.
+var thresholdAttributeScopes = []string{string(AttributeScopeShared), string(AttributeScopeServer)}
+
+// numericAttributeValueTypes are the value types numericAttributeValue parses as a number — the
+// one list both it and the reconcile door's SQL narrow on.
+var numericAttributeValueTypes = []string{string(AttributeValueDouble), string(AttributeValueLong)}
 
 // normalizeAttributeValue enforces the storage-form invariant the facet-selector lowering
 // (ADR-061 G3 §3.4) relies on: a stored value is always well-formed for its value_type, so
@@ -227,9 +231,7 @@ func canonicalNumericText(valueType string, value *string) (*string, error) {
 // JSON attribute, a nil value, or an unparseable/non-finite number yields ok=false — the
 // caller then emits a removal so no stale numeric value survives in the projection.
 func numericAttributeValue(valueType string, value *string) (float64, bool) {
-	switch AttributeValueType(valueType) {
-	case AttributeValueDouble, AttributeValueLong:
-	default:
+	if !slices.Contains(numericAttributeValueTypes, valueType) {
 		return 0, false
 	}
 	if value == nil {

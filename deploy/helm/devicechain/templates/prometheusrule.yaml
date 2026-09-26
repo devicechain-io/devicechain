@@ -93,6 +93,36 @@ spec:
           annotations:
             summary: "Geofence edits are not being announced to the detection engine"
             description: "device-management could not publish a geofence-set manifest — a marshal error, a broker refusal, or a transport fault. The fence edit itself succeeded and is durable; what failed is telling event-processing about it, so containment holds the previous fence set until the five-minute reconcile sweep repairs it. A sustained rate means every fence edit is taking minutes to take effect. If this started after a broker configuration change, check that infrastructure.nats.streamMaxMsgSize is not set below what a manifest needs — the service logs a warning naming both sizes at startup."
+        # The rule, roster and attribute notifications (the fact reconcile, ADR-044 decision 3
+        # for DETECT): the publish side's counter, the reconcile's repairs, and the reconcile
+        # itself failing. Three alerts because they are three different answers — a broker
+        # refusing sends, notifications lost somewhere, and the repair itself not running.
+        - alert: DeviceFactPublishFailing
+          expr: sum by (fact) (rate(devicechain_devicemanagement_fact_publish_failures_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Rule, device or attribute changes are not being announced to the detection engine"
+            description: "device-management could not publish a detection-rule, device-roster or device-attribute notification (the fact label says which) — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine picks it up at its next comparison with device-management, within a few minutes, instead of at once. Sustained means every such change is taking minutes to take effect: look at the broker."
+        - alert: DetectFactsRepaired
+          expr: sum by (projection) (increase(devicechain_eventprocessing_detect_fact_reconcile_repairs_total{namespace="{{ $ns }}"}[30m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The detection engine repaired changes it had never been told about"
+            description: "event-processing found published rules, active profile versions, device memberships or threshold attributes (the projection label says which) that differed from device-management, and corrected them. Detection is right again; until the repair it was running on the old state. A change still in flight is not counted — only one whose notification never arrived. Recurring means notifications are being lost: see DeviceFactPublishFailing and the broker."
+        - alert: DetectFactReconcileFailing
+          expr: sum by (projection) (rate(devicechain_eventprocessing_detect_fact_reconcile_failures_total{namespace="{{ $ns }}"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The detection engine cannot compare its rules and devices with device-management"
+            description: "event-processing's comparison with device-management (or the tenant list from user-management) is failing; the projection label says which part. Nothing is removed while it fails; what is lost is the repair — a missed rule, device or threshold change stays missed until the comparison succeeds. The tenant and cause are in event-processing's error log. Check device-management and user-management health and the service secret; during a rolling upgrade a message that device-management is running an older build is expected briefly."
         - alert: DetectFenceGeometryUnresolved
           expr: sum(rate(devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m

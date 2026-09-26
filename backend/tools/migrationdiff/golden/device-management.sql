@@ -685,7 +685,8 @@ CREATE TABLE "device-management".device_profiles (
  category character varying(64),
  provenance character varying(256),
  active_version integer,
- location_declaration jsonb
+ location_declaration jsonb,
+ active_since timestamp with time zone
 );
 CREATE TABLE "device-management".device_replacements (
  id bigint NOT NULL,
@@ -732,7 +733,8 @@ CREATE TABLE "device-management".devices (
  description character varying(1024),
  metadata jsonb,
  device_type_id bigint,
- external_id character varying(256)
+ external_id character varying(256),
+ expected_since timestamp with time zone
 );
 CREATE TABLE "device-management".entity_attributes (
  id bigint NOT NULL,

@@ -68,9 +68,14 @@ var (
 	// seeds its live projection from. Both are nil when the seam is unconfigured (no service secret
 	// or no device-management coordinate), which disables the projection and degrades a geofence
 	// preview loudly — see buildFenceSetSeam.
-	FenceSets               runtime.FenceSetSource
-	CurrentFenceSets        runtime.CurrentFenceSetSource
-	FenceManifests          runtime.FenceManifestResolver
+	FenceSets        runtime.FenceSetSource
+	CurrentFenceSets runtime.CurrentFenceSetSource
+	FenceManifests   runtime.FenceManifestResolver
+	// DeviceManagementFacts is the seam the DETECT fact reconcile reads device-management's
+	// rules, roster and threshold attributes (and user-management's tenant list) through, to
+	// repair a projection whose fact never reached its stream. Nil when the seam is
+	// unconfigured — see buildFactReconcileSeam.
+	DeviceManagementFacts   processor.DeviceManagementFacts
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
 	// ReactDispatcher is the REACT stage's derived-event consumer (ADR-051 slice 5b/5c). Since the
@@ -166,10 +171,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// device-state (projection) — event-processing's DETECT tap (ADR-051).
 	//
 	// 🔴 EVERY DETECT DURABLE IS TERM-GATED, NOT JUST THIS ONE. The fact consumers
-	// persist and ack per message with no checkpoint gate of their own, and the leader
-	// has no periodic reconcile for the registry, the attribute view or dead-man
-	// arming — only the fence view sweeps. So a fact a zombie acks after the new
-	// leader's catch-up is invisible until that leader restarts.
+	// persist and ack per message with no checkpoint gate of their own. The leader's fact
+	// reconcile repairs the rule, active-version, roster and attribute PROJECTIONS against
+	// device-management at every term start and every five minutes, and re-signals what it
+	// repairs — but a row a zombie wrote CORRECTLY after the new leader's catch-up differs
+	// from nothing, so the reconcile never re-reads it into the live registry, attribute view
+	// or dead-man arming. That residual (a split brain) still lasts until the next term build.
 	revents, err := nmgr.NewReader(streams.ResolvedEvents, gated)
 	if err != nil {
 		return err
@@ -310,6 +317,10 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	ResolvedEventsProcessor.FenceSets = CurrentFenceSets
 	ResolvedEventsProcessor.VersionedFenceSets = FenceSets
 	ResolvedEventsProcessor.FenceManifests = FenceManifests
+	// The fact reconcile (ADR-044 decision 3 for the DETECT projections): the leader compares the
+	// rule, active-version, roster and attribute projections with device-management at the start
+	// of every term and every five minutes, and repairs what a lost fact left behind.
+	ResolvedEventsProcessor.DeviceManagement = DeviceManagementFacts
 	if err := ResolvedEventsProcessor.Initialize(context.Background()); err != nil {
 		return err
 	}
@@ -523,6 +534,40 @@ func buildFenceSetSeam() (runtime.FenceSetSource, runtime.CurrentFenceSetSource,
 		geofence.NewGeometryCache(geofence.DefaultMaxCachedVertices))
 }
 
+// buildFactReconcileSeam constructs the seam the DETECT fact reconcile reads through: the tenant
+// list from user-management (tenant:read, the SYSTEM-tier authority its one cross-tenant query
+// takes) and the three reconcile doors from device-management (device:read, the authority every
+// other device read takes). As with the fence seam the tenant is never a query argument — it rides
+// the service token's tenant header, and device-management's rows are tenant-scoped.
+//
+// It is enabled only when the shared service secret and BOTH coordinates are set. Otherwise it
+// returns nil, and the reconcile is off: a rule, device or attribute change whose notification
+// was lost then stays lost until the next change — which is the behaviour before the reconcile
+// existed, and is said loudly here rather than discovered.
+func buildFactReconcileSeam() processor.DeviceManagementFacts {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	const off = " — the DETECT fact reconcile is OFF: a lost rule, device or attribute notification is repaired only by the next change to the same thing."
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Msg("Service secret not configured" + off)
+		return nil
+	}
+	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement)" + off)
+		return nil
+	}
+	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("user-management endpoint not configured (infrastructure.userManagement)" + off)
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing",
+		[]string{string(auth.TenantRead), string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	log.Info().Str("deviceManagement", dmURL).Str("userManagement", umURL).
+		Msg("DETECT fact reconcile ENABLED: the leader compares its rules, roster and threshold attributes with device-management at every term start and every five minutes.")
+	return processor.NewDeviceManagementFactsClient(client, dmURL, umURL, Microservice.InstanceId)
+}
+
 // buildDrafter constructs the ADR-056 NL→rule drafting orchestrator (slice 1). It wires the
 // bounded infer→compile→repair loop over an ai-inference service-token client (least-privilege
 // ai:infer — a SEPARATE, narrower scope than the command:write / tenant:read tokens the other
@@ -609,6 +654,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// the current-set half into the processor, whose startup reconcile seeds the containment
 			// projection from it, so it must exist by then.
 			FenceSets, CurrentFenceSets, FenceManifests = buildFenceSetSeam()
+			// Build the fact reconcile's seam alongside it, for the same reason: the processor
+			// is wired from it in createNatsComponents.
+			DeviceManagementFacts = buildFactReconcileSeam()
 
 			// buildDrafter wires the ADR-056 NL→rule drafting seam (nil ⇒ the draft door reports
 			// unavailable, fail-closed). It is built here so the resolver below can carry it

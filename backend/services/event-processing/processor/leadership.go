@@ -237,6 +237,11 @@ func (rp *ResolvedEventsProcessor) resetForTerm() {
 	// reconciles read the same durable projections from scratch.
 	clear(rp.armRetries)
 	clear(rp.attrRetries)
+	// The fact reconcile starts every term from scratch: its first tick sweeps, and the rows it
+	// had seen absent under the previous term are forgotten — another leader may have repaired
+	// them in between, so a deletion is confirmed by two sweeps of THIS term.
+	rp.lastFactReconcile = time.Time{}
+	rp.factAbsent = newAbsentSeen()
 }
 
 // drain empties a buffered channel without blocking. The loop that would have

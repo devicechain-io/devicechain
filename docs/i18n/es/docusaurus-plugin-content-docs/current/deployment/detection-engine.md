@@ -366,24 +366,27 @@ Por orden de frecuencia con la que resulta ser la respuesta:
    alcance `CLIENT`, cuenta como no definido. Una expresión CEL con un
    [respaldo](../concepts/event-processing.md#dynamic-thresholds-in-cel) dispara según su respaldo.
 6. **La regla falla en el momento de la evaluación.** Este es el caso difícil; vea más abajo.
-7. **La notificación de publicación se perdió.** Es raro, pero no deja rastro en ninguno de los
-   sitios donde uno lo buscaría.
+7. **Un cambio todavía no había llegado al motor.** Una publicación, una reversión, o un cambio de
+   dispositivo o de atributo del que no se avisó al motor se recoge en su siguiente comparación con
+   device-management (vea más abajo).
 8. **La regla dejó de compilar tras una actualización.** Una actualización puede rechazar una regla
    que una versión anterior aceptaba. Esa regla se omite cuando el motor la carga, y la pestaña
    **Rule Health** del perfil la muestra como un error de compilación con el motivo. Las notas de la
    versión enumeran cada uno de esos cambios.
 
-:::warning Una notificación de publicación perdida silencia un perfil sin dejar error en ninguna parte
-Cuando se publica una versión de perfil, las reglas que contiene se entregan al motor de detección
-como una notificación de un solo intento. Si el broker no está disponible justo en ese momento, **la
-publicación en sí sigue teniendo éxito**: el perfil aparece como publicado, las reglas se ven en la
-consola y nada queda marcado como fallido. El motor simplemente nunca las recibe, y nunca se
-ejecutan.
+:::note Una notificación de cambio perdida se repara, no se pierde
+Publicar o revertir un perfil, crear un dispositivo o cambiar su tipo, y establecer un atributo de
+umbral avisan al motor de detección una sola vez. Si ese aviso se pierde —el broker no estaba
+disponible en ese momento, o device-management se reinició justo después del cambio—, el cambio en
+sí se mantiene. Además, el motor compara su copia de las reglas publicadas, las versiones activas de
+perfil, los dispositivos y los atributos de umbral de cada inquilino con device-management cuando
+asume la detección y cada cinco minutos después, y corrige lo que difiera. Por tanto, un aviso
+perdido retrasa un cambio unos minutos —no más de unos siete, y un dispositivo o atributo
+eliminado no más de unos diez— en lugar de perderlo. No hace falta volver a publicar.
 
-Nada lo reintenta y no se dispara ninguna alerta. **La recuperación consiste en volver a publicar el
-perfil**, lo que reenvía la notificación. Si las reglas de todo un perfil dejaron de dispararse a la
-vez y el punto 1 de arriba no lo explica, compruebe si el broker sufrió una interrupción alrededor
-del momento de la publicación y vuelva a publicar.
+`DetectFactsRepaired` indica que se hizo una corrección. `DeviceFactPublishFailing` indica que los
+avisos no se están enviando. `DetectFactReconcileFailing` indica que la propia comparación está
+fallando; en ese caso, un cambio perdido sigue perdido hasta que la comparación funcione.
 :::
 
 :::caution Una regla que falla en cada evento se ve exactamente igual que una regla silenciosa
@@ -557,6 +560,9 @@ exigiría recorrerlo entero en cada punto de control.
 | `ReactConnectorEgressShedding` | Un inquilino supera su tasa de salida en la línea de tiempo en que su telemetría llegó a la plataforma, y sus acciones de salida se están descartando. Cada una se envía a la cola de mensajes no entregados con motivo `shed`, dentro de un presupuesto; léalas con `dcctl dead-letters`. Una puesta al día tras un reinicio no causa esta alerta. |
 | `ReactShedLettersOverBudget` | Un inquilino descarta acciones de salida más rápido de lo que se registran una a una, así que el exceso se resume en un mensaje no entregado por inquilino y minuto. |
 | `RateMeteringClockFallback` | Durante una hora, las acciones de salida se han medido según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día puede volver a descartarse como una inundación. Compruebe que event-processing y outbound-connectors ejecutan la misma versión. Una hora de desencadenamiento posterior a la hora del bróker de su mensaje se cuenta aparte, con el origen `capped`, y no dispara este aviso: es un desfase de reloj entre el pod y el bróker, no una hora que falte. |
+| `DetectFactReconcileFailing` | El motor no puede comparar sus reglas, versiones de perfil, dispositivos y umbrales con device-management. Mientras falla no se elimina nada, pero un cambio perdido sigue perdido hasta que se recupere. |
+| `DetectFactsRepaired` | El motor corrigió un estado del que no se le había avisado. La detección vuelve a ser correcta; si se repite, se están perdiendo avisos. |
+| `DeviceFactPublishFailing` | device-management no puede enviar avisos de cambio. Los cambios siguen llegando al motor, con unos minutos de retraso. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 
 :::note Un motor que pierde una carrera de cerebro dividido termina

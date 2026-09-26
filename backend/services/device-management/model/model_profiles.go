@@ -95,6 +95,14 @@ type DeviceProfile struct {
 	// (its draft definitions are inert), the same limiting case as a type with no
 	// profile. Rollback flips this pointer; publish advances it to the new version.
 	ActiveVersion sql.NullInt32
+	// ActiveSince is the instant ActiveVersion became active — set by publish and by rollback
+	// in the same transaction that moves ActiveVersion, and the value every
+	// detection-rules-published fact carries as PublishedAt and the detection engine's
+	// reconcile read returns. NULL on a profile never published, AND on one whose pointer was
+	// last moved before this column existed (or by an older replica during a rolling
+	// upgrade): read it only through activationFloorExpr / activeSinceOf, which resolve that
+	// NULL from the version rows, never directly.
+	ActiveSince sql.NullTime
 
 	// The typed capability definitions the profile owns (ADR-045 slice b): the
 	// inbound metric vocabulary (ADR-016), the outbound command vocabulary

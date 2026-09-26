@@ -74,6 +74,10 @@ var (
 	RaiseAlarmMetrics    processor.RaiseAlarmMetrics
 	AlarmEventMetrics    processor.AlarmEventMetrics
 	GeoFencePublishFails prometheus.Counter
+	// FactPublishFails counts detection-rule, device-roster and device-attribute facts that
+	// could not be published, by fact. Each one is a change the detection engine learns of at
+	// its next reconcile against this service rather than at once.
+	FactPublishFails *prometheus.CounterVec
 	// CredentialChecks counts the auth callout's MQTT password checks by outcome. The
 	// callout's credential.Checker exports its store_full series at zero when it is built.
 	CredentialChecks *prometheus.CounterVec
@@ -143,7 +147,24 @@ func buildMetrics() {
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
+	FactPublishFails = Microservice.NewCounterVec("fact_publish_failures_total",
+		"Detection-rule, device-roster and device-attribute notifications that could not be published, by fact — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine learns of it at its next reconcile against this service, a few minutes later, instead of at once. A sustained rate means changes are taking minutes to take effect.",
+		[]string{"fact"})
+	// Every label value exists from startup, so an alert on the rate sees a zero series rather
+	// than no series on a healthy instance.
+	for _, fact := range factPublishLabels {
+		FactPublishFails.WithLabelValues(fact).Add(0)
+	}
 }
+
+// factPublishLabels are the fact label values of FactPublishFails, one per fact writer.
+var factPublishLabels = []string{factDetectionRules, factDeviceRoster, factDeviceAttribute}
+
+const (
+	factDetectionRules  = "detection_rules"
+	factDeviceRoster    = "device_roster"
+	factDeviceAttribute = "device_attribute"
+)
 
 // newDeadLetterSink builds this service's sink over the platform dead-letter stream, stamped
 // by DeadLetters (the producer core/service built, which the max-delivery recorder shares).
@@ -225,7 +246,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	Api.DetectionRulesPublishedPublisher = processor.NewDetectionRulesPublishedWriter(drpub)
+	Api.DetectionRulesPublishedPublisher = processor.NewDetectionRulesPublishedWriter(drpub,
+		FactPublishFails.WithLabelValues(factDetectionRules))
 
 	// Add the device-roster writer and inject a publisher into the shared Api (ADR-051
 	// slice 4c-2): device create/re-type emit a roster fact so event-processing's DETECT
@@ -234,7 +256,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	Api.DeviceRosterPublisher = processor.NewDeviceRosterWriter(rosterpub)
+	Api.DeviceRosterPublisher = processor.NewDeviceRosterWriter(rosterpub,
+		FactPublishFails.WithLabelValues(factDeviceRoster))
 
 	// Add the device-attribute writer and inject a publisher into the shared Api (ADR-051
 	// slice 4c-3): a numeric, platform-set device attribute upsert/delete emits a fact so
@@ -244,7 +267,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	Api.DeviceAttributePublisher = processor.NewDeviceAttributeWriter(attrpub)
+	Api.DeviceAttributePublisher = processor.NewDeviceAttributeWriter(attrpub,
+		FactPublishFails.WithLabelValues(factDeviceAttribute))
 
 	// Add the geofence-set writer and inject a publisher into the shared Api (ADR-078): a
 	// change to the fence SET — created, geometry edited, deleted — mints a new fence-set

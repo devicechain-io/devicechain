@@ -137,9 +137,11 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	}
 	// Announce the deletion so cross-service reference holders can reconcile
 	// (ADR-044). Emitted after the transaction commits — never for a rolled-back
-	// delete — and best-effort: the delete is the source of truth, and the planned
-	// reconciliation sweep (ADR-044 decision 3) will backstop a missed event, so a
-	// publish failure is logged, not surfaced.
+	// delete — and best-effort: the delete is the source of truth, and a missed event is
+	// repaired by the holders' own sweeps against this service (ADR-044 decision 3) —
+	// event-management's anchor reconciliation sweep, and event-processing's reconcile of
+	// its device roster and threshold attributes — so a publish failure is logged, not
+	// surfaced.
 	api.emitEntityDeleted(ctx, &EntityDeletedEvent{
 		EntityType:  etype,
 		EntityId:    id,

@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -233,12 +234,23 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	// resolving the stale one, so wrap both.
 	var evictions []membershipEviction
 	var changed bool
+	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// The version row's creation time IS the activation instant, and both are stored: the
+		// fact below carries it, and the detection engine's reconcile reads it back. It is
+		// minted here, inside the transaction, from the floor the profile's own rows set — see
+		// nextActivationInstant for why the wall clock alone is not enough.
+		floor, err := activationFloor(tx, profile.ID)
+		if err != nil {
+			return err
+		}
+		activeSince = nextActivationInstant(floor)
+		version.CreatedAt = activeSince
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
 		res := tx.Model(profile).Where("id = ?", profile.ID).
-			Update("active_version", version.Version)
+			Updates(map[string]any{"active_version": version.Version, "active_since": activeSince})
 		if res.Error != nil {
 			return res.Error
 		}
@@ -265,34 +277,41 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	// ENABLED detection rules keyed on this version's token, POST-COMMIT and best-effort. It
 	// runs after the version is durable so the fact never advertises a version that was rolled
 	// back. Emission is at-most-once (ADR-044): a delivered fact is durably persisted by
-	// event-processing's consumer, but a dropped emit is recovered by a later publish or the
-	// planned reconcile, not by replay. Disabled rules ride the frozen snapshot but are omitted
-	// here — inert until a later publish enables them, exactly the set the gate compiled above.
-	api.emitDetectionRulesPublished(ctx, &DetectionRulesPublishedEvent{
-		ProfileVersionToken: fmt.Sprintf("%s@%d", token, version.Version),
-		Rules:               api.enabledSnapshotRules(snapshot),
-		// The version row's gorm-stamped creation time (app-clock at insert, ~ms before the
-		// commit) is the rule-activation instant (ADR-051 slice 4c-2): event-processing uses
-		// it as the grace-period base so publishing an absence rule gives an already-existing
-		// quiet device one timeout of grace, not an instant burst.
-		PublishedAt: version.CreatedAt,
-	})
+	// event-processing's consumer, and a fact that never reaches the stream is repaired by
+	// event-processing's reconcile against this service (at the start of its leadership term
+	// and every five minutes), not by replay. Disabled rules ride the frozen snapshot but are
+	// omitted — inert until a later publish enables them, exactly the set the gate compiled
+	// above. PublishedAt is the stored activation instant (ADR-051 slice 4c-2):
+	// event-processing uses it as the grace-period base so publishing an absence rule gives an
+	// already-existing quiet device one timeout of grace, not an instant burst.
+	api.emitActiveVersionRules(ctx, token, profile.ID, version.Version, activeSince)
 	return version, nil
 }
 
-// enabledSnapshotRules projects the ENABLED detection rules carried in a just-frozen
-// profile snapshot to the (token, definition) pairs the published-rule fact carries
-// (ADR-051 slice 4b-3). It parses the exact snapshot bytes the version froze, so the
-// propagated rule set is precisely the one published. A parse failure yields no rules
-// (logged, not fatal): emission is best-effort side-band to the already-committed
-// publish, so a corrupt snapshot cannot roll back a durable version — but it is loud,
-// because it should be impossible (the same bytes were just built and, when the gate
-// is wired, validated).
+// enabledSnapshotRules projects the ENABLED detection rules carried in a frozen profile
+// snapshot to the (token, definition) pairs the published-rule fact carries (ADR-051 slice
+// 4b-3). A parse failure yields no rules (logged, not fatal): emission is best-effort side-band
+// to the already-committed publish or rollback, so a corrupt snapshot cannot roll back a durable
+// version — but it is loud, because it should be impossible (the same bytes were built and, when
+// the gate is wired, validated at publish). The reconcile door does NOT use this: it calls
+// enabledSnapshotRulesStrict, because there "no rules" would read as an instruction to delete
+// every rule the engine holds for the version.
 func (api *Api) enabledSnapshotRules(snapshot datatypes.JSON) []PublishedDetectionRule {
+	out, err := enabledSnapshotRulesStrict(snapshot)
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to parse a frozen profile snapshot for rule propagation; emitting no rules.")
+		return nil
+	}
+	return out
+}
+
+// enabledSnapshotRulesStrict is the projection itself: the enabled rules of a frozen snapshot, or
+// the parse error. It is the one definition of "the rules a version publishes", shared by the fact
+// emit and the reconcile door so the two cannot disagree.
+func enabledSnapshotRulesStrict(snapshot datatypes.JSON) ([]PublishedDetectionRule, error) {
 	snap, err := parseProfileSnapshot(snapshot)
 	if err != nil {
-		log.Error().Err(err).Msg("Unable to parse just-frozen profile snapshot for rule propagation; emitting no rules.")
-		return nil
+		return nil, err
 	}
 	out := make([]PublishedDetectionRule, 0, len(snap.Rules))
 	for _, dr := range snap.Rules {
@@ -309,7 +328,82 @@ func (api *Api) enabledSnapshotRules(snapshot datatypes.JSON) []PublishedDetecti
 		}
 		out = append(out, pr)
 	}
-	return out
+	return out, nil
+}
+
+// activationFloor is the latest activation instant a profile's rows already record, read inside
+// the caller's transaction (resolveActiveSince over the profile row and its newest version). A new
+// activation must land strictly after it (nextActivationInstant). The zero time means the profile
+// has no version yet.
+func activationFloor(tx *gorm.DB, profileId uint) (time.Time, error) {
+	var current DeviceProfile
+	if err := tx.Select("id", "active_version", "active_since").Where("id = ?", profileId).
+		First(&current).Error; err != nil {
+		return time.Time{}, err
+	}
+	latest, found, err := latestProfileVersion(tx, profileId)
+	if err != nil || !found {
+		return time.Time{}, err
+	}
+	return resolveActiveSince(current.ActiveSince, current.ActiveVersion, latest), nil
+}
+
+// latestProfileVersion reads the number and creation time of a profile's newest version (not its
+// snapshot). found is false when the profile has none.
+func latestProfileVersion(db *gorm.DB, profileId uint) (DeviceProfileVersion, bool, error) {
+	var latest DeviceProfileVersion
+	res := db.Model(&DeviceProfileVersion{}).Select("id", "version", "created_at").
+		Where("device_profile_id = ?", profileId).Order("version DESC").Limit(1).Find(&latest)
+	if res.Error != nil {
+		return DeviceProfileVersion{}, false, res.Error
+	}
+	return latest, res.RowsAffected > 0, nil
+}
+
+// resolveActiveSince is the ONE rule for when a profile's active version became active, and every
+// reader of the instant goes through it: the reconcile door returns it and the next activation is
+// floored on it.
+//
+// It is the stored active_since, unless the version rows imply something later: the newest
+// version's publish time when the active version IS the newest, and a microsecond after it when it
+// is not (the active version was rolled back to, so it became active after the newest was
+// published). The version rows only ever win when active_since was not written by this code — a
+// profile last published or rolled back before the column existed, or whose pointer an older
+// replica moved during a rolling upgrade — because publish stores active_since equal to the new
+// version's creation time and rollback stores one strictly later than everything recorded.
+func resolveActiveSince(stored sql.NullTime, active sql.NullInt32, latest DeviceProfileVersion) time.Time {
+	implied := latest.CreatedAt
+	if active.Valid && active.Int32 != latest.Version {
+		implied = implied.Add(time.Microsecond)
+	}
+	if stored.Valid && !stored.Time.Before(implied) {
+		return stored.Time.UTC()
+	}
+	return implied.UTC()
+}
+
+// nextActivationInstant is when a profile's active version changes now: the wall clock, but never
+// at or before floor (the activation already recorded), and truncated to the microsecond the
+// database stores, so the value a fact carries is the value that reads back.
+//
+// The floor is what makes a clock that runs behind harmless. The detection engine refuses an
+// active-version change older than the one it holds (its monotonic guard), so a publish or a
+// rollback on a replica whose clock trails the one that made the previous change would otherwise
+// mint an activation the engine never applies. floor+1µs is later than everything recorded.
+//
+// It is not a lock: two replicas moving the SAME profile's pointer at the same moment each read
+// the floor before the other commits, and the later commit can store the earlier instant. The
+// engine's reconcile compares WHICH version is active, not the instant, so it still converges on
+// the version this service stores.
+func nextActivationInstant(floor time.Time) time.Time {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if floor.IsZero() {
+		return now
+	}
+	if next := floor.UTC().Truncate(time.Microsecond).Add(time.Microsecond); now.Before(next) {
+		return next
+	}
+	return now
 }
 
 // RollbackDeviceProfile re-points the profile's active published version at an
@@ -344,9 +438,15 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 
 	var evictions []membershipEviction
 	var changed bool
+	var activeSince time.Time
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		floor, err := activationFloor(tx, profile.ID)
+		if err != nil {
+			return err
+		}
+		activeSince = nextActivationInstant(floor)
 		res := tx.Model(profile).Where("id = ?", profile.ID).
-			Update("active_version", version)
+			Updates(map[string]any{"active_version": version, "active_since": activeSince})
 		if res.Error != nil {
 			return res.Error
 		}
@@ -369,22 +469,32 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 	// ever advance, and it would keep the dead-man roster armed under the wrong (later)
 	// version's absence rules. Re-emitting the target version's fact restores the "the most
 	// recent rule fact for a profile names its active version" invariant the roster relies
-	// on. The bodies are identical to the version's original publish, so the DETECT engine's
-	// upsert preserves running state (no reset); PublishedAt = reactivation time gives any
-	// re-activated absence rule a fresh grace window. Best-effort, like every other fact emit.
-	api.emitRolledBackRules(ctx, token, profile.ID, version)
+	// on. The bodies are the ones the version's publish carried — both are read from the same
+	// stored snapshot — so the DETECT engine's upsert preserves running state (no reset).
+	// PublishedAt is the STORED reactivation instant, which gives any re-activated absence rule
+	// a fresh grace window and is exactly what the engine's reconcile against this service reads
+	// back. Best-effort, like every other fact emit.
+	api.emitActiveVersionRules(ctx, token, profile.ID, version, activeSince)
 
 	// Reload so the returned profile carries the freshly-bumped updated_at (the
 	// column-scoped Update advanced it in the DB) rather than the pre-update value.
 	return api.deviceProfileByToken(ctx, token)
 }
 
-// emitRolledBackRules loads the rolled-back-to version's frozen snapshot and re-emits its
-// enabled detection rules as a detection-rules-published fact (ADR-051 slice 4c-2), so a
-// rollback looks to event-processing like a (re)publish of that version. Best-effort: a
-// load failure is logged and swallowed — the rollback itself is durable, and the reconcile
-// sweep backstops a missed re-propagation.
-func (api *Api) emitRolledBackRules(ctx context.Context, token string, profileId uint, version int32) {
+// emitActiveVersionRules announces that a profile version became active — after a publish or a
+// rollback — as a detection-rules-published fact carrying the version's enabled rules and the
+// stored activation instant (ADR-051 slice 4b-3 / 4c-2).
+//
+// It reads the version's snapshot back from the database rather than using the bytes a publish
+// holds in memory, and that is the point: the stored snapshot is what a rollback re-emits and what
+// the reconcile door returns, and on Postgres its jsonb rendering differs byte-for-byte from the
+// compact form json.Marshal built. Emitting the stored form gives a version's publish fact, its
+// rollback fact and its reconcile answer identical bodies.
+//
+// Best-effort: a load failure is logged and swallowed — the publish or rollback itself is durable,
+// and event-processing's reconcile against this service (at the start of its leadership term and
+// every five minutes) repairs a missed announcement.
+func (api *Api) emitActiveVersionRules(ctx context.Context, token string, profileId uint, version int32, activeSince time.Time) {
 	if api.DetectionRulesPublishedPublisher == nil {
 		return
 	}
@@ -392,13 +502,13 @@ func (api *Api) emitRolledBackRules(ctx context.Context, token string, profileId
 	if err := api.RDB.DB(ctx).Where("device_profile_id = ? AND version = ?", profileId, version).
 		First(&v).Error; err != nil {
 		log.Error().Err(err).Str("profile", token).Int32("version", version).
-			Msg("Unable to load rolled-back version for rule re-propagation; skipping emit")
+			Msg("Unable to load the newly active profile version for rule propagation; skipping emit")
 		return
 	}
 	api.emitDetectionRulesPublished(ctx, &DetectionRulesPublishedEvent{
 		ProfileVersionToken: fmt.Sprintf("%s@%d", token, version),
 		Rules:               api.enabledSnapshotRules(v.Snapshot),
-		PublishedAt:         time.Now().UTC(),
+		PublishedAt:         activeSince,
 	})
 }
 

@@ -6,6 +6,7 @@ package runtime
 import (
 	"context"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/rs/zerolog/log"
@@ -101,12 +102,17 @@ func NewRuleRegistry(scoped []ScopedRule) *RuleRegistry {
 // DiffersFrom reports whether this rule's SEMANTICS differ from a prior entry filed under the
 // same id — the test that decides whether a reused id (a deleted+reused profile token re-minting
 // an old id) must GC the stale keyed state before installing the replacement. It compares the
-// raw Definition (a change may live only in the predicate, invisible to the lowered core.Rule)
-// AND the group scope (ADR-062 S4): a scope change with a byte-identical definition (the scope
+// Definition (a change may live only in the predicate, invisible to the lowered core.Rule)
+// AND the group scope (ADR-062 S4): a scope change with an identical definition (the scope
 // is a sibling field, not part of the definition JSON) still means the rule now covers a
 // different membership set, so grafting the old series' held state onto it would mis-fire.
+//
+// The definitions are compared as documents (dmmodel.SameRuleDefinition), not as bytes: the same
+// rule reaches this service in two byte forms — compact from an older publish, jsonb-rendered from
+// a rollback or the fact reconcile — and a byte comparison would GC a running rule's state over a
+// change nobody made.
 func (sr ScopedRule) DiffersFrom(old *ScopedRule) bool {
-	return old.Definition != sr.Definition ||
+	return !dmmodel.SameRuleDefinition(old.Definition, sr.Definition) ||
 		old.GroupToken != sr.GroupToken ||
 		old.GroupVersion != sr.GroupVersion
 }

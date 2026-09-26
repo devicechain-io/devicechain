@@ -304,6 +304,14 @@ type ResolvedEventsProcessor struct {
 	// fetched for a fact is already held when the next reconcile sweep asks about that version.
 	FenceManifests runtime.FenceManifestResolver
 
+	// DeviceManagement is the off-loop seam the fact reconcile (fact_reconcile.go) reads
+	// device-management's authoritative rules, roster and attributes — and user-management's
+	// tenant list — through, to repair the rule, active-version, roster and attribute projections
+	// when a fact never reached its stream. Nil disables the reconcile: the scaffold/test path,
+	// and a deployment with no service secret or no device-management / user-management
+	// coordinate, which main logs loudly.
+	DeviceManagement DeviceManagementFacts
+
 	// armer arms dead-man absence timers for never-seen devices, cross-referencing the roster +
 	// active-version read-models (ADR-051 slice 4c-2b-2b). It is built in ExecuteStart once the
 	// engine is final (after replay), reconciled from the durable projections, then driven live on
@@ -435,6 +443,19 @@ type ResolvedEventsProcessor struct {
 	// keep arriving and would otherwise pile sweeps up against it, turning a cross-service blip
 	// into a self-inflicted read storm on the service that is already struggling.
 	fenceReconciling atomic.Bool
+	// lastFactReconcile is when the periodic fact reconcile last STARTED — loop-owned, like
+	// lastFenceReconcile. Unlike that one it is deliberately left ZERO at the start of a term
+	// (resetForTerm), so the first tick of every term sweeps: a term build is exactly when a fact
+	// lost while this replica was down or standing by needs repairing, and the sweep runs off the
+	// loop, so it adds nothing to the build.
+	lastFactReconcile time.Time
+	// factReconciling is the fact sweep's in-flight guard, exactly as fenceReconciling is the
+	// fence sweep's: the loop sets it, the sweep clears it, and a tick that finds it set drops
+	// its own sweep.
+	factReconciling atomic.Bool
+	// factAbsent is the fact reconcile's memory of rows device-management did not return on the
+	// previous sweep (see absentSeen). Owned by the sweep goroutine; cleared per term.
+	factAbsent *absentSeen
 	// lastLiveRead is the wall-clock time of the most recent live read-pump delivery (a
 	// message or a read error). It drains the reader's local fetch buffer before idle-advance
 	// (the authoritative caught-up signal is the broker backlog, not this timer): idle-advance
@@ -626,6 +647,7 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		// send. One tenant purge is in flight at a time in any case — the coordinator holds
 		// an instance-wide advisory lock.
 		tenantPurges: make(chan tenantPurgeRequest),
+		factAbsent:   newAbsentSeen(),
 	}
 	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
 	// Wire the rule-health fire projection (slice 7b) when a store is supplied. It is off the
@@ -1565,6 +1587,15 @@ func (rp *ResolvedEventsProcessor) run() {
 			if now.Sub(rp.lastFenceReconcile) >= fenceReconcileInterval {
 				rp.startFenceReconcile()
 				rp.lastFenceReconcile = now
+			}
+			// Periodically compare the rule, active-version, roster and attribute projections
+			// with device-management, so a LOST rule, device or attribute fact is repaired rather
+			// than lasting until the next change (see factReconcileInterval). Like the fence sweep
+			// it does no reading here; the first tick of a term always sweeps (lastFactReconcile
+			// starts zero).
+			if now.Sub(rp.lastFactReconcile) >= factReconcileInterval {
+				rp.startFactReconcile()
+				rp.lastFactReconcile = now
 			}
 		}
 	}

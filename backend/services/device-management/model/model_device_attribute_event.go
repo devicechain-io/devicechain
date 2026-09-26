@@ -59,9 +59,10 @@ type DeviceAttributeEvent struct {
 // never surfaced to the caller — a NATS hiccup must not fail or retry the attribute
 // set/delete. Emission is at-most-once (ADR-044 async-fact posture): a DELIVERED fact is
 // durably persisted by event-processing's consumer (persist-before-ack) and survives a
-// restart, but a fact that never reaches the stream is NOT recovered by replay — it
-// relies on a subsequent write to the same attribute or the planned reconciliation
-// sweep. Implementations must be safe for concurrent use.
+// restart, but a fact that never reaches the stream is NOT recovered by replay — it is
+// repaired by event-processing's reconcile against this service
+// (DeviceThresholdAttributePage, at the start of its DETECT term and every five minutes).
+// Implementations must be safe for concurrent use.
 type DeviceAttributePublisher interface {
 	PublishDeviceAttribute(ctx context.Context, event *DeviceAttributeEvent)
 }

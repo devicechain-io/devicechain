@@ -333,20 +333,26 @@ In order of how often it is the answer:
    expression with a [fallback](../concepts/event-processing.md#dynamic-thresholds-in-cel) fires on
    its fallback instead.
 6. **The rule errors at evaluation time.** This is the hard one — see below.
-7. **The publish notification was lost.** Rare, but it leaves no trace where you would look for one.
+7. **A change had not reached the engine yet.** A publish, rollback, device or attribute change
+   the engine was not told about is picked up by its next comparison with device-management (see
+   below).
 8. **The rule stopped compiling after an upgrade.** An upgrade can refuse a rule that an earlier
    version accepted. Such a rule is skipped when the engine loads it, and the profile's **Rule
    Health** tab shows it as a compile error with the reason. The release notes list each such change.
 
-:::warning A lost publish notification silences a profile with no error anywhere
-When a profile version is published, the rules it contains are handed to the detection engine as a
-one-shot notification. If the broker is unavailable at that exact moment, **the publish itself still
-succeeds** — the profile shows as published, the rules are visible in the console, and nothing is
-marked failed. The engine simply never receives them, and they never run.
+:::note A lost change notification is repaired, not lost
+Publishing or rolling back a profile, creating or re-typing a device, and setting a threshold
+attribute each notify the detection engine once. If that notification is lost — the broker was
+unavailable at that moment, or device-management restarted right after the change — the change
+itself still stands. The engine also compares its copy of every tenant's published rules, active
+profile versions, devices and threshold attributes with device-management when it takes over
+detection and every five minutes after, and corrects whatever differs. A lost notification
+therefore delays a change by a few minutes — no more than about seven, and a deleted device or
+attribute no more than about ten — rather than losing it. You do not need to publish again.
 
-Nothing retries it and no alert fires. **The recovery is to publish the profile again**, which
-re-sends the notification. If a whole profile's rules stopped firing at once and item 1 above does
-not explain it, check whether the broker was disrupted around the publish time and republish.
+`DetectFactsRepaired` tells you a correction was made. `DeviceFactPublishFailing` tells you
+notifications are failing to send. `DetectFactReconcileFailing` tells you the comparison itself is
+failing, in which case a missed change stays missed until it succeeds.
 :::
 
 :::caution A rule that errors on every event looks exactly like a quiet rule
@@ -507,6 +513,9 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `ReactConnectorEgressShedding` | A tenant is over its outbound rate on the timeline its telemetry reached the platform, and its outbound actions are being shed. Each is dead-lettered with reason `shed`, within a budget; read them with `dcctl dead-letters`. A catch-up after a restart does not cause this. |
 | `ReactShedLettersOverBudget` | A tenant is shedding outbound actions faster than they are recorded one by one, so the excess is summarised in one dead letter per tenant per minute. |
 | `RateMeteringClockFallback` | Outbound actions have been metered on broker or arrival time for an hour because they carried no trigger time, so a catch-up can be shed as a flood again. Check that event-processing and outbound-connectors run the same release. A trigger time later than its message's broker time is counted separately, as source `capped`, and does not fire this: that is clock skew between the pod and the broker, not a missing time. |
+| `DetectFactReconcileFailing` | The engine cannot compare its rules, profile versions, devices and thresholds with device-management. Nothing is removed while it fails, but a missed change stays missed until it recovers. |
+| `DetectFactsRepaired` | The engine corrected state it had not been told about. Detection is right again; recurring means notifications are being lost. |
+| `DeviceFactPublishFailing` | device-management cannot send change notifications. Changes still reach the engine, a few minutes late. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 
 :::note An engine that loses a split-brain race exits
