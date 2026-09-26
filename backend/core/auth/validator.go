@@ -224,6 +224,16 @@ func (v *Validator) lookup(kid string) *rsa.PublicKey {
 // that one unlucky fetch into a refusal of every token the new key signed for the
 // whole interval. A caller that misses inside the interval still fails fast rather
 // than waiting it out, so a forged-kid flood cannot park goroutines behind a clock.
+//
+// It CAN park them behind a fetch, and that is the price of the first half. While a
+// refetch is in flight, every unknown-kid caller waits for it, forged kid or genuine
+// — the validator cannot tell them apart — for as long as the fetch takes: for the
+// JWKS fetch, up to its request timeout when user-management is slow or unreachable.
+// A flood arriving then holds one goroutine per request until the fetch ends, where
+// before this policy each was refused at once. The wait is bounded by the fetch, and
+// after it comes a full interval in which a miss fails fast again. Capping the wait
+// shorter than the fetch would refuse the genuine callers of a slow refetch, which
+// is the refusal this policy exists to remove.
 func (v *Validator) tryRefresh(kid string) *rsa.PublicKey {
 	if v.refresh == nil {
 		return nil
