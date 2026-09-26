@@ -370,8 +370,8 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 
 ### The rule-duration ceiling is enforced
 
-`maxRuleDurationSeconds` is the one setting in the table above that **refuses work** rather than reporting on it. A
-rule declaring a longer window, hold, timeout or gap is rejected when the profile is published, with
+`maxRuleDurationSeconds` is the one setting in the table above that **refuses a rule** rather than
+reporting on it. A rule declaring a longer window, hold, timeout or gap is rejected when the profile is published, with
 an error naming the field and the limit, and the same ceiling is applied again when the engine loads
 a published rule — so the two can never disagree about what is runnable.
 

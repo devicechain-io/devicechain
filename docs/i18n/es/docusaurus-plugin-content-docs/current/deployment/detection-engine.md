@@ -410,7 +410,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 
 ### El techo de duración de regla sí se aplica
 
-`maxRuleDurationSeconds` es el único ajuste de la tabla anterior que **rechaza trabajo** en lugar de
+`maxRuleDurationSeconds` es el único ajuste de la tabla anterior que **rechaza una regla** en lugar de
 limitarse a informar sobre él. Una regla que declare una ventana, retención, tiempo de espera o
 hueco más largos se rechaza al publicar el perfil, con un error que nombra el campo y el límite, y
 ese mismo techo se vuelve a aplicar cuando el motor carga una regla publicada, de modo que ambos

@@ -5,6 +5,7 @@ package predicate
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,5 +133,34 @@ func TestCompileGatesAtThePlatformCeiling(t *testing.T) {
 	// And a cheap leaf passes at the same ceiling, so this is a gate and not a wall.
 	if _, err := Compile(`"t" in m && m["t"] > 1.0`); err != nil {
 		t.Fatalf("a cheap leaf was refused at the platform ceiling: %v", err)
+	}
+}
+
+// TestRuntimeCostLimitIsThePlatformCeiling pins the runtime backstop, which the static gate
+// cannot: the estimator bounds a string pulled from anchors by its map hint, so this leaf
+// estimates far under the ceiling while its actual cost grows with the value it is handed.
+// A value that costs roughly half the ceiling must evaluate; one that costs roughly twice it
+// must be cancelled by the Program's CostLimit. Together they hold the runtime limit to the
+// same order as the publish-time ceiling, so raising or dropping it cannot pass unnoticed.
+func TestRuntimeCostLimitIsThePlatformCeiling(t *testing.T) {
+	const src = `"x" in anchors && anchors["x"].contains("y")`
+	p := mustCompile(t, src)
+	if p.CostMax() > 100 {
+		t.Fatalf("%q estimates at %d; the probe needs a leaf the static gate admits", src, p.CostMax())
+	}
+	eval := func(n int) error {
+		_, err := p.Eval(Input{Anchors: map[string]string{"x": strings.Repeat("a", n)}})
+		return err
+	}
+	// contains costs about one unit per ten characters of the receiver.
+	if err := eval(500); err != nil {
+		t.Fatalf("a value costing about half the ceiling was refused at runtime: %v", err)
+	}
+	err := eval(2000)
+	if err == nil {
+		t.Fatal("a value costing about twice the ceiling evaluated; the runtime CostLimit is not the platform ceiling")
+	}
+	if !strings.Contains(err.Error(), "cost limit exceeded") {
+		t.Fatalf("want a cost-limit cancellation, got %v", err)
 	}
 }

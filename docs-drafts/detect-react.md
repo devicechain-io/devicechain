@@ -328,8 +328,9 @@ and rule token denormalized so a load parses no ids. It is the restart source of
 because the fact stream has a 7-day retention (`:56-63`, the figure at `:58`; the authority is
 `backend/core/messaging/nats.go:24-28` and `:572`, where every stream takes the same `MaxAge`).
 
-The compiler is `backend/services/event-processing/internal/rules/compile.go:167-234`. Its posture:
-limits are floored before anything else so **compile can never run uncapped** (`:168`); each rule
+The compiler is `backend/services/event-processing/internal/rules/compile.go:227-311`. Its posture:
+the rule-duration limit is floored before anything else so **compile never runs without a duration
+cap** (`:228`), and the cost ceiling needs no floor because it is a constant; each rule
 type forbids every field it does not read (`internal/rules/validate.go:30-57`), returning the first
 forbidden non-zero field; the leaf lowers to CEL and compiles under a cost ceiling. That ceiling is
 `predicate.CostCeiling` (**100**), a platform constant: no tenant, tier or operator setting changes
