@@ -18,7 +18,7 @@ import (
 // newTestStore spins up an in-memory sqlite database with the tenant-scope
 // callbacks registered and the DetectSnapshot table migrated, exactly as the
 // production wiring does (minus the schema prefix, which sqlite has no notion of).
-func newTestStore(t *testing.T) *SnapshotStore {
+func newTestStore(t testing.TB) *SnapshotStore {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -132,6 +132,48 @@ func TestSnapshotStoreRefusesBackwardSeq(t *testing.T) {
 	}
 }
 
+// Save is monotonic on the watermark too: at an EQUAL sequence a lower watermark is a
+// split-brain peer moving the logical clock backward, and it is refused with the row left
+// exactly as it was. This is also the mapping guard for the watermark half of the locked
+// read — a watermark that scanned as the zero time would make Before() answer false and
+// let this write through.
+func TestSnapshotStoreRefusesBackwardWatermarkAtEqualSeq(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	wm := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 100, Watermark: wm, Payload: []byte("seed")}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 100, Watermark: wm.Add(-time.Minute), Payload: []byte("lagging")})
+	if !errors.Is(err, ErrStaleCheckpoint) {
+		t.Fatalf("equal seq, lower watermark: got %v, want ErrStaleCheckpoint", err)
+	}
+	got, ok, err := store.Load(ctx, "singleton")
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
+	}
+	if got.StreamSeq != 100 || !got.Watermark.Equal(wm) || !bytes.Equal(got.Payload, []byte("seed")) {
+		t.Fatalf("a refused backward-watermark write mutated the row: seq=%d wm=%v payload=%q",
+			got.StreamSeq, got.Watermark, got.Payload)
+	}
+
+	// The counterweight: a HIGHER watermark at the same sequence is the ordinary idle
+	// advance and must land, or the guard above is satisfied by one that refuses everything.
+	ahead := wm.Add(time.Minute)
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 100, Watermark: ahead, Payload: []byte("ahead")}); err != nil {
+		t.Fatalf("equal seq, higher watermark rejected: %v", err)
+	}
+	got, ok, err = store.Load(ctx, "singleton")
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
+	}
+	if !got.Watermark.Equal(ahead) || !bytes.Equal(got.Payload, []byte("ahead")) {
+		t.Fatalf("the idle advance did not land: wm=%v payload=%q", got.Watermark, got.Payload)
+	}
+}
+
 // Reset is the ONE write in this store that moves a checkpoint backward on purpose, and it
 // is issued from inside a leadership term BUILD — after the lease is acquired, before the
 // term is live, across a restore, three view builds and a whole replay. That is a long
@@ -203,5 +245,55 @@ func TestResetOfAnAbsentCheckpointIsANoOp(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Reset(context.Background(), "singleton", 0); err != nil {
 		t.Fatalf("Reset with no row present: %v", err)
+	}
+}
+
+// Every guard compares a partition against ITS OWN row. Production binds one partition
+// today, so nothing else in this file ever holds two rows, and a lock read that matched
+// whatever row came first would pass all of it.
+//
+// The two partitions are seeded so that reading the OTHER partition's floor flips an
+// answer in BOTH directions, whichever row a mis-scoped read happens to return: B's
+// forward write would be refused against A's higher floor, and A's backward write would be
+// accepted against B's lower one. Reset is checked the same way, and the oracle is the
+// rows, not just the errors.
+func TestSnapshotGuardsCompareEachPartitionOnlyAgainstItsOwnRow(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	wm := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "a", StreamSeq: 100, Watermark: wm, Payload: []byte("a100")}); err != nil {
+		t.Fatalf("seed a: %v", err)
+	}
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "b", StreamSeq: 10, Watermark: wm, Payload: []byte("b10")}); err != nil {
+		t.Fatalf("seeding b (a new partition) was refused: it was compared against a's floor: %v", err)
+	}
+
+	// B moves forward against its own floor (10), not A's (100).
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "b", StreamSeq: 50, Watermark: wm, Payload: []byte("b50")}); err != nil {
+		t.Fatalf("b's forward save (10 -> 50) was refused: it was compared against another partition's floor: %v", err)
+	}
+	// A moving backward is refused against its own floor (100), not B's (now 50).
+	if err := store.Save(ctx, &DetectSnapshot{PartitionId: "a", StreamSeq: 60, Watermark: wm, Payload: []byte("a60")}); !errors.Is(err, ErrStaleCheckpoint) {
+		t.Fatalf("a's backward save (100 -> 60) returned %v, want ErrStaleCheckpoint: it was compared against another partition's floor", err)
+	}
+
+	// Reset's compare-and-swap reads its own partition too: B's sequence is not A's.
+	if err := store.Reset(ctx, "a", 50); !errors.Is(err, ErrResetRaced) {
+		t.Fatalf("Reset(a, 50) returned %v, want ErrResetRaced: 50 is b's sequence, not a's", err)
+	}
+	if err := store.Reset(ctx, "b", 50); err != nil {
+		t.Fatalf("Reset(b, 50) against the row it read: %v", err)
+	}
+
+	if _, ok, err := store.Load(ctx, "b"); err != nil || ok {
+		t.Fatalf("b survived its own reset: ok=%v err=%v", ok, err)
+	}
+	got, ok, err := store.Load(ctx, "a")
+	if err != nil || !ok {
+		t.Fatalf("a was removed by operations on b: ok=%v err=%v", ok, err)
+	}
+	if got.StreamSeq != 100 || !bytes.Equal(got.Payload, []byte("a100")) {
+		t.Fatalf("a's row was moved by operations on the other partition: %+v", got)
 	}
 }
