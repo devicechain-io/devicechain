@@ -121,6 +121,37 @@ const (
 	RetentionWorkQueue
 )
 
+// The platform's ONE consumer retry contract. messaging.AckWait and messaging.MaxDeliver ARE
+// these values: their comments in core/messaging/nats.go say why there is exactly one of each
+// and why neither is a knob. They are declared here, in the leaf, for one reason. A stream whose
+// producer re-publishes on each redelivery of its consumer's input has to declare a dedup window
+// that covers the whole redelivery span, and this package cannot import messaging. Declaring the
+// inputs here makes that window a constant expression rather than a second literal that could
+// drift from them.
+const (
+	// ConsumerAckWaitSeconds is how long the broker waits for an ack before redelivering.
+	ConsumerAckWaitSeconds = 60
+	// ConsumerMaxDeliver is how many deliveries a message gets before consumers give up on it.
+	ConsumerMaxDeliver = 5
+	// RedeliveryDuplicateWindowSeconds covers every delivery of one consumed message, for a
+	// producer that re-publishes the same message, under a dedup id stable across them, on each
+	// delivery of its input. Within it the broker stores that message once.
+	//
+	// It rests on a premise its consumer has to MAKE true, not one the broker provides: each
+	// delivery is handled within its own AckWait. REACT, the one consumer that relies on it,
+	// makes it true by reading through a one-slot capacity reader (a delivery is never left
+	// queued behind another past its clock) and by bounding every sink call by the delivery's
+	// ack deadline. Given that, successive deliveries are at most two AckWaits apart (the
+	// redelivery becomes due one AckWait after its predecessor was fetched, and can wait up to
+	// one more for the message ahead of it to finish), so the last re-publish lands at most
+	// (MaxDeliver-1)*2*AckWait + AckWait after the first. 2*MaxDeliver*AckWait covers that with
+	// one AckWait to spare.
+	//
+	// Longer than this is possible only with no consumer at all for the gap — every replica
+	// down, or a lease handover that outlasts it — and then the repeat is stored again.
+	RedeliveryDuplicateWindowSeconds = 2 * ConsumerMaxDeliver * ConsumerAckWaitSeconds
+)
+
 // String names a shape for the messages that mention one.
 //
 // Those messages are the ones a maintainer reads when a subject came out wrong, and a
@@ -538,9 +569,9 @@ var All = []Stream{
 	// had already been delivered. It is sized like inbound-events' to a bad rollout; a replay
 	// older than it re-publishes duplicates. A sendCommand duplicate is still collapsed by its
 	// idempotency key at the command sink. A connector duplicate is NOT: REACT's outbound gate
-	// charges it again, and if admitted it is SENT again. outbound-connectors forwards the
-	// idempotency key to the destination but does not deduplicate on it, so collapsing it is
-	// the destination's job.
+	// charges it again, and connector-dispatch's own window covers only REACT's redelivery span,
+	// so a replay older than this one reaches the connectors service again. Collapsing it then
+	// is the destination's job, on the forwarded idempotency key.
 	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: 1800,
 		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
@@ -602,7 +633,15 @@ var All = []Stream{
 	//
 	// Its give-ups are kept VERBATIM on connector-dispatch.dead, because a replay of an
 	// outbound send has to be byte-identical; the dead letter is only the index entry.
-	{Suffix: ConnectorDispatch, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot,
+	//
+	// REACT re-publishes every connector action of a detection on each delivery of the derived
+	// event, with the action's content-addressed token as the dedup id. The window is the
+	// redelivery span (RedeliveryDuplicateWindowSeconds), so a re-publish from a retry, or
+	// from both replicas during a lease handover, is stored once. It is NOT sized to a DETECT
+	// replay: derived-events' own window collapses those before REACT sees them. Past it the
+	// connectors service runs the request again, and the forwarded idempotency key is the
+	// destination's to honour.
+	{Suffix: ConnectorDispatch, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind: kindConnectorDispatch, VerbatimCopy: ConnectorDispatchDead, Why: "REACT outbound dispatch — scales with rule firings"},
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
@@ -647,7 +686,12 @@ var All = []Stream{
 	// monotonic decision timestamp. Since the ADR-057 cutover retired the
 	// measurement evaluator this is the SOLE alarm-raise path — there is no peer
 	// to double-raise against.
-	{Suffix: RaiseAlarm, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindDetectionAction, Why: "REACT alarm requests"},
+	//
+	// REACT re-publishes each alarm edge on every delivery of the derived event, under an
+	// edge-scoped token as the dedup id, and the window covers that redelivery span. The fold
+	// would absorb the repeat anyway; the window means device-management does not have to.
+	{Suffix: RaiseAlarm, Areas: []string{"device-management", "event-processing"}, Tier: Cold,
+		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, DeadLetterKind: kindDetectionAction, Why: "REACT alarm requests"},
 
 	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
 	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},

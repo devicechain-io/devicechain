@@ -15,11 +15,13 @@
 // idempotency is carried by a DETERMINISTIC token (command-delivery is idempotent on the command
 // token, ADR-051 slice 5b-1; the alarm fold is upsert-keyed) — so for commands and alarms a
 // redelivered event, a DETECT replay that re-publishes the same detection, and a retry after a
-// transient failure all collapse downstream rather than double-acting. Connector calls are the
-// exception: the outbound-connectors service forwards the token to the destination as an
-// idempotency key and does not deduplicate on it itself, so a connector call dispatched twice
-// reaches the destination twice unless the destination honours the key. The token is derived from the detection's dedup identity
-// plus the action's CONTENT, deliberately NOT its index in the action list: the rule is resolved
+// transient failure all collapse downstream rather than double-acting. Alarm and connector
+// requests are also published with the action's token as the broker dedup id, on streams whose
+// window covers the redelivery span, so a retry's re-publish is stored once. Past that window (a
+// replay after a long outage), and inside the connectors service's own at-least-once execution, a
+// connector call can still reach its destination twice; the token is forwarded as the
+// destination's idempotency key for exactly that remainder. The token is derived from the
+// detection's dedup identity plus the action's CONTENT, deliberately NOT its index in the action list: the rule is resolved
 // fresh per attempt, so an author reordering the chain between attempts would, under an index-keyed
 // token, re-send whichever action now sits at the old index under the old action's token. See
 // idempotencyToken for the full argument. Dispatch failures are retried by DEFAULT — the event is
@@ -51,10 +53,10 @@ const (
 	// gone) — ack the event; there is nothing a redelivery would achieve.
 	Done Outcome = iota
 	// Retry: a failure the dispatcher cannot resolve now (the rule store or a sink was unreachable)
-	// — do NOT ack. The event redelivers and every action is dispatched again. The deterministic
-	// idempotency tokens make that safe for commands (command-delivery dedups on them) and alarms
-	// (an upsert), but NOT for connector actions, whose token is only forwarded to the destination.
-	// The consumer's redelivery cap bounds a permanently-failing event.
+	// — do NOT ack. The event redelivers and EVERY action is attempted again. The tokens make that
+	// safe: command-delivery replays a known token, and alarm and connector re-publishes are stored
+	// once within their stream's duplicate window. The consumer's redelivery cap bounds a
+	// permanently-failing event.
 	Retry
 )
 
@@ -117,13 +119,18 @@ type CommandSink interface {
 }
 
 // AlarmRequest is one alarm-contributor dispatch (ADR-041 / ADR-057): raise/escalate (Edge=raised) or
-// clear/de-escalate (Edge=resolved) this rule's contribution to a device's alarm. It carries no
-// idempotency token — device-management's alarm integrator is an upsert keyed on (device, alarmKey)
-// whose contributor-set mutations are idempotent and ordered by (OccurredTime, Edge): an older edge is
-// ignored and at an equal OccurredTime a resolve wins a raise (RaiseAlarmRequest.OccurredTime), so an
-// at-least-once redelivery in ANY order re-derives the same state without a sequence field.
+// clear/de-escalate (Edge=resolved) this rule's contribution to a device's alarm. device-management's
+// alarm integrator is an upsert keyed on (device, alarmKey) whose contributor-set mutations are
+// idempotent and ordered by (OccurredTime, Edge): an older edge is ignored and at an equal
+// OccurredTime a resolve wins a raise (RaiseAlarmRequest.OccurredTime), so an at-least-once
+// redelivery in ANY order re-derives the same state without a sequence field. Token is not needed
+// for that; it lets the broker drop a retry's re-publish before the fold ever sees it.
 type AlarmRequest struct {
-	Tenant      string
+	Tenant string
+	// Token is this edge's dedup key (alarmToken): stable across redeliveries of the same
+	// detection, and distinct between its raised and resolved edges. The sink publishes it as the
+	// message's broker dedup id.
+	Token       string
 	DeviceToken string
 	AlarmKey    string
 	MetricKey   string
@@ -166,8 +173,9 @@ type AlarmSink interface {
 // the dedicated service consumes, so the heavy connector dep-tree and any credential handling stay out
 // of this replay-correct binary (ADR-060 §4). It carries the CEL payload template ALREADY RENDERED to
 // bytes (so the connectors service never imports cel — the determinism/supply-chain firewall) plus the
-// deterministic idempotency Token, which the connectors service forwards to the destination for the
-// destination to deduplicate on. DeviceChain does not deduplicate connector dispatches itself.
+// deterministic idempotency Token. The sink publishes the Token as the broker dedup id, so a re-publish
+// within connector-dispatch's duplicate window is stored once; the connectors service also forwards it
+// to the destination, which is the only thing that can collapse a duplicate past that window.
 type ConnectorRequest struct {
 	Tenant       string
 	DeviceToken  string
@@ -179,9 +187,11 @@ type ConnectorRequest struct {
 	// the outbound-connectors egress limiter meters the SAME time rather than the dispatch's arrival.
 	TriggeredAt time.Time
 	// Token is the content-addressed idempotency key (idempotencyToken) — the SAME token family the
-	// command sink dedups on. For a command that makes a redelivery/replay collapse downstream; for a
-	// connector it does not: outbound-connectors forwards the key to the destination and executes every
-	// dispatch it receives, so a redelivery/replay collapses only at a destination that honours the key.
+	// command sink dedups on. The sink publishes it as the broker dedup id, so REACT's own re-publish on
+	// a redelivery is stored once within connector-dispatch's duplicate window. outbound-connectors
+	// executes every dispatch it receives and forwards the key to the destination, so a duplicate the
+	// window does not cover (an older replay, the connectors service's own retry) collapses only at a
+	// destination that honours it.
 	Token string
 	// Payload is the rendered template output (the request body / message payload). Empty when the
 	// action declares no template — the connectors service then sends an empty body.
@@ -195,9 +205,8 @@ type ConnectorRequest struct {
 // ConnectorSink hands a rendered connector action to the outbound-connectors service (ADR-060),
 // implemented by publishing a connector-dispatch request onto the per-tenant NATS subject the service
 // consumes. Dispatch returns a non-nil error on any failure (a marshal or broker-write failure); the
-// dispatcher retries every error (the event redelivers and the request is published again, carrying
-// the same forwarded idempotency Token — nothing on the way deduplicates it), so the sink need not
-// classify. A nil ConnectorSink DISABLES connector dispatch: an httpCall/publish
+// dispatcher retries every error (the event redelivers and the request is published again under the
+// same Token, which the stream's duplicate window collapses), so the sink need not classify. A nil ConnectorSink DISABLES connector dispatch: an httpCall/publish
 // action is then recognized-but-inert (RecordNotEnabled), exactly like a nil command/alarm sink.
 type ConnectorSink interface {
 	Dispatch(ctx context.Context, req ConnectorRequest) error
@@ -231,11 +240,18 @@ type ConnectorSink interface {
 // DETERMINISM (ADR-056 boundary): charging a wall-clock rate limiter here is safe because REACT holds
 // NO replay-correct state — it is a separate, at-least-once, DECOUPLED consumer of the derived-event
 // stream (unlike the DETECT single-writer loop). A shed is a dropped SIDE EFFECT, never a mutation of
-// engine state, so it cannot diverge a replay. One consequence of at-least-once: if ANOTHER action of
-// the same detection fails and the whole event redelivers, this connector action re-charges the gate
-// on the re-run, at the bucket's mark (a bounded over-count, capped by the consumer's redelivery cap)
-// — an accepted cost of keeping the gate a pure per-attempt test rather than threading dispatch
-// state.
+// engine state, so it cannot diverge a replay. One consequence of at-least-once: if ANY other action
+// of the same detection fails, the whole event redelivers and every connector action of it is
+// charged again on each re-run, at the bucket's mark — its re-publish is deduplicated at the stream,
+// but the charge is not. That is a bounded over-count (at most MaxDeliver charges per action per
+// detection), and it follows a routine condition, not only an outage: a tenant at its held-command
+// ceiling keeps a [sendCommand, httpCall] rule retrying, and each retry spends outbound budget the
+// tenant's other rules may then be shed for. A re-charge on a later attempt can also shed an action
+// whose first attempt was published, and a shed letter written on the final Done then names an
+// action that did go out. Both are accepted costs of keeping the gate a pure per-attempt test.
+// Charging only a first delivery was the alternative, and it is worse: an action shed on that
+// delivery would then be published UNCHARGED on a retry, which weakens the ceiling rather than
+// over-counting against it.
 //
 // SCOPE: the gate (and its resolver cache) is PER-PROCESS. REACT's reader is gated on the DETECT
 // lease (main.go, newReactReader), so only the replica that detects dispatches, and the gate is
@@ -257,12 +273,25 @@ type ShedAction struct {
 	Token string
 }
 
-// Result is the disposition of one derived event's dispatch: whether the consumer may ack it, and
-// the connector actions the source gate shed on this attempt. Shed is reported on a Retry too, but a
-// consumer records it only on Done — a Retry re-runs the whole event, sheds included.
+// FailedAction is one action whose sink failed on this attempt: its kind (the metric enum:
+// "sendCommand", "raiseAlarm", "clearAlarm", "httpCall", "publish") and the token it was sent under
+// — the same token the sink dedups on, so an operator can match it downstream.
+type FailedAction struct {
+	Kind  string
+	Token string
+}
+
+// Result is the disposition of one derived event's dispatch: whether the consumer may ack it, the
+// connector actions the source gate shed on this attempt, and the actions whose sink failed on it.
+// Shed is reported on a Retry too, but a consumer letters each shed only on Done — a Retry re-runs
+// the whole event, sheds included — and names the final attempt's sheds in the exhausted letter.
 type Result struct {
 	Outcome Outcome
 	Shed    []ShedAction
+	// Failed lists, in rule order, every action whose sink failed on this attempt. Outcome is
+	// Retry exactly when Failed is non-empty, or when the rule could not be read at all (then no
+	// action was attempted and Failed is empty).
+	Failed []FailedAction
 }
 
 // Metrics is the REACT observability sink (bounded cardinality — no per-tenant labels, the ADR-023
@@ -270,7 +299,9 @@ type Result struct {
 // "publish" — "clearAlarm" is the structural falling-edge clear, ADR-057), never a tenant/rule value.
 type Metrics interface {
 	// RecordDispatched: one action successfully handed to its sink (includes idempotent replays,
-	// which command-delivery collapses — so on a redelivery this counts the accepted attempt).
+	// which command-delivery and the streams' duplicate windows collapse — so it counts accepted
+	// ATTEMPTS). Every action is attempted on every delivery, so while one action of a detection
+	// keeps failing, its siblings are counted again on each retry, up to MaxDeliver times each.
 	RecordDispatched(action string)
 	// RecordOrphan: one derived event whose rule was gone from the projection (nothing dispatched).
 	RecordOrphan()
@@ -356,11 +387,24 @@ func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink
 }
 
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
-// it redeliver (Retry). It resolves the rule that fired and dispatches each action in order. A
-// failure at ANY action returns Retry immediately, leaving the event unacked; the redelivery re-runs
-// the already-dispatched prefix idempotently (the command token collapses re-sends; the alarm
-// contributor upsert collapses re-raises/re-clears) and reaches the failed action again. An orphan
-// rule never wedges the loop.
+// it redeliver (Retry). It resolves the rule that fired and attempts EVERY action, in list order,
+// whatever happened to the others. A sink failure is recorded in Result.Failed and does not stop the
+// loop, so one failing action cannot hold back its siblings. The event is then left for redelivery,
+// which attempts every action again: the already-dispatched ones collapse on their tokens
+// (command-delivery's replay, the alarm and connector streams' duplicate window). There is
+// deliberately no way for one action to depend on another's success. An orphan rule never wedges
+// the loop.
+//
+// ctx bounds every sink call. The consumer gives it the delivery's ack deadline, so an attempt
+// against hung sinks ends with its delivery instead of running on into the next one. Within that
+// deadline each action gets its SHARE (actionContext): the time left divided by the actions left,
+// so a sink that hangs to its own timeout cannot spend the time of the actions listed after it. One
+// deadline for the whole list would bring the order dependence back under hung rather than failing
+// sinks: a command-delivery that answers nothing times each sendCommand out at its client's own
+// limit, and a few of those listed before a raiseAlarm would use up every delivery's deadline, so
+// the alarm would fail fast on an expired context on every attempt and never be raised. A share is
+// a ceiling, not a reservation — an action that finishes early leaves its unused time to the ones
+// after it.
 //
 // EDGE ROUTING (ADR-057). The detection's edge selects which side effects fire:
 //   - a RAISED (rising) edge dispatches every action — raiseAlarm raises/escalates, sendCommand sends.
@@ -384,22 +428,43 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev runtime.DerivedEvent) Resu
 		return Result{Outcome: Done}
 	}
 	var res Result
-	for _, a := range rule.Actions {
-		if out := d.dispatchAction(ctx, ev, rule, a, &res); out == Retry {
-			res.Outcome = Retry
-			return res
-		}
+	for i, a := range rule.Actions {
+		actx, cancel := actionContext(ctx, len(rule.Actions)-i)
+		d.dispatchAction(actx, ev, rule, a, &res)
+		cancel()
 	}
+	// The outcome is a function of the recorded failures, not a second channel that could
+	// disagree with them.
 	res.Outcome = Done
+	if len(res.Failed) > 0 {
+		res.Outcome = Retry
+	}
 	return res
 }
 
-// dispatchAction dispatches one action for the event's edge (see Dispatch). A sink failure is a Retry
-// (the whole event redelivers); a success, a disabled action kind (nil sink → inert, counted), an
-// action with no effect on this edge (sendCommand on a Resolved), and an unknown action (unreachable
-// for a gate-validated rule) are all Done so the loop moves on. The rule is passed so a raiseAlarm
-// action can read the rule-level severity + watched metric it raises with.
-func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent, rule rules.Rule, a rules.Action, res *Result) Outcome {
+// actionContext bounds one action's sink call to its share of ctx's deadline: the time left divided
+// by remaining, the number of actions not yet attempted including this one. A ctx with no deadline
+// is returned as is, and so is one whose deadline has already passed, since there is nothing left
+// to share and the call fails fast on it either way.
+func actionContext(ctx context.Context, remaining int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || remaining < 1 {
+		return ctx, func() {}
+	}
+	left := time.Until(deadline)
+	if left <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, left/time.Duration(remaining))
+}
+
+// dispatchAction dispatches one action for the event's edge (see Dispatch). A sink failure is
+// recorded in res.Failed and a source-gate shed in res.Shed. Everything else — a success, a disabled
+// action kind (nil sink → inert, counted), an action with no effect on this edge (sendCommand on a
+// Resolved), a permanent rejection, and an unknown action (unreachable for a gate-validated rule) —
+// records nothing. The rule is passed so a raiseAlarm action can read the rule-level severity +
+// watched metric it raises with.
+func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent, rule rules.Rule, a rules.Action, res *Result) {
 	resolved := ev.Edge == runtime.EdgeResolved
 	switch a.Type {
 	case rules.ActionSendCommand:
@@ -412,22 +477,22 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		if a.SendCommand == nil {
 			log.Error().Str("rule", ev.RuleID).
 				Msg("REACT: dropping a sendCommand action whose payload variant is missing (malformed/forged rule).")
-			return Done
+			return
 		}
 		if resolved {
 			// A command has no falling-edge twin: the Resolved reports the condition ceased, which is
 			// not a fresh trigger to re-send. Skip (no metric — it is a routine non-effect, not a drop).
-			return Done
+			return
 		}
 		if d.commands == nil {
 			d.metrics.RecordNotEnabled("sendCommand")
-			return Done
+			return
 		}
 		if !d.guardAllows(ev, a) {
 			// The action's branch guard evaluated false for this detection — a routine, deterministic
 			// non-effect (like sendCommand on a Resolved). Skip and ack; a redelivery re-evaluates the
 			// same guard to the same bit, so there is nothing a retry would change.
-			return Done
+			return
 		}
 		req := CommandRequest{
 			Tenant:      ev.Tenant,
@@ -451,12 +516,13 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 					Str("reason", permanent.Reason).
 					Msg("REACT send-command permanently rejected; dropping (a retry cannot change the verdict).")
 				d.metrics.RecordPermanentlyRejected("sendCommand")
-				return Done
+				return
 			}
-			return Retry
+			res.Failed = append(res.Failed, FailedAction{Kind: "sendCommand", Token: req.Token})
+			return
 		}
 		d.metrics.RecordDispatched("sendCommand")
-		return Done
+		return
 	case rules.ActionRaiseAlarm:
 		// A raiseAlarm action is dispatched on BOTH edges: a Raised raises/escalates this rule's
 		// contribution, a Resolved (the structural clearAlarm pairing) removes it. The alarm object
@@ -469,7 +535,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			// No alarm sink (a test-only configuration; production always wires it since 6d).
 			// Count it so its inertness is observable rather than silent.
 			d.metrics.RecordNotEnabled(action)
-			return Done
+			return
 		}
 		if !resolved && !d.guardAllows(ev, a) {
 			// Guarded out on the RISING edge → do not raise this contribution. The guard is consulted
@@ -478,7 +544,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			// inputs changed between the raise and the resolve. Because we did not raise, no contributor
 			// exists, so the always-dispatched falling-edge clear is a harmless idempotent no-op — the
 			// contributor upsert removes a contribution that was never added.
-			return Done
+			return
 		}
 		// The VERSION-FREE stable rule identity keys BOTH the default alarm key AND the contributor: the
 		// composed rule id embeds the profile VERSION token, which rotates on EVERY publish, so keying on
@@ -501,7 +567,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		if a.RaiseAlarm == nil {
 			log.Error().Str("rule", ev.RuleID).
 				Msg("REACT: dropping a raiseAlarm action whose payload variant is missing (malformed/forged rule).")
-			return Done
+			return
 		}
 
 		// Resolve the key BEFORE the sink call, on BOTH edges, from the same inputs. An alarm-key
@@ -512,11 +578,12 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// skipping the clear too strands nothing.
 		alarmKey, ok := d.resolveAlarmKey(ev, a.RaiseAlarm)
 		if !ok {
-			return Done
+			return
 		}
 		contributorID := stableContributorID(ev.RuleID)
 		req := AlarmRequest{
 			Tenant:       ev.Tenant,
+			Token:        alarmToken(ev, a),
 			DeviceToken:  ev.Series,
 			AlarmKey:     alarmKey,
 			MetricKey:    ruleMetric(rule),
@@ -527,16 +594,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			Value:        ev.Value,
 		}
 		if err := d.alarms.Dispatch(ctx, req); err != nil {
-			return Retry
+			res.Failed = append(res.Failed, FailedAction{Kind: action, Token: req.Token})
+			return
 		}
 		d.metrics.RecordDispatched(action)
-		return Done
+		return
 	case rules.ActionHTTPCall, rules.ActionPublish:
 		// A connector action (ADR-060) is a one-shot outbound side effect, exactly like sendCommand: it
 		// fires ONLY on the rising edge. A Resolved reports the condition ceased — not a fresh trigger to
 		// re-POST/re-publish — so it has no falling-edge twin; skip it (no metric, a routine non-effect).
 		if resolved {
-			return Done
+			return
 		}
 		// A malformed/forged resolved rule whose declared type has no matching payload variant would
 		// otherwise nil-panic when idempotencyToken dereferences the variant below — crashing the shared
@@ -547,17 +615,17 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		if (a.Type == rules.ActionHTTPCall && a.HTTPCall == nil) || (a.Type == rules.ActionPublish && a.Publish == nil) {
 			log.Error().Str("rule", ev.RuleID).Str("action", string(a.Type)).
 				Msg("REACT: dropping a connector action whose payload variant is missing (malformed/forged rule).")
-			return Done
+			return
 		}
 		kind := string(a.Type) // "httpCall" / "publish" — a fixed metric enum, never a tenant/rule value
 		if d.connectors == nil {
 			d.metrics.RecordNotEnabled(kind)
-			return Done
+			return
 		}
 		if !d.guardAllows(ev, a) {
 			// Branch guard false for this detection — a routine, deterministic non-effect. Skip and ack;
 			// a redelivery re-evaluates the same guard to the same bit.
-			return Done
+			return
 		}
 		payload, ok := d.renderPayload(ev, a)
 		if !ok {
@@ -565,7 +633,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			// publish cost gate). Fail CLOSED: skip rather than dispatch an empty/partial body or retry
 			// into a wedge (a render error is deterministic for this event, so a retry loops to poison).
 			// renderPayload logs the defect.
-			return Done
+			return
 		}
 		// SOURCE-side egress cost-gate (ADR-060 SD-3): charge the tenant's outbound budget immediately
 		// before the publish, on the event's trigger time (see ConnectorRateGate's CLOCK), so an
@@ -584,7 +652,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		if d.connectorRate != nil && !d.connectorRate.AllowAt(ev.Tenant, ev.TriggeredAt) {
 			d.metrics.RecordConnectorShed(kind)
 			res.Shed = append(res.Shed, ShedAction{Kind: kind, Token: token})
-			return Done
+			return
 		}
 		req := ConnectorRequest{
 			Tenant:       ev.Tenant,
@@ -598,15 +666,16 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			Action:       a,
 		}
 		if err := d.connectors.Dispatch(ctx, req); err != nil {
-			return Retry
+			res.Failed = append(res.Failed, FailedAction{Kind: kind, Token: token})
+			return
 		}
 		d.metrics.RecordDispatched(kind)
-		return Done
+		return
 	default:
 		// The publish gate (rules.Compile) rejects unknown action types, so this is unreachable for
 		// a gate-validated rule; a forged/hand-edited definition's unknown action is skipped (not a
 		// wedge). No metric — it cannot happen through the supported authoring path.
-		return Done
+		return
 	}
 }
 
@@ -814,6 +883,22 @@ func ruleMetric(rule rules.Rule) string {
 		return rule.Metric
 	}
 	return rule.When.Metric
+}
+
+// alarmToken is the dedup key of one alarm EDGE: the action's idempotencyToken plus the edge. The
+// edge is load-bearing. A Raised and a Resolved of one rule on one device can share (RuleID, Series,
+// Kind, OccurredTime) — a falling edge coinciding with a fresh rising edge, the case
+// runtime.DerivedEvent.Edge documents — so an edge-free key would let the broker suppress the
+// resolve as a duplicate of the raise and strand the alarm ACTIVE. idempotencyToken itself is NOT
+// changed: it is durable (command-delivery stores it), and commands and connector calls fire on the
+// rising edge only, so they never need the edge.
+//
+// The token names the edge, not the request's content, so a re-send collapses even if what it
+// would carry has changed: a profile republish that changes a rule's severity between two deliveries
+// of one detection has the second delivery's raise dropped as a duplicate, and the alarm keeps the
+// severity of the first. The window is minutes and the change is the author's, so this is accepted.
+func alarmToken(ev runtime.DerivedEvent, a rules.Action) string {
+	return hashToken(idempotencyToken(ev, a) + "\x00" + edgeOrRaised(ev.Edge))
 }
 
 // idempotencyToken derives the stable, deterministic command token for one detection + action. It

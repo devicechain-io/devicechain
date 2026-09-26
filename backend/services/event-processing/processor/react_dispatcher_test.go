@@ -38,13 +38,17 @@ func (r reactFakeResolver) Resolve(context.Context, string) (rules.Rule, bool, e
 	return r.rule, r.found, r.err
 }
 
-// reactFakeSink records commands and can fail every Send (a command-delivery outage).
+// reactFakeSink records commands and can fail every Send (a command-delivery outage). attempted
+// records every call, failed or not, so a test can compare what a letter names with what the sink
+// was actually sent.
 type reactFakeSink struct {
-	sent []react.CommandRequest
-	fail bool
+	sent      []react.CommandRequest
+	attempted []react.CommandRequest
+	fail      bool
 }
 
 func (s *reactFakeSink) Send(_ context.Context, req react.CommandRequest) error {
+	s.attempted = append(s.attempted, req)
 	if s.fail {
 		return errors.New("command-delivery unreachable")
 	}
@@ -309,6 +313,9 @@ func TestReactDeadLettersAtTheCap(t *testing.T) {
 	}
 	if e.Reference != "acme/p@1/r1" {
 		t.Fatalf("the letter does not name the rule that fired: %q", e.Reference)
+	}
+	if e.Detail == "" {
+		t.Fatal("the letter does not say which action could not be dispatched")
 	}
 	// A value ABOVE the cap, so a hard-coded messaging.MaxDeliver would be visible here.
 	if e.Attempts != messaging.MaxDeliver+2 {

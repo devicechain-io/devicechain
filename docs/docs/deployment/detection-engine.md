@@ -64,9 +64,9 @@ loading it would mean reading a checkpoint the leader is still writing.
 
 That includes the actions detections trigger: a standby dispatches nothing, so a tenant's outbound
 ceiling at the engine is charged once, on the replica that detects. When the partition moves, the
-old and new replica can both dispatch for up to about five seconds, and a connector call made
-twice in that window reaches its destination twice: DeviceChain passes the idempotency key on to
-the destination and does not deduplicate connector calls itself.
+old and new replica can both dispatch for a short time. An alarm update or connector request sent
+by both is stored once by the message bus, and a command carries a key that prevents a second
+enqueue; each replica does charge its own outbound ceiling in that window.
 
 With a single replica there is no pod disruption budget, and draining its node stops detection until
 the pod is rescheduled. A standby is the way to avoid that.
@@ -87,7 +87,7 @@ waits.
 |---|---|
 | **Events already processed and committed** | Nothing is lost. Messages are acknowledged only *after* the checkpoint that includes them commits, so anything not committed is redelivered. |
 | **Alarms and commands already sent** | Re-derived and re-sent, then collapsed: an alarm is an idempotent update, and a command carries a key that prevents a second enqueue. |
-| **Outbound webhooks and connector publishes already sent** | Re-derived and **sent again**. Nothing on the platform side collapses them — see the delivery section below. |
+| **Outbound webhooks and connector publishes already sent** | Collapsed too. A detection re-derived within 30 minutes is recognised by the message bus and never dispatched again, and a request the engine sends again within about ten minutes — a detection that was in flight when the pod stopped — is stored once. After a longer outage a request can be **sent again**; see the delivery section below. |
 | **Rule fire counts** | **Over-counted.** A replay increments them again. The *last fired* time is correct; treat the count as a floor, not an exact total. |
 | **Open windows, holds and timers** | Restored from the checkpoint. A hold that was part-way through is still part-way through. |
 | **Rules using a dynamic (attribute-based) threshold** | See the caveat below. |
@@ -107,16 +107,22 @@ The telemetry path is at-least-once end to end, so plan for a repeat rather than
 - A **detection** may be produced more than once and is collapsed by its identity.
 - An **alarm** update is idempotent — a repeat lands on the same alarm.
 - A **command** carries a key derived from the firing, so a repeat never enqueues a second command.
-- An **outbound webhook or connector publish** is the one action a retry can genuinely duplicate.
-  Every request carries an `X-DC-Idempotency-Key` header derived from the firing, but collapsing on
-  it is the **receiving endpoint's** job. For queue and broker targets the key travels as metadata,
-  which most brokers cannot act on. **Design outbound receivers to be idempotent.**
+- An **outbound webhook or connector publish** that the engine sends again within about ten
+  minutes — every retry of one detection — is recognised by the message bus and stored once. Past
+  that, a request can still reach its destination twice: a replay after a long outage, or the
+  connectors service retrying a call whose response it lost. Every request carries an
+  `X-DC-Idempotency-Key` header derived from the firing, so collapsing that remaining duplicate is
+  the **receiving endpoint's** job. For queue and broker targets the key travels as metadata, which
+  most brokers cannot act on. **Design outbound receivers to be idempotent.**
 
 When a downstream system is unavailable, the message is left unacknowledged and retried on a timer
 rather than hammered. After five delivery attempts, roughly four minutes apart in total:
 
 - an **outbound connector** request is **dead-lettered**, so it can be inspected;
-- a **detection** whose actions could not be dispatched is **dead-lettered too**, with a loud error.
+- a **detection** some of whose actions still could not be dispatched is **dead-lettered too**,
+  with a loud error. The letter's detail names each action that failed, or was refused by the
+  outbound rate, on the final attempt, by kind and idempotency key. The detection's other actions
+  were carried out, or deliberately skipped (guarded out, not enabled, or rejected as invalid).
 
 :::caution Dead-lettered is recorded, not retried
 Nothing re-runs a dead letter. The record exists so a failure is visible and diagnosable
@@ -132,6 +138,10 @@ back under its ceiling. The rate is metered on the time the triggering telemetry
 platform, so a backlog the engine works through after a restart is charged as it happened rather
 than all at once. Past a per-tenant budget of about one letter a second (60 at once) and ten a
 second in total, shed actions are counted and summarised in one letter per tenant per minute.
+While one of a detection's actions keeps failing, each retry charges its webhook and connector
+actions against the tenant's outbound rate again, even though the message bus stores the re-sent
+request once — so a sustained failure, such as a tenant at its held-command limit, can cause sheds
+elsewhere in the same tenant.
 Detections the engine re-publishes after a restart are recognised by the message bus and stored
 once within a 30-minute window, so they are neither dispatched nor charged twice.
 
@@ -165,14 +175,15 @@ configurable per deployment.
 
 The `ReactPoisonDropping` alert exists for exactly that case and should be treated as urgent.
 
-:::caution An action that fails takes its later siblings with it
-A rule's actions run in the order they are listed, and a failing action stops the rest. On each
-retry the actions *before* it run again, and the actions *after* it have still never run — so if the
-event is eventually given up on, those later actions never happened at all. The dead letter records
-that the detection fired and its actions did not; it does not carry them out.
-
-**Order a rule's actions so the important one comes first.** If a rule both raises an alarm and calls
-a webhook, putting the alarm first means a flaky endpoint cannot cost you the alarm.
+:::note Each action is dispatched on its own
+A rule's actions do not depend on each other. Every action is attempted on every delivery, so one
+that keeps failing — a command for a device whose tenant is at its held-command limit, a webhook
+whose endpoint is down — does not hold back the alarm or the rule's other actions. The same holds
+for a service that does not answer at all: each attempt is limited to the time before the message
+would be delivered again, and each action gets its share of what is left, so actions listed first
+cannot use up the time of the ones after them. Actions that already succeeded are sent again on each
+retry and collapsed as described above. There is no way to make one action conditional on another
+one succeeding.
 :::
 
 ## Timing: what "when" means
@@ -490,7 +501,7 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `DetectConsumerBacklogHigh` | The engine is behind. Absence detection **on silence** is suppressed while it is — a later event still fires an overdue absence, as above. |
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
-| `ReactPoisonDropping` | Actions are not being dispatched after exhausting their retries — alarms and commands are not happening. The detections are dead-lettered so you can see which, but nothing replays them. Treat as urgent. |
+| `ReactPoisonDropping` | Some of a detection's actions failed on every delivery attempt — usually command-delivery or the message bus was unavailable for several minutes. Its other actions were attempted on every delivery; each dead letter names the ones that failed. Nothing replays them. Treat as urgent. |
 | `DeadLetterWriteLost` | Something was given up on **and** could not be written to the dead-letter stream. Look at the broker, and at the service's log: a letter the service refused to write lands here too, and so does a dead letter that the dead-letter store or the command writeback ran out of attempts on. |
 | `DeadLetterStoreLosing` | Dead letters reached the stream but could not be written to the store, so they will age out of it unrecorded. Look at the operator database. |
 | `ReactConnectorEgressShedding` | A tenant is over its outbound rate on the timeline its telemetry reached the platform, and its outbound actions are being shed. Each is dead-lettered with reason `shed`, within a budget; read them with `dcctl dead-letters`. A catch-up after a restart does not cause this. |

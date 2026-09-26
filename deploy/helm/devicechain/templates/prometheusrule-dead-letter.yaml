@@ -43,8 +43,8 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "REACT is giving up on un-dispatchable derived events"
-            description: "Derived events are hitting the redelivery cap — raised alarms and dispatched commands are not reaching their sinks. A REACT sink (alarm/command) is likely down. The events are dead-lettered rather than lost, so they can be inspected; nothing replays them, so the alarms and commands they carried still did not happen."
+            summary: "REACT is giving up on detection actions that keep failing"
+            description: "Derived events are hitting the redelivery cap with actions still failing — typically command-delivery or the message bus has been unavailable for several minutes. Every action of each detection was attempted on every delivery; the dead letter names each one that failed on the final attempt, by kind and idempotency key. Nothing replays them, so treat each named alarm, command or connector call as not carried out."
         - alert: DeadLetterStoreLosing
           expr: sum(rate(devicechain_usermanagement_dead_letters_unstored_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 5m

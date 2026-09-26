@@ -443,15 +443,19 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 // REACT has no order to protect, and a buffer it kept would be handed out on a later term
 // after the other replica had already dispatched it. It narrows that window rather than
 // closing it: ReaderWithReleaseOnPark names the subscription-buffered leftovers it cannot
-// reach, which is one more reason a connector call can reach its destination twice.
+// reach. A leftover dispatched again soon after is collapsed by the alarm and connector
+// streams' duplicate windows; one dispatched again after a term gap longer than those windows
+// is one more way a connector call can reach its destination twice.
+//
+// The reader is also a one-slot capacity reader; processor.ReactReaderOptions says why, and
+// holds the whole option set so the tests build the reader main does.
 //
 // REACT is deliberately NOT one of the processor's termReaders (bound and unbound per term).
 // Unbinding protects DETECT from a pull request served past the new leader's replay head,
 // which for DETECT is loss; for REACT the same event only delays a dispatch. Binding REACT
 // per term would also put its bind failures on the DETECT term-build fuse.
 func newReactReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error) {
-	return nmgr.NewReader(streams.DerivedEvents, messaging.ReaderWithDeliverNew(),
-		messaging.ReaderWithTermGate(DetectTermGate.Held), messaging.ReaderWithReleaseOnPark())
+	return nmgr.NewReader(streams.DerivedEvents, processor.ReactReaderOptions(DetectTermGate.Held)...)
 }
 
 // buildEgressLimiter constructs the per-tenant SOURCE-side OUTBOUND egress cost-gate (ADR-060 SD-3).

@@ -31,8 +31,10 @@ func wireAlarmEdge(edge string) string {
 // device-management consumer folds into the alarm's contributor set (slice 5c-1 / ADR-057). It is
 // dependency-inverted behind react.AlarmSink so the dispatcher never depends on the transport.
 //
-// It carries no idempotency token: the downstream contributor-set fold is keyed on (device, alarmKey)
-// with a per-contributor monotonic decision-ts, so an at-least-once redelivery is safe without one.
+// It publishes with the request's edge-scoped token as the broker dedup id, so a redelivery's
+// re-publish is stored once within raise-alarm's duplicate window. The contributor-set fold is keyed
+// on (device, alarmKey) with a per-contributor monotonic decision-ts, so a repeat that does reach it
+// (one past the window) is still absorbed.
 // Since the 6d cutover it is always wired (the sole alarm-RAISE path; an operator ack/clear still
 // mutates the same alarm row in device-management).
 type alarmClient struct {
@@ -47,8 +49,8 @@ func NewAlarmClient(writer messaging.MessageWriter) react.AlarmSink {
 // Dispatch publishes one alarm request (raise or clear, per req.Edge — ADR-057) on its tenant's
 // subject. The writer derives the subject from the tenant in context (fail-closed on none), so the
 // request lands on exactly "{instance}.{tenant}.raise-alarm". A marshal or write failure is returned
-// so the dispatcher retries (the event redelivers; the downstream contributor upsert makes the re-run
-// idempotent). The triggering value is carried through as a nullable pointer (slice 6a): a
+// so the dispatcher retries (the event redelivers; the re-publish carries the same dedup id, and the
+// downstream contributor upsert is idempotent besides). The triggering value is carried through as a nullable pointer (slice 6a): a
 // value-bearing raised detection (threshold/repeating crossing sample, deltaRate/aggregate computed
 // scalar) stamps its real value, while a silence-driven fire and every resolved edge carry nil —
 // device-management then leaves the alarm's last value NULL rather than writing a fabricated 0.
@@ -67,7 +69,7 @@ func (c *alarmClient) Dispatch(ctx context.Context, req react.AlarmRequest) erro
 		return fmt.Errorf("react: marshal alarm request for device %q: %w", req.DeviceToken, err)
 	}
 	tctx := dccore.WithTenant(ctx, req.Tenant)
-	if err := c.writer.WriteMessages(tctx, messaging.Message{Value: payload}); err != nil {
+	if err := c.writer.WriteMessages(tctx, messaging.Message{Value: payload, DedupID: req.Token}); err != nil {
 		return fmt.Errorf("react: publish alarm request for device %q: %w", req.DeviceToken, err)
 	}
 	return nil

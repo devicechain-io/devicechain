@@ -4,9 +4,12 @@
 package processor
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 )
 
@@ -26,5 +29,24 @@ func TestWireAlarmEdgeMapping(t *testing.T) {
 	// so an unstamped request can never be dropped as a resolve.
 	if got := wireAlarmEdge(""); got != dmmodel.AlarmEdgeRaised {
 		t.Fatalf("an empty edge must default to raised, got %q", got)
+	}
+}
+
+// The alarm request is published under the request's edge token as the broker dedup id, so a
+// retry's re-publish of it is stored once by raise-alarm, and scoped to the request's tenant.
+func TestAlarmClientPublishesUnderTheRequestToken(t *testing.T) {
+	w := &captureConnectorWriter{}
+	err := NewAlarmClient(w).Dispatch(context.Background(), react.AlarmRequest{
+		Tenant: "acme", Token: "tok-1", DeviceToken: "device-1", AlarmKey: "overheat",
+		RuleID: "p/r1", Edge: runtime.EdgeRaised, OccurredTime: time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if w.dedupID != "tok-1" {
+		t.Fatalf("published under dedup id %q, want the request token %q", w.dedupID, "tok-1")
+	}
+	if w.tenant != "acme" {
+		t.Fatalf("published under tenant %q, want acme", w.tenant)
 	}
 }

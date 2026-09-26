@@ -2431,6 +2431,40 @@ While the upgrade rolls out:
 - Alarm lists, acknowledge and clear served by a `device-management` pod still on the previous
   release can fail once per database connection. Repeating the request succeeds.
 
+#### A failing action no longer stops a rule's other actions
+
+Nothing needs doing at the upgrade. Read this if any rule lists more than one action.
+
+Before this release a rule's actions ran in the order they were listed, and the first one that
+failed stopped the rest. On each retry the actions before it ran again and the actions after it
+never ran at all, so a command that could not be enqueued for a few minutes — for example because
+the tenant was at its held-command limit — meant an alarm listed after it was never raised. Every
+action is now attempted on every delivery, whatever happens to the others.
+
+- **A rule no longer needs its most important action listed first.** Rules reordered to work
+  around this can stay as they are.
+- **A rule that relied on the old behaviour to run an action only when an earlier one succeeded no
+  longer gets that:** every action runs regardless of the others.
+- **A retry by the detection engine no longer sends a webhook or connector publish a second time,
+  within about ten minutes of the first attempt.** Alarm updates and connector requests sent again
+  in that time are recognised by the message bus and stored once. The two streams involved are
+  reconfigured automatically when the new version starts; remembering each request for ten minutes
+  costs NATS memory in proportion to how often rules fire. Past that window, and when the connectors
+  service itself retries a call, a request can still reach its destination twice.
+- **While one of a detection's actions keeps failing, each retry charges its webhook and connector
+  actions against the tenant's outbound rate again,** even though the re-sent request is stored
+  once. A sustained failure, such as a tenant at its held-command limit, can therefore cause sheds
+  in the tenant's other rules.
+- **A detection that is dead-lettered after its retries now names, in the letter's detail, each
+  action that failed on the final attempt,** by kind and idempotency key, as `sendCommand/failed/<key>`
+  (and `httpCall/shed/<key>` for one the outbound rate refused), the same form shed letters use. The
+  `ReactPoisonDropping` alert's summary and description are reworded to match.
+- **The detection engine now fetches one detection at a time from the message bus,** so a detection
+  is never left waiting behind a slow one long enough to be delivered twice, and an attempt against
+  a service that does not answer ends when its delivery does instead of running on. Each action
+  gets its share of that time, so commands to a service that does not answer cannot use it all up
+  before an alarm listed after them is raised.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

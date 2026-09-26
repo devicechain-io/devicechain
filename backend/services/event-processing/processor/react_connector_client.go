@@ -22,9 +22,10 @@ import (
 // execute the action here — REACT's job ends at a durable publish, keeping the heavy connector
 // dep-tree and any credential handling out of this replay-correct binary.
 //
-// It carries the deterministic idempotency token (react.ConnectorRequest.Token) on the wire so the
-// consumer dedups an at-least-once redelivery; this sink itself is a thin marshal-and-publish, mirroring
-// alarmClient.
+// It publishes with the deterministic idempotency token (react.ConnectorRequest.Token) as the broker
+// dedup id, so every re-publish within connector-dispatch's duplicate window is stored once. The same
+// token rides the wire as the IdempotencyKey the connectors service forwards to the destination. This
+// sink itself is a thin marshal-and-publish, mirroring alarmClient.
 type connectorClient struct {
 	writer messaging.MessageWriter
 }
@@ -56,8 +57,7 @@ func wireConnectorKind(t rules.ActionType) (string, bool) {
 // its tenant's subject. The writer derives the subject from the tenant in context (fail-closed on
 // none), so the request lands on exactly "{instance}.{tenant}.connector-dispatch". A marshal or write
 // failure is returned so the dispatcher retries (the event redelivers and every connector action on it
-// is published again; the idempotency token is forwarded to the destination, not deduplicated on the
-// way). An unmappable/malformed action is a programming error (the dispatcher only routes
+// is published again, under the same dedup id, which the stream's duplicate window collapses). An unmappable/malformed action is a programming error (the dispatcher only routes
 // httpCall/publish here); it is rejected fail-closed rather than published as a malformed request.
 func (c *connectorClient) Dispatch(ctx context.Context, req react.ConnectorRequest) error {
 	kind, ok := wireConnectorKind(req.Action.Type)
@@ -103,7 +103,7 @@ func (c *connectorClient) Dispatch(ctx context.Context, req react.ConnectorReque
 		return fmt.Errorf("react: marshal connector dispatch for rule %q: %w", req.RuleID, err)
 	}
 	tctx := dccore.WithTenant(ctx, req.Tenant)
-	if err := c.writer.WriteMessages(tctx, messaging.Message{Value: payload}); err != nil {
+	if err := c.writer.WriteMessages(tctx, messaging.Message{Value: payload, DedupID: req.Token}); err != nil {
 		return fmt.Errorf("react: publish connector dispatch for rule %q: %w", req.RuleID, err)
 	}
 	return nil

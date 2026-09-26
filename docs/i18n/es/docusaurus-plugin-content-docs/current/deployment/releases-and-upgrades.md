@@ -2600,6 +2600,44 @@ Mientras se despliega la actualización:
   `device-management` que siga en la versión anterior pueden fallar una vez por conexión a la base
   de datos. Repetir la petición funciona.
 
+#### Una acción que falla ya no detiene las demás acciones de la regla
+
+No hay que hacer nada en la actualización. Lea esto si alguna regla tiene más de una acción.
+
+Antes de esta versión, las acciones de una regla se ejecutaban en el orden en que estaban listadas,
+y la primera que fallaba detenía al resto. En cada reintento las acciones anteriores se volvían a
+ejecutar y las posteriores no llegaban a ejecutarse nunca, así que un comando que no se podía
+encolar durante unos minutos (por ejemplo, porque el inquilino estaba en su límite de comandos
+retenidos) hacía que nunca se levantara una alarma listada después de él. Ahora cada acción se
+intenta en cada entrega, pase lo que pase con las demás.
+
+- **Una regla ya no necesita listar primero su acción más importante.** Las reglas que se
+  reordenaron para sortear esto pueden quedarse como están.
+- **Una regla que dependía del comportamiento anterior para ejecutar una acción solo si otra
+  anterior tenía éxito deja de tenerlo:** cada acción se ejecuta con independencia de las demás.
+- **Un reintento del motor de detección ya no envía por segunda vez un webhook ni una publicación a
+  un conector, dentro de unos diez minutos desde el primer intento.** Las actualizaciones de alarma
+  y las solicitudes a conectores que se vuelven a enviar en ese plazo las reconoce el bus de
+  mensajes y se almacenan una sola vez. Los dos flujos afectados se reconfiguran automáticamente al
+  arrancar la nueva versión; recordar cada solicitud durante diez minutos cuesta memoria de NATS en
+  proporción a la frecuencia con que se disparan las reglas. Pasado ese plazo, y cuando el propio
+  servicio de conectores reintenta una llamada, una solicitud todavía puede llegar dos veces a su
+  destino.
+- **Mientras una de las acciones de una detección sigue fallando, cada reintento vuelve a cobrar sus
+  acciones de webhook y de conector contra la tasa de salida del inquilino,** aunque la solicitud
+  reenviada se almacene una sola vez. Un fallo sostenido, como un inquilino en su límite de comandos
+  retenidos, puede provocar así descartes en las demás reglas del inquilino.
+- **Una detección que acaba en la cola de mensajes no entregados tras sus reintentos ahora nombra,
+  en el detalle del mensaje, cada acción que falló en el último intento,** por tipo y clave de
+  idempotencia, como `sendCommand/failed/<clave>` (y `httpCall/shed/<clave>` para una que la tasa de
+  salida rechazó), la misma forma que usan los mensajes de descarte. El resumen y la descripción de
+  la alerta `ReactPoisonDropping` se reformulan en consecuencia.
+- **El motor de detección ahora obtiene del bus de mensajes una detección cada vez,** así que una
+  detección nunca queda esperando detrás de otra lenta el tiempo suficiente para entregarse dos
+  veces, y un intento contra un servicio que no responde termina cuando termina su entrega en lugar
+  de prolongarse. Cada acción recibe su parte de ese tiempo, así que los comandos a un servicio que
+  no responde no pueden agotarlo antes de que se active una alarma listada detrás de ellos.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,10 +33,19 @@ import (
 // cancelled context.
 //
 // Failure handling is classification-free: any dispatch failure leaves the message unacked for
-// AckWait-paced redelivery (the dispatcher never acks a partially-dispatched event), and a persistently-failing event is
-// bounded by the JetStream redelivery cap (messaging.MaxDeliver), after which it is dropped as
-// poison and counted — the same transient-then-give-up idiom every cross-service consumer here uses,
-// rather than fragile per-error interpretation.
+// AckWait-paced redelivery (the dispatcher never acks a partially-dispatched event), and a
+// persistently-failing event is bounded by the JetStream redelivery cap (messaging.MaxDeliver),
+// after which it is dead-lettered, naming the actions that failed on the final attempt, and acked —
+// the same transient-then-give-up idiom every cross-service consumer here uses, rather than fragile
+// per-error interpretation. A redelivery attempts every action again: commands replay on their
+// token in command-delivery, and alarm and connector re-publishes are stored once within their
+// stream's duplicate window.
+//
+// That window is sized on the premise that each delivery is handled within its own AckWait
+// (streams.RedeliveryDuplicateWindowSeconds), and this consumer is what makes the premise true:
+// it reads through a one-slot capacity reader (ReactReaderOptions), so no delivery waits in a
+// buffer behind another while its clock runs, and it bounds every sink call by the delivery's ack
+// deadline (handle).
 type ReactDispatcher struct {
 	reader     messaging.MessageReader
 	dispatcher *react.Dispatcher
@@ -133,9 +143,40 @@ func (rd *ReactDispatcher) Stop(ctx context.Context) error {
 func (rd *ReactDispatcher) run() {
 	defer rd.wg.Done()
 	messaging.RunConsumer(rd.procCtx, rd.reader, rd.pacer(), func(msg messaging.Message) bool {
-		rd.handle(msg)
+		// Process returns the message's capacity slot however handle leaves, so the reader
+		// fetches the next delivery only once this one is finished with.
+		messaging.Process(msg, rd.handle)
 		return true
 	})
+}
+
+// ReactReaderOptions are the options REACT's derived-events reader is built with. held is the
+// DETECT term gate (main.go, newReactReader): REACT consumes only on the replica that detects.
+//
+// ReaderWithCapacity(1) is load-bearing for deduplication, not for throughput. REACT re-publishes
+// every alarm and connector action on each delivery, and the streams collapse those re-publishes
+// only within a window sized on the premise that each delivery is handled within its AckWait. A
+// plain reader fetches a batch of 64 whose clocks all start at the fetch; behind a slow sink (a hung
+// command-delivery costs a timeout per sendCommand) the tail of that batch would be redelivered
+// while its first copy was still queued, both copies would be handled, many minutes apart, and the
+// second re-publish could land past the window. One slot matches the one serial worker: a delivery
+// is fetched only when the previous one is finished, and a copy whose clock ran out in the buffer
+// is never handed out. The cost is one fetch round trip per derived event on the one serial worker,
+// which caps REACT's drain rate at one event per round trip plus its dispatch. That ceiling has not
+// been measured against real sinks; measure it before relying on REACT to drain a large backlog.
+//
+// ReaderWithReleaseOnPark is not pinned by a test here. With one slot the reader holds at most one
+// fetched message, and the release path runs only when the term gate closes during a fetch, which
+// no test times. Removing it would leave a message fetched in that instant unacked until its
+// AckWait, not lost: the other replica cannot be handed it before then either, and the re-publishes
+// of a later delivery collapse on their tokens.
+func ReactReaderOptions(held func() bool) []messaging.ReaderOption {
+	return []messaging.ReaderOption{
+		messaging.ReaderWithDeliverNew(),
+		messaging.ReaderWithTermGate(held),
+		messaging.ReaderWithReleaseOnPark(),
+		messaging.ReaderWithCapacity(1),
+	}
 }
 
 // pacer builds a read pacer for one run of the loop, falling back to a reportless one when
@@ -153,9 +194,8 @@ func (rd *ReactDispatcher) pacer() *core.ReadPacer {
 // handle dispatches one derived event and acks it or leaves it unacked. An undecodable or
 // tenant-inconsistent payload is poison (a retry cannot fix it) — acked so it stops redelivering. A
 // dispatch that returns Retry is left unacked for AckWait-paced redelivery, unless the redelivery cap
-// is exhausted, in which case the event is dropped (acked) and counted as poison so a
-// persistently-failing dispatch cannot redeliver
-// forever. A Done dispatch is acked.
+// is exhausted, in which case the event is dead-lettered, acked and counted as poison so a
+// persistently-failing dispatch cannot redeliver forever. A Done dispatch is acked.
 func (rd *ReactDispatcher) handle(msg messaging.Message) {
 	tctx, tenant, ok := messaging.TenantContextFromSubject(rd.procCtx, msg.Subject)
 	if !ok {
@@ -206,7 +246,26 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 	ev.TriggeredAt = at
 	rd.metrics.recordClockFallback(clk)
 
-	res := rd.dispatcher.Dispatch(tctx, ev)
+	// Every sink call of this attempt is bounded by the delivery's ack deadline — the moment the
+	// broker hands the event to the next delivery. An attempt against hung sinks therefore ends with
+	// its delivery rather than running into the next one, which is what keeps the redelivery span
+	// inside the duplicate window the alarm and connector streams declare. The deadline is for the
+	// sink calls only. The letters below are written exactly when it may have run out — the
+	// exhausted letter after a final attempt against hung sinks, a shed letter after an attempt
+	// whose sinks answered at the last moment — so they are handed tctx, which has no deadline.
+	// That is not what keeps them, though: the dead-letter sink detaches every write from its
+	// caller's deadline and cancellation (core/deadletter, detach), so a letter handed the
+	// deadlined context would be written too. The guarantee is pinned end to end, over a real
+	// broker, by TestTheExhaustedLetterOutlivesTheDeliveryDeadline and
+	// TestShedLettersOutliveTheDeliveryDeadline. A message from a reader without capacity carries
+	// no deadline and dispatches on tctx as before.
+	dctx := tctx
+	if deadline := msg.AckDeadline(); !deadline.IsZero() {
+		var cancel context.CancelFunc
+		dctx, cancel = context.WithDeadline(tctx, deadline)
+		defer cancel()
+	}
+	res := rd.dispatcher.Dispatch(dctx, ev)
 	if res.Outcome == react.Done {
 		// Letters only on Done: a Retry re-runs the whole event, sheds included, so a letter
 		// written now would record an attempt that did not stand. An event that never reaches
@@ -223,8 +282,9 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 	// a log line and a counter.
 	if msg.NumDelivered >= messaging.MaxDeliver {
 		log.Error().Str("rule", ev.RuleID).Str("series", ev.Series).Int("attempts", msg.NumDelivered).
-			Msg("Dead-lettering derived event after the redelivery cap; its actions could not be dispatched.")
-		rd.deadLetter(tctx, msg, ev)
+			Str("undispatched", undispatchedDetail(res)).
+			Msg("Dead-lettering derived event after the redelivery cap; the actions it names failed on the final attempt.")
+		rd.deadLetter(tctx, msg, ev, res)
 		rd.metrics.recordPoisonDropped()
 		rd.ack(msg)
 		return
@@ -248,7 +308,7 @@ func (rd *ReactDispatcher) handle(msg messaging.Message) {
 // the stream, so no running service reaches here with one. It is tolerated because every
 // other test in this package builds a dispatcher without it, and a nil check is cheaper
 // than making them all care about a sink they are not testing.
-func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Message, ev runtime.DerivedEvent) {
+func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Message, ev runtime.DerivedEvent, res react.Result) {
 	if rd.dead == nil {
 		return
 	}
@@ -256,8 +316,9 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 	// correlation from msg, and the dedup id the max-delivery recorder shares.
 	err := rd.dead.WriteFor(tctx, msg, deadletter.Envelope{
 		Reason: deadletter.ReasonExhausted,
-		Summary: "a detection fired and its authored actions could not be dispatched after " +
-			"every delivery attempt",
+		Summary: "a detection fired and one or more of its authored actions could not be " +
+			"dispatched after every delivery attempt",
+		Detail:     undispatchedDetail(res),
 		Reference:  ev.RuleID,
 		OccurredAt: time.Now().UTC(),
 		Payload:    msg.Value,
@@ -272,8 +333,34 @@ func (rd *ReactDispatcher) deadLetter(tctx context.Context, msg messaging.Messag
 	rd.metrics.recordDeadLettered()
 }
 
-// ack best-effort acks, logging a failed ack. A redelivery re-dispatches every action: commands
-// and alarms deduplicate on their token, connector calls do not (the key is only forwarded).
+// undispatchedDetail names what the final attempt could not carry out, for the exhausted dead
+// letter, in the grammar the shed letters already use ("kind/outcome/token"), so an operator can
+// grep one grammar across both letter types. Tokens are content hashes, safe on any surface.
+//
+// An action named "failed" failed on the LAST attempt; it may have succeeded on an earlier one,
+// which is harmless because a repeat collapses on the same token. An action named "shed" was
+// refused by the outbound gate on the last attempt. An action not named was carried out, or was
+// deliberately skipped (guarded out, not enabled, permanently rejected, a render failure).
+//
+// A Retry with nothing Failed comes only from a rule that could not be read, which is before any
+// action — or shed — is attempted.
+func undispatchedDetail(res react.Result) string {
+	if len(res.Failed) == 0 {
+		return "the rule could not be read on the final attempt, so no action was attempted"
+	}
+	parts := make([]string, 0, len(res.Failed)+len(res.Shed))
+	for _, f := range res.Failed {
+		parts = append(parts, f.Kind+"/failed/"+f.Token)
+	}
+	for _, s := range res.Shed {
+		parts = append(parts, s.Kind+"/shed/"+s.Token)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// ack best-effort acks, logging a failed ack. A redelivery attempts every action again: commands
+// replay on their token in command-delivery, and alarm and connector re-publishes are stored once
+// within their stream's duplicate window.
 func (rd *ReactDispatcher) ack(msg messaging.Message) {
 	if err := msg.Ack(); err != nil {
 		log.Warn().Err(err).Msg("Failed to ack a derived event; it will redeliver and dispatch its actions again.")
