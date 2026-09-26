@@ -2785,6 +2785,10 @@ stopped and the pod is not going to finish on its own. Remove it, and the operat
 # the event store's are dc-tsdb-<n> in dci-<instance>
 kubectl -n dc-system delete pod dc-rdb-1 --grace-period=0 --force
 ```
+
+Only do this when the pod's node is `Ready` and you have read that line in its log. A pod that is
+`Terminating` because its node is unreachable is a different case: its database may still be
+running, and it must not be force-deleted. See [losing a node](./bootstrap.md#ha-node-loss).
 :::
 
 #### Events are persisted in batches
@@ -2815,6 +2819,21 @@ See [Event persistence](./observability.md#event-persistence).
   writers, because it counts events waiting for their batch to commit, and
   `persist_duration_seconds` now includes that wait. Two metrics are new, `persist_batch_size` and
   `persist_batch_fallbacks_total`.
+
+#### What losing a node, and getting it back, looks like is documented
+
+Nothing changes in behaviour. Under `--ha`, [losing a node](./bootstrap.md#ha-node-loss) now
+describes, in order, what an operator sees: how quickly the broker, the services and the
+databases recover, that event processing can pause for about a minute, why evicted pods on the
+lost node stay `Terminating` and must not be force-deleted
+while it is unreachable, and that a node's **return** is itself a short disruption. A broker
+server that was cut off comes back having held elections on its own, and the other servers
+elect their leaders again when it rejoins: expect a few seconds of "temporarily unavailable"
+from JetStream about 45 seconds after the node returns. Nothing is lost. Plan a node's return
+the way you plan its loss.
+
+The 30-second node-loss eviction on the services' pods is unchanged and deliberate, and is now
+checked on every pod the chart renders, the console included.
 
 ### The one-time durable-ingest cutover
 

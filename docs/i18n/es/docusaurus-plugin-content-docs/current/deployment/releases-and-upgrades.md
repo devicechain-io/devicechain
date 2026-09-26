@@ -2983,6 +2983,11 @@ detenido y el pod no va a terminar por sí solo. Elimínelo, y el operador lo vu
 # los del almacén de eventos son dc-tsdb-<n> en dci-<instance>
 kubectl -n dc-system delete pod dc-rdb-1 --grace-period=0 --force
 ```
+
+Hágalo solo cuando el nodo del pod esté `Ready` y haya leído esa línea en su registro. Un pod que
+está en `Terminating` porque su nodo es inaccesible es un caso distinto: su base de datos puede
+seguir en ejecución, y no debe eliminarse a la fuerza. Consulte
+[perder un nodo](./bootstrap.md#ha-node-loss).
 :::
 
 #### Los eventos se persisten por lotes
@@ -3016,6 +3021,22 @@ defecto `5`). Consulte [Persistencia de eventos](./observability.md#event-persis
   de escritores, porque cuenta los eventos que esperan a que su lote se confirme, y
   `persist_duration_seconds` incluye ahora esa espera. Hay dos métricas nuevas,
   `persist_batch_size` y `persist_batch_fallbacks_total`.
+
+#### Qué ocurre al perder un nodo y al recuperarlo queda documentado
+
+El comportamiento no cambia. Con `--ha`, [perder un nodo](./bootstrap.md#ha-node-loss) describe
+ahora, en orden, lo que ve un operador: con qué rapidez se recuperan el broker, los servicios y
+las bases de datos, que el procesamiento de eventos puede detenerse durante un minuto, por qué
+los pods desalojados del nodo perdido se quedan en `Terminating` y no deben
+eliminarse a la fuerza mientras el nodo sea inaccesible, y que la **vuelta** de un nodo es en sí
+misma una interrupción breve. Un servidor del broker que quedó aislado vuelve tras haber
+celebrado elecciones por su cuenta, y los demás servidores vuelven a elegir a sus líderes cuando
+se reincorpora: cuente con unos segundos de "temporalmente no disponible" en JetStream alrededor
+de 45 segundos después de que vuelva el nodo. No se pierde nada. Planifique la vuelta de un nodo
+como planifica su pérdida.
+
+El desalojo a los 30 segundos de los pods de los servicios cuando se pierde un nodo no cambia y
+es deliberado, y ahora se comprueba en cada pod que renderiza el chart, incluida la consola.
 
 ### La transición única a la ingesta duradera
 
