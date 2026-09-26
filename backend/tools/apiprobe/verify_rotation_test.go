@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,9 @@ type fakeInstance struct {
 
 	mu     sync.Mutex
 	logins int
+
+	// out is what verify printed: the report an operator reads.
+	out bytes.Buffer
 }
 
 const probeToken = "rotation-probe"
@@ -139,7 +143,7 @@ func (f *fakeInstance) verify(extra ...string) error {
 		f.t.Fatal(err)
 	}
 	argv := append([]string{"--receipt", path, "--server", strings.TrimPrefix(f.srv.URL, "http://"), "--scheme", "http"}, extra...)
-	return runVerify(context.Background(), argv)
+	return verifyTo(context.Background(), argv, &f.out)
 }
 
 // 🔴 THE MISLABEL. A token the upgraded platform will not accept was reported as
@@ -177,6 +181,12 @@ func TestVerifyRidesOutATokenTheOldPodCannotVerify(t *testing.T) {
 	if got := f.signIns(); got != 2 {
 		t.Fatalf("signed in %d times, want 2: a retry must sign in AGAIN, because a token the old pod "+
 			"issued is refused for good", got)
+	}
+	// A green run that rode out a rotation must SAY so; read without the retry it
+	// would look exactly like a run that never met one.
+	if out := f.out.String(); !strings.Contains(out, "  retry   401 from ") ||
+		!strings.Contains(out, "1 request(s) were refused while the signing key rotated") {
+		t.Fatalf("verify passed after a retry but its report does not say so:\n%s", out)
 	}
 }
 
@@ -233,6 +243,12 @@ func TestNothingRefusedMeansOneSignIn(t *testing.T) {
 	}
 	if got := f.signIns(); got != 1 {
 		t.Fatalf("signed in %d times against a platform that refused nothing, want 1", got)
+	}
+	if out := f.out.String(); strings.Contains(out, "retry") || strings.Contains(out, "were refused") {
+		t.Fatalf("a run that retried nothing reports a retry:\n%s", out)
+	}
+	if !strings.Contains(f.out.String(), "  ok      "+f.e.Name) {
+		t.Fatalf("the report does not carry the row it read back:\n%s", f.out.String())
 	}
 }
 

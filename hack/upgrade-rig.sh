@@ -1700,15 +1700,32 @@ run_verify() {
 # pass the drill green behind a column of retry lines. The first baseline cut after
 # the rotation turns the window off by itself; a baseline sorting above v0.17.0 is
 # taken to carry the new key.
+#
+# A prerelease is compared as the release it precedes: `sort -V` puts v0.17.0-rc.3
+# ABOVE v0.17.0, which would give an explicit DC_BASELINE_TAG=v0.17.0-rc.3 no window
+# although it predates the rotation just as v0.17.0 does.
 signing_key_replaced_after=v0.17.0
 verify_auth_window() {
-  local lowest
-  lowest="$(printf '%s\n%s\n' "$baseline_tag" "$signing_key_replaced_after" | sort -V | head -1)"
-  if [[ "$lowest" == "$baseline_tag" ]]; then
+  local release="${baseline_tag%%-*}" lowest
+  lowest="$(printf '%s\n%s\n' "$release" "$signing_key_replaced_after" | sort -V | head -1)"
+  if [[ "$lowest" == "$release" ]]; then
     printf '45s'
   else
     printf '0s'
   fi
+}
+
+# drill_verify is THE DRILL's call to apiprobe verify: run_verify with the retry window
+# this baseline's upgrade is owed, returning apiprobe's exit code undecided.
+#
+# 🔴 It is a function of its own so that selftest can drive the SAME call cmd_verify
+# makes against a stub apiprobe and see the flag ARRIVE. Pinning verify_auth_window's
+# value alone left the one line that hands it on unwatched: dropping it kept the
+# selftest green and the "retried for 45s" note printing, while verify ran with no
+# window — which the kind drill would catch only when the rotation race happened to
+# land, i.e. sometimes.
+drill_verify() {
+  run_verify --auth-window "$(verify_auth_window)"
 }
 
 cmd_verify() {
@@ -1725,7 +1742,7 @@ there is no telling whether this upgrade replaced the signing key."
   note "a token refused with 401 is retried for $window (0s: not at all), because the
 upgrade from $baseline_tag $([[ "$window" == 0s ]] && printf 'keeps' || printf 'replaces') the signing key"
   local rc=0
-  run_verify --auth-window "$window" || rc=$?
+  drill_verify || rc=$?
 
   # 🔴 INCONCLUSIVE IS NOT A FINDING, and this rig used to say it was: every
   # non-zero code got the same "rows did NOT survive" headline, including the one
@@ -1748,14 +1765,16 @@ receipt from another build, an unreachable API, a tenant that could not be resol
 Fix that and run 'verify' again; the cluster is still up and still upgraded."
   fi
 
-  # A refused token is a finding, but not about the ROWS: no query was evaluated, so
-  # the "did NOT survive" headline below would claim a data loss nobody observed.
+  # A refused token is a finding, but not about the ROWS: the refused query was never
+  # evaluated, so the "did NOT survive" headline below would claim a data loss nobody
+  # observed.
   if [[ $rc -eq $APIPROBE_EXIT_DENIED ]]; then
     fail "THE UPGRADED PLATFORM REFUSED A FRESHLY SIGNED-IN TOKEN with 401 (apiprobe exit
-$rc = DENIED; retry window $window). No row was read, so nothing is claimed about the
-data. Authentication did not settle across the upgrade: a key set that never publishes
-the new signing key, or a service that never refetches it. Read apiprobe's output above
-for the endpoint and every retry."
+$rc = DENIED; retry window $window). The refused read was never evaluated: rows before
+it (their 'ok' lines above) read back unchanged, and nothing is claimed about the rest.
+Authentication did not settle across the upgrade: a key set that never publishes the
+new signing key, or a service that never refetches it. Read apiprobe's output above for
+the endpoint and every retry."
   fi
 
   if [[ $rc -ne 0 ]]; then
@@ -2442,7 +2461,7 @@ passed by ABSENCE. It would hold just as well against a filter that had stopped 
   # a later baseline that inherited the window would hide the defect it exists to ride out.
   say "verify_auth_window"
   local tag want got
-  for tag in v0.16.2:45s v0.17.0:45s v0.17.1:0s v0.18.0:0s v1.0.0:0s; do
+  for tag in v0.16.2:45s v0.17.0:45s v0.17.0-rc.3:45s v0.17.1:0s v0.18.0-rc.1:0s v0.18.0:0s v1.0.0:0s; do
     baseline_tag="${tag%%:*}" want="${tag#*:}"
     got="$(verify_auth_window)"
     [[ "$got" == "$want" ]] ||
@@ -2450,6 +2469,46 @@ passed by ABSENCE. It would hold just as well against a filter that had stopped 
   done
   baseline_tag="$saved"
   note "only a baseline at or below $signing_key_replaced_after rides out a key rotation"
+
+  # ...and the window has to REACH apiprobe. drill_verify is the call cmd_verify makes;
+  # run it against a stub that records its argv and exits with a chosen code, so both
+  # directions are measured: the flag arrives, and apiprobe's verdict comes back.
+  say "drill_verify"
+  local stub_dir saved_apiprobe="$apiprobe" argv_file drc
+  stub_dir="$(mktemp -d)"
+  argv_file="$stub_dir/argv"
+  cat > "$stub_dir/apiprobe" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "$argv_file"
+exit "\${STUB_EXIT:-0}"
+STUB
+  chmod +x "$stub_dir/apiprobe"
+  apiprobe="$stub_dir/apiprobe"
+  for tag in v0.17.0:45s v0.18.0:0s; do
+    baseline_tag="${tag%%:*}" want="${tag#*:}"
+    : > "$argv_file"
+    drc=0; drill_verify || drc=$?
+    [[ $drc -eq 0 ]] || fail "SELF-TEST FAILED: drill_verify returned $drc over a stub apiprobe that exited 0"
+    [[ " $(cat "$argv_file") " == *" verify "*" --auth-window $want "* ]] ||
+      fail "SELF-TEST FAILED: for baseline $baseline_tag apiprobe was called with '$(cat "$argv_file")',
+want 'verify ... --auth-window $want'"
+  done
+  drc=0; STUB_EXIT=8 drill_verify || drc=$?
+  [[ $drc -eq 8 ]] || fail "SELF-TEST FAILED: drill_verify returned $drc over a stub apiprobe that exited 8"
+  apiprobe="$saved_apiprobe"
+  baseline_tag="$saved"
+  rm -rf "$stub_dir"
+  note "the window reaches apiprobe verify, and its exit code comes back unchanged"
+
+  # cmd_verify itself needs a cluster (need_all, a built apiprobe), so what selftest can
+  # hold it to is its SHAPE: the drill goes through drill_verify, and never around it.
+  # A direct run_verify there would drop the window with every check above still green.
+  local verify_body
+  verify_body="$(declare -f cmd_verify)"
+  [[ "$verify_body" == *"drill_verify"* && "$verify_body" != *"run_verify"* ]] ||
+    fail "SELF-TEST FAILED: cmd_verify must call drill_verify and never run_verify directly;
+a direct call runs THE DRILL with no auth window"
+  note "cmd_verify reaches apiprobe only through drill_verify"
 
   say "operator_in_step"
   expect_step "ghcr.io/devicechain-io/operator:v0.12.0" "v0.12.0" 0 "a matching published tag is IN STEP"

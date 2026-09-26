@@ -39,14 +39,30 @@ func (c *fakeClock) sleep(_ context.Context, d time.Duration) error {
 
 var unauthorized = &userclient.StatusError{URL: "u", StatusCode: 401, Body: "invalid or expired token"}
 
+// origin is where every fake clock starts: the instant verify began. Elapsed time is
+// measured from HERE, never from r.start — r.start is the very value a per-read budget
+// would move, so a test measuring from it agrees with whatever the code under test says.
+var origin = time.Unix(1_000_000, 0)
+
+// maxSessions bounds the sessions one test may open. The fake clock only moves when a
+// retry WAITS, so a loop that stopped waiting would retry forever at +0s; this turns
+// that into a named failure instead of a package timeout. No test here needs more than
+// a few dozen (a 45s window with a 1s delay is at most 46).
+const maxSessions = 200
+
 // tolerant builds a rotationTolerant over a fake clock; newSession is called for the
 // first session and for every retry, and the count of calls is returned through n.
-func tolerant(window time.Duration, out io.Writer, newSession func(n int) *stubSession) (*rotationTolerant, *fakeClock, *int) {
-	clock := &fakeClock{t: time.Unix(1_000_000, 0)}
+func tolerant(t *testing.T, window time.Duration, out io.Writer, newSession func(n int) *stubSession) (*rotationTolerant, *fakeClock, *int) {
+	t.Helper()
+	clock := &fakeClock{t: origin}
 	n := 0
 	r := &rotationTolerant{
 		fresh: func() signedInQuerier {
 			n++
+			if n > maxSessions {
+				t.Fatalf("%d sessions opened with the clock at +%s: the retry loop is not waiting "+
+					"between attempts, so its window never runs out", n, clock.t.Sub(origin))
+			}
 			return newSession(n)
 		},
 		window: window,
@@ -71,7 +87,7 @@ func TestOnlyA401IsRetried(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer
-			r, _, n := tolerant(45*time.Second, &out, func(int) *stubSession {
+			r, _, n := tolerant(t, 45*time.Second, &out, func(int) *stubSession {
 				return &stubSession{read: func() error { return readErr }}
 			})
 			err := r.Query(context.Background(), "u", "q", nil, nil)
@@ -89,7 +105,7 @@ func TestOnlyA401IsRetried(t *testing.T) {
 // inconclusive at once.
 func TestASignInThatWasNotReachedIsNotRetried(t *testing.T) {
 	var out bytes.Buffer
-	r, _, n := tolerant(45*time.Second, &out, func(int) *stubSession {
+	r, _, n := tolerant(t, 45*time.Second, &out, func(int) *stubSession {
 		return &stubSession{signIn: errors.New("userclient: call u: connection refused")}
 	})
 	assertCode(t, r.Query(context.Background(), "u", "q", nil, nil), exitSetup)
@@ -102,9 +118,10 @@ func TestASignInThatWasNotReachedIsNotRetried(t *testing.T) {
 // refused for good. Read 2 must be DENIED inside the same 45s, not given 45s of its own.
 func TestTheWindowIsOneBudgetNotPerRead(t *testing.T) {
 	var clock *fakeClock
-	r, clock, _ := tolerant(45*time.Second, io.Discard, func(int) *stubSession {
+	secondRead := false
+	r, clock, _ := tolerant(t, 45*time.Second, io.Discard, func(int) *stubSession {
 		return &stubSession{read: func() error {
-			if clock.t.Sub(time.Unix(1_000_000, 0)) < 40*time.Second {
+			if secondRead || clock.t.Sub(origin) < 40*time.Second {
 				return unauthorized
 			}
 			return nil
@@ -113,11 +130,12 @@ func TestTheWindowIsOneBudgetNotPerRead(t *testing.T) {
 	if err := r.Query(context.Background(), "first", "q", nil, nil); err != nil {
 		t.Fatalf("read 1 should have been ridden out: %v", err)
 	}
-	r.fresh = func() signedInQuerier { return &stubSession{read: func() error { return unauthorized }} }
-	r.current = r.fresh()
+	secondRead = true
 
 	assertCode(t, r.Query(context.Background(), "second", "q", nil, nil), exitDenied)
-	if spent := clock.t.Sub(r.start); spent > 45*time.Second {
+	// From the fixed origin, not r.start: a budget restarted per read moves r.start
+	// to +40s, and read 2 then runs to +85s while looking like +45s "from the start".
+	if spent := clock.t.Sub(origin); spent > 45*time.Second {
 		t.Fatalf("read 2 was denied at +%s: the window restarted per read", spent)
 	}
 }
@@ -125,14 +143,14 @@ func TestTheWindowIsOneBudgetNotPerRead(t *testing.T) {
 // The bound is not overrun: a retry starts only if its wait still fits.
 func TestTheBoundIsNotOverrun(t *testing.T) {
 	for _, window := range []time.Duration{10 * time.Second, 10*time.Second + 500*time.Millisecond} {
-		r, clock, _ := tolerant(window, io.Discard, func(int) *stubSession {
+		r, clock, _ := tolerant(t, window, io.Discard, func(int) *stubSession {
 			return &stubSession{read: func() error { return unauthorized }}
 		})
 		assertCode(t, r.Query(context.Background(), "u", "q", nil, nil), exitDenied)
 		if r.retries != 10 {
 			t.Errorf("window %s: %d retries, want 10", window, r.retries)
 		}
-		if spent := clock.t.Sub(r.start); spent > window {
+		if spent := clock.t.Sub(origin); spent > window {
 			t.Errorf("window %s: waited until +%s", window, spent)
 		}
 	}
@@ -141,7 +159,7 @@ func TestTheBoundIsNotOverrun(t *testing.T) {
 // A zero window is no tolerance: the first 401 is DENIED, with no retry and no line.
 func TestAZeroWindowRetriesNothing(t *testing.T) {
 	var out bytes.Buffer
-	r, _, n := tolerant(0, &out, func(int) *stubSession {
+	r, _, n := tolerant(t, 0, &out, func(int) *stubSession {
 		return &stubSession{read: func() error { return unauthorized }}
 	})
 	assertCode(t, r.Query(context.Background(), "u", "q", nil, nil), exitDenied)
@@ -153,7 +171,7 @@ func TestAZeroWindowRetriesNothing(t *testing.T) {
 // Every retry is printed with its elapsed time, and a pass that retried says so.
 func TestEveryRetryIsPrintedWithItsElapsedTime(t *testing.T) {
 	var out bytes.Buffer
-	r, _, _ := tolerant(45*time.Second, &out, func(n int) *stubSession {
+	r, _, _ := tolerant(t, 45*time.Second, &out, func(n int) *stubSession {
 		return &stubSession{read: func() error {
 			if n < 3 {
 				return unauthorized
@@ -188,7 +206,7 @@ func TestEveryRetryIsPrintedWithItsElapsedTime(t *testing.T) {
 func TestARefusedSignInIsRetriedAndPrinted(t *testing.T) {
 	var out bytes.Buffer
 	refused := &userclient.GraphQLError{URL: "u", Messages: []string{"invalid or expired token"}, Codes: []string{""}}
-	r, _, n := tolerant(45*time.Second, &out, func(n int) *stubSession {
+	r, _, n := tolerant(t, 45*time.Second, &out, func(n int) *stubSession {
 		if n == 1 {
 			return &stubSession{signIn: refused}
 		}
@@ -211,7 +229,7 @@ func TestACancelledWaitIsInconclusive(t *testing.T) {
 		t.Fatalf("sleepCtx ignored a cancelled context: err=%v after %s", err, time.Since(start))
 	}
 
-	r, _, _ := tolerant(45*time.Second, io.Discard, func(int) *stubSession {
+	r, _, _ := tolerant(t, 45*time.Second, io.Discard, func(int) *stubSession {
 		return &stubSession{read: func() error { return unauthorized }}
 	})
 	r.sleep = sleepCtx

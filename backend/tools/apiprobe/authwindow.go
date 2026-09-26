@@ -55,6 +55,13 @@ const authRetryDelay = time.Second
 // pass the drill green with nothing but retry lines to show for it. The rig asks for a
 // window only for the baselines whose upgrade replaces the key.
 //
+// KNOWN LIMIT, deliberate: a sign-in that did not reach the platform — a transport
+// error, or a 502/503 from the ingress while it still routes to the stopping pod — is
+// exitSetup at once, never retried. A rotating key produces a REFUSAL, not an
+// unreachable endpoint, and retrying those too would widen the tolerance past the
+// one thing it exists for. So a red SETUP whose sign-in failed with a 5xx during the
+// rollout is the drill being inconclusive, not a new authentication defect.
+//
 // The window bounds when a retry may START (elapsed + delay <= window); the attempt it
 // starts can still take up to the HTTP client's own timeout. It is a retry budget, not
 // a wall-clock deadline, and the messages say so.

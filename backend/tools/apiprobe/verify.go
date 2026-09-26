@@ -8,12 +8,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
 )
 
 func runVerify(ctx context.Context, argv []string) error {
+	return verifyTo(ctx, argv, os.Stdout)
+}
+
+// verifyTo is runVerify writing its report — the per-row lines, the coverage summary
+// and any retry the session took — to out, so a test can read what the operator reads.
+func verifyTo(ctx context.Context, argv []string, out io.Writer) error {
 	fs := flagSetFor("verify")
 	var c connection
 	c.bind(fs)
@@ -43,7 +50,7 @@ func runVerify(ctx context.Context, argv []string) error {
 	// false FINDING rather than a setup error, and the loudest possible way to
 	// mislead someone mid-upgrade.
 	c.tenant = rec.Tenant
-	session := newRotationTolerant(func() signedInQuerier { return c.session(rec.Identity) }, window, os.Stdout)
+	session := newRotationTolerant(func() signedInQuerier { return c.session(rec.Identity) }, window, out)
 
 	// byName lets a receipt be verified against the current table even if the
 	// table has since grown: an entity the receipt does not carry was not seeded
@@ -110,14 +117,14 @@ func runVerify(ctx context.Context, argv []string) error {
 		}
 
 		checked++
-		fmt.Printf("  ok      %-26s %s\n", r.Name, r.Token)
+		fmt.Fprintf(out, "  ok      %-26s %s\n", r.Name, r.Token)
 	}
 
 	// A pass is only worth reading if it says how much it covered. "verified"
 	// with no number is how a run that checked nothing reads exactly like one
 	// that checked everything.
-	fmt.Print(coverageSummary(rec, checked))
-	fmt.Print(session.settledNote())
+	fmt.Fprint(out, coverageSummary(rec, checked))
+	fmt.Fprint(out, session.settledNote())
 	return nil
 }
 

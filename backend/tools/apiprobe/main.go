@@ -67,8 +67,10 @@
 // and an upgrade rig that cannot tell them apart would report the third as the
 // first and send somebody hunting through migrations for a resolver change.
 // exitDenied is kept apart from all four for the same reason: a token the upgraded
-// platform would not accept is not a verdict about data at all, and reporting it as
-// exitShape told a reader the schema had moved when no query had even run.
+// platform would not accept says nothing about the row it was refused on, because
+// that query was never evaluated, and reporting it as exitShape told a reader the
+// schema had moved. Rows verify read before the refusal did read back unchanged (their
+// `ok` lines are printed); nothing is claimed about the rows after it.
 package main
 
 import (
