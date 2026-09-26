@@ -43,5 +43,12 @@ terraform {
     # No tls provider: nothing in this tree uses one since dcctl mints the NATS CA
     # and leaf itself (see modules/nats), and an unused provider under -upgrade
     # would still be downloaded on every run.
+    #
+    # 🔴 SO THE "EVERY MACHINE RUNS THE PINNED VERSION" CLAIM ABOVE HAS ONE HOLE. A
+    # state written before that cutover still holds module.nats.tls_* resources,
+    # and init resolves a provider for whatever the state holds: with no constraint
+    # here, that is the newest hashicorp/tls. dcctl refuses such an instance before
+    # it plans (checkNoRetiredInfrastructure), and destroying tls_* resources only
+    # drops them from state, so that unpinned provider never touches the cluster.
   }
 }

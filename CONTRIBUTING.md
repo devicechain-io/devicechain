@@ -128,11 +128,13 @@ helm template deploy/helm/devicechain \
 
 # opentofu
 # fmt covers the whole tree; init and validate act on ONE directory each, so they
-# run per root. hack/tofu-roots.sh is the same discovery CI uses, and it fails
-# rather than returning an empty list -- so this cannot quietly validate nothing.
+# run per root. -upgrade because the providers are pinned exactly and a lock file
+# left by an earlier init keeps the old versions, which a plain init refuses.
+# hack/tofu-roots.sh is the same discovery CI uses, and it fails rather than
+# returning an empty list -- so this cannot quietly validate nothing.
 (cd deploy/opentofu && tofu fmt -check -recursive)
 for root in $(hack/tofu-roots.sh); do
-  ( cd "$root" && tofu init -backend=false && tofu validate ) || break
+  ( cd "$root" && tofu init -upgrade -backend=false && tofu validate ) || break
 done
 ```
 
