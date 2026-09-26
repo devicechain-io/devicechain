@@ -19,6 +19,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // The MQTT client-id pin, against a REAL broker.
@@ -57,6 +58,17 @@ func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout ti
 
 	mqttPort := dctest.FreeTCPPort(t)
 
+	// The service login is a bcrypt hash, as deployed, but at the minimum cost
+	// rather than the minted one. The server checks it before answering the
+	// CONNECT, and at the deployed cost under the race detector on a busy CI
+	// runner that check alone outlasts both the client's connect timeout and the
+	// server's first PING, so the service connect failed for reasons that say
+	// nothing about the callout under test. The password itself is unchanged.
+	serviceHash, err := bcrypt.GenerateFromPassword([]byte(creds.ServicePassword), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// A config FILE rather than a hand-built Options struct, because the shape under
 	// test is the deployed one. Options assembled in Go can express an arrangement
 	// the config parser would never produce, and the question here is whether the
@@ -78,7 +90,7 @@ func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout ti
 		  auth_callout { issuer: %q, auth_users: [%q], account: "APP" }
 		}
 	`, filepath.Join(dir, "js"), mqttPort,
-		natsauth.ServiceUser, creds.ServicePasswordBcrypt,
+		natsauth.ServiceUser, string(serviceHash),
 		authTimeout.Seconds(),
 		creds.IssuerPublic, natsauth.ServiceUser)
 	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
