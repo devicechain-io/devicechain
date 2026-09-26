@@ -51,8 +51,9 @@ import (
 // and "I sent you back exactly what you gave me" must be a no-op. Normalizing input is
 // a decision for the create path to make, once, for both paths — not for the fold that
 // exists to stop updates from silently rewriting what is stored. There are three such
-// decisions on the platform, one per kind of column, each defined once in package
-// sqlnull and applied by the create path and the fold alike:
+// decisions on the platform, one per kind of column, each applied by the create path and
+// the fold alike. The two nullable rules are defined once in package sqlnull; the
+// required-string rule is defined here, in ApplyToRequired:
 //
 //   - REQUIRED strings (this fold) are stored verbatim; TrimSpace only decides whether a
 //     value is blank.

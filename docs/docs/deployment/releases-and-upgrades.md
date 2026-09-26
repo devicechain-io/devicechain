@@ -2563,7 +2563,8 @@ channels](../guides/notification-channels.md) has the details.
 - **A device credential's `credentialValue` is no longer trimmed.** Earlier releases removed
   leading and trailing whitespace when the value was saved, but compared the password a device
   presented without trimming it, so an MQTT password that began or ended with a space could never
-  authenticate. The value is now stored exactly as sent. Only an empty value stores no password.
+  authenticate. The value is now stored exactly as sent. Only an empty value, or an explicit
+  `null` on update, stores no password.
 - **The other direction changes too.** A value pasted with a trailing newline or space used to be
   saved without it, so a device presenting the password without it was accepted. It is now saved
   with it, and such a device is refused until the value is sent again without the newline.
@@ -2578,7 +2579,9 @@ channels](../guides/notification-channels.md) has the details.
 - **`firstName` and `lastName` are trimmed like other display text**, on `createIdentity` and on
   `updateProfile`, and a cleared name is stored as null. Reads already returned `null` for an
   empty name, and still do: the upgrade converts every stored empty name to null. It does the same
-  for an AI provider's empty `endpoint`, which likewise already read as `null`.
+  for an AI provider's empty `endpoint`, which likewise already read as `null`. A name an earlier
+  release saved with surrounding spaces keeps them until an update names that field, which then
+  trims it.
 - **A stored number too large for a GraphQL `Int` is now an error rather than a wrong number.**
   A notification policy's `throttleSeconds`, `escalateAfterSeconds` and `maxEscalations`, and a
   tenant's burst, shed-priority, held-command and geofence overrides on the admin API, used to wrap

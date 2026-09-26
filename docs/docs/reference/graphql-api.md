@@ -369,12 +369,15 @@ null preserved and only `""` deleted, is gone.
 A name, a description, and similar display text — a person's first or last name, an icon, a unit,
 a tier's color — is stored without its leading and trailing spaces, and an empty or
 whitespace-only value clears it, so it reads back as `null`. That happens on create and on update
-alike, so sending back a value you read is never a change. Structured text, such as `metadata`, a
+alike, so sending back a value you read is not a change for anything stored under this rule. A
+value saved with surrounding spaces by an earlier release, such as a person's name, is trimmed the
+first time an update names that field. Structured text, such as `metadata`, a
 channel's `config` or a dashboard `definition`, is not trimmed.
 
 A device credential's `credentialValue` is not trimmed either: it is stored exactly as you send
 it, spaces included, because a device presents its password byte for byte. Only an empty
-`credentialValue` stores no password, and a credential with no password cannot authenticate.
+`credentialValue`, or an explicit `null` on update, stores no password, and a credential with no
+password cannot authenticate.
 
 ### Which mutations are partial updates {#which-mutations-are-partial-updates}
 

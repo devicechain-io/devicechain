@@ -2743,7 +2743,7 @@ notificación](../guides/notification-channels.md) tiene los detalles.
   anteriores quitaban los espacios iniciales y finales al guardar el valor, pero comparaban sin
   recortar la contraseña que presentaba el dispositivo, así que una contraseña MQTT que empezaba o
   terminaba con un espacio nunca podía autenticarse. Ahora el valor se guarda exactamente como se
-  envía. Solo un valor vacío no guarda ninguna contraseña.
+  envía. Solo un valor vacío, o un `null` explícito al actualizar, no guarda ninguna contraseña.
 - **También cambia la dirección contraria.** Un valor pegado con un salto de línea o un espacio al
   final se guardaba sin él, así que se aceptaba a un dispositivo que presentaba la contraseña sin
   él. Ahora se guarda con él, y ese dispositivo se rechaza hasta que se vuelva a enviar el valor
@@ -2760,7 +2760,8 @@ notificación](../guides/notification-channels.md) tiene los detalles.
   en `updateProfile`, y un nombre limpiado se guarda como null. Las lecturas ya devolvían `null`
   para un nombre vacío, y lo siguen haciendo: la actualización convierte a null todos los nombres
   vacíos guardados. Hace lo mismo con el `endpoint` vacío de un proveedor de IA, que también se
-  leía ya como `null`.
+  leía ya como `null`. Un nombre que una versión anterior guardó con espacios alrededor los
+  conserva hasta que una actualización nombra ese campo, que entonces lo recorta.
 - **Un número guardado demasiado grande para un `Int` de GraphQL es ahora un error en lugar de un
   número equivocado.** Los campos `throttleSeconds`, `escalateAfterSeconds` y `maxEscalations` de
   una política de notificación, y las anulaciones de ráfaga, prioridad de descarte, comandos

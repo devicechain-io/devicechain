@@ -385,14 +385,16 @@ donde null conservaba y solo `""` borraba, ha desaparecido.
 Un nombre, una descripción y el texto visible similar — el nombre o el apellido de una persona, un
 icono, una unidad, el color de un nivel — se guardan sin sus espacios iniciales y finales, y un
 valor vacío o formado solo por espacios lo limpia, así que se lee de vuelta como `null`. Eso ocurre
-igual al crear que al actualizar, así que reenviar un valor que has leído nunca es un cambio. El
-texto estructurado, como `metadata`, la `config` de un canal o la `definition` de un panel, no se
+igual al crear que al actualizar, así que reenviar un valor que has leído no es un cambio para nada
+guardado bajo esta regla. Un valor que una versión anterior guardó con espacios alrededor, como el
+nombre de una persona, se recorta la primera vez que una actualización nombra ese campo. El texto
+estructurado, como `metadata`, la `config` de un canal o la `definition` de un panel, no se
 recorta.
 
 El `credentialValue` de una credencial de dispositivo tampoco se recorta: se guarda exactamente
 como lo envías, espacios incluidos, porque un dispositivo presenta su contraseña byte a byte. Solo
-un `credentialValue` vacío no guarda ninguna contraseña, y una credencial sin contraseña no puede
-autenticarse.
+un `credentialValue` vacío, o un `null` explícito al actualizar, no guarda ninguna contraseña, y una
+credencial sin contraseña no puede autenticarse.
 
 ### Qué mutaciones son actualizaciones parciales {#which-mutations-are-partial-updates}
 
