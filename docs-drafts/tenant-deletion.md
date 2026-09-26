@@ -474,8 +474,10 @@ inserting a tombstone that re-wakes the escalation scheduler
 (`backend/core/rdb/postgres.go`) so a tenant-scoped Create or Update is refused when a fence for
 its tenant stands. It is read once per tenant per transaction: the first write for a tenant reads
 it, and later writes for that tenant in the same transaction reuse a "no fence" answer. They never
-reuse a refusal or a failed read, and a transaction that writes the fence table itself forgets
-every answer it had.
+reuse a refusal or a failed read. A transaction that writes the fence table itself forgets every
+answer it had, and one that prepares a statement naming the fence table, or binds in a prepared
+statement whose text the wrapper cannot see, stops remembering for the rest of the transaction,
+since that statement could run at any later moment.
 
 **Why not the lifecycle gate, which already exists.** Three reasons, each of which is on its own
 enough:

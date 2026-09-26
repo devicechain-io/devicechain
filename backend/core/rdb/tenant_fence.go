@@ -91,8 +91,10 @@ var ErrTenantPurged = errors.New("this tenant has been deleted and its data in t
 // It also swaps the handle's connection pool for one whose transactions remember a clear
 // fence read (see fencePool and installFenceMemo), and it REFUSES a pool it cannot wrap
 // rather than leaving the fence silently unmemoised. It must therefore be called on the
-// handle every later session derives from, before any are derived; postgres.go and every
-// test fixture do. Calling it again on a handle that already has the fence is a no-op.
+// handle every later session derives from, before any are derived — a rule it can check
+// only as far as refusing a handle inside a transaction (see installFenceMemo); postgres.go
+// and every test fixture keep it. Calling it again on a handle that already has the fence
+// is a no-op, and logs nothing.
 //
 // 🔴 THE AUDIT JOURNAL'S OWN INSERT IS EXCLUDED, and skipping it is not a courtesy — it is
 // what makes the "deletes are not fenced" sentence above TRUE. The journal's callback is
@@ -111,8 +113,9 @@ func RegisterTenantFence(db *gorm.DB) error {
 	if err := installFenceMemo(db); err != nil {
 		return err
 	}
-	// gorm's Register APPENDS a duplicate name with only a warning, so a second call would
-	// run the check twice per statement. Registered once, the callbacks stay registered.
+	// gorm keeps one callback per name, so registering again would change nothing but the
+	// log: every repeat logs a "duplicated callback" warning. Registered once, the
+	// callbacks stay registered, and a second call returns here silently.
 	if db.Callback().Create().Get("dc:tenant_fence_create") != nil {
 		return nil
 	}

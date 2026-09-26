@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 // The erasure fence is read at most once per tenant per transaction. These tests pin that
@@ -374,6 +375,11 @@ func TestAFenceWrittenInsideTheTransactionIsHonoured(t *testing.T) {
 			var tok string
 			return tx.Raw(insert+` RETURNING token`, "acme", now, now).Scan(&tok).Error
 		}},
+		{"Raw RETURNING through Row()", func(tx *gorm.DB) error {
+			// Row() goes through QueryRowContext, not QueryContext.
+			var tok string
+			return tx.Raw(insert+` RETURNING token`, "acme", now, now).Row().Scan(&tok)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, _ := newFenceMemoDB(t)
@@ -395,6 +401,79 @@ func TestAFenceWrittenInsideTheTransactionIsHonoured(t *testing.T) {
 				t.Fatalf("a write after the transaction fenced its own tenant returned %v; want ErrTenantPurged", after)
 			}
 		})
+	}
+}
+
+// A statement prepared on the transaction can run the fence write at any later moment, and
+// running it never passes this wrapper again. Prepared BEFORE a proof and executed AFTER
+// it, it must still stop the next write: preparing it disables the memo for the rest of
+// the transaction.
+func TestAFenceStatementPreparedBeforeAProofIsHonouredWhenRunAfterIt(t *testing.T) {
+	insert := `INSERT INTO purged_tenants (token, epoch, planted_at) VALUES (?, ?, ?)`
+	now := time.Now().UTC()
+	db, counter := newFenceMemoDB(t)
+	var after error
+	err := db.WithContext(tenantCtx("acme")).Transaction(func(tx *gorm.DB) error {
+		stmt, err := tx.Statement.ConnPool.PrepareContext(context.Background(), insert)
+		if err != nil {
+			return fmt.Errorf("preparing the plant: %w", err)
+		}
+		defer stmt.Close()
+		for i := 0; i < 2; i++ {
+			if err := tx.Create(&widget{Name: fmt.Sprintf("proof-%d", i)}).Error; err != nil {
+				return err
+			}
+		}
+		if _, err := stmt.Exec("acme", now, now); err != nil {
+			return fmt.Errorf("running the plant: %w", err)
+		}
+		after = tx.Create(&widget{Name: "after"}).Error
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("transaction: %v", err)
+	}
+	if !errors.Is(after, ErrTenantPurged) {
+		t.Fatalf("a write after a fence statement prepared earlier in the transaction ran returned %v; "+
+			"want ErrTenantPurged", after)
+	}
+	// Every write read the fence: the two before the plant as well, since nothing is
+	// proven once a fence statement is prepared. (The counter's marker also counts the
+	// prepare; the executed statement does not pass the logger.)
+	if got := fenceReads(counter); got < 3 {
+		t.Errorf("the transaction made %d fence statement(s); want every write to read it (>= 3)", got)
+	}
+}
+
+// A statement prepared on the POOL and bound into the transaction carries no text the
+// wrapper can see, so binding one disables the memo whatever it holds.
+func TestAPoolStatementBoundIntoTheTransactionIsHonoured(t *testing.T) {
+	insert := `INSERT INTO purged_tenants (token, epoch, planted_at) VALUES (?, ?, ?)`
+	now := time.Now().UTC()
+	db, _ := newFenceMemoDB(t)
+	stmt, err := db.Statement.ConnPool.PrepareContext(context.Background(), insert)
+	if err != nil {
+		t.Fatalf("preparing on the pool: %v", err)
+	}
+	defer stmt.Close()
+	var after error
+	err = db.WithContext(tenantCtx("acme")).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&widget{Name: "proof"}).Error; err != nil {
+			return err
+		}
+		bound := tx.Statement.ConnPool.(gorm.Tx).StmtContext(context.Background(), stmt)
+		if _, err := bound.Exec("acme", now, now); err != nil {
+			return fmt.Errorf("running the bound plant: %w", err)
+		}
+		after = tx.Create(&widget{Name: "after"}).Error
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("transaction: %v", err)
+	}
+	if !errors.Is(after, ErrTenantPurged) {
+		t.Fatalf("a write after a pool statement bound into the transaction planted the fence returned %v; "+
+			"want ErrTenantPurged", after)
 	}
 }
 
@@ -459,7 +538,7 @@ func TestRegisterTenantFenceRefusesAPoolItCannotMemoise(t *testing.T) {
 			t.Error("the fence's callbacks were registered despite the refusal")
 		}
 	})
-	t.Run("a handle that is not the root", func(t *testing.T) {
+	t.Run("a handle inside a transaction", func(t *testing.T) {
 		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 		if err != nil {
 			t.Fatalf("opening sqlite: %v", err)
@@ -478,18 +557,91 @@ func TestRegisterTenantFenceRefusesAPoolItCannotMemoise(t *testing.T) {
 			t.Errorf("the refused registration still swapped the root's pool to %T", db.Config.ConnPool)
 		}
 	})
+	// gorm keeps one callback per name, so a second registration could not run the check
+	// twice; what it would do is log a "duplicated callback" warning per callback. This
+	// pins that it is silent, and still one read per write.
 	t.Run("a second registration", func(t *testing.T) {
-		db, counter := newFenceMemoDB(t)
-		if err := RegisterTenantFence(db); err != nil {
-			t.Fatalf("registering the fence a second time: %v", err)
+		warns := &warnRecorder{Interface: logger.Discard}
+		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: warns})
+		if err != nil {
+			t.Fatalf("opening sqlite: %v", err)
 		}
-		if err := db.WithContext(tenantCtx("acme")).Create(&widget{Name: "w"}).Error; err != nil {
-			t.Fatalf("create: %v", err)
+		t.Cleanup(func() {
+			if sqldb, err := db.DB(); err == nil {
+				_ = sqldb.Close()
+			}
+		})
+		for i := 0; i < 2; i++ {
+			if err := RegisterTenantFence(db); err != nil {
+				t.Fatalf("registration %d: %v", i+1, err)
+			}
 		}
-		if got := fenceReads(counter); got != 1 {
-			t.Errorf("after a second registration one write read the fence %d time(s); want 1", got)
+		if got := warns.messages(); len(got) != 0 {
+			t.Errorf("a second registration logged %q; want nothing", got)
 		}
 	})
+}
+
+// warnRecorder keeps every Warn gorm logs.
+type warnRecorder struct {
+	logger.Interface
+	mu   sync.Mutex
+	seen []string
+}
+
+func (w *warnRecorder) LogMode(logger.LogLevel) logger.Interface { return w }
+
+func (w *warnRecorder) Warn(_ context.Context, msg string, args ...any) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.seen = append(w.seen, fmt.Sprintf(msg, args...))
+}
+
+func (w *warnRecorder) messages() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.seen...)
+}
+
+func TestContainsFold(t *testing.T) {
+	for _, tc := range []struct {
+		s    string
+		want bool
+	}{
+		{"INSERT INTO purged_tenants (token) VALUES (?)", true},
+		{`insert into "PURGED_TENANTS" values (?)`, true},
+		{"UPDATE Purged_Tenants SET completed_at = ?", true},
+		{"purged_tenants", true},
+		{"ppurged_tenants", true},
+		{"purged_tenant", false},
+		{"INSERT INTO widgets (name) VALUES ('purged tenants')", false},
+		{"", false},
+	} {
+		if got := containsFold(tc.s, FenceTable); got != tc.want {
+			t.Errorf("containsFold(%q) = %v; want %v", tc.s, got, tc.want)
+		}
+	}
+}
+
+// The text test runs on every statement of every transaction, including a large batch
+// INSERT that never names the fence: the case where it has to look at every byte.
+func BenchmarkContainsFoldOnABatchInsert(b *testing.B) {
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO "device_states" ("tenant_id","device_token","payload") VALUES `)
+	for i := 0; i < 1000; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, "('tenant-%d','device-%d','{\"temperature\":%d,\"pressure\":%d}')", i%7, i, i, i*3)
+	}
+	q := sb.String()
+	b.SetBytes(int64(len(q)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if containsFold(q, FenceTable) {
+			b.Fatal("matched")
+		}
+	}
 }
 
 // A forget that lands between a read and its proof must win: the answer was read before
