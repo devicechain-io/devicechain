@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	nats "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -49,10 +50,35 @@ func (e valueEntry) Created() time.Time              { return time.Time{} }
 func (e valueEntry) Delta() uint64                   { return 0 }
 func (e valueEntry) Operation() jetstream.KeyValueOp { return jetstream.KeyValuePut }
 
-// silentGet waits for its context, the way a read routed to a silent replica does.
+// silentStoreCap is how long a silent store waits before giving up by itself, with the
+// JetStream request timeout's error, because that is what production did.
+//
+// 🔴 IT IS WHAT MAKES A LOST BUDGET FAIL A TEST INSTEAD OF HANGING IT. A double that waited
+// on its context alone would, under a Cache that stopped passing its budget down, block
+// until go test's own timeout killed the whole package, and every later test would go
+// unevaluated. With the cap, the call comes back after 5 s with nats.ErrTimeout, and the
+// test fails on the error and the time it took.
+const silentStoreCap = 5 * time.Second
+
+// waitSilently waits for ctx, or for silentStoreCap, the way a request routed to a server
+// that has gone silent does.
+func waitSilently(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(silentStoreCap):
+		return nats.ErrTimeout
+	}
+}
+
+// silentGet is a read routed to a silent replica.
 func silentGet(ctx context.Context, _ string) (jetstream.KeyValueEntry, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
+	return nil, waitSilently(ctx)
+}
+
+// silentWrite is a write sent to a silent bucket leader, the only server that can accept it.
+func silentWrite(ctx context.Context, _ string) error {
+	return waitSilently(ctx)
 }
 
 func answeringGet(context.Context, string) (jetstream.KeyValueEntry, error) {
@@ -178,7 +204,13 @@ func TestOnlyOneProbeRunsAndAFailedProbeReopens(t *testing.T) {
 	var holding atomic.Bool
 	store := &scriptedStore{put: okWrite, delete: okWrite, get: func(ctx context.Context, k string) (jetstream.KeyValueEntry, error) {
 		if holding.Load() {
-			<-release
+			// Held past the budget so the probe stays in flight while a second caller
+			// tries, but never forever: a second caller that is wrongly let through lands
+			// here too, and must fail this test on the store count, not hang the package.
+			select {
+			case <-release:
+			case <-time.After(silentStoreCap):
+			}
 			return nil, context.DeadlineExceeded
 		}
 		return silentGet(ctx, k)
@@ -188,7 +220,7 @@ func TestOnlyOneProbeRunsAndAFailedProbeReopens(t *testing.T) {
 	clock.advance(c.bypass)
 
 	holding.Store(true)
-	probeDone := make(chan error)
+	probeDone := make(chan error, 1)
 	go func() {
 		_, err := getOnce(c)
 		probeDone <- err
@@ -203,6 +235,10 @@ func TestOnlyOneProbeRunsAndAFailedProbeReopens(t *testing.T) {
 	if reachesStore(t, c, store) {
 		t.Fatal("a second caller reached the store while the probe was in flight")
 	}
+	if n := store.gets.Load(); n != 2 {
+		t.Fatalf("the store was called %d times while one probe was in flight, want 2 (the read that "+
+			"opened the breaker, and the probe)", n)
+	}
 	close(release)
 	if err := <-probeDone; !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("probe returned %v, want its timeout", err)
@@ -210,6 +246,51 @@ func TestOnlyOneProbeRunsAndAFailedProbeReopens(t *testing.T) {
 	holding.Store(false)
 	if reachesStore(t, c, store) {
 		t.Fatal("a failed probe did not reopen the breaker")
+	}
+}
+
+// A write is bounded like a read, and it matters more: only the bucket's LEADER can accept
+// a put, so when the leader is the server that went silent, every write goes to it — a
+// Set that is let through as the breaker's probe, or one that follows a read a healthy
+// follower answered.
+func TestAWriteThatIsNeverAnsweredGivesUpAtTheBudgetAndOpensTheBreaker(t *testing.T) {
+	store := &scriptedStore{get: answeringGet, put: silentWrite, delete: okWrite}
+	c, _ := breakerCache(store)
+
+	start := time.Now()
+	err := c.Set(context.Background(), "key", "v")
+	took := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Set against a silent leader = %v, want context.DeadlineExceeded at the budget", err)
+	}
+	if took > c.timeout+50*time.Millisecond {
+		t.Fatalf("Set against a silent leader took %s, want about the %s budget", took, c.timeout)
+	}
+	if reachesStore(t, c, store) {
+		t.Fatal("a write that timed out did not open the breaker; the next read went to the store")
+	}
+}
+
+// A write that is admitted as the probe is bounded too, and its timeout keeps the breaker
+// open.
+func TestAWriteProbeIsBoundedAndAFailedOneReopens(t *testing.T) {
+	store := &scriptedStore{get: silentGet, put: silentWrite, delete: okWrite}
+	c, clock := breakerCache(store)
+	_, _ = getOnce(c)
+	clock.advance(c.bypass)
+
+	start := time.Now()
+	err := c.Set(context.Background(), "key", "v")
+	took := time.Since(start)
+	if store.puts.Load() != 1 {
+		t.Fatalf("the Set after the bypass reached the store %d times, want once, as the probe", store.puts.Load())
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || took > c.timeout+50*time.Millisecond {
+		t.Fatalf("a write probe against a silent leader = %v after %s, want context.DeadlineExceeded "+
+			"at about the %s budget", err, took, c.timeout)
+	}
+	if reachesStore(t, c, store) {
+		t.Fatal("a write probe that timed out did not reopen the breaker")
 	}
 }
 
