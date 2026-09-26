@@ -20,9 +20,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// The erasure fence reads purged_tenants once before every tenant-bearing create or
-// update. These tests pin, BY VALUE, what that costs on event-management's per-message
-// write path — the statements PersistEvent makes and how many of them are fence reads —
+// The erasure fence reads purged_tenants before a tenant-bearing create or update, at most
+// once per tenant per transaction. These tests pin, BY VALUE, what that costs on
+// event-management's per-message write path — the statements PersistEvent makes and how many of them are fence reads —
 // and prove the fence fires on this area's real models (events, measurement_events,
 // event_anchors) along that path.
 //
@@ -30,7 +30,8 @@ import (
 // refusal and fail-closed tests are what turn that change red; the counts alone would not.
 //
 // The numbers are STATEMENTS, not round trips: gorm does not trace BEGIN/COMMIT, and
-// PersistEvent runs in one transaction.
+// PersistEvent runs in one transaction — so it pays one fence read however many tables it
+// writes.
 
 const fenceCostTenant = "acme"
 
@@ -167,16 +168,17 @@ func TestFenceCostOfAMeasurementMessage(t *testing.T) {
 	}{
 		{
 			// The altId probe (a read, not fenced), then events, measurement_events and
-			// event_anchors inserts, each behind its own fence read.
+			// event_anchors inserts. One fence read for the transaction, however many
+			// tables it writes: the first insert reads it, the other two reuse the answer.
 			name:    "altId and one anchor",
 			event:   fenceCostMeasurement("fc-1", t0, 1),
-			wantAll: 7, wantFence: 3,
+			wantAll: 5, wantFence: 1,
 			wantEvents: 1, wantMeasurements: 3, wantAnchors: 1, wantPersisted: true,
 		},
 		{
 			name:    "altId and no anchors",
 			event:   fenceCostMeasurement("fc-2", t0, 0),
-			wantAll: 5, wantFence: 2,
+			wantAll: 4, wantFence: 1,
 			wantEvents: 1, wantMeasurements: 3, wantAnchors: 0, wantPersisted: true,
 		},
 		{
