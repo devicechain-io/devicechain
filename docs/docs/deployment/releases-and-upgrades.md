@@ -1549,6 +1549,9 @@ by their own time".
 If you query alarms through the GraphQL API, the MCP alarm tools, `@devicechain/dashboards` or
 `@devicechain/widgets`, or parse notification webhooks, read "The alarm `message` field is removed".
 
+If you edit detection rules on the automation canvas, read "The automation canvas authors
+Connectivity rules, and will not save over a rule it cannot show in full".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2464,6 +2467,25 @@ action is now attempted on every delivery, whatever happens to the others.
   a service that does not answer ends when its delivery does instead of running on. Each action
   gets its share of that time, so commands to a service that does not answer cannot use it all up
   before an alarm listed after them is raised.
+
+#### The automation canvas authors Connectivity rules, and will not save over a rule it cannot show in full
+
+Nothing needs doing at the upgrade.
+
+- **The canvas has a Connectivity node,** so a "device went offline" rule can be built there as well
+  as in the form builder.
+- **When the canvas opens an existing rule, it checks that saving would keep the whole rule.**
+  Before, a rule of a type the canvas could not show opened as an empty canvas with no explanation,
+  and a rule with a field or action type the canvas does not model opened without it. A save from
+  the canvas then replaced the stored rule with the reduced one. Now the canvas explains what it
+  cannot show and turns saving off for that rule; edit it through the API instead.
+- **A canvas-built rule whose definition was changed through the API is laid out again from that
+  definition** when the canvas opens it, rather than from its older saved layout, so a canvas save
+  no longer undoes the change. The canvas says when it has done this.
+- **The canvas keeps an alarm-key template** set through the API. It shows the template read-only
+  and saves it unchanged.
+- **A canvas save no longer clears a rule's name or description** when the rule's definition does
+  not carry them. They are sent only when you edit them on the canvas.
 
 ### The one-time durable-ingest cutover
 

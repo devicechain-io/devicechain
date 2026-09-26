@@ -1654,6 +1654,9 @@ Si consulta alarmas mediante la API de GraphQL, las herramientas de alarmas de M
 `@devicechain/dashboards` o `@devicechain/widgets`, o procesa webhooks de notificación, lea «Se
 elimina el campo `message` de las alarmas».
 
+Si edita reglas de detección en el lienzo de automatización, lea «El lienzo de automatización autora
+reglas de Conectividad y no guarda sobre una regla que no puede mostrar por completo».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2637,6 +2640,27 @@ intenta en cada entrega, pase lo que pase con las demás.
   veces, y un intento contra un servicio que no responde termina cuando termina su entrega en lugar
   de prolongarse. Cada acción recibe su parte de ese tiempo, así que los comandos a un servicio que
   no responde no pueden agotarlo antes de que se active una alarma listada detrás de ellos.
+
+#### El lienzo de automatización autora reglas de Conectividad y no guarda sobre una regla que no puede mostrar por completo
+
+No hace falta hacer nada en la actualización.
+
+- **El lienzo tiene un nodo de Conectividad,** así que una regla de «el dispositivo se desconectó»
+  puede construirse allí además de en el generador de formularios.
+- **Al abrir una regla existente, el lienzo comprueba que guardar conservaría la regla completa.**
+  Antes, una regla de un tipo que el lienzo no podía mostrar se abría como un lienzo vacío sin
+  ninguna explicación, y una regla con un campo o un tipo de acción que el lienzo no modela se abría
+  sin él. Guardar desde el lienzo reemplazaba entonces la regla almacenada por la reducida. Ahora el
+  lienzo explica lo que no puede mostrar y desactiva el guardado para esa regla; edítela a través de
+  la API.
+- **Una regla construida en el lienzo cuya definición se modificó a través de la API se vuelve a
+  disponer a partir de esa definición** cuando el lienzo la abre, en lugar de a partir de su
+  disposición guardada anterior, así que guardar desde el lienzo ya no deshace el cambio. El lienzo
+  indica cuándo lo ha hecho.
+- **El lienzo conserva una plantilla de clave de alarma** definida a través de la API. La muestra en
+  modo de solo lectura y la guarda sin cambios.
+- **Guardar desde el lienzo ya no borra el nombre ni la descripción de una regla** cuando su
+  definición no los contiene. Solo se envían cuando los edita en el lienzo.
 
 ### La transición única a la ingesta duradera
 

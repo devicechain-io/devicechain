@@ -107,6 +107,8 @@ export function summarize(t: TFunction, type: NodeType, config: Record<string, u
       return t('nodeDurationSummary', { leaf: leafSummary(t, c.when), duration: ms(c.holdMs) });
     case 'absence':
       return t('nodeSilentFor', { duration: ms(c.timeoutMs) });
+    case 'connectivity':
+      return t('nodeConnectivitySummary');
     case 'aggregate': {
       const metric = c.agg === 'count' ? '' : `(${str(c.metric)})`;
       const win = c.windowMode === 'session' ? t('nodeAggregateGap', { duration: ms(c.gapMs) }) : c.windowMode === 'count' ? t('nodeAggregateEventCount', { count: num(c.count) }) : ms(c.windowMs);
@@ -121,7 +123,7 @@ export function summarize(t: TFunction, type: NodeType, config: Record<string, u
     case 'branch':
       return str(c.when) ? t('nodeBranchIf', { when: str(c.when) }) : t('nodeBranchIfEmpty');
     case 'action':
-      return c.action === 'sendCommand' ? t('nodeActionSend', { command: str(c.command) || '…' }) : t('nodeActionRaiseAlarm', { key: str(c.alarmKey) }).trim();
+      return c.action === 'sendCommand' ? t('nodeActionSend', { command: str(c.command) || '…' }) : t('nodeActionRaiseAlarm', { key: str(c.alarmKey) || str(c.alarmKeyTemplate) }).trim();
     case 'compute':
       return str(c.name) ? t('nodeComputeSummary', { name: str(c.name), expr: str(c.expr) || '…' }) : t('nodeComputeEmpty');
   }

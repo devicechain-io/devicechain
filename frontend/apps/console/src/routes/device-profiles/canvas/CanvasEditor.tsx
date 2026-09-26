@@ -8,6 +8,10 @@
 // host. The browser never authors the rules.Rule definition: the graph is compiled
 // server-side (compileCanvas), which returns the definition to store and the diagnostics to
 // show on nodes. A form-authored rule opens here via the pure reverse round-trip.
+//
+// Before a stored rule may be saved from here, the graph the editor opens with is compiled and
+// must still carry everything the stored definition says (fidelity.ts). A rule the canvas cannot
+// show in full opens with a notice and Save turned off — never a silent rewrite.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -39,6 +43,7 @@ import {
   updateDetectionRule,
   type DetectionRule,
   type DetectionRuleCreateRequest,
+  type DetectionRuleUpdateRequest,
 } from '@/lib/api/device-management';
 import { compileCanvas, type CanvasCompileResult, type NodeTraceStep } from '@/lib/api/event-processing';
 import {
@@ -51,11 +56,22 @@ import {
   type NodeType,
 } from './model';
 import { buildCanvasDefinition, graphFromDefinition } from './roundtrip';
+import { allowsSave, openStoredRule, openWithoutCompile, type Fidelity, type Opened, type SeedCandidates } from './fidelity';
 import { CanvasNodeView, type CanvasNodeData } from './nodes';
 import { NodeInspector } from './inspector';
 import { PreviewPanel } from './PreviewPanel';
 
 const nodeTypes = { dc: CanvasNodeView };
+
+// One timeout for every compile this editor makes, so the open-time check and the debounced
+// compile cannot drift apart on it.
+const COMPILE_TIMEOUT_MS = 10000;
+function compileWithTimeout(graph: string, profileToken: string): Promise<CanvasCompileResult> {
+  return Promise.race([
+    compileCanvas(graph, profileToken),
+    new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), COMPILE_TIMEOUT_MS)),
+  ]);
+}
 
 // splitEndpoint parses a "nodeId:port" endpoint on its last colon (matches the Go/model form).
 function splitEndpoint(s: string): [string, string] {
@@ -100,30 +116,35 @@ function structuralKey(nodes: Node[], edges: Edge[]): string {
   });
 }
 
-// initialGraph resolves the starting graph: the stored AuthoringGraph if the rule was
-// canvas-authored, else the reverse round-trip of its definition, else a lone Source for a new
-// rule. `t` (deviceProfiles-scoped) is threaded into graphFromDefinition, which is a plain
-// function and cannot call the translation hook itself.
-function initialGraph(entity: DetectionRule | undefined, profileToken: string, t: TFunction): CanvasDefinition {
-  if (entity?.authoringGraph) {
-    try {
-      const parsed = JSON.parse(entity.authoringGraph) as CanvasDefinition;
-      // Require both arrays — an API-authored sidecar that satisfies the backend's
-      // "JSON object" guard but lacks edges would otherwise crash toReactFlow (L3).
-      if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) return parsed;
-    } catch {
-      // fall through to synthesis
-    }
-  }
-  if (entity?.definition) {
-    const { graph } = graphFromDefinition(entity.definition, profileToken, t);
-    if (graph) return graph;
-  }
+// loneSource is the starting graph of a new rule: one profile-scoped Source.
+function loneSource(profileToken: string): CanvasDefinition {
   return {
     schemaVersion: 1,
     nodes: [{ id: 'source', type: 'source', config: { scope: { kind: 'profile', profileToken } }, ui: { x: 40, y: 160 } }],
     edges: [],
   };
+}
+
+// seedCandidates resolves what a stored rule could open with: its stored AuthoringGraph if it
+// was canvas-authored, and the reverse round-trip of its definition (always, because a stale
+// graph falls back to it). Which one is used, and whether it may be saved, is fidelity.ts's call.
+// `t` (deviceProfiles-scoped) is threaded into graphFromDefinition, which is a plain function and
+// cannot call the translation hook itself.
+function seedCandidates(entity: DetectionRule, profileToken: string, t: TFunction): SeedCandidates {
+  let graph: CanvasDefinition | null = null;
+  if (entity.authoringGraph) {
+    try {
+      const parsed = JSON.parse(entity.authoringGraph) as CanvasDefinition;
+      // Require both arrays — an API-authored sidecar that satisfies the backend's
+      // "JSON object" guard but lacks edges would otherwise crash toReactFlow (L3).
+      if (parsed && Array.isArray(parsed.nodes) && Array.isArray(parsed.edges)) graph = parsed;
+    } catch {
+      // fall through to synthesis
+    }
+  }
+  const stored = entity.definition ?? '';
+  const { graph: synthesized, error } = graphFromDefinition(stored, profileToken, t);
+  return { stored, graph, synthesized, synthesisError: synthesized ? null : (error ?? t('canvasErrorNotRuleObject')) };
 }
 
 // conditionMeta pulls the rule-level name/description off the single condition node, for the
@@ -137,10 +158,33 @@ function conditionMeta(nodes: Node[]): { name?: string; description?: string } {
   };
 }
 
-function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: string; entity?: DetectionRule; onDone: (message: string) => void }) {
+function CanvasEditorInner({
+  profileToken,
+  entity,
+  onDone,
+  opened,
+  onRetry,
+}: {
+  profileToken: string;
+  entity?: DetectionRule;
+  onDone: (message: string) => void;
+  opened: Opened<CanvasCompileResult>;
+  onRetry: () => void;
+}) {
   const { t } = useTranslation('deviceProfiles');
   const editing = entity != null;
-  const seed = useMemo(() => toReactFlow(initialGraph(entity, profileToken, t)), [entity, profileToken, t]);
+  const { fidelity } = opened;
+  // The seed is fixed for this mount (useNodesState only ever reads the first one anyway). When the
+  // open-time check already compiled it, its diagnostics are painted from that result.
+  const [seed] = useState(() => {
+    const rf = toReactFlow(opened.graph);
+    const byNode = new Map<string, string>();
+    for (const d of opened.compiled?.diagnostics ?? []) if (d.nodeId) byNode.set(d.nodeId, d.message);
+    return {
+      nodes: rf.nodes.map((n) => (byNode.has(n.id) ? { ...n, data: { ...(n.data as CanvasNodeData), diagnostic: byNode.get(n.id) } } : n)),
+      edges: rf.edges,
+    };
+  });
   const [nodes, setNodes, onNodesChange] = useNodesState(seed.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(seed.edges);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -157,11 +201,14 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   // result to match the CURRENT graph — otherwise a stale definition (from a compile that is
   // still in flight, or a still-good previous result kept during a re-check) could be stored
   // alongside a newer graph, the exact definition/graph divergence the design prevents (H1).
-  const [compile, setCompile] = useState<{ status: 'idle' | 'checking' | 'done'; result: CanvasCompileResult | null; forKey: string | null }>({
-    status: 'idle',
-    result: null,
-    forKey: null,
-  });
+  //
+  // When the open-time check compiled the seed, that result IS the compile of the current graph,
+  // so it starts as the finished result and the first debounced compile is skipped (below).
+  const [seedKey] = useState(() => structuralKey(seed.nodes, seed.edges));
+  const [compile, setCompile] = useState<{ status: 'idle' | 'checking' | 'done'; result: CanvasCompileResult | null; forKey: string | null }>(() =>
+    opened.compiled ? { status: 'done', result: opened.compiled, forKey: seedKey } : { status: 'idle', result: null, forKey: null },
+  );
+  const precompiledKey = useRef<string | null>(opened.compiled ? seedKey : null);
 
   const idSeq = useRef(1);
   const newId = (type: NodeType): string => {
@@ -186,14 +233,15 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   // compiled definition. A transport failure degrades to no-feedback (like the form's inline
   // check) rather than blocking authoring.
   useEffect(() => {
+    // The open-time check already compiled exactly this graph: do not ask again.
+    const precompiled = precompiledKey.current === key;
+    precompiledKey.current = null;
+    if (precompiled) return;
     let cancelled = false;
     setCompile((c) => ({ status: 'checking', result: c.result, forKey: c.forKey }));
     const timer = setTimeout(async () => {
       try {
-        const res = await Promise.race([
-          compileCanvas(JSON.stringify(canvasDefRef.current), profileToken),
-          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
-        ]);
+        const res = await compileWithTimeout(JSON.stringify(canvasDefRef.current), profileToken);
         if (cancelled) return;
         setCompile({ status: 'done', result: res, forKey: key });
         const byNode = new Map<string, string>();
@@ -291,10 +339,15 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   // still-good previous result kept during a re-check, and not an in-flight one — so Save can
   // never store a definition that doesn't match what is on the canvas (H1).
   const fresh = compile.status === 'done' && compile.forKey === key;
-  const canSave = fresh && !!result?.ok && (editing || token.trim().length > 0) && !busy;
+  // An existing rule additionally needs a fidelity verdict that permits a save: anything else
+  // means the save would replace the stored rule with something nobody confirmed represents it.
+  const canSave = fresh && !!result?.ok && (editing ? allowsSave(fidelity) : token.trim().length > 0) && !busy;
 
   const save = async () => {
     if (!fresh || !result?.ok || !result.definition) return;
+    // A second, independent guard: a disabled button is not an authorization check. No UI path
+    // reaches this line with a refusing verdict today; it is here so one added later cannot.
+    if (editing && !allowsSave(fidelity)) return;
     setFormError(null);
     setBusy(true);
     try {
@@ -308,6 +361,15 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
         enabled,
       };
       if (editing) {
+        // The name and description are COLUMNS as well as definition fields, and an API-created
+        // rule can carry a column value its definition does not (the canvas shows the
+        // definition's). Under the partial update an omitted field keeps its value, so they are
+        // sent only when edited here — sending the seed's empty value back would clear the column.
+        const seedMeta = conditionMeta(seed.nodes);
+        const { name, description, ...rest } = edited;
+        const update: DetectionRuleUpdateRequest = { ...rest };
+        if (meta.name !== seedMeta.name) update.name = name;
+        if (meta.description !== seedMeta.description) update.description = description;
         // 🔴 THE GROUP SCOPE IS PRESERVED BY NOT BEING NAMED. It lives in columns rather
         // than in the canvas graph, and this editor has no control that edits it — the
         // Form tab authors it. Under the full replace this save had to echo the stored
@@ -315,7 +377,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
         // profile-wide; under the partial update the safe thing and the simple thing are
         // the same, and the echo is the version with a stale-read race in it. metadata is
         // left alone for the same reason.
-        await updateDetectionRule(entity.token, edited);
+        await updateDetectionRule(entity.token, update);
         onDone(t('canvasRuleUpdated', { token: entity.token }));
       } else {
         // A create names everything, because there is nothing yet to leave alone. A rule
@@ -343,6 +405,7 @@ function CanvasEditorInner({ profileToken, entity, onDone }: { profileToken: str
   return (
     <div className="flex flex-col gap-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      <FidelityNotice fidelity={fidelity} onRetry={onRetry} />
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <FormField label={t('canvasTokenLabel')} htmlFor="canvas-token" description={editing ? t('canvasTokenDescription') : undefined}>
@@ -493,11 +556,104 @@ function CompileStatus({ status, result }: { status: 'idle' | 'checking' | 'done
   return <span className="text-xs text-destructive">{t('canvasNotValidYet')}</span>;
 }
 
+// FidelityNotice explains a verdict from the open-time check. A refusing verdict is an alert and
+// is not dismissible: dismissing it would not re-enable Save, and would hide the only explanation
+// of why Save is off. The two verdicts that allow a save get a status note instead.
+function FidelityNotice({ fidelity, onRetry }: { fidelity: Fidelity; onRetry: () => void }) {
+  const { t } = useTranslation('deviceProfiles');
+  let text: string | null = null;
+  switch (fidelity.kind) {
+    case 'unrepresentable':
+      text = t('canvasFidelityUnrepresentable', { reason: fidelity.reason });
+      break;
+    case 'lossy':
+      text = t('canvasFidelityLossy');
+      break;
+    case 'staleLayout':
+      text = t('canvasFidelityStaleLayout');
+      break;
+    case 'uncompilable':
+      text = t('canvasFidelityUncompilable');
+      break;
+    case 'unverified':
+      text = t('canvasFidelityUnverified');
+      break;
+    case 'relaid':
+      text = t('canvasFidelityRelaid');
+      break;
+    case 'uncompilableGraph':
+      text = t('canvasFidelityUncompilableGraph');
+      break;
+    case 'new':
+    case 'faithful':
+      break;
+  }
+  if (text == null) return null;
+  const blocking = !allowsSave(fidelity);
+  return (
+    <div
+      role={blocking ? 'alert' : 'status'}
+      className={
+        blocking
+          ? 'flex items-start justify-between gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400'
+          : 'flex items-start justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground'
+      }
+    >
+      <span>{text}</span>
+      {fidelity.kind === 'unverified' && (
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          {t('canvasFidelityRetry')}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+// CanvasOpen runs the open-time fidelity check for a stored rule, then mounts the editor with the
+// graph it chose and its verdict. The candidates are frozen at mount: fidelity is a property of
+// the stored bytes as they were opened, and a refetched entity must not re-judge a graph that is
+// not the one on screen. The editor is held back until the verdict is in because the verdict can
+// choose WHICH graph opens (a stale saved graph is replaced by a fresh layout of the definition).
+// "Check again" re-runs the check and remounts the editor.
+function CanvasOpen({ profileToken, entity, onDone }: { profileToken: string; entity?: DetectionRule; onDone: (message: string) => void }) {
+  const { t } = useTranslation('deviceProfiles');
+  const [candidates] = useState(() => (entity ? seedCandidates(entity, profileToken, t) : null));
+  const [blank] = useState(() => loneSource(profileToken));
+  const [attempt, setAttempt] = useState(0);
+  const [opened, setOpened] = useState<Opened<CanvasCompileResult> | null>(() =>
+    candidates == null ? { graph: blank, fidelity: { kind: 'new' }, compiled: null } : openWithoutCompile(candidates, blank),
+  );
+
+  useEffect(() => {
+    if (candidates == null || openWithoutCompile(candidates, blank)) return;
+    let cancelled = false;
+    setOpened(null);
+    void openStoredRule(candidates, blank, (g) => compileWithTimeout(JSON.stringify(g), profileToken)).then((o) => {
+      if (!cancelled) setOpened(o);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [candidates, blank, profileToken, attempt]);
+
+  if (opened == null) return <p className="text-sm text-muted-foreground">{t('canvasFidelityChecking')}</p>;
+  return (
+    <CanvasEditorInner
+      key={attempt}
+      profileToken={profileToken}
+      entity={entity}
+      onDone={onDone}
+      opened={opened}
+      onRetry={() => setAttempt((n) => n + 1)}
+    />
+  );
+}
+
 // CanvasEditor is the exported entry — it provides the @xyflow/react context the editor needs.
 export function CanvasEditor(props: { profileToken: string; entity?: DetectionRule; onDone: (message: string) => void }) {
   return (
     <ReactFlowProvider>
-      <CanvasEditorInner {...props} />
+      <CanvasOpen {...props} />
     </ReactFlowProvider>
   );
 }

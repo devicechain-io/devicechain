@@ -35,7 +35,7 @@ Detection covers threshold, held-for-duration, repeating-occurrence, rate-of-cha
 | **Repeating** | the condition occurs a number of times within a window (e.g. `3 faults in 10 minutes`) | an occurrence count + a window |
 | **Rate of change** | a metric changes too fast between consecutive readings (e.g. `temperature rising > 5°/s`) | the comparison + an optional flag to normalise the change to a per-second rate |
 | **Absence / silence** | a device goes quiet — no event at all within a window (a dead-man check); every event counts as a heartbeat, so the rule takes no condition | a silence window |
-| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md). *Authored in the console's form builder or through the API — the visual automation canvas does not offer the type (see below).* | none — the [presence](./device-presence.md) edge is the whole signal |
+| **Connectivity** | a device reports an authoritative disconnect (raise) and reconnects (resolve) — for presence-asserting transports like [Sparkplug-B](./sparkplug.md) and [LwM2M](./lwm2m.md). *Authored in the console's form builder, on the automation canvas, or through the API.* | none — the [presence](./device-presence.md) edge is the whole signal |
 | **Windowed aggregate** | an aggregate over a window crosses a comparison (e.g. `average > 50 over 10 minutes`) | the function (count/sum/avg/min/max), a window (tumbling, sliding, session, or a count window of N events), the comparison + value |
 | **Area correlation** | enough distinct devices in an area meet the condition together (e.g. `≥ 3 devices in a zone report a fault within 5 minutes`) | the area/anchor type, a distinct-device count + window |
 
@@ -55,13 +55,18 @@ Silence timeouts and session gaps are capped too, even though they hold no readi
 
 If you need a longer span, an operator can raise the limit for the instance ([`maxRuleDurationSeconds`](../deployment/detection-engine.md#configuration)) after sizing the memory. Before asking for one, consider whether the question is really about *retention* rather than *detection*. A "compare against last month" question is usually better answered by querying stored history than by holding a month of readings in memory.
 
-### Connectivity rules and the automation canvas
+### Opening a stored rule in the form or on the canvas
 
-The form builder authors and opens Connectivity rules. The type is in its picker, and because the presence edge is the whole signal, the form offers no condition or parameters for it.
+The form builder and the automation canvas both author Connectivity rules. The presence edge is the whole signal, so neither offers a condition or parameters for the type: on the canvas it is a **Connectivity** node that takes the source's stream and feeds actions, like any other condition.
 
-The visual automation canvas has no Connectivity node. It refuses to open a Connectivity rule outright and tells you the type cannot be shown on the canvas. Author and edit a Connectivity rule in the form builder or through the API, not on the canvas.
+Neither surface silently rewrites a rule it cannot show in full. If the form opens a stored rule it cannot hold completely (a field it does not model, or a type it does not know), it warns that part of the definition is not shown and that saving would replace the original with only what you can see. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON. A Connectivity rule opens with neither.
 
-If the form opens a stored rule it cannot hold completely — a field it does not model, or a type it does not know — it warns that part of the definition is not shown and that saving would replace the original with only what you can see. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON. A Connectivity rule opens with neither.
+The canvas is stricter. When it opens a stored rule, it asks the compiler whether saving the rule as laid out would keep everything the stored definition says. If the rule has a type the canvas has no node for, a field or action type the canvas does not model, or if that check cannot be completed, the canvas says so and turns saving off. Edit such a rule through the API. The form can open it too, but it will warn that saving there drops what it cannot show.
+
+Two cases are specific to rules built on the canvas:
+
+- If the rule's definition was changed through the API after it was last saved on the canvas, the saved layout no longer matches the rule. The canvas lays the rule out again from its current definition and tells you so, so that saving does not undo the change. If it cannot lay the current rule out in full, saving is turned off.
+- If the saved canvas no longer compiles as it stands, it opens as it was, with a note. Fix it on the canvas; saving then replaces the stored rule with what is on the canvas.
 
 ### Static and dynamic thresholds
 
@@ -103,7 +108,7 @@ A firing is **edge-triggered**: a rising edge when the condition starts holding,
 You author rules in the console in three ways. All three use the same schema, and the **same server-side compiler** validates all of them before publish:
 
 - A **form builder** — a typed form per condition type, the quickest path for a single rule. As you edit, it shows the compiler's type and cost feedback inline, before you publish. Its action picker offers only raise alarm and send command. Guards and the outbound actions are authored on the canvas; the form shows them read-only and preserves them when you save.
-- A **visual automation canvas** — a node graph (source → condition → optional branches → actions) for richer flows. The canvas **compiles to the same rule** a form would produce; it is an authoring surface, not a second engine. It adds **branch** nodes (route a firing to different actions by a guard) and **compute** nodes (name a reusable derived value and reference it in a condition or guard).
+- A **visual automation canvas** — a node graph (source → condition → optional branches → actions) for richer flows. The canvas **compiles to the same rule** a form would produce; it is an authoring surface, not a second engine. It adds **branch** nodes (route a firing to different actions by a guard) and **compute** nodes (name a reusable derived value and reference it in a condition or guard). It offers a node for every condition type.
 - A natural-language **"Describe" door** — where the AI service is enabled, you describe the rule in words and get a drafted candidate to review and publish. It is offered when you create a new rule, and it produces a rule in the same schema the other two produce. See [AI-Assisted Authoring](./ai-authoring.md).
 
 The canvas's standout feature is **preview against history**. You run a *draft* rule over the profile's replayed event history and see the raise/resolve edges it *would* have produced over a chosen window, without publishing anything. Selecting a firing overlays a **per-node trace** onto the canvas that shows the path the event took: which condition matched, which branch it took, and which action fired. Edit and re-preview until the rule does what you expect, then publish.

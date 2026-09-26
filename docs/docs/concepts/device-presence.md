@@ -92,7 +92,7 @@ Device presence, both inferred and asserted, is available. Three transports asse
 A detection rule can fire directly on a connect/disconnect edge. The [Connectivity condition](./event-processing.md#condition-types) raises an alarm the instant an authoritative disconnect arrives, and resolves it on reconnect. There is no timeout to tune.
 
 - **Rule form.** The console's rule form offers it as the **Connectivity** type. There is no condition to author, because the presence edge itself is the signal. The form opens an existing Connectivity rule as its own type. If a stored definition carries anything the form cannot model, the form says so before you save rather than silently replacing it.
-- **Automation canvas.** The canvas is the one authoring surface that still omits the type. It refuses to open a Connectivity rule, and names the unsupported type.
+- **Automation canvas.** The canvas offers a **Connectivity** node. It has nothing to configure: wire the source into it and its signal into actions. Like the form, the canvas never silently rewrites a stored rule it cannot show in full. It says so and turns saving off.
 
 The Connectivity condition complements the timeout-based Absence rule (authoritative death versus inferred silence), and the two are meant to be paired.
 

@@ -1,0 +1,155 @@
+{
+  "definition": {
+    "name": "hot",
+    "description": "Too hot",
+    "type": "threshold",
+    "severity": "major",
+    "when": {
+      "metric": "tempC",
+      "op": "gt",
+      "threshold": 30
+    },
+    "actions": [
+      {
+        "type": "raiseAlarm",
+        "raiseAlarm": {
+          "alarmKey": "hot"
+        },
+        "guard": "value > 100.0"
+      },
+      {
+        "type": "sendCommand",
+        "sendCommand": {
+          "command": "cool",
+          "payload": "{\"level\":2}"
+        }
+      },
+      {
+        "type": "httpCall",
+        "httpCall": {
+          "url": "https://hooks.example.com/alarm",
+          "method": "POST",
+          "headers": {
+            "X-Source": "devicechain"
+          },
+          "timeoutMs": 5000
+        }
+      }
+    ]
+  },
+  "graph": {
+    "schemaVersion": 1,
+    "nodes": [
+      {
+        "id": "source",
+        "type": "source",
+        "config": {
+          "scope": {
+            "kind": "profile",
+            "profileToken": "thermostat"
+          }
+        },
+        "ui": {
+          "x": 40,
+          "y": 120
+        }
+      },
+      {
+        "id": "condition",
+        "type": "threshold",
+        "config": {
+          "name": "hot",
+          "description": "Too hot",
+          "severity": "major",
+          "when": {
+            "metric": "tempC",
+            "op": "gt",
+            "threshold": {
+              "kind": "literal",
+              "value": 30
+            }
+          }
+        },
+        "ui": {
+          "x": 320,
+          "y": 120
+        }
+      },
+      {
+        "id": "action-0000",
+        "type": "action",
+        "config": {
+          "action": "raiseAlarm",
+          "alarmKey": "hot"
+        },
+        "ui": {
+          "x": 700,
+          "y": 120
+        }
+      },
+      {
+        "id": "branch-0000",
+        "type": "branch",
+        "config": {
+          "when": "value > 100.0"
+        },
+        "ui": {
+          "x": 500,
+          "y": 120
+        }
+      },
+      {
+        "id": "action-0001",
+        "type": "action",
+        "config": {
+          "action": "sendCommand",
+          "command": "cool",
+          "payload": "{\"level\":2}"
+        },
+        "ui": {
+          "x": 700,
+          "y": 240
+        }
+      },
+      {
+        "id": "action-0002",
+        "type": "action",
+        "config": {
+          "action": "httpCall",
+          "url": "https://hooks.example.com/alarm",
+          "method": "POST",
+          "headers": {
+            "X-Source": "devicechain"
+          },
+          "timeoutMs": 5000
+        },
+        "ui": {
+          "x": 700,
+          "y": 360
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "source:out",
+        "to": "condition:in"
+      },
+      {
+        "from": "condition:signal",
+        "to": "branch-0000:in"
+      },
+      {
+        "from": "branch-0000:out",
+        "to": "action-0000:in"
+      },
+      {
+        "from": "condition:signal",
+        "to": "action-0001:in"
+      },
+      {
+        "from": "condition:signal",
+        "to": "action-0002:in"
+      }
+    ]
+  }
+}

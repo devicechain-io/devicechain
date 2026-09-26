@@ -401,7 +401,12 @@ Forms, the visual canvas, and a natural-language "Describe" box all lower to the
 and pass through the same server-side compiler. The console never authors a definition itself: the
 canvas round-trips through `compileCanvas` on a debounce and refuses to save unless a *fresh* compile
 of the *current* graph succeeded
-(`frontend/apps/console/src/routes/device-profiles/canvas/CanvasEditor.tsx:187-215`, `:292-293`).
+(`frontend/apps/console/src/routes/device-profiles/canvas/CanvasEditor.tsx:235-264`, `:341-344`). For
+a STORED rule it also refuses unless an open-time fidelity check passed: the graph it opens with is
+compiled first and must still carry everything the stored definition says, both ways for a saved
+canvas graph that may be stale (`frontend/apps/console/src/routes/device-profiles/canvas/fidelity.ts`).
+A rule the canvas cannot show in full opens with a notice and Save off; a stale saved graph is laid
+out again from the definition when that is faithful.
 
 The canvas is a compiler front end, not a second engine
 (`backend/services/event-processing/internal/rules/graph/lower.go:91-214`). Three port types —
@@ -977,7 +982,11 @@ Ordered by what they cost.
    (`applyDuration`), and a matching sample more than the hold behind the frontier is refused and
    counted. Pinned by `TestDurationStaleNonMatchDoesNotCancelTheHold` and
    `TestDurationLateMatchCannotReopenAcrossABreak`.
-6. **A `connectivity` rule cannot be authored from the console**, in either door — and the gap is in
+6. ~~**A `connectivity` rule cannot be authored from the console**~~ — **CLOSED.** The form gained
+   the type first; the canvas now has the node too (its `connectivity` entry in `NODE_CATALOG`, `canvas/model.ts`,
+   compared port by port with the Go catalog in `taxonomy-lockstep.test.ts`), and the canvas no longer
+   discards the "cannot be shown" answer — it opens such a rule with a notice and Save off
+   (`canvas/fidelity.ts`). The original finding, for the record: it could not be authored in either door — and the gap is in
    the **frontend twin of the catalog**, not in the compiler. The backend canvas knows the node
    (`backend/services/event-processing/internal/rules/graph/schema.go:66`, catalog entry at
    `:128-131`, lowering at `graph/config.go:151-162`); the browser catalog omits it from the node

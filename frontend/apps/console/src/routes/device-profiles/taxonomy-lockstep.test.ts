@@ -28,7 +28,8 @@ import SCHEMA_GO from '../../../../../../backend/services/event-processing/inter
 import { MAX_ACTIONS_PER_RULE, RULE_TYPES, conditionForbidden, parseDefinition, rebuildFrom } from './rule-model';
 import { ruleTypeOptions } from './DetectionRuleForm';
 import FORM_SRC from './DetectionRuleForm.tsx?raw';
-import { CONDITION_TYPES } from './canvas/model';
+import { CONDITION_TYPES, NODE_CATALOG, type NodeSpec } from './canvas/model';
+import GRAPH_SCHEMA_GO from '../../../../../../backend/services/event-processing/internal/rules/graph/schema.go?raw';
 import EN_RULES from '@/i18n/locales/en/deviceProfiles.json';
 import ES_RULES from '@/i18n/locales/es/deviceProfiles.json';
 import type { TFunction } from 'i18next';
@@ -285,22 +286,24 @@ describe('the rule type picker', () => {
 // 🔴 THE FORM IS NOT THE WHOLE CONSOLE. The canvas carries its own condition vocabulary, and
 // leaving it ungated would have reproduced this file's own subject one directory down: a kind
 // added to the compiler and to the form passes every check above while the canvas silently
-// cannot express it. The canvas fails CLOSED on a kind it does not know (roundtrip.ts returns
-// `canvasErrorUnsupportedType`), so the cost is a refusal rather than a rewrite — but its
-// documented fallback is "open it in the form", and the form is where the rewrite lived.
+// cannot express it.
+//
+// Today the canvas offers every kind the compiler lowers. Where it cannot show a stored rule in
+// full — a kind from a later release, a field or action it does not model — it opens it with a
+// notice and Save turned off (canvas/fidelity.ts). It refuses; it does not rewrite. (It used to
+// compute that refusal and then discard it, opening such a rule as a blank canvas that could be
+// saved over it — which is why the refusal is now tested through the editor, in
+// canvas/canvas-fidelity.test.tsx.)
 //
 // The canvas is allowed to offer FEWER kinds than the compiler accepts. What it is not allowed
 // to do is drift without anyone deciding: each omission is named here with its reason, and the
 // omission is ASSERTED to still be real. A gap list that is not checked against reality is how
-// a fixed gap turns into a free slot for the next one.
+// a fixed gap turns into a free slot for the next one. The list is empty now; it stays, so the
+// next deliberate gap has a reasoned, checked home.
 
 describe('the canvas condition vocabulary', () => {
   // Kinds the compiler accepts that the canvas deliberately does not offer as a node.
-  const DECLARED_GAPS: Record<string, string> = {
-    connectivity:
-      'no canvas node yet — it is a leaf-less edge trigger with no ports to wire, so it needs a ' +
-      'node shape of its own rather than a copy of an existing condition. Authorable in the form.',
-  };
+  const DECLARED_GAPS: Record<string, string> = {};
 
   it('offers no kind the compiler would refuse', () => {
     const backend = ruleTypesTheCompilerAccepts();
@@ -325,6 +328,90 @@ describe('the canvas condition vocabulary', () => {
     expect(CONDITION_TYPES).toContain('threshold');
     expect(CONDITION_TYPES).not.toContain('action'); // not a condition
     expect(CONDITION_TYPES).not.toContain('source');
+  });
+});
+
+
+// ── The canvas node catalog, port by port ───────────────────────────────────
+//
+// 🔴 THE LAST GAP ENTRY WAS JUSTIFIED BY A PORT CLAIM NOTHING CHECKED. It said connectivity had
+// "no ports to wire" and needed a node shape of its own; the Go catalog had always given it
+// exactly absence's ports. The console's NODE_CATALOG is a hand copy of that Go `catalog` (it
+// validates a connection before the server re-checks it, and decides which handles render), so
+// it is compared here entry by entry — category and every typed port, in both directions.
+
+const GO_CATEGORY: Record<string, NodeSpec['category']> = {
+  catSource: 'source',
+  catCondition: 'condition',
+  catBranch: 'branch',
+  catAction: 'action',
+  catCompute: 'compute',
+};
+
+/**
+ * The Go canvas catalog (`var catalog = map[NodeType]struct {…}` in graph/schema.go), resolved
+ * to wire values. It throws on anything it cannot account for — an unresolved Node or Port
+ * ident, an unknown category — rather than skipping it: a parser that quietly drops an entry
+ * turns "every node agrees" into a claim about fewer nodes than there are.
+ */
+function goCanvasCatalog(src: string): Map<string, Pick<NodeSpec, 'category' | 'in' | 'out'>> {
+  const startMarker = 'var catalog = map[NodeType]struct {';
+  const start = src.indexOf(startMarker);
+  if (start < 0) throw new Error('no canvas catalog in the Go source');
+  // The block closes at the first column-zero brace after it.
+  const endAt = src.indexOf('\n}\n', start);
+  if (endAt < 0) throw new Error('canvas catalog block is not closed');
+  const block = src.slice(start, endAt).replace(/\/\/[^\n]*/g, '');
+  const consts = constValues(src);
+  const resolve = (ident: string): string => {
+    const c = consts.get(ident);
+    if (c == null) throw new Error(`unresolved Go ident ${ident}`);
+    return c.value;
+  };
+  const out = new Map<string, Pick<NodeSpec, 'category' | 'in' | 'out'>>();
+  for (const m of block.matchAll(/(Node\w+):\s*\{(cat\w+),\s*ports\{([\s\S]*?)\}\},/g)) {
+    const category = GO_CATEGORY[m[2]];
+    if (category == null) throw new Error(`unknown Go category ${m[2]}`);
+    const spec = { category, in: {} as NodeSpec['in'], out: {} as NodeSpec['out'] };
+    for (const p of m[3].matchAll(/(in|out):\s*map\[string\]PortType\{([^}]*)\}/g)) {
+      for (const pair of p[2].matchAll(/"(\w+)":\s*(Port\w+)/g)) {
+        spec[p[1] as 'in' | 'out'][pair[1]] = resolve(pair[2]) as NodeSpec['in'][string];
+      }
+    }
+    out.set(resolve(m[1]), spec);
+  }
+  return out;
+}
+
+describe('the canvas node catalog mirrors the Go catalog', () => {
+  const GO = goCanvasCatalog(GRAPH_SCHEMA_GO);
+
+  it('parses the Go catalog, and refuses what it cannot account for', () => {
+    // The control: a parser that matched nothing would make both comparisons below vacuous.
+    expect(GO.size).toBeGreaterThanOrEqual(12);
+    expect(GO.get('absence')).toEqual({ category: 'condition', in: { in: 'stream' }, out: { signal: 'signal' } });
+    expect(() => goCanvasCatalog('package graph')).toThrow();
+    // An entry naming a node const that does not exist is refused, not silently dropped.
+    const orphan = GRAPH_SCHEMA_GO.replace(
+      'NodeSource: {catSource,',
+      'NodeFoo: {catSource, ports{out: map[string]PortType{"out": PortStream}}},\n\tNodeSource: {catSource,',
+    );
+    expect(orphan).not.toBe(GRAPH_SCHEMA_GO);
+    expect(() => goCanvasCatalog(orphan)).toThrow(/NodeFoo/);
+  });
+
+  it('has every Go node, with the same category and ports', () => {
+    const got = [...GO.keys()].sort().map((node) => {
+      const spec = NODE_CATALOG[node as keyof typeof NODE_CATALOG];
+      return { node, spec: spec ? { category: spec.category, in: spec.in, out: spec.out } : null };
+    });
+    const want = [...GO.keys()].sort().map((node) => ({ node, spec: GO.get(node) }));
+    expect(got).toEqual(want);
+  });
+
+  it('has no node the Go catalog lacks', () => {
+    const extra = Object.keys(NODE_CATALOG).filter((k) => !GO.has(k));
+    expect({ extra }).toEqual({ extra: [] });
   });
 });
 
