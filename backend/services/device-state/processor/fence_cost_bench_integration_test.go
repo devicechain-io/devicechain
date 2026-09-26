@@ -49,6 +49,12 @@ import (
 // rather than exported from core on purpose: an exported "unregister the fence" is a
 // foot-gun in a shipped package. The harness below proves each removal took effect, so a
 // rename in core fails here by name instead of silently measuring "on" twice.
+//
+// Removing them turns the fence's READS off, not all of its machinery: the connection pool
+// RegisterTenantFence installs (whose transactions carry the per-transaction memo) stays
+// under both legs, because it is installed once on the root handle during initialization.
+// It costs one small allocation per transaction and nothing per statement that is not a
+// fence read, so the "off" leg is "no fence reads", not "no fence code".
 var fenceCallbacks = []struct {
 	name string
 	get  func(*gorm.DB) func(*gorm.DB)
@@ -286,9 +292,11 @@ func BenchmarkFenceCostMergeMeasurementEvent(b *testing.B) {
 	}
 
 	for _, c := range []struct {
-		name      string
-		wantFence int64 // fence reads per op with the fence on
-	}{{"newer", 4}, {"stale", 1}} {
+		name string
+		// fence reads per op with the fence on: one per transaction that writes. A newer
+		// event writes in both of the merge's transactions, a stale one only in the first.
+		wantFence int64
+	}{{"newer", 2}, {"stale", 1}} {
 		for _, fence := range []string{"on", "off"} {
 			b.Run("case="+c.name+"/fence="+fence, func(b *testing.B) {
 				sp, counter, mgr := legs[fence], counters[fence], mgrs[fence]

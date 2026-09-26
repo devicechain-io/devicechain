@@ -472,7 +472,10 @@ inserting a tombstone that re-wakes the escalation scheduler
 `purged_tenants` in every schema it manages, beside the audit journal and for the same reason
 (`backend/core/rdb/rdb.go`), and registers two GORM callbacks beside the tenant-scope predicate
 (`backend/core/rdb/postgres.go`) so a tenant-scoped Create or Update is refused when a fence for
-its tenant stands.
+its tenant stands. It is read once per tenant per transaction: the first write for a tenant reads
+it, and later writes for that tenant in the same transaction reuse a "no fence" answer. They never
+reuse a refusal or a failed read, and a transaction that writes the fence table itself forgets
+every answer it had.
 
 **Why not the lifecycle gate, which already exists.** Three reasons, each of which is on its own
 enough:
@@ -526,6 +529,21 @@ remote gate cannot have, and it costs nothing: the fence is in the same schema, 
 connection, inside the same transaction as the write being checked, so a query that cannot answer
 is a write that was not going to succeed either.
 
+**Once per transaction, and why that is not a gap** (`backend/core/rdb/tenant_fence_memo.go`).
+The "no fence" answer is remembered on the transaction's own connection wrapper, so it ends with the
+transaction and no other transaction can reach it; a write outside an explicit transaction is its
+own transaction and reads every time. Remembering it adds no new kind of exposure. Even reading on
+every statement, a transaction could read the fence a moment before the plant and commit a moment
+after — that is what reading inside the transaction means under READ COMMITTED — and the purge never
+relied on the fence to close that window: it is why the fence is planted in its own committed
+transaction, why passes repeat, and why a pass that deletes rows restarts the settle window (see
+*Planted before the sweep* below, and section 4). The memo widens the same window from "one
+statement" to "one transaction". What changes is quantity: a transaction that straddles the plant
+used to be refused at its next write and rolled back whole, and now one whose first write came
+before the plant commits and a later sweep collects its rows. Both before and after, the argument
+assumes no transaction stays open longer than the settle window; one that did could commit after
+completion, memo or not, and nothing configures a timeout that would bound it.
+
 ### Planted before the sweep, lifted before the token
 
 `backend/core/tenantpurge/fence.go`, called from `backend/services/user-management/purge/relational.go`.
@@ -534,6 +552,9 @@ The fence is planted in its own committed transaction **before** the sweep runs,
 fence planted inside the sweep's transaction would become visible to other sessions at the instant
 the delete committed, which would stop nothing the delete had not already caught. Planting first is
 what makes the sweep converge instead of racing; the residual scan afterwards is the re-verify.
+Passes repeat because a writer already inside its transaction when the fence landed still commits —
+including, since the fence is read once per tenant per transaction, one that keeps writing for the
+tenant after the plant (see *Once per transaction* above).
 
 It carries the same in-transaction precondition the sweep does, and the reason is sharper than the
 sweep's. A sweep misdirected at a live tenant deletes rows — catastrophic and obvious. A fence

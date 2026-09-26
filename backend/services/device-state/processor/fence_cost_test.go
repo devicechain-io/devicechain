@@ -20,9 +20,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// The erasure fence reads purged_tenants once before every tenant-bearing create or
-// update. These tests pin, BY VALUE, what that costs on device-state's per-event write
-// path — the statements mergeOne makes and how many of them are fence reads — and
+// The erasure fence reads purged_tenants before a tenant-bearing create or update, at most
+// once per tenant per transaction. These tests pin, BY VALUE, what that costs on
+// device-state's per-event write path — the statements mergeOne makes and how many of them are fence reads — and
 // prove the fence actually fires on this area's real models along that path.
 //
 // 🔴 THE COUNTS ARE HALF OF IT, AND THE WEAKER HALF. A later change that makes the path
@@ -31,7 +31,8 @@ import (
 // that change red: they are the guard on the side the defect is on.
 //
 // The numbers are STATEMENTS, not round trips: gorm does not trace BEGIN/COMMIT, and a
-// merge opens two transactions (MergeDeviceState, then the latest-value merge).
+// merge opens two transactions (MergeDeviceState, then the latest-value merge) — which is
+// also why a merge that writes both pays two fence reads, never fewer.
 
 // fenceTenant is the tenant the shared message subject carries (locationTestSubject).
 const fenceTenant = "tenant1"
@@ -197,20 +198,22 @@ func TestFenceCostOfAMeasurementEvent(t *testing.T) {
 		check func(t *testing.T, sp *StateProcessor)
 	}{
 		{
-			// Rows created: device state (lock read, fence, insert) plus, per metric, the
-			// same three.
+			// Rows created: device state (lock read, fence, insert), then per metric a lock
+			// read and an insert. One fence read per transaction: device state, then latest
+			// measurements, whose three inserts share the one read.
 			name:    "first sight",
 			msg:     func(t *testing.T) messaging.Message { return threeMetrics(t, "fc-01", t0) },
-			wantAll: 12, wantFence: 4,
+			wantAll: 10, wantFence: 2,
 			check: func(t *testing.T, sp *StateProcessor) { assertProjectedAt(t, sp, "fc-01", t0) },
 		},
 		{
 			// The steady state: every reading newer than the stored one, so every row is
-			// updated and each update pays its own fence read.
+			// updated. One fence read per transaction: device state, then latest
+			// measurements, whose three updates share the one read.
 			name:    "every reading newer",
 			seed:    func(t *testing.T, sp *StateProcessor) { seed(t, sp, threeMetrics(t, "fc-01", t0)) },
 			msg:     func(t *testing.T) messaging.Message { return threeMetrics(t, "fc-01", t1) },
-			wantAll: 12, wantFence: 4,
+			wantAll: 10, wantFence: 2,
 			check: func(t *testing.T, sp *StateProcessor) { assertProjectedAt(t, sp, "fc-01", t1) },
 		},
 		{
@@ -224,7 +227,8 @@ func TestFenceCostOfAMeasurementEvent(t *testing.T) {
 			check: func(t *testing.T, sp *StateProcessor) { assertProjectedAt(t, sp, "fc-01", t1) },
 		},
 		{
-			// A newer fix: device state and the last-known position, one fence read each.
+			// A newer fix: device state and the last-known position, one fence read each
+			// (two transactions, one fenced write in each).
 			name:    "location event",
 			seed:    func(t *testing.T, sp *StateProcessor) { seed(t, sp, aFix(t, "fc-01", t0, "28.5")) },
 			msg:     func(t *testing.T) messaging.Message { return aFix(t, "fc-01", t1, "28.75") },

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +38,13 @@ type StatementCounter struct {
 	armed  atomic.Bool
 	all    atomic.Int64
 	marked atomic.Int64
+
+	// recording keeps the rendered SQL of every marked statement, for a test that has to
+	// assert WHAT a statement asked rather than how many there were. Off by default: a
+	// benchmark must not grow a slice inside its timed loop.
+	recording atomic.Bool
+	mu        sync.Mutex
+	sqls      []string
 }
 
 // NewStatementCounter returns an armed counter for marker.
@@ -66,16 +74,36 @@ func (c *StatementCounter) Trace(_ context.Context, _ time.Time, fc func() (stri
 	c.all.Add(1)
 	if sql, _ := fc(); c.Marker != "" && strings.Contains(sql, c.Marker) {
 		c.marked.Add(1)
+		if c.recording.Load() {
+			c.mu.Lock()
+			c.sqls = append(c.sqls, sql)
+			c.mu.Unlock()
+		}
 	}
+}
+
+// Record turns keeping the marked statements' SQL on or off.
+func (c *StatementCounter) Record(on bool) { c.recording.Store(on) }
+
+// MarkedSQL returns the rendered SQL of every marked statement recorded since the last
+// Reset, in the order gorm traced them. The SQL is the dialect's Explain rendering, so
+// bound values appear as literals.
+func (c *StatementCounter) MarkedSQL() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.sqls...)
 }
 
 // Arm turns counting on or off without resetting the totals.
 func (c *StatementCounter) Arm(on bool) { c.armed.Store(on) }
 
-// Reset zeroes both totals.
+// Reset zeroes both totals and drops any recorded SQL.
 func (c *StatementCounter) Reset() {
 	c.all.Store(0)
 	c.marked.Store(0)
+	c.mu.Lock()
+	c.sqls = nil
+	c.mu.Unlock()
 }
 
 // Counts returns every statement counted since the last Reset, and the marked subset.

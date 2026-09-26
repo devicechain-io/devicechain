@@ -44,6 +44,12 @@ import (
 // rather than exported from core on purpose: an exported "unregister the fence" is a
 // foot-gun in a shipped package. The harness below proves each removal took effect, so a
 // rename in core fails here by name instead of silently measuring "on" twice.
+//
+// Removing them turns the fence's READS off, not all of its machinery: the connection pool
+// RegisterTenantFence installs (whose transactions carry the per-transaction memo) stays
+// under both legs, because it is installed once on the root handle during initialization.
+// It costs one small allocation per transaction and nothing per statement that is not a
+// fence read, so the "off" leg is "no fence reads", not "no fence code".
 var fenceCallbacks = []struct {
 	name string
 	get  func(*gorm.DB) func(*gorm.DB)
@@ -250,9 +256,11 @@ func BenchmarkFenceCostPersistMeasurementMessage(b *testing.B) {
 	var invocation int
 
 	for _, c := range []struct {
-		anchors   int
-		wantFence int64 // fence reads per op with the fence on
-	}{{1, 3}, {0, 2}} {
+		anchors int
+		// fence reads per op with the fence on: one for the persist's transaction, however
+		// many tables it writes.
+		wantFence int64
+	}{{1, 1}, {0, 1}} {
 		for _, fence := range []string{"on", "off"} {
 			b.Run(fmt.Sprintf("anchors=%d/fence=%s", c.anchors, fence), func(b *testing.B) {
 				ep, counter, mgr := workers[fence], counters[fence], mgrs[fence]

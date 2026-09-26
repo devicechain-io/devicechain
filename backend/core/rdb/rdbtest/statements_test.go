@@ -178,3 +178,35 @@ func TestCalibratePropagatesAnOperationFailure(t *testing.T) {
 	}
 	assertDisarmedAndReset(t, db, c)
 }
+
+// Recording keeps the SQL of marked statements only, only while it is on, and Reset drops
+// it — so a test asserting what a fence read ASKED reads that read and nothing else.
+func TestRecordingKeepsOnlyMarkedSQLWhileOn(t *testing.T) {
+	db, c := openCounted(t)
+	c.Reset()
+	if err := readMarker(db); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.MarkedSQL(); len(got) != 0 {
+		t.Fatalf("recorded %d statement(s) with recording off; want 0", len(got))
+	}
+	c.Record(true)
+	for _, op := range []func(*gorm.DB) error{readMarker, readOther, readMarker} {
+		if err := op(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := c.MarkedSQL()
+	if len(got) != 2 {
+		t.Fatalf("recorded %d statement(s); want the 2 marked ones: %q", len(got), got)
+	}
+	for _, sql := range got {
+		if !strings.Contains(sql, testMarker) {
+			t.Errorf("recorded an unmarked statement: %q", sql)
+		}
+	}
+	c.Reset()
+	if got := c.MarkedSQL(); len(got) != 0 {
+		t.Fatalf("Reset left %d recorded statement(s)", len(got))
+	}
+}

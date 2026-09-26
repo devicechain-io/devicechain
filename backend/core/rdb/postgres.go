@@ -229,6 +229,11 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	// Register the erasure fence (ADR-077) so a write for a tenant this area has
 	// already reclaimed is refused inside the writing transaction.
 	//
+	// Registering it also installs the connection pool whose transactions remember a
+	// clear fence read (tenant_fence_memo.go), which is why it is called on rdb.Database
+	// itself, before any session is derived from it, and before applyPoolSizing, whose
+	// db.DB() goes through that pool.
+	//
 	// It goes here, beside the other three, for the same reason they are here: the
 	// six areas that write tenant rows without any lifecycle gate — device-state,
 	// event-processing, event-management, dashboard-management, ai-inference and

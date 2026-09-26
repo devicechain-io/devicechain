@@ -16,8 +16,9 @@ import (
 )
 
 // PurgedTenant is one functional area's erasure fence: a local record that this
-// area's data for a tenant has been reclaimed, consulted in the same transaction
-// as every tenant-scoped write.
+// area's data for a tenant has been reclaimed, consulted inside the transaction of every
+// tenant-scoped write, at most once per tenant per transaction (see tenantFenceCheck and
+// fenceMemo).
 //
 // 🔴 IT EXISTS BECAUSE THE LIFECYCLE GATE IS NOT THE CORRECTNESS PATH, and the gate's
 // own documentation says so. That gate resolves a tenant's state from user-management
@@ -28,9 +29,9 @@ import (
 // enforced by a remote lookup which cannot answer is not enforced.
 //
 // This fence has none of those properties. It is a row in the area's OWN schema, read
-// inside the writing transaction, so it cannot be stale, cannot fail open, and cannot
-// be skipped by a call site — the check is a global GORM callback, exactly like the
-// tenant-scope predicate beside it.
+// inside the writing transaction, so it is never staler than that transaction, cannot
+// fail open, and cannot be skipped by a call site — the check is a global GORM callback,
+// exactly like the tenant-scope predicate beside it.
 //
 // 🔑 THE EPOCH IS WHY THIS IS KEYED BY TWO COLUMNS AND NOT ONE. The token is the only
 // tenant identity in the data plane and it is RELEASED when a purge completes, so the
@@ -87,6 +88,12 @@ var ErrTenantPurged = errors.New("this tenant has been deleted and its data in t
 // would stop the erasure it exists to protect. Query is not fenced either: a read
 // resurrects nothing, and the residual scan that grades the purge is a read.
 //
+// It also swaps the handle's connection pool for one whose transactions remember a clear
+// fence read (see fencePool and installFenceMemo), and it REFUSES a pool it cannot wrap
+// rather than leaving the fence silently unmemoised. It must therefore be called on the
+// handle every later session derives from, before any are derived; postgres.go and every
+// test fixture do. Calling it again on a handle that already has the fence is a no-op.
+//
 // 🔴 THE AUDIT JOURNAL'S OWN INSERT IS EXCLUDED, and skipping it is not a courtesy — it is
 // what makes the "deletes are not fenced" sentence above TRUE. The journal's callback is
 // registered After("gorm:create"), which gorm sorts AFTER the commit callback, so the
@@ -101,6 +108,14 @@ var ErrTenantPurged = errors.New("this tenant has been deleted and its data in t
 // purged tenant are not swept but RETAINED, with the two columns that can name a person
 // emptied — see the redaction registry in core/tenantpurge.
 func RegisterTenantFence(db *gorm.DB) error {
+	if err := installFenceMemo(db); err != nil {
+		return err
+	}
+	// gorm's Register APPENDS a duplicate name with only a warning, so a second call would
+	// run the check twice per statement. Registered once, the callbacks stay registered.
+	if db.Callback().Create().Get("dc:tenant_fence_create") != nil {
+		return nil
+	}
 	for _, register := range []func() error{
 		func() error {
 			return db.Callback().Create().Before("gorm:create").Register("dc:tenant_fence_create", tenantFenceCheck)
@@ -120,10 +135,49 @@ func RegisterTenantFence(db *gorm.DB) error {
 //
 // 🔑 IT READS THE FENCE ON A FRESH SESSION SHARING THIS STATEMENT'S CONNECTION, which
 // inside a transaction is that transaction — the same device the audit journal uses one
-// hook later. Two things follow, and both are the point. The answer is the one the write
-// itself will be committed against, so it cannot be stale the way a cached remote lookup
-// is; and the read is a Query, which neither this callback nor the audit journal is
-// registered on, so it cannot re-enter the chain it is part of.
+// hook later. Two things follow, and both are the point. The answer is one read on the
+// connection the write commits on, no earlier than the transaction's first write for that
+// tenant, so it cannot be stale the way a cached remote lookup is, which can predate the
+// transaction entirely; and the read is a Query, which neither this callback nor the audit
+// journal is registered on, so it cannot re-enter the chain it is part of.
+//
+// 🔑 INSIDE A TRANSACTION IT READS THE FENCE ONCE PER TENANT, NOT ONCE PER STATEMENT. The
+// first write for a tenant reads it. If no fence stands, that answer is remembered on the
+// transaction itself (fenceMemo), and later writes for the same tenant in the same
+// transaction do not read it again. A statement naming several tenants reads every one not
+// yet proven, in one query. Only "no fence stands" is remembered: a refusal is already the
+// statement's error, and a read that failed is never an answer, so the fail-closed branch
+// below is exactly as it was. A gorm call outside an explicit transaction is its own
+// transaction and so reads every time. And a transaction that writes the fence table
+// itself forgets everything it had proven, so it reads again after that: "at most once per
+// tenant per transaction, unless the transaction writes the fence".
+//
+// 🔴 THIS ADDS NO NEW KIND OF EXPOSURE, AND THE ARGUMENT IS WORTH HAVING IN FULL. Without
+// the memo a transaction could already read the fence a moment before a purge planted it
+// and commit its write a moment after; that is what reading inside the transaction means
+// under READ COMMITTED, the isolation every transaction here runs at. The purge never
+// relied on the fence closing that window. The fence is planted in its own committed
+// transaction before each sweep, sweeps repeat, a sweep that deletes rows restarts the
+// settle window, and a purge completes only after its residual scan has been clean for the
+// whole of it. That is precisely the write the sweep and the residual scan exist to catch.
+// Remembering the first answer for the rest of the transaction widens that same window
+// from "one statement" to "one transaction"; it does not create a different one.
+//
+// What does change is quantity, and it is stated rather than left to be found. Before, a
+// transaction that straddled the plant was usually refused at its next write and rolled
+// back whole; now one whose first write for the tenant preceded the plant commits, and a
+// later sweep collects its rows — more rows swept, more settle restarts, never a row the
+// sweep cannot see. Both before and after, the argument assumes no transaction stays open
+// longer than the purge's settle window: one that did could commit after completion, and
+// nothing catches that, memo or not. Nothing enforces that bound today (no idle-in-
+// transaction or statement timeout is configured); the memo adds rows to such a
+// transaction, it does not create one. (On Postgres the first fence read also takes a
+// share lock on the fence table until the transaction ends, so no other session can drop
+// or alter it under a memoised transaction and turn a remembered answer into one that
+// should have failed closed.)
+//
+// What the memo must never do is outlive its transaction, which is why it is a field of
+// the transaction's own connection wrapper rather than an entry in a registry.
 //
 // What it does not cover, said plainly rather than left to be discovered: a statement that
 // never builds a gorm schema. THIS fence cannot classify one — statementTenants has no
@@ -155,22 +209,35 @@ func tenantFenceCheck(db *gorm.DB) {
 	if len(tokens) == 0 {
 		return
 	}
+	memo := memoOf(db.Statement.ConnPool)
+	ask, gen := tokens, uint64(0)
+	if memo != nil {
+		if ask, gen = memo.unproven(tokens); len(ask) == 0 {
+			// Every tenant this statement names was read clear earlier in THIS transaction.
+			return
+		}
+	}
 	ctx := db.Statement.Context
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	session := db.Session(&gorm.Session{NewDB: true, Context: ctx})
+	// The marker tells the transaction wrapper that this statement READS the fence, so it
+	// is not mistaken for one that might have written it (see fenceTx.forgetIfFence).
+	session := db.Session(&gorm.Session{NewDB: true, Context: context.WithValue(ctx, fenceReadKey{}, true)})
 	var standing PurgedTenant
 	err := session.Model(&PurgedTenant{}).
 		Where("completed_at IS NULL").
-		Where("token IN ?", tokens).
+		Where("token IN ?", ask).
 		Limit(1).Take(&standing).Error
 	switch {
 	case err == nil:
 		_ = db.AddError(fmt.Errorf("%w (tenant %q)", ErrTenantPurged, standing.Token))
 	case errors.Is(err, gorm.ErrRecordNotFound), errors.Is(err, sql.ErrNoRows):
-		// No fence stands for any tenant in this statement. This is the ordinary answer
-		// and the only one that lets the write proceed.
+		// No fence stands for any tenant in this statement. This is the ordinary answer,
+		// the only one that lets the write proceed, and the only one remembered.
+		if memo != nil {
+			memo.prove(ask, gen)
+		}
 	default:
 		// 🔴 FAIL CLOSED. An unreadable fence is not an absent one, and the whole reason
 		// this check is local is that "I could not ask" and "the answer is no" are the
