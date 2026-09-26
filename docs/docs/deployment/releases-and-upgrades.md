@@ -2720,7 +2720,7 @@ is.
 Nothing needs configuring. If you point backups at your own object store with
 `--backup-credentials-file`, nothing changes for you.
 
-#### A database primary fails over in seconds
+#### A database primary fails over in seconds {#database-primary-failover-in-seconds}
 
 Deleting a database primary's pod, draining its node, or rolling out a change to it used to hold
 the failover for three minutes: the primary waited for every client to disconnect, and the
@@ -2747,15 +2747,28 @@ retried.
 **The event store of an existing instance keeps the old settings.** `dcctl upgrade` does not
 re-apply an instance's databases, so only instances bootstrapped from this release get the new
 settings on their event store. To give an existing instance's event store the same settings,
-patch its database cluster. This restarts its instances once, as above:
+patch its database cluster with ONE of these commands. This restarts its instances once, as
+above:
 
 ```bash
+# under --ha: the switchover setting goes in the SAME patch as the timings
+kubectl -n dci-<instance> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"primaryUpdateMethod":"switchover","smartShutdownTimeout":5,"stopDelay":120,"switchoverDelay":120}}'
+# a single-instance install
 kubectl -n dci-<instance> patch cluster dc-tsdb --type merge \
   -p '{"spec":{"smartShutdownTimeout":5,"stopDelay":120,"switchoverDelay":120}}'
-# under --ha only: roll the primary by switchover, as a new instance does
-kubectl -n dci-<instance> patch cluster dc-tsdb --type merge \
-  -p '{"spec":{"primaryUpdateMethod":"switchover"}}'
 ```
+
+Under `--ha`, do not split the first command into two patches with the timings first. Changing
+`stopDelay` starts the restart immediately, and if the switchover setting is not yet in place the
+primary is restarted in place with no standby promoted, which is the long outage this release
+removes.
+
+**Under `--ha`, a database image change and a database parameter change must be applied
+separately.** With the switchover setting in place, the database operator refuses an update that
+changes the database image and any database parameter at once. A single `dcctl install` run that
+both moves to a release with a new database image and changes `--max-connections` is therefore
+refused. Run `dcctl install` without the `--max-connections` change first, then again with it.
 
 :::caution The restart that applies these settings still has the old thirty-minute limit
 The two-minute limit belongs to each database pod, so it arrives with the restart that replaces

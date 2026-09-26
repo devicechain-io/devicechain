@@ -427,6 +427,30 @@ locals {
 
 
 locals {
+  # 🔴 THE CHART IS LOCAL, SO A CHANGE TO IT IS INVISIBLE TO THE PLAN UNLESS IT
+  # MOVES THE VALUES. The helm provider recomputes a release only when `chart`,
+  # `values` or a `set` changes, or when Chart.yaml's `version` does -- it does not
+  # diff the rendered manifest (that is an opt-in experiment, off here). `chart` is
+  # a fixed path and Chart.yaml's version is fixed at 0.1.0, so an edited template
+  # or values.yaml would produce an EMPTY PLAN and the live Cluster would keep the
+  # old spec, with every apply reporting success. Measured, not assumed: against
+  # helm provider 2.17.0 (the locked version) on a throwaway cluster, a template
+  # edit planned "No changes" and the live object kept its old value; with the
+  # digest below, the same edit planned an update and the object moved. It hid a
+  # real change: new shutdown timings that only a direct `helm upgrade` had applied.
+  #
+  # So a digest of every file in the chart travels in the values. Any edit to the
+  # chart moves it, the provider sees changed values, and Helm upgrades the
+  # release. An edit that renders the same Cluster (a comment) is an upgrade with
+  # an unchanged object, so it restarts nothing. The chart does not read the key;
+  # its only job is to be different. Paths are part of the digest so a renamed or
+  # added template moves it too. Read back as the `chart_digest` output, which
+  # hack/check-tofu-validations.sh recomputes from the files independently.
+  chart_dir = "${path.module}/chart"
+  chart_digest = sha256(join("\n", [
+    for f in sort(fileset(local.chart_dir, "**")) : "${f} ${filesha256("${local.chart_dir}/${f}")}"
+  ]))
+
   # 🔴 THE VALUES LIVE IN A LOCAL, NOT INLINE IN THE RESOURCE, so the outputs can
   # READ THEM BACK. See `reported` below: an output that re-derives what it
   # reports is a copy, and the CI harness asserting on it is then checking the
@@ -434,6 +458,7 @@ locals {
   # output can reach.
   base_values = {
     name                   = var.name
+    chartDigest            = local.chart_digest
     imageName              = var.image
     instances              = var.instances
     aliasServiceName       = var.alias_service_name
@@ -552,6 +577,9 @@ locals {
     # Helm was handed. tostring() pins the type so the "unset means Kubernetes'
     # 300" case compares as a null string rather than an untyped null.
     node_loss_toleration_seconds = tostring(local.base_values.nodeLossTolerationSeconds)
+    # What Helm is handed, so a digest computed and then dropped from the values
+    # reads as absent here rather than as correct.
+    chart_digest = local.base_values.chartDigest
     # tostring() pins the TYPE, not the value. Inside an object constructor a
     # bare `null` branch is a null of no particular type, and `tofu console`
     # prints that as `null` where a null string prints as `tostring(null)` --
@@ -570,7 +598,7 @@ resource "helm_release" "cluster" {
 
   name      = var.name
   namespace = var.namespace
-  chart     = "${path.module}/chart"
+  chart     = local.chart_dir
 
   # 🔴 TWO documents, not one map with a conditional `backup` key inside it.
   #
@@ -673,4 +701,9 @@ output "synchronous_enforced" {
 output "node_loss_toleration_seconds" {
   description = "The eviction fuse this store's pods actually carry, as a string, or \"tostring(null)\" when Kubernetes' 300s default is left in force. Worth reporting because it is invisible everywhere else: an unset value is not absent from the pod, it is 300 injected by an admission plugin, and nothing else in the apply says so."
   value       = local.reported.node_loss_toleration_seconds
+}
+
+output "chart_digest" {
+  description = "The digest of this module's local chart files that is handed to Helm in the release values. It exists so that an edit to the chart changes the values and so reaches an existing release: the helm provider does not otherwise notice a changed local chart whose Chart.yaml version is unchanged."
+  value       = local.reported.chart_digest
 }

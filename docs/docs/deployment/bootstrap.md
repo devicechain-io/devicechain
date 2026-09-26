@@ -653,10 +653,12 @@ connection and shuts down. Writes that were in progress fail, and the services r
 Under `--ha`, a standby is promoted once the old primary has stopped, and `dc-postgresql` or
 `dc-timescaledb-single` moves to it. In testing, the new primary was accepting writes 20 to 25
 seconds after the old one ended its connections, about half a minute after the pod was
-deleted. Rolling out a configuration change does not restart the primary in place: the
-standbys restart first, then the primary role is switched over to an up-to-date standby, and
-the old primary restarts as a standby. In testing, that switchover interrupted writes for about
-ten seconds.
+deleted. On a database that carries these settings, rolling out a configuration change does
+not restart the primary in place: the standbys restart first, then the primary role is switched
+over to an up-to-date standby, and the old primary restarts as a standby. In testing, that
+switchover interrupted writes for about ten seconds. An event store created before these
+settings were introduced keeps the in-place restart until it is patched as described in the
+[release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds).
 
 A single-instance install has no standby to promote. Its database is unavailable until the
 instance has restarted, and writes wait for it. In testing, on a small database, writes

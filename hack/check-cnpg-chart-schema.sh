@@ -273,6 +273,11 @@ rendered+=("$(render_case analytics-roles "${base[@]}" --set instances=1 \
   --set 'extraRoles[2].connectionLimit=5' \
   --set 'extraRoles[2].inRoles[0]=analytics_reader')")
 
+# The shutdown fast-phase floor, exactly at its boundary: stopDelay leaves 15s after
+# smartShutdownTimeout, which the chart must accept (its refusal at 14s is below).
+rendered+=("$(render_case fast-phase-floor "${base[@]}" --set instances=3 --set synchronous.enabled=true \
+  --set smartShutdownTimeout=5 --set stopDelay=20)")
+
 # --- the configurations the chart must REFUSE ---------------------------------
 say "checking the render-time guards"
 
@@ -338,15 +343,29 @@ refuses analytics-roles-over-budget "the extra roles ask for" \
   --set 'extraRoles[0].name=analytics_acme' --set 'extraRoles[0].login=true' \
   --set 'extraRoles[0].connectionLimit=60'
 
-# SHUTDOWN TIMING. An explicit null must not fall through to CloudNativePG's
-# defaults (a `required`, so the coverage control below does not demand this case;
-# it is here because the fall-through is the one failure this block exists for),
-# and a stop window with no room for the fast phase is refused outright.
-refuses shutdown-timing-unset ".Values.stopDelay is required" \
+# SHUTDOWN TIMING. Each floor is a `fail`, so the coverage control below demands a
+# case for it. The unset and the 0 cases are both here because they reach
+# CloudNativePG differently -- null is turned into 0 by the template's `int`, and 0
+# is what its getters read as 1800 / 3600 -- and a guard that caught only one
+# spelling would let the other restore the hour-long demotion bound.
+refuses smart-shutdown-unset "smartShutdownTimeout must be 0 or more seconds" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set smartShutdownTimeout=null
+refuses smart-shutdown-negative "smartShutdownTimeout must be 0 or more seconds" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set smartShutdownTimeout=-1
+refuses stop-delay-unset "stopDelay must be at least 1 second" \
   "${base[@]}" --set instances=3 --set synchronous.enabled=true --set stopDelay=null
+refuses stop-delay-zero "stopDelay must be at least 1 second" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set stopDelay=0
+refuses switchover-delay-unset "switchoverDelay must be at least 1 second" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set switchoverDelay=null
+refuses switchover-delay-zero "switchoverDelay must be at least 1 second" \
+  "${base[@]}" --set instances=3 --set synchronous.enabled=true --set switchoverDelay=0
+# The fast-phase floor AT its boundary: 14s left is refused, and 15s left renders
+# (the `fast-phase-floor` positive case above). A case far below the floor would
+# let the threshold drift anywhere under it with this still green.
 refuses shutdown-fast-phase-too-short "seconds for the fast shutdown" \
   "${base[@]}" --set instances=3 --set synchronous.enabled=true \
-  --set smartShutdownTimeout=5 --set stopDelay=10
+  --set smartShutdownTimeout=5 --set stopDelay=19
 
 # COVERAGE: every `fail` in the templates must have been tripped by a case above.
 # A guard nothing exercises is indistinguishable from one that has stopped firing,
@@ -818,7 +837,9 @@ note "every rendered field exists in the pinned CRD schemas"
 # drained primary sat 180s in a smart shutdown waiting for pooled connections that
 # never close, a new primary took 3m24s, and the whole outage sat inside a 4-minute
 # redelivery budget with seconds to spare. Deleting a line from the template brings
-# that back with every other check green; this is what notices.
+# that back with every other check green; this is what notices. A stopDelay or
+# switchoverDelay at or below 0 is read at the default too, because that is how
+# CloudNativePG reads it (see `effective` below).
 #
 # The budget is not restated here. It is read from the constants the consumers use
 # (backend/core/streams/streams.go): a transiently failing write is left unacked, so
@@ -876,9 +897,22 @@ PROMOTION_ALLOWANCE = 60
 # of it is added to the failover. This is the most of it the check tolerates.
 SMART_WAIT_MAX = 15
 
+# 🔴 ABSENT IS NOT THE ONLY SPELLING OF THE DEFAULT. stopDelay and switchoverDelay
+# are plain int32 fields, and CloudNativePG's getters (GetMaxStopDelay,
+# GetMaxSwitchoverDelay) return the default for anything at or below 0 -- so a
+# rendered `switchoverDelay: 0` is an hour, not no wait. smartShutdownTimeout is a
+# pointer and its 0 is honoured.
+DEFAULT_AT_OR_BELOW_ZERO = ("stopDelay", "switchoverDelay")
+
+def effective(spec, f):
+    v = spec.get(f)
+    if v is None or (f in DEFAULT_AT_OR_BELOW_ZERO and int(v) <= 0):
+        return defaults[f]
+    return v
+
 def violations(cluster):
     spec = cluster.get("spec") or {}
-    eff = {f: spec.get(f, defaults[f]) for f in FIELDS}
+    eff = {f: effective(spec, f) for f in FIELDS}
     out = []
     if eff["smartShutdownTimeout"] > SMART_WAIT_MAX:
         out.append("smartShutdownTimeout %d > %d: a stopping primary waits that long for "
@@ -903,6 +937,12 @@ def clusters(path):
 if len(violations({"spec": {"instances": 3}})) != 4:
     sys.exit("a 3-instance Cluster with no shutdown fields did not fail on all four counts; "
              "an absent field is not being read at the CRD default")
+# Self-test 1b: a stopDelay / switchoverDelay of 0 is read at the CRD default, as
+# CloudNativePG reads it, and fails -- the chart refuses 0, so this too is planted.
+if len(violations({"spec": {"instances": 3, "smartShutdownTimeout": 5, "stopDelay": 0,
+                            "switchoverDelay": 0, "primaryUpdateMethod": "switchover"}})) != 2:
+    sys.exit("a Cluster with stopDelay and switchoverDelay at 0 did not fail on both; a 0 is "
+             "being read as no wait, but CloudNativePG reads it as 1800 / 3600")
 # Self-test 2: a render that passes every chart guard but blows the budget must fail.
 if not any(violations(c) for c in clusters(over_budget)):
     sys.exit("the over-budget render passed; this check cannot fail")

@@ -696,11 +696,14 @@ Las escrituras que estaban en curso fallan, y los servicios las reintentan.
 Con `--ha`, se promueve una réplica en espera en cuanto la antigua primaria se ha detenido, y
 `dc-postgresql` o `dc-timescaledb-single` pasa a apuntar a ella. En las pruebas, la nueva
 primaria aceptaba escrituras entre 20 y 25 segundos después de que la antigua cerrara sus
-conexiones, aproximadamente medio minuto después de eliminar el pod. Desplegar un cambio de
-configuración no reinicia la primaria en su sitio: primero se reinician las réplicas en
-espera, después el papel de primaria se traspasa a una réplica al día, y la antigua primaria
-se reinicia como réplica. En las pruebas, ese traspaso interrumpió las escrituras durante unos
-diez segundos.
+conexiones, aproximadamente medio minuto después de eliminar el pod. En una base de datos que
+tiene esta configuración, desplegar un cambio de configuración no reinicia la primaria en su
+sitio: primero se reinician las réplicas en espera, después el papel de primaria se traspasa a
+una réplica al día, y la antigua primaria se reinicia como réplica. En las pruebas, ese
+traspaso interrumpió las escrituras durante unos diez segundos. Un almacén de eventos creado
+antes de que existiera esta configuración mantiene el reinicio en su sitio hasta que se le
+aplica el parche descrito en las
+[notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds).
 
 Una instalación de una sola instancia no tiene ninguna réplica que promover. Su base de datos
 no está disponible hasta que la instancia se ha reiniciado, y las escrituras esperan. En las

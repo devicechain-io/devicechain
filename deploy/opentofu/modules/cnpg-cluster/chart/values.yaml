@@ -78,14 +78,16 @@ enableSuperuserAccess: false
 #
 # These carry defaults rather than null + a module variable because both stores
 # take the same values and no caller has a reason to vary them: the default IS
-# the one value that ships. templates/cluster.yaml still `required`s all three, so
-# an explicit null cannot fall through to CloudNativePG's defaults.
+# the one value that ships. templates/cluster.yaml still refuses a null for all
+# three, and a 0 for stopDelay and switchoverDelay -- CloudNativePG reads 0 there
+# as its 1800 / 3600 default, not as "no wait" -- so neither can fall through.
 #
 # 🔴 hack/check-cnpg-chart-schema.sh reads all three back from the RENDER, counting
-# an absent field at the CRD's default, and fails unless they fit inside the
-# messaging layer's redelivery budget: (ConsumerMaxDeliver-1) x
-# ConsumerAckWaitSeconds in backend/core/streams/streams.go, 240s today. It reads
-# both sides, so moving either one can fail it.
+# an absent field (and a stopDelay or switchoverDelay at or below 0) at the CRD's
+# default, and fails unless they fit inside the messaging layer's redelivery
+# budget: (ConsumerMaxDeliver-1) x ConsumerAckWaitSeconds in
+# backend/core/streams/streams.go, 240s today. It reads both sides, so moving
+# either one can fail it.
 #
 # smartShutdownTimeout: the wait for clients to leave. With the services
 # connected it is pure delay, so it is short. It is not 0 because 0 is honoured
