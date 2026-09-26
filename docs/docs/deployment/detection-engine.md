@@ -265,13 +265,16 @@ completes or the next session closes with the condition no longer true, which ma
 **The intended pattern is to pair such a rule with an absence rule**, so a device that stops
 reporting raises a distinct, actionable signal rather than leaving a stale one standing.
 
-Two more causes worth checking:
+Three more causes worth checking:
 
 - **An operator "clear" does not remove the underlying condition.** If the condition is still true,
   the next event re-activates the same alarm. Clearing is an acknowledgement that you have seen it,
   not a suppression.
 - **A device that leaves a rule's scope and then goes silent** keeps its raised alarm. Scope changes
   take effect on the device's next event, and a silent device has no next event.
+- **The rule that raised it no longer runs.** A rule that is skipped at load — the profile's
+  **Rule Health** tab shows it as a compile error — is not evaluated, so nothing resolves the alarm
+  it raised before. Clear the alarm by hand once you have fixed or retired the rule.
 
 ## A rule that is not firing
 
@@ -287,10 +290,16 @@ In order of how often it is the answer:
    events for the exact key.
 4. **The rule is scoped to a group the device is not currently in.** Membership is recorded on each
    event as it is resolved, so a device that has just been added joins on its next event.
-5. **A dynamic threshold has no attribute set on that device.** The rule reads the device's own
-   attribute; a device without it does not fire.
+5. **A dynamic threshold has no attribute set on that device.** A threshold built on the form reads
+   the device's own attribute, and a device with no numeric `SERVER` or `SHARED` value for it does
+   not fire. A value that is not a number, or one set with `CLIENT` scope, counts as not set. A CEL
+   expression with a [fallback](../concepts/event-processing.md#dynamic-thresholds-in-cel) fires on
+   its fallback instead.
 6. **The rule errors at evaluation time.** This is the hard one — see below.
 7. **The publish notification was lost.** Rare, but it leaves no trace where you would look for one.
+8. **The rule stopped compiling after an upgrade.** An upgrade can refuse a rule that an earlier
+   version accepted. Such a rule is skipped when the engine loads it, and the profile's **Rule
+   Health** tab shows it as a compile error with the reason. The release notes list each such change.
 
 :::warning A lost publish notification silences a profile with no error anywhere
 When a profile version is published, the rules it contains are handed to the detection engine as a
@@ -322,7 +331,10 @@ results:
 
 - It starts **cold** at the beginning of the window. A hold or a window that began earlier is
   invisible, and an aggregate window straddling the end never closes.
-- It resolves **no device attributes**, so a rule with a dynamic threshold previews as never firing.
+- It resolves **no device attributes**: every device previews as though it had none. A dynamic
+  threshold built on the form therefore previews as never firing, and a CEL expression with a
+  [fallback](../concepts/event-processing.md#dynamic-thresholds-in-cel) previews its fallback on
+  every device, including devices that do have the attribute.
 - It does not apply a **group scope** — a scoped rule previews across the whole profile.
 - It cannot arm absence for a device that has **never reported**.
 

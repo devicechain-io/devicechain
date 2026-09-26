@@ -67,6 +67,22 @@ Si el formulario abre una regla almacenada que no puede contener por completo �
 
 Un umbral puede ser un **valor fijo** en la regla, o **dinámico**: el nombre de un **atributo** de dispositivo que la regla lee en el momento de la evaluación. Un umbral dinámico permite que una sola regla se adapte por dispositivo. El perfil define la regla una vez, y cada dispositivo lleva su propio límite como un atributo con alcance `SERVER` o `SHARED` (los valores establecidos por el servidor tienen prioridad). Cambia el atributo y el umbral efectivo cambia, sin editar la regla.
 
+#### Umbrales dinámicos en una expresión CEL {#dynamic-thresholds-in-cel}
+
+En una expresión CEL, las mediciones del evento son el mapa `m` y los atributos del dispositivo son el mapa `attr`, ambos de una clave a un número. Una clave está en `attr` solo mientras el dispositivo tiene un valor **numérico** para ella con alcance `SERVER` o `SHARED`. Falta cuando el atributo nunca se estableció, cuando se estableció con algo que no es un número, cuando se estableció con alcance `CLIENT`, y durante un breve tiempo después de establecerlo, hasta que el cambio llega al motor de detección.
+
+Compruebe la presencia antes de leer un valor. Un umbral dinámico creado en el formulario se compila como `"tempLimit" in attr && "temp" in m && m["temp"] > attr["tempLimit"]`, que no se dispara para un dispositivo sin el atributo. El formulario no tiene valor de respaldo. Para recurrir a un límite fijo, escriba el respaldo como su propia comparación:
+
+```
+"temp" in m && ("tempLimit" in attr ? m["temp"] > attr["tempLimit"] : m["temp"] > 80.0)
+```
+
+Como esta expresión no puede ser verdadera para un evento sin `temp`, la regla solo mira los eventos que llevan `temp`. Un evento sin ella se omite: no resuelve una alarma de umbral y no interrumpe el tiempo de sostenimiento de una regla de duración.
+
+Una condición de umbral o de duración que sería verdadera en todos los eventos de **todos** los dispositivos sin los atributos que lee, sea cual sea el contenido del evento, se rechaza al publicar el perfil. Por ejemplo, `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` levantaría una alarma para cada uno de esos dispositivos, informara lo que informara, mientras le faltara el atributo. Una condición que sigue dependiendo de la lectura, como `!("tempLimit" in attr) && m["temp"] > 80.0`, se acepta. Tenga en cuenta que también se aplica a los dispositivos cuyo atributo tiene un tipo o un alcance incorrectos, no solo a los que nunca lo establecieron.
+
+En una regla de repetición, de tasa de cambio, de agregado en ventana o de correlación de área, la condición es un filtro sobre qué eventos cuentan, así que allí se acepta un filtro como `!("maint" in attr)` («dispositivos que no están en mantenimiento»).
+
 ## Acciones automatizadas {#automated-actions}
 
 Cuando una regla se dispara, se ejecutan sus acciones. Las acciones integradas son:

@@ -23,8 +23,10 @@
 // A preview is an APPROXIMATION by design, in honest ways it documents rather than hides: it starts
 // COLD at the window (no state carried from before the window, so a mid-window duration hold that
 // began earlier is not seen, and an aggregate pane straddling the window End never closes); it
-// resolves NO device attributes (dynamic-threshold rules preview as non-firing — nil attr); it
-// processes events in delivered (publish) order with zero lateness; and it does not apply the live
+// resolves NO device attributes (nil attr: every device previews as having none, so a structured
+// dynamic threshold previews as non-firing, while a raw-CEL fallback such as
+// `!("k" in attr) && m["t"] > 80.0` previews its FALLBACK on every device, including devices that do
+// have the attribute); it processes events in delivered (publish) order with zero lateness; and it does not apply the live
 // future-skew clamp, so an event whose device clock ran ahead of its arrival is placed at its raw
 // occurred time (and, since the replay reader starts by PUBLISH time, a future-skewed event published
 // before the window Start can be missed).
@@ -234,12 +236,15 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 			break
 		}
 		res.Stats.EventsScanned++
-		// nil attr: a preview resolves no device attributes, so a dynamic-threshold rule cleanly does
-		// not fire (its presence-guarded comparison reads absent state as a non-match) — documented.
+		// nil attr: a preview resolves no device attributes, so every device previews as having none.
+		// A structured dynamic threshold therefore does not fire (its positive presence guard reads
+		// absent state as a non-match), while a raw-CEL leaf written with a fallback for a missing
+		// attribute previews that fallback on EVERY device, including devices that do have the
+		// attribute live — documented.
 		//
 		// 🔴 FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
 		// because a device attribute is CURRENT state with no historical record: there is no way to
-		// know what a threshold was last Tuesday, so the honest preview is "does not fire". A fence
+		// know what a threshold was last Tuesday, so the honest preview is "as if unset". A fence
 		// set is different in kind — the event NAMES the version it was resolved against, and that
 		// version's fences are frozen and still on record — so the exact set that was live is
 		// recoverable and the preview can be CORRECT. Copying attr's degradation here would render

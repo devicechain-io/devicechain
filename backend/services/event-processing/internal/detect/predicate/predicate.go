@@ -92,6 +92,11 @@ type Predicate struct {
 	// RequiresPosition): a fence leaf must see only events that report a position, exactly as a
 	// metric-gated leaf must see only events carrying its measurement.
 	referencesFences bool
+
+	// trueWithoutAttributes records whether the leaf is definitely true for every event from every
+	// device holding none of the attributes it reads. See TrueWithoutAttributes; rules.Compile
+	// decides, per rule kind, whether that is a refusal.
+	trueWithoutAttributes bool
 }
 
 // Source is the CEL text the predicate compiled from (generated or raw). Useful for
@@ -114,6 +119,11 @@ const CostCeiling uint64 = 100
 // non-boolean result, or a worst-case cost above CostCeiling all reject the rule at
 // publish with a message the console can surface. The returned Program also carries a
 // runtime CostLimit at the same ceiling as a backstop against an under-estimate.
+//
+// It also records, from the type-checked AST, the facts a caller decides on per rule kind — the
+// metric scope (ScopableMetrics), fence use (ReferencesFences) and whether the leaf is true for
+// every device without the attributes it reads (TrueWithoutAttributes). Those are recorded, not
+// refused here: rules.Compile refuses the last one for threshold and duration rules only.
 func Compile(source string) (*Predicate, error) {
 	return compile(source, CostCeiling)
 }
@@ -148,6 +158,17 @@ func compile(source string, costCeiling uint64) (*Predicate, error) {
 	}
 	p := &Predicate{source: source, program: program, costMax: est.Max}
 	p.referencesFences = referencesFences(ast.NativeRep())
+
+	// Attribute-absence analysis: only a leaf that reads `attr` can be true BECAUSE an attribute
+	// is absent, so a leaf that never names it (the matchAll `true` of absence/connectivity, a pure
+	// measurement test) is left false without evaluating anything.
+	if referencesAttr(ast.NativeRep()) {
+		alwaysTrue, err := trueWhenAttributesAbsent(env, ast)
+		if err != nil {
+			return nil, &CompileError{Source: source, Err: fmt.Errorf("analyze attribute absence: %w", err)}
+		}
+		p.trueWithoutAttributes = alwaysTrue
+	}
 
 	// Metric-scoped-feed analysis (review D4), computed once here where the AST and env are in
 	// hand. First derive which measurements the leaf reads via constant keys; then, only if that

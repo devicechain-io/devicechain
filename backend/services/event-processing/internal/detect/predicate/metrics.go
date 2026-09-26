@@ -97,15 +97,7 @@ func falseWhenMetricsAbsent(env *cel.Env, ast *cel.Ast) (bool, error) {
 // metricRefs collapses onto the same empty slice. Feed scoping only ever needed the nameable
 // ones; the fence/measurement conflict check (rules.errFenceAndMetricLeaf) needs to know the
 // leaf touches `m` even when it cannot say which key.
-func referencesMetrics(a *celast.AST) bool {
-	if a == nil {
-		return false
-	}
-	root := celast.NavigateAST(a)
-	return len(celast.MatchDescendants(root, func(e celast.NavigableExpr) bool {
-		return e.Kind() == celast.IdentKind && e.AsIdent() == VarM
-	})) > 0
-}
+func referencesMetrics(a *celast.AST) bool { return referencesIdent(a, VarM) }
 
 // metricRefs walks a type-checked predicate AST for constant-keyed reads of the `m` variable.
 func metricRefs(a *celast.AST) (metrics []string, complete bool) {
