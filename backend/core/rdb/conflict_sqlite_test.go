@@ -86,3 +86,17 @@ func TestARealSQLiteDuplicateIsRedactedAtTheBoundary(t *testing.T) {
 	assert.Equal(t, "save: "+conflict.Message, got)
 	assert.True(t, changed)
 }
+
+// A duplicate PRIMARY KEY is its own SQLite extended code (1555,
+// SQLITE_CONSTRAINT_PRIMARYKEY), not the UNIQUE one (2067): it is a uniqueness conflict
+// all the same, and the classifier must say so for both.
+func TestARealSQLitePrimaryKeyDuplicateIsAConflict(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE gadgets (id TEXT PRIMARY KEY, name TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO gadgets (id, name) VALUES ('a', 'n')`).Error)
+	err = db.Exec(`INSERT INTO gadgets (id, name) VALUES ('a', 'n')`).Error
+	require.Error(t, err)
+	require.Equal(t, 1555, errorCode(t, err), "fixture must produce SQLITE_CONSTRAINT_PRIMARYKEY")
+	assert.True(t, conflict.Is(err))
+}

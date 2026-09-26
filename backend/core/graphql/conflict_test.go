@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/gorilla/websocket"
+	gqlerrors "github.com/graph-gophers/graphql-go/errors"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -207,4 +208,30 @@ func TestTheSubscriptionPumpAnswersAConflictWithConflict(t *testing.T) {
 	require.Len(t, body.Errors, 1)
 	assert.Equal(t, wireConflict, body.Errors[0].Extensions["code"])
 	assert.Equal(t, "watch widget: "+neutralMessage, body.Errors[0].Message)
+}
+
+// sharedExtensions is an Extensions() that hands out ONE map to every caller and sets no
+// "code": the case answerConflicts must copy rather than write into.
+type sharedExtensions struct {
+	ext map[string]any
+	err error
+}
+
+func (s sharedExtensions) Error() string                      { return s.err.Error() }
+func (s sharedExtensions) Unwrap() error                      { return s.err }
+func (s sharedExtensions) Extensions() map[string]interface{} { return s.ext }
+
+// A typed error whose Extensions() returns a shared map without "code", over a driver
+// unique violation: the answer gains CONFLICT, and the typed error's own map does NOT —
+// otherwise every later request that reads that map would see a code nobody chose.
+func TestAnswerConflictsCopiesATypedErrorsExtensionsRatherThanWritingIntoThem(t *testing.T) {
+	shared := map[string]any{"hint": "retry"}
+	typed := sharedExtensions{ext: shared, err: fmt.Errorf("create widget: %w", pgUniqueViolation())}
+	qe := &gqlerrors.QueryError{Message: typed.Error(), ResolverError: typed, Extensions: typed.Extensions()}
+
+	answerConflicts([]*gqlerrors.QueryError{qe})
+
+	assert.Equal(t, wireConflict, qe.Extensions["code"])
+	assert.Equal(t, "retry", qe.Extensions["hint"], "the typed error's own entries are kept")
+	assert.Equal(t, map[string]any{"hint": "retry"}, shared, "the typed error's shared map must be left unmodified")
 }

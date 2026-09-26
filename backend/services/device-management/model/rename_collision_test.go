@@ -20,9 +20,9 @@ import (
 // IS WHAT THESE TESTS EXIST FOR. At READ COMMITTED a SELECT cannot lock a row that does not
 // exist, so two renames onto one token — or a rename racing a create — both see zero rows,
 // and the second UPDATE discovers the collision at the partial unique index instead.
-// Without a translation the loser would get the GraphQL boundary's
-// NEUTRAL conflict sentence (code CONFLICT) instead of this rename's own sentence, which
-// is not what the served API reference promises.
+// Without a translation the loser would get the GraphQL boundary's NEUTRAL conflict
+// sentence (code CONFLICT) instead of this rename's own sentence, which is not what the
+// served API reference promises.
 //
 // The uncontended refusal is covered by TestRenameDeviceProfile_RefusesATokenAlreadyInUse.
 // What is here is the contended one.
