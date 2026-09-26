@@ -370,8 +370,8 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 
 ### The rule-duration ceiling is enforced
 
-`maxRuleDurationSeconds` is the one limit here that **refuses work** rather than reporting on it. A
-rule declaring a longer window, hold, timeout or gap is rejected when the profile is published, with
+`maxRuleDurationSeconds` is the one setting in the table above that **refuses a rule** rather than
+reporting on it. A rule declaring a longer window, hold, timeout or gap is rejected when the profile is published, with
 an error naming the field and the limit, and the same ceiling is applied again when the engine loads
 a published rule — so the two can never disagree about what is runnable.
 
@@ -409,6 +409,19 @@ value and shorten or retire them deliberately. Afterwards, check the engine log 
 Health** tab.
 :::
 
+### The expression cost ceiling is fixed
+
+Every CEL expression in a detection rule is cost-checked when the profile is published: the
+condition, an action's guard, a payload template and an alarm-key template. A rule whose expression
+has an estimated worst-case cost above **100** is refused, with an error that states the estimate
+and the ceiling. The engine applies the same ceiling again when it loads a published rule.
+Dynamic-group selectors are checked against the same value when a group is saved.
+
+The ceiling is the same for every tenant, and there is no setting to raise it, for one tenant or
+for the instance. It bounds how much work one reading can cost the single engine that every tenant
+shares. An expression that iterates over a reading's measurements (`m.all(...)`, `m.exists(...)`)
+is the usual way to reach it; name the measurements you need instead.
+
 :::note The per-tenant state budgets are measured, not enforced
 The three per-tenant ceilings — rules, live keys, and retained samples — raise a metric and a log
 line when a tenant exceeds them. **Nothing stops the tenant.** A single tenant authoring
@@ -433,7 +446,7 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 
 | Signal | Means |
 |---|---|
-| `DetectCheckpointsStalledWithBacklog` | **The most important alert here.** Checkpoints have stopped while work is waiting. Either the engine has halted after losing a split-brain race, or its database is unavailable. Detection is not happening. |
+| `DetectCheckpointsStalledWithBacklog` | **The most important alert here.** Checkpoints have stopped while work is waiting: the engine cannot reach its database or the broker, or its loop is stuck. Detection is not happening. |
 | `DetectConsumerBacklogHigh` | The engine is behind. Absence detection **on silence** is suppressed while it is — a later event still fires an overdue absence, as above. |
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
 | `DetectFanoutEvalErrors` | One or more published rules are failing to evaluate. See the caution above. |
@@ -445,11 +458,12 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `RateMeteringClockFallback` | Outbound actions have been metered on broker or arrival time for an hour because they carried no trigger time, so a catch-up can be shed as a flood again. Check that event-processing and outbound-connectors run the same release. A trigger time later than its message's broker time is counted separately, as source `capped`, and does not fire this: that is clock skew between the pod and the broker, not a missing time. |
 | `DetectTenantOverStateBudget` | A tenant is over a ceiling that is not enforced — its rule count, its live windows and timers, or the readings its open windows retain. |
 
-:::warning A halted engine still reports healthy
-If the engine halts after losing a split-brain race, its health endpoints continue to report ready.
-The pod looks fine and detection has stopped. `DetectCheckpointsStalledWithBacklog` is currently the
-signal that catches this, and it fires after a delay — do not rely on pod health alone to tell you
-detection is running.
+:::note An engine that loses a split-brain race exits
+If two engines ever act as the writer at once, the one whose checkpoint is refused as stale stops
+detecting, reports not-ready, and exits with a non-zero status so that it is replaced. It does not
+stay up looking healthy. What it leaves behind is a restart of an event-processing pod, whose last
+log lines say the checkpoint was refused as stale. If no replica holds the partition for two
+minutes, `DetectHasNoLeader` fires.
 :::
 
 Per-rule status, last-fired time and fire count are available in the console on the device profile's

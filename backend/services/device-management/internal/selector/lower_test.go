@@ -66,7 +66,7 @@ func TestLower_Goldens(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		sel, err := Compile(c.src, "device", 1000)
+		sel, err := Compile(c.src, "device")
 		if err != nil {
 			t.Fatalf("compile %q: %v", c.src, err)
 		}
@@ -86,7 +86,7 @@ func TestLower_Goldens(t *testing.T) {
 // A compound selector composes leaf fragments with real SQL AND/OR and shares no state
 // between leaves — the args accumulate in fragment (placeholder) order.
 func TestLower_CompoundOrder(t *testing.T) {
-	sel, err := Compile(`attr["climate"] == "arid" && attr["population"] > 100000`, "device", 1000)
+	sel, err := Compile(`attr["climate"] == "arid" && attr["population"] > 100000`, "device")
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

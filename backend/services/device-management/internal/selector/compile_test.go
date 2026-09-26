@@ -23,7 +23,7 @@ func TestCompile_Accepts(t *testing.T) {
 		`attr["climate"] == "arid" || attr["climate"] == "humid"`,
 	}
 	for _, src := range ok {
-		if _, err := Compile(src, "device", 1000); err != nil {
+		if _, err := Compile(src, "device"); err != nil {
 			t.Errorf("Compile(%q) unexpected error: %v", src, err)
 		}
 	}
@@ -48,7 +48,7 @@ func TestCompile_Rejects(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := Compile(c.src, "device", 1000)
+			_, err := Compile(c.src, "device")
 			if err == nil {
 				t.Fatalf("Compile(%q) = nil error, want %T", c.src, c.want)
 			}
@@ -79,7 +79,7 @@ func TestCompile_LeafBound(t *testing.T) {
 		parts[i] = `"k` + string(rune('a'+i%26)) + strings.Repeat("x", i) + `" in attr`
 	}
 	src := strings.Join(parts, " || ")
-	_, err := Compile(src, "device", 1_000_000)
+	_, err := Compile(src, "device")
 	var nl *NotLowerableError
 	if !errors.As(err, &nl) {
 		t.Fatalf("Compile(oversized) = %v, want *NotLowerableError for leaf bound", err)
@@ -89,18 +89,34 @@ func TestCompile_LeafBound(t *testing.T) {
 	}
 }
 
-// The cost ceiling rejects an over-budget selector, and a zero ceiling resolves to the
-// platform default (never unlimited).
+// The cost gate compares the estimate against the ceiling it is given: a single presence
+// leaf, cheap as it is, is refused at a ceiling of 1, with the ceiling it was held to.
 func TestCompile_CostCeiling(t *testing.T) {
-	// A single presence leaf is cheap; a tiny explicit ceiling of 1 rejects it on cost.
-	if _, err := Compile(`"climate" in attr`, "device", 1); err != nil {
-		var ce *CostError
-		if !errors.As(err, &ce) {
-			t.Fatalf("Compile with ceiling 1 = %v, want *CostError", err)
-		}
+	_, err := compile(`"climate" in attr`, "device", 1)
+	var ce *CostError
+	if !errors.As(err, &ce) {
+		t.Fatalf("compile with ceiling 1 = %v, want *CostError", err)
 	}
-	// Zero ceiling → DefaultCostCeiling; a normal selector clears it.
-	if _, err := Compile(`attr["climate"] == "arid"`, "device", 0); err != nil {
-		t.Errorf("Compile with zero (default) ceiling: %v", err)
+	if ce.Ceiling != 1 {
+		t.Fatalf("CostError.Ceiling = %d, want the 1 it was compiled at", ce.Ceiling)
+	}
+}
+
+// TestASelectorIsGatedAtThePlatformCeiling pins the exported entry point to the platform
+// value. The ceiling is a literal, not CostCeiling, so changing the platform value is a
+// deliberate edit here too. The cost gate runs before the lowerability check, so this
+// comprehension, which would not lower either, is refused on cost.
+func TestASelectorIsGatedAtThePlatformCeiling(t *testing.T) {
+	const src = `attr.all(k, attr[k] == "x")`
+	_, err := Compile(src, "device")
+	var ce *CostError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Compile(%q) = %v, want a *CostError at the platform ceiling", src, err)
+	}
+	if ce.Ceiling != 100 {
+		t.Fatalf("the selector was gated at a ceiling of %d, want the platform's 100", ce.Ceiling)
+	}
+	if ce.EstimatedMax <= 100 {
+		t.Fatalf("the refusal reports an estimate of %d, which is within the ceiling it was refused at", ce.EstimatedMax)
 	}
 }

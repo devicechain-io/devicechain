@@ -74,7 +74,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "DETECT is not checkpointing while a backlog exists"
-            description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (broker/store outage or a halted stale writer)."
+            description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (a broker or store outage). A replica that lost a split-brain race does not cause this: it exits to be replaced, and DetectHasNoLeader covers the gap."
         - alert: DetectFanoutEvalErrors
           expr: sum(rate(devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 15m

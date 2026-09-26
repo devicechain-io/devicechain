@@ -82,7 +82,7 @@ func (r *SchemaResolver) RuleHealth(ctx context.Context, args struct {
 // buildRuleHealth composes one rule's health row: its name (from the authored definition), a
 // status from re-decoding+compiling the stored definition under current limits, and the joined
 // firing stats. A projected rule compiled at publish (publish fails closed otherwise), so
-// COMPILE_ERROR here means it stopped compiling AFTER publish — e.g. a tightened cost ceiling.
+// COMPILE_ERROR here means it stopped compiling AFTER publish — e.g. a lowered maxRuleDurationSeconds.
 func buildRuleHealth(rr model.DetectRule, stat model.RuleStat, hasStat bool, limits rules.Limits) *RuleHealthResolver {
 	rh := &RuleHealthResolver{
 		ruleID:    rr.RuleId,

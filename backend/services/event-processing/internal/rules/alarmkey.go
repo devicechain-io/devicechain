@@ -35,16 +35,11 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 )
-
-// alarmKeyCostCeilingBackstop is the runtime CostLimit stamped on a dispatch-built alarm-key
-// program — the runaway backstop, mirroring guardCostCeilingBackstop / templateCostCeilingBackstop
-// and carrying the same invariant: it must stay >= any per-tenant PredicateCostCeiling, or a
-// template that PASSES publish would trip this at every dispatch.
-const alarmKeyCostCeilingBackstop uint64 = 1_000
 
 var (
 	alarmKeyEnvOnce sync.Once
@@ -74,12 +69,17 @@ func AlarmKeyEnv() (*cel.Env, error) {
 // CompileAlarmKeyTemplate parses, type-checks and cost-gates an alarm-key template at publish,
 // requiring STRING output — the authoritative gate, mirroring CompileTemplate. A parse/type error
 // (including a reference to value/hasValue, which are undeclared in this env), a non-string result,
-// or a worst-case cost above the tenant ceiling rejects the rule. costCeiling is the per-tenant
-// ceiling the caller resolves (never zero/"unlimited" — the ADR-023 fail-safe).
+// or a worst-case cost above the platform ceiling (predicate.CostCeiling) rejects the rule.
 //
 // It does NOT and cannot check that the rendered key will satisfy the token grammar: the output
 // depends on the series, which is not known until dispatch. That check is Eval's (fail closed).
-func CompileAlarmKeyTemplate(source string, costCeiling uint64) (costMax uint64, err error) {
+func CompileAlarmKeyTemplate(source string) (costMax uint64, err error) {
+	return compileAlarmKeyTemplate(source, predicate.CostCeiling)
+}
+
+// compileAlarmKeyTemplate is CompileAlarmKeyTemplate at an arbitrary ceiling. Only this package's
+// tests call it with anything but predicate.CostCeiling; no production path can.
+func compileAlarmKeyTemplate(source string, costCeiling uint64) (costMax uint64, err error) {
 	env, err := AlarmKeyEnv()
 	if err != nil {
 		return 0, err
@@ -111,9 +111,9 @@ type CompiledAlarmKeyTemplate struct {
 
 // BuildAlarmKeyTemplateProgram builds an evaluable alarm-key template WITHOUT the publish-time cost
 // gate — for the REACT dispatcher, which re-derives the template from the durable rule projection
-// per dispatch (the tenant ceiling already gated it at publish). It still type-checks, requires
-// string output, and stamps a runtime CostLimit backstop, so a forged/hand-edited definition is
-// still rejected or bounded rather than trusted.
+// per dispatch (the platform ceiling already gated it at publish). It still type-checks, requires
+// string output, and stamps the runtime backstop (runtimeCostBackstop), so a forged/hand-edited
+// definition is still rejected or bounded rather than trusted.
 func BuildAlarmKeyTemplateProgram(source string) (*CompiledAlarmKeyTemplate, error) {
 	env, err := AlarmKeyEnv()
 	if err != nil {
@@ -126,7 +126,7 @@ func BuildAlarmKeyTemplateProgram(source string) (*CompiledAlarmKeyTemplate, err
 	if ast.OutputType() != cel.StringType {
 		return nil, fmt.Errorf("alarm-key template must evaluate to a string, got %s", ast.OutputType())
 	}
-	program, err := env.Program(ast, cel.CostLimit(alarmKeyCostCeilingBackstop))
+	program, err := env.Program(ast, cel.CostLimit(runtimeCostBackstop))
 	if err != nil {
 		return nil, fmt.Errorf("alarm-key template: build program: %w", err)
 	}

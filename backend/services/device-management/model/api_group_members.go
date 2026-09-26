@@ -93,7 +93,7 @@ func (api *Api) lowerSelectorSource(ctx context.Context, memberType, source stri
 	if !ok {
 		return "", nil, "", fmt.Errorf("unresolvable member family %q", memberType)
 	}
-	sel, err := selector.Compile(source, memberType, 0)
+	sel, err := selector.Compile(source, memberType)
 	if err != nil {
 		return "", nil, "", err
 	}

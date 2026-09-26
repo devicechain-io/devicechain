@@ -123,23 +123,23 @@ func TestConnectorActionDedup(t *testing.T) {
 // string output (rejecting a boolean) and enforces the cost ceiling.
 func TestCompileTemplateRequiresStringAndGatesCost(t *testing.T) {
 	// A constant string compiles.
-	if _, err := CompileTemplate(`"literal"`, 100); err != nil {
+	if _, err := CompileTemplate(`"literal"`); err != nil {
 		t.Fatalf("constant string template should compile: %v", err)
 	}
 	// A boolean is rejected — a template must render bytes, not a bit.
-	if _, err := CompileTemplate("hasValue", 100); err == nil || !strings.Contains(err.Error(), "string") {
+	if _, err := CompileTemplate("hasValue"); err == nil || !strings.Contains(err.Error(), "string") {
 		t.Fatalf("boolean template should be rejected as non-string, got %v", err)
 	}
 	// Cost gate: a template that estimates above the ceiling is rejected.
 	src := "series + series + series"
-	cost, err := CompileTemplate(src, 100_000)
+	cost, err := compileTemplate(src, 100_000)
 	if err != nil {
 		t.Fatalf("template should compile under a generous ceiling: %v", err)
 	}
 	if cost == 0 {
 		t.Fatal("expected a non-zero estimated cost for a concatenation template")
 	}
-	if _, err := CompileTemplate(src, cost-1); err == nil || !strings.Contains(err.Error(), "cost") {
+	if _, err := compileTemplate(src, cost-1); err == nil || !strings.Contains(err.Error(), "cost") {
 		t.Fatalf("template over the ceiling should be rejected, got %v", err)
 	}
 }

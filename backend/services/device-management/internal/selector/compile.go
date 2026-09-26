@@ -10,11 +10,10 @@ import (
 )
 
 const (
-	// DefaultCostCeiling is the platform-default static worst-case CEL cost a selector
-	// may estimate to. A caller resolving a per-tenant override MUST pass the resolved
-	// ceiling; a missing/zero override maps to this default here, NEVER to "unlimited"
-	// (the ADR-023 fail-safe posture, mirroring event-processing's predicate ceiling).
-	DefaultCostCeiling uint64 = 100
+	// CostCeiling is the platform ceiling on a selector's static worst-case CEL cost. It is
+	// one value for the whole instance: no tenant, tier or operator setting changes it. It
+	// is the same value as event-processing's detection-rule expression ceiling.
+	CostCeiling uint64 = 100
 
 	// MaxSelectorLeaves caps the number of facet comparisons a selector may carry — i.e.
 	// the number of EXISTS semi-joins the lowered query will run. It is the fail-closed
@@ -77,17 +76,17 @@ func (s *Selector) Keys() []string {
 
 // Compile parses, type-checks, cost-gates, and proves-lowerable a dynamic-group selector
 // against the shared selector environment for the given member family. It fails closed: a
-// parse/type error, a non-boolean result, a worst-case cost above costCeiling, a node
+// parse/type error, a non-boolean result, a worst-case cost above CostCeiling, a node
 // outside the facet-predicate subset, or more than MaxSelectorLeaves facet leaves all
 // reject the selector at publish with a console-surfaceable message. A selector that clears
 // Compile is guaranteed to lower to an indexed SQL predicate (Lower).
-//
-// costCeiling is the per-tenant ceiling resolved by the caller; a zero value resolves to
-// DefaultCostCeiling (never unlimited).
-func Compile(source, memberType string, costCeiling uint64) (*Selector, error) {
-	if costCeiling == 0 {
-		costCeiling = DefaultCostCeiling
-	}
+func Compile(source, memberType string) (*Selector, error) {
+	return compile(source, memberType, CostCeiling)
+}
+
+// compile is Compile at an arbitrary ceiling. Only this package's tests call it with
+// anything but CostCeiling; no production path can.
+func compile(source, memberType string, costCeiling uint64) (*Selector, error) {
 	env, err := Env()
 	if err != nil {
 		return nil, err

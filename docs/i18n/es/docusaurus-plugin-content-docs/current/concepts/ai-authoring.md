@@ -18,7 +18,7 @@ La mutación `draftDetectionRuleFromText` llama al servicio de IA y ejecuta un c
 
 ## Cómo se verifica una regla redactada {#ai-proposes-the-compiler-disposes}
 
-Cada superficie de autoría produce una regla candidata. Después, el **compilador CEL** la analiza, verifica sus tipos y le aplica límites de costo antes de que pueda guardarse. Una regla mal formada, con tipos incorrectos o que supere el tope de costo de un inquilino es **rechazada al publicar, antes de llegar a ejecutarse**. La puerta de IA no es la excepción: el modelo propone una candidata, y el compilador la acepta o la rechaza exactamente igual que una regla dibujada a mano en el lienzo.
+Cada superficie de autoría produce una regla candidata. Después, el **compilador CEL** la analiza, verifica sus tipos y le aplica límites de costo antes de que pueda guardarse. Una regla mal formada, con tipos incorrectos o que supere el tope de costo de la plataforma es **rechazada al publicar, antes de llegar a ejecutarse**. La puerta de IA no es la excepción: el modelo propone una candidata, y el compilador la acepta o la rechaza exactamente igual que una regla dibujada a mano en el lienzo.
 
 Este es el **límite de determinismo**, y es una línea firme:
 

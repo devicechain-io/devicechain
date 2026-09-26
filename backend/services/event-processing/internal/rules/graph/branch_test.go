@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
@@ -239,5 +240,66 @@ func TestBranchRejects(t *testing.T) {
 				t.Fatalf("diagnostic node id = %q, want %q (msg: %s)", ce.Diagnostics[0].NodeID, tc.wantNodeID, ce.Diagnostics[0].Message)
 			}
 		})
+	}
+}
+
+// TestBranchGuardIsGatedAtThePlatformCeiling pins the canvas branch gate to the platform cost
+// ceiling, for an UNWIRED branch as well as a wired one: the up-front validation must refuse a
+// guard over the ceiling on the branch's own node id, and a wired branch a term shorter compiles. No
+// estimator figure is pinned; the guard grows one term at a time until the guard compiler
+// itself refuses it, so the test holds whatever the estimator charges per term.
+func TestBranchGuardIsGatedAtThePlatformCeiling(t *testing.T) {
+	guard := func(n int) string {
+		return "size(" + strings.TrimSuffix(strings.Repeat("series + ", n), " + ") + ") > 0"
+	}
+	n := 1
+	for ; n <= 64; n++ {
+		if _, err := rules.CompileGuard(guard(n)); err != nil {
+			if !strings.Contains(err.Error(), "exceeds the ceiling 100") {
+				t.Fatalf("%d terms: the guard was refused for something other than the ceiling of 100: %v", n, err)
+			}
+			break
+		}
+	}
+	if n > 64 {
+		t.Fatal("no guard of up to 64 terms was refused at the ceiling; the step is wrong")
+	}
+	if n == 1 {
+		t.Fatal("a single term is already over the ceiling, so there is no shorter guard to accept")
+	}
+
+	orphan := func(when string) CanvasDefinition {
+		return canvas(
+			[]Node{src("s"), hotThreshold("c"), raiseAlarm("a", "k"), branch("b", when)},
+			Edge{From: "s:out", To: "c:in"},
+			Edge{From: "c:signal", To: "a:in"},
+		)
+	}
+	wired := func(when string) CanvasDefinition {
+		return canvas(
+			[]Node{src("s"), hotThreshold("c"), branch("b", when), raiseAlarm("a", "k")},
+			Edge{From: "s:out", To: "c:in"},
+			Edge{From: "c:signal", To: "b:in"},
+			Edge{From: "b:out", To: "a:in"},
+		)
+	}
+	for name, def := range map[string]CanvasDefinition{"unwired": orphan(guard(n)), "wired": wired(guard(n))} {
+		_, err := Compile(def, profile, rules.DefaultLimits())
+		var ce *CompileError
+		if !errors.As(err, &ce) {
+			t.Fatalf("%s: a branch over the ceiling compiled: got %T %v, want a *CompileError", name, err, err)
+		}
+		found := false
+		for _, d := range ce.Diagnostics {
+			if d.NodeID == "b" && strings.Contains(d.Message, "exceeds the ceiling 100") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no ceiling refusal on the branch among %+v", name, ce.Diagnostics)
+		}
+	}
+	if _, err := Compile(wired(guard(n-1)), profile, rules.DefaultLimits()); err != nil {
+		t.Fatalf("a branch within the ceiling was refused: %v", err)
 	}
 }

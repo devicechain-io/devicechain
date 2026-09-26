@@ -4,6 +4,7 @@
 package predicate
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -49,13 +50,32 @@ func TestMetricRefsComplete(t *testing.T) {
 // false and the caller must fall back to feeding every event rather than risk dropping a raise.
 func TestMetricRefsIncomplete(t *testing.T) {
 	cases := []string{
-		`m[device] > 30.0`,          // dynamic index key
-		`size(m) > 3`,               // whole-map operation
-		`m.exists(k, m[k] > 100.0)`, // comprehension iterating m
-		`m.all(k, m[k] >= 0.0)`,     // comprehension iterating m
+		`m[device] > 30.0`, // dynamic index key
+		`size(m) > 3`,      // whole-map operation
 	}
 	for _, src := range cases {
 		p := mustCompile(t, src)
+		if _, complete := p.MetricRefs(); complete {
+			t.Errorf("%q: complete=true, want false (opaque m use)", src)
+		}
+	}
+
+	// A comprehension over m estimates far above CostCeiling (m is bounded at MaxMapElements
+	// entries), so no such leaf can be published and Compile refuses these. The analysis
+	// still has to classify them as opaque: its answer must not depend on the ceiling
+	// happening to keep them out, or raising the ceiling would silently start dropping
+	// raises. So these are compiled past the gate, to test the analysis and nothing else.
+	for _, src := range []string{
+		`m.exists(k, m[k] > 100.0)`, // comprehension iterating m
+		`m.all(k, m[k] >= 0.0)`,     // comprehension iterating m
+	} {
+		if _, err := Compile(src); err == nil {
+			t.Errorf("%q compiled at the platform ceiling; move it to the table above", src)
+		}
+		p, err := compile(src, math.MaxUint64)
+		if err != nil {
+			t.Fatalf("compile %q past the gate: %v", src, err)
+		}
 		if _, complete := p.MetricRefs(); complete {
 			t.Errorf("%q: complete=true, want false (opaque m use)", src)
 		}

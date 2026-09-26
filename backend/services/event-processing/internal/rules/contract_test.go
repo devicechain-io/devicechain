@@ -173,7 +173,7 @@ func TestBuildEventCarriesGateSampleForThreshold(t *testing.T) {
 func TestCompileErrorAnchoring(t *testing.T) {
 	// A raw-CEL leaf that trips the cost ceiling.
 	_, err := Compile(Rule{ID: "r7", Name: "big", Type: TypeThreshold,
-		When: Condition{CEL: `m.all(k, m[k] > 0.0)`}}, Limits{PredicateCostCeiling: 5})
+		When: Condition{CEL: `m.all(k, m[k] > 0.0)`}}, Limits{})
 	if err == nil {
 		t.Fatal("expected a cost rejection")
 	}

@@ -24,6 +24,8 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker"
 	"github.com/google/cel-go/ext"
+
+	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 )
 
 // The variable names the guard environment declares — the whole vocabulary a guard may
@@ -46,11 +48,6 @@ const (
 	// lands.
 	GuardVarSeries = "series"
 )
-
-// guardCostCeilingBackstop is the runtime CostLimit stamped on a dispatch-built guard program. The
-// AUTHORITATIVE cost gate is the publish-time EstimateCost check in CompileGuard against the
-// tenant ceiling; this is only the runaway backstop on the Program, generous for any real guard.
-const guardCostCeilingBackstop uint64 = 1_000
 
 var (
 	guardEnv     *cel.Env
@@ -105,9 +102,14 @@ const guardSeriesMaxLen = 256
 // environment — the publish-time gate, mirroring predicate.Compile's fail-closed posture: a
 // parse/type error, a non-boolean result, or a worst-case cost above the ceiling rejects the
 // rule. It returns the estimated worst-case cost (for operator introspection); the caller (the
-// publish gate) uses only the error. costCeiling is the per-tenant ceiling resolved by the caller
-// (never zero/"unlimited" — the ADR-023 fail-safe).
-func CompileGuard(source string, costCeiling uint64) (costMax uint64, err error) {
+// publish gate) uses only the error. The ceiling is the platform's, predicate.CostCeiling.
+func CompileGuard(source string) (costMax uint64, err error) {
+	return compileGuard(source, predicate.CostCeiling)
+}
+
+// compileGuard is CompileGuard at an arbitrary ceiling. Only this package's tests call it with
+// anything but predicate.CostCeiling; no production path can.
+func compileGuard(source string, costCeiling uint64) (costMax uint64, err error) {
 	env, err := GuardEnv()
 	if err != nil {
 		return 0, err
@@ -138,10 +140,10 @@ type CompiledGuard struct {
 
 // BuildGuardProgram builds an evaluable guard WITHOUT the publish-time cost gate — for the REACT
 // dispatcher, which re-derives a guard from the durable rule projection per dispatch and only needs
-// to run it (the tenant cost ceiling already gated it at publish, and the dispatcher does not know
-// per-tenant ceilings). It still type-checks, requires a boolean output, and stamps a generous
-// runtime CostLimit backstop, so a forged/hand-edited non-boolean or runaway guard is still
-// rejected/bounded rather than trusted.
+// to run it (the platform ceiling, predicate.CostCeiling, already gated it at publish). It still
+// type-checks, requires a boolean output, and stamps the runtime backstop (runtimeCostBackstop),
+// so a forged/hand-edited non-boolean or runaway guard is still rejected/bounded rather than
+// trusted.
 func BuildGuardProgram(source string) (*CompiledGuard, error) {
 	env, err := GuardEnv()
 	if err != nil {
@@ -154,7 +156,7 @@ func BuildGuardProgram(source string) (*CompiledGuard, error) {
 	if ast.OutputType() != cel.BoolType {
 		return nil, fmt.Errorf("guard must evaluate to a boolean, got %s", ast.OutputType())
 	}
-	program, err := env.Program(ast, cel.CostLimit(guardCostCeilingBackstop))
+	program, err := env.Program(ast, cel.CostLimit(runtimeCostBackstop))
 	if err != nil {
 		return nil, fmt.Errorf("guard: build program: %w", err)
 	}

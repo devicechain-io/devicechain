@@ -72,7 +72,7 @@ func TestGeoIsOpaqueToTheRuleLanguage(t *testing.T) {
 		`geo.fences()`,            // any other member
 		`geo.inFence("yard") > 0`, // a non-boolean leaf
 	} {
-		if _, err := Compile(src, testCeiling); err == nil {
+		if _, err := Compile(src); err == nil {
 			t.Errorf("%q compiled; the geo binding must expose nothing but inFence(string)->bool", src)
 		}
 	}
@@ -85,7 +85,7 @@ func TestGeoIsOpaqueToTheRuleLanguage(t *testing.T) {
 // tenant or miss (an error). It is asserted rather than left implicit because "only literals are
 // allowed" would be a comfortable and false thing to believe.
 func TestInFenceAcceptsOnlyATokenItIsGiven(t *testing.T) {
-	p, err := Compile(`geo.inFence(device)`, testCeiling)
+	p, err := Compile(`geo.inFence(device)`)
 	if err != nil {
 		t.Fatalf("a computed fence token did not compile: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestSchemaVersionCoversTheGeoDeclarations(t *testing.T) {
 	if SchemaVersion != 3 {
 		t.Fatalf("SchemaVersion = %d, want 3 (geo + inFence entered the declared shape)", SchemaVersion)
 	}
-	if _, err := Compile(`geo.inFence("yard")`, testCeiling); err != nil {
+	if _, err := Compile(`geo.inFence("yard")`); err != nil {
 		t.Fatalf("the version claims geo is declared, but a geo leaf does not compile: %v", err)
 	}
 }

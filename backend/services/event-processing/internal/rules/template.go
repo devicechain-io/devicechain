@@ -23,19 +23,9 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/checker"
-)
 
-// templateCostCeilingBackstop is the runtime CostLimit stamped on a dispatch-built template
-// program — the runaway backstop, mirroring guardCostCeilingBackstop. The AUTHORITATIVE gate is the
-// publish-time EstimateCost in CompileTemplate against the per-tenant ceiling.
-//
-// INVARIANT (shared with guard.go): this fixed backstop must stay >= any per-tenant
-// PredicateCostCeiling. Today PredicateCostCeiling is the hardcoded default 100 (no override wiring
-// yet), so 1000 is ample headroom. When the ADR-023 per-tenant-override slice lets an operator
-// raise a tenant's ceiling ABOVE 1000, this must become ceiling-derived (as the DETECT predicate
-// already stamps CostLimit(costCeiling)) — otherwise a template/guard that PASSES publish (estimate
-// <= a >1000 ceiling) would trip this fixed backstop and fail at every dispatch.
-const templateCostCeilingBackstop uint64 = 1_000
+	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
+)
 
 // templateConvMaxLen bounds the estimated output length of a scalar→string conversion (string(value)
 // / string(hasValue)). A finite double stringifies to at most ~24 chars, a bool to 5; 64 is a safe
@@ -73,9 +63,15 @@ func (templateEstimator) EstimateCallCost(function, overloadID string, target *c
 // REACT derived-event environment (the same env a guard uses), requiring STRING output. It is the
 // publish-time gate, mirroring CompileGuard: a parse/type error, a non-string result, or a
 // worst-case cost above the ceiling rejects the rule (fail-closed, so a runaway template never
-// reaches the dispatcher). costCeiling is the per-tenant ceiling the caller resolves (never
-// zero/"unlimited" — the ADR-023 fail-safe). Returns the estimated worst-case cost.
-func CompileTemplate(source string, costCeiling uint64) (costMax uint64, err error) {
+// reaches the dispatcher). The ceiling is the platform's, predicate.CostCeiling. Returns the
+// estimated worst-case cost.
+func CompileTemplate(source string) (costMax uint64, err error) {
+	return compileTemplate(source, predicate.CostCeiling)
+}
+
+// compileTemplate is CompileTemplate at an arbitrary ceiling. Only this package's tests call it
+// with anything but predicate.CostCeiling; no production path can.
+func compileTemplate(source string, costCeiling uint64) (costMax uint64, err error) {
 	env, err := GuardEnv()
 	if err != nil {
 		return 0, err
@@ -106,9 +102,9 @@ type CompiledTemplate struct {
 
 // BuildTemplateProgram builds an evaluable template WITHOUT the publish-time cost gate — for the
 // REACT dispatcher, which re-derives a template from the durable rule projection per dispatch and
-// only needs to render it (the tenant ceiling already gated it at publish). It still type-checks,
-// requires string output, and stamps a generous runtime CostLimit backstop, so a forged/hand-edited
-// non-string or runaway template is still rejected/bounded rather than trusted.
+// only needs to render it (the platform ceiling already gated it at publish). It still type-checks,
+// requires string output, and stamps the runtime backstop (runtimeCostBackstop), so a
+// forged/hand-edited non-string or runaway template is still rejected/bounded rather than trusted.
 func BuildTemplateProgram(source string) (*CompiledTemplate, error) {
 	env, err := GuardEnv()
 	if err != nil {
@@ -121,7 +117,7 @@ func BuildTemplateProgram(source string) (*CompiledTemplate, error) {
 	if ast.OutputType() != cel.StringType {
 		return nil, fmt.Errorf("template must evaluate to a string, got %s", ast.OutputType())
 	}
-	program, err := env.Program(ast, cel.CostLimit(templateCostCeilingBackstop))
+	program, err := env.Program(ast, cel.CostLimit(runtimeCostBackstop))
 	if err != nil {
 		return nil, fmt.Errorf("template: build program: %w", err)
 	}

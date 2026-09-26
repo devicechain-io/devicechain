@@ -20,9 +20,9 @@ func (e *CompileError) Error() string {
 func (e *CompileError) Unwrap() error { return e.Err }
 
 // CostError is a publish-time rejection of a selector whose worst-case evaluation cost
-// exceeds the per-tenant ceiling, or that carries more facet leaves than MaxSelectorLeaves.
-// It is the fail-closed guard (ADR-023) against an author publishing a selector whose
-// resolved query would carry an unbounded number of EXISTS semi-joins.
+// exceeds CostCeiling. It is the fail-closed guard (ADR-023) against an author publishing
+// an expensive selector. (A selector carrying more facet leaves than MaxSelectorLeaves is
+// refused separately, as a NotLowerableError.)
 type CostError struct {
 	Source       string
 	EstimatedMax uint64

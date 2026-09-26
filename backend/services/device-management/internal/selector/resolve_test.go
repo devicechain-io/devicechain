@@ -167,7 +167,7 @@ func TestLowering_MatchesReferenceEvaluator(t *testing.T) {
 	}
 
 	for _, src := range selectors {
-		sel, err := Compile(src, "device", 1000)
+		sel, err := Compile(src, "device")
 		if err != nil {
 			t.Fatalf("compile %q: %v", src, err)
 		}

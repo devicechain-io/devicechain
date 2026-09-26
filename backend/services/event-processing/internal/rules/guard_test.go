@@ -8,9 +8,8 @@ import "testing"
 func f64(v float64) *float64 { return &v }
 
 // TestCompileGuard is the publish-time gate: a valid boolean over the guard vocabulary compiles; a
-// non-boolean, an undeclared identifier, and a guard over the cost ceiling all reject (fail closed).
+// non-boolean, an undeclared identifier and a parse error all reject (fail closed).
 func TestCompileGuard(t *testing.T) {
-	const ceiling = 100
 	ok := []string{
 		`value > 100.0`,
 		`hasValue && value > 100.0`,
@@ -18,7 +17,7 @@ func TestCompileGuard(t *testing.T) {
 		`!hasValue || value <= 0.0`,
 	}
 	for _, src := range ok {
-		if _, err := CompileGuard(src, ceiling); err != nil {
+		if _, err := CompileGuard(src); err != nil {
 			t.Errorf("CompileGuard(%q): unexpected error: %v", src, err)
 		}
 	}
@@ -32,15 +31,11 @@ func TestCompileGuard(t *testing.T) {
 		{"parse error", `value >`},
 	}
 	for _, tc := range bad {
-		if _, err := CompileGuard(tc.src, ceiling); err == nil {
+		if _, err := CompileGuard(tc.src); err == nil {
 			t.Errorf("CompileGuard(%q) [%s]: expected an error", tc.src, tc.name)
 		}
 	}
-	// The cost gate: a real guard estimates a positive cost, so a zero ceiling rejects it (never
-	// "unlimited" — the ADR-023 fail-safe the caller must respect by flooring before this call).
-	if _, err := CompileGuard(`value > 100.0`, 0); err == nil {
-		t.Error("CompileGuard with a zero ceiling should reject a cost-bearing guard")
-	}
+	// The cost gate at the platform ceiling is pinned in cost_ceiling_test.go.
 }
 
 // TestGuardEval proves the value/hasValue/series binding: a nil value binds hasValue=false and

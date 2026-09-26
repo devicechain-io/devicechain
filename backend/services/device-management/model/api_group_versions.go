@@ -65,7 +65,7 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 	// Re-compile + cost-gate the draft one last time before freezing: the selector was
 	// already vetted at create/update, but re-checking here guarantees validated ≡
 	// frozen even if the selector-env schema advanced since the draft was last written.
-	sel, err := selector.Compile(group.Selector.String, group.MemberType, 0)
+	sel, err := selector.Compile(group.Selector.String, group.MemberType)
 	if err != nil {
 		return nil, err
 	}
