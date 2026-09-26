@@ -682,8 +682,9 @@ The same two minutes also cover a known issue in the database operator. An insta
 PostgreSQL down cleanly and then fail to exit: its log ends with
 `failed waiting for all runnables to end within grace period of 30s`, and its pod stays
 `Terminating` although the database has stopped. Nothing is wrong with the data, and the pod is
-removed when the two minutes are up. A pod that was created before this limit was introduced
-still carries thirty minutes; the
+removed when the two minutes are up. A pod that does not yet carry this limit (one created before
+it was introduced, or any instance of an event store that has not been patched as the release notes
+describe) still carries thirty minutes; the
 [release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds) say how to
 recognise that case and clear it.
 
@@ -719,6 +720,10 @@ happens:
   at that moment fail, and a device posting over HTTP can see some `503` responses and should
   retry. New connections through the broker's service can keep failing intermittently for about
   45 seconds, until Kubernetes marks the node as lost and stops routing to the server on it.
+- **Event processing can pause for about a minute.** If the lost node's broker server led the
+  stream of incoming events, devices' events keep being accepted, but resolving them can stall
+  for about a minute, with no error reported, before it resumes and works through the backlog.
+  Nothing is lost; alarms and stored events for that minute arrive late.
 - **Service pods move after about a minute and a quarter.** Kubernetes first takes roughly 40 to
   50 seconds to decide that the node is lost. Each service pod on it is then evicted after
   `nodeLossTolerationSeconds` (30 by default; `null` restores Kubernetes' own 300) and started on
@@ -733,7 +738,7 @@ happens:
   [stopping a primary](#ha-database-failover), because nothing tells the operator the primary is
   gone; in testing, with the operator itself on a surviving node, a new primary was writable
   about two minutes after the node was lost. Events wait in the messaging layer meanwhile.
-- **Pods on the lost node show `Terminating` until it returns.** Kubernetes cannot confirm that
+- **Evicted pods on the lost node show `Terminating` until it returns.** Kubernetes cannot confirm that
   they have stopped, so it leaves them there. Do not force-delete a pod whose node is
   unreachable: for a database instance or a broker server, that lets a replacement start while
   the original may still be running on the other side of the fault. If the machine is gone for

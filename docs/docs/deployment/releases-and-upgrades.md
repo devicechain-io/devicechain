@@ -2824,7 +2824,8 @@ See [Event persistence](./observability.md#event-persistence).
 
 Nothing changes in behaviour. Under `--ha`, [losing a node](./bootstrap.md#ha-node-loss) now
 describes, in order, what an operator sees: how quickly the broker, the services and the
-databases recover, why pods on the lost node stay `Terminating` and must not be force-deleted
+databases recover, that event processing can pause for about a minute, why evicted pods on the
+lost node stay `Terminating` and must not be force-deleted
 while it is unreachable, and that a node's **return** is itself a short disruption. A broker
 server that was cut off comes back having held elections on its own, and the other servers
 elect their leaders again when it rejoins: expect a few seconds of "temporarily unavailable"

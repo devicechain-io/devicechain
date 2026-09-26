@@ -3026,7 +3026,8 @@ defecto `5`). Consulte [Persistencia de eventos](./observability.md#event-persis
 
 El comportamiento no cambia. Con `--ha`, [perder un nodo](./bootstrap.md#ha-node-loss) describe
 ahora, en orden, lo que ve un operador: con qué rapidez se recuperan el broker, los servicios y
-las bases de datos, por qué los pods del nodo perdido se quedan en `Terminating` y no deben
+las bases de datos, que el procesamiento de eventos puede detenerse durante un minuto, por qué
+los pods desalojados del nodo perdido se quedan en `Terminating` y no deben
 eliminarse a la fuerza mientras el nodo sea inaccesible, y que la **vuelta** de un nodo es en sí
 misma una interrupción breve. Un servidor del broker que quedó aislado vuelve tras haber
 celebrado elecciones por su cuenta, y los demás servidores vuelven a elegir a sus líderes cuando

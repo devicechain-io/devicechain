@@ -730,8 +730,9 @@ Los mismos dos minutos cubren también un problema conocido del operador de base
 instancia puede apagar PostgreSQL correctamente y después no terminar: su registro acaba con
 `failed waiting for all runnables to end within grace period of 30s`, y su pod se queda en
 `Terminating` aunque la base de datos ya se ha detenido. Los datos no tienen ningún problema, y
-el pod se elimina al cumplirse los dos minutos. Un pod creado antes de que se introdujera este
-límite sigue teniendo treinta minutos; las
+el pod se elimina al cumplirse los dos minutos. Un pod que aún no tiene este límite (uno creado
+antes de que se introdujera, o cualquier instancia de un almacén de eventos que no se haya
+modificado como describen las notas de la versión) sigue teniendo treinta minutos; las
 [notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds) explican
 cómo reconocer ese caso y resolverlo.
 
@@ -769,6 +770,11 @@ real.
   través del servicio del broker pueden seguir fallando de forma intermitente durante unos 45
   segundos, hasta que Kubernetes da el nodo por perdido y deja de dirigir tráfico al servidor que
   había en él.
+- **El procesamiento de eventos puede detenerse durante un minuto, aproximadamente.** Si el
+  servidor del broker del nodo perdido era el líder del stream de eventos entrantes, los eventos
+  de los dispositivos se siguen aceptando, pero su resolución puede detenerse durante un minuto,
+  sin que se notifique ningún error, antes de reanudarse y procesar lo acumulado. No se pierde
+  nada; las alarmas y los eventos almacenados de ese minuto llegan con retraso.
 - **Los pods de los servicios se mueven al cabo de un minuto y cuarto, aproximadamente.**
   Kubernetes tarda primero entre 40 y 50 segundos en dar el nodo por perdido. Después desaloja
   cada pod de servicio de ese nodo al cabo de `nodeLossTolerationSeconds` (30 por defecto; `null`
@@ -785,7 +791,7 @@ real.
   ha desaparecido; en las pruebas, con el propio operador en un nodo superviviente, la nueva
   primaria aceptaba escrituras unos dos minutos después de perder el nodo. Mientras tanto, los
   eventos esperan en la capa de mensajería.
-- **Los pods del nodo perdido aparecen en `Terminating` hasta que vuelve.** Kubernetes no puede
+- **Los pods desalojados del nodo perdido aparecen en `Terminating` hasta que vuelve.** Kubernetes no puede
   confirmar que se han detenido, así que los deja ahí. No elimines a la fuerza un pod cuyo nodo
   es inaccesible: en el caso de una instancia de base de datos o de un servidor del broker, eso
   permite que arranque un sustituto mientras el original puede seguir ejecutándose al otro lado
