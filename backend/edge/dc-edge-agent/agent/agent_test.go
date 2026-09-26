@@ -104,7 +104,7 @@ func newCloudBroker(t *testing.T, mqttPort int, storeDir string) *natsserver.Ser
 // broker running for the whole test.
 func startCloudBroker(t *testing.T, mqttPort int) {
 	t.Helper()
-	srv := newCloudBroker(t, mqttPort, t.TempDir())
+	srv := newCloudBroker(t, mqttPort, dctest.JetStreamStoreDir(t))
 	t.Cleanup(srv.Shutdown)
 }
 
@@ -444,7 +444,7 @@ func TestForwardFailureLeavesEventBufferedWithStableKey(t *testing.T) {
 // exactly once. A never-severed run would not exercise the buffer at all.
 func TestBuffersAcrossOutageAndRestart(t *testing.T) {
 	cloudPort := freePort(t)
-	cloudStore := t.TempDir()
+	cloudStore := dctest.JetStreamStoreDir(t)
 	srv := newCloudBroker(t, cloudPort, cloudStore)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 	cloudURL := fmt.Sprintf("tcp://%s", cloudAddr)
@@ -649,7 +649,7 @@ func httpGet(t *testing.T, url string) (int, string) {
 // fails (max seq ≠ nEvents-1); zero the drop computation ⇒ dropped_total ≠ published−received.
 func TestSpoolBoundedRingBufferDropsOldestVisibly(t *testing.T) {
 	cloudPort := freePort(t)
-	cloudStore := t.TempDir()
+	cloudStore := dctest.JetStreamStoreDir(t)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 	cloudURL := fmt.Sprintf("tcp://%s", cloudAddr)
 	storeDir := dctest.JetStreamStoreDir(t) // shared across the restart; the spool lives here
@@ -1189,7 +1189,7 @@ func TestStoreArtifactsArePrivate(t *testing.T) {
 // the post-reconnect payload is byte-identical.
 func TestUplinkReconnectsAndResumesForwarding(t *testing.T) {
 	cloudPort := freePort(t)
-	cloudStore := t.TempDir()
+	cloudStore := dctest.JetStreamStoreDir(t)
 	srv := newCloudBroker(t, cloudPort, cloudStore)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 

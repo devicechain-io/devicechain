@@ -31,8 +31,10 @@
 # copy of `go test` that reports success forever. --self-test builds a program
 # with a known race, runs it through the same command the step runs, and requires
 # a DATA RACE report; it also runs a race-free control, because a checker that
-# fails on everything proves nothing either. It runs in `discover`, before the
-# matrix fans out.
+# fails on everything proves nothing either. Both go through do_module, the same
+# entry point the step calls, against a throwaway go.work holding the probes, so
+# the self-test proves the step's own call and not a copy of it. It runs in
+# `discover`, before the matrix fans out.
 #
 # This replaced backend/services/device-management/.github/workflows/test.yaml,
 # a workflow inherited from that service's pre-monorepo repository. It ran
@@ -42,12 +44,17 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HACK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The workspace this script reports on. The self-test points it at a throwaway
+# workspace of probe modules, so everything that reads the workspace reads it
+# through ROOT.
+ROOT="$(cd "$HACK/.." && pwd)"
 
-# The ONE command the race step runs, and the one the self-test proves. Both go
-# through race_test and nothing else: a second spelling of the command is how
-# `-race` could be deleted from the step while the self-test, which ran its own
-# copy, stayed green.
+# The ONE command the race step runs. do_module runs it through race_test, and the
+# self-test drives do_module itself on a module with a known race: a second
+# spelling of the command in do_module is how `-race` could be deleted from the
+# step while a self-test that ran its own copy stayed green, and driving the step's
+# own entry point is what closes that.
 #
 # -count=1 for the same reason every other test gate in this repo passes it: `go
 # test` does not track files outside the module, so a cached pass can survive a
@@ -127,7 +134,7 @@ verdict_for() {
 # go.work membership, read through the toolchain-free reader so this works in a
 # job with no Go installed (--list is called from one).
 workspace_modules() {
-  "$ROOT/hack/list-workspace-modules.sh" | sed 's|^\./||'
+  "$HACK/list-workspace-modules.sh" "$ROOT/go.work" | sed 's|^\./||'
 }
 
 # ---------------------------------------------------------------------------
@@ -223,17 +230,30 @@ do_self_test() {
   # shellcheck disable=SC2064 # expand tmp now, not at trap time
   trap "rm -rf '$tmp'" EXIT
 
-  mkdir -p "$tmp/racy" "$tmp/clean"
-  cat > "$tmp/go.mod" <<'EOF'
-module racecheckprobe
-
+  # A throwaway workspace of probe modules, each its own module in its own go.work
+  # entry, so do_module -- the step's own entry point -- can be driven on them
+  # exactly as the step drives it on a real module.
+  local ws="$tmp/ws" m
+  for m in racy clean skipped; do
+    mkdir -p "$ws/$m"
+    printf 'module racecheckprobe/%s\n\ngo 1.26\n' "$m" > "$ws/$m/go.mod"
+  done
+  cat > "$ws/go.work" <<'EOF'
 go 1.26
+
+use (
+	./racy
+	./clean
+	./skipped
+)
 EOF
 
   # An unsynchronised read-modify-write from two goroutines. Nothing subtle: the
   # point is a report the detector is certain to produce, so that its ABSENCE is
-  # unambiguous evidence the instrumentation is not on.
-  cat > "$tmp/racy/racy_test.go" <<'EOF'
+  # unambiguous evidence the instrumentation is not on. `skipped` carries the same
+  # race, so running an exempt module anyway is a failure too.
+  for m in racy skipped; do
+    cat > "$ws/$m/racy_test.go" <<'EOF'
 package racy
 
 import (
@@ -257,11 +277,12 @@ func TestUnsynchronisedCounter(t *testing.T) {
 	_ = n
 }
 EOF
+  done
 
   # The counterweight. A checker that reports DATA RACE on everything would pass
   # the case above and be worthless, so the same toolchain must also come back
   # clean on the same shape done correctly.
-  cat > "$tmp/clean/clean_test.go" <<'EOF'
+  cat > "$ws/clean/clean_test.go" <<'EOF'
 package clean
 
 import (
@@ -293,20 +314,37 @@ func TestSynchronisedCounter(t *testing.T) {
 }
 EOF
 
-  echo "==> Self-test: a known race must be REPORTED by the step's own command"
+  # probe <exempt set> <command...> runs a command of this script against the
+  # probe workspace with the given exempt set, in a subshell so neither leaks.
+  # GOWORK is unset so the go command finds the probe's go.work from the module
+  # directory, as it finds the real one in CI.
+  probe() {
+    local set="$1"
+    shift
+    (
+      # shellcheck disable=SC2030 # local to this subshell on purpose
+      ROOT="$ws"
+      # shellcheck disable=SC2317 # called indirectly, through the command run below
+      exempt_modules() { printf '%s\n' "$set"; }
+      unset GOWORK
+      "$@"
+    )
+  }
+  local probe_set='skipped|probe: exempt on purpose'
+
+  echo "==> Self-test: the step's entry point must REPORT a known race"
   local out rc
-  # GOWORK=off so the probe is built as its own module rather than being refused
-  # for sitting outside the workspace.
   set +e
-  out="$(cd "$tmp" && GOWORK=off race_test ./racy 2>&1)"
+  out="$(probe "$probe_set" do_module racy 2>&1)"
   rc=$?
   set -e
   if [ "$rc" -eq 0 ]; then
-    echo "  FAIL: a program with an unsynchronised counter passed under: ${RACE_TEST[*]}" >&2
+    echo "  FAIL: a module with an unsynchronised counter passed the race step:" >&2
+    echo "        ${RACE_TEST[*]}" >&2
     echo "        The detector is not instrumenting this build, so every green" >&2
-    echo "        race step in this workflow means nothing. Check that the command" >&2
-    echo "        passes -race, that cgo is enabled (CGO_ENABLED=1) and that a C" >&2
-    echo "        compiler is installed." >&2
+    echo "        race step in this workflow means nothing. Check that do_module" >&2
+    echo "        runs race_test, that RACE_TEST passes -race, that cgo is enabled" >&2
+    echo "        (CGO_ENABLED=1) and that a C compiler is installed." >&2
     echo "$out" >&2
     return 1
   fi
@@ -319,11 +357,19 @@ EOF
       return 1
       ;;
   esac
+  case "$out" in
+    *"race: COVERED racy -- "*) ;;
+    *)
+      echo "  FAIL: the race step failed on the probe without its COVERED verdict line." >&2
+      echo "$out" >&2
+      return 1
+      ;;
+  esac
   echo "  ok: DATA RACE reported, exit status $rc"
 
   echo "==> Self-test: correctly synchronised code must stay GREEN"
   set +e
-  out="$(cd "$tmp" && GOWORK=off race_test ./clean 2>&1)"
+  out="$(probe "$probe_set" do_module clean 2>&1)"
   rc=$?
   set -e
   if [ "$rc" -ne 0 ]; then
@@ -333,6 +379,48 @@ EOF
     return 1
   fi
   echo "  ok: no report on synchronised code"
+
+  echo "==> Self-test: an exempt module is NOT run, and says so"
+  set +e
+  out="$(probe "$probe_set" do_module skipped 2>&1)"
+  rc=$?
+  set -e
+  case "$out" in
+    *"race: NOT COVERED skipped -- exempt (hack/go-race.sh): probe: exempt on purpose"*) ;;
+    *)
+      echo "  FAIL: an exempt module did not print its NOT COVERED verdict:" >&2
+      echo "$out" >&2
+      return 1
+      ;;
+  esac
+  if [ "$rc" -ne 0 ]; then
+    echo "  FAIL: an exempt module (whose tests race) was run anyway, exit status $rc:" >&2
+    echo "$out" >&2
+    return 1
+  fi
+  echo "  ok: NOT COVERED, not run"
+
+  echo "==> Self-test: an exempt path matches only the module it names"
+  # A module whose path is a substring of an exempt path is still covered: the
+  # match is exact, or an exempt entry would silently exempt its neighbours.
+  if [ "$(probe "$probe_set" verdict_for skip)" != COVERED ]; then
+    echo "  FAIL: 'skip' was treated as exempt because the exempt set names 'skipped'." >&2
+    return 1
+  fi
+  echo "  ok: exact match"
+
+  echo "==> Self-test: an exempt set that names a module twice is refused"
+  set +e
+  out="$(probe "$probe_set
+skipped|probe: named again" check_set_is_sane 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ] || [[ "$out" != *"names a module more than once: skipped"* ]]; then
+    echo "  FAIL: a duplicated exempt entry was not refused as a duplicate (exit $rc):" >&2
+    echo "$out" >&2
+    return 1
+  fi
+  echo "  ok: refused"
 
   echo "==> Self-test: the step's command passes -race"
   case " ${RACE_TEST[*]} " in
@@ -394,6 +482,7 @@ do_module() {
   fi
 
   echo "race: COVERED $module -- ${RACE_TEST[*]} ./..."
+  # shellcheck disable=SC2031 # the self-test's subshell override is meant not to leak here
   cd "$ROOT/$module"
   race_test ./...
 }

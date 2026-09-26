@@ -176,8 +176,9 @@ jobs:
       # races" and "never instrumented" the same result. Dropping -race from the
       # command, a toolchain built without cgo or a missing C compiler each turn
       # the race step into a second, slower copy of `go test` that reports
-      # success forever. This builds a program with a known race, runs it through
-      # this runner's toolchain and requires a DATA RACE report — plus a
+      # success forever. This builds a module with a known race, runs it through
+      # the race step's own entry point on this runner's toolchain and requires a
+      # DATA RACE report — plus a
       # race-free control, since a checker that fails on everything proves
       # nothing either. It runs here, before the matrix fans out.
       - name: race detector self-test

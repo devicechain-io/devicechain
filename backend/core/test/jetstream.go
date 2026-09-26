@@ -53,7 +53,10 @@ const storeDirRemovalStep = 10 * time.Millisecond
 // removeStoreDir removes dir, retrying only while the failure is a directory that was
 // not empty when rmdir reached it (POSIX allows either ENOTEMPTY or EEXIST for that).
 // Any other error is returned at once, and the last error is returned when the budget
-// is spent — a store that cannot be removed fails the test rather than leaking quietly.
+// is spent, so JetStreamStoreDir fails the test naming the store. That Errorf is not the
+// only line of defence: TempDir's own cleanup runs after it and would report a store
+// still on disk too, as a plain removal failure. Nothing tests the Errorf for that
+// reason; it is there to say which directory and why.
 //
 // The budget is counted in the pauses taken rather than in wall-clock time, so a test
 // can drive it with a fake sleep and get the same answer on any machine.
