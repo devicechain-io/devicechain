@@ -91,30 +91,27 @@ func (r *TenantGovernanceResolver) rate(dim governance.Dimension) *float64 {
 	return v
 }
 
-// burst folds one dimension's burst the same way, adapting to the GraphQL Int.
-func (r *TenantGovernanceResolver) burst(dim governance.Dimension) *int32 {
+// burst folds one dimension's burst the same way, adapting to the GraphQL Int — and
+// refusing, rather than wrapping, a value the Int cannot hold (util.IntPtrInt32).
+func (r *TenantGovernanceResolver) burst(field string, dim governance.Dimension) (*int32, error) {
 	v, _ := r.t.EffectiveBurst(dim)
-	if v == nil {
-		return nil
-	}
-	i := int32(*v)
-	return &i
+	return util.IntPtrInt32(field, v)
 }
 
 func (r *TenantGovernanceResolver) IngestMessagesPerSecond() *float64 {
 	return r.rate(governance.Ingest)
 }
 
-func (r *TenantGovernanceResolver) IngestBurst() *int32 {
-	return r.burst(governance.Ingest)
+func (r *TenantGovernanceResolver) IngestBurst() (*int32, error) {
+	return r.burst("ingestBurst", governance.Ingest)
 }
 
 func (r *TenantGovernanceResolver) OutboundMessagesPerSecond() *float64 {
 	return r.rate(governance.Outbound)
 }
 
-func (r *TenantGovernanceResolver) OutboundBurst() *int32 {
-	return r.burst(governance.Outbound)
+func (r *TenantGovernanceResolver) OutboundBurst() (*int32, error) {
+	return r.burst("outboundBurst", governance.Outbound)
 }
 
 // AiExternalEnabled resolves the tenant's external-AI consent as a non-null
@@ -135,8 +132,8 @@ func (r *TenantGovernanceResolver) AiInferenceRequestsPerMinute() *float64 {
 	return r.rate(governance.AIInference)
 }
 
-func (r *TenantGovernanceResolver) AiInferenceBurst() *int32 {
-	return r.burst(governance.AIInference)
+func (r *TenantGovernanceResolver) AiInferenceBurst() (*int32, error) {
+	return r.burst("aiInferenceBurst", governance.AIInference)
 }
 
 // ShedPriority resolves the tenant's ADR-063 shed priority (1–100) down the same
@@ -145,13 +142,9 @@ func (r *TenantGovernanceResolver) AiInferenceBurst() *int32 {
 // platform fail-safe (governance.DefaultShedPriority, a bronze-band value), never
 // gold. A scalar preference, not a ceiling — the provenance is dropped here like the
 // rates, since a service acting on it has no business knowing which level won.
-func (r *TenantGovernanceResolver) ShedPriority() *int32 {
+func (r *TenantGovernanceResolver) ShedPriority() (*int32, error) {
 	v, _ := r.t.EffectiveShedPriority()
-	if v == nil {
-		return nil
-	}
-	i := int32(*v)
-	return &i
+	return util.IntPtrInt32("shedPriority", v)
 }
 
 // HeldCommandCeiling resolves how many commands this tenant may park in the HELD state
@@ -163,13 +156,9 @@ func (r *TenantGovernanceResolver) ShedPriority() *int32 {
 //
 // The provenance is dropped here like the rates: a service enforcing the bound has no
 // business knowing which level won. That belongs to the admin plane.
-func (r *TenantGovernanceResolver) HeldCommandCeiling() *int32 {
+func (r *TenantGovernanceResolver) HeldCommandCeiling() (*int32, error) {
 	v, _ := r.t.EffectiveHeldCommandCeiling()
-	if v == nil {
-		return nil
-	}
-	i := int32(*v)
-	return &i
+	return util.IntPtrInt32("heldCommandCeiling", v)
 }
 
 // The three geofence caps, each resolved down the same cascade — override, else tier, else
@@ -189,26 +178,22 @@ func (r *TenantGovernanceResolver) HeldCommandCeiling() *int32 {
 // knowing which level won. That belongs to the admin plane.
 
 // GeoFencePositionCeiling resolves how many positions ONE of this tenant's fences may carry.
-func (r *TenantGovernanceResolver) GeoFencePositionCeiling() *int32 {
-	return int32OrNil(r.t.EffectiveGeoFencePositionCeiling())
+func (r *TenantGovernanceResolver) GeoFencePositionCeiling() (*int32, error) {
+	v, _ := r.t.EffectiveGeoFencePositionCeiling()
+	return util.IntPtrInt32("geoFencePositionCeiling", v)
 }
 
 // GeoFenceCeiling resolves how many fences this tenant may hold.
-func (r *TenantGovernanceResolver) GeoFenceCeiling() *int32 {
-	return int32OrNil(r.t.EffectiveGeoFenceCeiling())
+func (r *TenantGovernanceResolver) GeoFenceCeiling() (*int32, error) {
+	v, _ := r.t.EffectiveGeoFenceCeiling()
+	return util.IntPtrInt32("geoFenceCeiling", v)
 }
 
 // GeoFencePositionBudget resolves how many positions this tenant's whole fence set may carry.
-func (r *TenantGovernanceResolver) GeoFencePositionBudget() *int32 {
-	return int32OrNil(r.t.EffectiveGeoFencePositionBudget())
+func (r *TenantGovernanceResolver) GeoFencePositionBudget() (*int32, error) {
+	v, _ := r.t.EffectiveGeoFencePositionBudget()
+	return util.IntPtrInt32("geoFencePositionBudget", v)
 }
-
-// int32OrNil adapts an (Effective*, SettingSource) pair to the wire's nullable Int, dropping
-// the provenance. Written once rather than three more times: the four-line tail it replaces is
-// exactly the shape that gets a nil check subtly wrong on the next copy, and a wrong one here
-// returns a zero cap — which device-management's fold reads as "not a cap" and quietly
-// replaces with the platform default.
-func int32OrNil(v *int, _ iam.SettingSource) *int32 { return rawInt32(v) }
 
 // PurgeState resolves where the tenant sits in the ADR-077 deletion lifecycle, as the
 // raw state string ("active" | "purging").
@@ -302,8 +287,8 @@ type CurrentIdentityResolver struct {
 }
 
 func (r *CurrentIdentityResolver) Email() string      { return r.id.Email }
-func (r *CurrentIdentityResolver) FirstName() *string { return optStr(r.id.FirstName) }
-func (r *CurrentIdentityResolver) LastName() *string  { return optStr(r.id.LastName) }
+func (r *CurrentIdentityResolver) FirstName() *string { return util.NullStrNonEmpty(r.id.FirstName) }
+func (r *CurrentIdentityResolver) LastName() *string  { return util.NullStrNonEmpty(r.id.LastName) }
 
 // Me describes the identity the caller is signed in as (ADR-033). Self-scoped:
 // resolved from the email carried as the access token's subject, so being

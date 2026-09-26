@@ -6,6 +6,7 @@ package model
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,34 +89,38 @@ func paramsJSON(raw *string) (datatypes.JSON, error) {
 	return datatypes.JSON(trimmed), nil
 }
 
-// endpointValue validates an optional endpoint override and returns it as a column
-// string ("" when absent). A present value must be an absolute http(s) URL — the
-// operator sets it (ai:admin), and the actual outbound call (slice 0c) is
-// SSRF-guarded there, but a typo is caught here at write.
-func endpointValue(raw *string) (string, error) {
+// endpointValue validates an optional endpoint override and returns it as the column
+// value: NULL when absent or blank, meaning "the kind's built-in default". A present
+// value must be an absolute http(s) URL — the operator sets it (ai:admin), and the actual
+// outbound call (slice 0c) is SSRF-guarded there, but a typo is caught here at write.
+//
+// The value is TRIMMED, which the platform does not do to secrets and does not do to a
+// required string. A URL is the exception core documents for a token: it has a grammar
+// that forbids surrounding whitespace, so trimming cannot change which address is named.
+func endpointValue(raw *string) (sql.NullString, error) {
 	if raw == nil {
-		return "", nil
+		return sql.NullString{}, nil
 	}
 	v := strings.TrimSpace(*raw)
 	if v == "" {
-		return "", nil
+		return sql.NullString{}, nil
 	}
 	u, err := url.Parse(v)
 	if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", ErrInvalidEndpoint
+		return sql.NullString{}, ErrInvalidEndpoint
 	}
 	// Reject a query or fragment: the endpoint is a BASE URL onto which the provider
 	// impl splices its API path (e.g. /v1/messages), so a query/fragment would produce a
 	// silently broken URL. Credentials belong in the ADR-059 secret handle, never here.
 	if u.RawQuery != "" || u.Fragment != "" {
-		return "", ErrInvalidEndpoint
+		return sql.NullString{}, ErrInvalidEndpoint
 	}
-	return v, nil
+	return sql.NullString{String: v, Valid: true}, nil
 }
 
 // validateRequest validates a create request's kind, model, endpoint, and params,
-// returning the params as a column value and the endpoint string.
-func (api *Api) validateRequest(request *AIProviderCreateRequest) (datatypes.JSON, string, error) {
+// returning the params and the endpoint as column values.
+func (api *Api) validateRequest(request *AIProviderCreateRequest) (datatypes.JSON, sql.NullString, error) {
 	return api.validateProviderFields(request.Kind, request.Model, request.Endpoint, request.Params)
 }
 
@@ -125,26 +130,26 @@ func (api *Api) validateRequest(request *AIProviderCreateRequest) (datatypes.JSO
 // has no default to fall back to — so an update naming only one of them still has to be
 // checked against the stored other, or a provider could be left addressable by nothing
 // and refused only at the first call.
-func (api *Api) validateProviderFields(kind, model string, endpoint, params *string) (datatypes.JSON, string, error) {
+func (api *Api) validateProviderFields(kind, model string, endpoint, params *string) (datatypes.JSON, sql.NullString, error) {
 	if err := validateProviderKind(kind); err != nil {
-		return nil, "", err
+		return nil, sql.NullString{}, err
 	}
 	if strings.TrimSpace(model) == "" {
-		return nil, "", errors.New("provider model is required")
+		return nil, sql.NullString{}, errors.New("provider model is required")
 	}
 	resolvedEndpoint, err := endpointValue(endpoint)
 	if err != nil {
-		return nil, "", err
+		return nil, sql.NullString{}, err
 	}
 	// A kind with no built-in base URL is unusable without one, so it is refused at the
 	// write rather than at the first call — the same fail-closed reasoning that keeps an
-	// unregistered kind out of the store.
-	if err := validateEndpointForKind(AIProviderKind(kind), resolvedEndpoint); err != nil {
-		return nil, "", err
+	// unregistered kind out of the store. NULL is validated as "", which is what it means.
+	if err := validateEndpointForKind(AIProviderKind(kind), resolvedEndpoint.String); err != nil {
+		return nil, sql.NullString{}, err
 	}
 	paramsValue, err := paramsJSON(params)
 	if err != nil {
-		return nil, "", err
+		return nil, sql.NullString{}, err
 	}
 	return paramsValue, resolvedEndpoint, nil
 }
@@ -234,15 +239,17 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	if err != nil {
 		return nil, err
 	}
-	storedEndpoint := current.Endpoint
+	// The endpoint folds through the POINTER shape on purpose: the pair is re-validated
+	// even when the request names neither half, and validation needs the value it would
+	// hold. endpointValue is idempotent on anything it has already stored.
 	storedParams := providerParamsStr(current.Params)
 	params, endpoint, err := api.validateProviderFields(kind, modelID,
-		request.Endpoint.ApplyTo(&storedEndpoint), request.Params.ApplyTo(storedParams))
+		request.Endpoint.ApplyTo(dcgraphql.NullStr(current.Endpoint)), request.Params.ApplyTo(storedParams))
 	if err != nil {
 		return nil, err
 	}
-	name := rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
-	description := rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
+	name := request.Name.ApplyToNullString(current.Name)
+	description := request.Description.ApplyToNullString(current.Description)
 	secret := updatedSecret(request.Secret)
 
 	fields := map[string]any{

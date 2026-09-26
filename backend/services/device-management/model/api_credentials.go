@@ -11,6 +11,7 @@ import (
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/gorm"
 )
 
@@ -58,11 +59,13 @@ func buildDeviceCredential(device *Device, request *DeviceCredentialCreateReques
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		DeviceId:        device.ID,
-		Device:          device,
-		CredentialType:  request.CredentialType,
-		CredentialId:    request.CredentialId,
-		CredentialValue: rdb.NullStrOf(request.CredentialValue),
+		DeviceId:       device.ID,
+		Device:         device,
+		CredentialType: request.CredentialType,
+		CredentialId:   request.CredentialId,
+		// Stored EXACTLY AS SENT: a device presents its password byte for byte, so trimming
+		// it here would store something no device sends.
+		CredentialValue: sqlnull.Secret(request.CredentialValue),
 		Enabled:         request.Enabled,
 		ExpiresAt:       expiresAt,
 	}, nil
@@ -154,7 +157,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	updated.Metadata = metadataJSON
 	updated.CredentialType = credentialType
 	updated.CredentialId = credentialId
-	updated.CredentialValue = rdb.NullStrOf(request.CredentialValue.ApplyTo(dcgraphql.NullStr(updated.CredentialValue)))
+	updated.CredentialValue = request.CredentialValue.ApplyToNullSecret(updated.CredentialValue)
 	updated.Enabled = enabled
 	updated.ExpiresAt = expiresAt
 	if device != nil {

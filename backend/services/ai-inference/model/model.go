@@ -4,6 +4,7 @@
 package model
 
 import (
+	"database/sql"
 	"fmt"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -45,10 +46,10 @@ type AIProvider struct {
 	// Kind selects the Provider implementation. One of the registered AIProviderKind
 	// vocabulary (`anthropic` at GA); validated against it at write.
 	Kind string `gorm:"not null;size:64"`
-	// Endpoint is the provider API base URL. Empty means the Kind's built-in default
+	// Endpoint is the provider API base URL. NULL means the Kind's built-in default
 	// (for `anthropic`, the public Anthropic API). Set it to target a self-hosted or
 	// proxied endpoint. An http(s) URL, validated at write.
-	Endpoint string `gorm:"size:512"`
+	Endpoint sql.NullString `gorm:"size:512"`
 	// ModelID is the provider model id (e.g. "claude-opus-4-8"). Named ModelID (not
 	// Model) so it does not collide with the embedded gorm.Model; the DB column stays
 	// `model` via the column tag.
@@ -131,8 +132,8 @@ type AIProviderUpdateRequest struct {
 	// Kind selects the Provider implementation. NOT NULL, and its zero value is not a
 	// member of the vocabulary, so an explicit null is REFUSED rather than folded to "".
 	Kind dcgraphql.OptionalString
-	// Endpoint is the provider API base URL. Nullable in the storage sense — "" means
-	// the kind's built-in default — so a null CLEARS the override.
+	// Endpoint is the provider API base URL. Nullable — NULL means the kind's built-in
+	// default — so a null (or "") CLEARS the override.
 	//
 	// 🔴 IT IS COUPLED TO Kind, and clearing it is not always legal: a kind DEFINED by
 	// its address (openai-compatible) has no default to fall back to, so

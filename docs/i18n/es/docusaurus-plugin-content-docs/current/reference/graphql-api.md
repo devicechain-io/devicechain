@@ -353,7 +353,6 @@ lo establece.
 | `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `null` o `{}` para limpiarlo |
 | `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
 | `definition` en `updateDashboard` | **Se conserva** al omitirlo, que es como se renombra un panel sin reenviar su documento. Igual que `selector` arriba, no se puede *limpiar*: `null` se rechaza, porque un panel sin definición no es nada. Una definición malformada rechaza la actualización completa, así que un renombrado enviado con ella tampoco se aplica |
-| `firstName` / `lastName` en `updateProfile` | **Se conservan.** Una cadena vacía limpia, y `null` significa lo mismo: son las columnas del nombre visible, donde «vacío» es un valor que una persona puede tener legítimamente y no una ausencia |
 | `credentialType` en `updateProvisioningProfile` | **No está en la entrada de actualización.** Hoy el aprovisionamiento solo puede emitir un tipo de credencial, así que el campo únicamente repetiría lo almacenado. Antes cualquier actualización que lo omitiera lo *restablecía* a `ACCESS_TOKEN` |
 | `activeVersion` en un perfil de dispositivo o un grupo de entidades | Nada: aquí no es escribible en absoluto, y solo se mueve con publicar y revertir |
 | `memberType` / `membershipMode` en `updateEntityGroup` | **No están en la entrada de actualización.** Ambos son identidad, así que un cambio no es representable en lugar de rechazarse |
@@ -380,6 +379,22 @@ borra.
 `null` también borra la credencial. Eso no es una excepción sino el significado habitual de un null
 en la plataforma: un null limpia el campo que nombra. La inversión que estos campos llevaban antes,
 donde null conservaba y solo `""` borraba, ha desaparecido.
+
+#### El texto se recorta; las credenciales no {#text-and-credentials}
+
+Un nombre, una descripción y el texto visible similar — el nombre o el apellido de una persona, un
+icono, una unidad, el color de un nivel — se guardan sin sus espacios iniciales y finales, y un
+valor vacío o formado solo por espacios lo limpia, así que se lee de vuelta como `null`. Eso ocurre
+igual al crear que al actualizar, así que reenviar un valor que has leído no es un cambio para nada
+guardado bajo esta regla. Un valor que una versión anterior guardó con espacios alrededor, como el
+nombre de una persona, se recorta la primera vez que una actualización nombra ese campo. El texto
+estructurado, como `metadata`, la `config` de un canal o la `definition` de un panel, no se
+recorta.
+
+El `credentialValue` de una credencial de dispositivo tampoco se recorta: se guarda exactamente
+como lo envías, espacios incluidos, porque un dispositivo presenta su contraseña byte a byte. Solo
+un `credentialValue` vacío, o un `null` explícito al actualizar, no guarda ninguna contraseña, y una
+credencial sin contraseña no puede autenticarse.
 
 ### Qué mutaciones son actualizaciones parciales {#which-mutations-are-partial-updates}
 
@@ -484,8 +499,9 @@ crear. Las URI de redirección y los ámbitos de un cliente OAuth no: una lista 
 coincide con nada, así que el cliente jamás podría completar una autorización.
 
 `updateProfile` toma ahora `request: ProfileUpdateRequest!` en lugar de argumentos sueltos
-`firstName` / `lastName`. Su comportamiento no cambia: escribe solo los nombres que envías, y `""`
-sigue limpiando uno.
+`firstName` / `lastName`. Escribe solo los nombres que envías. Un nombre se recorta como el resto
+del texto visible, y `""`, un valor formado solo por espacios o `null` lo limpian, así que se lee
+de vuelta como `null`.
 
 #### Campos que conviene conocer en las mutaciones convertidas {#two-fields-on-converted-mutations}
 

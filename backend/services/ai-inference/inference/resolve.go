@@ -226,7 +226,7 @@ func (r *Resolver) build(ctx context.Context, p *model.AIProvider) (*Resolved, e
 
 	switch model.AIProviderKind(p.Kind) {
 	case model.AIProviderKindAnthropic:
-		provider, err := newClaudeProvider(r.client, p.Endpoint, p.ModelID, string(key), r.bounds.MaxOutputTokens)
+		provider, err := newClaudeProvider(r.client, p.Endpoint.String, p.ModelID, string(key), r.bounds.MaxOutputTokens)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +237,7 @@ func (r *Resolver) build(ctx context.Context, p *model.AIProvider) (*Resolved, e
 		// and a tenant's prompt to whatever a bare path resolves to. Everything else on
 		// this path — key resolution, the bounds, the consent gate that already ran — is
 		// identical, which is the point of the interface.
-		provider, err := newOpenAICompatibleProvider(r.client, p.Endpoint, p.ModelID, string(key), r.bounds.MaxOutputTokens)
+		provider, err := newOpenAICompatibleProvider(r.client, p.Endpoint.String, p.ModelID, string(key), r.bounds.MaxOutputTokens)
 		if err != nil {
 			return nil, err
 		}

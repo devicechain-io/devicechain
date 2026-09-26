@@ -126,12 +126,12 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	updated.DataType = dataType
 	updated.Metadata = metadataJSON
 	updated.Enum = enumJSON
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
-	updated.Unit = rdb.NullStrOf(request.Unit.ApplyTo(dcgraphql.NullStr(updated.Unit)))
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
+	updated.Unit = request.Unit.ApplyToNullString(updated.Unit)
 	updated.MinValue = rdb.NullFloat64Of(request.MinValue.ApplyTo(dcgraphql.NullFloat64(updated.MinValue)))
 	updated.MaxValue = rdb.NullFloat64Of(request.MaxValue.ApplyTo(dcgraphql.NullFloat64(updated.MaxValue)))
-	updated.Descriptor = rdb.NullStrOf(request.Descriptor.ApplyTo(dcgraphql.NullStr(updated.Descriptor)))
+	updated.Descriptor = request.Descriptor.ApplyToNullString(updated.Descriptor)
 	if reparent != nil {
 		updated.DeviceProfile = reparent
 		updated.DeviceProfileId = reparent.ID

@@ -1555,6 +1555,9 @@ Connectivity rules, and will not save over a rule it cannot show in full".
 If your code or scripts recognise a duplicate by reading a GraphQL error message, read "A duplicate
 now answers with the code `CONFLICT`".
 
+If a device's MQTT password begins or ends with a space or a newline, or your own code reads a
+tier's `color` from the admin API, read "Credential values are stored exactly as sent".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2554,6 +2557,37 @@ channels](../guides/notification-channels.md) has the details.
   dead-lettered as exhausted, so a secret stored during that window could still let the call
   through. Nothing replays a dead letter, so that firing's call is not made; correct the action's
   secret handle so later firings authenticate. The call is never sent without its credential.
+
+#### Credential values are stored exactly as sent
+
+- **A device credential's `credentialValue` is no longer trimmed.** Earlier releases removed
+  leading and trailing whitespace when the value was saved, but compared the password a device
+  presented without trimming it, so an MQTT password that began or ended with a space could never
+  authenticate. The value is now stored exactly as sent. Only an empty value, or an explicit
+  `null` on update, stores no password.
+- **The other direction changes too.** A value pasted with a trailing newline or space used to be
+  saved without it, so a device presenting the password without it was accepted. It is now saved
+  with it, and such a device is refused until the value is sent again without the newline.
+- **Values saved before this release are not changed by the upgrade.** They were stored trimmed,
+  and the whitespace cannot be recovered. If a device's configured password has surrounding
+  spaces, send the value again with `updateDeviceCredential`.
+- **A tier with no color now reads `color: null`** on the admin API, where it used to read `""`.
+  Sending `""` or `null` still clears it, and the upgrade converts every stored empty color to
+  null. Surrounding spaces are now trimmed before the color is checked, so `" amber "` is accepted
+  as `amber` where it used to be refused. The console needs nothing; code of your own that
+  compares `color` with `""` should test for null.
+- **`firstName` and `lastName` are trimmed like other display text**, on `createIdentity` and on
+  `updateProfile`, and a cleared name is stored as null. Reads already returned `null` for an
+  empty name, and still do: the upgrade converts every stored empty name to null. It does the same
+  for an AI provider's empty `endpoint`, which likewise already read as `null`. A name an earlier
+  release saved with surrounding spaces keeps them until an update names that field, which then
+  trims it.
+- **A stored number too large for a GraphQL `Int` is now an error rather than a wrong number.**
+  A notification policy's `throttleSeconds`, `escalateAfterSeconds` and `maxEscalations`, and a
+  tenant's burst, shed-priority, held-command and geofence overrides on the admin API, used to wrap
+  such a value into a negative one. Values written through the API always fit, so this affects
+  only a value written to the database some other way. A notification-policy update that does not
+  name one of those three fields also no longer rewrites it.
 
 ### The one-time durable-ingest cutover
 

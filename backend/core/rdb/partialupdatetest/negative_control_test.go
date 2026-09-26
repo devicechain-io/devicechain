@@ -185,6 +185,28 @@ var mutants = map[string]func(t *testing.T){
 		Run(t, s)
 	},
 
+	// 🔴 A REQUIRED LIST THAT REFUSES null BUT EMPTIES ON []. ARequiredFieldRefusesAnExplicitNull
+	// passes it — null is refused — so only the [] half of EmptyListIsTheSameAsANull can see
+	// it, and [] is the spelling a form with nothing selected sends.
+	"requiredlistemptied": func(t *testing.T) {
+		Run(t, demoSuiteOf(demoApi{emptiesRequiredList: true}))
+	},
+
+	// A list field declared without SetEmpty. EmptyListIsTheSameAsANull skips a field that
+	// cannot send [], so without the request-type check this list's [] state would go
+	// undriven with the suite green.
+	"listwithoutsetempty": func(t *testing.T) {
+		s := demoSuite(false)
+		fams := demoFamilies()
+		for i := range fams[0].Fields {
+			if fams[0].Fields[i].Name == "tags" {
+				fams[0].Fields[i].SetEmpty = nil
+			}
+		}
+		s.Families = fams
+		Run(t, s)
+	},
+
 	// A suite with no families at all. Run must refuse rather than iterate nothing.
 	"nofamilies": func(t *testing.T) {
 		s := demoSuite(false)
@@ -249,6 +271,9 @@ func TestNegativeControls(t *testing.T) {
 		{mutant: "preconditionUnregistered",
 			want: "UpdateWithPrecondition takes shapeInput, which no registered family covers"},
 		{mutant: "shapefloortoohigh", want: "stopped seeing the surface it certifies"},
+
+		{mutant: "requiredlistemptied", want: "accepted an empty list, but it is required"},
+		{mutant: "listwithoutsetempty", want: "is a list, but its Field has no SetEmpty"},
 
 		{mutant: "replaceEqualsCleared",
 			want: "the update SET this\" and \"the update CLEARED it\" are the same observation"},

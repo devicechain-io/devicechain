@@ -55,20 +55,15 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	})
 }
 
-// TestEmptyListIsRefusedForAnOAuthClientsAllowlists drives the FOURTH wire state a list
-// has — `[]` — on the two fields where it is REFUSED rather than honoured.
+// TestAnEmptyAllowlistRefusalNamesTheField pins the one thing about the [] refusal the
+// shared harness does not: WHICH field the error names.
 //
-// The shared harness has a property for [] (EmptyListIsTheSameAsANull) and it only runs
-// on a CLEARABLE list, where the claim is that null and [] agree in emptying the column.
-// For a required list they agree in being rejected, which is a different claim with no
-// property to carry it — and [] is the spelling that actually arrives, because a form
-// with nothing selected serializes as an empty array and never as null.
-//
-// 🔴 WITHOUT THIS, "the allowlists cannot be emptied" IS HALF-TESTED: the null half is
-// driven by ARequiredFieldRefusesAnExplicitNull, and a fold that special-cased [] into
-// "leave it alone" would pass everything else in this package while silently turning the
-// most likely client request into a no-op that reports success.
-func TestEmptyListIsRefusedForAnOAuthClientsAllowlists(t *testing.T) {
+// That [] is refused on the two allowlists, totally, is now a shared property —
+// EmptyListIsTheSameAsANull drives [] on every RequiredStringListField and requires the
+// refusal, so a fold that special-cased [] into "leave it alone" fails there. What the
+// harness asserts is the refusal, not its wording, and an operator given "an empty list
+// was refused" without the field's name has to guess which of two lists it meant.
+func TestAnEmptyAllowlistRefusalNamesTheField(t *testing.T) {
 	const clientId = "mcp-client"
 	uris := []string{"https://example.invalid/callback"}
 	scopes := []string{"read-only"}
@@ -96,12 +91,6 @@ func TestEmptyListIsRefusedForAnOAuthClientsAllowlists(t *testing.T) {
 			_, err = s.UpdateOAuthClient(ctx, clientId, tc.request())
 			require.Errorf(t, err, "an empty %s was accepted", tc.field)
 			require.Contains(t, err.Error(), tc.field)
-
-			// And the refusal wrote nothing: the client still holds both lists.
-			after, err := s.iam.OAuthClientByClientId(ctx, clientId)
-			require.NoError(t, err)
-			require.Equal(t, uris, after.RedirectURIs)
-			require.Equal(t, scopes, after.Scopes)
 		})
 	}
 }

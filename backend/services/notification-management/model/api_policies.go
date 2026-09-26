@@ -9,6 +9,7 @@ import (
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/gorm"
 )
 
@@ -43,9 +44,9 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 			},
 			MetadataEntity:       rdb.MetadataEntity{Metadata: metadataJSON},
 			DeviceTypeToken:      rdb.NullStrOf(request.DeviceTypeToken),
-			ThrottleSeconds:      nullInt64OfInt32(request.ThrottleSeconds),
-			EscalateAfterSeconds: nullInt64OfInt32(request.EscalateAfterSeconds),
-			MaxEscalations:       nullInt64OfInt32(request.MaxEscalations),
+			ThrottleSeconds:      sqlnull.Int64FromInt32(request.ThrottleSeconds),
+			EscalateAfterSeconds: sqlnull.Int64FromInt32(request.EscalateAfterSeconds),
+			MaxEscalations:       sqlnull.Int64FromInt32(request.MaxEscalations),
 			Enabled:              request.Enabled,
 		}
 		if err := tx.Create(policy).Error; err != nil {
@@ -120,15 +121,12 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 
 	var updated *NotificationPolicy
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		policy.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(policy.Name)))
-		policy.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(policy.Description)))
+		policy.Name = request.Name.ApplyToNullString(policy.Name)
+		policy.Description = request.Description.ApplyToNullString(policy.Description)
 		policy.Metadata = metadataJSON
-		policy.ThrottleSeconds = nullInt64OfInt32(
-			request.ThrottleSeconds.ApplyTo(int32OfNullInt64(policy.ThrottleSeconds)))
-		policy.EscalateAfterSeconds = nullInt64OfInt32(
-			request.EscalateAfterSeconds.ApplyTo(int32OfNullInt64(policy.EscalateAfterSeconds)))
-		policy.MaxEscalations = nullInt64OfInt32(
-			request.MaxEscalations.ApplyTo(int32OfNullInt64(policy.MaxEscalations)))
+		policy.ThrottleSeconds = request.ThrottleSeconds.ApplyToNullInt64(policy.ThrottleSeconds)
+		policy.EscalateAfterSeconds = request.EscalateAfterSeconds.ApplyToNullInt64(policy.EscalateAfterSeconds)
+		policy.MaxEscalations = request.MaxEscalations.ApplyToNullInt64(policy.MaxEscalations)
 		policy.Enabled = enabled
 		if err := tx.Omit("Rules").Save(policy).Error; err != nil {
 			return err

@@ -88,5 +88,12 @@ var (
 		// column. The migration's own comment says why the rows are deleted rather than
 		// demoted, and what it cannot reach (backups, WAL, dead tuples).
 		NewSigningKeyPrivateHalfMigration(),
+		// A tier's "no pill" becomes NULL: the colour column drops its NOT NULL and its ''
+		// default, and every stored '' is converted. It was the one text column here that
+		// could not hold NULL, and the only reason a private "emptiable" fold existed.
+		NewTierColorNullableMigration(),
+		// An identity's empty first/last name becomes NULL. The columns always allowed it;
+		// the model now spells it, and this converts the '' rows already written. DML only.
+		NewIdentityNamesNullMigration(),
 	}
 )

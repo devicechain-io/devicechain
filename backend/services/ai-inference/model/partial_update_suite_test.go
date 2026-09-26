@@ -135,7 +135,7 @@ func aiProviderFamily() putest.Family[*Api] {
 				"name":        putest.NullString(e.Name),
 				"description": putest.NullString(e.Description),
 				"kind":        e.Kind,
-				"endpoint":    e.Endpoint,
+				"endpoint":    putest.NullString(e.Endpoint),
 				"model":       e.ModelID,
 				"params":      paramsReading(e.Params),
 				"enabled":     putest.BoolString(e.Enabled),
@@ -158,20 +158,9 @@ func aiProviderFamily() putest.Family[*Api] {
 			putest.RequiredStringField("kind", string(AIProviderKindAnthropic),
 				string(AIProviderKindOpenAICompatible),
 				func(r *AIProviderUpdateRequest) *dcgraphql.OptionalString { return &r.Kind }),
-			// The endpoint column is a plain NOT-NULL-in-Go string whose EMPTY value is
-			// the meaningful state ("use the kind's built-in default"), so its cleared
-			// reading is "" rather than NullMarker — there is no SQL NULL to reach.
-			putest.Field{
-				Name: "endpoint", Seeded: seededProviderEndpoint,
-				Replace: replacedProviderEndpoint, Cleared: "",
-				Kind: putest.Clearable,
-				Set: func(req any, v string) {
-					req.(*AIProviderUpdateRequest).Endpoint = dcgraphql.OptionalStringOf(v)
-				},
-				SetNull: func(req any) {
-					req.(*AIProviderUpdateRequest).Endpoint = dcgraphql.ClearedString()
-				},
-			},
+			// NULL is the meaningful cleared state ("use the kind's built-in default").
+			putest.OptionalStringField("endpoint", seededProviderEndpoint, replacedProviderEndpoint,
+				func(r *AIProviderUpdateRequest) *dcgraphql.OptionalString { return &r.Endpoint }),
 			putest.RequiredStringField("model", "claude-opus-4-8", "claude-haiku-4-5-20251001",
 				func(r *AIProviderUpdateRequest) *dcgraphql.OptionalString { return &r.Model }),
 			putest.OptionalStringField("params", seededProviderParams, replacedProviderParams,
@@ -183,17 +172,8 @@ func aiProviderFamily() putest.Family[*Api] {
 			// means on every other field on the platform. Under the old *string the
 			// clear was spelled as the empty string, because a pointer had no third
 			// state to give it.
-			putest.Field{
-				Name: "secret", Seeded: "sk-seeded", Replace: "sk-rotated",
-				Cleared: putest.NullMarker,
-				Kind:    putest.Clearable,
-				Set: func(req any, v string) {
-					req.(*AIProviderUpdateRequest).Secret = dcgraphql.OptionalStringOf(v)
-				},
-				SetNull: func(req any) {
-					req.(*AIProviderUpdateRequest).Secret = dcgraphql.ClearedString()
-				},
-			},
+			putest.OptionalStringField("secret", "sk-seeded", "sk-rotated",
+				func(r *AIProviderUpdateRequest) *dcgraphql.OptionalString { return &r.Secret }),
 		},
 	}
 }

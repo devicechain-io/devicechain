@@ -5,22 +5,12 @@ package graphql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
 	gql "github.com/graph-gophers/graphql-go"
 )
-
-// nullInt32 adapts a nullable bigint column to an optional GraphQL Int (int32).
-func nullInt32(v sql.NullInt64) *int32 {
-	if !v.Valid {
-		return nil
-	}
-	n := int32(v.Int64)
-	return &n
-}
 
 // NotificationPolicyResolver resolves a routing policy and its rules.
 type NotificationPolicyResolver struct {
@@ -51,13 +41,20 @@ func (r *NotificationPolicyResolver) DeviceTypeToken() *string {
 	return util.NullStr(r.M.DeviceTypeToken)
 }
 
-func (r *NotificationPolicyResolver) ThrottleSeconds() *int32 { return nullInt32(r.M.ThrottleSeconds) }
-
-func (r *NotificationPolicyResolver) EscalateAfterSeconds() *int32 {
-	return nullInt32(r.M.EscalateAfterSeconds)
+// The three intervals are bigint columns read as a 32-bit GraphQL Int. A stored value the
+// Int cannot hold is REFUSED with a resolver error rather than wrapped into a plausible
+// wrong number — see util.NullInt32.
+func (r *NotificationPolicyResolver) ThrottleSeconds() (*int32, error) {
+	return util.NullInt32("throttleSeconds", r.M.ThrottleSeconds)
 }
 
-func (r *NotificationPolicyResolver) MaxEscalations() *int32 { return nullInt32(r.M.MaxEscalations) }
+func (r *NotificationPolicyResolver) EscalateAfterSeconds() (*int32, error) {
+	return util.NullInt32("escalateAfterSeconds", r.M.EscalateAfterSeconds)
+}
+
+func (r *NotificationPolicyResolver) MaxEscalations() (*int32, error) {
+	return util.NullInt32("maxEscalations", r.M.MaxEscalations)
+}
 
 func (r *NotificationPolicyResolver) Enabled() bool { return r.M.Enabled }
 

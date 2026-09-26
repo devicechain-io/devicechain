@@ -147,16 +147,8 @@ func connectorFamily() putest.Family[*Api] {
 			// means on every other field on the platform. Under the old *string the
 			// clear was spelled as the empty string, because a pointer had no third
 			// state to give it.
-			putest.Field{
-				Name: "secret", Seeded: "s3cret", Replace: "rotated", Cleared: putest.NullMarker,
-				Kind: putest.Clearable,
-				Set: func(req any, v string) {
-					req.(*ConnectorUpdateRequest).Secret = dcgraphql.OptionalStringOf(v)
-				},
-				SetNull: func(req any) {
-					req.(*ConnectorUpdateRequest).Secret = dcgraphql.ClearedString()
-				},
-			},
+			putest.OptionalStringField("secret", "s3cret", "rotated",
+				func(r *ConnectorUpdateRequest) *dcgraphql.OptionalString { return &r.Secret }),
 		},
 	}
 }

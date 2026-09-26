@@ -130,8 +130,9 @@ func checkExpiry(cred *DeviceCredential, now time.Time) error {
 // storedSecret is the secret a secret-carrying credential stores, or
 // ErrCredentialMisconfigured when it stores none. An EMPTY stored secret is
 // misconfigured too, not a secret that an empty presented one could match: the
-// create path stores NULL for a blank value, so an empty string there is a defect in
-// the stored data, and it must reach an operator rather than authenticate anyone.
+// create and update paths store NULL for an empty value and any other value exactly
+// as sent, so an empty string there is a defect in the stored data, and it must reach
+// an operator rather than authenticate anyone.
 func storedSecret(cred *DeviceCredential) (string, error) {
 	if !cred.CredentialValue.Valid || cred.CredentialValue.String == "" {
 		return "", ErrCredentialMisconfigured

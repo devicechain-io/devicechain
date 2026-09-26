@@ -39,17 +39,30 @@ import (
 // It does NOT trim what it accepts, and that reversal is the whole point of this
 // paragraph. An earlier version did, on the reasoning that trimming keeps "acme" and
 // "acme " from being two values a human reads as one. The reasoning is fine and the
-// place is wrong: no create path on this platform trims, so an update that trimmed
-// made RESTATING A FIELD change it. That is not theoretical — a provisioning profile
-// created with " s3cret " (legal today) and then updated by any client that re-sends
-// the fields it read back is left holding "s3cret", the whole fleet stops
-// authenticating, and the edit that did it returned 200. Clients that restate exist:
-// the simulator's ensure* paths send a full restatement on every convergence pass.
+// place is wrong: the create paths for these REQUIRED strings store them verbatim, so
+// an update that trimmed made RESTATING A FIELD change it. That is not theoretical — a
+// provisioning profile created with " s3cret " (legal today) and then updated by any
+// client that re-sends the fields it read back is left holding "s3cret", the whole
+// fleet stops authenticating, and the edit that did it returned 200. Clients that
+// restate exist: the simulator's ensure* paths send a full restatement on every
+// convergence pass.
 //
 // So the rule is: an update may not change a value the caller did not mean to change,
 // and "I sent you back exactly what you gave me" must be a no-op. Normalizing input is
 // a decision for the create path to make, once, for both paths — not for the fold that
-// exists to stop updates from silently rewriting what is stored.
+// exists to stop updates from silently rewriting what is stored. There are three such
+// decisions on the platform, one per kind of column, each applied by the create path and
+// the fold alike. The two nullable rules are defined once in package sqlnull; the
+// required-string rule is defined here, in ApplyToRequired:
+//
+//   - REQUIRED strings (this fold) are stored verbatim; TrimSpace only decides whether a
+//     value is blank.
+//   - NULLABLE DESCRIPTIVE TEXT — a name, a description, an icon — is trimmed on BOTH
+//     create and update (rdb.NullStrOf, ApplyToNullString), so restating it is a no-op
+//     too, for any row written since both paths applied the rule. A row written untrimmed
+//     by some other path keeps its whitespace until a caller names that field.
+//   - SECRETS are never trimmed (sqlnull.Secret, ApplyToNullSecret): a device presents
+//     its password byte for byte.
 //
 // References are the deliberate exception and they are folded elsewhere:
 // resolveRequiredTypeRef in device-management DOES trim, because a token has a grammar

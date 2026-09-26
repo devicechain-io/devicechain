@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -31,7 +32,7 @@ func TestOpenAICompatibleProviderIsAccepted(t *testing.T) {
 		openAIReq("vllm", strp("http://vllm.ai.svc.cluster.local:8000")))
 	require.NoError(t, err)
 	assert.Equal(t, string(AIProviderKindOpenAICompatible), created.Kind)
-	assert.Equal(t, "http://vllm.ai.svc.cluster.local:8000", created.Endpoint)
+	assert.Equal(t, sql.NullString{String: "http://vllm.ai.svc.cluster.local:8000", Valid: true}, created.Endpoint)
 }
 
 // 🔴 THE ENDPOINT IS THE PROVIDER. A row of this kind with no endpoint is unusable — it

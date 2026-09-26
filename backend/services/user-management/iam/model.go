@@ -17,6 +17,7 @@
 package iam
 
 import (
+	"database/sql"
 	"strings"
 	"time"
 
@@ -151,11 +152,14 @@ func (Role) TableName() string { return "iam_roles" }
 type Identity struct {
 	gorm.Model
 
-	Email        string `gorm:"uniqueIndex;not null;size:256"`
-	FirstName    string `gorm:"size:128"`
-	LastName     string `gorm:"size:128"`
-	Enabled      bool   `gorm:"not null;default:true"`
-	PasswordHash string `gorm:"not null;size:256" json:"-"`
+	Email string `gorm:"uniqueIndex;not null;size:256"`
+	// FirstName / LastName are nullable display text: NULL when the identity has no name,
+	// never the empty string. The columns have always allowed NULL; the model now spells
+	// it, so a cleared name is NULL rather than ''.
+	FirstName    sql.NullString `gorm:"size:128"`
+	LastName     sql.NullString `gorm:"size:128"`
+	Enabled      bool           `gorm:"not null;default:true"`
+	PasswordHash string         `gorm:"not null;size:256" json:"-"`
 	// SessionEpoch is the identity's current session value, embedded as the "sep"
 	// claim in every refresh and identity token minted for it. A token whose epoch
 	// no longer matches this column cannot be exchanged for anything (see
@@ -247,9 +251,10 @@ type TenantTier struct {
 	// field with its own meaning; do not conflate them, and do not read this one for
 	// anything but sort order.
 	DisplayOrder int `gorm:"not null;default:0"`
-	// Color is a token into the named palette (see tier_color.go), or "" for no pill.
-	// Validated against ValidTierColor on write; never a raw hex value.
-	Color string `gorm:"not null;default:'';size:32"`
+	// Color is a token into the named palette (see tier_color.go), or NULL for no pill.
+	// Validated against ValidTierColor on write; never a raw hex value. The column was
+	// NOT NULL with an empty-string default until NewTierColorNullableMigration.
+	Color sql.NullString `gorm:"size:32"`
 }
 
 func (TenantTier) TableName() string { return "iam_tenant_tiers" }

@@ -145,31 +145,6 @@ func RequiredStringField[R any](name, seeded, replace string,
 	}
 }
 
-// EmptiableStringField describes a string column WHOSE EMPTY VALUE IS A LEGITIMATE STATE
-// and whose model cannot spell NULL — so it is Clearable, and its cleared reading is ""
-// rather than NullMarker, because there is no NULL for a clear to reach.
-//
-// 🔴 IT IS THE THIRD SHAPE, AND IT IS NEITHER OF THE TWO EITHER SIDE OF IT.
-// OptionalStringField reads back NullMarker once cleared, which needs a nullable column
-// AND a model that can represent the null. RequiredStringField REFUSES the clear, which
-// is right for a vocabulary value whose zero is not a state the entity may be in. This
-// one is for the column where "" is a value the create path already writes and the read
-// path already renders — a person's display name, a tier's colour meaning "no pill" —
-// where refusing the clear would delete a capability rather than convert one.
-//
-// It arrived here from two service test packages that had each written it, which is the
-// duplication this shared package exists to end: a second copy is how two call sites come
-// to disagree about what "cleared" looks like.
-func EmptiableStringField[R any](name, seeded, replace string,
-	pick func(*R) *dcgraphql.OptionalString) Field {
-	return Field{
-		Name: name, Seeded: seeded, Replace: replace, Cleared: "",
-		Kind:    Clearable,
-		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalStringOf(v) },
-		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedString() },
-	}
-}
-
 // RequiredBoolField describes a NOT NULL boolean column. The harness's uniform value
 // representation is a string, so the seeded/replace readings are "true"/"false" and the
 // setter parses — which is what lets one registry hold booleans beside strings without a
@@ -181,6 +156,29 @@ func RequiredBoolField[R any](name string, seeded bool,
 	pick func(*R) *dcgraphql.OptionalBool) Field {
 	return Field{
 		Name: name, Seeded: BoolString(seeded), Replace: BoolString(!seeded), Kind: RequiredValue,
+		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalBoolOf(v == "true") },
+		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedBool() },
+	}
+}
+
+// OptionalBoolField describes a NULLABLE boolean column: settable, and CLEARABLE back to
+// NULL, which reads back as NullMarker.
+//
+// 🔴 It is the counterpart RequiredBoolField deliberately is not. That one refuses a null
+// because folding it to `false` on a NOT NULL column is the quietest possible data loss —
+// false is a value a caller could legitimately have sent. That reasoning is about a
+// column whose zero value is not a state the entity may be in. A nullable column has a
+// third state, NULL, and a clear writes it rather than folding onto a zero — so the
+// harness asserts the column reads NullMarker afterwards, never "false".
+//
+// What that NULL MEANS is the reader's business, and it can differ by reader: a tenant's
+// external-AI consent keeps nil and false apart in storage and on the admin read-back,
+// while the enforcing read folds both to "not opted in", fail-closed.
+func OptionalBoolField[R any](name string, seeded bool,
+	pick func(*R) *dcgraphql.OptionalBool) Field {
+	return Field{
+		Name: name, Seeded: BoolString(seeded), Replace: BoolString(!seeded), Cleared: NullMarker,
+		Kind:    Clearable,
 		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalBoolOf(v == "true") },
 		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedBool() },
 	}
@@ -246,15 +244,7 @@ func OptionalInt32Field[R any](name string, seeded, replace int32,
 // panic names it at the declaration, where the fix is.
 func OptionalStringListField[R any](name string, seeded, replace []string,
 	pick func(*R) *dcgraphql.OptionalStringList) Field {
-	if len(seeded) == 0 {
-		panic("partialupdatetest: list field " + name + " is seeded empty, so \"the update " +
-			"preserved it\" and \"it was never set\" are the same observation")
-	}
-	if len(replace) == 0 {
-		panic("partialupdatetest: list field " + name + " has an empty replacement, which " +
-			"renders the same as the cleared reading, so \"the update set this list\" and " +
-			"\"the update emptied it\" are the same observation")
-	}
+	requireNonEmptyList(name, seeded, replace)
 	return Field{
 		Name: name, Seeded: RenderStringList(seeded), Replace: RenderStringList(replace),
 		Cleared: RenderStringList(nil),
@@ -264,6 +254,47 @@ func OptionalStringListField[R any](name string, seeded, replace []string,
 		},
 		SetNull:  func(req any) { *pick(req.(*R)) = dcgraphql.ClearedStringList() },
 		SetEmpty: func(req any) { *pick(req.(*R)) = dcgraphql.OptionalStringListOf([]string{}) },
+	}
+}
+
+// RequiredStringListField describes a `[String!]` column that may be REPLACED but never
+// EMPTIED — an OAuth client's redirect allowlist, its scope set.
+//
+// 🔴 IT IS RequiredValue, NOT Clearable, AND IT STILL CARRIES SetEmpty. null and [] are one
+// request spelled two ways (dcgraphql.OptionalStringList), so on a required list they must
+// agree in being REFUSED — and [] is the spelling a form with nothing selected actually
+// sends, so a fold that refused null but emptied the list on [] would fail every client
+// that matters while passing ARequiredFieldRefusesAnExplicitNull. EmptyListIsTheSameAsANull
+// drives [] off SetEmpty and, for this kind, asserts the refusal.
+//
+// It panics on an empty seed or an empty replacement for the reasons
+// OptionalStringListField gives: an empty seed makes "preserved" and "never set" one
+// observation, and an empty replacement is the [] request this field must refuse, so the
+// SET property could never pass for the right reason.
+func RequiredStringListField[R any](name string, seeded, replace []string,
+	pick func(*R) *dcgraphql.OptionalStringList) Field {
+	requireNonEmptyList(name, seeded, replace)
+	return Field{
+		Name: name, Seeded: RenderStringList(seeded), Replace: RenderStringList(replace),
+		Kind: RequiredValue,
+		Set: func(req any, v string) {
+			*pick(req.(*R)) = dcgraphql.OptionalStringListOf(ParseStringList(v))
+		},
+		SetNull:  func(req any) { *pick(req.(*R)) = dcgraphql.ClearedStringList() },
+		SetEmpty: func(req any) { *pick(req.(*R)) = dcgraphql.OptionalStringListOf([]string{}) },
+	}
+}
+
+// requireNonEmptyList is the declaration-time refusal both list constructors share.
+func requireNonEmptyList(name string, seeded, replace []string) {
+	if len(seeded) == 0 {
+		panic("partialupdatetest: list field " + name + " is seeded empty, so \"the update " +
+			"preserved it\" and \"it was never set\" are the same observation")
+	}
+	if len(replace) == 0 {
+		panic("partialupdatetest: list field " + name + " has an empty replacement, which " +
+			"renders the same as the cleared reading, so \"the update set this list\" and " +
+			"\"the update emptied it\" are the same observation")
 	}
 }
 

@@ -59,8 +59,9 @@ import (
 //     required BOOLEAN, where the zero value a fold would write is legal and therefore
 //     invisible to everything downstream.
 //  7. an unknown reference token refuses the WHOLE update, leaving nothing written.
-//  8. for a LIST field, an empty list and an explicit null agree. They are one request
-//     spelled two ways, and a claim to that effect is worth nothing until both are sent.
+//  8. for a LIST field, [] and null agree: both empty a clearable list, and both are
+//     refused on a required one. They are one request spelled two ways, and a claim to
+//     that effect is worth nothing until both are sent.
 //
 // Property 3 runs over exactly the fields a family declares clearable, property 6 over
 // exactly the ones it declares required, and property 7 over the required REFERENCES — so
@@ -342,17 +343,23 @@ func clearingOneFieldClearsOnlyIt[A any](t *testing.T, s Suite[A]) {
 	}
 }
 
-// THE FOURTH WIRE STATE, which only a LIST has: []. It folds onto the same stored value
-// as an explicit null, and this is where that claim is measured rather than asserted.
+// THE FOURTH WIRE STATE, which only a LIST has: []. It is the same request as an explicit
+// null, and this is where that claim is measured rather than asserted — for both kinds a
+// list can be:
+//
+//   - Clearable: [] empties the list exactly as null does, and changes nothing else.
+//   - RequiredValue / RequiredRef: [] is REFUSED exactly as null is, and the refusal is
+//     total — every field still reads its seeded value.
 //
 // It matters because a client sends [] by accident and null almost never: a form with
 // nothing selected serializes as an empty array. If the two ever stopped agreeing, the
-// spelling a real client sends would be the one nobody tested.
+// spelling a real client sends would be the one nobody tested — and on a required list,
+// a fold that refused null but accepted [] would empty an OAuth client's redirect
+// allowlist from a form and report success.
 //
-// This property is SILENT for a family with no list fields, which is correct — but a
-// service whose registry declares a list field and whose constructor forgot SetEmpty
-// would then be silently skipped, so the loop fails on a list-shaped field with no
-// SetEmpty rather than passing over it.
+// This property is SILENT for a field with no SetEmpty, which is correct for a scalar. A
+// LIST field without one would be silently skipped here, so EveryRequestFieldIsDeclared
+// asks the request TYPE which fields are lists and fails any whose Field cannot send [].
 func emptyListIsTheSameAsANull[A any](t *testing.T, s Suite[A]) {
 	for _, fam := range s.Families {
 		for _, f := range fam.Fields {
@@ -366,10 +373,26 @@ func emptyListIsTheSameAsANull[A any](t *testing.T, s Suite[A]) {
 
 				req := fam.NewRequest()
 				f.SetEmpty(req)
-				if err := fam.Update(api, ctx, fam.Token, req); err != nil {
-					t.Fatalf("update: %v", err)
+				err := fam.Update(api, ctx, fam.Token, req)
+
+				if f.Kind != Clearable {
+					if err == nil {
+						t.Errorf("%s accepted an empty list, but it is required — [] is the "+
+							"spelling a form sends, so it must be refused like null", f.Name)
+					}
+					got := fam.Read(t, api, ctx)
+					for _, other := range fam.Fields {
+						if got[other.Name] != other.Seeded {
+							t.Errorf("an empty list on the required %s wrote %s = %q, want %q — "+
+								"the refusal must be total", f.Name, other.Name, got[other.Name], other.Seeded)
+						}
+					}
+					return
 				}
 
+				if err != nil {
+					t.Fatalf("update: %v", err)
+				}
 				got := fam.Read(t, api, ctx)
 				if got[f.Name] != f.Cleared {
 					t.Fatalf("%s = %q after an empty list, want %q — [] and null are one request "+
@@ -536,19 +559,26 @@ func everyRequestFieldIsDeclared[A any](t *testing.T, s Suite[A]) {
 			}
 			rt = rt.Elem()
 
-			declared := map[string]bool{}
+			declared := map[string]Field{}
 			for _, f := range fam.Fields {
-				declared[strings.ToLower(f.Name)] = true
+				declared[strings.ToLower(f.Name)] = f
 			}
 			for i := 0; i < rt.NumField(); i++ {
 				sf := rt.Field(i)
 				if sf.PkgPath != "" {
 					continue // unexported: not reachable from the wire
 				}
-				if !declared[strings.ToLower(sf.Name)] {
+				f, ok := declared[strings.ToLower(sf.Name)]
+				if !ok {
 					t.Errorf("%s.%s is a field callers can send, but no Field declares it — "+
 						"nothing in this harness would notice it being written from a zero "+
 						"value on every update", rt.Name(), sf.Name)
+					continue
+				}
+				if isThreeStateList(sf.Type) && f.SetEmpty == nil {
+					t.Errorf("%s.%s is a list, but its Field has no SetEmpty, so the [] state is "+
+						"never driven — build it with OptionalStringListField or "+
+						"RequiredStringListField, or supply SetEmpty", rt.Name(), sf.Name)
 				}
 			}
 			// The other direction, so the map cannot be satisfied by a table declaring
@@ -768,6 +798,29 @@ func fixtureFailsClosedOnAnUnwritableJournal(t *testing.T, ctx context.Context) 
 }
 
 // ─── shared helpers ────────────────────────────────────────────────────────
+
+// isThreeStateList reports whether a request field's type is a three-state LIST input: a
+// struct carrying `Set bool` and a slice-typed `Value`. That is the shape core's
+// dcgraphql.OptionalStringList has and the shape a service-local list input
+// (notification-management's OptionalNotificationRuleList) has too, so both are asked for
+// SetEmpty by the same rule.
+//
+// It asks the request TYPE rather than the Field's Seeded value on purpose: a JSON text
+// column seeded `["low","high"]` is not a list input, and reading lists off the seed would
+// demand a SetEmpty from it. Every other three-state input — OptionalString, OptionalBool,
+// OptionalInt32, OptionalFloat64, OptionalID — carries a POINTER Value, so none of them is
+// exempted by this rule: they are not lists.
+func isThreeStateList(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	set, ok := t.FieldByName("Set")
+	if !ok || set.Type.Kind() != reflect.Bool {
+		return false
+	}
+	value, ok := t.FieldByName("Value")
+	return ok && value.Type.Kind() == reflect.Slice
+}
 
 func assertOthersHoldSeeded[A any](t *testing.T, fam Family[A], got map[string]string,
 	touched string, msg string) {

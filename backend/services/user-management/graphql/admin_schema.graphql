@@ -51,11 +51,11 @@ type AdminTenantTier {
     tenantCount: Int!
     # PRESENTATION ONLY (ADR-065 S5c). The operator's listing order (low to high; the
     # tenantTiers query returns tiers already sorted by it) and a palette-token color for
-    # the tier's pill (one of tierColorPalette.colors, or "" for no pill). Neither is read to
-    # make a decision — displayOrder is not a rank and implies no nesting between tiers;
+    # the tier's pill (one of tierColorPalette.colors, or null for no pill). Neither is read
+    # to make a decision — displayOrder is not a rank and implies no nesting between tiers;
     # shed priority is a separate concern.
     displayOrder: Int!
-    color: String!
+    color: String
 }
 
 # The palette a tier's color is chosen from (ADR-065 S5c) — a closed, named vocabulary,
@@ -66,8 +66,8 @@ type TierColorPalette {
 }
 
 # Data to create a tier. config is an optional JSON object string. color is a palette
-# token (see tierColorPalette) or omitted/"" for no pill; displayOrder is not set here —
-# a new tier lands last and is arranged with reorderTenantTiers.
+# token (see tierColorPalette), or omitted, null or "" for no pill; displayOrder is not
+# set here — a new tier lands last and is arranged with reorderTenantTiers.
 input AdminTenantTierCreateRequest {
     token: String!
     name: String
@@ -90,8 +90,8 @@ input AdminTenantTierUpdateRequest {
     description: String
     # The tier's settings, as a JSON object string. Null, "" and "{}" all clear them.
     config: String
-    # A palette token or "" for no pill. Null clears it to "" — the column is NOT NULL
-    # with an empty default, so "no pill" is a value it holds rather than an absence.
+    # A palette token, or null for no pill: sending "" or null clears it. Surrounding
+    # spaces are trimmed before the token is checked.
     color: String
 }
 

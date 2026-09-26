@@ -1660,6 +1660,10 @@ reglas de Conectividad y no guarda sobre una regla que no puede mostrar por comp
 Si su código o sus scripts reconocen un duplicado leyendo el mensaje de un error de GraphQL, lea
 «Un duplicado responde ahora con el código `CONFLICT`».
 
+Si la contraseña MQTT de un dispositivo empieza o termina con un espacio o un salto de línea, o su
+propio código lee el `color` de un nivel desde la API de administración, lea «Los valores de las
+credenciales se guardan exactamente como se envían».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2732,6 +2736,39 @@ notificación](../guides/notification-channels.md) tiene los detalles.
   mensaje no entregado, así que la llamada de ese disparo no se hace; corrija el manejador de
   secreto de la acción para que los disparos posteriores se autentiquen. La llamada nunca se envía
   sin su credencial.
+
+#### Los valores de las credenciales se guardan exactamente como se envían
+
+- **El `credentialValue` de una credencial de dispositivo ya no se recorta.** Las versiones
+  anteriores quitaban los espacios iniciales y finales al guardar el valor, pero comparaban sin
+  recortar la contraseña que presentaba el dispositivo, así que una contraseña MQTT que empezaba o
+  terminaba con un espacio nunca podía autenticarse. Ahora el valor se guarda exactamente como se
+  envía. Solo un valor vacío, o un `null` explícito al actualizar, no guarda ninguna contraseña.
+- **También cambia la dirección contraria.** Un valor pegado con un salto de línea o un espacio al
+  final se guardaba sin él, así que se aceptaba a un dispositivo que presentaba la contraseña sin
+  él. Ahora se guarda con él, y ese dispositivo se rechaza hasta que se vuelva a enviar el valor
+  sin el salto de línea.
+- **La actualización no cambia los valores guardados antes de esta versión.** Se guardaron
+  recortados, y los espacios no se pueden recuperar. Si la contraseña configurada en un
+  dispositivo lleva espacios alrededor, vuelva a enviar el valor con `updateDeviceCredential`.
+- **Un nivel sin color ahora devuelve `color: null`** en la API de administración, donde antes
+  devolvía `""`. Enviar `""` o `null` lo sigue limpiando, y la actualización convierte a null todos
+  los colores vacíos guardados. Los espacios alrededor se recortan ahora antes de comprobar el
+  color, así que `" amber "` se acepta como `amber` donde antes se rechazaba. La consola no
+  necesita nada; el código propio que compare `color` con `""` debe comprobar null.
+- **`firstName` y `lastName` se recortan como el resto del texto visible**, en `createIdentity` y
+  en `updateProfile`, y un nombre limpiado se guarda como null. Las lecturas ya devolvían `null`
+  para un nombre vacío, y lo siguen haciendo: la actualización convierte a null todos los nombres
+  vacíos guardados. Hace lo mismo con el `endpoint` vacío de un proveedor de IA, que también se
+  leía ya como `null`. Un nombre que una versión anterior guardó con espacios alrededor los
+  conserva hasta que una actualización nombra ese campo, que entonces lo recorta.
+- **Un número guardado demasiado grande para un `Int` de GraphQL es ahora un error en lugar de un
+  número equivocado.** Los campos `throttleSeconds`, `escalateAfterSeconds` y `maxEscalations` de
+  una política de notificación, y las anulaciones de ráfaga, prioridad de descarte, comandos
+  retenidos y geocercas de un inquilino en la API de administración, convertían ese valor en uno
+  negativo. Los valores escritos a través de la API siempre caben, así que esto afecta solo a un
+  valor escrito en la base de datos por otra vía. Una actualización de una política de
+  notificación que no nombra uno de esos tres campos tampoco lo reescribe ya.
 
 ### La transición única a la ingesta duradera
 
