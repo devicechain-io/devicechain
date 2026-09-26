@@ -15,18 +15,12 @@
 # whose streams are all R1 is the default outcome of raising only this half, and
 # it presents as healthy. See var.cluster_replicas.
 #
-# Transport security (ADR-025): when enable_tls is set, this module generates a
-# self-signed CA and a NATS-server leaf from it (the tls provider — declarative,
-# no cert-manager, so the CA is a plain output the bring-up threads into every
-# service's instance config), writes them to a Secret the chart mounts, and turns
-# on TLS for BOTH the 4222 client listener and the 1883 MQTT gateway. Server-auth
-# only in v1 (no tls.verify) — clients verify the broker; device authentication is
-# the separate auth-callout half of ADR-025.
-#
-# Tradeoff: the tls provider keeps the CA + server PRIVATE KEYS in tofu state
-# (plaintext). State is local + gitignored, which is fine for the local/dev
-# bring-up; a production deployment should front this with a real PKI (or encrypted
-# remote state) rather than TF-generated self-signed material.
+# Transport security (ADR-025): when enable_tls is set, this module mounts the
+# broker's TLS Secret -- a CA and a NATS-server leaf that dcctl mints and writes
+# before the apply (see "TLS material" below; no key material passes through this
+# module or its state) -- and turns on TLS for BOTH the 4222 client listener and
+# the 1883 MQTT gateway. Server-auth only in v1 (no tls.verify) — clients verify
+# the broker; device authentication is the separate auth-callout half of ADR-025.
 
 variable "namespace" {
   type = string

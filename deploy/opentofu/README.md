@@ -155,12 +155,17 @@ deploys against this infra with no extra wiring.
 ```bash
 cd deploy/opentofu/instance
 cp terraform.tfvars.example terraform.tfvars   # edit: kubeconfig, credentials, pinned versions
-tofu init
+tofu init -upgrade
 tofu plan
 tofu apply
 ```
 
 (`terraform` works identically — the HCL is provider-compatible.)
+
+`-upgrade` because the providers are pinned to exact versions in each root's
+`versions.tf`, and a lock file left by an earlier init keeps the old ones: a plain
+`init` then refuses the root with "locked provider ... does not match configured
+version constraint". dcctl initialises with `-upgrade` on every run for the same reason.
 
 ## Data durability
 
@@ -249,6 +254,11 @@ broker and the event store are not in.
   library; the application creates the extension and hypertables on migrate.
 - **Credentials.** Passwords default to `devicechain` for local dev. Override via
   `terraform.tfvars` (gitignored) or a pre-created Secret for any real deploy.
+- **Provider versions** are pinned exactly in each root's `versions.tf` (not only the
+  charts), and nothing bumps them automatically. After pulling a change to them, run
+  `tofu init -upgrade` in the root; dcctl always does. When the kubernetes provider
+  moves, run `hack/tofu-rerun-rig.sh`: it is what shows a failed install still
+  recovers when run again.
 - **Pin versions.** Every third-party Helm chart is **already pinned by default**, and
   `hack/check-chart-pins.sh` keeps it that way — in the module *and* in the root, at the
   same version. An unpinned version has to be resolved at apply time, so the chart

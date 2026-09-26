@@ -65,9 +65,11 @@ frontend/                     npm workspace (React 19 + Vite + Tailwind + shadcn
                               external embedder with its own login) + packages/{client,dashboards,widgets}
                               (SDK, dashboard runtime + slot/binding-manifest model, ECharts widgets; ADR-039)
 docs/                         Docusaurus site
-hack/                         license headers, dev scripts, and the two VALIDATION RIGS — `ha-rig.sh`
-                              (ADR-020 messaging HA) and `dr-rig.sh` (ADR-028 root-key restore).
-                              Both are manual, both need a real cluster, and both carry a NEGATIVE
+hack/                         license headers, dev scripts, and the three VALIDATION RIGS — `ha-rig.sh`
+                              (ADR-020 messaging HA), `dr-rig.sh` (ADR-028 root-key restore) and
+                              `tofu-rerun-rig.sh` (a failed install recovers on re-run; run it when
+                              the kubernetes provider pin moves — needs kind, no DeviceChain images).
+                              All are manual, all need a real cluster, and all carry a NEGATIVE
                               CONTROL: a check is worth nothing until it has been shown to fail
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit
 ```
@@ -214,11 +216,13 @@ helm template deploy/helm/devicechain \
 
 # opentofu
 # fmt covers the whole tree; init and validate act on ONE directory each, so they
-# run per root. hack/tofu-roots.sh is the same discovery CI uses, and it fails
-# rather than returning an empty list -- so this cannot quietly validate nothing.
+# run per root. -upgrade because the providers are pinned exactly and a lock file
+# left by an earlier init keeps the old versions, which a plain init refuses.
+# hack/tofu-roots.sh is the same discovery CI uses, and it fails rather than
+# returning an empty list -- so this cannot quietly validate nothing.
 (cd deploy/opentofu && tofu fmt -check -recursive)
 for root in $(hack/tofu-roots.sh); do
-  ( cd "$root" && tofu init -backend=false && tofu validate ) || break
+  ( cd "$root" && tofu init -upgrade -backend=false && tofu validate ) || break
 done
 ```
 

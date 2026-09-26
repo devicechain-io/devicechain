@@ -479,6 +479,17 @@ resource "kubernetes_deployment_v1" "this" {
   # Bound to the pod becoming Ready, not merely created. Everything that follows
   # in the apply -- the two Clusters, each with an ObjectStore pointing here --
   # assumes there is something at the endpoint URL.
+  #
+  # 🔴 WHAT A TIMED-OUT WAIT LEAVES BEHIND DEPENDS ON WHETHER IT WAS A CREATE.
+  #   - A create that times out leaves this Deployment TAINTED, and the next run
+  #     must replace it, re-waiting for Ready, rather than adopt it: adopting it
+  #     would report the install finished over a store nothing can archive to. That
+  #     re-run only works on kubernetes provider >= 3.2.1; see the pin in the
+  #     roots' versions.tf.
+  #   - An update that times out is NOT tainted: the provider records the new spec
+  #     anyway, so the next run plans no change and its apply succeeds. That is why
+  #     dcctl confirms the rollout itself after every apply, from the `deployment`
+  #     output below, instead of trusting a green apply.
   wait_for_rollout = true
 
   timeouts {
@@ -504,6 +515,19 @@ resource "kubernetes_service_v1" "this" {
       port        = local.api_port
       target_port = local.api_port
     }
+  }
+}
+
+# 🔴 READ BY dcctl AFTER EVERY APPLY, because a green apply does not prove this
+# Deployment rolled out. The provider waits for the rollout inside the apply, but an
+# UPDATE whose rollout timed out still records the new spec in state: the next apply
+# plans no change and succeeds over a store that never became Ready. dcctl therefore
+# checks the rollout itself, on every install, against the Deployment named here.
+output "deployment" {
+  description = "Namespace and name of the object store Deployment, for a caller that has to confirm it actually rolled out."
+  value = {
+    namespace = kubernetes_deployment_v1.this.metadata[0].namespace
+    name      = kubernetes_deployment_v1.this.metadata[0].name
   }
 }
 

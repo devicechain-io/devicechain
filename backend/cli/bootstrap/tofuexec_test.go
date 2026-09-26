@@ -19,6 +19,9 @@ import (
 //
 // `destroy` exits 1 when a file named fail-destroy sits beside the binary, so a test can
 // make a progress command fail without a second fake.
+//
+// `init` writes its argv, one argument per line, to init-argv beside the binary, so a
+// test can read the flags dcctl actually handed the CLI.
 func fakeTofu(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -28,7 +31,7 @@ case "$1" in
   version) echo '{"terraform_version":"1.8.0","platform":"linux_amd64","provider_selections":{},"marker":"LEAK-version"}' ;;
   show)    echo '{"format_version":"1.0","marker":"LEAK-show"}' ;;
   output)  echo '{"secret":{"sensitive":true,"type":"string","value":"LEAK-output"}}' ;;
-  init)    echo 'PROGRESS-init' ;;
+  init)    printf '%s\n' "$@" > "$(dirname "$0")/init-argv"; echo 'PROGRESS-init' ;;
   apply)   echo 'PROGRESS-apply' ;;
   destroy) echo 'PROGRESS-destroy'; if [ -f "$(dirname "$0")/fail-destroy" ]; then exit 1; fi ;;
   state)   echo "PROGRESS-state-$2" ;;
@@ -106,6 +109,48 @@ func TestTofuExecStreamsProgressNotReads(t *testing.T) {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("diagnostics %q did not reach stderr; got:\n%s", want, errOut)
 		}
+	}
+}
+
+// TestTofuInitMovesTheLockToThePins pins that every init dcctl runs is -upgrade, so a
+// machine whose lock file predates a provider pin is moved onto the pin instead of
+// failing the version constraint on every command against that cluster.
+func TestTofuInitMovesTheLockToThePins(t *testing.T) {
+	root, bin := t.TempDir(), fakeTofu(t)
+	var initErr error
+	captureStdoutAndStderr(t, func() {
+		tf, err := newTofuExec(root, bin)
+		if err != nil {
+			initErr = err
+			return
+		}
+		initErr = tf.Init(context.Background())
+	})
+	if initErr != nil {
+		t.Fatalf("init: %v", initErr)
+	}
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(bin), "init-argv"))
+	if err != nil {
+		// Without a recorded init, "no -upgrade=false" would read as a clean pass.
+		t.Fatalf("the fake never recorded an init, so this test would prove nothing: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if args[0] != "init" {
+		t.Fatalf("recorded argv is not an init: %q", args)
+	}
+	// The VALUE of the flag the CLI acts on -- the last one, when a flag repeats --
+	// not merely that some "-upgrade" appears. terraform-exec always emits one, and
+	// its default is false.
+	var upgrade []string
+	for _, a := range args {
+		if a == "-upgrade" || strings.HasPrefix(a, "-upgrade=") {
+			upgrade = append(upgrade, a)
+		}
+	}
+	if len(upgrade) == 0 || upgrade[len(upgrade)-1] != "-upgrade=true" {
+		t.Errorf("init ran with upgrade flags %q, want the last to be -upgrade=true; an existing "+
+			"cluster's lock would stay on the provider its first install resolved, and every "+
+			"command against it would fail the pinned version constraint", upgrade)
 	}
 }
 
