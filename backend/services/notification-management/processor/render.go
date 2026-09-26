@@ -52,9 +52,6 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	if event.LastValue != nil {
 		writeField(&b, "Value", fmt.Sprintf("%g", *event.LastValue))
 	}
-	if event.Message != nil && *event.Message != "" {
-		writeField(&b, "Message", *event.Message)
-	}
 	writeField(&b, "Acknowledged", yesNo(event.Acknowledged))
 	writeField(&b, "Raised", formatTime(event.RaisedTime))
 	writeField(&b, "Occurred", formatTime(event.OccurredTime))
@@ -80,9 +77,6 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	}
 	if event.LastValue != nil {
 		payload["value"] = *event.LastValue
-	}
-	if event.Message != nil && *event.Message != "" {
-		payload["message"] = *event.Message
 	}
 
 	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload}

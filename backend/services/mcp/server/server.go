@@ -156,17 +156,17 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.QueryLocations)
 	register(s, c, &mcp.Tool{
 		Name:        "list_alarms",
-		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, key, metric, state, severity, acknowledged flag, raised/cleared times, last value, and message.",
+		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, key, metric, state, severity, acknowledged flag, raised/cleared times, and last value.",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScalePage,
-		Discloses: "a tenant-wide list of what has been going wrong and where, a page at a time, including the message and triggering value on each alarm",
+		Discloses: "a tenant-wide list of what has been going wrong and where, a page at a time, including the value that raised each alarm",
 	}, t.ListAlarms)
 	register(s, c, &mcp.Tool{
 		Name:        "get_alarm",
 		Description: "Look up one or more alarms by token, returning full alarm detail.",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScaleAddressed,
-		Discloses: "full detail of alarms the caller already names, including the message and the value that raised each one",
+		Discloses: "full detail of alarms the caller already names, including the value that raised each one",
 	}, t.GetAlarm)
 	register(s, c, &mcp.Tool{
 		Name:        "list_commands",

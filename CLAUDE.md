@@ -314,10 +314,12 @@ Two things to know:
 1. A `replace` applies **only in the main module**, so **every module that resolves graphql-go at
    all needs its own** — not just the ones that compile it. Modules split into two kinds, and the
    second is the dangerous one:
-   - those that **import** the library (core plus the GraphQL-serving services), and
-   - those that resolve it **transitively through core and compile none of it** — `cli`,
-     `services/mcp` (which fronts GraphQL over HTTP rather than executing a schema), the ingest
-     services, `sims/dc-simulator`, `tools/*`, `edge/dc-edge-agent`. Their replace is *defensive*:
+   - those that **import** the library (core plus the GraphQL-serving services — and
+     `services/mcp`, which fronts GraphQL over HTTP rather than executing a schema, but imports
+     the library in a TEST, `server/documents_test.go`, to validate every document it sends
+     against the schema it is sent to), and
+   - those that resolve it **transitively through core and compile none of it** — `cli`, the
+     ingest services, `sims/dc-simulator`, `tools/*`, `edge/dc-edge-agent`. Their replace is *defensive*:
      it means the day one of them **does** import the library, it gets the patched one rather than
      silently getting upstream. Because they carry no graphql-go line in their `go.mod`, a grep
      cannot find them — which is exactly how a module ends up on the unpatched library unnoticed.

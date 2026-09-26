@@ -524,7 +524,7 @@ export type AlarmsQueryVariables = Exact<{
 }>;
 
 
-export type AlarmsQuery = { alarms: { results: Array<{ id: string, token: string, originatorType: string, originatorId: string, originatorToken: string | null, alarmKey: string, metricKey: string, state: string, acknowledged: boolean, severity: string, raisedTime: string | null, clearedTime: string | null, acknowledgedTime: string | null, acknowledgedBy: string | null, lastValue: number | null, message: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type AlarmsQuery = { alarms: { results: Array<{ id: string, token: string, originatorType: string, originatorId: string, originatorToken: string | null, alarmKey: string, metricKey: string, state: string, acknowledged: boolean, severity: string, raisedTime: string | null, clearedTime: string | null, acknowledgedTime: string | null, acknowledgedBy: string | null, lastValue: number | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AcknowledgeAlarmMutationVariables = Exact<{
   token: string;
@@ -549,7 +549,7 @@ export type AlarmStreamSubscriptionVariables = Exact<{
 }>;
 
 
-export type AlarmStreamSubscription = { alarmStream: { eventType: string, alarmToken: string, originatorType: string, originatorId: string, originatorToken: string | null, alarmKey: string, metricKey: string, state: string, severity: string, previousSeverity: string | null, acknowledged: boolean, acknowledgedBy: string | null, lastValue: number | null, message: string | null, raisedTime: string | null, occurredTime: string } };
+export type AlarmStreamSubscription = { alarmStream: { eventType: string, alarmToken: string, originatorType: string, originatorId: string, originatorToken: string | null, alarmKey: string, metricKey: string, state: string, severity: string, previousSeverity: string | null, acknowledged: boolean, acknowledgedBy: string | null, lastValue: number | null, raisedTime: string | null, occurredTime: string } };
 
 export type AreasQueryVariables = Exact<{
   criteria: AreaSearchCriteria;
@@ -1375,7 +1375,6 @@ export const AlarmsDocument = new TypedDocumentString(`
       acknowledgedTime
       acknowledgedBy
       lastValue
-      message
     }
     pagination {
       pageStart
@@ -1421,7 +1420,6 @@ export const AlarmStreamDocument = new TypedDocumentString(`
     acknowledged
     acknowledgedBy
     lastValue
-    message
     raisedTime
     occurredTime
   }

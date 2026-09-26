@@ -199,8 +199,6 @@ func (r *AlarmEventResolver) AcknowledgedBy() *string { return r.E.AcknowledgedB
 
 func (r *AlarmEventResolver) LastValue() *float64 { return r.E.LastValue }
 
-func (r *AlarmEventResolver) Message() *string { return r.E.Message }
-
 func (r *AlarmEventResolver) RaisedTime() *string { return util.FormatTime(r.E.RaisedTime) }
 
 // OccurredTime is always present (every transition has an event time); formatted with

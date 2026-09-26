@@ -1,9 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { Kind, parse } from 'graphql';
+import type { FieldNode, OperationDefinitionNode } from 'graphql';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AlarmSnapshot, AlarmSubscription, CommandSnapshot } from './hub';
+import { ALARMS_QUERY } from './internal/alarm-doc';
 import { SyntheticDataSource } from './synthetic';
 import type { MeasurementSample } from './types';
 import type { DatasourceSelector } from './types';
@@ -148,6 +151,29 @@ describe('SyntheticDataSource.subscribeAlarms', () => {
     const snap = snapshots[0];
     expect(snap.alarms.length).toBeGreaterThan(0);
     expect(snap.alarms.every((a) => a.severity === 'CRITICAL')).toBe(true);
+  });
+
+  // The preview must show authors exactly what production can: a field the live query
+  // does not select is one the live table never has, so a synthetic row carrying it
+  // previews something that never appears. The expected set is derived from the query
+  // itself, not a hand list that could drift with it.
+  it('emits exactly the fields the live alarms query selects', () => {
+    const op = parse(ALARMS_QUERY as unknown as string).definitions[0] as OperationDefinitionNode;
+    const alarms = op.selectionSet.selections[0] as FieldNode;
+    const results = alarms.selectionSet!.selections.find(
+      (s): s is FieldNode => s.kind === Kind.FIELD && s.name.value === 'results',
+    )!;
+    const selected = results.selectionSet!.selections.map((s) => (s as FieldNode).name.value).sort();
+    expect(selected).toContain('lastValue'); // floor: the walk found the row selection
+
+    const src = new SyntheticDataSource();
+    const { sink, snapshots } = collectAlarms();
+    src.subscribeAlarms({ pageSize: 50 }, sink);
+
+    expect(snapshots[0].alarms.length).toBeGreaterThan(0);
+    for (const row of snapshots[0].alarms) {
+      expect(Object.keys(row).sort()).toEqual(selected);
+    }
   });
 
   it('stops emitting after the returned disposer is called', () => {

@@ -90,9 +90,6 @@ func (n *LogNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateChang
 	if event.LastValue != nil {
 		ev = ev.Float64("lastValue", *event.LastValue)
 	}
-	if event.Message != nil {
-		ev = ev.Str("message", *event.Message)
-	}
 	ev.Msg("Alarm notification (no channels configured yet — ADR-017 first slice logs delivery intent)")
 	return nil
 }

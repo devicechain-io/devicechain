@@ -5,6 +5,8 @@ package processor
 
 import (
 	"database/sql"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +16,6 @@ import (
 )
 
 func floatPtr(v float64) *float64 { return &v }
-func strPtr(s string) *string     { return &s }
 
 func TestRenderNotificationRaised(t *testing.T) {
 	raised := time.Date(2026, 7, 6, 11, 58, 0, 0, time.UTC)
@@ -29,7 +30,6 @@ func TestRenderNotificationRaised(t *testing.T) {
 		State:          "ACTIVE",
 		Severity:       "CRITICAL",
 		LastValue:      floatPtr(42.5),
-		Message:        strPtr("Temperature above threshold"),
 		RaisedTime:     raised,
 		OccurredTime:   occurred,
 	}
@@ -40,7 +40,7 @@ func TestRenderNotificationRaised(t *testing.T) {
 		!strings.Contains(r.Subject, "device 42") {
 		t.Fatalf("subject missing pieces: %q", r.Subject)
 	}
-	for _, want := range []string{"CRITICAL", "ACTIVE", "temperature", "42.5", "Temperature above threshold"} {
+	for _, want := range []string{"CRITICAL", "ACTIVE", "temperature", "42.5"} {
 		if !strings.Contains(r.TextBody, want) {
 			t.Fatalf("body missing %q:\n%s", want, r.TextBody)
 		}
@@ -75,9 +75,6 @@ func TestRenderNotificationMinimal(t *testing.T) {
 	r := renderNotification(event)
 	if _, ok := r.Payload["value"]; ok {
 		t.Fatalf("value should be absent")
-	}
-	if _, ok := r.Payload["message"]; ok {
-		t.Fatalf("message should be absent")
 	}
 	if r.Payload["previousSeverity"] != "MINOR" {
 		t.Fatalf("previousSeverity missing")
@@ -120,5 +117,56 @@ func TestRenderEscalation(t *testing.T) {
 	}
 	if r.Payload["lastNotifiedTime"] != "2026-07-06T12:05:00Z" {
 		t.Fatalf("payload lastNotifiedTime = %v", r.Payload["lastNotifiedTime"])
+	}
+}
+
+// The webhook payload's keys and the email body are a contract a receiver parses, so
+// both are pinned whole, by value, for a transition that fills every optional field.
+// A key or a line added (or re-added) without updating this test fails it; asserting
+// only that one retired key is ABSENT would pass over anything else.
+func TestRenderNotificationPayloadKeys(t *testing.T) {
+	event := &dmmodel.AlarmStateChangeEvent{
+		EventType:        dmmodel.AlarmEventEscalated,
+		AlarmToken:       "alarm-1",
+		OriginatorType:   "device",
+		OriginatorId:     42,
+		AlarmKey:         "temperature.high",
+		MetricKey:        "temperature",
+		State:            "ACTIVE",
+		Severity:         "CRITICAL",
+		PreviousSeverity: "MAJOR",
+		Acknowledged:     true,
+		LastValue:        floatPtr(42.5),
+		RaisedTime:       time.Date(2026, 7, 6, 11, 58, 0, 0, time.UTC),
+		OccurredTime:     time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC),
+	}
+
+	r := renderNotification(event)
+
+	keys := make([]string, 0, len(r.Payload))
+	for k := range r.Payload {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	wantKeys := []string{
+		"acknowledged", "alarmKey", "alarmToken", "eventType", "metricKey", "occurredTime",
+		"originatorId", "originatorType", "previousSeverity", "raisedTime", "severity", "state",
+		"text", "value",
+	}
+	if !reflect.DeepEqual(keys, wantKeys) {
+		t.Errorf("payload keys = %v, want %v", keys, wantKeys)
+	}
+
+	wantBody := "Alarm temperature.high escalated on device 42.\n\n" +
+		"Severity:          CRITICAL\n" +
+		"Previous severity: MAJOR\n" +
+		"State:             ACTIVE\n" +
+		"Metric:            temperature\n" +
+		"Value:             42.5\n" +
+		"Acknowledged:      yes\n" +
+		"Raised:            2026-07-06T11:58:00Z\n" +
+		"Occurred:          2026-07-06T12:00:00Z\n"
+	if r.TextBody != wantBody {
+		t.Errorf("text body =\n%s\nwant\n%s", r.TextBody, wantBody)
 	}
 }

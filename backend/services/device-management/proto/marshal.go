@@ -396,7 +396,6 @@ func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, e
 		Acknowledged:   event.Acknowledged,
 		AcknowledgedBy: event.AcknowledgedBy,
 		LastValue:      event.LastValue,
-		Message:        event.Message,
 		OccurredTime:   event.OccurredTime.Format(time.RFC3339Nano),
 		RaisedTime:     event.RaisedTime.Format(time.RFC3339Nano),
 	}
@@ -440,7 +439,6 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		Acknowledged:   pbevent.Acknowledged,
 		AcknowledgedBy: pbevent.AcknowledgedBy,
 		LastValue:      pbevent.LastValue,
-		Message:        pbevent.Message,
 		RaisedTime:     raised,
 		OccurredTime:   occurred,
 	}

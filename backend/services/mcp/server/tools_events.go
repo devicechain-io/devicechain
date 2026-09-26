@@ -34,12 +34,12 @@ type QueryMeasurementsOutput struct {
 	TotalRecords int                `json:"totalRecords"`
 }
 
-const queryMeasurementsQuery = `query QueryMeasurements($criteria: EventSearchCriteria!) {
+var queryMeasurementsQuery = newDocument("event-management", `query QueryMeasurements($criteria: EventSearchCriteria!) {
   measurementEvents(criteria: $criteria) {
     results { deviceToken name value unit dataType occurredTime }
     pagination { totalRecords }
   }
-}`
+}`)
 
 // QueryMeasurements returns raw measurement history for a device (paged, bounded).
 // For trends prefer aggregate_measurements — it returns far fewer rows.
@@ -67,7 +67,7 @@ func (t *Tools) QueryMeasurements(ctx context.Context, req *mcp.CallToolRequest,
 			} `json:"pagination"`
 		} `json:"measurementEvents"`
 	}
-	if err := t.gql.Query(ctx, "event-management", token, queryMeasurementsQuery, map[string]any{"criteria": criteria}, &resp); err != nil {
+	if err := t.gql.Query(ctx, queryMeasurementsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, QueryMeasurementsOutput{}, err
 	}
 	return nil, QueryMeasurementsOutput{
@@ -100,11 +100,11 @@ type AggregateMeasurementsOutput struct {
 	Buckets []MeasurementBucket `json:"buckets"`
 }
 
-const aggregateMeasurementsQuery = `query AggregateMeasurements($criteria: MeasurementAggregationCriteria!) {
+var aggregateMeasurementsQuery = newDocument("event-management", `query AggregateMeasurements($criteria: MeasurementAggregationCriteria!) {
   bucketedMeasurements(criteria: $criteria) {
     bucketStart name avg min max sum count
   }
-}`
+}`)
 
 // AggregateMeasurements returns time-bucketed avg/min/max/sum/count per metric
 // (ADR-026 rollup). The token-efficient way to read trends over a window.
@@ -130,7 +130,7 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 	var resp struct {
 		BucketedMeasurements []MeasurementBucket `json:"bucketedMeasurements"`
 	}
-	if err := t.gql.Query(ctx, "event-management", token, aggregateMeasurementsQuery, map[string]any{"criteria": criteria}, &resp); err != nil {
+	if err := t.gql.Query(ctx, aggregateMeasurementsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, AggregateMeasurementsOutput{}, err
 	}
 	return nil, AggregateMeasurementsOutput{Buckets: resp.BucketedMeasurements}, nil
@@ -151,10 +151,9 @@ type AlarmSummary struct {
 	AcknowledgedTime string   `json:"acknowledgedTime,omitempty"`
 	AcknowledgedBy   string   `json:"acknowledgedBy,omitempty"`
 	LastValue        *float64 `json:"lastValue,omitempty"`
-	Message          string   `json:"message,omitempty"`
 }
 
-const alarmFields = `token originatorToken alarmKey metricKey state severity acknowledged raisedTime clearedTime acknowledgedTime acknowledgedBy lastValue message`
+const alarmFields = `token originatorToken alarmKey metricKey state severity acknowledged raisedTime clearedTime acknowledgedTime acknowledgedBy lastValue`
 
 type ListAlarmsInput struct {
 	Originator   string `json:"originator,omitempty" jsonschema:"optional device token to filter alarms to one device"`
@@ -171,12 +170,12 @@ type ListAlarmsOutput struct {
 	TotalRecords int            `json:"totalRecords"`
 }
 
-var listAlarmsQuery = `query ListAlarms($criteria: AlarmSearchCriteria!) {
+var listAlarmsQuery = newDocument("device-management", `query ListAlarms($criteria: AlarmSearchCriteria!) {
   alarms(criteria: $criteria) {
-    results { ` + alarmFields + ` }
+    results { `+alarmFields+` }
     pagination { totalRecords }
   }
-}`
+}`)
 
 // ListAlarms lists alarms in the caller's tenant with optional filters (paged).
 func (t *Tools) ListAlarms(ctx context.Context, req *mcp.CallToolRequest, in ListAlarmsInput) (*mcp.CallToolResult, ListAlarmsOutput, error) {
@@ -207,7 +206,7 @@ func (t *Tools) ListAlarms(ctx context.Context, req *mcp.CallToolRequest, in Lis
 			} `json:"pagination"`
 		} `json:"alarms"`
 	}
-	if err := t.gql.Query(ctx, "device-management", token, listAlarmsQuery, map[string]any{"criteria": criteria}, &resp); err != nil {
+	if err := t.gql.Query(ctx, listAlarmsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, ListAlarmsOutput{}, err
 	}
 	return nil, ListAlarmsOutput{Alarms: resp.Alarms.Results, TotalRecords: resp.Alarms.Pagination.TotalRecords}, nil
@@ -221,9 +220,9 @@ type GetAlarmOutput struct {
 	Alarms []AlarmSummary `json:"alarms"`
 }
 
-var getAlarmQuery = `query GetAlarm($tokens: [String!]!) {
-  alarmsByToken(tokens: $tokens) { ` + alarmFields + ` }
-}`
+var getAlarmQuery = newDocument("device-management", `query GetAlarm($tokens: [String!]!) {
+  alarmsByToken(tokens: $tokens) { `+alarmFields+` }
+}`)
 
 // GetAlarm resolves alarms by token.
 func (t *Tools) GetAlarm(ctx context.Context, req *mcp.CallToolRequest, in GetAlarmInput) (*mcp.CallToolResult, GetAlarmOutput, error) {
@@ -237,7 +236,7 @@ func (t *Tools) GetAlarm(ctx context.Context, req *mcp.CallToolRequest, in GetAl
 	var resp struct {
 		AlarmsByToken []AlarmSummary `json:"alarmsByToken"`
 	}
-	if err := t.gql.Query(ctx, "device-management", token, getAlarmQuery, map[string]any{"tokens": in.Tokens}, &resp); err != nil {
+	if err := t.gql.Query(ctx, getAlarmQuery, token, map[string]any{"tokens": in.Tokens}, &resp); err != nil {
 		return nil, GetAlarmOutput{}, err
 	}
 	return nil, GetAlarmOutput{Alarms: resp.AlarmsByToken}, nil
@@ -278,12 +277,12 @@ type ListCommandsOutput struct {
 	TotalRecords int              `json:"totalRecords"`
 }
 
-const listCommandsQuery = `query ListCommands($criteria: CommandSearchCriteria!) {
+var listCommandsQuery = newDocument("command-delivery", `query ListCommands($criteria: CommandSearchCriteria!) {
   commands(criteria: $criteria) {
     results { token deviceToken name status queuedTime sentTime respondedTime error }
     pagination { totalRecords }
   }
-}`
+}`)
 
 // ListCommands lists dispatched commands in the caller's tenant with optional
 // device/status filters (paged). Delivery lifecycle only; payloads are omitted.
@@ -307,7 +306,7 @@ func (t *Tools) ListCommands(ctx context.Context, req *mcp.CallToolRequest, in L
 			} `json:"pagination"`
 		} `json:"commands"`
 	}
-	if err := t.gql.Query(ctx, "command-delivery", token, listCommandsQuery, map[string]any{"criteria": criteria}, &resp); err != nil {
+	if err := t.gql.Query(ctx, listCommandsQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, ListCommandsOutput{}, err
 	}
 	return nil, ListCommandsOutput{Commands: resp.Commands.Results, TotalRecords: resp.Commands.Pagination.TotalRecords}, nil

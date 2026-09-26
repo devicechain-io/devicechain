@@ -160,7 +160,6 @@ const alarm = (over: Partial<AlarmRow> = {}): AlarmRow => ({
   acknowledgedTime: null,
   acknowledgedBy: null,
   lastValue: 87.4,
-  message: null,
   ...over,
 });
 

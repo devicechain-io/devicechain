@@ -82,12 +82,12 @@ type ListDevicesOutput struct {
 	TotalRecords int             `json:"totalRecords"`
 }
 
-const listDevicesQuery = `query ListDevices($criteria: DeviceSearchCriteria!) {
+var listDevicesQuery = newDocument("device-management", `query ListDevices($criteria: DeviceSearchCriteria!) {
   devices(criteria: $criteria) {
     results { token name description externalId deviceType { token } }
     pagination { totalRecords }
   }
-}`
+}`)
 
 // ListDevices lists the devices in the caller's tenant (paged), forwarding the
 // caller's token so the result is exactly what that user may see.
@@ -120,7 +120,7 @@ func (t *Tools) ListDevices(ctx context.Context, req *mcp.CallToolRequest, in Li
 			} `json:"pagination"`
 		} `json:"devices"`
 	}
-	if err := t.gql.Query(ctx, "device-management", token, listDevicesQuery, map[string]any{"criteria": criteria}, &resp); err != nil {
+	if err := t.gql.Query(ctx, listDevicesQuery, token, map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, ListDevicesOutput{}, err
 	}
 

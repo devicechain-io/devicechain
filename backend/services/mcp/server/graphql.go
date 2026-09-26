@@ -44,12 +44,42 @@ type gqlError struct {
 	Message string `json:"message"`
 }
 
-// Query executes a GraphQL query against the named area's endpoint, forwarding the
+// document is one GraphQL document MCP sends, together with the area that serves it.
+//
+// Every document is a STRING the compiler does not read, sent to a schema that lives in
+// another module, so a field dropped from a schema used to break the tool selecting it
+// only at runtime, with no CI signal. Carrying the area WITH the text is what lets
+// documents_test.go validate every document against the schema it is actually sent to,
+// and it means a call site can no longer send a document to the wrong area.
+//
+// Build one only through newDocument, which records it in documents: a document built as
+// a literal would be sent but never validated. documents_test.go refuses such a literal in
+// this package's non-test code, whether written as document{...} or with its type elided
+// inside a slice or map literal of documents, and checks that every newDocument call site
+// was recorded under the area it names.
+type document struct {
+	area string
+	text string
+}
+
+// documents is every document built by newDocument, in declaration order. It is read
+// only by documents_test.go.
+var documents []document
+
+// newDocument declares a document MCP sends to area and records it for validation.
+func newDocument(area, text string) document {
+	d := document{area: area, text: text}
+	documents = append(documents, d)
+	return d
+}
+
+// Query executes a GraphQL document against its area's endpoint, forwarding the
 // caller's bearer token, and unmarshals the `data` field into out. A transport
 // failure, a non-2xx status, or any GraphQL `errors` entry is returned as an error
 // (the tool surfaces it to the model as a failed call).
-func (c *GraphQLClient) Query(ctx context.Context, area, token, query string, variables map[string]any, out any) error {
-	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+func (c *GraphQLClient) Query(ctx context.Context, doc document, token string, variables map[string]any, out any) error {
+	area := doc.area
+	body, err := json.Marshal(map[string]any{"query": doc.text, "variables": variables})
 	if err != nil {
 		return fmt.Errorf("marshaling query: %w", err)
 	}

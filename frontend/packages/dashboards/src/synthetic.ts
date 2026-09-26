@@ -68,14 +68,14 @@ const DEFAULT_NAME = 'value';
 const SYNTHETIC_ALARMS: ReadonlyArray<
   Pick<
     AlarmRow,
-    'severity' | 'state' | 'acknowledged' | 'alarmKey' | 'metricKey' | 'lastValue' | 'originatorToken' | 'message'
+    'severity' | 'state' | 'acknowledged' | 'alarmKey' | 'metricKey' | 'lastValue' | 'originatorToken'
   >
 > = [
-  { severity: 'CRITICAL', state: 'ACTIVE', acknowledged: false, alarmKey: 'over-temperature', metricKey: 'temperature', lastValue: 87.4, originatorToken: 'thermostat-01', message: 'Temperature above 85°C' },
-  { severity: 'MAJOR', state: 'ACTIVE', acknowledged: true, alarmKey: 'low-battery', metricKey: 'battery', lastValue: 12, originatorToken: 'sensor-14', message: 'Battery below 15%' },
-  { severity: 'MINOR', state: 'ACTIVE', acknowledged: false, alarmKey: 'humidity-high', metricKey: 'humidity', lastValue: 78, originatorToken: 'sensor-03', message: 'Relative humidity above threshold' },
-  { severity: 'WARNING', state: 'CLEARED', acknowledged: true, alarmKey: 'signal-weak', metricKey: 'rssi', lastValue: -89, originatorToken: 'gateway-02', message: 'Weak uplink signal' },
-  { severity: 'INDETERMINATE', state: 'ACTIVE', acknowledged: false, alarmKey: 'self-test', metricKey: 'status', lastValue: null, originatorToken: 'device-99', message: null },
+  { severity: 'CRITICAL', state: 'ACTIVE', acknowledged: false, alarmKey: 'over-temperature', metricKey: 'temperature', lastValue: 87.4, originatorToken: 'thermostat-01' },
+  { severity: 'MAJOR', state: 'ACTIVE', acknowledged: true, alarmKey: 'low-battery', metricKey: 'battery', lastValue: 12, originatorToken: 'sensor-14' },
+  { severity: 'MINOR', state: 'ACTIVE', acknowledged: false, alarmKey: 'humidity-high', metricKey: 'humidity', lastValue: 78, originatorToken: 'sensor-03' },
+  { severity: 'WARNING', state: 'CLEARED', acknowledged: true, alarmKey: 'signal-weak', metricKey: 'rssi', lastValue: -89, originatorToken: 'gateway-02' },
+  { severity: 'INDETERMINATE', state: 'ACTIVE', acknowledged: false, alarmKey: 'self-test', metricKey: 'status', lastValue: null, originatorToken: 'device-99' },
 ];
 
 // A canonical spread of synthetic commands (one per lifecycle stage) so an author
@@ -232,7 +232,6 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
           severity: a.severity,
           originatorToken: a.originatorToken,
           lastValue: a.lastValue,
-          message: a.message,
           raisedTime: raised,
           clearedTime: a.state === 'CLEARED' ? raised : null,
           acknowledgedTime: a.acknowledged ? raised : null,

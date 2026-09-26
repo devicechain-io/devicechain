@@ -1546,6 +1546,9 @@ If you use duration rules, especially on devices that upload buffered readings, 
 `detect_late_samples_total` or the per-tenant live keys, read "Duration rules place late readings
 by their own time".
 
+If you query alarms through the GraphQL API, the MCP alarm tools, `@devicechain/dashboards` or
+`@devicechain/widgets`, or parse notification webhooks, read "The alarm `message` field is removed".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2393,6 +2396,40 @@ A checkpoint written before the upgrade restores unchanged, including any durati
 the time. Rolling back to the previous release afterwards does not turn the new records into
 alarms: it reads only the open runs from the checkpoint and ignores the rest. Nothing needs doing
 at the upgrade.
+
+#### The alarm `message` field is removed
+
+Alarms had a `message` field that nothing ever filled in: it was always null. It is removed
+everywhere it appeared:
+
+- **GraphQL:** `Alarm.message` and `AlarmEvent.message` (the `alarmStream` subscription) are gone.
+  A query or subscription that still selects `message` is now refused with
+  `Cannot query field "message"`. Remove it from your own documents before upgrading.
+- **`@devicechain/dashboards` and `@devicechain/widgets`:** `AlarmRow` no longer has `message`, so
+  code that reads `AlarmRow.message` no longer compiles. The alarm table widget no longer shows a
+  tooltip on the alarm key, and the dashboard editor's preview no longer shows made-up alarm
+  messages. Versions of these packages from before this release still select `message`, so the
+  upgraded server refuses their alarm list and alarm widgets stop loading: upgrade the packages
+  together with the platform.
+- **Notifications:** alarm emails no longer have a `Message` line and webhook payloads no longer have
+  a `message` key. Neither ever appeared, because the value was always empty.
+- **MCP:** `list_alarms` and `get_alarm` no longer return `message`.
+- **Database:** the empty `message` column is dropped from the alarms table when device-management
+  starts.
+
+While the upgrade rolls out:
+
+- A console tab opened before the upgrade, and a console, dashboard or MCP pod still on the previous
+  release, get an error on alarm lists until the tab is reloaded or the pod is replaced.
+- A `device-management` pod still on the previous release cannot store a new alarm. The alarm is
+  retried about once a minute and is normally stored by an upgraded pod. If pods of the previous
+  release keep running for more than about five minutes, for example because a new pod never
+  becomes ready, the alarm is given up and recorded as a dead letter, and it is raised only when
+  its condition clears and occurs again. Keep the rollout short, and afterwards check
+  `dcctl dead-letters list --kind detection-action --source device-management` for alarms that
+  were not raised.
+- Alarm lists, acknowledge and clear served by a `device-management` pod still on the previous
+  release can fail once per database connection. Repeating the request succeeds.
 
 ### The one-time durable-ingest cutover
 

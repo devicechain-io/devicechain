@@ -471,7 +471,6 @@ CREATE TABLE "device-management".alarms (
  acknowledged_time timestamp with time zone,
  acknowledged_by character varying(256),
  last_value numeric,
- message character varying(1024),
  contributors jsonb,
  contributor_version bigint DEFAULT 0 NOT NULL
 );
