@@ -2720,6 +2720,57 @@ is.
 Nothing needs configuring. If you point backups at your own object store with
 `--backup-credentials-file`, nothing changes for you.
 
+#### A database primary fails over in seconds
+
+Deleting a database primary's pod, draining its node, or rolling out a change to it used to hold
+the failover for three minutes: the primary waited for every client to disconnect, and the
+platform's services never do. It now gives clients five seconds and then shuts down, so under
+`--ha` a standby takes over in well under a minute. See
+[When a database primary stops](./bootstrap.md#ha-database-failover).
+
+- **A multi-instance database now rolls its primary by switchover.** Earlier releases restarted
+  the primary in place and waited for it, with no standby promoted, which made every such
+  rollout a full write outage.
+- **A stopping database instance is stopped forcibly after two minutes**, instead of thirty. A
+  database pod that stayed `Terminating` for up to half an hour after its database had stopped,
+  leaving the cluster a standby short, is now removed after at most two minutes.
+- **If the backup store is unreachable when an instance stops**, the instance no longer waits up
+  to thirty minutes for its last write-ahead log to be archived. It waits at most two. Committed
+  data is not affected, but the archive can have a gap, as described on the page linked above.
+
+**The relational store's instances restart once when `dcctl install` moves the cluster.** Under
+`--ha` the standbys restart first and the primary role is then switched over to one of them,
+which is a brief write outage. A single-instance install restarts its only instance in place,
+and the relational store is unavailable until the restart finishes. Writes made during it are
+retried.
+
+**The event store of an existing instance keeps the old settings.** `dcctl upgrade` does not
+re-apply an instance's databases, so only instances bootstrapped from this release get the new
+settings on their event store. To give an existing instance's event store the same settings,
+patch its database cluster. This restarts its instances once, as above:
+
+```bash
+kubectl -n dci-<instance> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"smartShutdownTimeout":5,"stopDelay":120,"switchoverDelay":120}}'
+# under --ha only: roll the primary by switchover, as a new instance does
+kubectl -n dci-<instance> patch cluster dc-tsdb --type merge \
+  -p '{"spec":{"primaryUpdateMethod":"switchover"}}'
+```
+
+:::caution The restart that applies these settings still has the old thirty-minute limit
+The two-minute limit belongs to each database pod, so it arrives with the restart that replaces
+the pod, and the pods being replaced still carry thirty minutes. If a database pod stays
+`Terminating` for more than two minutes during that restart, and its log shows
+`failed waiting for all runnables to end within grace period of 30s`, its database has already
+stopped and the pod is not going to finish on its own. Remove it, and the operator recreates it:
+
+```bash
+# the relational store's pods are dc-rdb-<n> in dc-system,
+# the event store's are dc-tsdb-<n> in dci-<instance>
+kubectl -n dc-system delete pod dc-rdb-1 --grace-period=0 --force
+```
+:::
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

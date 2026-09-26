@@ -335,6 +335,12 @@ suponiendo que cada una de esas conexiones puede estar ejecutando una consulta l
   conexiones y la decisión sobre la posición, y no se pueden revocar por separado. Dimensiona
   `connection_limit` para todas ellas juntas, y activa `reads_location` si *alguna* de ellas necesita
   un mapa.
+- **Un reinicio de la base de datos cierra la sesión de un lector a los cinco segundos.** Cuando la
+  primaria del almacén de eventos se detiene (una conmutación por error, el drenaje de un nodo, el
+  despliegue de un cambio de configuración), los clientes conectados disponen de cinco segundos
+  antes de que se cierren sus sesiones, así que una consulta larga en curso en ese momento falla.
+  Vuelve a conectarte y ejecútala de nuevo. Consulta
+  [cuando se detiene la primaria de una base de datos](../deployment/bootstrap.md#ha-database-failover).
 - **Un lector sobrevive a un cambio de esquema pero no gana nada de él automáticamente.** Las vistas
   exponen un conjunto fijo de columnas. Una columna añadida a la plataforma más tarde aparece en la
   superficie analítica cuando se añade allí deliberadamente, no antes.

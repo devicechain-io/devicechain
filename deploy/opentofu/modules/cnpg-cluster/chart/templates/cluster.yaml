@@ -240,6 +240,29 @@ where there is no time to debug the configuration.
   {{- end -}}
 {{- end -}}
 
+{{- /*
+SHUTDOWN TIMING. The numbers and the reasons for them are in values.yaml.
+
+`required`, although values.yaml gives all three a default: an explicit null
+would otherwise render no field, and an absent field is not "no timeout" but
+CloudNativePG's default (180 / 1800 / 3600) -- the three-minute failover these
+values exist to remove, back without a word. (`required` refuses null and the
+empty string only; 0 passes it, and CloudNativePG honours 0 for
+smartShutdownTimeout by skipping the smart phase -- faster, not slower, so it is
+left alone here even though values.yaml does not choose it.)
+
+The `fail` refuses a stopDelay that leaves the fast phase less than the 15s
+CloudNativePG documents as its floor. At or below smartShutdownTimeout the
+instance manager goes further and skips the smart phase, saying so only in a log
+line, so neither number would mean what it says.
+*/ -}}
+{{- $smart := required "cnpg-cluster: .Values.smartShutdownTimeout is required -- unset, CloudNativePG waits 180s for clients that never disconnect before a primary can be replaced" .Values.smartShutdownTimeout | int -}}
+{{- $stop := required "cnpg-cluster: .Values.stopDelay is required -- unset, CloudNativePG gives a stopping instance 1800s" .Values.stopDelay | int -}}
+{{- $switchover := required "cnpg-cluster: .Values.switchoverDelay is required -- unset, CloudNativePG gives a demoting primary 3600s" .Values.switchoverDelay | int -}}
+{{- if lt (sub $stop $smart) 15 -}}
+  {{- fail (printf "cnpg-cluster %q: stopDelay %d leaves %d seconds for the fast shutdown after smartShutdownTimeout %d, and CloudNativePG documents a floor of 15. At or below smartShutdownTimeout the smart phase is skipped with only a log line to say so, so neither value would do what it says." $name $stop (sub $stop $smart) $smart) -}}
+{{- end -}}
+
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -272,6 +295,31 @@ spec:
   #
   # Above one instance the budget is doing real work and stays on.
   enablePDB: {{ gt $instances 1 }}
+
+  # Shutdown timing; see values.yaml for the numbers and why. 🔴 All three are read
+  # back by hack/check-cnpg-chart-schema.sh against the redelivery budget, with an
+  # absent field counted at CloudNativePG's default -- so deleting a line here fails
+  # CI rather than quietly restoring the three-minute failover.
+  smartShutdownTimeout: {{ $smart }}
+  stopDelay: {{ $stop }}
+  switchoverDelay: {{ $switchover }}
+
+  # How a spec change that needs the PRIMARY's pod recreated is rolled out (an
+  # image bump, a resource change, a new terminationGracePeriodSeconds -- which is
+  # stopDelay, so moving the value above is itself one).
+  #
+  # 🔴 NOT CloudNativePG's default above one instance. The default, `restart`,
+  # deletes the primary's pod and WAITS for it to come back -- no standby is
+  # promoted -- so every roll is a write outage lasting a full stop plus a pod
+  # recreate plus a start, and a stop that hangs holds it for the pod's whole grace
+  # period. `switchover` promotes an up-to-date standby first, through the same
+  # fast shutdown switchoverDelay bounds, and the old primary then rolls as a
+  # replica. At one instance there is nothing to switch to, so it is the in-place
+  # restart either way, written out rather than left to the default.
+  #
+  # Read back by hack/check-cnpg-chart-schema.sh, which fails a multi-instance
+  # render whose effective method is not `switchover`.
+  primaryUpdateMethod: {{ gt $instances 1 | ternary "switchover" "restart" }}
 
   storage:
     size: {{ required "cnpg-cluster: .Values.storage.size is required" .Values.storage.size }}

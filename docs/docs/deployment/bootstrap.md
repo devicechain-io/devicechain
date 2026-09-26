@@ -641,6 +641,49 @@ up and retries writes twice unless the operation is idempotent. `statement_timeo
 statement.
 :::
 
+#### When a database primary stops {#ha-database-failover}
+
+A database instance stops when its pod is deleted, when its node is drained, and when a
+change to its configuration is rolled out. The instance first writes a checkpoint, then stops
+accepting new connections and gives connected clients five seconds to leave. The platform's
+services keep their database connections open for as long as they run, so waiting longer for
+them would only delay what comes next. After those five seconds the instance ends every open
+connection and shuts down. Writes that were in progress fail, and the services retry them.
+
+Under `--ha`, a standby is promoted once the old primary has stopped, and `dc-postgresql` or
+`dc-timescaledb-single` moves to it. In testing, the new primary was accepting writes 20 to 25
+seconds after the old one ended its connections, about half a minute after the pod was
+deleted. Rolling out a configuration change does not restart the primary in place: the
+standbys restart first, then the primary role is switched over to an up-to-date standby, and
+the old primary restarts as a standby. In testing, that switchover interrupted writes for about
+ten seconds.
+
+A single-instance install has no standby to promote. Its database is unavailable until the
+instance has restarted, and writes wait for it. In testing, on a small database, writes
+resumed about 15 seconds after they stopped; a restart that has more write-ahead log to replay
+takes longer.
+
+Either way, events are held by the messaging layer until they are stored. Each one is
+delivered up to five times, a minute apart, before it is given up on and
+[recorded as undelivered](./observability.md#max-delivery-records). A database outage shorter
+than about four minutes therefore leaves no event undelivered.
+
+A stopping instance is given at most two minutes in all. If it has not stopped by then, it is
+stopped forcibly and its pod is removed. The most likely reason is that it is still trying to
+copy its last write-ahead log to an unreachable backup store. Committed data stays where it was
+committed, but part of the backup archive can then be missing: a point-in-time restore may not
+reach a moment inside that gap, and the `PostgresWALArchivingFailing` alert is already firing.
+Restores to points after the next base backup are unaffected. A base backup that is running
+when the primary stops is abandoned, and the next scheduled one runs as usual.
+
+Under `--ha`, a primary that is being demoted (by a switchover, or because it is failing) is
+likewise stopped abruptly if it has not shut down within two minutes. On the relational store
+that loses nothing, because every commit is held until a standby has it. The event store does
+not wait for a standby when none is available, so a commit made while no standby was attached
+exists only on its primary, and is lost if that primary is replaced before a standby catches
+up. That is the recovery-point trade described above, and an abrupt stop is one more way to
+reach it.
+
 #### Verifying it {#verifying-it}
 
 An HA claim is only worth what the broker actually holds, so check it there rather than in the

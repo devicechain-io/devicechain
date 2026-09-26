@@ -68,6 +68,70 @@ nodeLossTolerationSeconds: null
 # credential with no consumer.
 enableSuperuserAccess: false
 
+# How a stopping instance shuts down. CloudNativePG's defaults are 180 / 1800 /
+# 3600, and all three are wrong for this platform for one reason: the services
+# hold their pooled connections open for as long as they run, so a SMART shutdown
+# (stop accepting new connections, wait for the existing ones to leave) never
+# finishes on its own. Measured with the defaults: a deleted primary spent exactly
+# 180s in smart shutdown before a standby could be promoted, and a new primary
+# took 3m24s in total, against a redelivery budget of 4 minutes.
+#
+# These carry defaults rather than null + a module variable because both stores
+# take the same values and no caller has a reason to vary them: the default IS
+# the one value that ships. templates/cluster.yaml still `required`s all three, so
+# an explicit null cannot fall through to CloudNativePG's defaults.
+#
+# 🔴 hack/check-cnpg-chart-schema.sh reads all three back from the RENDER, counting
+# an absent field at the CRD's default, and fails unless they fit inside the
+# messaging layer's redelivery budget: (ConsumerMaxDeliver-1) x
+# ConsumerAckWaitSeconds in backend/core/streams/streams.go, 240s today. It reads
+# both sides, so moving either one can fail it.
+#
+# smartShutdownTimeout: the wait for clients to leave. With the services
+# connected it is pure delay, so it is short. It is not 0 because 0 is honoured
+# only by an undocumented path (the instance manager skips the smart phase); 5s
+# keeps us on the documented one and still lets an instance nobody is connected
+# to (maintenance, teardown) stop gracefully. Note that CloudNativePG runs a
+# CHECKPOINT before the smart phase, outside this window.
+smartShutdownTimeout: 5
+# stopDelay: the OUTER bound on stopping an instance whose pod is being deleted
+# (pod delete, node drain, an in-place primary restart), and also the pod's
+# terminationGracePeriodSeconds -- after it the kubelet kills the instance
+# manager. It is the longest a stopping instance can hold its pod: an instance
+# manager that hangs after PostgreSQL has stopped (seen twice on CloudNativePG
+# 1.30.0) keeps the pod Terminating until this runs out, which at the 1800s
+# default was half an hour with the cluster a standby short.
+#
+# At the pinned operator (1.30.0) the fast phase after the smart one is bounded by
+# pg_ctl's own implicit 60s, not by what is left of this window; stopDelay bounds
+# the whole thing -- checkpoint, smart phase, fast phase, WAL archiving of the
+# last segment, and any hang after it. CloudNativePG documents that stopDelay
+# must leave at least 15s after smartShutdownTimeout for the fast phase; the
+# chart refuses less.
+#
+# Trade, taken deliberately: a stop waits for the last WAL to be archived, and if
+# the backup store is unreachable the instance is killed at 120s rather than
+# 1800s. Committed data stays where it was committed (the instance's own WAL, and
+# the synchronous standby while one is attached), but WAL not yet archived is
+# missing from the ARCHIVE. PostgresWALArchivingFailing is already firing then.
+stopDelay: 120
+# switchoverDelay: NOT only "the planned-switchover bound". It is the timeout of
+# the FAST shutdown CloudNativePG uses whenever it demotes a primary -- a planned
+# switchover (which is how a multi-instance cluster now rolls its primary, see
+# primaryUpdateMethod in templates/cluster.yaml), fencing, and the shutdown of a
+# failing primary -- and when it runs out the next step is an IMMEDIATE shutdown,
+# i.e. a crash stop. CloudNativePG warns that a low value favours RTO over RPO.
+# Why that is acceptable here: a fast shutdown does not wait for clients, so it
+# normally ends in seconds, and the step that can run long is archiving the last
+# WAL segment; the relational store's synchronous replication is `required`, so a
+# commit is on a standby before the client sees it. The event store's is
+# `preferred`, so while it has NO synchronous standby attached a commit is only
+# local, and a crash stop of that primary followed by a promotion can lose what
+# the new primary never received -- the same exposure `preferred` already takes
+# on any primary crash. The default (3600) would instead hold a demotion, and so
+# the promotion behind it, for up to an hour. Same bound as stopDelay.
+switchoverDelay: 120
+
 synchronous:
   # Off by default so a single-instance install is the safe path. At one
   # instance there is no standby, and `number: 1` would stall every write
