@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -132,7 +133,7 @@ func (l *gormLogger) Trace(_ context.Context, begin time.Time, fc func() (string
 		return
 	}
 	sql, rows := fc()
-	e = e.Str("sql", sql)
+	e = e.Str("sql", explainedPlaceholder.ReplaceAllString(sql, "$$$1"))
 	if rows != -1 {
 		e = e.Int64("rows", rows)
 	}
@@ -142,8 +143,17 @@ func (l *gormLogger) Trace(_ context.Context, begin time.Time, fc func() (string
 		Msg(msg)
 }
 
+// explainedPlaceholder is a numbered placeholder as gorm's Explain leaves it when it has no
+// value to substitute. Explain (logger.ExplainSQL, which the postgres dialector uses) first
+// rewrites every `$N` to `$N$`, then replaces each `$N$` with the N-th bound value — and
+// ParamsFilter below supplies none, so every placeholder would otherwise reach the sql field
+// as `$1$`. Trace puts it back to `$1`, the form Postgres itself uses. A `?` placeholder
+// (sqlite) never takes this form.
+var explainedPlaceholder = regexp.MustCompile(`\$(\d+)\$`)
+
 // ParamsFilter implements gorm.ParamsFilter: gorm renders a logged statement from what this
-// returns, and with no values it renders the statement's placeholders. Unconditional — at
+// returns, and with no values it renders the statement's placeholders (numbered ones as `$N$`,
+// which Trace turns back into `$N` — see explainedPlaceholder). Unconditional — at
 // every level, sqlDebug included — because a switch to bring the values back would be a
 // setting whose only effect is to write credentials and tenant tokens into the log.
 func (l *gormLogger) ParamsFilter(_ context.Context, sql string, _ ...any) (string, []any) {

@@ -1563,7 +1563,8 @@ attribute notification no longer needs a republish: read "Lost rule, device and 
 are repaired automatically".
 
 If you search or alert on database messages in service logs, or turn on `sqlDebug`, read "Database
-messages are structured log lines, and a query that finds nothing is no longer logged".
+messages are structured log lines, and a query that finds nothing is no longer logged as a
+failure".
 
 #### Every user is signed out once, and a password reset now ends sessions
 
@@ -2656,7 +2657,7 @@ What you will see:
   service secret or either address is not configured, the comparison is off and the service logs a
   warning at startup, as geofence evaluation does.
 
-#### Database messages are structured log lines, and a query that finds nothing is no longer logged
+#### Database messages are structured log lines, and a query that finds nothing is no longer logged as a failure
 
 Earlier releases printed database messages in a format of their own: coloured, multi-line text
 written outside the service's JSON log, with no `instance` or `area` field, whatever

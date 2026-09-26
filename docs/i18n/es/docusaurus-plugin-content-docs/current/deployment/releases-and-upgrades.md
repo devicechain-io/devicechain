@@ -1670,7 +1670,7 @@ dispositivos y atributos se reparan solos».
 
 Si busca o alerta sobre mensajes de la base de datos en los registros de los servicios, o activa
 `sqlDebug`, lea «Los mensajes de la base de datos son líneas de registro estructuradas, y una
-consulta que no encuentra nada ya no se registra».
+consulta que no encuentra nada ya no se registra como un fallo».
 
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
@@ -2844,7 +2844,7 @@ Lo que verá:
   configurado, la comparación queda desactivada y el servicio registra un aviso al arrancar, como
   ocurre con la evaluación de geocercas.
 
-#### Los mensajes de la base de datos son líneas de registro estructuradas, y una consulta que no encuentra nada ya no se registra
+#### Los mensajes de la base de datos son líneas de registro estructuradas, y una consulta que no encuentra nada ya no se registra como un fallo
 
 Las versiones anteriores imprimían los mensajes de la base de datos en un formato propio: texto de
 varias líneas y en color, escrito fuera del registro JSON del servicio, sin los campos `instance`
