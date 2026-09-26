@@ -196,20 +196,39 @@ size the setting:
   span of time, and a reading from outside the span the rule currently covers is not evidence about
   that span. Counting it would let "three readings above 80 within ten seconds" fire on readings an
   hour apart.
-- **Rules without a window still evaluate it** — threshold, duration, count-window and rate. Each
-  compares a reading against the one before it or against a fixed bound, so there is no span for a
-  late reading to fall outside of.
+- **Duration rules discard a matching reading that is further behind the frontier than their hold
+  time.** Such a reading could only change a hold the engine has already decided. A reading inside
+  that span is placed by its own time, not by when it arrived. A late reading showing the condition
+  had stopped part-way through a run restarts the run from the newest reading that met it, and a
+  late reading that meets the condition never reopens a run across a break the engine has already
+  seen, so a late reading cannot raise a duration alarm the readings do not support. A reading that
+  does not meet the condition ends a raised duration alarm however late it arrives, unless it is
+  older than the alarm: a late reading from before the alarm was raised, arriving after it, does
+  not withdraw it.
+- **Rules without a window still evaluate it** — threshold, count-window and rate. Each compares a
+  reading against the one before it or against a fixed bound, so there is no span for a late
+  reading to fall outside of.
 
-Either way the reading is **stored and charted normally**; this is a detection-only effect.
+In every case the reading is **stored and charted normally**; this is a detection-only effect.
 
 Inside the tolerance nothing changes: an out-of-order reading that still falls within the window is
 folded in as normal, which is what the tolerance is for. The window can stretch by up to the
 tolerance as a result — that is what tolerating out-of-order arrival means — but no further.
 
-The sliding kinds **count what they discard**. `detect_late_samples_total` rises every time a
-reading arrives after the window it belonged to has passed, so a fleet whose windowed rules have
-gone quiet has something to look at rather than silence; a store-and-forward upload is the usual
-cause. Tumbling-window and session rules discard silently and do not appear in it.
+The sliding kinds and duration rules **count what they discard**, once for each rule that
+discards a reading. `detect_late_samples_total` rises every time a reading arrives after the window
+it belonged to has passed, when a duration rule discards a matching reading further behind the
+frontier than its hold time, and when a reading that does not meet a duration rule's condition
+arrives after its alarm was raised but was taken inside the run that raised it, before the raise.
+A late reading older than the whole run is ignored and not counted: the run began after it. A
+fleet whose rules have gone quiet therefore has something to look at rather than silence; a store-and-forward upload is the usual cause. Tumbling-window and session rules discard
+silently and do not appear in it.
+
+A duration rule raises its alarm when the frontier passes the end of the hold, and the frontier
+trails the newest reading by the lateness tolerance. A reading showing the condition stopped that
+arrives before then ends the run without raising, even when every reading arrives in order and the
+condition had held for the full hold time. So an episode is certain to raise only if it lasts its
+hold time plus the lateness tolerance.
 
 One property makes the tolerance less of a lever than it looks: **the frontier is shared across the
 whole instance**, not tracked per device. So a fleet's busy devices carry it to roughly "now"
@@ -219,14 +238,21 @@ by half an hour. Where that trade does not work, the answer is to shorten the up
 keep window-shaped rules off those metrics — see [connecting a
 device](../guides/connecting-a-device.md).
 
+The shared frontier also applies to **device clocks**. A device whose timestamps consistently trail
+the rest of the fleet by more than a duration rule's hold time plus the lateness tolerance, whether
+from a slow clock or a slow path to the platform, never raises that rule: every reading of it that
+meets the condition is discarded as late and counted on `detect_late_samples_total`. Correct the
+device's clock, or give the rule a hold time longer than the lag.
+
 The same applies to readings that waited **inside the platform**. While `event-sources` is down,
 the platform broker keeps storing what devices publish over MQTT, and `event-sources` works through
 that backlog when it returns. Each reading keeps its own time: one the device reported, or, for a
 reading sent with no `occurredTime`, the moment the broker received it. Only transports that
 bypass `event-sources` keep arriving in the meantime: LwM2M and Sparkplug do, and they keep the
 frontier at "now", while HTTP ingest is served by `event-sources` itself and is down with it. After an outage longer than a rule's window, the backlog therefore arrives late to the
-sliding kinds, exactly as a store-and-forward upload does: it is stored and charted normally, is
-not folded into those windows, and `detect_late_samples_total` rises.
+sliding kinds, and to duration rules when it is older than their hold time, exactly as a
+store-and-forward upload does: it is stored and charted normally, is not used by those rules, and
+`detect_late_samples_total` rises.
 
 ### How quickly can an absence rule fire?
 
@@ -337,9 +363,11 @@ results:
   every device, including devices that do have the attribute.
 - It does not apply a **group scope** — a scoped rule previews across the whole profile.
 - It cannot arm absence for a device that has **never reported**.
+- It runs with **no lateness tolerance**, so a reading that arrives further behind the rest of the
+  replayed history than a sliding window or a duration rule's hold time is not used.
 
-When preview truncates — because the window aged out of retention, or a scan limit was reached — it
-tells you so rather than silently returning a short result. Read that notice before concluding a
+When preview truncates — because the window aged out of retention, or a scan limit was reached — or
+sets readings aside as late, it tells you so rather than silently returning a short result. Read that notice before concluding a
 rule does not fire.
 
 ## Configuration {#configuration}
@@ -365,7 +393,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 
 | Setting | Default | What it does |
 |---|---|---|
-| `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, and other rules ignore a reading older than one they have already seen. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
+| `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, a duration rule places it by its own time, and the other rules ignore a reading older than one they have already seen. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
 | `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |
 | `checkpointIntervalSeconds` | 10 | Maximum time between checkpoints, so a quiet stream still commits. **At most 30**: a checkpoint is what acknowledges the stream, so an interval near or past the broker's 60-second acknowledgement window makes messages on a quiet stream redeliver. 30 leaves room for the checkpoint itself, and the service refuses anything longer at startup. |

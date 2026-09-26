@@ -51,8 +51,11 @@ func measuredMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metri
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
 		EventType:           esmodel.Measurement,
+		// The entry carries its own instant, as the resolver always stamps one: the engine places a
+		// sample by it, so a zero here would be a reading from the year 1.
 		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			Entries: []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
+			OccurredTime: occurred,
+			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
 		}}},
 	}
 	b, err := dmproto.MarshalResolvedEvent(ev)
@@ -184,8 +187,11 @@ func measuredMsgScoped(t *testing.T, seq uint64, tenant, device, profileVersion,
 		ProcessedTime:       occurred,
 		EventType:           esmodel.Measurement,
 		ScopeMemberships:    refs,
+		// The entry carries its own instant, as the resolver always stamps one: the engine places a
+		// sample by it, so a zero here would be a reading from the year 1.
 		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			Entries: []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
+			OccurredTime: occurred,
+			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
 		}}},
 	}
 	b, err := dmproto.MarshalResolvedEvent(ev)

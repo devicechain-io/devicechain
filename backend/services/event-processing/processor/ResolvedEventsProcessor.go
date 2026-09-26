@@ -1692,9 +1692,10 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		}
 	}
 	rp.engine.ProcessResolved(msg.StreamSeq, occurred, plan.Events)
-	// Samples the sliding kinds declined as late (core.foldsIn). Drained here rather than left on
-	// the engine so the counter is the only place the number lives — a store-and-forward fleet whose
-	// windowed rules stop firing shows up as a rising detect_late_samples_total instead of silence.
+	// Samples the engine declined as late (the sliding kinds' foldsIn, Duration's hold budget in
+	// applyDuration). Drained here rather than left on the engine so the counter is the only place
+	// the number lives — a store-and-forward fleet whose windowed or duration rules stop firing
+	// shows up as a rising detect_late_samples_total instead of silence.
 	rp.metrics.recordLateSamples(rp.engine.DrainLateSamples())
 	rp.drainDetections(triggerTime(msg, event))
 	if rp.engine.LastSeq() > prev || descoped {

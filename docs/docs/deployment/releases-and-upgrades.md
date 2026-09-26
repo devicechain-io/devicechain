@@ -1542,6 +1542,10 @@ below its previous level only once you delete the two buckets it no longer uses.
 If you write threshold or duration rules in CEL that read device attributes, read "A threshold or
 duration condition that is true for every device without an attribute is now refused".
 
+If you use duration rules, especially on devices that upload buffered readings, or watch
+`detect_late_samples_total` or the per-tenant live keys, read "Duration rules place late readings
+by their own time".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2327,6 +2331,68 @@ publish the profile again. See
 
 The preview documentation is corrected too. Preview resolves no device attributes, so a CEL fallback
 previews its fallback on every device; it does not preview as never firing.
+
+#### Duration rules place late readings by their own time
+
+A duration rule ("temperature above 80 for 10 minutes") now places each reading by the time it was
+taken rather than the order it arrived in, and discards a reading that meets its condition but is
+further behind the detection engine's frontier than the rule's hold time. Before this release a
+late reading was applied as if it were the newest one:
+
+- **A late reading that did not meet the condition cancelled a hold that newer readings still
+  supported.** A device uploading buffered readings could delay a duration alarm by up to a full
+  hold each time, or keep it from raising at all while the condition held throughout. Now a late
+  reading older than the run is ignored, and one showing that the condition stopped part-way
+  through restarts the run from the newest reading that met it.
+- **A late reading that met the condition could open a run across a break the engine had already
+  seen**, and raise an alarm the readings did not support. It is now ignored.
+- **A reading from long before the frontier could open a run whose hold had already passed**, and
+  raise the alarm at the next event. It is now discarded and counted on
+  `detect_late_samples_total`, whose description now names duration rules alongside the sliding
+  kinds.
+
+A reading that does not meet the condition still ends a raised duration alarm however late it
+arrives, unless it is older than the alarm: a late reading from before the alarm was raised,
+arriving after it, does not withdraw it, and is counted on `detect_late_samples_total` when it was
+taken inside the run that raised the alarm (one older than the whole run is ignored). Because
+readings are now placed where they belong, a duration alarm can raise earlier or later than it did
+before, depending on the order its readings arrived in; it no longer raises on a run the readings
+show was broken. As before, an episode is certain to raise only if it lasts its hold time plus the
+lateness tolerance. See [what "when" means to the detection engine](./detection-engine.md#timing-what-when-means).
+
+Because the frontier is shared by the whole instance, a device whose timestamps consistently trail
+the rest of the fleet by more than a duration rule's hold time plus the lateness tolerance, from a
+slow clock or a slow path, never raises that rule: each of its readings that meets the condition is discarded and counted as
+late. Before this release such readings were applied.
+
+The canvas preview runs with no lateness tolerance, so it discards a late reading with no margin.
+It now says how many readings it set aside as late, for duration rules and the sliding kinds.
+
+**What it costs.** To tell a late reading from a break, a duration rule now keeps a small record
+and an expiry timer for every device that sends the rule's metric without meeting its condition,
+until one hold time after that device's newest such reading. Before, such a device held nothing.
+For a device that reports at least once per hold, the record is therefore permanent while it keeps
+reporting:
+
+- **Two live keys per device per duration rule**, counted toward the per-tenant live-key ceiling,
+  which is measured and not enforced. A tenant with 100,000 reporting devices under five duration
+  rules reaches the default `maxLiveKeysPerTenant` of 1,000,000 on this alone, and the
+  `DetectTenantOverStateBudget` warning then fires. Raise `maxLiveKeysPerTenant` if that is your
+  fleet.
+- **About 290 bytes of detection checkpoint per device per duration rule**
+  (`detect_snapshot_bytes`), measured in-process with a 26-character rule id and 19-character
+  device tokens. It grows with the length of both.
+- **The frontier moves on every idle interval.** Those expiry timers are pending work, so an
+  instance with a duration rule and any device reporting its metric advances and checkpoints the
+  frontier on a quiet stream instead of staying at rest.
+
+A raised device also keeps its run until the condition stops, where it used to give it up at the
+raise.
+
+A checkpoint written before the upgrade restores unchanged, including any duration alarm raised at
+the time. Rolling back to the previous release afterwards does not turn the new records into
+alarms: it reads only the open runs from the checkpoint and ignores the rest. Nothing needs doing
+at the upgrade.
 
 ### The one-time durable-ingest cutover
 

@@ -93,16 +93,16 @@ Cómo se entera el dispositivo depende del transporte:
 Los operadores ven todos los rechazos en el contador `total_msg_too_many_readings`. El tope es un ajuste de operador (`maxReadingsPerMessage`) para una instancia cuya flota necesite realmente otro valor. Bajarlo no reescribe el historial, pero sí se aplica a lo que siga en cola: los mensajes ya capturados y aún sin decodificar se rechazan con el valor nuevo.
 
 :::caution Un lote muy acumulado se almacena entero, pero la detección puede no verlo todo
-El almacenamiento guarda cada lectura en su propio instante, sin matices. La detección es otra cosa: un dispositivo que estuvo sin conexión y luego sube toda su serie de golpe puede ver cómo las reglas con ventana de tiempo descartan sus lecturas más antiguas, sin registro ni alarma. Consulta [Subidas acumuladas y reglas con ventana](#buffered-uploads-and-windowed-rules).
+El almacenamiento guarda cada lectura en su propio instante, sin matices. La detección es otra cosa: un dispositivo que estuvo sin conexión y luego sube toda su serie de golpe puede ver cómo las reglas con ventana de tiempo o con tiempo de sostenimiento descartan sus lecturas más antiguas, sin registro ni alarma. Consulta [Subidas acumuladas y reglas con ventana](#buffered-uploads-and-windowed-rules).
 :::
 
 #### Subidas acumuladas y reglas con ventana {#buffered-uploads-and-windowed-rules}
 
-El motor de detección mantiene una única frontera para toda la instancia y la avanza con la hora propia de cada mensaje. Un dispositivo que estuvo un rato sin conexión y luego sube toda su serie de golpe puede hacer que sus lecturas más antiguas lleguen por detrás de esa frontera. Las reglas con ventana de tiempo descartan una lectura cuya ventana ya ha quedado atrás de la frontera: los agregados de ventana fija, las reglas de sesión/hueco y los tipos deslizantes (repetición, agregados deslizantes y correlación). Ningún registro ni ninguna alarma deja constancia del descarte.
+El motor de detección mantiene una única frontera para toda la instancia y la avanza con la hora propia de cada mensaje. Un dispositivo que estuvo un rato sin conexión y luego sube toda su serie de golpe puede hacer que sus lecturas más antiguas lleguen por detrás de esa frontera. Las reglas con ventana de tiempo descartan una lectura cuya ventana ya ha quedado atrás de la frontera: los agregados de ventana fija, las reglas de sesión/hueco y los tipos deslizantes (repetición, agregados deslizantes y correlación). Las reglas de duración descartan una lectura que cumple su condición y queda más atrás de la frontera que su tiempo de sostenimiento, y colocan el resto según su propia hora. Ningún registro ni ninguna alarma deja constancia del descarte.
 
-Los tipos deslizantes cuentan lo que descartan en la métrica `detect_late_samples_total`. Los agregados de ventana fija y las reglas de sesión/hueco descartan en silencio y no aparecen en ella.
+Los tipos deslizantes y las reglas de duración cuentan lo que descartan en la métrica `detect_late_samples_total`. Los agregados de ventana fija y las reglas de sesión/hueco descartan en silencio y no aparecen en ella.
 
-Las reglas de umbral, duración, ventana de conteo y tasa sí evalúan esas lecturas.
+Las reglas de umbral, ventana de conteo y tasa sí evalúan esas lecturas.
 
 La tolerancia es [`watermarkLatenessSeconds`](../deployment/detection-engine.md) (5 segundos por defecto). Subirla ayuda solo hasta cierto punto: la frontera es compartida, así que los dispositivos activos la siguen empujando hacia adelante por mucho tiempo que el silencioso haya estado fuera.
 

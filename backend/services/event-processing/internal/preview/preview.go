@@ -35,6 +35,7 @@ package preview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"time"
@@ -268,6 +269,19 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	// documented approximation.
 	engine.Advance(tr.End)
 	res.Firings = appendFirings(res.Firings, engine.Drain(), tr)
+
+	// Readings the engine declined as late (a sliding window that had already passed them, or a
+	// duration reading further behind the frontier than its hold) reached the engine and were not
+	// used. Unreported, the preview would answer "the rule would not have fired" about readings it
+	// never looked at — the confident wrong answer this package exists to avoid. The live engine
+	// declines the same readings, but counts them on a metric; here the count is the only trace.
+	if n := engine.DrainLateSamples(); n > 0 {
+		noun := "readings"
+		if n == 1 {
+			noun = "reading"
+		}
+		addDegraded(&res.Degraded, fmt.Sprintf("%d %s arrived too far behind the other readings to be used by the rule; firings may be incomplete", n, noun))
+	}
 
 	// A rule whose leaf errored on in-scope events would otherwise be indistinguishable from a quiet
 	// rule; surface it (M1).

@@ -14,7 +14,10 @@ import (
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // measuredMsgAt is measuredMsg with the occurred time given rather than derived from the
@@ -102,4 +105,71 @@ func TestProcessorDrainsTheEngineLateSampleCount(t *testing.T) {
 	if n := rp.engine.DrainLateSamples(); n != 0 {
 		t.Errorf("the processor left %d late samples undrained — detect_late_samples_total would read a permanent zero", n)
 	}
+}
+
+// durationReg wires a registry with one Duration rule: temperature above 80 held for 10s.
+func durationReg(t *testing.T) *runtime.RuleRegistry {
+	t.Helper()
+	thr := 80.0
+	cr, err := rules0.Compile(rules0.Rule{
+		ID:   "acme/hot",
+		Name: "hot",
+		Type: rules0.TypeDuration,
+		When: rules0.Condition{Metric: "temperature", Op: rules0.OpGt, Threshold: &thr},
+		Hold: rules0.Duration(10 * time.Second),
+	}, rules0.Limits{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	return runtime.NewRuleRegistry([]runtime.ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: cr}})
+}
+
+// A duration rule refuses a matching reading further behind the frontier than its hold, and the
+// processor must carry that refusal onto detect_late_samples_total — through the real processor, so
+// the counter is proven to see the duration kind and not only the sliding ones.
+func TestADurationReadingPastItsHoldIsCountedLate(t *testing.T) {
+	now := testBase.Add(2 * time.Hour)
+
+	run := func(t *testing.T, readingAt time.Time) float64 {
+		t.Helper()
+		ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
+		ms.UseMetricsRegistry(prometheus.NewRegistry())
+		metrics := NewDetectMetrics(ms)
+		reg := durationReg(t)
+		ctx := context.Background()
+		rp := &ResolvedEventsProcessor{
+			Store: newTestStore(t),
+			cfg: Config{
+				PartitionId:        "singleton",
+				CheckpointEvents:   100,
+				CheckpointInterval: time.Hour,
+				TickInterval:       time.Hour,
+				Clock:              detectcore.RealClock{},
+			},
+			registry:  reg,
+			metrics:   metrics,
+			publisher: runtime.NewPublisher(&captureWriter{}, reg, metrics),
+			clock:     detectcore.RealClock{},
+			procCtx:   ctx,
+		}
+		if err := rp.restore(ctx); err != nil {
+			t.Fatalf("restore: %v", err)
+		}
+		// Another device's live traffic moves the watermark to now.
+		rp.handle(measuredMsgAt(t, 1, now, "acme", "lwm2m-dev", "p@1", "temperature", "20", &fakeAck{}))
+		rp.handle(measuredMsgAt(t, 2, readingAt, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}))
+		return testutil.ToFloat64(metrics.lateSamplesTotal)
+	}
+
+	t.Run("an hour behind", func(t *testing.T) {
+		if late := run(t, now.Add(-time.Hour)); late != 1 {
+			t.Errorf("detect_late_samples_total = %v, want 1: a reading an hour behind a 10s hold is refused", late)
+		}
+	})
+	// The counterweight: behind the frontier but inside the hold, the reading is used, not counted.
+	t.Run("inside the hold", func(t *testing.T) {
+		if late := run(t, now.Add(-5*time.Second)); late != 0 {
+			t.Errorf("detect_late_samples_total = %v, want 0 for a reading inside the hold", late)
+		}
+	})
 }
