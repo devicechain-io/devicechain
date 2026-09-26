@@ -22,7 +22,9 @@ func objectStoreOutputs(value string) map[string]tfexec.OutputMeta {
 	return map[string]tfexec.OutputMeta{"backup_object_store_deployment": {Value: []byte(value)}}
 }
 
-const inClusterStore = `{"namespace":"dc-system","name":"dc-object-store"}`
+const inClusterStore = `{"in_cluster":true,"namespace":"dc-system","name":"dc-object-store"}`
+
+const noInClusterStore = `{"in_cluster":false,"namespace":"","name":""}`
 
 // objectStoreDeployment is the object store in a given rollout state; see deployment.
 func objectStoreDeployment(generation, observed int64, updated, replicas, available int32) *appsv1.Deployment {
@@ -71,11 +73,11 @@ func TestANamedStoreThatDoesNotExistFails(t *testing.T) {
 	}
 }
 
-// Null means this cluster runs no in-cluster store (backups off, or an external
-// destination): nothing to wait for, and no reason to build kube clients.
+// in_cluster false means this cluster runs no in-cluster store (backups off, or an
+// external destination): nothing to wait for, and no reason to build kube clients.
 func TestNoInClusterStoreNeedsNoCheck(t *testing.T) {
 	built := false
-	err := confirmObjectStoreRolledOut(context.Background(), objectStoreOutputs(`null`),
+	err := confirmObjectStoreRolledOut(context.Background(), objectStoreOutputs(noInClusterStore),
 		func() (kubernetes.Interface, error) {
 			built = true
 			return nil, errors.New("no cluster in this test")
@@ -98,8 +100,31 @@ func TestAMissingStoreOutputFailsRatherThanSkipping(t *testing.T) {
 	}
 }
 
+// 🔴 "NO STORE" MUST BE SAID, NOT IMPLIED. A root output whose value is null is not
+// stored in state at all, so a root that expressed "no store" as null would reach
+// dcctl as a MISSING output (the case above) on every cluster without one -- which is
+// how the first cut of this check failed every install with backups off. A null that
+// does arrive, or an object that does not say whether there is a store, is refused
+// the same way rather than read as "no store".
+func TestAStoreOutputThatDoesNotSayWhetherThereIsAStoreFails(t *testing.T) {
+	for _, v := range []string{`null`, `{}`, `{"namespace":"","name":""}`, `{"namespace":"dc-system","name":"dc-object-store"}`} {
+		err := confirmObjectStoreRolledOut(context.Background(), objectStoreOutputs(v),
+			clientsFor(fake.NewSimpleClientset(objectStoreDeployment(2, 2, 1, 1, 0))), 20*time.Millisecond)
+		if err == nil || !strings.Contains(err.Error(), "does not say whether") {
+			t.Errorf("output %s was not refused as not saying whether there is a store: %v", v, err)
+		}
+	}
+	// ...and "no store" that names one anyway is a contradiction, not a skip.
+	err := confirmObjectStoreRolledOut(context.Background(),
+		objectStoreOutputs(`{"in_cluster":false,"namespace":"dc-system","name":"dc-object-store"}`),
+		clientsFor(fake.NewSimpleClientset(objectStoreDeployment(2, 2, 1, 1, 0))), 20*time.Millisecond)
+	if err == nil {
+		t.Error("an output saying there is no store while naming one was accepted")
+	}
+}
+
 func TestAStoreOutputNamingNoDeploymentFails(t *testing.T) {
-	for _, v := range []string{`{"namespace":"dc-system","name":""}`, `{"namespace":"","name":"dc-object-store"}`, `"dc-object-store"`} {
+	for _, v := range []string{`{"in_cluster":true,"namespace":"dc-system","name":""}`, `{"in_cluster":true,"namespace":"","name":"dc-object-store"}`, `"dc-object-store"`} {
 		if err := confirmObjectStoreRolledOut(context.Background(), objectStoreOutputs(v),
 			clientsFor(fake.NewSimpleClientset()), 20*time.Millisecond); err == nil {
 			t.Errorf("output %s was accepted", v)
@@ -107,7 +132,7 @@ func TestAStoreOutputNamingNoDeploymentFails(t *testing.T) {
 	}
 	// ...and an empty name is refused as what it is, before any client is built, rather
 	// than surfacing as a Get of an empty name.
-	for _, v := range []string{`{"namespace":"dc-system","name":""}`, `{"namespace":"","name":"dc-object-store"}`} {
+	for _, v := range []string{`{"in_cluster":true,"namespace":"dc-system","name":""}`, `{"in_cluster":true,"namespace":"","name":"dc-object-store"}`} {
 		err := confirmObjectStoreRolledOut(context.Background(), objectStoreOutputs(v),
 			func() (kubernetes.Interface, error) {
 				t.Errorf("kube clients were built for output %s, which names no Deployment", v)
@@ -131,9 +156,10 @@ func TestLiveObjectStoreRolloutCheck(t *testing.T) {
 	if kubeContext == "" {
 		t.Skip("DCCTL_RIG_KUBE_CONTEXT is not set; this runs under hack/tofu-rerun-rig.sh")
 	}
-	ref, err := json.Marshal(map[string]string{
-		"namespace": os.Getenv("DCCTL_RIG_NAMESPACE"),
-		"name":      os.Getenv("DCCTL_RIG_DEPLOYMENT"),
+	ref, err := json.Marshal(map[string]any{
+		"in_cluster": true,
+		"namespace":  os.Getenv("DCCTL_RIG_NAMESPACE"),
+		"name":       os.Getenv("DCCTL_RIG_DEPLOYMENT"),
 	})
 	if err != nil {
 		t.Fatal(err)
