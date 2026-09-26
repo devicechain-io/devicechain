@@ -66,6 +66,9 @@
 // the schema, and a stored shape the new release can no longer make sense of —
 // and an upgrade rig that cannot tell them apart would report the third as the
 // first and send somebody hunting through migrations for a resolver change.
+// exitDenied is kept apart from all four for the same reason: a token the upgraded
+// platform would not accept is not a verdict about data at all, and reporting it as
+// exitShape told a reader the schema had moved when no query had even run.
 package main
 
 import (
@@ -132,6 +135,14 @@ const (
 	// defect that is not there; reporting it as exitSetup would file it as
 	// inconclusive, which is exactly what it is not.
 	exitCoverage = 7
+
+	// exitDenied means the upgraded platform refused a FRESHLY SIGNED-IN identity's
+	// token with HTTP 401 — at once, or past the retry window verify was given for an
+	// upgrade that replaces the signing key. Distinct from exitShape because the query
+	// was never evaluated: nothing is known about the schema or the row, only that
+	// authentication across the upgrade did not settle — a key set that never
+	// publishes the new key, a validator that never refetches.
+	exitDenied = 8
 )
 
 const usage = `apiprobe — write one of every creatable entity, then prove it reads back unchanged.
@@ -147,6 +158,12 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
   apiprobe verify   --receipt <path> [flags]
         Read every entity on the receipt back through the same API and compare
         it field by field.
+        --auth-window <duration>  a retry budget, measured from the start of
+        verify, for a read refused with 401 or a sign-in the platform refused;
+        each retry signs in again and is printed with its elapsed time. The first
+        seconds of an upgrade that REPLACES the signing key can refuse a valid
+        token while the old user-management pod stops. Default 0: no retries, the
+        first 401 exits DENIED.
 
   apiprobe readsweep --receipt <path> --schemas <dir> [flags]
         Call every door the DEPLOYED release's schemas serve that this tool can
@@ -204,6 +221,7 @@ func printExitCodes() {
 	fmt.Printf("APIPROBE_EXIT_SHAPE=%d\n", exitShape)
 	fmt.Printf("APIPROBE_EXIT_UNREADABLE=%d\n", exitUnreadable)
 	fmt.Printf("APIPROBE_EXIT_COVERAGE=%d\n", exitCoverage)
+	fmt.Printf("APIPROBE_EXIT_DENIED=%d\n", exitDenied)
 }
 
 func main() {

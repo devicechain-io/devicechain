@@ -132,8 +132,9 @@ func Refresh(ctx context.Context, httpc *http.Client, userGraphQL, refreshToken 
 }
 
 // graphqlPost executes one GraphQL operation against url, applies any extra headers
-// (e.g. Authorization), and decodes the response "data" object into out. A non-2xx
-// status is an error, and a non-empty GraphQL "errors" array is a *GraphQLError. It
+// (e.g. Authorization), and decodes the response "data" object into out. A status
+// other than 200 is a *StatusError, and a non-empty GraphQL "errors" array is a
+// *GraphQLError. It
 // mirrors svcclient's envelope handling, except that Codes here is parallel to Messages
 // (see GraphQLError).
 func graphqlPost(ctx context.Context, httpc *http.Client, url string, headers map[string]string, query string, variables map[string]any, out any) error {
@@ -168,7 +169,7 @@ func graphqlPost(ctx context.Context, httpc *http.Client, url string, headers ma
 		return fmt.Errorf("userclient: read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("userclient: %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return &StatusError{URL: url, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 
 	var envelope struct {
@@ -217,6 +218,29 @@ type GraphQLError struct {
 // Error is "userclient: <url>: <m1>; <m2>", the text this client has always produced.
 func (e *GraphQLError) Error() string {
 	return fmt.Sprintf("userclient: %s: %s", e.URL, strings.Join(e.Messages, "; "))
+}
+
+// StatusError is graphqlPost's answer when the server replied with a status other than
+// 200: the request reached something, and it refused before any GraphQL ran. Its text is
+// the one this client has always produced, so a reader of the message sees no change; a
+// caller that must act on the STATUS asks for it here instead of parsing the text.
+type StatusError struct {
+	URL        string
+	StatusCode int
+	Body       string // the response body, trimmed
+}
+
+// Error is "userclient: <url> returned <code>: <body>".
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("userclient: %s returned %d: %s", e.URL, e.StatusCode, e.Body)
+}
+
+// IsUnauthorized reports whether err's chain holds a *StatusError whose status is 401:
+// the endpoint refused the bearer token itself. Nothing else counts — not a 403, not a
+// GraphQL error whose message talks about authorization, not a transport failure.
+func IsUnauthorized(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.StatusCode == http.StatusUnauthorized
 }
 
 // AllHaveCode reports whether err's chain holds a *GraphQLError in which EVERY error
