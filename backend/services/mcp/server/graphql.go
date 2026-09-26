@@ -53,8 +53,10 @@ type gqlError struct {
 // and it means a call site can no longer send a document to the wrong area.
 //
 // Build one only through newDocument, which records it in documents: a document built as
-// a bare literal would be sent but never validated. documents_test.go refuses such a
-// literal anywhere in this package's non-test code.
+// a literal would be sent but never validated. documents_test.go refuses such a literal in
+// this package's non-test code, whether written as document{...} or with its type elided
+// inside a slice or map literal of documents, and checks that every newDocument call site
+// was recorded under the area it names.
 type document struct {
 	area string
 	text string

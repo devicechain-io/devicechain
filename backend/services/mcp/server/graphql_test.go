@@ -75,3 +75,29 @@ func TestGraphQLClient_HTTPErrorSurfaces(t *testing.T) {
 		t.Fatal("expected an error from the 401 status")
 	}
 }
+
+// Query sends a document to the area the document names. testClient throws the area away,
+// so this test keeps it: if Query stopped reading doc.area, every device-state,
+// event-management and command-delivery tool would be posted to device-management.
+func TestGraphQLClient_RoutesToTheDocumentsArea(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{}}`))
+	}))
+	defer ts.Close()
+
+	for _, doc := range []document{getDeviceStateQuery, queryMeasurementsQuery, listCommandsQuery, listAlarmsQuery} {
+		var gotArea string
+		c := NewGraphQLClient()
+		c.baseURL = func(area string) string { gotArea = area; return ts.URL }
+		if err := c.Query(context.Background(), doc, "t", nil, nil); err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if gotArea != doc.area {
+			t.Errorf("%s: sent to area %q, want %q", operationName(doc), gotArea, doc.area)
+		}
+	}
+	// The fixture must span areas, or a constant area would pass.
+	if getDeviceStateQuery.area != "device-state" || listCommandsQuery.area != "command-delivery" {
+		t.Fatalf("fixture documents changed area; pick documents that are not all device-management")
+	}
+}
