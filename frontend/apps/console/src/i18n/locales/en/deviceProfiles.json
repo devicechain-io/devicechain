@@ -14,7 +14,7 @@
   "canvasFidelityRetry": "Check again",
   "canvasFidelityStaleLayout": "This rule was changed outside the canvas, and its saved canvas no longer matches it. The canvas cannot lay out the current rule in full, so saving here would undo that change. Saving is turned off. Edit this rule through the API.",
   "canvasFidelityUncompilable": "The rule as laid out on the canvas does not compile, so the canvas cannot confirm that saving here would keep it intact. Saving is turned off. Edit this rule in the Form.",
-  "canvasFidelityUncompilableGraph": "This rule's saved canvas does not compile as it stands. Fix it here: saving replaces the stored rule with what is on the canvas.",
+  "canvasFidelityUncompilableGraph": "This rule's saved canvas does not compile as it stands. Fix it here: saving replaces the stored rule with what is on the canvas, including undoing any change made to the rule outside the canvas since it was last saved here.",
   "canvasFidelityUnrepresentable": "{{reason}} Saving from the canvas would replace it, so saving is turned off here. Edit this rule through the API. The Form can open it too, but it warns that saving there would drop what it cannot show.",
   "canvasFidelityUnverified": "The canvas could not reach the compiler to confirm it shows this rule in full, so saving is turned off.",
   "canvasFixCompileErrors": "Fix the compile errors before previewing",

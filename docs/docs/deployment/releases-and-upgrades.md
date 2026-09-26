@@ -2481,7 +2481,9 @@ Nothing needs doing at the upgrade.
   cannot show and turns saving off for that rule; edit it through the API instead.
 - **A canvas-built rule whose definition was changed through the API is laid out again from that
   definition** when the canvas opens it, rather than from its older saved layout, so a canvas save
-  no longer undoes the change. The canvas says when it has done this.
+  no longer undoes the change. The canvas says when it has done this. The exception is a saved
+  canvas that no longer compiles, which cannot be compared with the rule: it opens as it was, and
+  its note warns that saving it undoes any such change.
 - **The canvas keeps an alarm-key template** set through the API. It shows the template read-only
   and saves it unchanged.
 - **A canvas save no longer clears a rule's name or description** when the rule's definition does

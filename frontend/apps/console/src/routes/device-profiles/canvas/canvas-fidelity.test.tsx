@@ -20,13 +20,24 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // jsdom has no ResizeObserver, and the graph VIEW is not what this file measures. The node and
-// edge state hooks and the provider stay real.
-vi.mock('@xyflow/react', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  ReactFlow: () => null,
-  Background: () => null,
-  Controls: () => null,
-}));
+// edge state hooks and the provider stay real. The stand-in view renders each node as a button that
+// selects it (the real view's onNodeClick), so a test can open a node in the inspector.
+vi.mock('@xyflow/react', async (importOriginal) => {
+  const { createElement, Fragment } = await import('react');
+  type N = { id: string };
+  const ReactFlow = ({ nodes, onNodeClick }: { nodes: N[]; onNodeClick?: (e: unknown, n: N) => void }) =>
+    createElement(
+      Fragment,
+      null,
+      nodes.map((n) => createElement('button', { key: n.id, type: 'button', onClick: (e: unknown) => onNodeClick?.(e, n) }, `node ${n.id}`)),
+    );
+  return {
+    ...(await importOriginal<Record<string, unknown>>()),
+    ReactFlow,
+    Background: () => null,
+    Controls: () => null,
+  };
+});
 vi.mock('@/lib/api/event-processing', () => ({ compileCanvas: vi.fn(), previewRule: vi.fn() }));
 vi.mock('@/lib/api/device-management', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -285,6 +296,9 @@ describe('a canvas-authored rule whose saved graph no longer compiles', () => {
     open(entity);
 
     await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/does not compile as it stands/));
+    // It cannot tell whether the rule was also changed outside the canvas, so it says a save would
+    // undo such a change rather than implying it checked.
+    expect(screen.getByRole('status').textContent).toMatch(/undoing any change made to the rule outside the canvas/);
     expect(saveBtn().disabled).toBe(true); // it does not compile yet
 
     addNode('Branch'); // any edit re-arms the compile
@@ -324,6 +338,14 @@ describe('opening a rule the canvas CAN show in full', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByRole('status')).toBeNull();
     expect(saveBtn().disabled).toBe(false);
+    // The open-time check's compile IS the editor's first compile: a normal open asks once.
+    expect(compileMock).toHaveBeenCalledTimes(1);
+
+    // ...and that reuse is sound only because the graph it compiled is the graph a save stores
+    // as the rule's authoring graph (the stored definition is the compile of the stored graph).
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(savedRequest().authoringGraph as string)).toEqual(compiledGraphs()[0]);
   });
 
   it('keeps an alarm-key template, which the canvas carries, through a save', async () => {
@@ -357,6 +379,7 @@ describe('opening a rule the canvas CAN show in full', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByRole('status')).toBeNull();
     expect(saveBtn().disabled).toBe(false);
+    expect(compileMock).toHaveBeenCalledTimes(1);
   });
 
   it('checks nothing when creating a rule', async () => {
@@ -391,6 +414,55 @@ describe('saving from the canvas', () => {
       description: undefined,
       hasName: false,
       hasDescription: false,
+    });
+  });
+
+  // The counterweight: leaving an unedited name alone must not become never sending an edit.
+  // A rename on the canvas that is not sent leaves the name column on the old name while the
+  // stored definition carries the new one.
+  it('sends a name edited in the inspector', async () => {
+    compilesFaithfully();
+    open(rule(JSON.stringify(threshold(30))));
+    await settled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'node condition' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Hotter' } });
+    await settled();
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(savedRequest().name).toBe('Hotter');
+    expect(JSON.parse(savedRequest().definition as string).name).toBe('Hotter');
+  });
+
+  it('sends a cleared name as null', async () => {
+    compilesFaithfully();
+    open(rule(JSON.stringify(threshold(30))));
+    await settled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'node condition' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: '' } });
+    await settled();
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect({ hasName: 'name' in savedRequest(), name: savedRequest().name }).toEqual({ hasName: true, name: null });
+  });
+
+  // The inspector has no description field; the canvas changes a description only by replacing
+  // the condition node that carries it. That is an edit, and the column must follow it.
+  it('sends a description removed with its condition node as null', async () => {
+    compilesFaithfully();
+    open(rule(JSON.stringify(threshold(30, { description: 'Too hot' }))));
+    await settled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'node condition' }));
+    fireEvent.click(screen.getByTitle('Remove node'));
+    addNode('Threshold');
+    await settled();
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect({ hasDescription: 'description' in savedRequest(), description: savedRequest().description }).toEqual({
+      hasDescription: true,
+      description: null,
     });
   });
 });

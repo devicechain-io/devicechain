@@ -31,6 +31,9 @@ export type Fidelity =
   // The stored canvas graph does not compile as it stands. The whole authored graph is on screen,
   // so nothing is hidden, and the canvas is the only surface that can author every node in it — so
   // Save is allowed (through the normal "compiles" gate) with a note that it replaces the rule.
+  // 🔴 This verdict does NOT know whether the definition was changed outside the canvas since the
+  // graph was saved: a graph that does not compile cannot be compared with it. A save therefore
+  // reverts any such change, and the note says so — it is disclosed, not checked.
   | { kind: 'uncompilableGraph' }
   // The definition has a shape the canvas cannot lay out at all (a type with no node, not JSON).
   | { kind: 'unrepresentable'; reason: string }

@@ -61,12 +61,16 @@ Tanto el generador de formularios como el lienzo de automatización autoran regl
 
 Ninguna de las dos superficies reescribe en silencio una regla que no puede mostrar por completo. Si el formulario abre una regla almacenada que no puede contener por completo —un campo que no modela o un tipo que no conoce—, advierte que parte de la definición no se muestra y que guardar reemplazaría la original únicamente con lo que ves. Ese aviso es distinto del de «no se pudo leer» que aparece para una definición que no es JSON válido. Una regla de Conectividad se abre sin ninguno de los dos.
 
-El lienzo es más estricto. Al abrir una regla almacenada, pregunta al compilador si guardar la regla tal como está dispuesta conservaría todo lo que dice la definición almacenada. Si la regla tiene un tipo para el que el lienzo no tiene nodo, un campo o un tipo de acción que el lienzo no modela, o si esa comprobación no puede completarse, el lienzo lo indica y desactiva el guardado. Edita una regla así a través de la API. El formulario también puede abrirla, pero advertirá que guardar allí descarta lo que no puede mostrar.
+El lienzo es más estricto. Al abrir una regla almacenada, pregunta al compilador si guardar la regla tal como está dispuesta conservaría todo lo que dice la definición almacenada. Cuando la respuesta no es afirmativa, el lienzo indica el motivo y desactiva el guardado para esa regla:
+
+- Si la regla tiene un tipo para el que el lienzo no tiene nodo, o un campo o un tipo de acción que el lienzo no modela, edítala a través de la API. El formulario también puede abrirla, pero advertirá que guardar allí descarta lo que no puede mostrar.
+- Si la regla tal como la dispone el lienzo no compila, el lienzo no puede confirmar que guardar la mantendría intacta. Edítala en el formulario.
+- Si el lienzo no puede contactar con el compilador para hacer la comprobación, elige **Comprobar de nuevo**. El guardado sigue desactivado hasta que la comprobación se complete.
 
 Hay dos casos propios de las reglas construidas en el lienzo:
 
 - Si la definición de la regla se modificó a través de la API después de guardarla por última vez en el lienzo, la disposición guardada ya no coincide con la regla. El lienzo vuelve a disponer la regla a partir de su definición actual y te lo indica, para que guardar no deshaga el cambio. Si no puede disponer la regla actual por completo, el guardado se desactiva.
-- Si el lienzo guardado ya no compila tal como está, se abre como estaba, con una nota. Corrígelo en el lienzo; al guardar, la regla almacenada se reemplaza por lo que hay en el lienzo.
+- Si el lienzo guardado ya no compila tal como está, se abre como estaba, con una nota. Corrígelo en el lienzo; al guardar, la regla almacenada se reemplaza por lo que hay en el lienzo. Un lienzo que no compila no puede compararse con la regla, así que si la regla también se modificó a través de la API desde que se guardó por última vez en el lienzo, guardar aquí deshace ese cambio. La nota lo indica.
 
 ### Umbrales estáticos y dinámicos
 

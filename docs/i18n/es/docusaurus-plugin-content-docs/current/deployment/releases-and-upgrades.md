@@ -2656,7 +2656,9 @@ No hace falta hacer nada en la actualización.
 - **Una regla construida en el lienzo cuya definición se modificó a través de la API se vuelve a
   disponer a partir de esa definición** cuando el lienzo la abre, en lugar de a partir de su
   disposición guardada anterior, así que guardar desde el lienzo ya no deshace el cambio. El lienzo
-  indica cuándo lo ha hecho.
+  indica cuándo lo ha hecho. La excepción es un lienzo guardado que ya no compila, que no puede
+  compararse con la regla: se abre como estaba, y su nota advierte que guardarlo deshace cualquier
+  cambio de ese tipo.
 - **El lienzo conserva una plantilla de clave de alarma** definida a través de la API. La muestra en
   modo de solo lectura y la guarda sin cambios.
 - **Guardar desde el lienzo ya no borra el nombre ni la descripción de una regla** cuando su

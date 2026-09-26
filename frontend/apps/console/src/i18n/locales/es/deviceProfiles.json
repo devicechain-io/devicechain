@@ -14,7 +14,7 @@
   "canvasFidelityRetry": "Comprobar de nuevo",
   "canvasFidelityStaleLayout": "Esta regla se modificó fuera del lienzo y su lienzo guardado ya no coincide con ella. El lienzo no puede disponer la regla actual por completo, así que guardar aquí desharía ese cambio. El guardado está desactivado. Edita esta regla a través de la API.",
   "canvasFidelityUncompilable": "La regla tal como se dispone en el lienzo no compila, así que el lienzo no puede confirmar que guardar aquí la mantendría intacta. El guardado está desactivado. Edita esta regla en el Formulario.",
-  "canvasFidelityUncompilableGraph": "El lienzo guardado de esta regla no compila tal como está. Corrígelo aquí: guardar reemplaza la regla almacenada por lo que hay en el lienzo.",
+  "canvasFidelityUncompilableGraph": "El lienzo guardado de esta regla no compila tal como está. Corrígelo aquí: guardar reemplaza la regla almacenada por lo que hay en el lienzo, y deshace cualquier cambio hecho a la regla fuera del lienzo desde que se guardó aquí por última vez.",
   "canvasFidelityUnrepresentable": "{{reason}} Guardar desde el lienzo la reemplazaría, así que aquí el guardado está desactivado. Edita esta regla a través de la API. El Formulario también puede abrirla, pero advierte que guardar allí descartaría lo que no puede mostrar.",
   "canvasFidelityUnverified": "El lienzo no pudo contactar con el compilador para confirmar que muestra esta regla completa, así que el guardado está desactivado.",
   "canvasFixCompileErrors": "Corrige los errores de compilación antes de previsualizar",

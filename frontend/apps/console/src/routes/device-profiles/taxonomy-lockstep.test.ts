@@ -351,8 +351,11 @@ const GO_CATEGORY: Record<string, NodeSpec['category']> = {
 /**
  * The Go canvas catalog (`var catalog = map[NodeType]struct {…}` in graph/schema.go), resolved
  * to wire values. It throws on anything it cannot account for — an unresolved Node or Port
- * ident, an unknown category — rather than skipping it: a parser that quietly drops an entry
- * turns "every node agrees" into a claim about fewer nodes than there are.
+ * ident, an unknown category, or an entry key the entry pattern did not read (a keyed-field
+ * literal such as `NodeX: {cat: catAction, ports: …}` is valid Go the positional pattern does not
+ * match) — rather than skipping it: a parser that quietly drops an entry turns "every node agrees"
+ * into a claim about fewer nodes than there are. Every top-level key in the block (gofmt puts each
+ * at one tab of indent; the nested `in:`/`out:` keys sit deeper) must be an entry it parsed.
  */
 function goCanvasCatalog(src: string): Map<string, Pick<NodeSpec, 'category' | 'in' | 'out'>> {
   const startMarker = 'var catalog = map[NodeType]struct {';
@@ -369,6 +372,7 @@ function goCanvasCatalog(src: string): Map<string, Pick<NodeSpec, 'category' | '
     return c.value;
   };
   const out = new Map<string, Pick<NodeSpec, 'category' | 'in' | 'out'>>();
+  const read = new Set<string>();
   for (const m of block.matchAll(/(Node\w+):\s*\{(cat\w+),\s*ports\{([\s\S]*?)\}\},/g)) {
     const category = GO_CATEGORY[m[2]];
     if (category == null) throw new Error(`unknown Go category ${m[2]}`);
@@ -379,7 +383,10 @@ function goCanvasCatalog(src: string): Map<string, Pick<NodeSpec, 'category' | '
       }
     }
     out.set(resolve(m[1]), spec);
+    read.add(m[1]);
   }
+  const unread = [...block.matchAll(/^\t(\w+)\s*:/gm)].map((k) => k[1]).filter((k) => !read.has(k));
+  if (unread.length) throw new Error(`canvas catalog entries this parser did not read: ${unread.join(', ')}`);
   return out;
 }
 
@@ -398,6 +405,14 @@ describe('the canvas node catalog mirrors the Go catalog', () => {
     );
     expect(orphan).not.toBe(GRAPH_SCHEMA_GO);
     expect(() => goCanvasCatalog(orphan)).toThrow(/NodeFoo/);
+    // A keyed-field entry is valid Go the entry pattern does not match; it is refused by name,
+    // not skipped (which would let a node the console lacks pass both comparisons below).
+    const keyed = GRAPH_SCHEMA_GO.replace(
+      'NodeSource: {catSource, ports{out: map[string]PortType{"out": PortStream}}},',
+      'NodeSource: {cat: catSource, ports: ports{out: map[string]PortType{"out": PortStream}}},',
+    );
+    expect(keyed).not.toBe(GRAPH_SCHEMA_GO);
+    expect(() => goCanvasCatalog(keyed)).toThrow(/did not read: NodeSource/);
   });
 
   it('has every Go node, with the same category and ports', () => {

@@ -61,12 +61,16 @@ The form builder and the automation canvas both author Connectivity rules. The p
 
 Neither surface silently rewrites a rule it cannot show in full. If the form opens a stored rule it cannot hold completely (a field it does not model, or a type it does not know), it warns that part of the definition is not shown and that saving would replace the original with only what you can see. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON. A Connectivity rule opens with neither.
 
-The canvas is stricter. When it opens a stored rule, it asks the compiler whether saving the rule as laid out would keep everything the stored definition says. If the rule has a type the canvas has no node for, a field or action type the canvas does not model, or if that check cannot be completed, the canvas says so and turns saving off. Edit such a rule through the API. The form can open it too, but it will warn that saving there drops what it cannot show.
+The canvas is stricter. When it opens a stored rule, it asks the compiler whether saving the rule as laid out would keep everything the stored definition says. When the answer is not yes, the canvas says why and turns saving off for that rule:
+
+- If the rule has a type the canvas has no node for, or a field or action type the canvas does not model, edit it through the API. The form can open it too, but it will warn that saving there drops what it cannot show.
+- If the rule as the canvas lays it out does not compile, the canvas cannot confirm that saving would keep it intact. Edit it in the form.
+- If the canvas cannot reach the compiler to run the check, choose **Check again**. Saving stays off until the check completes.
 
 Two cases are specific to rules built on the canvas:
 
 - If the rule's definition was changed through the API after it was last saved on the canvas, the saved layout no longer matches the rule. The canvas lays the rule out again from its current definition and tells you so, so that saving does not undo the change. If it cannot lay the current rule out in full, saving is turned off.
-- If the saved canvas no longer compiles as it stands, it opens as it was, with a note. Fix it on the canvas; saving then replaces the stored rule with what is on the canvas.
+- If the saved canvas no longer compiles as it stands, it opens as it was, with a note. Fix it on the canvas; saving then replaces the stored rule with what is on the canvas. A canvas that does not compile cannot be compared with the rule, so if the rule was also changed through the API since it was last saved on the canvas, saving here undoes that change. The note says so.
 
 ### Static and dynamic thresholds
 
