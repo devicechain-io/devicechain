@@ -401,7 +401,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "DETECT is not checkpointing while a backlog exists"
-              description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (broker/store outage or a halted stale writer)."
+              description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (a broker or store outage). A replica that lost a split-brain race does not cause this: it exits to be replaced, and DetectHasNoLeader covers the gap."
       - eval_time: 16m
         alertname: DetectLeaderIsNotConsuming
         exp_alerts: []

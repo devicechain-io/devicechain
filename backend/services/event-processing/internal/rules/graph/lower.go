@@ -86,8 +86,8 @@ type typedEdge struct {
 // source per condition, cross-window join) returns a node-anchored CompileError.
 //
 // profileToken scopes the canvas: every Source node must be profile-scoped to it (the GA
-// profile-homed cut, §4.1). limits are the per-tenant compile ceilings, resolved by the
-// caller (never uncapped — ADR-023).
+// profile-homed cut, §4.1). limits carry the operator's maximum rule duration; rules.Compile
+// floors it, so the canvas never compiles uncapped (ADR-023).
 func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*Result, error) {
 	if def.SchemaVersion != SchemaVersion {
 		return nil, errorf("", "unsupported canvas schemaVersion %d (this build understands %d)", def.SchemaVersion, SchemaVersion)
@@ -95,10 +95,6 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	if profileToken == "" {
 		return nil, errorf("", "a profile token is required to compile a canvas")
 	}
-	// Floor the limits once, up front, to the EFFECTIVE per-tenant ceilings — so the up-front branch
-	// guard gate below cost-gates against the real ceiling (a zero PredicateCostCeiling would reject
-	// every guard) rather than re-deriving the floor. rules.Compile floors again internally (idempotent).
-	limits = limits.WithDefaults()
 
 	// Index nodes; reject duplicate ids and unknown types up front (fail closed).
 	byID := make(map[string]Node, len(def.Nodes))
@@ -163,7 +159,7 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	// compute-referencing guard would not compile without the fold).
 	for _, n := range def.Nodes {
 		if n.Type == NodeBranch {
-			if cerr := validateBranch(n, computes[n.ID], limits); cerr != nil {
+			if cerr := validateBranch(n, computes[n.ID]); cerr != nil {
 				return nil, cerr
 			}
 		}
@@ -537,9 +533,9 @@ func composeGuards(guards []string) string {
 
 // validateBranch cost-gates a branch node's guard up front (regardless of connectivity), rejecting an
 // empty predicate (a branch that gates nothing) and a parse/type/over-cost guard — the same
-// fail-closed posture validateSource takes for an unwired source. limits must already be floored to
-// the effective ceiling (Compile floors before this runs).
-func validateBranch(n Node, computes []computeBind, limits rules.Limits) *CompileError {
+// fail-closed posture validateSource takes for an unwired source. It gates at the platform ceiling,
+// the same one rules.Compile applies to the guard once the branch is wired.
+func validateBranch(n Node, computes []computeBind) *CompileError {
 	var c branchConfig
 	if err := decodeConfig(n.Config, &c); err != nil {
 		return errorf(n.ID, "branch config: %v", err)
@@ -553,7 +549,7 @@ func validateBranch(n Node, computes []computeBind, limits rules.Limits) *Compil
 	if ferr != nil {
 		return errorf(n.ID, "branch condition: %v", ferr)
 	}
-	if _, err := rules.CompileGuard(folded, limits.PredicateCostCeiling); err != nil {
+	if _, err := rules.CompileGuard(folded); err != nil {
 		return errorf(n.ID, "branch condition: %v", err)
 	}
 	return nil

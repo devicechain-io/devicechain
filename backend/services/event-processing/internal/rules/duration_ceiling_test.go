@@ -42,7 +42,7 @@ func ceilingCases(d time.Duration) map[string]struct {
 // window, hold, timeout or gap from above — so a rule retaining a month of samples per series
 // was publishable.
 func TestRuleDurationCeilingRejectsOverlongRule(t *testing.T) {
-	limits := Limits{PredicateCostCeiling: 1_000_000, MaxRuleDuration: time.Hour}
+	limits := Limits{MaxRuleDuration: time.Hour}
 	for name, tc := range ceilingCases(time.Hour + time.Second) {
 		t.Run(name, func(t *testing.T) {
 			_, err := Compile(tc.rule, limits)
@@ -66,7 +66,7 @@ func TestRuleDurationCeilingRejectsOverlongRule(t *testing.T) {
 // inclusive and must not reject well-formed rules. A gate that refuses everything would pass
 // the test above while being useless.
 func TestRuleDurationCeilingAcceptsRuleAtTheCeiling(t *testing.T) {
-	limits := Limits{PredicateCostCeiling: 1_000_000, MaxRuleDuration: time.Hour}
+	limits := Limits{MaxRuleDuration: time.Hour}
 	for name, tc := range ceilingCases(time.Hour) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Compile(tc.rule, limits); err != nil {
@@ -83,11 +83,11 @@ func TestRuleDurationCeilingAcceptsRuleAtTheCeiling(t *testing.T) {
 func TestUnsetMaxRuleDurationFloorsToADayNeverUnlimited(t *testing.T) {
 	for name, zero := range map[string]time.Duration{"unset": 0, "negative": -time.Hour} {
 		t.Run(name, func(t *testing.T) {
-			limits := Limits{PredicateCostCeiling: 1_000_000, MaxRuleDuration: zero}
-			if got := limits.WithDefaults().MaxRuleDuration; got != defaultMaxRuleDuration {
+			limits := Limits{MaxRuleDuration: zero}
+			if got := limits.withDefaults().MaxRuleDuration; got != defaultMaxRuleDuration {
 				t.Fatalf("want the built-in floor %s, got %s", defaultMaxRuleDuration, got)
 			}
-			// And prove the floor is actually ENFORCED, not merely reported by WithDefaults:
+			// And prove the floor is actually ENFORCED, not merely reported by withDefaults:
 			// a rule one second past the day must be refused by a Compile given zero limits.
 			over := Rule{ID: "rp", Name: "flap", Type: TypeRepeating, Count: 3,
 				Window: Duration(defaultMaxRuleDuration + time.Second),
@@ -108,7 +108,7 @@ func TestDefaultLimitsCarriesTheConfiguredCeiling(t *testing.T) {
 
 	// Unconfigured: DefaultLimits reports zero, which Compile floors to a day.
 	SetPlatformMaxRuleDuration(0)
-	if got := DefaultLimits().WithDefaults().MaxRuleDuration; got != defaultMaxRuleDuration {
+	if got := DefaultLimits().withDefaults().MaxRuleDuration; got != defaultMaxRuleDuration {
 		t.Fatalf("unconfigured DefaultLimits must resolve to the day floor, got %s", got)
 	}
 

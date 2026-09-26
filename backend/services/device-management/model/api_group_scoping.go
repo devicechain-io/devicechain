@@ -183,7 +183,7 @@ func (api *Api) loadGroupVersionForScoping(ctx context.Context, db *gorm.DB, gro
 	}
 	// Compile the frozen selector to extract its referenced facet keys. It already
 	// cleared the publish gate, so this cannot reject; compile is how Keys() is reached.
-	sel, err := selector.Compile(frozen.Selector, frozen.MemberType, 0)
+	sel, err := selector.Compile(frozen.Selector, frozen.MemberType)
 	if err != nil {
 		return nil, nil, nil, err
 	}

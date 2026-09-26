@@ -23,7 +23,7 @@ func TestGenerateComparison(t *testing.T) {
 		t.Fatalf("generated CEL:\n got %q\nwant %q", got, want)
 	}
 	// And it must actually compile + type-check against the shared env.
-	if _, err := predicate.Compile(got, 1_000_000); err != nil {
+	if _, err := predicate.Compile(got); err != nil {
 		t.Fatalf("generated CEL should compile: %v", err)
 	}
 }
@@ -59,10 +59,10 @@ func TestGenerateDynamicComparison(t *testing.T) {
 		t.Fatalf("generated dynamic CEL:\n got %q\nwant %q", got, want)
 	}
 	// It must compile + type-check against the shared env (which declares attr as of schema v2).
-	if _, err := predicate.Compile(got, 1_000_000); err != nil {
+	if _, err := predicate.Compile(got); err != nil {
 		t.Fatalf("generated dynamic CEL should compile: %v", err)
 	}
-	// And EVERY operator's dynamic form must fit the platform-default cost ceiling — a dynamic
+	// And EVERY operator's dynamic form must fit the platform cost ceiling — a dynamic
 	// comparison indexes two bounded maps, and eq/ne cost more than the ordered ops (the equality
 	// overload's estimate), so the costliest form (eq/ne) is the one that must be pinned, not just
 	// gt. If any dynamic comparison exceeded the ceiling, a gate-accepted structured rule could be
@@ -72,8 +72,8 @@ func TestGenerateDynamicComparison(t *testing.T) {
 		if err != nil {
 			t.Fatalf("op %q: %v", op, err)
 		}
-		if _, err := predicate.Compile(src, defaultPredicateCostCeiling); err != nil {
-			t.Fatalf("dynamic comparison with op %q must fit the default cost ceiling (%d): %v", op, defaultPredicateCostCeiling, err)
+		if _, err := predicate.Compile(src); err != nil {
+			t.Fatalf("dynamic comparison with op %q must fit the platform cost ceiling (%d): %v", op, predicate.CostCeiling, err)
 		}
 	}
 }
@@ -108,7 +108,7 @@ func TestDynamicComparisonEvalIsTotal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pred, err := predicate.Compile(src, defaultPredicateCostCeiling)
+	pred, err := predicate.Compile(src)
 	if err != nil {
 		t.Fatal(err)
 	}

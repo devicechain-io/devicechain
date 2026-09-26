@@ -9,11 +9,9 @@ import (
 	"time"
 )
 
-const testCeiling = 1_000_000
-
 func mustCompile(t *testing.T, src string) *Predicate {
 	t.Helper()
-	p, err := Compile(src, testCeiling)
+	p, err := Compile(src)
 	if err != nil {
 		t.Fatalf("compile %q: %v", src, err)
 	}
@@ -72,7 +70,7 @@ func TestNilMapsEvalCleanly(t *testing.T) {
 // TestNonBooleanRejected proves a leaf that does not evaluate to a boolean is rejected at
 // compile (a double-valued expression here).
 func TestNonBooleanRejected(t *testing.T) {
-	_, err := Compile(`m["x"]`, testCeiling)
+	_, err := Compile(`m["x"]`)
 	var ce *CompileError
 	if !errors.As(err, &ce) {
 		t.Fatalf("want a CompileError for a non-boolean leaf, got %v", err)
@@ -82,7 +80,7 @@ func TestNonBooleanRejected(t *testing.T) {
 // TestTypeErrorRejected proves cel-go's type checker rejects a mistyped comparison at
 // publish (double vs string).
 func TestTypeErrorRejected(t *testing.T) {
-	_, err := Compile(`m["x"] > "hot"`, testCeiling)
+	_, err := Compile(`m["x"] > "hot"`)
 	var ce *CompileError
 	if !errors.As(err, &ce) {
 		t.Fatalf("want a CompileError for a type error, got %v", err)
@@ -92,17 +90,17 @@ func TestTypeErrorRejected(t *testing.T) {
 // TestUndeclaredIdentifierRejected proves a leaf referencing a variable outside the
 // declared vocabulary is rejected — the env is the whole contract.
 func TestUndeclaredIdentifierRejected(t *testing.T) {
-	_, err := Compile(`bogus > 1.0`, testCeiling)
+	_, err := Compile(`bogus > 1.0`)
 	if err == nil {
 		t.Fatal("an undeclared identifier must be rejected")
 	}
 }
 
-// TestCostGate proves an expensive comprehension is rejected at a tight ceiling and
-// accepted at a generous one — the fail-closed per-tenant cost gate.
+// TestCostGate proves the gate compares the estimate against the ceiling it is given: the
+// same comprehension is rejected at a tight ceiling and accepted at a generous one.
 func TestCostGate(t *testing.T) {
 	const expensive = `m.all(k, m[k] > 0.0)`
-	if _, err := Compile(expensive, 5); err == nil {
+	if _, err := compile(expensive, 5); err == nil {
 		t.Fatal("an expensive predicate must be rejected at a tight ceiling")
 	} else {
 		var cost *CostError
@@ -110,7 +108,29 @@ func TestCostGate(t *testing.T) {
 			t.Fatalf("want a CostError, got %v", err)
 		}
 	}
-	if _, err := Compile(expensive, testCeiling); err != nil {
+	if _, err := compile(expensive, 1_000_000); err != nil {
 		t.Fatalf("the same predicate should pass a generous ceiling: %v", err)
+	}
+}
+
+// TestCompileGatesAtThePlatformCeiling pins the exported entry point to the platform value.
+// The ceiling is written as a literal, not as CostCeiling, so changing the platform value is
+// a deliberate edit in two places rather than one that moves the test along with it.
+func TestCompileGatesAtThePlatformCeiling(t *testing.T) {
+	const expensive = `m.all(k, m[k] > 0.0)`
+	_, err := Compile(expensive)
+	var cost *CostError
+	if !errors.As(err, &cost) {
+		t.Fatalf("Compile(%q) = %v, want a *CostError at the platform ceiling", expensive, err)
+	}
+	if cost.Ceiling != 100 {
+		t.Fatalf("Compile gated at a ceiling of %d, want the platform's 100", cost.Ceiling)
+	}
+	if cost.EstimatedMax <= 100 {
+		t.Fatalf("the refusal reports an estimate of %d, which is within the ceiling it was refused at", cost.EstimatedMax)
+	}
+	// And a cheap leaf passes at the same ceiling, so this is a gate and not a wall.
+	if _, err := Compile(`"t" in m && m["t"] > 1.0`); err != nil {
+		t.Fatalf("a cheap leaf was refused at the platform ceiling: %v", err)
 	}
 }

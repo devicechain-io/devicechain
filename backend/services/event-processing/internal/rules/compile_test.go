@@ -14,9 +14,9 @@ import (
 func at(sec int) time.Time   { return time.Unix(int64(sec), 0).UTC() }
 func ptr(v float64) *float64 { return &v }
 
-// testLimits use a generous cost ceiling so the functional tests exercise firing, not the
-// gate (the gate is proven in predicate_test and the rejection tests below).
-var testLimits = Limits{PredicateCostCeiling: 1_000_000, DefaultCorrelationMemberCap: 1024}
+// testLimits are the production limits. The cost ceiling is a platform constant, so a
+// functional test whose expression only compiles above it is testing a rule no one can publish.
+var testLimits = Limits{}
 
 // driver compiles a rule and drives synthetic events through the REAL keyed-streaming core
 // via BuildEvent, collecting detections — the proof that the compiler's (CEL + core-config)
@@ -296,16 +296,17 @@ func TestCorrelation(t *testing.T) {
 	d.assertFires(core.Correlation, at(2))
 }
 
-// TestCorrelationDefaultMemberCap proves an unset member cap resolves to the limit default
-// (never unlimited) — the ADR-023 fail-safe posture.
+// TestCorrelationDefaultMemberCap proves an unset member cap resolves to the platform's 1024
+// (never unlimited) — the ADR-023 fail-safe posture. The value is a literal on purpose: changing
+// the platform cap is a deliberate edit here too, not one the test follows silently.
 func TestCorrelationDefaultMemberCap(t *testing.T) {
 	cr, err := Compile(Rule{ID: "co", Name: "area", Type: TypeCorrelation,
 		AnchorType: "site", Count: 3, Window: Duration(100 * time.Second)}, testLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cr.Core.MemberCap != testLimits.DefaultCorrelationMemberCap {
-		t.Fatalf("want default member cap %d, got %d", testLimits.DefaultCorrelationMemberCap, cr.Core.MemberCap)
+	if cr.Core.MemberCap != 1024 {
+		t.Fatalf("want the platform default member cap 1024, got %d", cr.Core.MemberCap)
 	}
 }
 

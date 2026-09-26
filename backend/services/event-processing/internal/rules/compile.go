@@ -17,18 +17,13 @@ import (
 	"github.com/devicechain-io/dc-microservice/httpsink"
 )
 
-// Limits are the per-tenant compile-time ceilings. The caller resolves them BEFORE Compile
-// from the tenant's overrides falling back to the platform default — a missing or zero
-// override must resolve here to the platform default, NEVER to "unlimited" (the ADR-023
-// fail-safe posture). Compile treats a zero field as "unset" and substitutes the built-in
-// floor so it can never accidentally run uncapped.
+// Limits are the compile-time ceilings a caller may vary. Today that is only
+// MaxRuleDuration, which the platform operator sets (maxRuleDurationSeconds). The expression
+// cost ceiling (predicate.CostCeiling) and the correlation member cap
+// (defaultCorrelationMemberCap) are platform constants and are not part of Limits. Compile
+// treats a zero MaxRuleDuration as "unset" and floors it to a day, so it can never run
+// uncapped.
 type Limits struct {
-	// PredicateCostCeiling is the maximum static worst-case CEL cost a leaf may estimate
-	// to at publish (and the runtime CostLimit on the compiled program).
-	PredicateCostCeiling uint64
-	// DefaultCorrelationMemberCap is the retained-member backstop applied to a correlation
-	// rule that does not set its own MemberCap.
-	DefaultCorrelationMemberCap int
 	// MaxRuleDuration is the longest temporal extent an authored rule may declare — the
 	// ceiling on window, hold, timeout and gap alike.
 	//
@@ -55,10 +50,10 @@ type Limits struct {
 	MaxRuleDuration time.Duration
 }
 
-// Built-in floors used when a Limits field is left zero, so Compile is never uncapped.
 const (
-	defaultPredicateCostCeiling      uint64 = 100
-	defaultCorrelationMemberCapFloor        = 1024
+	// defaultCorrelationMemberCap is the retained-member cap applied to a correlation rule
+	// that does not set its own MemberCap. It is a platform constant.
+	defaultCorrelationMemberCap = 1024
 	// defaultMaxRuleDuration is a day. It is deliberately the same order as the 24h cap the
 	// PREVIEW path has always enforced (preview.DefaultMaxWindow): previewing a rule over more
 	// than a day was already refused as too expensive, while PUBLISHING one — the path that
@@ -68,15 +63,25 @@ const (
 	defaultMaxRuleDuration = 24 * time.Hour
 )
 
+// runtimeCostBackstop is the runtime CostLimit stamped on every dispatch-built guard,
+// payload-template and alarm-key program. The authoritative gate is the publish-time
+// estimate against predicate.CostCeiling; this only bounds a forged or hand-edited
+// expression that reached the dispatcher without passing it. It must not be below the
+// ceiling, or an expression that passes publish would trip it on every dispatch; the
+// declaration below makes that a compile error rather than a comment.
+const runtimeCostBackstop uint64 = 1_000
+
+// A negative difference overflows uint64, so this line fails to compile if the backstop is
+// ever lowered below the ceiling.
+const _ uint64 = runtimeCostBackstop - predicate.CostCeiling
+
 // DefaultLimits is the platform-default compile budget applied to a published detection
 // rule. It is the SINGLE source both compile sites must share: the ADR-044 publish gate
 // (graphql.ValidateDetectionRules, slice 4b-2) and the runtime fact consumer that loads a
 // published rule into the engine (runtime.CompilePublishedRules, slice 4b-3). If the two
 // diverged, a rule could pass the publish gate and then be rejected when the engine
-// consumes it (or the reverse). Zero fields floor to the built-in caps inside Compile, so
-// this is never uncapped (ADR-023 never-unlimited). When per-tenant governance overrides
-// land (ADR-023, slice 6) BOTH sites resolve the caller's tenant limits from one source,
-// replacing this.
+// consumes it (or the reverse). A zero MaxRuleDuration floors to a day inside Compile, so
+// this is never uncapped (ADR-023 never-unlimited).
 func DefaultLimits() Limits {
 	return Limits{MaxRuleDuration: time.Duration(platformMaxRuleDuration.Load())}
 }
@@ -99,25 +104,11 @@ var platformMaxRuleDuration atomic.Int64
 // A non-positive value leaves the built-in day in force (ADR-023: never unlimited).
 func SetPlatformMaxRuleDuration(d time.Duration) { platformMaxRuleDuration.Store(int64(d)) }
 
-// WithDefaults returns the limits with every zero field floored to its built-in cap — the same
-// resolution Compile applies internally, exported so a caller that must cost-gate against the
-// EFFECTIVE ceiling before Compile runs (the canvas lowering gates unwired branch guards up front)
-// resolves it from one place rather than re-deriving the floor and drifting.
-func (l Limits) WithDefaults() Limits { return l.withDefaults() }
-
 func (l Limits) withDefaults() Limits {
-	if l.PredicateCostCeiling == 0 {
-		l.PredicateCostCeiling = defaultPredicateCostCeiling
-	}
-	if l.DefaultCorrelationMemberCap <= 0 {
-		// <= 0, not == 0: a negative caller misconfig must also floor, else every
-		// default-cap correlation rule is rejected downstream with a confusing message.
-		l.DefaultCorrelationMemberCap = defaultCorrelationMemberCapFloor
-	}
 	if l.MaxRuleDuration <= 0 {
-		// <= 0 for the same reason as the member cap: a negative override is a caller
-		// misconfiguration, and flooring it to the platform default is the ADR-023 fail-safe
-		// (never unlimited). A negative CONFIGURED value is rejected earlier, at config Validate.
+		// <= 0, not == 0: a negative override is a caller misconfiguration, and flooring it
+		// to the platform default is the ADR-023 fail-safe (never unlimited). A negative
+		// CONFIGURED value is rejected earlier, at config Validate.
 		l.MaxRuleDuration = defaultMaxRuleDuration
 	}
 	return l
@@ -267,7 +258,7 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	case TypeAggregate:
 		leafSrc, err = compileAggregate(r, cr)
 	case TypeCorrelation:
-		leafSrc, err = compileCorrelation(r, cr, limits)
+		leafSrc, err = compileCorrelation(r, cr)
 	case TypeConnectivity:
 		leafSrc, err = compileConnectivity(r, cr)
 	default:
@@ -277,7 +268,7 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 		return nil, err
 	}
 
-	pred, err := predicate.Compile(leafSrc, limits.PredicateCostCeiling)
+	pred, err := predicate.Compile(leafSrc)
 	if err != nil {
 		// Anchor the leaf error to the rule + its `when` input for the console, while
 		// preserving the underlying predicate.CompileError/CostError for errors.As.
@@ -312,7 +303,7 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 	// Validate the REACT layer (severity + action chain) and carry the severity through. This is
 	// the same publish-time gate the detection fields pass: a malformed action or an alarm without
 	// a tier is rejected here (fail-closed) so it can never reach the dispatcher.
-	if err := validateReact(r, limits); err != nil {
+	if err := validateReact(r); err != nil {
 		return nil, err
 	}
 	cr.Severity = r.Severity
@@ -375,7 +366,7 @@ func errFenceAndMetricLeaf(r Rule, cr *CompiledRule, pred *predicate.Predicate) 
 // action chain, each action well-formed for its type, and a severity that is present when an alarm
 // is raised and always within the known set. It is separate from the per-type detection lowering
 // because actions are orthogonal to the detection shape — any rule type may carry any action.
-func validateReact(r Rule, limits Limits) error {
+func validateReact(r Rule) error {
 	if r.Severity != "" && !r.Severity.Valid() {
 		return invalid(r.ID, "severity", "unknown severity %q", r.Severity)
 	}
@@ -397,12 +388,12 @@ func validateReact(r Rule, limits Limits) error {
 			return err
 		}
 		if a.Guard != "" {
-			// Cost-gate the per-action guard at the SAME tenant ceiling as the leaf predicate (a guard
+			// Cost-gate the per-action guard at the SAME platform ceiling as the leaf predicate (a guard
 			// is another cost-bearing CEL expression, ADR-023). A parse/type error, non-boolean, or
 			// over-cost guard rejects the rule at publish — fail-closed, so a runaway guard never
 			// reaches the dispatcher's hot path. The guard env is the derived event's scalars, NOT the
 			// resolved event's map (guard.go).
-			if _, err := CompileGuard(a.Guard, limits.PredicateCostCeiling); err != nil {
+			if _, err := CompileGuard(a.Guard); err != nil {
 				return invalid(r.ID, "actions", "action %d guard: %v", i, err)
 			}
 		}
@@ -411,19 +402,19 @@ func validateReact(r Rule, limits Limits) error {
 			// one severity), so an alarm action without a valid rule severity is rejected.
 			return invalid(r.ID, "severity", "a raiseAlarm action requires a valid rule severity")
 		}
-		// Cost-gate a connector action's CEL payload template at the SAME tenant ceiling as the leaf
+		// Cost-gate a connector action's CEL payload template at the SAME platform ceiling as the leaf
 		// predicate/guard (ADR-023): a bad or runaway template rejects the rule at publish, so REACT
 		// renders only a proven template on its hot path. Empty ⇒ no body, nothing to compile.
 		if tmpl := actionTemplate(a); tmpl != "" {
-			if _, err := CompileTemplate(tmpl, limits.PredicateCostCeiling); err != nil {
+			if _, err := CompileTemplate(tmpl); err != nil {
 				return invalid(r.ID, "actions", "action %d payload template: %v", i, err)
 			}
 		}
-		// Cost-gate a raiseAlarm's alarm-key template at the same tenant ceiling, against its own
+		// Cost-gate a raiseAlarm's alarm-key template at the same platform ceiling, against its own
 		// narrower environment (series only — alarmkey.go). This is where an author who reached for
 		// `value` is told, by the type checker, that the key must be edge-stable.
 		if a.Type == ActionRaiseAlarm && a.RaiseAlarm != nil && a.RaiseAlarm.AlarmKeyTemplate != "" {
-			if _, err := CompileAlarmKeyTemplate(a.RaiseAlarm.AlarmKeyTemplate, limits.PredicateCostCeiling); err != nil {
+			if _, err := CompileAlarmKeyTemplate(a.RaiseAlarm.AlarmKeyTemplate); err != nil {
 				return invalid(r.ID, "actions", "action %d alarmKeyTemplate: %v", i, err)
 			}
 		}
@@ -618,7 +609,7 @@ func validateAction(ruleID string, i int, a Action) error {
 }
 
 // validateHTTPCall checks an httpCall action's inline config (ADR-060). The CEL body template is
-// cost-gated separately in validateReact (it needs the tenant ceiling); this checks the structural
+// cost-gated separately in validateReact (against the platform ceiling); this checks the structural
 // fields: an http/https URL, POST-only method, non-reserved headers, a well-formed secret handle,
 // and a bounded timeout.
 func validateHTTPCall(ruleID string, i int, h *HTTPCallAction) error {
@@ -888,7 +879,7 @@ func compileAggregate(r Rule, cr *CompiledRule) (string, error) {
 	return optionalLeaf(r)
 }
 
-func compileCorrelation(r Rule, cr *CompiledRule, limits Limits) (string, error) {
+func compileCorrelation(r Rule, cr *CompiledRule) (string, error) {
 	if err := forbid(r, "correlation", forbidden{value: true, hold: true, timeout: true, gap: true, rate: true, mode: true, agg: true, op: true, threshold: true}); err != nil {
 		return "", err
 	}
@@ -906,7 +897,7 @@ func compileCorrelation(r Rule, cr *CompiledRule, limits Limits) (string, error)
 	}
 	memberCap := r.MemberCap
 	if memberCap == 0 {
-		memberCap = limits.DefaultCorrelationMemberCap
+		memberCap = defaultCorrelationMemberCap
 	}
 	if memberCap < r.Count {
 		return "", invalid(r.ID, "memberCap", "member cap %d is below the distinct-member count %d", memberCap, r.Count)

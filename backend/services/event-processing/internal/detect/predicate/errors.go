@@ -21,7 +21,7 @@ func (e *CompileError) Error() string {
 func (e *CompileError) Unwrap() error { return e.Err }
 
 // CostError is a publish-time rejection of a predicate whose worst-case evaluation cost
-// exceeds the per-tenant ceiling. It is the fail-closed guard against an author (or a
+// exceeds CostCeiling. It is the fail-closed guard against an author (or a
 // generated canvas graph) publishing an expression that would load the singleton — the
 // analog of a query the planner would refuse.
 type CostError struct {

@@ -47,10 +47,9 @@ func resolveMembershipMode(request *EntityGroupCreateRequest) (*resolvedMembersh
 		if request.Selector == nil || *request.Selector == "" {
 			return nil, fmt.Errorf("a dynamic entity group requires a selector")
 		}
-		// Compile against the platform-default cost ceiling (0 → default; a per-tenant
-		// override is a later ADR-023 wiring — never unlimited). MemberType is fixed for
-		// the group, so the selector is checked for exactly this family.
-		sel, err := selector.Compile(*request.Selector, request.MemberType, 0)
+		// Compile against the platform cost ceiling. MemberType is fixed for the group, so
+		// the selector is checked for exactly this family.
+		sel, err := selector.Compile(*request.Selector, request.MemberType)
 		if err != nil {
 			return nil, err
 		}
@@ -144,7 +143,7 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 		if MembershipMode(updated.MembershipMode) != MembershipDynamic {
 			return nil, fmt.Errorf("a static entity group must not carry a selector")
 		}
-		sel, err := selector.Compile(selectorSource, updated.MemberType, 0)
+		sel, err := selector.Compile(selectorSource, updated.MemberType)
 		if err != nil {
 			return nil, err
 		}

@@ -101,16 +101,26 @@ func (p *Predicate) Source() string { return p.source }
 // CostMax is the static worst-case cost that cleared the publish-time ceiling.
 func (p *Predicate) CostMax() uint64 { return p.costMax }
 
+// CostCeiling is the platform's ceiling on a CEL expression's static worst-case cost, in
+// cel-go cost units. It is one value for the whole instance: no tenant, tier or operator
+// setting changes it. Every cost-bearing expression in a detection rule (the leaf
+// predicate, an action guard, a payload template, an alarm-key template) is gated against
+// it at publish AND again when the engine loads a published rule, so the two agree by
+// construction. A compiled predicate's runtime CostLimit is the same value.
+const CostCeiling uint64 = 100
+
 // Compile parses, type-checks, and cost-gates a CEL boolean expression against the shared
 // environment, returning a reusable Predicate. It fails closed: a parse/type error, a
-// non-boolean result, or a worst-case cost above costCeiling all reject the rule at
+// non-boolean result, or a worst-case cost above CostCeiling all reject the rule at
 // publish with a message the console can surface. The returned Program also carries a
 // runtime CostLimit at the same ceiling as a backstop against an under-estimate.
-//
-// costCeiling is the per-tenant ceiling resolved by the caller (a missing/zero tenant
-// override must resolve to the platform default before this call — never to "unlimited",
-// per the ADR-023 fail-safe posture).
-func Compile(source string, costCeiling uint64) (*Predicate, error) {
+func Compile(source string) (*Predicate, error) {
+	return compile(source, CostCeiling)
+}
+
+// compile is Compile at an arbitrary ceiling. Only this package's tests call it with
+// anything but CostCeiling, to exercise the gate's boundary; no production path can.
+func compile(source string, costCeiling uint64) (*Predicate, error) {
 	env, err := Env()
 	if err != nil {
 		return nil, err

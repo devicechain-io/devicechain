@@ -18,7 +18,7 @@ The `draftDetectionRuleFromText` mutation calls the AI service and runs a bounde
 
 ## How a drafted rule is checked {#ai-proposes-the-compiler-disposes}
 
-Every authoring surface produces a candidate rule. The **CEL compiler** then parses it, type-checks it, and cost-gates it before it can be saved. A rule that is malformed, mistyped, or over a tenant's cost ceiling is **rejected at publish, before it ever runs**. The AI door is no exception: the model proposes a candidate, and the compiler accepts or rejects it exactly as it does a hand-drawn canvas rule.
+Every authoring surface produces a candidate rule. The **CEL compiler** then parses it, type-checks it, and cost-gates it before it can be saved. A rule that is malformed, mistyped, or over the platform's cost ceiling is **rejected at publish, before it ever runs**. The AI door is no exception: the model proposes a candidate, and the compiler accepts or rejects it exactly as it does a hand-drawn canvas rule.
 
 This is the **determinism boundary**, and it is a hard line:
 

@@ -249,15 +249,17 @@ func PurgeTenantDetect(ctx context.Context, nc *nats.Conn, instanceId, tenant st
 		// pedantry about error handling — a partition can have TWO responders, and the one
 		// that answers first is the one that did not do the work.
 		//
-		// A writer that lost a split brain latches `stale`, cancels its loop, and keeps
-		// running with its subscription intact (Stop runs only at service shutdown). Asked to
-		// evict, it fails immediately on the cancelled context — microseconds — while the
-		// healthy writer is still doing a real eviction and a database commit. If an error
-		// reply cleared the partition from this set, the gather would return on the halted
-		// pod's answer every single time and never read the committed one, and the ledger
-		// would carry "this tenant's windows are still in its checkpoint" about a partition
-		// that had just erased them. Deterministic, self-repeating, and clearable only by
-		// noticing a pod that looks healthy.
+		// A writer that lost a split brain latches `stale`, cancels its loop and ends its
+		// process, but the process does not vanish at once: the shutdown drains readiness
+		// first, and the purge responder is stopped only in the teardown that follows, so for
+		// that window the pod still holds its subscription. Asked to evict in the window, it
+		// fails immediately on the cancelled context — microseconds — while the healthy
+		// writer is still doing a real eviction and a database commit. If an error reply
+		// cleared the partition from this set, every eviction asked in that window would
+		// return on the exiting pod's answer and never read the committed one, and the
+		// ledger would carry "this tenant's windows are still in its checkpoint" about a
+		// partition that had just erased them. A warm standby answers first in the same way,
+		// and it is not a fault at all; see below.
 		if reply.Error == "" && awaited[reply.PartitionId] {
 			delete(awaited, reply.PartitionId)
 			if len(awaited) == 0 {

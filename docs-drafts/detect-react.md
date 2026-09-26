@@ -332,8 +332,11 @@ The compiler is `backend/services/event-processing/internal/rules/compile.go:167
 limits are floored before anything else so **compile can never run uncapped** (`:168`); each rule
 type forbids every field it does not read (`internal/rules/validate.go:30-57`), returning the first
 forbidden non-zero field; the leaf lowers to CEL and compiles under a cost ceiling. That ceiling is
-**100** (`:34`) and it is the only value ever in play, because every call site passes the defaults
-and `DefaultLimits` is the zero `Limits` that the floor fills in (`:47`, `:56-57`).
+`predicate.CostCeiling` (**100**), a platform constant: no tenant, tier or operator setting changes
+it, and no compile entry point takes a ceiling. Every other cost-bearing expression in a rule (an
+action guard, a payload template, an alarm-key template) is gated against the same constant, and
+their dispatch-time programs carry one runtime backstop, `runtimeCostBackstop`, which a
+compile-time declaration keeps from ever being lowered below the ceiling.
 
 Generated CEL is **never string-spliced from author input**
 (`backend/services/event-processing/internal/rules/cel_gen.go`): operators come from a closed map
@@ -967,10 +970,13 @@ Ordered by what they cost.
    asks for a synthesized graph and **discards the error half of the answer**
    (`canvas/CanvasEditor.tsx:118-120`), falling through to a graph carrying nothing but a `source`
    node (`:121-125`).
-7. **A runtime split-brain halt is invisible to Kubernetes.** The stale latch stops the loop and is
-   never wired to readiness, so the pod keeps serving green health endpoints. The *startup* path
-   guards this exact hazard by name (`ResolvedEventsProcessor.go:474-480`); the runtime path reaches
-   the same state and does not.
+7. ~~**A runtime split-brain halt is invisible to Kubernetes.**~~ — **CLOSED.** A leased writer
+   whose checkpoint is refused as stale (by `Save` or by the idle-advance fence) latches `stale`,
+   ends its leadership, and calls `Microservice.FailNow` from `haltStaleWriter`, so the shutdown
+   drains readiness to 503 and the process exits non-zero to be replaced. The unleased path (unit
+   tests, the scaffold) still halts the loop only. The exit is pinned by the `leadership_test.go`
+   tests in `backend/services/event-processing/processor/`, which read FailNow's own log line with
+   the partition and the reason in it.
 8. ~~**`MaxConcurrentSends` is ungated and silently breaks the ack budget.**~~ — **CLOSED.** The
    wait-budget ceiling was sized against a two-worker-wave model that assumed concurrency near its
    default, and a lower `MaxConcurrentSends` stretched a 64-message fetch batch over many waves,

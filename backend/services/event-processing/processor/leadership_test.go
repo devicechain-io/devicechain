@@ -5,13 +5,17 @@ package processor
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // leasedProcessor is a processor wired for leadership but with no broker behind it:
@@ -30,6 +34,46 @@ func leasedProcessor(t *testing.T) *ResolvedEventsProcessor {
 		t.Fatalf("restore: %v", err)
 	}
 	return rp
+}
+
+// processEndedLine is what Microservice.FailNow logs, synchronously and before anything
+// else, when it takes the process down with a non-zero status. It is what the tests
+// below read: a test outside core cannot read a Microservice's outcome (only core's
+// unexported waitForShutdown can), so the log line is the observable.
+const processEndedLine = "declared this process unfit to continue"
+
+// noMicroserviceLine is what FailNow logs instead when it is handed a nil Microservice:
+// it cannot end the process, and says so.
+const noMicroserviceLine = "FailNow was called with no microservice"
+
+// observeProcessEnd gives rp a Microservice that FailNow can act on, and starts capturing
+// the log FailNow writes when it does.
+//
+// The Microservice is a struct literal that never ran, so FailNow takes its "nothing to
+// tear down" branch and records the outcome: nothing exits and nothing is torn down. What
+// it DOES do is log processEndedLine with the error it was handed, and only a real
+// Microservice logs that line. So the line appearing, carrying this partition's reason,
+// is the process being ended, seen from outside core.
+func observeProcessEnd(t *testing.T, rp *ResolvedEventsProcessor) *dctest.LogSink {
+	t.Helper()
+	rp.Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
+	return logSink.Capture(t)
+}
+
+// requireProcessEnded asserts FailNow ended the process exactly once, and that the reason
+// it logged names the partition and contains every fragment in want.
+func requireProcessEnded(t *testing.T, logged *dctest.LogSink, partition string, want ...string) {
+	t.Helper()
+	out := logged.String()
+	if n := strings.Count(out, processEndedLine); n != 1 {
+		t.Fatalf("the process was ended %d times, want exactly 1; logs were:\n%s", n, out)
+	}
+	// %q in the message renders the partition quoted, and the JSON log escapes the quotes.
+	for _, w := range append([]string{`\"` + partition + `\"`}, want...) {
+		if !strings.Contains(out, w) {
+			t.Fatalf("the reason the process ended does not contain %q; logs were:\n%s", w, out)
+		}
+	}
 }
 
 // 🔴 THE CHECKPOINT IS WHERE OWNERSHIP HAS TO BE CHECKED, and this is the assertion
@@ -223,11 +267,14 @@ func TestATermStartsFromCleanBuffers(t *testing.T) {
 // is strictly worse than not holding the partition at all: it holds it AGAINST a
 // healthy standby.
 //
-// Ending the supervisor drops both gauges, so the leaderless alert fires and the pod
-// is replaced.
-func TestAStaleCheckpointEndsLeadershipRatherThanJustTheTerm(t *testing.T) {
+// Ending the supervisor drops both gauges, so the leaderless alert fires. But it is the
+// PROCESS ending that gets the pod replaced: a supervisor whose context was cancelled
+// returns quietly, leaving the pod Ready, live and detecting nothing. So this asserts all
+// three — the term, leadership, and the process, the last by the reason it was given.
+func TestAStaleCheckpointEndsTheProcess(t *testing.T) {
 	ctx := context.Background()
 	rp := leasedProcessor(t)
+	logged := observeProcessEnd(t, rp)
 	rp.Gate.Enter(func() bool { return true })
 	rp.supCtx, rp.supCancel = context.WithCancel(context.Background())
 	rp.newTermContext()
@@ -260,6 +307,7 @@ func TestAStaleCheckpointEndsLeadershipRatherThanJustTheTerm(t *testing.T) {
 	default:
 		t.Fatal("the term context survived a stale checkpoint")
 	}
+	requireProcessEnded(t, logged, rp.cfg.PartitionId, "refused as stale")
 }
 
 // 🔴 THERE ARE TWO PLACES THAT DISCOVER A STALE CHECKPOINT AND THE FIRST VERSION OF
@@ -273,10 +321,12 @@ func TestAStaleCheckpointEndsLeadershipRatherThanJustTheTerm(t *testing.T) {
 // checkpoint refused on the flag, and count one term-build failure. Five of those,
 // with detect_is_leader reading 1 throughout.
 //
-// This asserts the fence site ends leadership, which is what pins the two together.
-func TestTheIdleAdvanceFenceAlsoEndsLeadership(t *testing.T) {
+// This asserts the fence site ends leadership and the process, which is what pins the
+// two together.
+func TestTheIdleAdvanceFenceAlsoEndsTheProcess(t *testing.T) {
 	ctx := context.Background()
 	rp := leasedProcessor(t)
+	logged := observeProcessEnd(t, rp)
 	rp.Gate.Enter(func() bool { return true })
 	rp.supCtx, rp.supCancel = context.WithCancel(context.Background())
 	rp.newTermContext()
@@ -302,6 +352,19 @@ func TestTheIdleAdvanceFenceAlsoEndsLeadership(t *testing.T) {
 		t.Fatal("the idle-advance fence ended the term but not leadership; the supervisor would re-acquire " +
 			"and rebuild a term whose every checkpoint is refused before it starts")
 	}
+	requireProcessEnded(t, logged, rp.cfg.PartitionId, "refused as stale")
+}
+
+// failProcess is the term-build fuse's way out: leadership has stopped for good, so the
+// pod exits to be replaced. This pins what the function does with its cause. It does not
+// drive the fuse that calls it.
+func TestFailProcessEndsTheProcessNamingThePartitionAndCause(t *testing.T) {
+	rp := leasedProcessor(t)
+	logged := observeProcessEnd(t, rp)
+
+	rp.failProcess(errors.New("the term build was refused five times"))
+
+	requireProcessEnded(t, logged, rp.cfg.PartitionId, "cannot resume", "the term build was refused five times")
 }
 
 // The unleased path keeps its original behaviour: a stale refusal halts the loop and
@@ -310,6 +373,9 @@ func TestTheIdleAdvanceFenceAlsoEndsLeadership(t *testing.T) {
 func TestAnUnleasedStaleWriterHaltsWithoutEndingTheProcess(t *testing.T) {
 	ctx := context.Background()
 	rp := newTestProcessor(newTestStore(t), nil, 1)
+	// A Microservice FailNow could act on, so a FailNow here would log that it ended the
+	// process rather than that it could not.
+	logged := observeProcessEnd(t, rp)
 	rp.supCtx, rp.supCancel = context.WithCancel(context.Background())
 	rp.newTermContext()
 	if err := rp.Store.Save(ctx, &model.DetectSnapshot{
@@ -326,9 +392,14 @@ func TestAnUnleasedStaleWriterHaltsWithoutEndingTheProcess(t *testing.T) {
 	}
 	select {
 	case <-rp.supCtx.Done():
-		t.Fatal("a processor that takes no lease ended its own process on a stale refusal; it holds no " +
+		t.Fatal("a processor that takes no lease ended its own leadership on a stale refusal; it holds no " +
 			"partition, so there is nothing for a replacement to take over")
 	default:
+	}
+	out := logged.String()
+	if strings.Contains(out, processEndedLine) || strings.Contains(out, noMicroserviceLine) {
+		t.Fatalf("a processor that takes no lease called FailNow on a stale refusal; it holds no "+
+			"partition, so there is nothing for a replacement to take over. Logs were:\n%s", out)
 	}
 }
 

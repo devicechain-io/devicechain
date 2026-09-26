@@ -17,7 +17,7 @@ type Query {
     # Validate a batch of detection-rule definitions (opaque rules.Rule JSON) by
     # decoding, compiling, and cost-gating each through the DETECT compiler — the
     # single-homed authority for rule structure, type coherence, CEL type-checking, and
-    # the ADR-023 predicate-cost ceiling. This is the ADR-044 validate-invariants-sync
+    # the platform predicate-cost ceiling. This is the ADR-044 validate-invariants-sync
     # gate: device-management invokes it at profile publish (over the service-token
     # svcclient), submitting the profile's ENABLED draft rules, and refuses to publish
     # if any of them does not compile (a disabled rule is inert and is not submitted).
@@ -211,8 +211,8 @@ type PreviewStats {
 enum RuleStatus {
     # The rule compiles under the current limits and is running.
     ACTIVE
-    # The projected rule no longer compiles under the current compile limits (e.g. a tightened
-    # cost ceiling) — it is surfaced so the author can see and re-author it, rather than failing
+    # The projected rule no longer compiles under the current compile limits (e.g. a lowered
+    # maximum rule duration) — it is surfaced so the author can see and re-author it, rather than failing
     # silently. A rule that failed to compile at publish never reaches the projection (publish
     # fails closed), so this only catches a rule that stopped compiling after it was published.
     COMPILE_ERROR

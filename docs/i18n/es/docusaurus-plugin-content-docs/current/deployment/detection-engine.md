@@ -410,7 +410,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 
 ### El techo de duración de regla sí se aplica
 
-`maxRuleDurationSeconds` es el único límite de esta página que **rechaza trabajo** en lugar de
+`maxRuleDurationSeconds` es el único ajuste de la tabla anterior que **rechaza trabajo** en lugar de
 limitarse a informar sobre él. Una regla que declare una ventana, retención, tiempo de espera o
 hueco más largos se rechaza al publicar el perfil, con un error que nombra el campo y el límite, y
 ese mismo techo se vuelve a aplicar cuando el motor carga una regla publicada, de modo que ambos
@@ -453,6 +453,21 @@ busca de `failed to compile; skipping` y confirme en la pestaña **Rule Health**
 están ejecutando las reglas que espera.
 :::
 
+### El techo de coste de las expresiones es fijo
+
+Cada expresión CEL de una regla de detección se somete a una comprobación de coste cuando se
+publica el perfil: la condición, la guarda de una acción, una plantilla de contenido y una
+plantilla de clave de alarma. Una regla cuya expresión tenga un coste estimado en el peor caso
+superior a **100** se rechaza, con un error que indica la estimación y el techo. El motor vuelve a
+aplicar el mismo techo cuando carga una regla publicada. Los selectores de grupos dinámicos se
+comprueban contra el mismo valor al guardar un grupo.
+
+El techo es el mismo para todos los inquilinos, y no hay ningún ajuste para subirlo, ni para un
+inquilino ni para la instancia. Acota cuánto trabajo puede costar una sola lectura al motor único
+que comparten todos los inquilinos. Una expresión que recorre las mediciones de una lectura
+(`m.all(...)`, `m.exists(...)`) es la forma habitual de alcanzarlo; nombre en su lugar las
+mediciones que necesita.
+
 :::note Los presupuestos de estado por inquilino se miden, no se aplican
 Los tres techos por inquilino —reglas, claves vivas y lecturas retenidas— levantan una métrica y una
 línea de registro cuando un inquilino los supera. **Nada detiene al inquilino.** Un solo inquilino
@@ -478,7 +493,7 @@ exigiría recorrerlo entero en cada punto de control.
 
 | Señal | Significa |
 |---|---|
-| `DetectCheckpointsStalledWithBacklog` | **La alerta más importante de esta página.** Los puntos de control se han detenido mientras hay trabajo esperando. O el motor se ha parado tras perder una carrera de cerebro dividido (split-brain), o su base de datos no está disponible. No se está detectando nada. |
+| `DetectCheckpointsStalledWithBacklog` | **La alerta más importante de esta página.** Los puntos de control se han detenido mientras hay trabajo esperando: el motor no puede alcanzar su base de datos o el bróker, o su bucle está atascado. No se está detectando nada. |
 | `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, queda suprimida la detección de ausencias **por silencio**; un evento posterior sigue disparando una ausencia vencida, como se explica arriba. |
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
 | `DetectFanoutEvalErrors` | Una o más reglas publicadas están fallando al evaluarse. Vea la advertencia de arriba. |
@@ -490,11 +505,13 @@ exigiría recorrerlo entero en cada punto de control.
 | `RateMeteringClockFallback` | Durante una hora, las acciones de salida se han medido según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día puede volver a descartarse como una inundación. Compruebe que event-processing y outbound-connectors ejecutan la misma versión. Una hora de desencadenamiento posterior a la hora del bróker de su mensaje se cuenta aparte, con el origen `capped`, y no dispara este aviso: es un desfase de reloj entre el pod y el bróker, no una hora que falte. |
 | `DetectTenantOverStateBudget` | Un inquilino ha superado un techo que no se aplica: su número de reglas, sus ventanas y temporizadores vivos, o las lecturas que retienen sus ventanas abiertas. |
 
-:::warning Un motor detenido sigue informando que está sano
-Si el motor se detiene tras perder una carrera de cerebro dividido, sus endpoints de salud siguen
-informando que está listo. El pod se ve bien y la detección se ha parado. Hoy
-`DetectCheckpointsStalledWithBacklog` es la señal que detecta esto, y se dispara con retraso: no se
-fíe solo de la salud del pod para saber si la detección está funcionando.
+:::note Un motor que pierde una carrera de cerebro dividido termina
+Si alguna vez dos motores actúan a la vez como escritor, aquel cuyo punto de control se rechaza por
+obsoleto deja de detectar, informa que no está listo y termina con un estado distinto de cero para
+que se lo reemplace. No sigue en marcha aparentando estar sano. Lo que deja tras de sí es un reinicio
+de un pod de event-processing, cuyas últimas líneas de registro indican que el punto de control se
+rechazó por obsoleto. Si ninguna réplica tiene la partición durante dos minutos, se dispara
+`DetectHasNoLeader`.
 :::
 
 El estado por regla, la hora del último disparo y el conteo de disparos están disponibles en la

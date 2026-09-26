@@ -25,7 +25,7 @@ func TestSelectorKeys(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			sel, err := Compile(c.src, "device", 0)
+			sel, err := Compile(c.src, "device")
 			if err != nil {
 				t.Fatalf("compile %q: %v", c.src, err)
 			}

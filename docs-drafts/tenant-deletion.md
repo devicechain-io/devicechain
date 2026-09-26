@@ -314,10 +314,11 @@ Four properties make the answer trustworthy:
    before the next scheduled checkpoint would resurrect exactly what was just erased — and the
    caller would already have been told it was gone.
 4. **Only a clean reply satisfies a partition.** A partition can have two responders: a split-brain
-   writer that lost its checkpoint race keeps its subscription until the process stops, and it fails
-   in microseconds on its cancelled context while the healthy writer is still committing. If an
-   error reply satisfied the expectation, the gather would return on the halted pod's answer every
-   single time and never read the committed one.
+   writer that lost its checkpoint race ends its process, but keeps its subscription through the
+   readiness drain until teardown stops the responder, and in that window it fails in microseconds
+   on its cancelled context while the healthy writer is still committing. A warm standby answers
+   just as fast. If an error reply satisfied the expectation, every gather asked in that window would
+   return on the exiting pod's answer and never read the committed one.
 
 The condition for reporting clean is **not** "this pass evicted nothing". It is that the engine has
 nothing *uncommitted*:

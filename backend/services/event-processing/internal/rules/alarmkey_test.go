@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-const testAlarmKeyCeiling uint64 = 100
-
 func alarmTemplateRule(key, template string) Rule {
 	return Rule{
 		ID: "acme/p@1/r1", Name: "r", Type: TypeThreshold, Severity: SeverityCritical,
@@ -28,7 +26,7 @@ func TestAlarmKeyTemplateRejectsEdgeUnstableVocabulary(t *testing.T) {
 		`"k-" + string(value)`,
 		`hasValue ? "k-hot" : "k-cold"`,
 	} {
-		if _, err := CompileAlarmKeyTemplate(src, testAlarmKeyCeiling); err == nil {
+		if _, err := CompileAlarmKeyTemplate(src); err == nil {
 			t.Fatalf("CompileAlarmKeyTemplate(%q) must be rejected: a key that reads the value is not edge-stable", src)
 		}
 	}
@@ -37,7 +35,7 @@ func TestAlarmKeyTemplateRejectsEdgeUnstableVocabulary(t *testing.T) {
 // The counterweight: rejecting the value vocabulary is only useful while the series vocabulary — the
 // entire point of the feature — still compiles.
 func TestAlarmKeyTemplateAcceptsSeries(t *testing.T) {
-	if _, err := CompileAlarmKeyTemplate(`"overtemp-" + series`, testAlarmKeyCeiling); err != nil {
+	if _, err := CompileAlarmKeyTemplate(`"overtemp-" + series`); err != nil {
 		t.Fatalf("a series-only alarm-key template must compile: %v", err)
 	}
 }
@@ -45,16 +43,16 @@ func TestAlarmKeyTemplateAcceptsSeries(t *testing.T) {
 // A non-string template is refused: the key is a string and a template that yields anything else
 // could only be coerced by guessing.
 func TestAlarmKeyTemplateMustYieldAString(t *testing.T) {
-	if _, err := CompileAlarmKeyTemplate(`size(series)`, testAlarmKeyCeiling); err == nil {
+	if _, err := CompileAlarmKeyTemplate(`size(series)`); err == nil {
 		t.Fatal("an int-valued alarm-key template must be rejected")
 	}
 }
 
-// Cost is gated at the tenant ceiling, like a guard and a payload template, so a runaway key
+// Cost is gated at the platform ceiling, like a guard and a payload template, so a runaway key
 // expression is refused at publish rather than burned on every dispatch.
 func TestAlarmKeyTemplateIsCostGated(t *testing.T) {
 	src := `"` + strings.Repeat("a", 8) + `" + series + series + series + series + series + series`
-	if _, err := CompileAlarmKeyTemplate(src, 1); err == nil {
+	if _, err := compileAlarmKeyTemplate(src, 1); err == nil {
 		t.Fatal("an alarm-key template above the ceiling must be rejected")
 	}
 }
