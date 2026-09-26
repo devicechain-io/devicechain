@@ -105,6 +105,18 @@ func TestAStoreOutputNamingNoDeploymentFails(t *testing.T) {
 			t.Errorf("output %s was accepted", v)
 		}
 	}
+	// ...and an empty name is refused as what it is, before any client is built, rather
+	// than surfacing as a Get of an empty name.
+	for _, v := range []string{`{"namespace":"dc-system","name":""}`, `{"namespace":"","name":"dc-object-store"}`} {
+		err := confirmObjectStoreRolledOut(context.Background(), objectStoreOutputs(v),
+			func() (kubernetes.Interface, error) {
+				t.Errorf("kube clients were built for output %s, which names no Deployment", v)
+				return fake.NewSimpleClientset(), nil
+			}, 20*time.Millisecond)
+		if err == nil || !strings.Contains(err.Error(), "names no Deployment") {
+			t.Errorf("output %s was not refused as naming no Deployment: %v", v, err)
+		}
+	}
 }
 
 // TestLiveObjectStoreRolloutCheck is hack/tofu-rerun-rig.sh's hook into the check
