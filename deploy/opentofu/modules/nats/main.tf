@@ -754,6 +754,23 @@ locals {
       # core/messaging hands them a single ClusterIP URL. The tradeoff is that the
       # advertised URLs would be pod IPs, useless to an external MQTT client. Both
       # are separate decisions with their own costs.
+      #
+      # A RETURNING SERVER IS ITSELF A DISRUPTION, and nothing in this module can
+      # change that. NATS RAFT has no pre-vote: a server cut off from its peers keeps
+      # campaigning and raising its term, and when it can reach them again, an
+      # AppendEntry response or a vote request carrying that higher term makes every
+      # healthy leader it touches step down ("Detected another leader with higher
+      # term, will stepdown"). Measured on 2.14.4, an 85s network partition of one
+      # of three nodes: about 45s after the partition healed, dozens of stream and
+      # consumer groups re-elected at once and JetStream answered "no responders" /
+      # "temporarily unavailable" for ~6s. The ingress refused 80 publishes, a
+      # handful of in-flight deliveries waited out one AckWait (~53s) before
+      # redelivery, nothing was lost, and every client re-bound on its own. The
+      # upstream 2.15.0 source has the same two step-down paths (the higher-term
+      # branch of processAppendEntryResponse, and processVoteRequest), so no
+      # release to date removes it. Treat a node's RETURN like its loss when
+      # planning maintenance; the operator-facing account is in the bootstrap
+      # docs' node-loss section.
     }
     promExporter = {
       enabled = var.enable_prom_exporter

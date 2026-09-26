@@ -678,6 +678,15 @@ reach a moment inside that gap, and the `PostgresWALArchivingFailing` alert is a
 Restores to points after the next base backup are unaffected. A base backup that is running
 when the primary stops is abandoned, and the next scheduled one runs as usual.
 
+The same two minutes also cover a known issue in the database operator. An instance can shut
+PostgreSQL down cleanly and then fail to exit: its log ends with
+`failed waiting for all runnables to end within grace period of 30s`, and its pod stays
+`Terminating` although the database has stopped. Nothing is wrong with the data, and the pod is
+removed when the two minutes are up. A pod that was created before this limit was introduced
+still carries thirty minutes; the
+[release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds) say how to
+recognise that case and clear it.
+
 Under `--ha`, a primary that is being demoted (by a switchover, or because it is failing) is
 likewise stopped abruptly if it has not shut down within two minutes. On the relational store
 that loses nothing, because every commit is held until a standby has it. The event store does
@@ -699,6 +708,46 @@ This reads the live broker. It asserts that every stream, KV bucket and durable 
 carries the declared replica factor **with all peers current**, and that the three servers are
 on three distinct nodes. It exits non-zero if anything falls short, and prints what it examined
 so that a pass over an empty set is not mistaken for a pass.
+
+#### Losing a node, and getting it back {#ha-node-loss}
+
+`--ha` survives the loss of one node. This is what that looks like from outside, in the order it
+happens:
+
+- **The broker elects new leaders within seconds.** Streams led from the lost node pick a new
+  leader, and in testing acknowledged writes resumed within about ten seconds. Publishes in flight
+  at that moment fail, and a device posting over HTTP can see some `503` responses and should
+  retry. New connections through the broker's service can keep failing intermittently for about
+  45 seconds, until Kubernetes marks the node as lost and stops routing to the server on it.
+- **Service pods move after about a minute and a quarter.** Kubernetes first takes roughly 40 to
+  50 seconds to decide that the node is lost. Each service pod on it is then evicted after
+  `nodeLossTolerationSeconds` (30 by default; `null` restores Kubernetes' own 300) and started on
+  another node. At one replica per service, which is the default, a service whose pod was on the
+  lost node is unavailable until then. The database instances and the database operator use the
+  same 30 seconds. The broker's servers do not, because Kubernetes does not recreate them on
+  another node while it cannot confirm that the old one has stopped, so a shorter limit would
+  gain nothing.
+- **A database primary on the lost node fails over.** A standby is promoted once the database
+  operator sees that the primary is unreachable, and `dc-postgresql` or `dc-timescaledb-single`
+  moves to it. This takes longer than
+  [stopping a primary](#ha-database-failover), because nothing tells the operator the primary is
+  gone; in testing, with the operator itself on a surviving node, a new primary was writable
+  about two minutes after the node was lost. Events wait in the messaging layer meanwhile.
+- **Pods on the lost node show `Terminating` until it returns.** Kubernetes cannot confirm that
+  they have stopped, so it leaves them there. Do not force-delete a pod whose node is
+  unreachable: for a database instance or a broker server, that lets a replacement start while
+  the original may still be running on the other side of the fault. If the machine is gone for
+  good, confirm that it is powered off and then delete its Node object; Kubernetes then removes
+  its pods. A database instance whose node returns rejoins as a standby.
+- **Getting the node back is itself a short disruption.** A broker server that was cut off has
+  kept holding elections on its own, and when it rejoins, the other servers' streams and
+  consumers elect their leaders again. Expect JetStream to answer "temporarily unavailable" for a
+  few seconds, about 45 seconds after the node returns, the HTTP ingress to refuse some publishes
+  in that window, and some events already in flight to be processed up to a minute late. Nothing
+  is lost, and the services re-attach on their own.
+
+Plan a node's return the way you plan its loss, and do not take a second node down until
+`dcctl ha verify` passes again.
 
 ## After bootstrap {#after-bootstrap}
 

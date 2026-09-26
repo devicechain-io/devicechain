@@ -726,6 +726,15 @@ restauración a un momento concreto no alcance un instante dentro de ese hueco, 
 siguiente copia base no se ven afectadas. Una copia base que esté en curso cuando se detiene la
 primaria se abandona, y la siguiente copia programada se ejecuta con normalidad.
 
+Los mismos dos minutos cubren también un problema conocido del operador de base de datos. Una
+instancia puede apagar PostgreSQL correctamente y después no terminar: su registro acaba con
+`failed waiting for all runnables to end within grace period of 30s`, y su pod se queda en
+`Terminating` aunque la base de datos ya se ha detenido. Los datos no tienen ningún problema, y
+el pod se elimina al cumplirse los dos minutos. Un pod creado antes de que se introdujera este
+límite sigue teniendo treinta minutos; las
+[notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds) explican
+cómo reconocer ese caso y resolverlo.
+
 Con `--ha`, una primaria que se está degradando (por un traspaso, o porque está fallando)
 también se detiene de forma abrupta si no se ha apagado en dos minutos. En el almacén relacional
 eso no pierde nada, porque cada commit se retiene hasta que una réplica lo tiene. El almacén de
@@ -748,6 +757,51 @@ factor de réplica declarado **con todos los pares al día**, y que los tres ser
 tres nodos distintos. Termina con código distinto de cero si algo se queda corto, e imprime
 qué examinó para que un resultado correcto sobre un conjunto vacío no se confunda con un éxito
 real.
+
+#### Perder un nodo y recuperarlo {#ha-node-loss}
+
+`--ha` sobrevive a la pérdida de un nodo. Así se ve desde fuera, en el orden en que ocurre:
+
+- **El broker elige nuevos líderes en segundos.** Los streams cuyo líder estaba en el nodo
+  perdido eligen uno nuevo, y en las pruebas las escrituras confirmadas se reanudaron en unos
+  diez segundos. Las publicaciones en curso en ese momento fallan, y un dispositivo que publica
+  por HTTP puede recibir algunas respuestas `503` y debe reintentar. Las conexiones nuevas a
+  través del servicio del broker pueden seguir fallando de forma intermitente durante unos 45
+  segundos, hasta que Kubernetes da el nodo por perdido y deja de dirigir tráfico al servidor que
+  había en él.
+- **Los pods de los servicios se mueven al cabo de un minuto y cuarto, aproximadamente.**
+  Kubernetes tarda primero entre 40 y 50 segundos en dar el nodo por perdido. Después desaloja
+  cada pod de servicio de ese nodo al cabo de `nodeLossTolerationSeconds` (30 por defecto; `null`
+  restablece los 300 del propio Kubernetes) y lo arranca en otro nodo. Con una réplica por
+  servicio, que es lo predeterminado, un servicio cuyo pod estaba en el nodo perdido no está
+  disponible hasta entonces. Las instancias de base de datos y el operador de base de datos usan
+  los mismos 30 segundos. Los servidores del broker no: Kubernetes no los recrea en otro nodo
+  mientras no pueda confirmar que el anterior se ha detenido, así que un plazo más corto no
+  aportaría nada.
+- **Una primaria de base de datos que estaba en el nodo perdido conmuta.** Se promueve una
+  réplica en cuanto el operador de base de datos ve que la primaria es inaccesible, y
+  `dc-postgresql` o `dc-timescaledb-single` pasa a apuntar a ella. Tarda más que
+  [detener una primaria](#ha-database-failover), porque nada avisa al operador de que la primaria
+  ha desaparecido; en las pruebas, con el propio operador en un nodo superviviente, la nueva
+  primaria aceptaba escrituras unos dos minutos después de perder el nodo. Mientras tanto, los
+  eventos esperan en la capa de mensajería.
+- **Los pods del nodo perdido aparecen en `Terminating` hasta que vuelve.** Kubernetes no puede
+  confirmar que se han detenido, así que los deja ahí. No elimines a la fuerza un pod cuyo nodo
+  es inaccesible: en el caso de una instancia de base de datos o de un servidor del broker, eso
+  permite que arranque un sustituto mientras el original puede seguir ejecutándose al otro lado
+  del fallo. Si la máquina no va a volver, confirma que está apagada y elimina después su objeto
+  Node; Kubernetes elimina entonces sus pods. Una instancia de base de datos cuyo nodo vuelve se
+  reincorpora como réplica.
+- **Recuperar el nodo también es una interrupción breve.** Un servidor del broker que quedó
+  aislado ha seguido celebrando elecciones por su cuenta y, al reincorporarse, los streams y
+  consumidores de los demás servidores vuelven a elegir a sus líderes. Cuenta con que JetStream
+  responda "temporalmente no disponible" durante unos segundos, unos 45 segundos después de que
+  vuelva el nodo, con que la ingesta HTTP rechace algunas publicaciones en ese intervalo, y con
+  que algunos eventos que ya estaban en curso se procesen hasta un minuto tarde. No se pierde
+  nada, y los servicios se vuelven a enlazar solos.
+
+Planifica la vuelta de un nodo como planificas su pérdida, y no retires un segundo nodo hasta
+que `dcctl ha verify` vuelva a pasar.
 
 ## Después del arranque inicial {#after-bootstrap}
 
