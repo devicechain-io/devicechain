@@ -77,6 +77,8 @@ Compruebe la presencia antes de leer un valor. Un umbral dinámico creado en el 
 "temp" in m && ("tempLimit" in attr ? m["temp"] > attr["tempLimit"] : m["temp"] > 80.0)
 ```
 
+Como esta expresión no puede ser verdadera para un evento sin `temp`, la regla solo mira los eventos que llevan `temp`. Un evento sin ella se omite: no resuelve una alarma de umbral y no interrumpe el tiempo de sostenimiento de una regla de duración.
+
 Una condición de umbral o de duración que sería verdadera en todos los eventos de **todos** los dispositivos sin los atributos que lee, sea cual sea el contenido del evento, se rechaza al publicar el perfil. Por ejemplo, `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` levantaría una alarma para cada uno de esos dispositivos, informara lo que informara, mientras le faltara el atributo. Una condición que sigue dependiendo de la lectura, como `!("tempLimit" in attr) && m["temp"] > 80.0`, se acepta. Tenga en cuenta que también se aplica a los dispositivos cuyo atributo tiene un tipo o un alcance incorrectos, no solo a los que nunca lo establecieron.
 
 En una regla de repetición, de tasa de cambio, de agregado en ventana o de correlación de área, la condición es un filtro sobre qué eventos cuentan, así que allí se acepta un filtro como `!("maint" in attr)` («dispositivos que no están en mantenimiento»).

@@ -77,6 +77,8 @@ Test presence before you read a value. A dynamic threshold built on the form com
 "temp" in m && ("tempLimit" in attr ? m["temp"] > attr["tempLimit"] : m["temp"] > 80.0)
 ```
 
+Because this expression cannot be true for an event without `temp`, the rule looks only at events that carry `temp`. An event without it is skipped: it does not resolve a threshold alarm, and it does not cancel a duration hold.
+
 A threshold or duration condition that would be true on every event from **every** device without the attributes it reads, whatever the event carries, is refused when the profile is published. For example, `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` would raise an alarm for every such device, whatever it reported, for as long as the attribute was missing. A condition that still depends on the reading, such as `!("tempLimit" in attr) && m["temp"] > 80.0`, is accepted. Remember that it also applies to devices whose attribute has the wrong type or scope, not only to devices that never set one.
 
 On a repeating, rate-of-change, windowed-aggregate or area-correlation rule the condition is a filter on which events count, so a filter such as `!("maint" in attr)` ("devices not in maintenance") is accepted there.

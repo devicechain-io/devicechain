@@ -433,4 +433,16 @@ func TestCompileKeepsConditionsThatAreNotAFleetWideAlarm(t *testing.T) {
 			t.Errorf("%s: must compile, got %v", name, err)
 		}
 	}
+
+	// The fallback the refusal message and the concepts page recommend is also metric-scoped: it
+	// is provably false without `t`, so an event that lacks `t` is skipped rather than evaluated to
+	// the false that would cancel a duration hold or resolve a threshold alarm. The docs promise
+	// this; pin it so the promise cannot drift from the scoping rule.
+	cr, err := Compile(kept["duration recommended fallback"], testLimits)
+	if err != nil {
+		t.Fatalf("duration recommended fallback: %v", err)
+	}
+	if len(cr.FeedMetrics) != 1 || cr.FeedMetrics[0] != "t" {
+		t.Fatalf("duration recommended fallback: want FeedMetrics [t], got %v", cr.FeedMetrics)
+	}
 }
