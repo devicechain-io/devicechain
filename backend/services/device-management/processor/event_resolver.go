@@ -55,6 +55,9 @@ type EventResolver struct {
 	// profile version) (ADR-078). It is SHARED across the whole worker pool — see
 	// newUndeclaredLocationMemo — so the bound is per process, not per worker.
 	locationMemo *undeclaredLocationMemo
+	// slow reports resolves that take seconds. Like locationMemo it is SHARED across the
+	// pool (initializeEventResolvers replaces the private one NewEventResolver gives).
+	slow *slowResolveReporter
 	// eventTime is the platform's event-time policy, applied HERE and nowhere else.
 	eventTime EventTimePolicy
 }
@@ -136,6 +139,7 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 		Failed:       failed,
 		metrics:      metrics,
 		locationMemo: locationMemo,
+		slow:         newSlowResolveReporter(),
 	}
 }
 
@@ -996,7 +1000,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			}
 
 			// Attempt to resolve event using the per-message tenant context.
+			started := time.Now()
 			resolved, reason, err := rez.ResolveEvent(msgctx, event)
+			rez.slow.observe(time.Since(started), correlation)
 			if err != nil {
 				// Resolution failed. Retry via redelivery (a transient lookup error
 				// may clear, and a not-yet-registered device may appear) until the

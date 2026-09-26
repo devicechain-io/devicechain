@@ -4,11 +4,14 @@
 package msgtest
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // MemoryKV is an in-memory stand-in for the JetStream KV bucket behind a
@@ -29,7 +32,7 @@ type MemoryKV struct {
 	mu     sync.Mutex
 	values map[string][]byte
 
-	// Gets and Puts count the calls that reached this store.
+	// Gets, Puts and Deletes count the calls that reached this store.
 	Gets, Puts, Deletes int
 }
 
@@ -41,7 +44,10 @@ func NewMemoryKV() *MemoryKV {
 // NewCache returns a messaging.Cache backed by this store.
 func (m *MemoryKV) NewCache() *messaging.Cache { return messaging.NewCacheOver(m) }
 
-func (m *MemoryKV) Put(key string, value []byte) (uint64, error) {
+func (m *MemoryKV) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Puts++
@@ -51,7 +57,10 @@ func (m *MemoryKV) Put(key string, value []byte) (uint64, error) {
 	return 1, nil
 }
 
-func (m *MemoryKV) Get(key string) (nats.KeyValueEntry, error) {
+func (m *MemoryKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Gets++
@@ -60,12 +69,15 @@ func (m *MemoryKV) Get(key string) (nats.KeyValueEntry, error) {
 		// The real bucket's miss, which messaging.Cache translates into (false, nil).
 		// Returning a nil entry and a nil error instead would make a miss look like a hit
 		// holding no data, and every cache test would then pass against a broken Get.
-		return nil, nats.ErrKeyNotFound
+		return nil, jetstream.ErrKeyNotFound
 	}
 	return memoryEntry{key: key, value: value}, nil
 }
 
-func (m *MemoryKV) Delete(key string, _ ...nats.DeleteOpt) error {
+func (m *MemoryKV) Delete(ctx context.Context, key string, _ ...jetstream.KVDeleteOpt) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Deletes++
@@ -80,17 +92,63 @@ func (m *MemoryKV) Len() int {
 	return len(m.values)
 }
 
-// memoryEntry is the nats.KeyValueEntry a MemoryKV hands back. messaging.Cache reads only
+// memoryEntry is the jetstream.KeyValueEntry a MemoryKV hands back. messaging.Cache reads only
 // Value(); the rest satisfy the interface.
 type memoryEntry struct {
 	key   string
 	value []byte
 }
 
-func (e memoryEntry) Bucket() string             { return "memory" }
-func (e memoryEntry) Key() string                { return e.key }
-func (e memoryEntry) Value() []byte              { return e.value }
-func (e memoryEntry) Revision() uint64           { return 1 }
-func (e memoryEntry) Created() time.Time         { return time.Time{} }
-func (e memoryEntry) Delta() uint64              { return 0 }
-func (e memoryEntry) Operation() nats.KeyValueOp { return nats.KeyValuePut }
+func (e memoryEntry) Bucket() string                  { return "memory" }
+func (e memoryEntry) Key() string                     { return e.key }
+func (e memoryEntry) Value() []byte                   { return e.value }
+func (e memoryEntry) Revision() uint64                { return 1 }
+func (e memoryEntry) Created() time.Time              { return time.Time{} }
+func (e memoryEntry) Delta() uint64                   { return 0 }
+func (e memoryEntry) Operation() jetstream.KeyValueOp { return jetstream.KeyValuePut }
+
+// SilentKV is a store that, once armed, never answers until the caller gives up: every
+// Get and Put blocks until its ctx is done and returns ctx.Err(), the way a request routed
+// to a replica that has gone silent does. Before Arm it delegates to the embedded
+// MemoryKV, so a rig can warm up; Delete always does.
+//
+// 🔴 IT ALSO GIVES UP BY ITSELF AFTER 5 s, with the JetStream request timeout's error,
+// because that is what production did. A Cache that stopped passing its context down then
+// waits 5 s per call and fails a test by its numbers, instead of hanging it forever.
+type SilentKV struct {
+	*MemoryKV
+
+	armed atomic.Bool
+	// Silenced counts the calls it swallowed.
+	Silenced atomic.Int64
+}
+
+// Arm switches the silence on.
+func (s *SilentKV) Arm() { s.armed.Store(true) }
+
+// Disarm switches it off again: the store answers from the embedded MemoryKV.
+func (s *SilentKV) Disarm() { s.armed.Store(false) }
+
+func (s *SilentKV) silence(ctx context.Context) error {
+	s.Silenced.Add(1)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
+		return nats.ErrTimeout
+	}
+}
+
+func (s *SilentKV) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	if s.armed.Load() {
+		return nil, s.silence(ctx)
+	}
+	return s.MemoryKV.Get(ctx, key)
+}
+
+func (s *SilentKV) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	if s.armed.Load() {
+		return 0, s.silence(ctx)
+	}
+	return s.MemoryKV.Put(ctx, key, value)
+}

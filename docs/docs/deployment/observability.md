@@ -411,6 +411,42 @@ No alert reads the next series, but it is the one to look at when publishing is 
   into it. A `mode="pipelined"` publish can be counted above 5 seconds without having reached the
   limit.
 
+## Caches that stop answering {#kv-caches}
+
+`device-management` keeps the lookups it repeats for every event (a device by its token, the
+device's tracked relationships, its type's published profile, and group memberships) in
+key-value buckets on NATS. Each lookup waits at most half a second. A bucket that does not answer
+in time, or that no server answers for, is skipped for five seconds: its lookups go straight to
+the database, which holds the same data, and then one lookup is tried again. Only when that one
+is answered does the bucket stop being skipped. The service logs one warning when a bucket is
+first skipped (`A key-value cache stopped answering`) and one line when it answers again (`A
+key-value cache is answering again`), with how long that took and how many lookups and writes
+went to the database meanwhile. An error the bucket answers with, such as a full bucket refusing
+a write, is counted but does not cause it to be skipped.
+
+The usual cause is a NATS server that has dropped off the network without closing its
+connections. Every replica of a bucket answers reads, so until the other servers notice the
+silence, which takes between one and one and a half minutes, some of the reads are sent to the
+server that is gone. Events keep being resolved in that time, at the cost of more database reads.
+
+Removing an entry after a change (a device deleted, a profile published) is never skipped. It
+waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the
+service logs `A key-value cache eviction failed`, and the old entry can be served until it
+expires, which is the cache's configured time to live.
+
+- **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 while the bucket is being
+  skipped.
+- **`devicechain_devicemanagement_kv_cache_failures_total{cache, op, reason}`**: operations that
+  timed out (`reason="timeout"`) or failed (`reason="error"`).
+- **`devicechain_devicemanagement_kv_cache_bypassed_total{cache, op}`**: lookups and writes that
+  went to the database instead.
+- **`devicechain_devicemanagement_kv_cache_request_duration_seconds{cache, op}`**: how long each
+  operation took. A lookup or write is cut off at half a second, a removal at five seconds.
+
+Separately, resolving an event that takes longer than five seconds for any reason is logged as a
+warning (`Event resolution is slow`): the first one at once, then at most one line every 30
+seconds, with how many there were and the slowest.
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command
