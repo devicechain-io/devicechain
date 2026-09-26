@@ -19,7 +19,7 @@ A **channel** is a delivery endpoint your tenant configures: an instance of a ch
 
 A channel splits its settings in two:
 
-- **`config`**: the non-secret connection settings, as a JSON document (SMTP host/port/from; webhook URL/method/headers).
+- **`config`**: the non-secret connection settings, as a JSON document (SMTP host/port/from; webhook URL/method/headers and how it authenticates).
 - **`secret`**: the credential, such as the SMTP password or a webhook auth token. It is stored in the platform's envelope-encrypted **secret store** and is **write-only**. You submit it on create, and it is never returned on read; the channel exposes only a `hasSecret` boolean.
 
 On an **update**, the `secret` field behaves as follows:
@@ -27,8 +27,9 @@ On an **update**, the `secret` field behaves as follows:
 - **Omit** it to leave the existing secret unchanged. You never need to re-send it.
 - Send a non-null value to replace it.
 - Send `null` or an empty string to clear it.
+- On a webhook channel whose config declares `bearer` or `header` auth, clearing the secret is refused. Switch `auth` to `none` in the same request if you mean the endpoint to be anonymous.
 
-If your client binds one variable per field, an unsupplied variable arrives as an explicit `null` and **clears the secret**. Send the whole request as a single variable and leave the `secret` key out.
+If your client binds one variable per field, an unsupplied variable arrives as an explicit `null` and **clears the secret**. On a webhook channel that declares `bearer` or `header` auth, that same `null` makes the whole update fail instead, even one that only meant to rename the channel. Send the whole request as a single variable and leave the `secret` key out.
 
 ### Create an SMTP channel
 
@@ -47,9 +48,36 @@ mutation {
 
 ### Create a webhook channel
 
-A webhook channel POSTs the rendered notification to a URL. Create it the same way, with `channelType: "webhook"` and a config carrying the `url` and, optionally, `method` and extra `headers`. The only accepted `method` is `POST`, which is also the default; any other method fails at delivery.
+A webhook channel POSTs the rendered notification to a URL. Create it the same way, with `channelType: "webhook"` and a config carrying the `url`, an `auth` mode, and optionally `method` and extra `headers`. The only accepted `method` is `POST`, which is also the default; any other method is refused when you save the channel.
 
-By default the secret is presented as `Authorization: Bearer <secret>`. To use a custom header instead, set `authHeader`/`authScheme` in the config.
+`auth` is required and says how the channel authenticates:
+
+| `auth` | What is sent | `secret` |
+| --- | --- | --- |
+| `none` | No credential header. Use this when the URL itself carries the credential, as a Slack incoming webhook's does. | Must not be set |
+| `bearer` | `Authorization: Bearer <secret>` | Required |
+| `header` | The secret in the header named by `authHeader`, prefixed by `authScheme` and a space if you set one. For example, `"authHeader":"X-API-Key"` sends the raw token, and `"authHeader":"Authorization","authScheme":"Token"` sends `Authorization: Token <secret>`. | Required |
+
+`authHeader` and `authScheme` are read only with `header`. With `none` or `bearer`, leave them out: a channel that sets them is refused rather than having them silently ignored.
+
+A channel whose `auth` and `secret` disagree is refused when you save it, not when an alarm fires. That covers a missing `auth`, `bearer` or `header` with no secret, and `none` with a secret. To make a `bearer` channel anonymous, send `auth` `none` and `secret: null` in the same update. An update that only renames, describes or disables a channel is not checked, so you can always switch a misconfigured channel off; enabling one is checked.
+
+A channel that reaches delivery in that state anyway, for example one saved before `auth` existed, is not sent. The delivery is refused on its first attempt and not retried, and the notification service logs the tenant, the channel's token and the reason. The refusal is counted on `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`, which you can alert on.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "oncall-hook",
+    name: "On-call webhook",
+    channelType: "webhook",
+    config: "{\"url\":\"https://hooks.example.com/alarms\",\"auth\":\"bearer\"}",
+    secret: "<token>",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out.
 
 ## Policies
 
@@ -99,7 +127,7 @@ On update, the request's `rules` **replaces** the policy's existing rule set. Om
 
 ## Verify the path end to end
 
-1. **Create a channel** (as above). Confirm `hasSecret: true` and `enabled: true` on the result.
+1. **Create a channel** (as above). Confirm `enabled: true` on the result, and that `hasSecret` is `true` for an SMTP channel with a username or a webhook declaring `bearer` or `header`, and `false` for a webhook declaring `none`.
 2. **Create a policy** whose rules map the severities you care about to that channel.
 3. **Raise a real alarm.** Trip a detection rule on a test device (see [Event Processing & Alarms](../concepts/event-processing.md)) and confirm the email or webhook call arrives.
 4. **Inspect delivery state.** The service keeps a read-only per-alarm record of what it has done. Query `notificationStatesByAlarmToken(alarmTokens: [...])`, or search with `notificationStates`. Check `firstNotifiedAt` and `notifyCount`, and, once the alarm has sat unacknowledged past the escalation window, `escalationLevel`.

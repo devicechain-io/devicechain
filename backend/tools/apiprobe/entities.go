@@ -1045,7 +1045,7 @@ var entities = []entity{
 				"name":        "apiprobe webhook",
 				"description": "Points at an unroutable host; the probe never delivers through it.",
 				"channelType": "webhook",
-				"config":      `{"url":"https://example.invalid/hook","method":"POST"}`,
+				"config":      `{"url":"https://example.invalid/hook","method":"POST","auth":"bearer"}`,
 				"secret":      "apiprobe-channel-secret",
 				"enabled":     true,
 				"metadata":    meta("notification-channel"),

@@ -144,6 +144,9 @@ func runSeed(ctx context.Context, argv []string) error {
 	config, err := json.Marshal(map[string]any{
 		"url":    "https://drdrill.invalid/hook",
 		"method": "POST",
+		// The drill seeds a secret, so the channel must declare that it presents one: a
+		// webhook config without `auth` is refused when it is saved.
+		"auth": "bearer",
 	})
 	if err != nil {
 		return failWith(exitSetup, "encode channel config: %w", err)

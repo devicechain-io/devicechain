@@ -43,7 +43,8 @@ type NotificationChannel {
     description: String
     channelType: String!
     # Non-secret, type-specific connection config as a JSON document (SMTP
-    # host/port/from; webhook URL/method/headers).
+    # host/port/from; webhook url/method/headers and a REQUIRED `auth`: none, bearer
+    # or header, with authHeader/authScheme for header).
     config: String
     # Whether a delivery secret (SMTP password, bearer token) is configured. The
     # secret itself is write-only and is never returned on read.
@@ -78,7 +79,8 @@ input NotificationChannelCreateRequest {
 #
 # `secret` is write-only and cannot be read back to re-send, so OMITTING it PRESERVES the
 # stored secret. Sending `null` — or an empty string, which has always meant this —
-# CLEARS it; sending a value rotates it.
+# CLEARS it; sending a value rotates it. A webhook channel whose config declares bearer or
+# header auth refuses to be left without a secret.
 input NotificationChannelUpdateRequest {
     name: String
     description: String

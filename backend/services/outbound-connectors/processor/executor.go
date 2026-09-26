@@ -104,8 +104,9 @@ func (e *Executor) Execute(ctx context.Context, req *connectorwire.ConnectorDisp
 
 // executeHTTPCall issues the hardened outbound HTTP request for a Kind==httpCall dispatch. It
 // re-validates the URL and method at execution (the publish gate is authoring-time; a stored rule
-// could have been forged past it), resolves the SecretRef fail-closed (a resolve error never sends
-// unauthenticated), renders nothing (REACT already rendered the CEL payload to req.Payload), and
+// could have been forged past it), states its auth mode (Bearer with a handle, none without), resolves
+// the SecretRef fail-closed (a resolve error never sends unauthenticated; a handle naming no stored,
+// or an empty, secret is terminal), renders nothing (REACT already rendered the CEL payload to req.Payload), and
 // sends via core/httpsink (no-redirect, reserved-header drop, response-body suppression on secret).
 func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.ConnectorDispatchRequest) execOutcome {
 	h := req.HTTPCall // present: connectorwire.Validate required it for this kind
@@ -122,12 +123,18 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 			err: fmt.Errorf("httpCall method %q is not supported (POST only)", h.Method)}
 	}
 
-	// Resolve the credential fail-closed: if a handle was authored, a resolve failure (missing or a
-	// transient store error) must NOT fall through to an unauthenticated send. It is classified
-	// retryable so a transient DB blip recovers on redelivery and a permanently-missing secret
-	// dead-letters after the cap — either way, never sent without the intended auth.
+	// The auth mode is STATED: an authored handle means Bearer, no handle means an anonymous call (a
+	// token-in-URL webhook). httpsink refuses a Bearer call with an empty credential, so a
+	// resolved-but-empty value can never go out unauthenticated.
+	//
+	// Resolve the credential fail-closed: if a handle was authored, a resolve failure must NOT fall
+	// through to an unauthenticated send. A handle naming no stored secret is TERMINAL — redelivery
+	// asks the store the same question — while any other store error is retryable, so a transient DB
+	// blip recovers on redelivery.
+	auth := httpsink.Auth{Mode: httpsink.AuthNone}
 	var secret string
 	if h.SecretRef != "" {
+		auth = httpsink.Auth{Mode: httpsink.AuthBearer}
 		// Bound the resolve with its own timeout: it is the one otherwise-unbounded term inside the
 		// wait+resolve+send in-flight budget the egress limiter sizes against AckWait, so an indefinitely
 		// hung secret store (DB) must not pin the message past AckWait into a redelivery. Normally the
@@ -135,6 +142,15 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		resolveCtx, cancelResolve := context.WithTimeout(ctx, secretResolveTimeout)
 		resolved, err := e.secrets.Resolve(resolveCtx, req.Tenant, h.SecretRef)
 		cancelResolve()
+		// It used to be retried to the redelivery cap and then dead-lettered as exhausted, which
+		// reads as "the endpoint kept failing". Dead-lettered now as invalid, it says the rule's
+		// credential does not exist. The letter records it; nothing re-sends it, so this firing's
+		// call is not made.
+		if errors.Is(err, secrets.ErrSecretNotFound) {
+			return execOutcome{outcome: outcomeInvalid, retryable: false,
+				err: fmt.Errorf("resolve secret %q: no secret is stored under this handle: %w",
+					h.SecretRef, httpsink.ErrMissingCredential)}
+		}
 		if err != nil {
 			// Never log the handle's value; the ref name is a non-sensitive handle.
 			return execOutcome{outcome: outcomeRetry, retryable: true,
@@ -152,6 +168,7 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		Headers:        h.Headers,
 		Body:           []byte(req.Payload),
 		Secret:         secret,
+		Auth:           auth,
 		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
@@ -162,6 +179,12 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		// at 169.254.169.254".
 		if errors.Is(err, egress.ErrBlocked) {
 			return execOutcome{outcome: outcomeBlocked, retryable: false, err: err}
+		}
+		// A refused credential (an authored handle whose stored value is empty) is terminal for the
+		// same reason: a redelivery resolves the same value and is refused the same way. Nothing was
+		// sent.
+		if errors.Is(err, httpsink.ErrAuthRefused) {
+			return execOutcome{outcome: outcomeInvalid, retryable: false, err: err}
 		}
 		// A send error or non-2xx is transient (bounded by the redelivery cap): the endpoint may be
 		// briefly down. httpsink already suppresses the response body when a secret is presented, so

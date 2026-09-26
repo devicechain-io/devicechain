@@ -23,8 +23,9 @@ const (
 	outcomeDead = "dead"
 	// outcomeInvalid — a message a redelivery cannot fix: a malformed/poison message at the consumer
 	// (no parseable tenant, undecodable JSON, failed structural validation), which is dropped (acked);
-	// or an executor-terminal dispatch (a dangling/unpublished ConnectorRef, or a malformed stored
-	// config of a supported type), which is dead-lettered so an operator can see it.
+	// or an executor-terminal dispatch (a dangling/unpublished ConnectorRef, a malformed stored
+	// config of a supported type, or an httpCall whose authored secret handle names no stored — or
+	// an empty — secret), which is dead-lettered so an operator can see it.
 	outcomeInvalid = "invalid"
 	// outcomeUnsupported — a well-formed dispatch this build cannot execute: a publish whose connector
 	// type has no generator shipped yet (e.g. kafka before slice C4c), or publish on an httpCall-only

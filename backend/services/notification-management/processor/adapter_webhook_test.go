@@ -40,7 +40,7 @@ func TestWebhookDeliverPostsPayloadWithAuth(t *testing.T) {
 	defer srv.Close()
 
 	adapter := &webhookAdapter{client: srv.Client()}
-	channel := channelWith("hook-1", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`"}`)
+	channel := channelWith("hook-1", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`","auth":"bearer"}`)
 	msg := &RenderedNotification{
 		Subject: "[CRITICAL] Alarm raised",
 		Payload: map[string]any{"text": "[CRITICAL] Alarm raised", "severity": "CRITICAL"},
@@ -74,7 +74,7 @@ func TestWebhookCustomAuthHeader(t *testing.T) {
 
 	adapter := &webhookAdapter{client: srv.Client()}
 	channel := channelWith("hook-2", model.ChannelTypeWebhook,
-		`{"url":"`+srv.URL+`","authHeader":"X-API-Key","authScheme":""}`)
+		`{"url":"`+srv.URL+`","auth":"header","authHeader":"X-API-Key","authScheme":""}`)
 	if err := adapter.Deliver(context.Background(), channel, "rawtoken", nil,
 		&RenderedNotification{Payload: map[string]any{"text": "hi"}}); err != nil {
 		t.Fatalf("deliver: %v", err)
@@ -92,26 +92,32 @@ func TestWebhookNon2xxIsError(t *testing.T) {
 	defer srv.Close()
 
 	adapter := &webhookAdapter{client: srv.Client()}
-	channel := channelWith("hook-3", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`"}`)
+	channel := channelWith("hook-3", model.ChannelTypeWebhook, `{"url":"`+srv.URL+`","auth":"none"}`)
 	err := adapter.Deliver(context.Background(), channel, "", nil, &RenderedNotification{Payload: map[string]any{}})
 	if err == nil {
 		t.Fatalf("expected error on 500")
 	}
 }
 
-func TestWebhookConfigValidation(t *testing.T) {
-	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{}`)); err == nil {
-		t.Fatalf("expected missing-url error")
+// A custom scheme on Authorization (the shape a channel that used to set only authScheme
+// needs now) sends "<scheme> <secret>".
+func TestWebhookHeaderModeWithASchemeOnAuthorization(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	adapter := &webhookAdapter{client: srv.Client()}
+	channel := channelWith("hook-4", model.ChannelTypeWebhook,
+		`{"url":"`+srv.URL+`","auth":"header","authHeader":"Authorization","authScheme":"Token"}`)
+	if err := adapter.Deliver(context.Background(), channel, "t", nil,
+		&RenderedNotification{Payload: map[string]any{"text": "hi"}}); err != nil {
+		t.Fatalf("deliver: %v", err)
 	}
-	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"ftp://x"}`)); err == nil {
-		t.Fatalf("expected invalid-scheme error")
-	}
-	if _, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"https://x/y","method":"DELETE"}`)); err == nil {
-		t.Fatalf("expected POST-only rejection")
-	}
-	cfg, err := parseWebhookConfig(channelWith("h", model.ChannelTypeWebhook, `{"url":"https://x/y"}`))
-	if err != nil || cfg.Method != http.MethodPost {
-		t.Fatalf("default method: cfg=%+v err=%v", cfg, err)
+	if gotAuth != "Token t" {
+		t.Fatalf("Authorization = %q, want Token t", gotAuth)
 	}
 }
 
@@ -129,7 +135,7 @@ func TestWebhookDropsReservedHeaders(t *testing.T) {
 
 	adapter := &webhookAdapter{client: srv.Client()}
 	channel := channelWith("hook", model.ChannelTypeWebhook,
-		`{"url":"`+srv.URL+`","headers":{"Authorization":"Bearer forged","X-DC-Tenant":"victim","X-Custom":"ok"}}`)
+		`{"url":"`+srv.URL+`","auth":"bearer","headers":{"Authorization":"Bearer forged","X-DC-Tenant":"victim","X-Custom":"ok"}}`)
 	if err := adapter.Deliver(context.Background(), channel, "realsecret", nil, &RenderedNotification{Payload: map[string]any{}}); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}

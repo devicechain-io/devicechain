@@ -334,7 +334,7 @@ exception follows the three states above: absent leaves it alone, `null` clears 
 
 | Field | What omitting it does |
 | --- | --- |
-| `secret` on `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Kept.** A value rotates it; `null` — or an empty string — deletes it. You cannot read a secret back, so omitting it is how you say "leave the credential alone" |
+| `secret` on `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Kept.** A value rotates it; `null` — or an empty string — deletes it. You cannot read a secret back, so omitting it is how you say "leave the credential alone". A notification channel whose webhook config declares `bearer` or `header` auth refuses to be left without one |
 | `config` on `updateTenantTier` | **Kept.** Clearing a tier's settings re-prices every tenant at it, so it is not reachable by omission — send `null` or `{}` to clear |
 | `selector` on `updateEntityGroup` | **Kept** when omitted. Unlike most partial-update fields it cannot be *cleared*: `null` is refused, because a dynamic group with no selector matches nothing and cannot be repaired. A static group is refused a selector outright |
 | `definition` on `updateDashboard` | **Kept** when omitted, which is how you rename a dashboard without resending its document. Like `selector` above it cannot be *cleared*: `null` is refused, because a dashboard with no definition is not a thing. A malformed one refuses the whole update, so a rename sent with it is not applied either |
@@ -348,7 +348,8 @@ exception follows the three states above: absent leaves it alone, `null` clears 
 
 :::danger An empty string does not mean "leave this alone"
 For every write-only `secret` field, **`""` deletes the stored credential**, and the mutation returns
-success. A client that fills in every field deletes a credential it never meant to touch, and a
+success. (The one exception is a notification channel whose webhook config declares `bearer` or
+`header` auth: there the whole update is refused instead.) A client that fills in every field deletes a credential it never meant to touch, and a
 connector whose credential is gone fails authentication on every outbound dispatch. **Leave the field
 out.** See [Secrets and empty strings](#secrets-and-empty-strings).
 :::

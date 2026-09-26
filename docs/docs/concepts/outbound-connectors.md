@@ -30,7 +30,7 @@ The form builder's action picker offers only *raise alarm* and *send command*. I
 
 `httpCall` sends an HTTP request directly to an endpoint you specify. You shape the request body with a **CEL expression** over the firing, so you send exactly the fields the receiver expects. The URL, method, headers and body template all live on the action itself, so a one-off webhook needs no separate setup.
 
-Authentication is optional and uses a **secret handle**. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way.
+Authentication is optional and uses a **secret handle**. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way. If the action names a handle but no secret is stored under it, the call is never sent without its credential: it is dead-lettered once with the outcome `invalid` and not retried. Nothing replays it, so that firing's call is not made; correct the action's secret handle so later firings authenticate.
 
 Webhook delivery is hardened in these ways:
 

@@ -108,6 +108,12 @@ type NotifyMetrics struct {
 	// dead_letter_lost_total every producing service shares (deadletter.Producer).
 	deadLettered prometheus.Counter
 
+	// deliveriesRefused counts channel deliveries refused as terminal, by reason ("egress":
+	// a destination outbound traffic may not reach; "credential": a refused credential
+	// configuration). Read by the PolicyNotifier, not by the processor: a refused delivery
+	// is acked and never reaches the dead-letter path, so this is its only count.
+	deliveriesRefused *prometheus.CounterVec
+
 	// RED metrics for the per-message dispatch path (E13).
 	metrics *core.ProcessorMetrics
 }
@@ -126,6 +132,11 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 		deadLettered: ms.NewCounter("notifications_dead_lettered_total",
 			"Alarms written to the dead-letter stream after every delivery attempt failed, so an "+
 				"operator can see which pages were never sent (ADR-024)."),
+		deliveriesRefused: ms.NewCounterVec("deliveries_refused_total",
+			"Channel deliveries refused on the first attempt and not retried, by reason: egress "+
+				"(the channel points at a destination outbound traffic may not reach) or credential "+
+				"(a declared credential is missing, or a secret is stored that the channel never presents).",
+			[]string{"reason"}),
 	}
 }
 

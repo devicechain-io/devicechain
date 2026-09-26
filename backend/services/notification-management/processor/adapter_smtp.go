@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/egress"
+	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
 )
@@ -76,6 +77,16 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 	if err := ensureHeaderSafe(cfg.From, recipients, msg); err != nil {
 		return err
 	}
+	// Refused BEFORE dialing: a missing credential is a configuration fact, and learning it
+	// after a TCP connect and a STARTTLS handshake to a tenant-chosen host costs a round trip
+	// for nothing. It wraps httpsink's sentinel on purpose — not because this is HTTP, but so
+	// that deliverWithRetry has ONE terminal classification for every credential refusal. A
+	// second sentinel here would need a second check there, and the one that was forgotten
+	// would retry.
+	if cfg.Username != "" && secret == "" {
+		return fmt.Errorf("smtp channel %q has a username but no secret configured: %w",
+			channel.Token, httpsink.ErrMissingCredential)
+	}
 
 	client, err := a.dial(ctx, cfg)
 	if err != nil {
@@ -91,9 +102,6 @@ func (a *smtpAdapter) Deliver(ctx context.Context, channel *model.NotificationCh
 	// Authenticate only when a username is configured; an open relay / loopback test
 	// server takes no auth.
 	if cfg.Username != "" {
-		if secret == "" {
-			return fmt.Errorf("smtp channel %q has a username but no secret configured", channel.Token)
-		}
 		auth := smtp.PlainAuth("", cfg.Username, secret, cfg.Host)
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("smtp auth: %w", err)

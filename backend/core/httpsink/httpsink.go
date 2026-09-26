@@ -21,6 +21,10 @@
 //     logs. (Present credentials through Secret/Auth — NOT by stuffing a raw token
 //     into Headers, which is not covered by suppression.)
 //
+//   - a stated auth mode: the caller says none, bearer or header, and there is no
+//     default. A declared credential that is missing, or a credential with mode none,
+//     is refused before a request is built (ErrAuthRefused);
+//
 //   - a destination-address boundary: DefaultClient dials through egress.Guard, which
 //     refuses a private, loopback, link-local or cloud-metadata address at the moment
 //     the kernel is about to connect to it. That placement is the point — checking the
@@ -44,6 +48,7 @@ package httpsink
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -95,65 +100,128 @@ func IsReservedHeader(name string) bool {
 // always reflects the sink's own key, never a forged one.
 const idempotencyHeader = "X-DC-Idempotency-Key"
 
-// Auth describes how a secret is presented as a request header. The zero value
-// (Header and Scheme both empty) means "Authorization: Bearer <secret>". Set Header
-// to a custom header (e.g. "X-API-Key") and Scheme to "" to send the raw token.
+// AuthMode says whether, and how, a request presents a credential. There is NO default:
+// the zero value is AuthUnstated, and Send refuses it. That is the point of the type. The
+// old zero Auth meant "Authorization: Bearer <secret>", so an empty secret silently
+// produced an unauthenticated request, and no caller could say "this endpoint is meant to
+// be anonymous" as distinct from "this endpoint's credential is missing".
+type AuthMode int
+
+const (
+	// AuthUnstated is the zero value. Send refuses it (ErrAuthModeUnstated).
+	AuthUnstated AuthMode = iota
+	// AuthNone presents no credential. The endpoint is anonymous, or its URL carries the
+	// credential (a Slack incoming webhook). A non-empty Secret is refused.
+	AuthNone
+	// AuthBearer presents the secret as "Authorization: Bearer <secret>". Header and Scheme
+	// must be empty.
+	AuthBearer
+	// AuthHeader presents the secret in Header, prefixed by Scheme and a space when Scheme
+	// is non-empty, raw otherwise. Header is required and may be "Authorization".
+	AuthHeader
+)
+
+// Auth is how a request presents its credential. Mode is required; Header and Scheme are
+// read only under AuthHeader, and setting them under any other mode is refused rather than
+// ignored.
 type Auth struct {
+	Mode   AuthMode
 	Header string
 	Scheme string
 }
 
-// Validate reports whether the auth header is one this sink will write.
+// ErrAuthRefused is the parent of every refusal about auth configuration or credential
+// presence. Callers classify on it: such a refusal is TERMINAL, because a redelivery sends
+// the same configuration and gets the same answer.
+var ErrAuthRefused = errors.New("auth refused")
+
+var (
+	// ErrAuthModeUnstated: the caller did not say how (or whether) to authenticate.
+	ErrAuthModeUnstated = fmt.Errorf("%w: no auth mode was stated", ErrAuthRefused)
+	// ErrMissingCredential: a credential is required and there is none. Worded without
+	// reference to HTTP on purpose — the SMTP adapter wraps it too, so that one terminal
+	// classification covers every credential refusal a notification can hit.
+	ErrMissingCredential = fmt.Errorf("%w: a credential is required but none was supplied", ErrAuthRefused)
+	// ErrUnexpectedCredential: a credential with mode none, which would never be presented.
+	ErrUnexpectedCredential = fmt.Errorf("%w: a credential was supplied but the auth mode is none", ErrAuthRefused)
+)
+
+// Validate reports whether the auth configuration is one this sink will write. It does not
+// look at the credential (CheckCredential does), so it can run at save time on config alone.
 //
-// 🔴 This is NOT IsReservedHeader, and the difference is the whole reason it exists.
-// IsReservedHeader rejects Authorization — which is the legitimate DEFAULT here, the
-// header the zero Auth uses. Reusing it would refuse the common case. What must be
-// refused is the internal service identity: an X-DC-* header carrying a tenant-supplied
-// secret value.
+// 🔴 The header check is NOT IsReservedHeader, and the difference is the whole reason it
+// exists. IsReservedHeader rejects Authorization — which is a legitimate header for
+// AuthHeader (a "Token" scheme, say), and the one AuthBearer writes. Reusing it would refuse
+// the common case. What must be refused is the internal service identity: an X-DC-* header
+// carrying a tenant-supplied secret value.
 //
 // The hole this closes: Send writes the auth header AFTER the reserved-header drop loop,
-// so it never passed through that filter, and nothing validated it at authoring time
-// either. A notification channel configured with authHeader "X-DC-Service-Secret" and a
-// secret holding the real service secret would send it as the service-identity header —
-// which, combined with a URL aimed at user-management's mint endpoint, is a path to a
-// service token. The address half of that is now refused by the egress guard; this is the
-// other half, and it should not depend on the first one holding.
+// so it never passed through that filter. A notification channel configured with
+// authHeader "X-DC-Service-Secret" and a secret holding the real service secret would send
+// it as the service-identity header — which, combined with a URL aimed at
+// user-management's mint endpoint, is a path to a service token. The address half of that
+// is refused by the egress guard; this is the other half, and it should not depend on the
+// first one holding.
 //
 // It ERRORS rather than dropping. Dropping would ship the payload to a tenant's endpoint
 // with no credential at all — a different defect, and a silent one: the endpoint would
 // reject it, the operator would see delivery failures, and nothing would say why.
 func (a Auth) Validate() error {
-	if a.Header == "" {
-		// The zero value, meaning "Authorization: Bearer <secret>". Nothing tenant-supplied.
+	switch a.Mode {
+	case AuthNone, AuthBearer:
+		if a.Header != "" || a.Scheme != "" {
+			return fmt.Errorf("%w: a header or scheme is set, but only auth mode header uses them", ErrAuthRefused)
+		}
 		return nil
+	case AuthHeader:
+		if a.Header == "" {
+			return fmt.Errorf("%w: auth mode header needs a header name", ErrAuthRefused)
+		}
+		if err := ValidateHeader(a.Header, a.Scheme); err != nil {
+			return fmt.Errorf("%w: %w", ErrAuthRefused, err)
+		}
+		if strings.HasPrefix(http.CanonicalHeaderKey(a.Header), "X-Dc-") {
+			return fmt.Errorf("%w: auth header %q is reserved: X-DC-* headers carry internal service identity "+
+				"and must not be settable from configuration", ErrAuthRefused, a.Header)
+		}
+		return nil
+	default:
+		return ErrAuthModeUnstated
 	}
-	if err := ValidateHeader(a.Header, a.Scheme); err != nil {
-		return err
-	}
-	if strings.HasPrefix(http.CanonicalHeaderKey(a.Header), "X-Dc-") {
-		return fmt.Errorf("auth header %q is reserved: X-DC-* headers carry internal service identity "+
-			"and must not be settable from configuration", a.Header)
-	}
-	return nil
 }
 
-// HeaderValue resolves the header name and value that carry secret. With the zero
-// Auth it is ("Authorization", "Bearer <secret>"); a custom Header with an empty
-// Scheme yields (Header, secret) — the raw token.
-func (a Auth) HeaderValue(secret string) (name, value string) {
-	name = a.Header
-	if name == "" {
-		name = "Authorization"
+// CheckCredential is THE rule relating a mode to whether a credential is present. Send calls
+// it with (Secret != ""); notification-management calls it when a channel is saved, with
+// "will a secret be stored". One definition, so that the two cannot disagree about the rule.
+// (They can still disagree about the FACT — a secret write that fails after its row is saved
+// — which is why Send, the point of use, is the authority.)
+func (a Auth) CheckCredential(present bool) error {
+	switch a.Mode {
+	case AuthNone:
+		if present {
+			return ErrUnexpectedCredential
+		}
+		return nil
+	case AuthBearer, AuthHeader:
+		if !present {
+			return ErrMissingCredential
+		}
+		return nil
+	default:
+		return ErrAuthModeUnstated
 	}
-	scheme := a.Scheme
-	if a.Header == "" && a.Scheme == "" {
-		// A defaulted Authorization header defaults to a Bearer scheme.
-		scheme = "Bearer"
+}
+
+// headerValue resolves the header that carries secret. Only meaningful for AuthBearer and
+// AuthHeader, which is all Send calls it with.
+func (a Auth) headerValue(secret string) (name, value string) {
+	if a.Mode == AuthBearer {
+		return "Authorization", "Bearer " + secret
 	}
-	if scheme != "" {
-		return name, scheme + " " + secret
+	if a.Scheme != "" {
+		return a.Header, a.Scheme + " " + secret
 	}
-	return name, secret
+	return a.Header, secret
 }
 
 // ValidateURL parses raw and requires an absolute http/https URL with a host and NO embedded
@@ -218,8 +286,9 @@ func validHeaderNameByte(c byte) bool {
 
 // Request is one outbound delivery. Body is sent as-is with ContentType (defaulting
 // to application/json). Method defaults to POST. Caller-supplied Headers have
-// reserved names dropped. When Secret is non-empty it is presented per Auth, and the
-// response body is suppressed from any error (see Send).
+// reserved names dropped. Auth is REQUIRED: Send refuses the zero value, a mode that
+// presents a credential with an empty Secret, and a Secret with AuthNone. The response
+// body is suppressed from any error whenever Secret is set (see Send).
 type Request struct {
 	URL            string
 	Method         string
@@ -232,8 +301,10 @@ type Request struct {
 }
 
 // Send delivers req using client (nil ⇒ DefaultClient), bounded by ctx. It validates
-// the target is http/https, drops reserved headers, sets the content type, applies
-// the secret auth header, and stamps the idempotency key. It returns nil on a 2xx.
+// the target is http/https and the auth mode against the credential, drops reserved
+// headers, sets the content type, applies the auth header, and stamps the idempotency
+// key. It returns nil on a 2xx. An auth refusal wraps ErrAuthRefused and is returned
+// before any request is built, so nothing reaches the wire.
 //
 // On a non-2xx or a transport error it returns an error — whose text NEVER includes
 // the response body when req.Secret is set, because a hostile endpoint could reflect
@@ -244,6 +315,15 @@ type Request struct {
 func Send(ctx context.Context, client *http.Client, req Request) error {
 	parsed, err := ValidateURL(req.URL)
 	if err != nil {
+		return err
+	}
+	// Checked BEFORE a request exists. This is the point of use and the only place that sees
+	// every caller: a stored config written before any save-time check existed, or a caller
+	// that forgot one, reaches the wire through here and nowhere else.
+	if err := req.Auth.Validate(); err != nil {
+		return err
+	}
+	if err := req.Auth.CheckCredential(req.Secret != ""); err != nil {
 		return err
 	}
 	method := req.Method
@@ -268,15 +348,9 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 		}
 		httpReq.Header.Set(k, v)
 	}
-	if req.Secret != "" {
-		// Checked HERE as well as at authoring time, deliberately. This is the point of
-		// use, and it is the only place that sees every caller — a stored config written
-		// before the authoring check existed, or by a service that forgot to call it,
-		// reaches the wire through this line and nowhere else.
-		if err := req.Auth.Validate(); err != nil {
-			return err
-		}
-		name, value := req.Auth.HeaderValue(req.Secret)
+	if req.Auth.Mode != AuthNone {
+		// CheckCredential above guarantees a non-empty Secret here.
+		name, value := req.Auth.headerValue(req.Secret)
 		httpReq.Header.Set(name, value)
 	}
 	if req.IdempotencyKey != "" {

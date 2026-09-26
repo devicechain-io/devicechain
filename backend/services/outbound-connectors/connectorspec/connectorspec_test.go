@@ -63,6 +63,18 @@ func TestBuildMQTT(t *testing.T) {
 	assert.Equal(t, "p4ss", m.Password)
 }
 
+// TestMQTTUsernameWithoutPasswordIsAccepted records a decision, not an oversight: a broker
+// that takes a token as the username needs no password, so this shape builds — unlike Kafka
+// SASL and AWS, which refuse a missing secret.
+func TestMQTTUsernameWithoutPasswordIsAccepted(t *testing.T) {
+	got, err := Build("mqtt", []byte(`{"urls":["tcp://b:1883"],"topic":"alerts","username":"u"}`), "")
+	require.NoError(t, err)
+	m, ok := got.(MQTTTarget)
+	require.True(t, ok, "an mqtt connector builds an MQTTTarget, got %T", got)
+	assert.Equal(t, "u", m.Username)
+	assert.Equal(t, "", m.Password)
+}
+
 // TestBuildMQTTDefaults: qos defaults to 1 (at-least-once), and an anonymous connector
 // carries no password, username or client id.
 func TestBuildMQTTDefaults(t *testing.T) {

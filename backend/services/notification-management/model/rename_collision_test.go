@@ -88,7 +88,7 @@ func TestRenameChannel_ARacedTokenIsRefusedByTheSameName(t *testing.T) {
 	api := newCollisionApi(t)
 	ctx := tenantCtx("A")
 	if _, err := api.CreateNotificationChannel(ctx, &NotificationChannelCreateRequest{
-		Token: "chan-a", Name: strPtr("Original"), ChannelType: ChannelTypeWebhook, Enabled: true,
+		Token: "chan-a", Name: strPtr("Original"), ChannelType: ChannelTypeWebhook, Config: strPtr(anonymousWebhookConfig), Enabled: true,
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}

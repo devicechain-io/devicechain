@@ -35,16 +35,16 @@ func TestIsReservedHeader(t *testing.T) {
 }
 
 func TestAuthHeaderValue(t *testing.T) {
-	// Zero Auth ⇒ Authorization: Bearer <secret>.
-	if n, v := (Auth{}).HeaderValue("s3cr3t"); n != "Authorization" || v != "Bearer s3cr3t" {
-		t.Fatalf("default = (%q,%q), want (Authorization, Bearer s3cr3t)", n, v)
+	// Bearer ⇒ Authorization: Bearer <secret>.
+	if n, v := (Auth{Mode: AuthBearer}).headerValue("s3cr3t"); n != "Authorization" || v != "Bearer s3cr3t" {
+		t.Fatalf("bearer = (%q,%q), want (Authorization, Bearer s3cr3t)", n, v)
 	}
 	// Custom header, empty scheme ⇒ raw token.
-	if n, v := (Auth{Header: "X-API-Key"}).HeaderValue("raw"); n != "X-API-Key" || v != "raw" {
+	if n, v := (Auth{Mode: AuthHeader, Header: "X-API-Key"}).headerValue("raw"); n != "X-API-Key" || v != "raw" {
 		t.Fatalf("custom = (%q,%q), want (X-API-Key, raw)", n, v)
 	}
-	// Custom scheme on the default header.
-	if n, v := (Auth{Scheme: "Token"}).HeaderValue("t"); n != "Authorization" || v != "Token t" {
+	// A custom scheme on Authorization.
+	if n, v := (Auth{Mode: AuthHeader, Header: "Authorization", Scheme: "Token"}).headerValue("t"); n != "Authorization" || v != "Token t" {
 		t.Fatalf("scheme = (%q,%q), want (Authorization, Token t)", n, v)
 	}
 }
@@ -106,6 +106,7 @@ func TestSendPostsWithAuthAndIdempotencyKey(t *testing.T) {
 		Headers:        map[string]string{"X-Custom": "ok"},
 		Body:           []byte(`{"a":1}`),
 		Secret:         "s3cr3t",
+		Auth:           Auth{Mode: AuthBearer},
 		IdempotencyKey: "idem-1",
 	})
 	if err != nil {
@@ -143,6 +144,7 @@ func TestSendDropsReservedHeaders(t *testing.T) {
 		URL:     srv.URL,
 		Headers: map[string]string{"Authorization": "Bearer forged", "X-DC-Tenant": "victim"},
 		Secret:  "real",
+		Auth:    Auth{Mode: AuthBearer},
 	})
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -162,7 +164,7 @@ func TestSendSuppressesBodyOnSecret(t *testing.T) {
 	defer srv.Close()
 
 	// With a secret, the response body is never surfaced (it could reflect the auth header).
-	err := Send(context.Background(), srv.Client(), Request{URL: srv.URL, Secret: "s"})
+	err := Send(context.Background(), srv.Client(), Request{URL: srv.URL, Secret: "s", Auth: Auth{Mode: AuthBearer}})
 	if err == nil {
 		t.Fatal("expected an error on 500")
 	}
@@ -171,14 +173,14 @@ func TestSendSuppressesBodyOnSecret(t *testing.T) {
 	}
 
 	// Without a secret, the body snippet is included for diagnostics.
-	err = Send(context.Background(), srv.Client(), Request{URL: srv.URL})
+	err = Send(context.Background(), srv.Client(), Request{URL: srv.URL, Auth: Auth{Mode: AuthNone}})
 	if err == nil || !strings.Contains(err.Error(), "leaked-secret-echo") {
 		t.Fatalf("non-secret error should include the body snippet: %v", err)
 	}
 }
 
 func TestSendRejectsNonHTTPURL(t *testing.T) {
-	if err := Send(context.Background(), nil, Request{URL: "file:///etc/passwd"}); err == nil {
+	if err := Send(context.Background(), nil, Request{URL: "file:///etc/passwd", Auth: Auth{Mode: AuthNone}}); err == nil {
 		t.Fatal("expected a scheme-validation error")
 	}
 }
@@ -198,7 +200,7 @@ func TestSendForcesNoRedirectOnCallerClient(t *testing.T) {
 	defer redirector.Close()
 
 	// A plain client follows redirects by default; Send must override that.
-	err := Send(context.Background(), &http.Client{}, Request{URL: redirector.URL})
+	err := Send(context.Background(), &http.Client{}, Request{URL: redirector.URL, Auth: Auth{Mode: AuthNone}})
 	if err == nil {
 		t.Fatal("expected the 302 to surface as a non-2xx error, not be followed")
 	}
@@ -213,7 +215,7 @@ func TestSendForcesNoRedirectOnCallerClient(t *testing.T) {
 // A URL-embedded credential is rejected outright, and the rejection error never echoes the
 // password (nor does the defense-in-depth redaction on the transport path).
 func TestSendRejectsAndRedactsURLCredentials(t *testing.T) {
-	err := Send(context.Background(), nil, Request{URL: "https://user:sup3rsecret@127.0.0.1:1/x"})
+	err := Send(context.Background(), nil, Request{URL: "https://user:sup3rsecret@127.0.0.1:1/x", Auth: Auth{Mode: AuthNone}})
 	if err == nil {
 		t.Fatal("expected a userinfo URL to be rejected")
 	}
