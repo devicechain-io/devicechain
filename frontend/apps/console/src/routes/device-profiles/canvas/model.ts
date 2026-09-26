@@ -23,6 +23,7 @@ export type NodeType =
   | 'threshold'
   | 'duration'
   | 'absence'
+  | 'connectivity'
   | 'aggregate'
   | 'deltaRate'
   | 'repeating'
@@ -53,6 +54,10 @@ export const NODE_CATALOG: Record<NodeType, NodeSpec> = {
   // Absence has no leaf predicate (it fires on silence), so nothing for a compute value to feed — no
   // `value` input, mirroring the Go catalog.
   absence: { category: 'condition', labelKey: 'nodeAbsence', in: { in: 'stream' }, out: { signal: 'signal' } },
+  // Connectivity is leaf-less like absence: the presence edge IS the signal, so there is nothing for
+  // a compute value to feed and no `value` input. Same ports as the Go catalog (graph/schema.go
+  // NodeConnectivity); taxonomy-lockstep.test.ts compares the two catalogs port by port.
+  connectivity: { category: 'condition', labelKey: 'nodeConnectivity', in: { in: 'stream' }, out: { signal: 'signal' } },
   aggregate: { category: 'condition', labelKey: 'nodeAggregate', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
   deltaRate: { category: 'condition', labelKey: 'nodeDeltaRate', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
   repeating: { category: 'condition', labelKey: 'nodeRepeating', in: { in: 'stream', value: 'value' }, out: { signal: 'signal' } },
@@ -125,6 +130,8 @@ export interface SourceConfig {
 export type ThresholdConfig = RuleMeta & { when: Leaf };
 export type DurationConfig = RuleMeta & { when: Leaf; holdMs: number };
 export type AbsenceConfig = RuleMeta & { timeoutMs: number };
+// Connectivity has nothing to configure beyond the rule metadata (Go: connectivityConfig{ruleMeta}).
+export type ConnectivityConfig = RuleMeta;
 export type AggregateConfig = RuleMeta & {
   agg: AggFunc;
   windowMode: WindowMode;
@@ -153,8 +160,10 @@ export type CorrelationConfig = RuleMeta & {
 };
 export interface ActionConfig {
   action: ActionKind;
-  // raiseAlarm
+  // raiseAlarm. alarmKeyTemplate renders the key per detection instead of stating it; the canvas
+  // carries it (so a rule that has one opens and saves without losing it) but does not author it.
   alarmKey?: string;
+  alarmKeyTemplate?: string;
   // sendCommand
   command?: string;
   payload?: string;
@@ -233,6 +242,8 @@ export function defaultConfig(type: NodeType, profileToken: string): NodeConfig 
       return { name: '', when: { metric: '', op: 'gt', threshold: { kind: 'literal', value: 0 } }, holdMs: 60000 };
     case 'absence':
       return { name: '', timeoutMs: 300000 };
+    case 'connectivity':
+      return { name: '' } satisfies ConnectivityConfig as NodeConfig;
     case 'aggregate':
       return { name: '', agg: 'avg', windowMode: 'tumbling', metric: '', windowMs: 60000, op: 'gt', threshold: 0 };
     case 'deltaRate':

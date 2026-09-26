@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest';
-import { graphFromDefinition, parseGoDuration } from './roundtrip';
+import { goDurationMs, graphFromDefinition, parseGoDuration } from './roundtrip';
 import type { CanvasNode } from './model';
 
 const P = 'thermostat';
@@ -194,4 +194,75 @@ describe('graphFromDefinition', () => {
     expect(g.nodes.find((n) => n.id === 'branch-0001')).toBeUndefined();
     expect(g.edges).toContainEqual({ from: 'condition:signal', to: 'action-0001:in' });
   });
+});
+
+describe('goDurationMs', () => {
+  // The split from parseGoDuration: the fidelity check must SEE a sub-millisecond duration the
+  // canvas would round, so the unrounded value is kept.
+  it('keeps fractions that parseGoDuration rounds', () => {
+    expect(goDurationMs('1500us')).toBe(1.5);
+    expect(parseGoDuration('1500us')).toBe(2);
+  });
+  it('accepts the number spellings Go accepts', () => {
+    expect(goDurationMs('.5s')).toBe(500);
+    expect(goDurationMs('1.s')).toBe(1000);
+    expect(goDurationMs('1.5.3s')).toBeNull();
+  });
+});
+
+describe('connectivity and alarm-key templates on the canvas', () => {
+  it('synthesizes connectivity with no leaf and no value edge', () => {
+    const def = JSON.stringify({
+      name: 'offline',
+      type: 'connectivity',
+      severity: 'critical',
+      actions: [{ type: 'raiseAlarm', raiseAlarm: { alarmKey: 'offline' } }],
+    });
+    const { graph, error } = graphFromDefinition(def, P);
+    expect(error).toBeUndefined();
+    const cond = nodeById(graph!.nodes, 'condition');
+    expect(cond.type).toBe('connectivity');
+    expect(cond.config).toEqual({ name: 'offline', severity: 'critical' });
+    expect(graph!.edges.filter((e) => e.to.endsWith(':value'))).toEqual([]);
+    expect(graph!.edges).toContainEqual({ from: 'condition:signal', to: 'action-0000:in' });
+  });
+
+  it('carries an alarm-key template onto the action node', () => {
+    const def = JSON.stringify({
+      name: 'zoned',
+      type: 'threshold',
+      severity: 'major',
+      when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: 'raiseAlarm', raiseAlarm: { alarmKeyTemplate: '"zone-" + series' } }],
+    });
+    const { graph } = graphFromDefinition(def, P);
+    expect(nodeById(graph!.nodes, 'action-0000').config).toEqual({ action: 'raiseAlarm', alarmKeyTemplate: '"zone-" + series' });
+  });
+});
+
+// 🔴 THE CONSOLE HALF OF A CROSS-LANGUAGE PIN. Each fixture pairs a stored definition with the
+// graph this synthesis must produce for it; the Go half (graph/synthesis_fixture_test.go, reading
+// the same directory) asserts that the server lowers that graph back to the same rule. The canvas
+// allows a save over a stored rule only when that round trip holds, so a divergence in either half
+// shows up as a test failure rather than as healthy rules opening locked.
+const SYNTHESIS_FIXTURES = import.meta.glob(
+  '../../../../../../../backend/services/event-processing/internal/rules/graph/testdata/synthesis/*.json',
+  { query: '?raw', import: 'default', eager: true },
+) as Record<string, string>;
+
+describe('the synthesis fixtures shared with the Go lowering', () => {
+  it('finds them', () => {
+    // The control: an empty glob would pass the table below by having no rows.
+    expect(Object.keys(SYNTHESIS_FIXTURES).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it.each(Object.entries(SYNTHESIS_FIXTURES).map(([path, raw]) => [path.split('/').pop() ?? path, raw]))(
+    'synthesizes exactly the fixture graph for %s',
+    (_name, raw) => {
+      const fx = JSON.parse(raw) as { definition: unknown; graph: unknown };
+      const { graph, error } = graphFromDefinition(JSON.stringify(fx.definition), P);
+      expect(error).toBeUndefined();
+      expect(graph).toEqual(fx.graph);
+    },
+  );
 });

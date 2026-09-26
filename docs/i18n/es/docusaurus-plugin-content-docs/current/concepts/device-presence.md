@@ -92,7 +92,7 @@ La presencia de dispositivo, tanto inferida como afirmada, está disponible. Tre
 Una regla de detección puede dispararse directamente sobre un flanco de conexión/desconexión. La [condición de Conectividad](./event-processing.md#condition-types) genera una alarma en el instante en que llega una desconexión autoritativa, y la resuelve al reconectar. No hay tiempo de espera que ajustar.
 
 - **Formulario de reglas.** El formulario de reglas de la consola la ofrece como el tipo **Conectividad**. No hay condición que redactar, porque el propio flanco de presencia es la señal. El formulario abre una regla de Conectividad existente como su propio tipo. Si una definición almacenada contiene algo que el formulario no puede modelar, el formulario te lo advierte antes de guardar en lugar de reemplazarla en silencio.
-- **Lienzo de automatización.** El lienzo es la única superficie de autoría que todavía omite ese tipo. Se niega a abrir una regla de Conectividad y nombra el tipo no soportado.
+- **Lienzo de automatización.** El lienzo ofrece un nodo de **Conectividad**. No tiene nada que configurar: conecta la fuente a él y su señal a las acciones. Igual que el formulario, el lienzo nunca reescribe en silencio una regla almacenada que no puede mostrar por completo. Lo indica y desactiva el guardado.
 
 La condición de Conectividad complementa la regla de Ausencia basada en tiempo de espera (muerte autoritativa frente a silencio inferido), y ambas están pensadas para usarse en conjunto.
 

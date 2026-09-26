@@ -208,6 +208,13 @@ export function NodeInspector({ type, config, onChange }: { type: NodeType; conf
           <DurationField label={t('inspectorSilentForLabel')} id="cfg-timeout" ms={numVal(config.timeoutMs)} onChange={(ms) => set({ timeoutMs: ms })} />
         </div>
       );
+    case 'connectivity':
+      return (
+        <div className="space-y-4">
+          <MetaFields config={config} set={set} />
+          <p className="text-xs text-muted-foreground">{t('inspectorConnectivityHelp')}</p>
+        </div>
+      );
     case 'aggregate': {
       const mode = strVal(config.windowMode) || 'tumbling';
       return (
@@ -430,6 +437,13 @@ function ActionFields({
       {kind === 'raiseAlarm' && (
         <FormField label={t('inspectorAlarmKeyLabel')} htmlFor="cfg-alarmkey" description={t('inspectorAlarmKeyDescription')}>
           <Input id="cfg-alarmkey" value={strVal(config.alarmKey)} onChange={(e) => set({ alarmKey: e.target.value || undefined })} placeholder={t('inspectorAlarmKeyPlaceholder')} />
+        </FormField>
+      )}
+      {/* The canvas CARRIES an alarm-key template (so a rule that has one opens and saves intact)
+          but does not author it: shown read-only, only when the rule has one. */}
+      {kind === 'raiseAlarm' && strVal(config.alarmKeyTemplate) && (
+        <FormField label={t('inspectorAlarmKeyTemplateLabel')} htmlFor="cfg-alarmkeytemplate" description={t('inspectorAlarmKeyTemplateDescription')}>
+          <Input id="cfg-alarmkeytemplate" value={strVal(config.alarmKeyTemplate)} readOnly />
         </FormField>
       )}
 

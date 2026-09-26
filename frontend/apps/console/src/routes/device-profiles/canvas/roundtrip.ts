@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The reverse round-trip (ADR-053 §6): synthesize a canvas graph from a form-authored (or
-// canvas-less) rules.Rule definition so ANY detection rule opens on the canvas. It is a pure,
+// canvas-less) rules.Rule definition so it opens on the canvas. It is a pure,
 // deterministic frontend synthesis — one Source + one condition + the rule's actions — with NO
 // server call. The forward direction (canvas → definition) is server-authoritative
 // (compileCanvas); this is only for re-opening a rule the canvas did not author.
@@ -22,11 +22,13 @@ import {
   endpoint,
 } from './model';
 
-// parseGoDuration converts a Go duration string ("1h30m", "600ms", "5m0s", "0s") to
-// milliseconds, or null if it is not a well-formed Go duration. It accepts the unit set Go
-// emits (ns, us/µs, ms, s, m, h) and a leading sign; an empty string is 0 (Go marshals a zero
-// Duration as "0s", but the schema also treats "" as zero).
-export function parseGoDuration(s: string): number | null {
+// goDurationMs converts a Go duration string ("1h30m", "600ms", "5m0s", "0s", ".5s") to
+// UNROUNDED milliseconds, or null if it is not a well-formed Go duration. It accepts the unit
+// set Go emits (ns, us/µs, ms, s, m, h), a leading sign, and the number spellings
+// time.ParseDuration accepts ("1", "1.5", "1.", ".5"); an empty string is 0 (Go marshals a
+// zero Duration as "0s", but the schema also treats "" as zero). Unrounded, so the open-time
+// fidelity check (fidelity.ts) can see a duration the canvas would have to round.
+export function goDurationMs(s: string): number | null {
   if (s === '' || s === '0' || s === '0s') return 0;
   const unitMs: Record<string, number> = {
     ns: 1e-6,
@@ -48,7 +50,7 @@ export function parseGoDuration(s: string): number | null {
   }
   if (rest === '') return null;
   let total = 0;
-  const re = /(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|s|m|h)/g;
+  const re = /(\d+\.?\d*|\.\d+)(ns|us|µs|μs|ms|s|m|h)/g;
   let consumed = 0;
   let match: RegExpExecArray | null;
   while ((match = re.exec(rest)) !== null) {
@@ -57,10 +59,17 @@ export function parseGoDuration(s: string): number | null {
     consumed = re.lastIndex;
   }
   if (consumed !== rest.length) return null; // trailing junk
-  // Round to whole milliseconds: float accumulation yields e.g. 8000.999999999999 for "8.001s",
-  // and the Go config fields are int64 — a fractional value would fail to decode. Millisecond
-  // precision is the canvas's declared floor; genuinely sub-ms durations round to the nearest ms.
-  return sign * Math.round(total);
+  return sign * total;
+}
+
+// parseGoDuration is goDurationMs rounded to whole milliseconds: float accumulation yields e.g.
+// 8000.999999999999 for "8.001s", and the Go config fields are int64 — a fractional value would
+// fail to decode. Millisecond precision is the canvas's declared floor; genuinely sub-ms
+// durations round to the nearest ms (and the fidelity check reports such a rule, because a
+// canvas save really would change it).
+export function parseGoDuration(s: string): number | null {
+  const v = goDurationMs(s);
+  return v === null ? null : Math.sign(v) * Math.round(Math.abs(v));
 }
 
 // The subset of the rules.Rule wire shape the synthesis reads.
@@ -73,7 +82,7 @@ interface WireCondition {
 }
 interface WireAction {
   type?: string;
-  raiseAlarm?: { alarmKey?: string };
+  raiseAlarm?: { alarmKey?: string; alarmKeyTemplate?: string };
   sendCommand?: { command?: string; payload?: string };
   // ADR-060 outbound actions.
   httpCall?: {
@@ -141,6 +150,9 @@ function conditionConfig(rule: WireRule): Record<string, unknown> {
       return { ...meta, when: when ?? {}, holdMs: durMs(rule.hold) };
     case 'absence':
       return { ...meta, timeoutMs: durMs(rule.timeout) };
+    case 'connectivity':
+      // Nothing but the rule metadata: the presence edge is the whole signal.
+      return { ...meta };
     case 'aggregate': {
       const cfg: Record<string, unknown> = {
         ...meta,
@@ -183,6 +195,7 @@ function actionConfig(a: WireAction): ActionConfig | null {
   if (a.type === 'raiseAlarm') {
     const cfg: ActionConfig = { action: 'raiseAlarm' };
     if (a.raiseAlarm?.alarmKey) cfg.alarmKey = a.raiseAlarm.alarmKey;
+    if (a.raiseAlarm?.alarmKeyTemplate) cfg.alarmKeyTemplate = a.raiseAlarm.alarmKeyTemplate;
     return cfg;
   }
   if (a.type === 'sendCommand') {
@@ -218,7 +231,8 @@ const ACTION_DY = 120;
 export interface SynthesisResult {
   graph: CanvasDefinition | null;
   // A human-readable reason the rule could not be laid out on the canvas (unparseable JSON, an
-  // unknown rule type). The editor falls back to the form when this is set.
+  // unknown rule type). The editor shows it as the reason it will not save over the rule
+  // (fidelity `unrepresentable`, fidelity.ts).
   error?: string;
 }
 
@@ -276,7 +290,9 @@ export function graphFromDefinition(definition: string, profileToken: string, t:
   const actions = Array.isArray(rule.actions) ? rule.actions : [];
   actions.forEach((a, i) => {
     const cfg = actionConfig(a);
-    if (!cfg) return; // an unknown action type is dropped from the layout; publish still uses the stored definition
+    // An unknown action type is dropped from the layout. The open-time fidelity check
+    // (fidelity.ts) then reports the rule lossy, so a canvas save cannot store it without that action.
+    if (!cfg) return;
     // Zero-pad the index so action ids sort in list order lexicographically — the server orders a
     // rule's actions by sorting node ids, so `action-0010` must sort after `action-0002`. Today the
     // cap is 8 (single digit), but padding mirrors the editor's newId and removes the trap if the

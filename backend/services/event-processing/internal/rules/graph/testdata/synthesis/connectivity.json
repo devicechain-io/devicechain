@@ -1,0 +1,68 @@
+{
+  "definition": {
+    "name": "offline",
+    "type": "connectivity",
+    "severity": "critical",
+    "actions": [
+      {
+        "type": "raiseAlarm",
+        "raiseAlarm": {
+          "alarmKey": "offline"
+        }
+      }
+    ]
+  },
+  "graph": {
+    "schemaVersion": 1,
+    "nodes": [
+      {
+        "id": "source",
+        "type": "source",
+        "config": {
+          "scope": {
+            "kind": "profile",
+            "profileToken": "thermostat"
+          }
+        },
+        "ui": {
+          "x": 40,
+          "y": 120
+        }
+      },
+      {
+        "id": "condition",
+        "type": "connectivity",
+        "config": {
+          "name": "offline",
+          "severity": "critical"
+        },
+        "ui": {
+          "x": 320,
+          "y": 120
+        }
+      },
+      {
+        "id": "action-0000",
+        "type": "action",
+        "config": {
+          "action": "raiseAlarm",
+          "alarmKey": "offline"
+        },
+        "ui": {
+          "x": 700,
+          "y": 120
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "source:out",
+        "to": "condition:in"
+      },
+      {
+        "from": "condition:signal",
+        "to": "action-0000:in"
+      }
+    ]
+  }
+}

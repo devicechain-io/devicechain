@@ -35,7 +35,7 @@ La detección cubre condiciones de umbral, sostenida por duración, ocurrencia r
 | **Repetición** | la condición ocurre un número de veces dentro de una ventana (p. ej. `3 faults in 10 minutes`) | un conteo de ocurrencias + una ventana |
 | **Tasa de cambio** | una métrica cambia demasiado rápido entre lecturas consecutivas (p. ej. `temperature rising > 5°/s`) | la comparación + una marca opcional para normalizar el cambio a una tasa por segundo |
 | **Ausencia / silencio** | un dispositivo deja de reportar: ningún evento en absoluto dentro de una ventana (una verificación de tipo "hombre muerto"); todo evento cuenta como latido, así que la regla no lleva condición | una ventana de silencio |
-| **Conectividad** | un dispositivo reporta una desconexión autoritativa (levanta) y se reconecta (resuelve), para transportes que afirman presencia como [Sparkplug-B](./sparkplug.md) y [LwM2M](./lwm2m.md). *Se autora en el generador de formularios de la consola o a través de la API; el lienzo visual de automatización no ofrece el tipo (véase más abajo).* | ninguno: el borde de [presencia](./device-presence.md) es toda la señal |
+| **Conectividad** | un dispositivo reporta una desconexión autoritativa (levanta) y se reconecta (resuelve), para transportes que afirman presencia como [Sparkplug-B](./sparkplug.md) y [LwM2M](./lwm2m.md). *Se autora en el generador de formularios de la consola, en el lienzo de automatización o a través de la API.* | ninguno: el borde de [presencia](./device-presence.md) es toda la señal |
 | **Agregado en ventana** | un agregado sobre una ventana cruza una comparación (p. ej. `average > 50 over 10 minutes`) | la función (count/sum/avg/min/max), una ventana (tumbling, sliding, session o una ventana de conteo de N eventos), la comparación + valor |
 | **Correlación de área** | suficientes dispositivos distintos en un área cumplen la condición en conjunto (p. ej. `≥ 3 devices in a zone report a fault within 5 minutes`) | el tipo de área/ancla, un conteo de dispositivos distintos + ventana |
 
@@ -55,13 +55,22 @@ Los tiempos de espera de silencio y los huecos de sesión también están limita
 
 Si necesitas un lapso mayor, un operador puede subir el límite de la instancia ([`maxRuleDurationSeconds`](../deployment/detection-engine.md#configuration)) tras dimensionar la memoria. Antes de pedirlo, considera si la pregunta trata en realidad de *retención* más que de *detección*. Una pregunta del tipo «comparar contra el mes pasado» suele responderse mejor consultando el historial almacenado que reteniendo un mes de lecturas en memoria.
 
-### Las reglas de Conectividad y el lienzo de automatización
+### Abrir una regla almacenada en el formulario o en el lienzo
 
-El generador de formularios autora y abre reglas de Conectividad. El tipo está en su selector y, como el borde de presencia es toda la señal, el formulario no ofrece condición ni parámetros para él.
+Tanto el generador de formularios como el lienzo de automatización autoran reglas de Conectividad. Como el borde de presencia es toda la señal, ninguno ofrece condición ni parámetros para ese tipo: en el lienzo es un nodo de **Conectividad** que recibe el flujo de la fuente y alimenta acciones, como cualquier otra condición.
 
-El lienzo visual de automatización no tiene nodo de Conectividad. Rechaza abrir una regla de Conectividad sin más y te indica que ese tipo no puede mostrarse en el lienzo. Autora y edita una regla de Conectividad en el generador de formularios o a través de la API, no en el lienzo.
+Ninguna de las dos superficies reescribe en silencio una regla que no puede mostrar por completo. Si el formulario abre una regla almacenada que no puede contener por completo —un campo que no modela o un tipo que no conoce—, advierte que parte de la definición no se muestra y que guardar reemplazaría la original únicamente con lo que ves. Ese aviso es distinto del de «no se pudo leer» que aparece para una definición que no es JSON válido. Una regla de Conectividad se abre sin ninguno de los dos.
 
-Si el formulario abre una regla almacenada que no puede contener por completo —un campo que no modela o un tipo que no conoce—, advierte que parte de la definición no se muestra y que guardar reemplazaría la original únicamente con lo que ves. Ese aviso es distinto del de «no se pudo leer» que aparece para una definición que no es JSON válido. Una regla de Conectividad se abre sin ninguno de los dos.
+El lienzo es más estricto. Al abrir una regla almacenada, pregunta al compilador si guardar la regla tal como está dispuesta conservaría todo lo que dice la definición almacenada. Cuando la respuesta no es afirmativa, el lienzo indica el motivo y desactiva el guardado para esa regla:
+
+- Si la regla tiene un tipo para el que el lienzo no tiene nodo, o un campo o un tipo de acción que el lienzo no modela, edítala a través de la API. El formulario también puede abrirla, pero advertirá que guardar allí descarta lo que no puede mostrar.
+- Si la regla tal como la dispone el lienzo no compila, el lienzo no puede confirmar que guardar la mantendría intacta. Edítala en el formulario.
+- Si el lienzo no puede contactar con el compilador para hacer la comprobación, elige **Comprobar de nuevo**. El guardado sigue desactivado hasta que la comprobación se complete.
+
+Hay dos casos propios de las reglas construidas en el lienzo:
+
+- Si la definición de la regla se modificó a través de la API después de guardarla por última vez en el lienzo, la disposición guardada ya no coincide con la regla. El lienzo vuelve a disponer la regla a partir de su definición actual y te lo indica, para que guardar no deshaga el cambio. Si no puede disponer la regla actual por completo, el guardado se desactiva.
+- Si el lienzo guardado ya no compila tal como está, se abre como estaba, con una nota. Corrígelo en el lienzo; al guardar, la regla almacenada se reemplaza por lo que hay en el lienzo. Un lienzo que no compila no puede compararse con la regla, así que si la regla también se modificó a través de la API desde que se guardó por última vez en el lienzo, guardar aquí deshace ese cambio. La nota lo indica.
 
 ### Umbrales estáticos y dinámicos
 
@@ -103,7 +112,7 @@ Un disparo es **activado por flanco**: un flanco ascendente cuando la condición
 Autoras las reglas en la consola de tres maneras. Las tres usan el mismo esquema, y el **mismo compilador del lado del servidor** las valida todas antes de publicar:
 
 - Un **generador de formularios**: un formulario tipado por tipo de condición, la vía más rápida para una sola regla. A medida que editas, muestra en línea la retroalimentación de tipos y costo del compilador, antes de publicar. Su selector de acciones solo ofrece levantar alarma y enviar comando. Las guardas y las acciones salientes se autoran en el lienzo; el formulario las muestra en modo de solo lectura y las conserva al guardar.
-- Un **lienzo visual de automatización**: un grafo de nodos (fuente → condición → ramas opcionales → acciones) para flujos más ricos. El lienzo **compila a la misma regla** que produciría un formulario; es una superficie de autoría, no un segundo motor. Añade nodos de **rama** (enrutar un disparo a distintas acciones mediante una guarda) y nodos de **cómputo** (nombrar un valor derivado reutilizable y referenciarlo en una condición o guarda).
+- Un **lienzo visual de automatización**: un grafo de nodos (fuente → condición → ramas opcionales → acciones) para flujos más ricos. El lienzo **compila a la misma regla** que produciría un formulario; es una superficie de autoría, no un segundo motor. Añade nodos de **rama** (enrutar un disparo a distintas acciones mediante una guarda) y nodos de **cómputo** (nombrar un valor derivado reutilizable y referenciarlo en una condición o guarda). Ofrece un nodo para cada tipo de condición.
 - Una puerta **"Describir"** en lenguaje natural: donde el servicio de IA está habilitado, describes la regla con palabras y recibes una candidata redactada para revisarla y publicarla. Se ofrece al crear una regla nueva, y produce una regla en el mismo esquema que producen las otras dos. Consulta [Autoría asistida por IA](./ai-authoring.md).
 
 Lo más destacado del lienzo es la **previsualización contra historial**. Ejecutas una regla en *borrador* sobre el historial de eventos reproducido del perfil y ves los flancos de levantamiento/resolución que *habría* producido en una ventana elegida, sin publicar nada. Al seleccionar un disparo se superpone sobre el lienzo una **traza por nodo** que muestra el camino que tomó el evento: qué condición coincidió, qué rama tomó y qué acción se disparó. Edita y vuelve a previsualizar hasta que la regla haga lo que esperas, y luego publícala.

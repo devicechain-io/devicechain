@@ -1,0 +1,83 @@
+{
+  "definition": {
+    "name": "warm",
+    "type": "duration",
+    "severity": "minor",
+    "when": {
+      "metric": "tempC",
+      "op": "gt",
+      "threshold": 25
+    },
+    "hold": "10m",
+    "actions": [
+      {
+        "type": "raiseAlarm",
+        "raiseAlarm": {
+          "alarmKeyTemplate": "\"overtemp-\" + series"
+        }
+      }
+    ]
+  },
+  "graph": {
+    "schemaVersion": 1,
+    "nodes": [
+      {
+        "id": "source",
+        "type": "source",
+        "config": {
+          "scope": {
+            "kind": "profile",
+            "profileToken": "thermostat"
+          }
+        },
+        "ui": {
+          "x": 40,
+          "y": 120
+        }
+      },
+      {
+        "id": "condition",
+        "type": "duration",
+        "config": {
+          "name": "warm",
+          "severity": "minor",
+          "when": {
+            "metric": "tempC",
+            "op": "gt",
+            "threshold": {
+              "kind": "literal",
+              "value": 25
+            }
+          },
+          "holdMs": 600000
+        },
+        "ui": {
+          "x": 320,
+          "y": 120
+        }
+      },
+      {
+        "id": "action-0000",
+        "type": "action",
+        "config": {
+          "action": "raiseAlarm",
+          "alarmKeyTemplate": "\"overtemp-\" + series"
+        },
+        "ui": {
+          "x": 700,
+          "y": 120
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "source:out",
+        "to": "condition:in"
+      },
+      {
+        "from": "condition:signal",
+        "to": "action-0000:in"
+      }
+    ]
+  }
+}

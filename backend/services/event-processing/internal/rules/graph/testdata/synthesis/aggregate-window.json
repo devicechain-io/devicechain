@@ -1,0 +1,56 @@
+{
+  "definition": {
+    "name": "avg-hot",
+    "type": "aggregate",
+    "severity": "warning",
+    "agg": "avg",
+    "windowMode": "tumbling",
+    "metric": "tempC",
+    "window": "5m0s",
+    "op": "gt",
+    "threshold": 40
+  },
+  "graph": {
+    "schemaVersion": 1,
+    "nodes": [
+      {
+        "id": "source",
+        "type": "source",
+        "config": {
+          "scope": {
+            "kind": "profile",
+            "profileToken": "thermostat"
+          }
+        },
+        "ui": {
+          "x": 40,
+          "y": 120
+        }
+      },
+      {
+        "id": "condition",
+        "type": "aggregate",
+        "config": {
+          "name": "avg-hot",
+          "severity": "warning",
+          "agg": "avg",
+          "windowMode": "tumbling",
+          "op": "gt",
+          "threshold": 40,
+          "metric": "tempC",
+          "windowMs": 300000
+        },
+        "ui": {
+          "x": 320,
+          "y": 120
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "source:out",
+        "to": "condition:in"
+      }
+    ]
+  }
+}
