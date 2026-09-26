@@ -88,6 +88,15 @@ instancias en marcha (consulta [el presupuesto de conexiones](#connection-budget
 se rechaza como cualquier otro cambio. Una nueva ejecución que no pase `--max-connections`
 conserva el presupuesto que ya tiene el clúster.
 
+**Una ejecución que falló a mitad se repara de la misma forma.** Cuando hayas corregido la
+causa, vuelve a ejecutar el mismo `dcctl install`. Si el almacén de objetos de los respaldos no
+pudo arrancar la primera vez, por ejemplo porque no se pudo descargar su imagen, la nueva
+ejecución lo elimina, lo crea de nuevo y espera a que esté listo, igual que la primera. Si la
+causa sigue ahí, la nueva ejecución falla del mismo modo. Antes de dar el clúster por instalado,
+`install` comprueba además que el almacén de objetos de los respaldos ha terminado su despliegue,
+así que un almacén que quedó sin estar listo tras un cambio fallido anterior se notifica en
+lugar de pasarse por alto.
+
 ### Dónde guarda install su estado {#install-state}
 
 Los requisitos previos se aplican con OpenTofu, y su estado vive en la máquina que ejecutó
@@ -103,6 +112,11 @@ de modo que puedes emparejar un directorio con su clúster:
 cat ~/.devicechain/clusters/*/cluster.json
 kubectl --context <kube-context> get namespace kube-system -o jsonpath='{.metadata.uid}'
 ```
+
+Los proveedores de OpenTofu están fijados a versiones exactas, y cada ejecución, incluida
+`dcctl destroy`, lleva el `.terraform.lock.hcl` del directorio a las versiones que fija este
+dcctl. Por eso cada ejecución consulta al registro de proveedores qué versiones existen, así
+que el registro, o un espejo de proveedores que hayas configurado, debe ser accesible.
 
 Una nueva ejecución trabaja a partir de ese estado, así que **un clúster ya instalado solo
 puede reinstalarse desde la máquina que tiene su directorio**. Ejecuta `dcctl install` contra
