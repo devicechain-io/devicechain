@@ -25,9 +25,9 @@ const signingMethod = "RS256"
 // the RFC 7638 thumbprint) so verification survives a signing-key rotation: a
 // token names its signing key in the "kid" header and the validator selects the
 // matching public key. When the validator was built from a remote JWKS, an
-// unknown kid triggers a single throttled refetch so a rotated-in key is picked
-// up without a restart. Verification is otherwise local — no per-request network
-// call (ADR-008).
+// unknown kid triggers a rate-limited, single-flight refetch so a rotated-in key
+// is picked up without a restart. Verification is otherwise local — no
+// per-request network call (ADR-008).
 type Validator struct {
 	parser *jwt.Parser
 
@@ -38,7 +38,13 @@ type Validator struct {
 	// service validating its own tokens).
 	refresh     func() (map[string]*rsa.PublicKey, error)
 	minInterval time.Duration
-	lastRefresh time.Time
+
+	// refreshMu guards the refetch schedule and is never held across a fetch. It
+	// is separate from mu so that neither a fetch nor a flood of unknown kids
+	// waiting on one ever holds up the lookup of a known kid.
+	refreshMu   sync.Mutex
+	lastRefresh time.Time     // when the last refetch COMPLETED
+	inflight    chan struct{} // non-nil while a refetch runs; closed when it completes
 }
 
 // newValidator builds a Validator over a key set with an optional refresher.
@@ -68,7 +74,8 @@ func NewValidatorFromKeys(keys map[string]*rsa.PublicKey) *Validator {
 }
 
 // NewRefreshingValidator builds a Validator that re-fetches its key set (via
-// refresh) when it encounters an unknown kid, no more than once per minInterval.
+// refresh) when it encounters an unknown kid: one fetch at a time, the next no
+// sooner than minInterval after the previous one completed.
 func NewRefreshingValidator(initial map[string]*rsa.PublicKey, refresh func() (map[string]*rsa.PublicKey, error), minInterval time.Duration) *Validator {
 	return newValidator(initial, refresh, minInterval)
 }
@@ -158,7 +165,7 @@ func (v *Validator) validateTyped(tokenString, expectedType string, requireTenan
 }
 
 // keyfunc selects the verification key for a token by its kid header, pinning the
-// RS256 method, and refetches the key set once (throttled) on an unknown kid.
+// RS256 method, and on an unknown kid joins or starts a rate-limited refetch.
 func (v *Validator) keyfunc(t *jwt.Token) (interface{}, error) {
 	// Belt-and-suspenders alg pin: WithValidMethods already rejects non-RS256,
 	// but assert the concrete RSA method here too so a public key is never handed
@@ -193,36 +200,94 @@ func (v *Validator) lookup(kid string) *rsa.PublicKey {
 	return nil
 }
 
-// tryRefresh refetches the key set at most once per minInterval and returns the
-// key for kid if the refresh produced it. The throttle is updated before the
-// fetch so a burst of tokens bearing unknown kids cannot stampede the endpoint.
+// tryRefresh returns the key for kid after a refetch of the key set, or nil when
+// no refetch is permitted or the refetched set lacks the kid.
+//
+// The policy is SINGLE-FLIGHT plus a SHORT minimum interval, and both halves carry
+// weight:
+//
+//   - A caller that misses while a refetch is already running WAITS for that
+//     refetch and looks again, instead of being refused. Otherwise every request
+//     racing the first one after a rotation is refused for a key the validator is
+//     at that moment fetching.
+//   - A new refetch starts no sooner than minInterval after the previous one
+//     COMPLETED — measured from completion, so fetches never run back to back even
+//     when the endpoint is slow. That bounds what a flood of tokens bearing forged
+//     kids can cost the JWKS endpoint to one fetch per interval per validator. It
+//     is the only bound available: the kid is attacker-chosen, so nothing keyed on
+//     it can be one.
+//
+// The interval is short because a refetch that misses is routine, not an attack.
+// During a rolling upgrade that rotates the signing key, the NEW user-management
+// pod signs tokens while the OLD one may still be answering the JWKS, so the first
+// refetch a new kid provokes can return only the old set. A long interval turned
+// that one unlucky fetch into a refusal of every token the new key signed for the
+// whole interval. A caller that misses inside the interval still fails fast rather
+// than waiting it out, so a forged-kid flood cannot park goroutines behind a clock.
+//
+// It CAN park them behind a fetch, and that is the price of the first half. While a
+// refetch is in flight, every unknown-kid caller waits for it, forged kid or genuine
+// — the validator cannot tell them apart — for as long as the fetch takes: for the
+// JWKS fetch, up to its request timeout when user-management is slow or unreachable.
+// A flood arriving then holds one goroutine per request until the fetch ends, where
+// before this policy each was refused at once. The wait is bounded by the fetch, and
+// after it comes a full interval in which a miss fails fast again. Capping the wait
+// shorter than the fetch would refuse the genuine callers of a slow refetch, which
+// is the refusal this policy exists to remove.
 func (v *Validator) tryRefresh(kid string) *rsa.PublicKey {
-	// Fast path under the read lock: a flood of tokens bearing bogus kids stays
-	// off the writer, so forged tokens cannot serialize all validation on it.
-	v.mu.RLock()
-	throttled := v.refresh == nil || time.Since(v.lastRefresh) < v.minInterval
-	v.mu.RUnlock()
-	if throttled {
+	if v.refresh == nil {
 		return nil
 	}
 
-	v.mu.Lock()
-	// Re-check under the write lock — another goroutine may have refreshed since.
-	if v.refresh == nil || time.Since(v.lastRefresh) < v.minInterval {
-		v.mu.Unlock()
+	v.refreshMu.Lock()
+	if done := v.inflight; done != nil {
+		v.refreshMu.Unlock()
+		<-done
+		return v.lookup(kid)
+	}
+	if time.Since(v.lastRefresh) < v.minInterval {
+		v.refreshMu.Unlock()
 		return nil
 	}
-	v.lastRefresh = time.Now()
-	refresh := v.refresh
-	v.mu.Unlock()
+	done := make(chan struct{})
+	v.inflight = done
+	v.refreshMu.Unlock()
 
-	keys, err := refresh()
+	fetched := v.runRefresh(done)
+	key := v.lookup(kid)
+	if key == nil && fetched > 0 {
+		// Logged by the claimant only, so at most once per refetch — the rate the
+		// interval already bounds — however many callers were refused alongside it.
+		// It is the line that tells a refusal after a rotation apart from a bad
+		// token: a genuine kid missing here means the endpoint answered with a key
+		// set that predates the key.
+		log.Warn().Str("kid", kid).Int("keys", fetched).
+			Msg("JWKS refetched on an unknown kid, and the fetched set does not hold it.")
+	}
+	return key
+}
+
+// runRefresh performs one refetch for the caller that claimed it and returns how
+// many keys it installed: the fetched set on success, none (keeping the existing
+// keys) on failure. However the fetch ends, it records the completion time and
+// releases every waiter — deferred, so a panicking refresh cannot leave the next
+// unknown kid waiting forever.
+func (v *Validator) runRefresh(done chan struct{}) int {
+	defer func() {
+		v.refreshMu.Lock()
+		v.lastRefresh = time.Now()
+		v.inflight = nil
+		v.refreshMu.Unlock()
+		close(done)
+	}()
+
+	keys, err := v.refresh()
 	if err != nil || len(keys) == 0 {
 		log.Warn().Err(err).Msg("JWKS refresh on unknown kid failed; keeping existing keys.")
-		return nil
+		return 0
 	}
 	v.mu.Lock()
 	v.keys = keys
 	v.mu.Unlock()
-	return v.lookup(kid)
+	return len(keys)
 }

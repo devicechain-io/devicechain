@@ -722,13 +722,33 @@ jobs:
           echo "::group::recent events"
           kubectl --context "$ctx" get events -A --sort-by=.lastTimestamp | tail -60 || true
           echo "::endgroup::"
+          # 🔴 THE LOGS OF EVERY PLATFORM SERVICE, READY OR NOT. A drill can fail with
+          # every pod Ready: a service that answers a valid token with 401 is a healthy
+          # pod giving a wrong answer, and the not-ready loop below would print nothing
+          # about it. That happened -- the first read after an upgrade was refused as
+          # "invalid or expired token" after a signing-key rotation, and the page held
+          # no line from any service saying why. So every functional-area pod (by the label the chart
+          # stamps on each one, not by a list of names) is dumped first, with
+          # timestamps to line it up against the rig's own output. These are the
+          # services' own logs, the same an operator reads with kubectl; no Secret,
+          # config file or environment is printed. The not-ready loop below then skips
+          # them so nothing is printed twice.
+          area_label=devicechain.io/functional-area
+          for ref in $(kubectl --context "$ctx" get pods -A -l "$area_label" \
+              -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
+            ns="${ref%%/*}"; pod="${ref##*/}"
+            echo "::group::service logs $ns/$pod"
+            kubectl --context "$ctx" -n "$ns" logs "$pod" --all-containers --timestamps --tail=300 || true
+            kubectl --context "$ctx" -n "$ns" logs "$pod" --all-containers --timestamps --tail=100 --previous 2>/dev/null || true
+            echo "::endgroup::"
+          done
           # 🔴 The LOGS of whatever did not come up, and --previous for the ones that
           # already restarted. Without this a crash-loop is reported as a rollout
           # timeout and nothing on the page says why: a run that paired the wrong
           # chart with the wrong images produced exactly one useful line
           # ("CrashLoopBackOff") and no reason at all, and the cluster dies with the
           # runner, so what is not printed now cannot be asked for later.
-          for ref in $(kubectl --context "$ctx" get pods -A \
+          for ref in $(kubectl --context "$ctx" get pods -A -l "!$area_label" \
               -o jsonpath='{range .items[?(@.status.phase!="Succeeded")]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'); do
             ns="${ref%%/*}"; pod="${ref##*/}"
             ready="$(kubectl --context "$ctx" -n "$ns" get pod "$pod" \

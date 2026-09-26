@@ -26,10 +26,16 @@ const (
 	// where user-management has not finished starting.
 	jwksFetchAttempts = 30
 	jwksFetchDelay    = 2 * time.Second
-	// jwksRefreshInterval throttles the on-demand refetch a validator does when
-	// it sees an unknown kid, so tokens bearing bogus kids cannot turn into a
-	// fetch storm against user-management.
-	jwksRefreshInterval = 30 * time.Second
+	// jwksRefreshInterval is the least time between the end of one on-demand
+	// refetch (a validator seeing an unknown kid) and the start of the next, so
+	// tokens bearing bogus kids cost user-management at most one JWKS fetch per
+	// second per validator. It is deliberately SHORT: a refetch that misses the
+	// kid is routine during a rolling upgrade that rotates the signing key (the
+	// old user-management pod can answer after the new one has signed), and every
+	// token the new key signs is refused until the next refetch is allowed. At
+	// 30s this refused valid tokens for half a minute after an upgrade. See
+	// Validator.tryRefresh for the whole policy.
+	jwksRefreshInterval = time.Second
 	jwksRequestTimeout  = 10 * time.Second
 )
 
@@ -74,7 +80,8 @@ func jwksURLForInstance(cfg config.UserManagementConfiguration) string {
 // NewValidatorFromJWKSURL fetches the platform JWKS from user-management and
 // returns a Validator that verifies tokens locally thereafter. It retries to
 // absorb the startup race where user-management is not yet serving, and on an
-// unknown kid refetches the JWKS once (throttled) to pick up a rotated-in key.
+// unknown kid refetches the JWKS (single-flight, at most once per
+// jwksRefreshInterval) to pick up a rotated-in key.
 func NewValidatorFromJWKSURL(ctx context.Context, url string, attempts int, delay time.Duration) (*Validator, error) {
 	if attempts < 1 {
 		attempts = 1

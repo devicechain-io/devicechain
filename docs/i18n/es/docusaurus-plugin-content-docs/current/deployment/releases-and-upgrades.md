@@ -2770,6 +2770,29 @@ notificación](../guides/notification-channels.md) tiene los detalles.
   valor escrito en la base de datos por otra vía. Una actualización de una política de
   notificación que no nombra uno de esos tres campos tampoco lo reescribe ya.
 
+#### Una nueva clave de firma se acepta en aproximadamente un segundo
+
+Cuando user-management empieza a firmar tokens con una clave nueva, como ocurre en esta
+actualización, cada uno de los demás servicios conoce esa clave la primera vez que ve un token
+firmado con ella, volviendo a obtener el conjunto de claves que publica user-management. Las
+versiones anteriores permitían a cada pod de servicio esa obtención como mucho una vez cada 30
+segundos. Si respondía un pod de user-management que aún publicaba el conjunto de claves anterior,
+como hace el pod antiguo mientras una actualización progresiva está en curso, ese servicio
+rechazaba todos los tokens firmados con la clave nueva como `invalid or expired token` hasta que
+pasaban los 30 segundos. Un inicio de sesión justo después de una actualización podía fallar así.
+
+- **Un servicio vuelve ahora a obtener las claves en cuanto pasa un segundo desde que terminó la
+  obtención anterior.** Las solicitudes que llegan mientras una obtención está en curso esperan a
+  que termine en lugar de rechazarse.
+- **Los tokens que nombran una clave que user-management nunca publicó** le siguen costando como
+  mucho una obtención por segundo desde cada pod de servicio.
+- **Una obtención que no encuentra la clave ahora se registra.** El servicio registra `JWKS
+  refetched on an unknown kid, and the fetched set does not hold it.` con el identificador de la
+  clave, lo que distingue un token rechazado durante un cambio de clave de un token que
+  simplemente no es válido.
+
+No hay nada que configurar.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

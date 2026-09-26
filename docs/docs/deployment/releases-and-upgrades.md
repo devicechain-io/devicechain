@@ -2589,6 +2589,26 @@ channels](../guides/notification-channels.md) has the details.
   only a value written to the database some other way. A notification-policy update that does not
   name one of those three fields also no longer rewrites it.
 
+#### A new signing key is trusted within about a second
+
+When user-management starts signing tokens with a new key, as it does at this upgrade, every
+other service learns that key the first time it sees a token signed with it, by fetching the key
+set user-management publishes. Earlier releases allowed each service pod that fetch at most once
+every 30 seconds. If the fetch was answered by a user-management pod still publishing the previous
+key set, as the old pod does while a rolling upgrade is under way, that service refused every
+token signed with the new key as `invalid or expired token` until the 30 seconds had passed. A
+sign-in straight after an upgrade could fail this way.
+
+- **A service now fetches again as soon as one second after its previous fetch finished.**
+  Requests that arrive while a fetch is under way wait for it instead of being refused.
+- **Tokens naming a key user-management never published** still cost it at most one fetch per
+  second from each service pod.
+- **A fetch that does not find the key is now logged.** The service logs `JWKS refetched on an
+  unknown kid, and the fetched set does not hold it.` with the key id, which tells a token refused
+  during a key change apart from a token that is simply not valid.
+
+Nothing needs configuring.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
