@@ -37,7 +37,7 @@ func TestTrueWithoutAttributes(t *testing.T) {
 		{`"t" in m && m["t"] > 80.0`, false, "a pure measurement test reads no attr"},
 	}
 	for _, c := range cases {
-		p, err := Compile(c.src, 1_000_000)
+		p, err := Compile(c.src)
 		if err != nil {
 			t.Fatalf("%s (%s): must compile, got %v", c.src, c.why, err)
 		}
@@ -51,7 +51,7 @@ func TestTrueWithoutAttributes(t *testing.T) {
 // accepted fallback idiom: it fires on the fallback for a device without the attribute, and
 // defers to the device's own value when it has one.
 func TestFallbackIdiomFiresOnAbsentAttribute(t *testing.T) {
-	p, err := Compile(`!("lim" in attr) && "t" in m && m["t"] > 0.0`, 1_000_000)
+	p, err := Compile(`!("lim" in attr) && "t" in m && m["t"] > 0.0`)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
