@@ -1620,7 +1620,7 @@ Si hay dispositivos que se conectan por MQTT con contraseña, o la instancia se 
 de JetStream del preset compacto crece, y una instancia compacta existente tiene que moverlo antes
 de que la actualización pueda continuar.
 
-el servicio de conectores tiene clientes nuevos» antes de actualizar. Si escribe documentos de
+Si escribe documentos de
 GraphQL a mano, lea «Los documentos de GraphQL deben usar los comentarios y las cadenas propios de
 GraphQL»: los comentarios al estilo de Go, las cadenas entre comillas invertidas y los caracteres
 entre comillas simples ahora se rechazan.
@@ -1634,7 +1634,7 @@ Si enruta o silencia alertas por su nombre, se añaden dos avisos más,
 `JetStreamReplicationUnobserved` y `ConnectorDispatchRateLimited` (consulte «Dos avisos nuevos: un
 flujo que no se puede leer, y descartes de conectores que el motor de detección admitió»).
 
-el servicio de conectores tiene clientes nuevos» antes de actualizar. Si ejecuta fuentes Sparkplug, o
+Si ejecuta fuentes Sparkplug, o
 tiene alertas sobre el estado en línea de un host Sparkplug, lea «Una fuente Sparkplug con un grupo
 rechazado sigue fuera de línea, y una renovación sobrevive a una caída breve».
 
