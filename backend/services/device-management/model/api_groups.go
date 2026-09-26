@@ -150,13 +150,13 @@ func (api *Api) UpdateEntityGroup(ctx context.Context, token string,
 		updated.Selector = sql.NullString{String: sel.Source(), Valid: true}
 		updated.SelectorSchema = selector.SchemaVersion
 	}
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
-	updated.ImageUrl = rdb.NullStrOf(request.ImageUrl.ApplyTo(dcgraphql.NullStr(updated.ImageUrl)))
-	updated.Icon = rdb.NullStrOf(request.Icon.ApplyTo(dcgraphql.NullStr(updated.Icon)))
-	updated.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(updated.BackgroundColor)))
-	updated.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(updated.ForegroundColor)))
-	updated.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(updated.BorderColor)))
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
+	updated.ImageUrl = request.ImageUrl.ApplyToNullString(updated.ImageUrl)
+	updated.Icon = request.Icon.ApplyToNullString(updated.Icon)
+	updated.BackgroundColor = request.BackgroundColor.ApplyToNullString(updated.BackgroundColor)
+	updated.ForegroundColor = request.ForegroundColor.ApplyToNullString(updated.ForegroundColor)
+	updated.BorderColor = request.BorderColor.ApplyToNullString(updated.BorderColor)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err

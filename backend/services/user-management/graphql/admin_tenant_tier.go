@@ -33,7 +33,7 @@ func (r *AdminTenantTierResolver) Config() (*string, error) { return marshalConf
 
 // DisplayOrder and Color are presentation only (ADR-065 S5c) — see iam.TenantTier.
 func (r *AdminTenantTierResolver) DisplayOrder() int32 { return int32(r.M.DisplayOrder) }
-func (r *AdminTenantTierResolver) Color() string       { return r.M.Color }
+func (r *AdminTenantTierResolver) Color() *string      { return util.NullStrNonEmpty(r.M.Color) }
 
 // TenantCount counts the tenants packaged at this tier. Resolved lazily (it takes
 // ctx and runs a query) so that listing tenants — where every row carries its tier
@@ -103,7 +103,7 @@ func (r *AdminResolver) CreateTenantTier(ctx context.Context, args struct {
 		Name:        strOrEmpty(args.Request.Name),
 		Description: strOrEmpty(args.Request.Description),
 		Config:      cfg,
-		Color:       strOrEmpty(args.Request.Color),
+		Color:       args.Request.Color,
 	}))
 }
 

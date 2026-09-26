@@ -37,12 +37,8 @@ func (r *AdminRoleResolver) Authorities() []string {
 // IngestMessagesPerSecond / IngestBurst resolve the per-tenant ingest governance
 // overrides; null means the tenant inherits the platform default.
 func (r *AdminTenantResolver) IngestMessagesPerSecond() *float64 { return r.M.IngestMessagesPerSecond }
-func (r *AdminTenantResolver) IngestBurst() *int32 {
-	if r.M.IngestBurst == nil {
-		return nil
-	}
-	v := int32(*r.M.IngestBurst)
-	return &v
+func (r *AdminTenantResolver) IngestBurst() (*int32, error) {
+	return util.IntPtrInt32("ingestBurst", r.M.IngestBurst)
 }
 
 // OutboundMessagesPerSecond / OutboundBurst resolve the per-tenant outbound
@@ -51,12 +47,8 @@ func (r *AdminTenantResolver) IngestBurst() *int32 {
 func (r *AdminTenantResolver) OutboundMessagesPerSecond() *float64 {
 	return r.M.OutboundMessagesPerSecond
 }
-func (r *AdminTenantResolver) OutboundBurst() *int32 {
-	if r.M.OutboundBurst == nil {
-		return nil
-	}
-	v := int32(*r.M.OutboundBurst)
-	return &v
+func (r *AdminTenantResolver) OutboundBurst() (*int32, error) {
+	return util.IntPtrInt32("outboundBurst", r.M.OutboundBurst)
 }
 
 // PurgeState / PurgeEpoch resolve the ADR-077 deletion lifecycle. They are what let
@@ -80,12 +72,8 @@ func (r *AdminTenantResolver) AiInferenceRequestsPerMinute() *float64 {
 	return r.M.AiInferenceRequestsPerMinute
 }
 
-func (r *AdminTenantResolver) AiInferenceBurst() *int32 {
-	if r.M.AiInferenceBurst == nil {
-		return nil
-	}
-	v := int32(*r.M.AiInferenceBurst)
-	return &v
+func (r *AdminTenantResolver) AiInferenceBurst() (*int32, error) {
+	return util.IntPtrInt32("aiInferenceBurst", r.M.AiInferenceBurst)
 }
 
 // ShedPriority resolves the per-tenant ADR-063 shed-priority override (1–100) for the
@@ -95,12 +83,8 @@ func (r *AdminTenantResolver) AiInferenceBurst() *int32 {
 // so a console that could not read the current override back would null it on any
 // unrelated edit — silently erasing an operator's "degrades last" placement. Every
 // other override is readable here for the same reason; this one must be too.
-func (r *AdminTenantResolver) ShedPriority() *int32 {
-	if r.M.ShedPriority == nil {
-		return nil
-	}
-	v := int32(*r.M.ShedPriority)
-	return &v
+func (r *AdminTenantResolver) ShedPriority() (*int32, error) {
+	return util.IntPtrInt32("shedPriority", r.M.ShedPriority)
 }
 
 // HeldCommandCeiling resolves the per-tenant HELD-command ceiling override for the
@@ -110,12 +94,8 @@ func (r *AdminTenantResolver) ShedPriority() *int32 {
 // override, nil clearing it), so a console that could not read the current value back
 // would null it on any unrelated edit — quietly returning a tenant that was deliberately
 // bounded to whatever the tier or the service default happens to be.
-func (r *AdminTenantResolver) HeldCommandCeiling() *int32 {
-	if r.M.HeldCommandCeiling == nil {
-		return nil
-	}
-	v := int32(*r.M.HeldCommandCeiling)
-	return &v
+func (r *AdminTenantResolver) HeldCommandCeiling() (*int32, error) {
+	return util.IntPtrInt32("heldCommandCeiling", r.M.HeldCommandCeiling)
 }
 
 // The three per-tenant geofence cap overrides, as the RAW nullable columns — null when the
@@ -124,29 +104,24 @@ func (r *AdminTenantResolver) HeldCommandCeiling() *int32 {
 // writes every override, nil clearing it), so a console that could not read the current value
 // back would null it on any unrelated edit. Here that would silently RAISE a cap an operator
 // had deliberately tightened, which is the one direction this whole feature exists to prevent.
+//
+// Every governance override reads through util.IntPtrInt32: nil stays nil (inherit, never
+// zero), and a stored value a 32-bit GraphQL Int cannot hold is REFUSED with a resolver
+// error rather than wrapped into a plausible wrong cap.
 
 // GeoFencePositionCeiling resolves the per-tenant per-fence position ceiling override.
-func (r *AdminTenantResolver) GeoFencePositionCeiling() *int32 {
-	return rawInt32(r.M.GeoFencePositionCeiling)
+func (r *AdminTenantResolver) GeoFencePositionCeiling() (*int32, error) {
+	return util.IntPtrInt32("geoFencePositionCeiling", r.M.GeoFencePositionCeiling)
 }
 
 // GeoFenceCeiling resolves the per-tenant fence-count override.
-func (r *AdminTenantResolver) GeoFenceCeiling() *int32 { return rawInt32(r.M.GeoFenceCeiling) }
-
-// GeoFencePositionBudget resolves the per-tenant whole-fence-set position budget override.
-func (r *AdminTenantResolver) GeoFencePositionBudget() *int32 {
-	return rawInt32(r.M.GeoFencePositionBudget)
+func (r *AdminTenantResolver) GeoFenceCeiling() (*int32, error) {
+	return util.IntPtrInt32("geoFenceCeiling", r.M.GeoFenceCeiling)
 }
 
-// rawInt32 adapts a nullable model int to the wire's nullable Int, preserving nil (inherit)
-// rather than coercing it to zero — which the cascade reads as "not a cap" and the console
-// would render as a configured bound of none.
-func rawInt32(v *int) *int32 {
-	if v == nil {
-		return nil
-	}
-	i := int32(*v)
-	return &i
+// GeoFencePositionBudget resolves the per-tenant whole-fence-set position budget override.
+func (r *AdminTenantResolver) GeoFencePositionBudget() (*int32, error) {
+	return util.IntPtrInt32("geoFencePositionBudget", r.M.GeoFencePositionBudget)
 }
 
 // Config resolves the AdminTenant.config field: the freeform config map as a
@@ -308,7 +283,8 @@ type adminTenantCreateInput struct {
 // intPtr adapts an optional GraphQL Int (*int32) to the model's *int, preserving
 // nil (inherit-the-default) rather than coercing it to zero. Used by the CREATE
 // resolvers, which have nothing to preserve and so still take plain pointers; the
-// update path's counterpart is patch.IntPtr, which folds three states rather than two.
+// update path's counterpart is OptionalInt32.ApplyToIntPtr, which folds three states
+// rather than two.
 func intPtr(v *int32) *int {
 	if v == nil {
 		return nil

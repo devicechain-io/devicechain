@@ -109,4 +109,4 @@ mutation {
 }
 ```
 
-For `MQTT_BASIC`, also pass `credentialValue: "<password>"` (write-only). Registering a credential and listing a device's credentials both require the `device:write` authority; see [Reading a credential requires `device:write`](#reading-a-credential).
+For `MQTT_BASIC`, also pass `credentialValue: "<password>"` (write-only). The password is stored exactly as you send it, including any leading or trailing spaces, so it must match what the device presents byte for byte; an empty value stores no password. Registering a credential and listing a device's credentials both require the `device:write` authority; see [Reading a credential requires `device:write`](#reading-a-credential).

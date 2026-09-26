@@ -188,8 +188,8 @@ func (api *Api) UpdateProvisioningProfile(ctx context.Context, token string,
 		return nil, err
 	}
 
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	updated.Metadata = metadataJSON
 	updated.ProvisionKey = provisionKey
 	updated.ProvisionSecret = provisionSecret

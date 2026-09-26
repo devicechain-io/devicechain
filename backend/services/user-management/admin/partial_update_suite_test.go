@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-user-management/iam"
@@ -70,6 +69,9 @@ var (
 	renderList = putest.RenderStringList
 )
 
+// strp is an optional string input, for the create inputs whose text fields are optional.
+func strp(v string) *string { return &v }
+
 // configJSON renders a config map the way the family tables spell it.
 //
 // 🔴 IT MARSHALS THE MAP RATHER THAN RE-READING THE COLUMN'S RAW TEXT, so the seeded
@@ -116,67 +118,6 @@ func nullFloatStr(v *float64) string {
 		return nullMarker
 	}
 	return floatStr(*v)
-}
-
-// ─── field constructors core does not provide ──────────────────────────────
-//
-// Each is a shape core's rdb/partialupdatetest has no constructor for, built from the
-// same exported Field struct rather than by widening core — which is deliberate: this
-// slice consumes that package while it is still in review, and a service reaching in to
-// add a constructor for its own fixture is how a shared harness acquires per-service
-// special cases.
-
-// optionalBoolField describes a NULLABLE boolean column: settable, and CLEARABLE back to
-// NULL.
-//
-// 🔴 core has RequiredBoolField and deliberately no clearable counterpart, on the
-// reasoning that folding a null to `false` is the quietest possible data loss — false is
-// a value a caller could legitimately have sent. That reasoning is about a NOT NULL
-// column, where the zero value is not a state the entity may be in.
-//
-// aiExternalEnabled's column IS nullable, so clearing it writes NULL rather than folding
-// onto a zero. What that null means depends on who is reading, and it is worth being
-// precise because an earlier version of this comment was not: STORAGE and the admin
-// read-back (AdminTenant.aiExternalEnabled) keep nil and false apart, which is why the
-// operator can see whether a tenant was ever considered — but the ENFORCING read folds
-// them together, correctly and fail-closed. tenantGovernance and ai-inference's consent
-// check both treat nil as "not opted in", so clearing consent and declining it have the
-// same effect on whether data may leave the boundary, and only the audit trail
-// distinguishes them.
-func optionalBoolField[R any](name string, seeded bool,
-	pick func(*R) *dcgraphql.OptionalBool) putest.Field {
-	return putest.Field{
-		Name: name, Seeded: boolStr(seeded), Replace: boolStr(!seeded), Cleared: nullMarker,
-		Kind:    putest.Clearable,
-		Set:     func(req any, v string) { *pick(req.(*R)) = dcgraphql.OptionalBoolOf(v == "true") },
-		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedBool() },
-	}
-}
-
-// requiredStringListField describes a `[String!]` column that may be REPLACED but never
-// EMPTIED — an OAuth client's redirect allowlist or its scope set.
-//
-// 🔴 IT IS RequiredValue, NOT Clearable, AND core's OptionalStringListField CANNOT
-// express it: that constructor hard-codes Clearable and installs a SetEmpty, so the
-// harness would assert the list can be emptied and that [] and null agree in doing so.
-// Here they agree in being REFUSED, which is a different claim and is driven by
-// ARequiredFieldRefusesAnExplicitNull plus this package's own
-// TestEmptyListIsRefusedForAnOAuthClientsAllowlists — the [] spelling has no property in
-// the shared harness for a required list, so it needs one here.
-func requiredStringListField[R any](name string, seeded, replace []string,
-	pick func(*R) *dcgraphql.OptionalStringList) putest.Field {
-	if len(seeded) == 0 {
-		panic("partial update: list field " + name + " is seeded empty, so \"the update " +
-			"preserved it\" and \"it was never set\" are the same observation")
-	}
-	return putest.Field{
-		Name: name, Seeded: renderList(seeded), Replace: renderList(replace),
-		Kind: putest.RequiredValue,
-		Set: func(req any, v string) {
-			*pick(req.(*R)) = dcgraphql.OptionalStringListOf(putest.ParseStringList(v))
-		},
-		SetNull: func(req any) { *pick(req.(*R)) = dcgraphql.ClearedStringList() },
-	}
 }
 
 // TestPartialUpdate drives every property over every converted admin-plane family.

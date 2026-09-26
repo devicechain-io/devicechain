@@ -109,4 +109,4 @@ mutation {
 }
 ```
 
-Para `MQTT_BASIC`, pasa también `credentialValue: "<password>"` (solo escritura). Tanto registrar una credencial como listar las credenciales de un dispositivo requieren la autoridad `device:write`; consulta [Leer una credencial requiere `device:write`](#reading-a-credential).
+Para `MQTT_BASIC`, pasa también `credentialValue: "<password>"` (solo escritura). La contraseña se guarda exactamente como la envías, espacios iniciales o finales incluidos, así que debe coincidir byte a byte con lo que presenta el dispositivo; un valor vacío no guarda ninguna contraseña. Tanto registrar una credencial como listar las credenciales de un dispositivo requieren la autoridad `device:write`; consulta [Leer una credencial requiere `device:write`](#reading-a-credential).

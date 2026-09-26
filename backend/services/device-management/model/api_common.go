@@ -58,8 +58,8 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err

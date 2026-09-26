@@ -111,7 +111,8 @@ export function TierForm({
           // `undefined` is now the only spelling of "leave it alone", and the key has to
           // be dropped rather than nulled.
           config,
-          // Color is a full replace, like name: "" is a real value meaning "no pill".
+          // Color is always sent, like name: "" means "no pill", which the server stores
+          // as null and reads back as null.
           color,
         });
         onDone(t('tierUpdatedToast', { token: tier.token }));

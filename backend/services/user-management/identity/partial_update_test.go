@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -85,7 +86,7 @@ func profileFamily() putest.Family[*Manager] {
 		Migrate: []any{&iam.Identity{}, &iam.Role{}, &iam.Membership{}},
 		Seed: func(t *testing.T, m *Manager, ctx context.Context) {
 			if err := m.iam.CreateIdentity(ctx, &iam.Identity{
-				Email: profileEmail, FirstName: "Ada", LastName: "Lovelace",
+				Email: profileEmail, FirstName: nullStr("Ada"), LastName: nullStr("Lovelace"),
 				Enabled: true, PasswordHash: "unused-by-this-suite",
 			}); err != nil {
 				t.Fatalf("seed identity: %v", err)
@@ -96,7 +97,10 @@ func profileFamily() putest.Family[*Manager] {
 			if err != nil {
 				t.Fatalf("reload identity: %v", err)
 			}
-			return map[string]string{"firstName": id.FirstName, "lastName": id.LastName}
+			return map[string]string{
+				"firstName": putest.NullString(id.FirstName),
+				"lastName":  putest.NullString(id.LastName),
+			}
 		},
 		NewRequest: func() any { return new(ProfileUpdateRequest) },
 		Update: func(m *Manager, ctx context.Context, email string, req any) error {
@@ -104,15 +108,12 @@ func profileFamily() putest.Family[*Manager] {
 			return err
 		},
 		Fields: []putest.Field{
-			// 🔴 CLEARABLE, WITH "" AS THE CLEARED READING RATHER THAN NullMarker. The
-			// COLUMNS are nullable; iam.Identity holds them as a bare `string`, which cannot
-			// represent that null, so "" is the only empty this path writes and is what the
-			// row reads back as. See patch.EmptiableString for why ApplyToRequired — which
-			// would refuse the clear — is the wrong fold here, and for the model change that
-			// would make NullMarker the right reading instead.
-			putest.EmptiableStringField("firstName", "Ada", "Augusta",
+			// Ordinary nullable text: a clear reads back as NULL. The columns have always
+			// been nullable, and the model now holds sql.NullString, so NullMarker is the
+			// honest cleared reading rather than the "" a bare-string model could only write.
+			putest.OptionalStringField("firstName", "Ada", "Augusta",
 				func(r *ProfileUpdateRequest) *dcgraphql.OptionalString { return &r.FirstName }),
-			putest.EmptiableStringField("lastName", "Lovelace", "Byron",
+			putest.OptionalStringField("lastName", "Lovelace", "Byron",
 				func(r *ProfileUpdateRequest) *dcgraphql.OptionalString { return &r.LastName }),
 		},
 	}
@@ -148,21 +149,15 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 	})
 }
 
-// TestUpdateProfilePreservesTheEmptyStringClear pins the ONE behaviour this conversion
-// was required to carry across unchanged.
+// TestUpdateProfileClearsANameToNull pins the clear a display name has always offered:
+// "" clears it, and so does an explicit null — two spellings of one request.
 //
-// updateProfile was already effectively three-state through two nullable inline
-// arguments: a nil pointer left a field alone, and a "" pointer CLEARED it. The clear is
-// the part a mechanical conversion would have broken — ApplyToRequired refuses a blank
-// as "a null spelled differently", which is right for a vocabulary column and wrong for a
-// display name — so it is asserted here rather than left to the fold's own reasoning.
-//
-// The null is asserted beside it because null and "" must agree: under the old inline
-// arguments `firstName: null` was indistinguishable from omitting the argument, and the
-// conversion gives it a meaning. Making that meaning "clear", the same as "", is what
-// stops the input having two spellings that do different things for no reason a caller
-// could predict.
-func TestUpdateProfilePreservesTheEmptyStringClear(t *testing.T) {
+// The clear is the part a mechanical conversion would break — ApplyToRequired refuses a
+// blank as "a null spelled differently", which is right for a vocabulary column and wrong
+// for a display name — so it is asserted here rather than left to the fold's own
+// reasoning. What the clear WRITES is NULL: see TestAClearedNameIsStoredAsNull for the
+// column itself.
+func TestUpdateProfileClearsANameToNull(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		request *ProfileUpdateRequest
@@ -174,21 +169,21 @@ func TestUpdateProfilePreservesTheEmptyStringClear(t *testing.T) {
 			m := newPartialUpdateManager(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{})
 			ctx := putest.TenantContext(profileTenant)()
 			require.NoError(t, m.iam.CreateIdentity(ctx, &iam.Identity{
-				Email: profileEmail, FirstName: "Ada", LastName: "Lovelace",
+				Email: profileEmail, FirstName: nullStr("Ada"), LastName: nullStr("Lovelace"),
 				Enabled: true, PasswordHash: "unused-by-this-suite",
 			}))
 
 			updated, err := m.UpdateProfile(ctx, profileEmail, tc.request)
 			require.NoError(t, err)
-			require.Equal(t, "", updated.FirstName)
-			require.Equal(t, "Lovelace", updated.LastName, "clearing one name cleared the other")
+			require.Equal(t, sql.NullString{}, updated.FirstName)
+			require.Equal(t, nullStr("Lovelace"), updated.LastName, "clearing one name cleared the other")
 
 			// From the database, not from the returned struct: a fold that mutated its
 			// in-memory copy and wrote nothing would satisfy the assertion above.
 			reloaded, err := m.iam.IdentityByEmail(ctx, profileEmail)
 			require.NoError(t, err)
-			require.Equal(t, "", reloaded.FirstName)
-			require.Equal(t, "Lovelace", reloaded.LastName)
+			require.Equal(t, sql.NullString{}, reloaded.FirstName)
+			require.Equal(t, nullStr("Lovelace"), reloaded.LastName)
 		})
 	}
 }
@@ -204,7 +199,7 @@ func TestUpdateProfileWritesOnlyTheColumnsItWasGiven(t *testing.T) {
 	m := newPartialUpdateManager(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{})
 	ctx := putest.TenantContext(profileTenant)()
 	require.NoError(t, m.iam.CreateIdentity(ctx, &iam.Identity{
-		Email: profileEmail, FirstName: "Ada", LastName: "Lovelace",
+		Email: profileEmail, FirstName: nullStr("Ada"), LastName: nullStr("Lovelace"),
 		Enabled: true, PasswordHash: "the-hash",
 	}))
 
@@ -215,10 +210,12 @@ func TestUpdateProfileWritesOnlyTheColumnsItWasGiven(t *testing.T) {
 
 	reloaded, err := m.iam.IdentityByEmail(ctx, profileEmail)
 	require.NoError(t, err)
-	require.Equal(t, "Augusta", reloaded.FirstName)
-	require.Equal(t, "Lovelace", reloaded.LastName)
+	require.Equal(t, nullStr("Augusta"), reloaded.FirstName)
+	require.Equal(t, nullStr("Lovelace"), reloaded.LastName)
 	// The columns this mutation must never touch, whatever it is sent.
 	require.Equal(t, profileEmail, reloaded.Email)
 	require.Equal(t, "the-hash", reloaded.PasswordHash)
 	require.True(t, reloaded.Enabled)
 }
+
+func nullStr(v string) sql.NullString { return sql.NullString{String: v, Valid: true} }

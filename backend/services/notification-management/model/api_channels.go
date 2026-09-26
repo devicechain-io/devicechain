@@ -166,8 +166,8 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 		}
 	}
 
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	updated.Metadata = metadataJSON
 	updated.ChannelType = channelType
 	updated.Config = configJSON

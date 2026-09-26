@@ -80,12 +80,12 @@ func TestTheGeoFenceCapResolversDoNotCrossTheirValues(t *testing.T) {
 		GeoFencePositionBudget:  &budget,
 	}}
 
-	require.NotNil(t, r.GeoFencePositionCeiling())
-	require.EqualValues(t, 700, *r.GeoFencePositionCeiling(), "geoFencePositionCeiling resolved another cap")
-	require.NotNil(t, r.GeoFenceCeiling())
-	require.EqualValues(t, 250, *r.GeoFenceCeiling(), "geoFenceCeiling resolved another cap")
-	require.NotNil(t, r.GeoFencePositionBudget())
-	require.EqualValues(t, 90000, *r.GeoFencePositionBudget(), "geoFencePositionBudget resolved another cap")
+	require.NotNil(t, i32(r.GeoFencePositionCeiling()))
+	require.EqualValues(t, 700, *i32(r.GeoFencePositionCeiling()), "geoFencePositionCeiling resolved another cap")
+	require.NotNil(t, i32(r.GeoFenceCeiling()))
+	require.EqualValues(t, 250, *i32(r.GeoFenceCeiling()), "geoFenceCeiling resolved another cap")
+	require.NotNil(t, i32(r.GeoFencePositionBudget()))
+	require.EqualValues(t, 90000, *i32(r.GeoFencePositionBudget()), "geoFencePositionBudget resolved another cap")
 }
 
 // TestAnUnconfiguredTenantResolvesEveryCapToNull is the counterweight to the test above, and it
@@ -96,9 +96,9 @@ func TestTheGeoFenceCapResolversDoNotCrossTheirValues(t *testing.T) {
 // operator had genuinely misconfigured, and those must stay distinguishable.
 func TestAnUnconfiguredTenantResolvesEveryCapToNull(t *testing.T) {
 	r := &TenantGovernanceResolver{t: &iam.Tenant{}}
-	require.Nil(t, r.GeoFencePositionCeiling(), "an unconfigured tenant must resolve to null (inherit), not 0")
-	require.Nil(t, r.GeoFenceCeiling(), "an unconfigured tenant must resolve to null (inherit), not 0")
-	require.Nil(t, r.GeoFencePositionBudget(), "an unconfigured tenant must resolve to null (inherit), not 0")
+	require.Nil(t, i32(r.GeoFencePositionCeiling()), "an unconfigured tenant must resolve to null (inherit), not 0")
+	require.Nil(t, i32(r.GeoFenceCeiling()), "an unconfigured tenant must resolve to null (inherit), not 0")
+	require.Nil(t, i32(r.GeoFencePositionBudget()), "an unconfigured tenant must resolve to null (inherit), not 0")
 }
 
 // TestTheGeoFenceCapResolversWalkTheFullCascade. The resolvers call Effective*, not the raw
@@ -112,19 +112,19 @@ func TestTheGeoFenceCapResolversWalkTheFullCascade(t *testing.T) {
 		iam.GeoFencePositionBudgetConfigKey:  80000,
 	}}}
 	r := &TenantGovernanceResolver{t: tiered}
-	require.NotNil(t, r.GeoFencePositionCeiling())
-	require.EqualValues(t, 640, *r.GeoFencePositionCeiling(), "the resolver read the column instead of the cascade")
-	require.NotNil(t, r.GeoFenceCeiling())
-	require.EqualValues(t, 320, *r.GeoFenceCeiling(), "the resolver read the column instead of the cascade")
-	require.NotNil(t, r.GeoFencePositionBudget())
-	require.EqualValues(t, 80000, *r.GeoFencePositionBudget(), "the resolver read the column instead of the cascade")
+	require.NotNil(t, i32(r.GeoFencePositionCeiling()))
+	require.EqualValues(t, 640, *i32(r.GeoFencePositionCeiling()), "the resolver read the column instead of the cascade")
+	require.NotNil(t, i32(r.GeoFenceCeiling()))
+	require.EqualValues(t, 320, *i32(r.GeoFenceCeiling()), "the resolver read the column instead of the cascade")
+	require.NotNil(t, i32(r.GeoFencePositionBudget()))
+	require.EqualValues(t, 80000, *i32(r.GeoFencePositionBudget()), "the resolver read the column instead of the cascade")
 
 	// And an override beats the tier, end to end through the resolver — the half that proves
 	// the cascade is being walked rather than the tier being read directly.
 	override := 128
 	tiered.GeoFencePositionCeiling = &override
-	require.EqualValues(t, 128, *r.GeoFencePositionCeiling(), "a per-tenant override must beat the tier")
-	require.EqualValues(t, 320, *r.GeoFenceCeiling(), "overriding one cap must not disturb another")
+	require.EqualValues(t, 128, *i32(r.GeoFencePositionCeiling()), "a per-tenant override must beat the tier")
+	require.EqualValues(t, 320, *i32(r.GeoFenceCeiling()), "overriding one cap must not disturb another")
 }
 
 // TestTheServedCapsNeverExceedThePlatformMaximum ties this service's output to the bound the
@@ -138,7 +138,7 @@ func TestTheServedCapsNeverExceedThePlatformMaximum(t *testing.T) {
 		GeoFenceCeiling:         over(governance.MaxGeoFenceCeiling),
 		GeoFencePositionBudget:  over(governance.MaxTenantGeometryPositions),
 	}}
-	require.Nil(t, r.GeoFencePositionCeiling(), "an out-of-band over-large ceiling must serve as inherit")
-	require.Nil(t, r.GeoFenceCeiling(), "an out-of-band over-large fence count must serve as inherit")
-	require.Nil(t, r.GeoFencePositionBudget(), "an out-of-band over-large budget must serve as inherit")
+	require.Nil(t, i32(r.GeoFencePositionCeiling()), "an out-of-band over-large ceiling must serve as inherit")
+	require.Nil(t, i32(r.GeoFenceCeiling()), "an out-of-band over-large fence count must serve as inherit")
+	require.Nil(t, i32(r.GeoFencePositionBudget()), "an out-of-band over-large budget must serve as inherit")
 }

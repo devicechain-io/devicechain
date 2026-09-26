@@ -6,6 +6,9 @@ package graphql
 import (
 	"database/sql"
 	_ "embed"
+	"errors"
+	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -69,6 +72,55 @@ func NullBool(value sql.NullBool) *bool {
 		return &value.Bool
 	}
 	return nil
+}
+
+// NullStrNonEmpty reads a nullable text column whose EMPTY value means "none" — a name, an
+// endpoint override, a colour — as an optional String: NULL and the empty string both read
+// as null.
+//
+// NULL is what such a column holds for "none", and an appended migration converted the
+// empty strings earlier releases wrote. The empty-string half is still needed: during a
+// rolling upgrade a pod on the previous release keeps writing the empty string after the
+// new one has migrated, and a row it writes must not read back as a "" the API no longer
+// produces.
+func NullStrNonEmpty(value sql.NullString) *string {
+	if !value.Valid || value.String == "" {
+		return nil
+	}
+	return &value.String
+}
+
+// ErrStoredIntOutOfRange is returned by NullInt32 and IntPtrInt32 when a stored integer
+// cannot be represented as a GraphQL Int, which is 32-bit by specification.
+var ErrStoredIntOutOfRange = errors.New("stored value is outside the range of a GraphQL Int")
+
+// NullInt32 reads a nullable bigint column as an optional GraphQL Int. A stored value
+// outside int32 is REFUSED, not wrapped: a wrapped number is a plausible wrong answer — a
+// throttle of 2147483648 seconds reads as -2147483648 — and a resolver error is a loud one.
+// field is the schema's name for it, so the error names something a caller can act on.
+func NullInt32(field string, value sql.NullInt64) (*int32, error) {
+	if !value.Valid {
+		return nil, nil
+	}
+	return int32InRange(field, value.Int64)
+}
+
+// IntPtrInt32 reads a nullable column the model holds as *int (a tenant governance
+// override) as an optional GraphQL Int, with NullInt32's refusal. nil stays nil — "inherit"
+// — and is never coerced to zero.
+func IntPtrInt32(field string, value *int) (*int32, error) {
+	if value == nil {
+		return nil, nil
+	}
+	return int32InRange(field, int64(*value))
+}
+
+func int32InRange(field string, v int64) (*int32, error) {
+	if v < math.MinInt32 || v > math.MaxInt32 {
+		return nil, fmt.Errorf("%s: %w (%d)", field, ErrStoredIntOutOfRange, v)
+	}
+	n := int32(v)
+	return &n, nil
 }
 
 // Format time as a string.

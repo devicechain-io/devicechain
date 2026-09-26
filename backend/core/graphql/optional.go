@@ -137,6 +137,14 @@ func (o OptionalString) ApplyTo(current *string) *string {
 //
 // If a genuinely nullable-in-the-model-but-not-in-the-column case ever appears, the
 // honest fix is to make the column nullable, not to bring this back.
+//
+// That fix has been applied once already. Three models were used to argue for an
+// "emptiable" fold that wrote "" for a null — an identity's first and last name, an AI
+// provider's endpoint override, and a tier's colour — and all three now hold
+// sql.NullString and fold with ApplyToNullString. The first two columns were already
+// nullable; the colour column was made nullable by an appended migration. No caller that
+// wants the zero-value fold is left, and TestNoFoldCollapsesNullToAZeroValue keeps one
+// from coming back under another name.
 
 // OptionalStringOf builds a field in the "sent with a value" state. Constructors
 // exist for the callers that build requests in Go rather than receiving them off

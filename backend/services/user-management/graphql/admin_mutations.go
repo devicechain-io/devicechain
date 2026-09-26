@@ -31,8 +31,8 @@ func (r *AdminResolver) CreateIdentity(ctx context.Context, args struct {
 	id, err := r.getAdminService(ctx).CreateIdentity(ctx, admin.CreateIdentityInput{
 		Email:       args.Request.Email,
 		Password:    args.Request.Password,
-		FirstName:   strOrEmpty(args.Request.FirstName),
-		LastName:    strOrEmpty(args.Request.LastName),
+		FirstName:   args.Request.FirstName,
+		LastName:    args.Request.LastName,
 		Enabled:     args.Request.Enabled,
 		SystemRoles: args.Request.SystemRoles,
 	})

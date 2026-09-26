@@ -192,7 +192,7 @@ func tenantFamily() putest.Family[*Service] {
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalString { return &r.TierToken }),
 			putest.OptionalStringField("config", seededConfig, replaceConfig,
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalString { return &r.Config }),
-			optionalBoolField("aiExternalEnabled", true,
+			putest.OptionalBoolField("aiExternalEnabled", true,
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalBool { return &r.AiExternalEnabled }),
 			putest.OptionalFloat64Field("ingestMessagesPerSecond", 11, 31,
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalFloat64 { return &r.IngestMessagesPerSecond }),
@@ -237,7 +237,7 @@ func tenantTierFamily() putest.Family[*Service] {
 			}
 			if _, err := s.CreateTenantTier(ctx, TierInput{
 				Token: token, Name: "Gold", Description: "The gold packaging",
-				Config: cfg, Color: string(iam.TierColorAmber),
+				Config: cfg, Color: strp(string(iam.TierColorAmber)),
 			}); err != nil {
 				t.Fatalf("seed tier: %v", err)
 			}
@@ -251,7 +251,7 @@ func tenantTierFamily() putest.Family[*Service] {
 				"name":        nullStr(tier.Name),
 				"description": nullStr(tier.Description),
 				"config":      configJSON(tier.Config),
-				"color":       tier.Color,
+				"color":       nullStr(tier.Color),
 			}
 		},
 		NewRequest: func() any { return new(TierUpdateRequest) },
@@ -266,12 +266,8 @@ func tenantTierFamily() putest.Family[*Service] {
 				func(r *TierUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
 			putest.OptionalStringField("config", seededConfig, replaceConfig,
 				func(r *TierUpdateRequest) *dcgraphql.OptionalString { return &r.Config }),
-			// 🔴 THE GENUINE COUNTER-CASE. iam_tenant_tiers.color is `not null default ''`,
-			// so "" — meaning "no pill" — is a value the column HOLDS rather than an
-			// absence, and its cleared reading is "" rather than NullMarker. This is the
-			// column core's ApplyToValue deletion note did not carve out: refusing the
-			// clear would remove a capability the create path has always had.
-			putest.EmptiableStringField("color", string(iam.TierColorAmber), string(iam.TierColorViolet),
+			// Ordinary nullable text: "no pill" is NULL, so a clear reads back NullMarker.
+			putest.OptionalStringField("color", string(iam.TierColorAmber), string(iam.TierColorViolet),
 				func(r *TierUpdateRequest) *dcgraphql.OptionalString { return &r.Color }),
 		},
 	}
@@ -319,12 +315,13 @@ func oauthClientFamily() putest.Family[*Service] {
 				func(r *OAuthClientUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
 			putest.OptionalStringField("description", "The agent client", "Rewritten",
 				func(r *OAuthClientUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			// Replaceable, never emptiable: the harness's ARequiredFieldRefusesAnExplicitNull
-			// drives the null and this package's own test drives the [] that means the same
-			// thing.
-			requiredStringListField("redirectUris", seededURIs, replaceURIs,
+			// Replaceable, never emptiable: the shared harness drives BOTH spellings of
+			// "empty" — ARequiredFieldRefusesAnExplicitNull the null, and
+			// EmptyListIsTheSameAsANull the [] a form actually sends — and requires both to
+			// be refused, totally.
+			putest.RequiredStringListField("redirectUris", seededURIs, replaceURIs,
 				func(r *OAuthClientUpdateRequest) *dcgraphql.OptionalStringList { return &r.RedirectUris }),
-			requiredStringListField("scopes", seededScopes, replaceScopes,
+			putest.RequiredStringListField("scopes", seededScopes, replaceScopes,
 				func(r *OAuthClientUpdateRequest) *dcgraphql.OptionalStringList { return &r.Scopes }),
 		},
 	}

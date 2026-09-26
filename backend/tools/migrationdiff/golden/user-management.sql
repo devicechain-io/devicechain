@@ -281,7 +281,7 @@ CREATE TABLE "user-management".iam_tenant_tiers (
  token character varying(128) NOT NULL,
  config text,
  display_order bigint DEFAULT 0 NOT NULL,
- color character varying(32) DEFAULT ''::character varying NOT NULL
+ color character varying(32)
 );
 CREATE TABLE "user-management".iam_tenants (
  id bigint NOT NULL,

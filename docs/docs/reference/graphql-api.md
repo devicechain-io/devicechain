@@ -338,7 +338,6 @@ exception follows the three states above: absent leaves it alone, `null` clears 
 | `config` on `updateTenantTier` | **Kept.** Clearing a tier's settings re-prices every tenant at it, so it is not reachable by omission — send `null` or `{}` to clear |
 | `selector` on `updateEntityGroup` | **Kept** when omitted. Unlike most partial-update fields it cannot be *cleared*: `null` is refused, because a dynamic group with no selector matches nothing and cannot be repaired. A static group is refused a selector outright |
 | `definition` on `updateDashboard` | **Kept** when omitted, which is how you rename a dashboard without resending its document. Like `selector` above it cannot be *cleared*: `null` is refused, because a dashboard with no definition is not a thing. A malformed one refuses the whole update, so a rename sent with it is not applied either |
-| `firstName` / `lastName` on `updateProfile` | **Kept.** An empty string clears, and `null` means the same thing — these are the display-name columns, where "empty" is a value a person may legitimately have rather than an absence |
 | `credentialType` on `updateProvisioningProfile` | **Not in the update input.** Provisioning can mint exactly one credential type today, so the field would only ever restate what is stored. It used to be *reset* to `ACCESS_TOKEN` by any update that omitted it |
 | `activeVersion` on a device profile or an entity group | Nothing: it is not writable here at all, and moves only by publish and rollback |
 | `memberType` / `membershipMode` on `updateEntityGroup` | **Not in the update input.** Both are identity, so a change is unrepresentable rather than refused |
@@ -364,6 +363,18 @@ teaches, and clients written against one still do it. Filling in every field mea
 `null` deletes the credential too. That is the platform's ordinary meaning of a null rather than an
 exception: a null clears the field it names. The inversion these fields used to carry, where
 null preserved and only `""` deleted, is gone.
+
+#### Text is trimmed; credentials are not {#text-and-credentials}
+
+A name, a description, and similar display text — a person's first or last name, an icon, a unit,
+a tier's color — is stored without its leading and trailing spaces, and an empty or
+whitespace-only value clears it, so it reads back as `null`. That happens on create and on update
+alike, so sending back a value you read is never a change. Structured text, such as `metadata`, a
+channel's `config` or a dashboard `definition`, is not trimmed.
+
+A device credential's `credentialValue` is not trimmed either: it is stored exactly as you send
+it, spaces included, because a device presents its password byte for byte. Only an empty
+`credentialValue` stores no password, and a credential with no password cannot authenticate.
 
 ### Which mutations are partial updates {#which-mutations-are-partial-updates}
 
@@ -462,7 +473,8 @@ create. An OAuth client's redirect URIs and scopes may not: an empty redirect al
 nothing, so the client could never complete an authorization.
 
 `updateProfile` now takes `request: ProfileUpdateRequest!` instead of bare `firstName` / `lastName`
-arguments. Its behaviour is unchanged: it writes only the names you send, and `""` still clears one.
+arguments. It writes only the names you send. A name is trimmed like other display text, and `""`,
+a whitespace-only value or `null` clears it, so it reads back as `null`.
 
 #### Fields worth knowing about on the converted mutations {#two-fields-on-converted-mutations}
 

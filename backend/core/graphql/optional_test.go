@@ -5,6 +5,10 @@ package graphql
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"reflect"
 	"strings"
 	"testing"
@@ -445,8 +449,7 @@ func TestApplyTo(t *testing.T) {
 // method set is the thing being asserted, so a reflection check is the assertion —
 // there is no behaviour left to drive.
 func TestApplyToValueHasNotComeBack(t *testing.T) {
-	for _, v := range []any{OptionalString{}, OptionalBool{}, OptionalInt32{}, OptionalFloat64{},
-		OptionalID{}, OptionalStringList{}} {
+	for _, v := range optionalTypes {
 		rt := reflect.TypeOf(v)
 		if _, found := rt.MethodByName("ApplyToValue"); found {
 			t.Errorf("%s has an ApplyToValue again: folding a null to the zero value accepts "+
@@ -459,6 +462,101 @@ func TestApplyToValueHasNotComeBack(t *testing.T) {
 			t.Errorf("%s has no ApplyTo, so the absence of ApplyToValue proves nothing about "+
 				"this check", rt.Name())
 		}
+	}
+}
+
+// optionalTypes is every Optional* type this package declares. TestTheOptionalTypeListIsComplete
+// derives the same set from the package source, so a type added later cannot escape the
+// checks that iterate this list.
+var optionalTypes = []any{OptionalString{}, OptionalBool{}, OptionalInt32{}, OptionalFloat64{},
+	OptionalID{}, OptionalStringList{}}
+
+// 🔴 NO FOLD MAY COLLAPSE A NULL TO A ZERO VALUE, UNDER ANY NAME.
+//
+// TestApplyToValueHasNotComeBack pins the one NAME. The shape is what matters: a fold
+// whose result is a bare string, bool or number has nowhere to put a null except the zero
+// value, which is ApplyToValue however it is spelled — the private "emptiable" fold that
+// user-management carried until its three columns learned to hold NULL was exactly that.
+//
+// So every ApplyTo* method must be able to SAY null or refuse it: it returns an error last
+// (it refuses), or its first result is a pointer, a slice, or a sql.Null* column type.
+func TestNoFoldCollapsesNullToAZeroValue(t *testing.T) {
+	folds := 0
+	for _, v := range optionalTypes {
+		rt := reflect.TypeOf(v)
+		for i := 0; i < rt.NumMethod(); i++ {
+			m := rt.Method(i)
+			if !strings.HasPrefix(m.Name, "ApplyTo") {
+				continue
+			}
+			folds++
+			ft := m.Type
+			if n := ft.NumOut(); n > 0 && ft.Out(n-1) == reflect.TypeOf((*error)(nil)).Elem() {
+				continue
+			}
+			first := ft.Out(0)
+			switch {
+			case first.Kind() == reflect.Pointer, first.Kind() == reflect.Slice:
+				continue
+			case first.Kind() == reflect.Struct && first.PkgPath() == "database/sql" &&
+				strings.HasPrefix(first.Name(), "Null"):
+				continue
+			}
+			t.Errorf("%s.%s returns %s and no error, so it has nowhere to put an explicit null "+
+				"but the zero value — that is the deleted ApplyToValue under another name. "+
+				"Return a nullable column type, or refuse the null.", rt.Name(), m.Name, first)
+		}
+	}
+	// The counterweight: a loop that found no folds would report nothing for the wrong
+	// reason. Each type has at least ApplyTo.
+	if folds < len(optionalTypes) {
+		t.Fatalf("found %d ApplyTo* methods over %d types — the check is not seeing the folds",
+			folds, len(optionalTypes))
+	}
+}
+
+// TestTheOptionalTypeListIsComplete asks the package SOURCE which Optional* types it
+// declares, so optionalTypes cannot silently fall behind: a seventh type added without a
+// row there would otherwise escape every check that iterates it.
+func TestTheOptionalTypeListIsComplete(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi fs.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse package: %v", err)
+	}
+	declared := map[string]bool{}
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			for _, decl := range f.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || gd.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					ts := spec.(*ast.TypeSpec)
+					if _, isStruct := ts.Type.(*ast.StructType); isStruct &&
+						strings.HasPrefix(ts.Name.Name, "Optional") {
+						declared[ts.Name.Name] = true
+					}
+				}
+			}
+		}
+	}
+	listed := map[string]bool{}
+	for _, v := range optionalTypes {
+		listed[reflect.TypeOf(v).Name()] = true
+	}
+	for name := range declared {
+		if !listed[name] {
+			t.Errorf("%s is declared in this package but missing from optionalTypes, so no fold "+
+				"check covers it", name)
+		}
+	}
+	if len(declared) == 0 || len(declared) != len(listed) {
+		t.Errorf("the source declares %d Optional* struct types and optionalTypes lists %d",
+			len(declared), len(listed))
 	}
 }
 

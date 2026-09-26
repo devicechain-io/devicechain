@@ -10,7 +10,6 @@ import (
 	"errors"
 	"time"
 
-	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -139,10 +138,10 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	// mentioned is not in the statement at all, so it cannot be written from a stale read.
 	assignments := map[string]any{}
 	if request.Name.Set {
-		assignments["name"] = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
+		assignments["name"] = request.Name.ApplyToNullString(current.Name)
 	}
 	if request.Description.Set {
-		assignments["description"] = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
+		assignments["description"] = request.Description.ApplyToNullString(current.Description)
 	}
 	// definition takes ApplyToRequired, which REFUSES an explicit null — see
 	// DashboardUpdateRequest in model.go for why a dashboard may not be left without one.

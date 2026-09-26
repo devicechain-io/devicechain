@@ -330,8 +330,8 @@ func (api *Api) UpdateGeoFence(ctx context.Context, token string,
 	// blocking. An operator sizing an outage's blast radius needs the repeating version.
 	capsAttempt := api.geoFenceCaps(ctx)
 	updated := matches[0]
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err

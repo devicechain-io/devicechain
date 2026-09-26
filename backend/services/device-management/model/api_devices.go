@@ -168,21 +168,21 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 		}
 	}
 
-	found.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(found.Name)))
-	found.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(found.Description)))
-	found.ImageUrl = rdb.NullStrOf(request.ImageUrl.ApplyTo(dcgraphql.NullStr(found.ImageUrl)))
-	found.Icon = rdb.NullStrOf(request.Icon.ApplyTo(dcgraphql.NullStr(found.Icon)))
-	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(found.BackgroundColor)))
-	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(found.ForegroundColor)))
-	found.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(found.BorderColor)))
+	found.Name = request.Name.ApplyToNullString(found.Name)
+	found.Description = request.Description.ApplyToNullString(found.Description)
+	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
+	found.Icon = request.Icon.ApplyToNullString(found.Icon)
+	found.BackgroundColor = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
+	found.ForegroundColor = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
+	found.BorderColor = request.BorderColor.ApplyToNullString(found.BorderColor)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
 	found.Metadata = metadataJSON
 	found.ProfileId = profileId
-	found.Manufacturer = rdb.NullStrOf(request.Manufacturer.ApplyTo(dcgraphql.NullStr(found.Manufacturer)))
-	found.ModelName = rdb.NullStrOf(request.Model.ApplyTo(dcgraphql.NullStr(found.ModelName)))
+	found.Manufacturer = request.Manufacturer.ApplyToNullString(found.Manufacturer)
+	found.ModelName = request.Model.ApplyToNullString(found.ModelName)
 
 	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {
@@ -654,9 +654,9 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		updated.DeviceTypeId = types[0].ID
 	}
 
-	updated.ExternalId = rdb.NullStrOf(request.ExternalId.ApplyTo(dcgraphql.NullStr(updated.ExternalId)))
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.ExternalId = request.ExternalId.ApplyToNullString(updated.ExternalId)
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err

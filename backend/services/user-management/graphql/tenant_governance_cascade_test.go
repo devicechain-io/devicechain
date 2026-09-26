@@ -39,15 +39,15 @@ func TestGovernanceCascadeTierBelowOverride(t *testing.T) {
 		}}
 		// The audited exception (decision 7) beats the packaging default.
 		require.Equal(t, float64(5000), *r.IngestMessagesPerSecond())
-		require.EqualValues(t, 9000, *r.IngestBurst())
+		require.EqualValues(t, 9000, *i32(r.IngestBurst()))
 	})
 
 	t.Run("tier supplies the ceiling when the tenant declares none", func(t *testing.T) {
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTier()}}
 		require.Equal(t, float64(2000), *r.IngestMessagesPerSecond())
-		require.EqualValues(t, 4000, *r.IngestBurst())
+		require.EqualValues(t, 4000, *i32(r.IngestBurst()))
 		require.Equal(t, float64(200), *r.OutboundMessagesPerSecond())
-		require.EqualValues(t, 400, *r.OutboundBurst())
+		require.EqualValues(t, 400, *i32(r.OutboundBurst()))
 	})
 
 	t.Run("null when neither declares — the consumer applies the platform default", func(t *testing.T) {
@@ -58,9 +58,9 @@ func TestGovernanceCascadeTierBelowOverride(t *testing.T) {
 			Tier: &iam.TenantTier{Token: iam.TierSilverToken},
 		}}
 		require.Nil(t, r.IngestMessagesPerSecond())
-		require.Nil(t, r.IngestBurst())
+		require.Nil(t, i32(r.IngestBurst()))
 		require.Nil(t, r.OutboundMessagesPerSecond())
-		require.Nil(t, r.OutboundBurst())
+		require.Nil(t, i32(r.OutboundBurst()))
 	})
 
 	t.Run("the dimensions are independent", func(t *testing.T) {
@@ -71,7 +71,7 @@ func TestGovernanceCascadeTierBelowOverride(t *testing.T) {
 			IngestMessagesPerSecond: f64(5000),
 		}}
 		require.Equal(t, float64(5000), *r.IngestMessagesPerSecond())
-		require.EqualValues(t, 4000, *r.IngestBurst(), "burst still comes from the tier")
+		require.EqualValues(t, 4000, *i32(r.IngestBurst()), "burst still comes from the tier")
 		require.Equal(t, float64(200), *r.OutboundMessagesPerSecond())
 	})
 }
@@ -88,15 +88,15 @@ func goldTierWithShedPriority() *iam.TenantTier {
 func TestShedPriorityCascadeOnTheWire(t *testing.T) {
 	t.Run("override wins over the tier", func(t *testing.T) {
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithShedPriority(), ShedPriority: ip(10)}}
-		require.EqualValues(t, 10, *r.ShedPriority())
+		require.EqualValues(t, 10, *i32(r.ShedPriority()))
 	})
 	t.Run("tier supplies it when the tenant declares none", func(t *testing.T) {
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithShedPriority()}}
-		require.EqualValues(t, 90, *r.ShedPriority())
+		require.EqualValues(t, 90, *i32(r.ShedPriority()))
 	})
 	t.Run("null when neither declares — the reader applies the fail-safe", func(t *testing.T) {
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: &iam.TenantTier{Token: iam.TierSilverToken}}}
-		require.Nil(t, r.ShedPriority())
+		require.Nil(t, i32(r.ShedPriority()))
 	})
 }
 
@@ -108,12 +108,12 @@ func TestShedPriorityCascadeOnTheWire(t *testing.T) {
 func TestAdminShedPriorityIsReadable(t *testing.T) {
 	// A set override reads back as itself.
 	r := &AdminTenantResolver{M: iam.Tenant{ShedPriority: ip(95)}}
-	got := r.ShedPriority()
+	got := i32(r.ShedPriority())
 	require.NotNil(t, got, "the shedPriority override must be readable on AdminTenant (else an edit silently nulls it)")
 	require.EqualValues(t, 95, *got)
 
 	// An unset override reads back as null (inherit), like every other override.
-	require.Nil(t, (&AdminTenantResolver{M: iam.Tenant{}}).ShedPriority())
+	require.Nil(t, i32((&AdminTenantResolver{M: iam.Tenant{}}).ShedPriority()))
 }
 
 // goldTierWithHeldCommandCeiling is a gold tier that packages extra headroom for an
@@ -129,22 +129,22 @@ func goldTierWithHeldCommandCeiling() *iam.TenantTier {
 func TestHeldCommandCeilingCascadeOnTheWire(t *testing.T) {
 	t.Run("override wins over the tier", func(t *testing.T) {
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithHeldCommandCeiling(), HeldCommandCeiling: ip(200)}}
-		require.EqualValues(t, 200, *r.HeldCommandCeiling())
+		require.EqualValues(t, 200, *i32(r.HeldCommandCeiling()))
 	})
 	t.Run("tier supplies it when the tenant declares none", func(t *testing.T) {
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithHeldCommandCeiling()}}
-		require.EqualValues(t, 50000, *r.HeldCommandCeiling())
+		require.EqualValues(t, 50000, *i32(r.HeldCommandCeiling()))
 	})
 	t.Run("null when neither declares — the reader applies its own default", func(t *testing.T) {
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: &iam.TenantTier{Token: iam.TierSilverToken}}}
-		require.Nil(t, r.HeldCommandCeiling())
+		require.Nil(t, i32(r.HeldCommandCeiling()))
 	})
 	t.Run("a junk override falls through to the tier, not past it", func(t *testing.T) {
 		// Same asymmetry as the rate ceilings: the consumer floors an unusable value to
 		// its OWN default, so passing one through here would skip the tier entirely and
 		// hand a gold tenant the service default instead of its packaged headroom.
 		r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: goldTierWithHeldCommandCeiling(), HeldCommandCeiling: ip(0)}}
-		require.EqualValues(t, 50000, *r.HeldCommandCeiling())
+		require.EqualValues(t, 50000, *i32(r.HeldCommandCeiling()))
 	})
 }
 
@@ -155,12 +155,12 @@ func TestHeldCommandCeilingCascadeOnTheWire(t *testing.T) {
 // default happens to allow, with nothing in the API to show it ever had a bound.
 func TestAdminHeldCommandCeilingIsReadable(t *testing.T) {
 	r := &AdminTenantResolver{M: iam.Tenant{HeldCommandCeiling: ip(2500)}}
-	got := r.HeldCommandCeiling()
+	got := i32(r.HeldCommandCeiling())
 	require.NotNil(t, got, "the heldCommandCeiling override must be readable on AdminTenant (else an edit silently nulls it)")
 	require.EqualValues(t, 2500, *got)
 
 	// An unset override reads back as null (inherit), like every other override.
-	require.Nil(t, (&AdminTenantResolver{M: iam.Tenant{}}).HeldCommandCeiling())
+	require.Nil(t, i32((&AdminTenantResolver{M: iam.Tenant{}}).HeldCommandCeiling()))
 }
 
 // TestUnusableOverrideFallsThroughToTheTierNotPastIt pins the one case where "the
@@ -181,7 +181,7 @@ func TestUnusableOverrideFallsThroughToTheTierNotPastIt(t *testing.T) {
 	}}
 	require.Equal(t, float64(2000), *junk.IngestMessagesPerSecond(),
 		"a junk override must fall through to the tier, not past it to the platform default")
-	require.EqualValues(t, 4000, *junk.IngestBurst())
+	require.EqualValues(t, 4000, *i32(junk.IngestBurst()))
 
 	// With no tier setting either, it still degrades to null (inherit the platform
 	// default) — never to the junk value itself.
@@ -201,9 +201,9 @@ func TestUnusableOverrideFallsThroughToTheTierNotPastIt(t *testing.T) {
 func TestGovernanceCascadeFailsSafeWithoutTier(t *testing.T) {
 	r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: nil}}
 	require.Nil(t, r.IngestMessagesPerSecond())
-	require.Nil(t, r.IngestBurst())
+	require.Nil(t, i32(r.IngestBurst()))
 	require.Nil(t, r.AiInferenceRequestsPerMinute())
-	require.Nil(t, r.AiInferenceBurst())
+	require.Nil(t, i32(r.AiInferenceBurst()))
 
 	withOverride := &TenantGovernanceResolver{t: &iam.Tenant{
 		Tier:                    nil,
@@ -223,7 +223,7 @@ func TestAiInferenceCascade(t *testing.T) {
 	}}
 	r := &TenantGovernanceResolver{t: &iam.Tenant{Tier: tier}}
 	require.Equal(t, float64(60), *r.AiInferenceRequestsPerMinute(), "declared per minute, unconverted")
-	require.EqualValues(t, 30, *r.AiInferenceBurst())
+	require.EqualValues(t, 30, *i32(r.AiInferenceBurst()))
 
 	// Consent is NOT part of the cascade: it is a boolean gate with no default to
 	// inherit, so a tier can never grant it.

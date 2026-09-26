@@ -280,8 +280,10 @@ type DeviceCredentialUpdateRequest struct {
 	CredentialType dcgraphql.OptionalString
 	CredentialId   dcgraphql.OptionalString
 	// CredentialValue is the secret material and IS nullable — a credential type that
-	// carries no secret is a real state — so an explicit null clears it. Omitting it
-	// leaves the secret in place, which is what makes a metadata edit safe.
+	// carries no secret is a real state — so an explicit null (or "") clears it. Omitting
+	// it leaves the secret in place, which is what makes a metadata edit safe. A value is
+	// stored EXACTLY AS SENT, surrounding whitespace included, because a device presents
+	// it byte for byte.
 	CredentialValue dcgraphql.OptionalString
 	// Enabled sits on a NOT NULL column; a null is refused rather than folded to false,
 	// which would silently disable the credential.

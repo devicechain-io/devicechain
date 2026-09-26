@@ -63,9 +63,9 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 
 	found := matches[0]
 
-	found.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(found.Name)))
-	found.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(found.Description)))
-	found.Category = rdb.NullStrOf(request.Category.ApplyTo(dcgraphql.NullStr(found.Category)))
+	found.Name = request.Name.ApplyToNullString(found.Name)
+	found.Description = request.Description.ApplyToNullString(found.Description)
+	found.Category = request.Category.ApplyToNullString(found.Category)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err

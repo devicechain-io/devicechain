@@ -72,9 +72,9 @@ func TestEffectiveSettingsReportsTierAndDelta(t *testing.T) {
 	assert.Equal(t, float64(5000), *ingest.Rate().Override())
 
 	assert.Equal(t, string(iam.SourceOverride), ingest.Burst().Source())
-	assert.EqualValues(t, 9000, *ingest.Burst().Value())
-	assert.EqualValues(t, 4000, *ingest.Burst().Tier())
-	assert.EqualValues(t, 9000, *ingest.Burst().Override())
+	assert.EqualValues(t, 9000, *i32(ingest.Burst().Value()))
+	assert.EqualValues(t, 4000, *i32(ingest.Burst().Tier()))
+	assert.EqualValues(t, 9000, *i32(ingest.Burst().Override()))
 
 	// An un-overridden dimension reports the tier as the winner and carries no
 	// delta — nil, not zero: "no exception" and "an exception of 0" are opposite
@@ -84,7 +84,7 @@ func TestEffectiveSettingsReportsTierAndDelta(t *testing.T) {
 	assert.Equal(t, float64(200), *outbound.Rate().Value())
 	assert.Equal(t, float64(200), *outbound.Rate().Tier())
 	assert.Nil(t, outbound.Rate().Override())
-	assert.Nil(t, outbound.Burst().Override())
+	assert.Nil(t, i32(outbound.Burst().Override()))
 }
 
 // TestEffectiveSettingsNamesThePlatformDefaultWithoutInventingIt pins the honest
@@ -110,7 +110,7 @@ func TestEffectiveSettingsNamesThePlatformDefaultWithoutInventingIt(t *testing.T
 		assert.Nil(t, row.Rate().Override(), name)
 
 		assert.Equal(t, string(iam.SourcePlatformDefault), row.Burst().Source(), name)
-		assert.Nil(t, row.Burst().Value(), name)
+		assert.Nil(t, i32(row.Burst().Value()), name)
 	}
 }
 

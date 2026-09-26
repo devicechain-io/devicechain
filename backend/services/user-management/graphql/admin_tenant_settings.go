@@ -8,6 +8,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/governance"
+	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -71,20 +72,18 @@ type AdminBurstSettingResolver struct {
 	override *int
 }
 
-func (r *AdminBurstSettingResolver) Source() string   { return string(r.source) }
-func (r *AdminBurstSettingResolver) Value() *int32    { return int32Ptr(r.value) }
-func (r *AdminBurstSettingResolver) Tier() *int32     { return int32Ptr(r.tier) }
-func (r *AdminBurstSettingResolver) Override() *int32 { return int32Ptr(r.override) }
+func (r *AdminBurstSettingResolver) Source() string { return string(r.source) }
 
-// int32Ptr adapts an optional int to the GraphQL Int, preserving nil (which means
-// "this level declares none" — never zero, which would read as a ceiling admitting
-// nothing).
-func int32Ptr(v *int) *int32 {
-	if v == nil {
-		return nil
-	}
-	i := int32(*v)
-	return &i
+// Value, Tier and Override adapt each level's optional int to the GraphQL Int through
+// util.IntPtrInt32: nil stays nil ("this level declares none" — never zero, which would
+// read as a ceiling admitting nothing), and a value the Int cannot hold is refused rather
+// than wrapped.
+func (r *AdminBurstSettingResolver) Value() (*int32, error) {
+	return util.IntPtrInt32("value", r.value)
+}
+func (r *AdminBurstSettingResolver) Tier() (*int32, error) { return util.IntPtrInt32("tier", r.tier) }
+func (r *AdminBurstSettingResolver) Override() (*int32, error) {
+	return util.IntPtrInt32("override", r.override)
 }
 
 // AdminTenantSettingResolver resolves what a tenant is metered at for one dimension.

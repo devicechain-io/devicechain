@@ -169,8 +169,8 @@ func (s *Service) UpdateOAuthClient(ctx context.Context, clientId string, reques
 	if err := validateClientScopes(scopes); err != nil {
 		return nil, err
 	}
-	c.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(c.Name)))
-	c.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(c.Description)))
+	c.Name = request.Name.ApplyToNullString(c.Name)
+	c.Description = request.Description.ApplyToNullString(c.Description)
 	c.RedirectURIs = uris
 	c.Scopes = scopes
 	if err := s.iam.UpdateOAuthClient(ctx, c); err != nil {

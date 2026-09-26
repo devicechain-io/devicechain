@@ -66,13 +66,13 @@ func (api *Api) UpdateAreaType(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-	found.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(found.Name)))
-	found.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(found.Description)))
-	found.ImageUrl = rdb.NullStrOf(request.ImageUrl.ApplyTo(dcgraphql.NullStr(found.ImageUrl)))
-	found.Icon = rdb.NullStrOf(request.Icon.ApplyTo(dcgraphql.NullStr(found.Icon)))
-	found.BackgroundColor = rdb.NullStrOf(request.BackgroundColor.ApplyTo(dcgraphql.NullStr(found.BackgroundColor)))
-	found.ForegroundColor = rdb.NullStrOf(request.ForegroundColor.ApplyTo(dcgraphql.NullStr(found.ForegroundColor)))
-	found.BorderColor = rdb.NullStrOf(request.BorderColor.ApplyTo(dcgraphql.NullStr(found.BorderColor)))
+	found.Name = request.Name.ApplyToNullString(found.Name)
+	found.Description = request.Description.ApplyToNullString(found.Description)
+	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
+	found.Icon = request.Icon.ApplyToNullString(found.Icon)
+	found.BackgroundColor = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
+	found.ForegroundColor = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
+	found.BorderColor = request.BorderColor.ApplyToNullString(found.BorderColor)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
@@ -194,8 +194,8 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 		updated.AreaTypeId = types[0].ID
 	}
 
-	updated.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(updated.Name)))
-	updated.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(updated.Description)))
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err

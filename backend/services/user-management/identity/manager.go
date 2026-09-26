@@ -29,7 +29,6 @@ import (
 	"github.com/devicechain-io/dc-user-management/basemap"
 	"github.com/devicechain-io/dc-user-management/branding"
 	"github.com/devicechain-io/dc-user-management/iam"
-	"github.com/devicechain-io/dc-user-management/patch"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -697,25 +696,17 @@ func (m *Manager) CurrentUser(ctx context.Context, email string) (*iam.Identity,
 // identity itself is named by the caller's own token rather than by anything in the
 // payload — so editing someone else's profile is unrepresentable, not merely refused.
 //
-// This mutation was ALREADY effectively three-state before the conversion, through two
-// nullable inline arguments: a nil pointer left a field alone and a "" pointer cleared
-// it. What it was not was built on the shared mechanism — so nothing certified it, and
-// the exhaustiveness guard could not see it at all. The behaviour is preserved exactly:
+// The names are ordinary nullable display text, folded with ApplyToNullString like every
+// other name on the platform:
 //
-//	omitted        leave the stored name alone
-//	""             set it to the empty string, which is how it has always been cleared
-//	explicit null  the same as "" — see below
-//	a value        set it
+//	omitted                  leave the stored name alone, byte for byte
+//	null, "" or whitespace   clear it to NULL
+//	a value                  set it, trimmed
 //
-// 🔴 NULL AND "" AGREE HERE, AND THAT IS THE DECISION. The first_name / last_name
-// COLUMNS are nullable, but iam.Identity holds them as a bare `string`, which cannot
-// represent that null — so "" is the only empty this path can write and there is no third
-// stored outcome for null to map onto. patch.EmptiableString carries the reasoning, why
-// ApplyToRequired (which would REFUSE both) is the wrong fold here, and the honest fix
-// that is filed separately: the model, not the column, is what makes the null
-// unreachable. Under the old inline arguments `firstName: null` was indistinguishable
-// from omitting it; it now clears, which is the only reading that leaves "" and null
-// meaning one thing.
+// ApplyToRequired would be the wrong fold: it REFUSES a blank, and clearing a display name
+// is a capability this mutation has always offered. The columns have always been
+// nullable; the model now holds sql.NullString, so the clear is a NULL rather than the
+// empty string a bare `string` model could only write.
 type ProfileUpdateRequest struct {
 	FirstName dcgraphql.OptionalString
 	LastName  dcgraphql.OptionalString
@@ -735,11 +726,11 @@ func (m *Manager) UpdateProfile(ctx context.Context, email string, request *Prof
 	}
 	fields := map[string]any{}
 	if request.FirstName.Set {
-		id.FirstName = patch.EmptiableString(request.FirstName, id.FirstName)
+		id.FirstName = request.FirstName.ApplyToNullString(id.FirstName)
 		fields["first_name"] = id.FirstName
 	}
 	if request.LastName.Set {
-		id.LastName = patch.EmptiableString(request.LastName, id.LastName)
+		id.LastName = request.LastName.ApplyToNullString(id.LastName)
 		fields["last_name"] = id.LastName
 	}
 	if err := m.iam.UpdateIdentityFields(ctx, id, fields); err != nil {

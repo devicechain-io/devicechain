@@ -31,7 +31,8 @@ import (
 //     deliberately broken versions of this same toy service in a subprocess.
 //
 // The toy is deliberately shaped like the real thing: a nullable column, a NOT NULL
-// vocabulary column, a NOT NULL reference, and a list.
+// vocabulary column, a NOT NULL reference, a clearable list, and a list that may be
+// replaced but never emptied.
 
 type demoOwner struct {
 	gorm.Model
@@ -46,6 +47,7 @@ type demoThing struct {
 	Name    sql.NullString
 	Kind    string
 	Tags    string
+	Aliases string
 	OwnerId uint
 	Owner   *demoOwner
 }
@@ -69,6 +71,7 @@ type demoUpdateRequest struct {
 	Name       dcgraphql.OptionalString
 	Kind       dcgraphql.OptionalString
 	Tags       dcgraphql.OptionalStringList
+	Aliases    dcgraphql.OptionalStringList
 	OwnerToken dcgraphql.OptionalString
 }
 
@@ -85,6 +88,11 @@ type demoApi struct {
 	// is the exact defect the harness exists to catch. Only the negative control turns it
 	// on.
 	fullReplace bool
+	// emptiesRequiredList makes UpdateDemoThing refuse only a NULL on the required aliases
+	// list and let [] through to empty it — the fold a required list most plausibly gets
+	// wrong, since null is the spelling a developer tests and [] the one a form sends. Only
+	// the negative control turns it on.
+	emptiesRequiredList bool
 }
 
 func (a *demoApi) UpdateDemoThing(ctx context.Context, token string,
@@ -124,14 +132,25 @@ func (a *demoApi) UpdateDemoThing(ctx context.Context, token string,
 			found.Kind = ""
 		}
 		found.Tags = RenderStringList(req.Tags.Value)
+		found.Aliases = RenderStringList(req.Aliases.Value)
 	} else {
 		kind, err := req.Kind.ApplyToRequired("kind", found.Kind)
 		if err != nil {
 			return nil, err
 		}
 		found.Kind = kind
-		found.Name = applyNullString(req.Name, found.Name)
+		found.Name = req.Name.ApplyToNullString(found.Name)
 		found.Tags = RenderStringList(req.Tags.ApplyTo(ParseStringList(found.Tags)))
+		if req.Aliases.Set {
+			refused := len(req.Aliases.ApplyTo(nil)) == 0
+			if a.emptiesRequiredList {
+				refused = req.Aliases.Value == nil
+			}
+			if refused {
+				return nil, errors.New("aliases cannot be emptied: every thing must carry one")
+			}
+			found.Aliases = RenderStringList(req.Aliases.Value)
+		}
 	}
 
 	if err := a.db.WithContext(ctx).Save(&found).Error; err != nil {
@@ -158,7 +177,7 @@ func (a *demoApi) UpdateDemoWidget(ctx context.Context, token string,
 		return nil, err
 	}
 	found.Label = label
-	found.Name = applyNullString(req.Name, found.Name)
+	found.Name = req.Name.ApplyToNullString(found.Name)
 	if err := a.db.WithContext(ctx).Save(&found).Error; err != nil {
 		return nil, err
 	}
@@ -180,15 +199,6 @@ func (a *demoApi) CreateDemoOwner(ctx context.Context, token string) error {
 	return a.db.WithContext(ctx).Create(&demoOwner{
 		TokenReference: rdb.TokenReference{Token: token},
 	}).Error
-}
-
-func applyNullString(o dcgraphql.OptionalString, current sql.NullString) sql.NullString {
-	var p *string
-	if current.Valid {
-		v := current.String
-		p = &v
-	}
-	return nullStringFrom(o.ApplyTo(p))
 }
 
 func nullStringFrom(v *string) sql.NullString {
@@ -215,14 +225,24 @@ const (
 	demoWidgetMethod = "UpdateDemoWidget"
 )
 
-var demoSeededTags = []string{"alpha", "beta"}
+var (
+	demoSeededTags    = []string{"alpha", "beta"}
+	demoSeededAliases = []string{"x-1"}
+)
 
 func demoTables() []any { return []any{&demoThing{}, &demoOwner{}} }
 
 func demoSuite(fullReplace bool) Suite[*demoApi] {
+	return demoSuiteOf(demoApi{fullReplace: fullReplace})
+}
+
+// demoSuiteOf builds the toy suite over an Api carrying the given defect switches.
+func demoSuiteOf(defects demoApi) Suite[*demoApi] {
 	return Suite[*demoApi]{
 		NewApi: func(t *testing.T, tables ...any) *demoApi {
-			return &demoApi{db: NewSQLiteDB(t, tables...), fullReplace: fullReplace}
+			api := defects
+			api.db = NewSQLiteDB(t, tables...)
+			return &api
 		},
 		Context:  TenantContext("acme"),
 		Families: demoFamilies(),
@@ -256,6 +276,7 @@ func demoFamilies() []Family[*demoApi] {
 				Name:           sql.NullString{String: demoSeededName, Valid: true},
 				Kind:           demoSeededKind,
 				Tags:           RenderStringList(demoSeededTags),
+				Aliases:        RenderStringList(demoSeededAliases),
 				OwnerId:        owner.ID,
 			}).Error; err != nil {
 				t.Fatalf("seed thing: %v", err)
@@ -275,6 +296,7 @@ func demoFamilies() []Family[*demoApi] {
 				"name":       NullString(e.Name),
 				"kind":       e.Kind,
 				"tags":       e.Tags,
+				"aliases":    e.Aliases,
 				"ownerToken": ownerToken,
 			}
 		},
@@ -290,6 +312,8 @@ func demoFamilies() []Family[*demoApi] {
 				func(r *demoUpdateRequest) *dcgraphql.OptionalString { return &r.Kind }),
 			OptionalStringListField("tags", demoSeededTags, []string{"gamma"},
 				func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Tags }),
+			RequiredStringListField("aliases", demoSeededAliases, []string{"x-2", "x-3"},
+				func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Aliases }),
 			RequiredRefField("ownerToken", demoOwnerToken, demoOwnerOther,
 				func(r *demoUpdateRequest) *dcgraphql.OptionalString { return &r.OwnerToken }),
 		},
@@ -412,6 +436,31 @@ func TestAListFieldWithAnEmptyReplacementIsRefused(t *testing.T) {
 	// were not bought by refusing every list field.
 	OptionalStringListField("tags", []string{"a"}, []string{"b"},
 		func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Tags })
+}
+
+// The required list refuses the same two vacuous declarations, for the same reasons.
+func TestARequiredListFieldSeededEmptyIsRefused(t *testing.T) {
+	assertPanics(t, "an empty seed on a required list", func() {
+		RequiredStringListField("aliases", nil, []string{"a"},
+			func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Aliases })
+	})
+}
+
+func TestARequiredListFieldWithAnEmptyReplacementIsRefused(t *testing.T) {
+	for _, empty := range [][]string{nil, {}} {
+		assertPanics(t, "an empty replacement on a required list", func() {
+			RequiredStringListField("aliases", []string{"a"}, empty,
+				func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Aliases })
+		})
+	}
+	// The counterweight, and the shape the constructor exists to produce: a RequiredValue
+	// field that CAN send [], so EmptyListIsTheSameAsANull drives its refusal.
+	f := RequiredStringListField("aliases", []string{"a"}, []string{"b"},
+		func(r *demoUpdateRequest) *dcgraphql.OptionalStringList { return &r.Aliases })
+	if f.Kind != RequiredValue || f.SetEmpty == nil {
+		t.Fatalf("RequiredStringListField built Kind %v with SetEmpty set=%v, want RequiredValue "+
+			"with SetEmpty", f.Kind, f.SetEmpty != nil)
+	}
 }
 
 func assertPanics(t *testing.T, what string, fn func()) {

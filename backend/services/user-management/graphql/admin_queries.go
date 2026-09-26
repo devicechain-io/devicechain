@@ -22,8 +22,8 @@ func (r *AdminIdentityResolver) Id() gql.ID         { return gql.ID(fmt.Sprint(r
 func (r *AdminIdentityResolver) CreatedAt() *string { return util.FormatTime(r.M.CreatedAt) }
 func (r *AdminIdentityResolver) UpdatedAt() *string { return util.FormatTime(r.M.UpdatedAt) }
 func (r *AdminIdentityResolver) Email() string      { return r.M.Email }
-func (r *AdminIdentityResolver) FirstName() *string { return optStr(r.M.FirstName) }
-func (r *AdminIdentityResolver) LastName() *string  { return optStr(r.M.LastName) }
+func (r *AdminIdentityResolver) FirstName() *string { return util.NullStrNonEmpty(r.M.FirstName) }
+func (r *AdminIdentityResolver) LastName() *string  { return util.NullStrNonEmpty(r.M.LastName) }
 func (r *AdminIdentityResolver) Enabled() bool      { return r.M.Enabled }
 
 func (r *AdminIdentityResolver) SystemRoles() []string { return roleTokenList(r.M.SystemRoles) }
@@ -87,14 +87,6 @@ func (r *AdminResolver) Tenants(ctx context.Context) ([]*AdminTenantResolver, er
 		out = append(out, &AdminTenantResolver{M: tenants[i]})
 	}
 	return out, nil
-}
-
-// optStr maps an empty string column to a null GraphQL field.
-func optStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }
 
 // roleTokenList projects iam roles to their token strings for display.

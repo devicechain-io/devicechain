@@ -196,8 +196,8 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	if err != nil {
 		return nil, err
 	}
-	name := rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(current.Name)))
-	description := rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(current.Description)))
+	name := request.Name.ApplyToNullString(current.Name)
+	description := request.Description.ApplyToNullString(current.Description)
 	secret := updatedSecret(request.Secret)
 
 	// No precondition → unconditional last-write-wins (non-interactive callers that

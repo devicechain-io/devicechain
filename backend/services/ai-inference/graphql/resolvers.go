@@ -37,12 +37,9 @@ func (r *AIProviderResolver) Description() *string { return util.NullStr(r.M.Des
 
 func (r *AIProviderResolver) Kind() string { return r.M.Kind }
 
-func (r *AIProviderResolver) Endpoint() *string {
-	if r.M.Endpoint == "" {
-		return nil
-	}
-	return &r.M.Endpoint
-}
+// Endpoint is null when the provider uses its kind's built-in default. An empty string
+// written by a pod on an earlier release during a rolling upgrade reads as null too.
+func (r *AIProviderResolver) Endpoint() *string { return util.NullStrNonEmpty(r.M.Endpoint) }
 
 func (r *AIProviderResolver) Model() string { return r.M.ModelID }
 

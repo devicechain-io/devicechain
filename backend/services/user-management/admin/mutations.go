@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -29,10 +30,12 @@ var (
 // CreateIdentityInput is the data to create a global identity (ADR-033). Password
 // is hashed here; SystemRoles are role tokens resolved in the system scope.
 type CreateIdentityInput struct {
-	Email       string
-	Password    string
-	FirstName   string
-	LastName    string
+	Email    string
+	Password string
+	// FirstName / LastName are optional display text: trimmed, and nil or blank stores
+	// NULL, the same rule every nullable name on the platform follows.
+	FirstName   *string
+	LastName    *string
 	Enabled     bool
 	SystemRoles []string
 }
@@ -57,7 +60,7 @@ func (s *Service) CreateIdentity(ctx context.Context, in CreateIdentityInput) (*
 		return nil, err
 	}
 	id := &iam.Identity{
-		Email: email, FirstName: in.FirstName, LastName: in.LastName,
+		Email: email, FirstName: rdb.NullStrOf(in.FirstName), LastName: rdb.NullStrOf(in.LastName),
 		Enabled: in.Enabled, PasswordHash: string(hash), SystemRoles: roles,
 	}
 	if err := s.iam.CreateIdentity(ctx, id); err != nil {

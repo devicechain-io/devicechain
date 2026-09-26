@@ -17,7 +17,6 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
-	"github.com/devicechain-io/dc-user-management/patch"
 	"gorm.io/gorm"
 )
 
@@ -143,8 +142,8 @@ func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *
 	if err := validateAuthorities(rs, authorities); err != nil {
 		return nil, err
 	}
-	r.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(r.Name)))
-	r.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(r.Description)))
+	r.Name = request.Name.ApplyToNullString(r.Name)
+	r.Description = request.Description.ApplyToNullString(r.Description)
 	r.Authorities = authorities
 	if err := s.iam.UpdateRole(ctx, r); err != nil {
 		return nil, err
@@ -403,16 +402,16 @@ type TenantUpdateRequest struct {
 func (r *TenantUpdateRequest) governanceFor(t *iam.Tenant) GovernanceOverrides {
 	return GovernanceOverrides{
 		IngestMessagesPerSecond:      r.IngestMessagesPerSecond.ApplyTo(t.IngestMessagesPerSecond),
-		IngestBurst:                  patch.IntPtr(r.IngestBurst, t.IngestBurst),
+		IngestBurst:                  r.IngestBurst.ApplyToIntPtr(t.IngestBurst),
 		OutboundMessagesPerSecond:    r.OutboundMessagesPerSecond.ApplyTo(t.OutboundMessagesPerSecond),
-		OutboundBurst:                patch.IntPtr(r.OutboundBurst, t.OutboundBurst),
+		OutboundBurst:                r.OutboundBurst.ApplyToIntPtr(t.OutboundBurst),
 		AiInferenceRequestsPerMinute: r.AiInferenceRequestsPerMinute.ApplyTo(t.AiInferenceRequestsPerMinute),
-		AiInferenceBurst:             patch.IntPtr(r.AiInferenceBurst, t.AiInferenceBurst),
-		ShedPriority:                 patch.IntPtr(r.ShedPriority, t.ShedPriority),
-		HeldCommandCeiling:           patch.IntPtr(r.HeldCommandCeiling, t.HeldCommandCeiling),
-		GeoFencePositionCeiling:      patch.IntPtr(r.GeoFencePositionCeiling, t.GeoFencePositionCeiling),
-		GeoFenceCeiling:              patch.IntPtr(r.GeoFenceCeiling, t.GeoFenceCeiling),
-		GeoFencePositionBudget:       patch.IntPtr(r.GeoFencePositionBudget, t.GeoFencePositionBudget),
+		AiInferenceBurst:             r.AiInferenceBurst.ApplyToIntPtr(t.AiInferenceBurst),
+		ShedPriority:                 r.ShedPriority.ApplyToIntPtr(t.ShedPriority),
+		HeldCommandCeiling:           r.HeldCommandCeiling.ApplyToIntPtr(t.HeldCommandCeiling),
+		GeoFencePositionCeiling:      r.GeoFencePositionCeiling.ApplyToIntPtr(t.GeoFencePositionCeiling),
+		GeoFenceCeiling:              r.GeoFenceCeiling.ApplyToIntPtr(t.GeoFenceCeiling),
+		GeoFencePositionBudget:       r.GeoFencePositionBudget.ApplyToIntPtr(t.GeoFencePositionBudget),
 	}
 }
 
@@ -575,7 +574,7 @@ func (s *Service) UpdateTenant(ctx context.Context, token string, request *Tenan
 		}
 	}
 
-	t.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(t.Name)))
+	t.Name = request.Name.ApplyToNullString(t.Name)
 	t.TierID = tier.ID
 	t.Config = config
 	t.AiExternalEnabled = request.AiExternalEnabled.ApplyTo(t.AiExternalEnabled)
@@ -667,11 +666,11 @@ type TierInput struct {
 	Name        string
 	Description string
 	Config      map[string]any
-	// Color is a palette token (iam.ValidTierColor) or "" for no pill. Presentation
-	// only (ADR-065 S5c). DisplayOrder is not settable here — a new tier lands at 0 and
-	// is arranged with ReorderTenantTiers, so ordering is one gesture rather than a
-	// number an operator hand-manages against collisions.
-	Color string
+	// Color is a palette token (iam.ValidTierColor), or nil / blank for no pill, which
+	// stores NULL. Presentation only (ADR-065 S5c). DisplayOrder is not settable here — a
+	// new tier lands at 0 and is arranged with ReorderTenantTiers, so ordering is one
+	// gesture rather than a number an operator hand-manages against collisions.
+	Color *string
 }
 
 // TierUpdateRequest is the data to update a tier: its token is fixed and carried by the
@@ -698,11 +697,11 @@ type TierUpdateRequest struct {
 	// Config is the tier's settings blob as a JSON object string, validated against the
 	// ADR-065 key registry when supplied.
 	Config dcgraphql.OptionalString
-	// Color is a palette token (iam.ValidTierColor) or "" for no pill. Its column is NOT
-	// NULL with a default of '', so "" is a value it genuinely holds and an explicit null
-	// writes that rather than being refused — see patch.EmptiableString for why this is
-	// not ApplyToRequired. DisplayOrder is not here: it is set by ReorderTenantTiers,
-	// never by editing one tier in isolation.
+	// Color is a palette token (iam.ValidTierColor), or NULL for no pill: null, "" and
+	// whitespace all clear it, and a value is trimmed before it is validated. It is
+	// ordinary nullable text, so it folds with ApplyToNullString — not ApplyToRequired,
+	// which would refuse the clear that "no pill" needs. DisplayOrder is not here: it is
+	// set by ReorderTenantTiers, never by editing one tier in isolation.
 	Color dcgraphql.OptionalString
 }
 
@@ -728,13 +727,16 @@ func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.Tena
 	if err := iam.ValidateTierConfig(in.Config); err != nil {
 		return nil, err
 	}
-	if !iam.ValidTierColor(in.Color) {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, in.Color)
+	// The STORED value is what is validated: trimmed, and NULL for no pill, which
+	// ValidTierColor accepts as "".
+	color := rdb.NullStrOf(in.Color)
+	if !iam.ValidTierColor(color.String) {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, color.String)
 	}
 	t := &iam.TenantTier{
 		Token:  in.Token,
 		Config: in.Config,
-		Color:  in.Color,
+		Color:  color,
 		NamedEntity: rdb.NamedEntity{
 			Name: rdb.NullStrOf(&in.Name), Description: rdb.NullStrOf(&in.Description),
 		},
@@ -762,9 +764,10 @@ func (s *Service) UpdateTenantTier(ctx context.Context, token string, request *T
 		return nil, err
 	}
 
-	color := patch.EmptiableString(request.Color, t.Color)
-	if !iam.ValidTierColor(color) {
-		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, color)
+	// Validated AFTER folding, so what is checked is exactly what would be stored.
+	color := request.Color.ApplyToNullString(t.Color)
+	if !iam.ValidTierColor(color.String) {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownTierColor, color.String)
 	}
 
 	config := t.Config
@@ -777,8 +780,8 @@ func (s *Service) UpdateTenantTier(ctx context.Context, token string, request *T
 		}
 	}
 
-	t.Name = rdb.NullStrOf(request.Name.ApplyTo(dcgraphql.NullStr(t.Name)))
-	t.Description = rdb.NullStrOf(request.Description.ApplyTo(dcgraphql.NullStr(t.Description)))
+	t.Name = request.Name.ApplyToNullString(t.Name)
+	t.Description = request.Description.ApplyToNullString(t.Description)
 	t.Color = color
 	t.Config = config
 	if err := s.iam.UpdateTenantTier(ctx, t); err != nil {

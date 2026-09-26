@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -180,21 +181,16 @@ func JSONTextOf(value *string) *datatypes.JSON {
 	return &conv
 }
 
-// Creates a sql.NullString from a string constant.
-func NullStrOf(value *string) sql.NullString {
-	if value != nil {
-		trimmed := strings.TrimSpace(*value)
-		if len(trimmed) > 0 {
-			return sql.NullString{
-				String: trimmed,
-				Valid:  true,
-			}
-		}
-	}
-	return sql.NullString{
-		Valid: false,
-	}
-}
+// NullStrOf is the platform's rule for NULLABLE DESCRIPTIVE TEXT (a name, a description,
+// an icon, a unit): surrounding whitespace is trimmed, and a value that is empty after
+// trimming is stored as NULL. It is sqlnull.Text, named here for the create paths that
+// already speak rdb; the partial-update fold (graphql.OptionalString.ApplyToNullString)
+// applies the same definition, so restating a value you read back is a no-op.
+//
+// 🔴 NOT FOR SECRETS. A credential is compared byte for byte against what a device
+// presents, and trimming it on save makes a password with surrounding whitespace
+// unmatchable. Use sqlnull.Secret.
+func NullStrOf(value *string) sql.NullString { return sqlnull.Text(value) }
 
 // Creates a sql.NullInt64 from a string constant.
 func NullInt64Of(value *int64) sql.NullInt64 {
