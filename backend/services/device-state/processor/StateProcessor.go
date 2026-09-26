@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	WORKER_COUNT         = 5   // Number of state mergers running in parallel
 	MESSAGE_BACKLOG_SIZE = 100 // Number of messages that can be read and waiting to be processed
 )
 
@@ -32,8 +31,10 @@ const (
 // monitor flips devices to inactive after an inactivity timeout.
 //
 // Like event-management's persistence processor, the single read loop only reads
-// messages and hands them to a pool of workers (E6); the workers run the actual
-// MergeDeviceState merge in parallel so projection throughput is not serialized.
+// messages and hands them to a pool of projection writers (E6, sized by
+// projection.writers); the writers run the actual MergeDeviceState merge in parallel so
+// projection throughput is not serialized. Each merge is its own transaction: unlike
+// event-management's persistence, the projection does not batch.
 // Per-device coalescing across workers is safe because MergeDeviceState is
 // idempotent. Each message carries its own NATS ack handle, so the ack/leave-unacked
 // disposition (A3) is performed by the worker that merges it.
@@ -53,6 +54,10 @@ type StateProcessor struct {
 	sweepMetrics *core.PeriodicTaskMetrics
 
 	messages chan messaging.Message
+
+	// writers is how many projection writers run. Defaulted in the constructor by the
+	// configuration's own ApplyDefaults.
+	writers int
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
 	// let ExecuteStop drain the reader before closing the channel it feeds, so the
@@ -107,6 +112,17 @@ func NewStateMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 	return ms.NewProcessorMetrics("state")
 }
 
+// StateProcessorOption configures a StateProcessor.
+type StateProcessorOption func(*StateProcessor)
+
+// WithWriters sets the number of projection writers from the service's configuration.
+// Without it the processor runs the configuration's default.
+func WithWriters(n int) StateProcessorOption {
+	return func(sp *StateProcessor) {
+		sp.writers = n
+	}
+}
+
 // Create a new device-state processor.
 //
 // sweepMetrics are the inactivity sweep's pass signals, built once in the initialize phase
@@ -119,7 +135,8 @@ func NewStateMetrics(ms *core.Microservice) *core.ProcessorMetrics {
 // and the instruments are not.
 func NewStateProcessor(ms *core.Microservice, reader messaging.MessageReader,
 	callbacks core.LifecycleCallbacks, api model.DeviceStateApi,
-	metrics *core.ProcessorMetrics, sweepMetrics *core.PeriodicTaskMetrics) *StateProcessor {
+	metrics *core.ProcessorMetrics, sweepMetrics *core.PeriodicTaskMetrics,
+	opts ...StateProcessorOption) *StateProcessor {
 	sp := &StateProcessor{
 		Microservice:         ms,
 		ResolvedEventsReader: reader,
@@ -127,6 +144,13 @@ func NewStateProcessor(ms *core.Microservice, reader messaging.MessageReader,
 		metrics:              metrics,
 		sweepMetrics:         sweepMetrics,
 	}
+	for _, opt := range opts {
+		opt(sp)
+	}
+	// The same defaulting the configuration load runs, so the two cannot disagree.
+	projection := config.ProjectionConfiguration{Writers: sp.writers}
+	projection.ApplyDefaults()
+	sp.writers = projection.Writers
 
 	// Create lifecycle manager.
 	spname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "state-proc")
@@ -151,10 +175,16 @@ func (sp *StateProcessor) ExecuteInitialize(ctx context.Context) error {
 	return nil
 }
 
+// Writers reports how many projection writers this processor runs, so a caller can
+// confirm its configuration reached it.
+func (sp *StateProcessor) Writers() int {
+	return sp.writers
+}
+
 // Initialize pool of workers that merge device state in parallel.
 func (sp *StateProcessor) initializeWorkers() {
 	sp.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
-	for w := 1; w <= WORKER_COUNT; w++ {
+	for w := 1; w <= sp.writers; w++ {
 		sp.workerWG.Add(1)
 		// Workers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

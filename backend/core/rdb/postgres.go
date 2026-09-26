@@ -274,11 +274,12 @@ func ownedGormConfig(functionalArea string) *gorm.Config {
 // and forgotten for the other.
 //
 // The sizing (ADR-022 review E4): the pool must comfortably exceed the owning service's
-// per-service worker count (currently 5 persistence/projection workers) plus the GraphQL
-// server's request concurrency, otherwise workers and GraphQL contend for the same
-// handles and per-pod throughput is capped. We deliberately do NOT validate
-// worker_count <= max_connections here: the worker counts live in the service processors,
-// not in this shared package.
+// writer count plus the GraphQL server's request concurrency, otherwise writers and
+// GraphQL contend for the same handles and per-pod throughput is capped. The writer
+// counts are configurable per service (event-management's persistence.writers,
+// device-state's projection.writers), so each service's own Validate bounds its count
+// against EffectiveMaxOpenConnections — the value this function applies — rather than
+// this shared package knowing about any service's workers.
 //
 // Values come from the per-microservice config (MaxOpen/MaxIdle). The legacy
 // instance-level PostgresConfig.MaxConnections (default 5) is subsumed by this and no
@@ -305,13 +306,54 @@ func applyPoolSizing(db *gorm.DB, cfg config.MicroserviceDatastoreConfiguration,
 const (
 	// defaultMaxOpenConnections is the per-pod cap on open database connections
 	// when the service does not configure one. It is intentionally larger than
-	// the historical value (5) so the per-service worker pool (5) and the GraphQL
+	// the historical value (5) so a service's writers (5 by default) and the GraphQL
 	// server do not contend for the same handles.
 	defaultMaxOpenConnections = 20
 	// minMaxIdleConnections floors the idle pool so a brief lull does not tear
 	// down every connection only to immediately reopen them (connection thrash).
 	minMaxIdleConnections = 2
 )
+
+// EffectiveMaxOpenConnections is the pool size a service actually gets for cfg: the
+// configured value, or the default when it is unset — the same poolSizing call
+// applyPoolSizing makes, so the two cannot disagree.
+func EffectiveMaxOpenConnections(cfg config.MicroserviceDatastoreConfiguration) int {
+	open, _ := poolSizing(cfg.MaxOpenConnections, cfg.MaxIdleConnections)
+	return open
+}
+
+// CheckWriterCount is the ONE bound on a service's parallel database writers: every writer
+// holds a pooled connection for the whole of its transaction, so key (the setting's name,
+// for the operator) must be at least 1 and BELOW the pool cfg sizes. A service calls it
+// from its configuration's Validate, so an out-of-range count stops it at startup naming
+// the setting.
+//
+// Below the pool, not at most half of it. At the pool size the writers can hold every
+// connection and a read then waits for a whole transaction to commit, which is wrong at any
+// load. Anything below it already ran before writer counts were configurable (they were a
+// fixed 5 on any pool), so refusing it would stop an upgraded service over a document
+// nobody changed. More than half the pool is allowed and logged, because reads then compete
+// with the writers for what is left.
+//
+// It names no way to raise the bound, deliberately: the platform's connection budgets —
+// the relational role limit dcctl computes and the event store's reserved connections —
+// are sized from the default pool, so a bigger pool is a change to those budgets, not to
+// this setting.
+func CheckWriterCount(key string, writers int, cfg config.MicroserviceDatastoreConfiguration) error {
+	pool := EffectiveMaxOpenConnections(cfg)
+	if writers < 1 {
+		return fmt.Errorf("%s must be at least 1, got %d", key, writers)
+	}
+	if writers >= pool {
+		return fmt.Errorf("%s is %d, but the connection pool holds %d; keep it below %d so reads are not starved",
+			key, writers, pool, pool)
+	}
+	if writers > pool/2 {
+		log.Warn().Str("setting", key).Int("writers", writers).Int("pool", pool).
+			Msg("More than half the connection pool is given to writers, so reads compete with them for the rest")
+	}
+	return nil
+}
 
 // poolSizing resolves the configured open/idle connection counts into the values
 // actually applied to the pool, substituting defaults for unset (zero/negative)

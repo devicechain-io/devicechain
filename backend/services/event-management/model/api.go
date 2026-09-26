@@ -69,8 +69,8 @@ type EventManagementApi interface {
 	DistinctAnchorDeviceTokensAfter(ctx context.Context, after string) ([]AnchorRef, error)
 
 	// PersistInTx runs fn inside a single database transaction whose handle
-	// carries the supplied (tenant-scoped) context, so a message's events are
-	// committed all-or-nothing (ADR-022 E5).
+	// carries the supplied context, so what fn writes — one message's events, or a
+	// batch of messages' — commits all-or-nothing (ADR-022 E5).
 	PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) error
 
 	// EventExistsByAltId reports whether a resolved event with the given
@@ -90,17 +90,19 @@ type EventManagementApi interface {
 }
 
 // PersistInTx opens one transaction whose handle is bound to the supplied
-// context so the tenant-scope GORM callbacks (which read the tenant from the
-// statement context) still fire on every statement inside the transaction. The
-// inserts performed by fn either all commit or all roll back, making a single
-// message's events atomic (ADR-022 E5).
+// context. The inserts performed by fn either all commit or all roll back, making
+// a message's events atomic (ADR-022 E5) — or a whole batch of messages', when the
+// persistence writer commits several in one transaction. Each statement fn makes
+// binds its own message's context (db.WithContext), so the tenant-scope and erasure
+// fence callbacks, which read the tenant from the statement, see that
+// message's tenant however many tenants the transaction carries.
 //
-// This makes a message's writes all-or-nothing. Idempotency on the at-least-once
-// consume path is layered on top via EventExistsByAltId: a redelivered resolved
-// event carrying an alternateId is detected and skipped inside the transaction
-// (PersistEvent), with the (tenant_id, alt_id, occurred_time) partial unique index
-// as the race backstop. Events without an alternateId are still re-inserted on
-// redelivery — supplying a stable alternateId is what opts an event into dedup.
+// Idempotency on the at-least-once consume path does not depend on the
+// transaction: every event id is derived from the event's content and every insert
+// carries an ON CONFLICT DO NOTHING arbiter, so a redelivery — with or without an
+// alternateId — or a batch written again after a rollback adds nothing twice.
+// EventExistsByAltId is a shortcut that skips a known redelivery before its
+// inserts, not the guard.
 func (api *Api) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) error {
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(tx)

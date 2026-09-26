@@ -1175,8 +1175,30 @@ functionalAreas:
     #                               # history on demand is a separate capability and is
     #                               # not offered here. Deleting a TENANT already
     #                               # removes its positions along with everything else.
+    #
+    # Event persistence (defaults shown). Events are written in batches: each writer
+    # commits the events already waiting for it, up to maxBatch, in one transaction,
+    # which is what lets the event store keep up when every commit waits for a standby.
+    #   config:
+    #     persistence:
+    #       writers: 5        # parallel writers, each holding one pooled connection
+    #                         # while it writes. Must be below the service's
+    #                         # connection pool (tsdbConfiguration.maxOpenConnections,
+    #                         # 20 unless set); above half of it is logged.
+    #       maxBatch: 32      # events per transaction, 1 to 64. 1 turns batching off.
+    #       lingerMillis: 0   # how long a writer waits for a batch to fill, up to
+    #                         # 1000. 0 commits only what is already waiting, which
+    #                         # adds no latency.
   device-state:
     config: {}
+    # Live-state projection writers (default shown). Each writer merges one event at a
+    # time in its own transaction, so this is the projection's only capacity lever;
+    # merges for one device wait for each other, so extra writers help only while events
+    # come from more devices than there are writers.
+    #   config:
+    #     projection:
+    #       writers: 5        # must be below rdbConfiguration.maxOpenConnections
+    #                         # (20 unless set); above half of it is logged.
   dashboard-management:
     config: {}
   command-delivery:

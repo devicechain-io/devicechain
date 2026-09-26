@@ -134,10 +134,10 @@ func TestLatestLocationUpsertsRatherThanInserts(t *testing.T) {
 // the reason the merge compares occurred time rather than trusting arrival order.
 //
 // 🔴 This is not hypothetical. The resolved-events stream redelivers any message left
-// unacked, and five merge workers drain it in parallel, so a fix that occurred EARLIER
-// routinely arrives LATER. Under last-write-wins the projection would teleport the
-// device back to a position it has already left — and nothing downstream could tell that
-// from the device having genuinely returned there.
+// unacked, and several merge workers (projection.writers) drain it in parallel, so a fix
+// that occurred EARLIER routinely arrives LATER. Under last-write-wins the projection would
+// teleport the device back to a position it has already left — and nothing downstream
+// could tell that from the device having genuinely returned there.
 func TestLatestLocationNeverGoesBackwards(t *testing.T) {
 	api := newLocationTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")

@@ -116,3 +116,10 @@ func TestMisspelledLocationRetentionRejected(t *testing.T) {
 	err := core.LoadConfiguration([]byte(`{"Lifecycle":{"LocationRetentionDay":30}}`), cfg)
 	assert.Error(t, err, "an unknown lifecycle key must be rejected at startup")
 }
+
+// The persistence settings are part of the configuration document.
+func TestPersistenceSettingsAreAccepted(t *testing.T) {
+	cfg := &EventManagementConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"persistence":{"writers":8,"maxBatch":16,"lingerMillis":5}}`), cfg)
+	assert.NoError(t, err)
+}

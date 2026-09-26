@@ -45,7 +45,7 @@ var (
 	// PersistMetrics is built ONCE, in the initialize phase, and shared by every
 	// EventPersistenceProcessor the NATS manager's oncreate callback builds. See
 	// buildMetrics.
-	PersistMetrics *core.ProcessorMetrics
+	PersistMetrics *processor.PersistMetrics
 
 	EntityDeletedReader    messaging.MessageReader
 	EntityAnchorReconciler *processor.EntityAnchorReconciler
@@ -99,6 +99,19 @@ func buildMetrics() {
 	PersistMetrics = processor.NewPersistMetrics(Microservice)
 }
 
+// newEventPersistenceProcessor assembles the persistence processor from this service's
+// globals: its writers sized by the loaded configuration, and the instruments built once in
+// afterMicroserviceInitialized — handed in because a collector belongs to the process while
+// everything the NATS callback builds belongs to the connection, and a second registration
+// panics. It is a function of its own so a test can check the configuration reaches the
+// processor, which nothing else exercises.
+func newEventPersistenceProcessor(reader messaging.MessageReader,
+	writer messaging.MessageWriter) *processor.EventPersistenceProcessor {
+	return processor.NewEventPersistenceProcessor(Microservice, reader, writer,
+		core.NewNoOpLifecycleCallbacks(), Api, PersistMetrics,
+		processor.WithPersistence(Configuration.Persistence))
+}
+
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for resolved events (wildcard across tenants).
@@ -116,11 +129,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	FailedEventsWriter = fevents
 
 	// Add and initialize inbound events processor.
-	// Its instruments were built once in afterMicroserviceInitialized and are handed
-	// in, because a collector belongs to the process while everything this callback
-	// builds belongs to the connection, and a second registration panics.
-	EventPersistenceProcessor = processor.NewEventPersistenceProcessor(Microservice, ResolvedEventsReader,
-		FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), Api, PersistMetrics)
+	EventPersistenceProcessor = newEventPersistenceProcessor(ResolvedEventsReader, FailedEventsWriter)
 	err = EventPersistenceProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

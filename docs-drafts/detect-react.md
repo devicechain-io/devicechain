@@ -805,7 +805,7 @@ it over-reaches are worth naming, because each is a real failure mode:
   (`backend/services/event-sources/processor/gateway_jetstream.go:352-377`), failed-events at
   resolution (`backend/services/device-management/processor/inbound.go:158-167`,
   `event_resolver.go:733-757`), failed-events at persistence
-  (`backend/services/event-management/processor/EventPersistenceWorker.go:386-412`), and
+  (`dispose` in `backend/services/event-management/processor/persist_batch.go`), and
   connector-dispatch.dead (`backend/services/outbound-connectors/processor/consumer.go:318-338`).
   §1 already relies on the second of those, so "only one stage has a dead-letter path" contradicts
   this document three sections earlier.

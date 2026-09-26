@@ -18,3 +18,10 @@ func TestLoadEmptyConfiguration(t *testing.T) {
 
 	assert.NoError(t, err)
 }
+
+// The projection writer count is part of the configuration document.
+func TestProjectionWritersSettingIsAccepted(t *testing.T) {
+	cfg := &DeviceStateConfiguration{}
+	err := core.LoadConfiguration([]byte(`{"projection":{"writers":8}}`), cfg)
+	assert.NoError(t, err)
+}
