@@ -84,6 +84,14 @@ There is one exception: a re-run may raise `--max-connections` while instances r
 [the connection budget](#connection-budget)). Lowering it is refused like any other change. A
 re-run that does not pass `--max-connections` keeps the budget the cluster already has.
 
+**A run that failed partway through is repaired the same way.** Once the cause is fixed, run
+the same `dcctl install` again. If the backup object store could not start the first time,
+for example because its image could not be pulled, the re-run deletes it, creates it again
+and waits for it to become ready, exactly as the first run did. If the cause is still there,
+the re-run fails the same way. Before it reports the cluster installed, `install` also checks
+that the backup object store has finished rolling out, so a store left unready by an earlier
+failed change is reported instead of being passed over.
+
 ### Where install keeps its state {#install-state}
 
 The prerequisites are applied with OpenTofu, and their state lives on the machine that ran
@@ -99,6 +107,11 @@ directory to its cluster:
 cat ~/.devicechain/clusters/*/cluster.json
 kubectl --context <kube-context> get namespace kube-system -o jsonpath='{.metadata.uid}'
 ```
+
+The OpenTofu providers are pinned to exact versions, and every run, `dcctl destroy` included,
+moves the directory's `.terraform.lock.hcl` onto the versions this dcctl pins. Each run
+therefore asks the provider registry which versions exist, so the registry, or a provider
+mirror you have configured, must be reachable.
 
 A re-run works from that state, so **an installed cluster can only be re-installed from the
 machine that holds its directory**. Run `dcctl install` against it from another machine and

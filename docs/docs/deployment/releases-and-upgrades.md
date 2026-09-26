@@ -1573,6 +1573,10 @@ maintained image": a fresh install failed without it, your nodes now pull that i
 If you watch `event-management`'s persistence metrics, or set a service's connection pool to 5 or
 fewer, read "Events are persisted in batches".
 
+If you run `dcctl` where the OpenTofu provider registry cannot be reached, or apply the OpenTofu
+configuration yourself, read "A failed `dcctl install` can be run again": every run now contacts
+the registry, and a plain `tofu init` refuses an existing lock file.
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2716,9 +2720,9 @@ is.
 - **This cannot be undone by installing an earlier release.** An earlier release's `dcctl install`
   would stop the object store and then fail to pull the image it names, and archiving would stop
   until this release's `dcctl install` runs again.
-- **If `dcctl install` failed on an earlier release because of this**, a re-run can still stop on
-  the object store that attempt left behind. On a local cluster, delete the cluster and its record
-  under `~/.devicechain/clusters/`, then install again with this release.
+- **If `dcctl install` failed on an earlier release because of this**, run this release's
+  `dcctl install` again: it replaces the object store that attempt left behind (see "A failed
+  `dcctl install` can be run again").
 
 Nothing needs configuring. If you point backups at your own object store with
 `--backup-credentials-file`, nothing changes for you.
@@ -2834,6 +2838,35 @@ the way you plan its loss.
 
 The 30-second node-loss eviction on the services' pods is unchanged and deliberate, and is now
 checked on every pod the chart renders, the console included.
+
+#### A failed `dcctl install` can be run again
+
+If `dcctl install` failed while the backup object store was starting, for example because its
+image could not be pulled, or was interrupted at that point, every later run failed too, before
+changing anything, with `Unexpected Identity Change` naming `kubernetes_deployment_v1`. This
+happened with Terraform 1.12 or later, and the only way out was to delete the cluster and its
+directory under `~/.devicechain/clusters/`. A re-run now deletes the half-created object store,
+creates it again and waits for it to become ready. A cluster already stuck this way recovers the
+same way, with no manual step, once the cause is fixed: run the same `dcctl install` again. If the
+cause is still there, the re-run fails the same way rather than reporting the cluster installed.
+
+- **`dcctl install` now checks that the backup object store has rolled out** before it reports the
+  cluster installed. A change to the store that timed out, such as a new image that could not be
+  pulled, used to be accepted by the next run, because the failed change had already been
+  recorded. That run now waits up to five minutes for the store and then fails, naming it.
+- **The Kubernetes provider moves from 2.38.0 to 3.2.1.** The fix is in that release. The first
+  dcctl command that applies or destroys infrastructure on each cluster downloads it. Nothing on
+  the cluster changes.
+- **The infrastructure providers are now pinned to exact versions** (Kubernetes 3.2.1, Helm
+  2.17.0), and dcctl moves each root's `.terraform.lock.hcl` onto them on every run. Before this, a
+  cluster kept whichever versions its first install happened to resolve. Every run, `dcctl
+  destroy` included, now asks the provider registry for these versions, so the registry, or a
+  provider mirror you have configured, must be reachable. The unused TLS provider is no longer
+  declared.
+- **An earlier dcctl cannot operate a cluster this release has run against.** Its `init` refuses
+  the lock file, which now names provider versions its configuration does not allow.
+- **If you run the OpenTofu configuration directly** rather than through dcctl, run
+  `tofu init -upgrade` once in each root: a plain `init` refuses a lock file on the old versions.
 
 ### The one-time durable-ingest cutover
 

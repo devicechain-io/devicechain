@@ -166,3 +166,12 @@ output "backup_bucket_tsdb" {
   description = "The bucket this root created for the EVENT store's archive. Exported because the store that writes into it lives in another root: the bucket has to be created here, beside the object store, and named there. Empty when backups are off."
   value       = local.backups_on ? var.backup_bucket_tsdb : ""
 }
+
+# The object store Deployment dcctl confirms has rolled out after every apply, or
+# null when this root runs no in-cluster store (backups off, or an external
+# destination). See the module's `deployment` output for why an apply succeeding
+# is not enough.
+output "backup_object_store_deployment" {
+  description = "Namespace and name of the in-cluster backup object store Deployment; null when there is none."
+  value       = one(module.object_store[*].deployment)
+}

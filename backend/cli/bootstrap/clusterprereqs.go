@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/hashicorp/terraform-exec/tfexec"
+	"k8s.io/client-go/kubernetes"
 )
 
 // prereqStateSubdir is where the cluster prerequisite root's working directory and
@@ -118,7 +120,84 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	if err != nil {
 		return InstallOutputs{}, fmt.Errorf("reading cluster prerequisite outputs: %w", err)
 	}
+	if err := confirmObjectStoreRolledOut(ctx, outputs, func() (kubernetes.Interface, error) {
+		_, _, typed, err := kubeClients(st.KubeContext)
+		return typed, err
+	}, objectStoreRolloutTimeout); err != nil {
+		return InstallOutputs{}, err
+	}
 	return clusterOutputs(outputs)
+}
+
+// objectStoreRolloutTimeout bounds the wait for the backup object store after an apply
+// that succeeded. The apply has already waited for any rollout it started, so on a
+// healthy cluster this returns on the first read; the bound is for a store that is
+// mid-rollout for a reason the apply did not cause, such as a rescheduled pod.
+const objectStoreRolloutTimeout = 5 * time.Minute
+
+// confirmObjectStoreRolledOut refuses to report the cluster prerequisites applied
+// while the in-cluster backup object store has not rolled out.
+//
+// 🔴 A GREEN APPLY DOES NOT PROVE IT, AND THE CASE THAT BREAKS IT IS AN UPDATE. The
+// provider waits for the Deployment's rollout inside the apply, but when an UPDATE's
+// wait times out -- a new image that cannot be pulled, say -- it records the new spec
+// in state anyway. The failed apply is reported, but the next one plans no change and
+// succeeds, and the install would then be recorded as finished over a store nothing
+// can archive to. A timed-out CREATE is safe without this (the resource is tainted and
+// the next apply replaces it and waits again); this closes the update half.
+//
+// It is the same four-condition check `dcctl upgrade` applies to the operator, not a
+// restatement of it: see deploymentRolledOut.
+//
+// The clients are built only when there is a store to check, so a cluster without
+// one never needs them; the constructor is a parameter so the decision and the wait
+// can be driven together without a cluster.
+func confirmObjectStoreRolledOut(ctx context.Context, outputs map[string]tfexec.OutputMeta,
+	clients func() (kubernetes.Interface, error), timeout time.Duration) error {
+	ref, err := objectStoreFromOutputs(outputs)
+	if err != nil || ref == nil {
+		return err
+	}
+	store := *ref
+	typed, err := clients()
+	if err != nil {
+		return fmt.Errorf("building kube clients to check the backup object store: %w", err)
+	}
+	if err := waitForRollout(ctx, typed, []deploymentRef{store}, timeout); err != nil {
+		return fmt.Errorf("the backup object store has not rolled out, so the databases have "+
+			"nowhere to archive to (the apply can succeed over it after an earlier one timed out "+
+			"updating it). Fix the cause -- kubectl -n %s describe deployment %s -- and run the "+
+			"same install again: %w", store.namespace, store.name, err)
+	}
+	return nil
+}
+
+// objectStoreFromOutputs reads which Deployment is the in-cluster backup object
+// store, or nil when this cluster runs none (backups off, or an external destination).
+//
+// 🔴 A MISSING OUTPUT IS AN ERROR, NOT "NO STORE". The root always declares it, null
+// when there is no store; reading its absence as null would silently skip the one
+// check that stops an install being recorded over an unready store.
+func objectStoreFromOutputs(outputs map[string]tfexec.OutputMeta) (*deploymentRef, error) {
+	meta, ok := outputs["backup_object_store_deployment"]
+	if !ok {
+		return nil, fmt.Errorf("the cluster prerequisite root has no backup_object_store_deployment " +
+			"output, so whether the backup object store rolled out cannot be checked")
+	}
+	var ref *struct {
+		Namespace string `json:"namespace"`
+		Name      string `json:"name"`
+	}
+	if err := json.Unmarshal(meta.Value, &ref); err != nil {
+		return nil, fmt.Errorf("decoding backup_object_store_deployment: %w", err)
+	}
+	if ref == nil {
+		return nil, nil
+	}
+	if ref.Namespace == "" || ref.Name == "" {
+		return nil, fmt.Errorf("backup_object_store_deployment names no Deployment (%q/%q)", ref.Namespace, ref.Name)
+	}
+	return &deploymentRef{namespace: ref.Namespace, name: ref.Name}, nil
 }
 
 // clusterOutputs decodes what the cluster root built into the install record's outputs.

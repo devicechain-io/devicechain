@@ -1680,6 +1680,11 @@ reinicia una vez.
 Si vigila las métricas de persistencia de `event-management`, o ha fijado el pool de conexiones de
 un servicio en 5 o menos, lea «Los eventos se persisten por lotes».
 
+Si ejecuta `dcctl` donde no se puede alcanzar el registro de proveedores de OpenTofu, o aplica la
+configuración de OpenTofu usted mismo, lea «Un `dcctl install` fallido puede volver a ejecutarse»:
+cada ejecución consulta ahora el registro, y un `tofu init` normal rechaza un archivo de bloqueo
+existente.
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -2907,9 +2912,9 @@ datos que escribió el servidor anterior.
 - **Esto no se deshace instalando una versión anterior.** El `dcctl install` de una versión
   anterior detendría el almacén y después no podría descargar la imagen que indica, y el archivado
   se detendría hasta volver a ejecutar el `dcctl install` de esta versión.
-- **Si `dcctl install` falló por esto en una versión anterior**, volver a ejecutarlo puede
-  detenerse aún en el almacén que dejó aquel intento. En un clúster local, elimine el clúster y su
-  registro en `~/.devicechain/clusters/`, e instale de nuevo con esta versión.
+- **Si `dcctl install` falló por esto en una versión anterior**, vuelva a ejecutar el
+  `dcctl install` de esta versión: sustituye el almacén que dejó aquel intento (consulte «Un
+  `dcctl install` fallido puede volver a ejecutarse»).
 
 No hay nada que configurar. Si dirige los respaldos a su propio almacén de objetos con
 `--backup-credentials-file`, no cambia nada para usted.
@@ -3037,6 +3042,39 @@ como planifica su pérdida.
 
 El desalojo a los 30 segundos de los pods de los servicios cuando se pierde un nodo no cambia y
 es deliberado, y ahora se comprueba en cada pod que renderiza el chart, incluida la consola.
+
+#### Un `dcctl install` fallido puede volver a ejecutarse
+
+Si `dcctl install` fallaba mientras arrancaba el almacén de objetos de los respaldos, por ejemplo
+porque no se podía descargar su imagen, o se interrumpía en ese punto, todas las ejecuciones
+posteriores fallaban también, antes de cambiar nada, con `Unexpected Identity Change` sobre
+`kubernetes_deployment_v1`. Ocurría con Terraform 1.12 o posterior, y la única salida era borrar el
+clúster y su directorio en `~/.devicechain/clusters/`. Ahora una nueva ejecución elimina el almacén
+a medio crear, lo crea de nuevo y espera a que esté listo. Un clúster que ya estaba bloqueado así se
+recupera del mismo modo, sin ningún paso manual, una vez corregida la causa: ejecute de nuevo el
+mismo `dcctl install`. Si la causa sigue ahí, la nueva ejecución falla del mismo modo en lugar de
+dar el clúster por instalado.
+
+- **`dcctl install` comprueba ahora que el almacén de objetos de los respaldos ha terminado su
+  despliegue** antes de dar el clúster por instalado. Un cambio en el almacén que agotaba su tiempo,
+  como una imagen nueva que no se podía descargar, lo aceptaba la ejecución siguiente, porque el
+  cambio fallido ya había quedado registrado. Esa ejecución espera ahora hasta cinco minutos al
+  almacén y después falla indicándolo.
+- **El proveedor de Kubernetes pasa de 2.38.0 a 3.2.1.** La corrección está en esa versión. El
+  primer comando de dcctl que aplica o destruye infraestructura en cada clúster lo descarga. No
+  cambia nada en el clúster.
+- **Los proveedores de infraestructura quedan fijados a versiones exactas** (Kubernetes 3.2.1,
+  Helm 2.17.0), y dcctl lleva el `.terraform.lock.hcl` de cada raíz a ellas en cada ejecución.
+  Antes, cada clúster conservaba las versiones que resolvió su primera instalación. Cada
+  ejecución, incluida `dcctl destroy`, consulta ahora esas versiones al registro de proveedores,
+  así que el registro, o un espejo de proveedores que haya configurado, debe ser accesible. El
+  proveedor TLS, que no se usaba, ya no se declara.
+- **Un dcctl anterior no puede operar un clúster sobre el que se ha ejecutado esta versión.** Su
+  `init` rechaza el archivo de bloqueo, que ahora indica versiones de proveedor que su
+  configuración no admite.
+- **Si ejecuta la configuración de OpenTofu directamente** en lugar de a través de dcctl, ejecute
+  `tofu init -upgrade` una vez en cada raíz: un `init` normal rechaza un archivo de bloqueo con las
+  versiones anteriores.
 
 ### La transición única a la ingesta duradera
 
