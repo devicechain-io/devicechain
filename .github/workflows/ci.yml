@@ -184,7 +184,8 @@ jobs:
         run: hack/go-race.sh --self-test
 
       # Which modules the detector covers, said once, as a table. The race step
-      # rides the whole per-module `go` matrix and runs on the few in the race set, and a step
+      # rides the whole per-module `go` matrix and runs on every module except the
+      # exempt list in hack/go-race.sh, and a step
       # that decides not to run renders as the same green tick as one that ran —
       # so a reader cannot recover the covered set from the matrix. This is where
       # that set is legible.
@@ -485,10 +486,12 @@ jobs:
 
       - name: go test
         working-directory: ${{ matrix.module }}
-        # The operator's controllers suite is a kubebuilder envtest scaffold with
-        # no specs yet — it boots a control plane but asserts nothing, and is
-        # environment-sensitive. Exclude it from unit CI; add a dedicated envtest
-        # job when real controller specs land. All other packages run normally.
+        # Every package, the operator's controllers included. That package holds
+        # the CEL suite the `envtest binaries` step installs an API server for, and
+        # it used to be dropped here as "a scaffold that asserts nothing" — so the
+        # suite guarding which cluster `dcctl destroy` acts on was installed for and
+        # never run. Nothing is excluded now, which also leaves the race step and
+        # this one testing the same packages without a list for them to agree on.
         #
         # -count=1 disables TEST-RESULT caching, and it is load-bearing here rather
         # than a habit. `go test` decides a cached result is still valid from the
@@ -503,42 +506,31 @@ jobs:
         # into CI — a PR touching only a fixture is precisely the shape that would
         # replay someone else's green. This disables result caching only; the BUILD
         # cache (the expensive part) is untouched.
-        run: |
-          if [ "${{ matrix.module }}" = "backend/k8s" ]; then
-            # Read into an array rather than splitting an unquoted $(...). The
-            # word-splitting was intended, but written that way it is
-            # indistinguishable from the accidental kind — to shellcheck and to a
-            # reader — and it would also glob. The array says "one argument per
-            # package" outright.
-            mapfile -t pkgs < <(go list ./... | grep -v '/controllers$')
-            go test -count=1 "${pkgs[@]}"
-          else
-            go test -count=1 ./...
-          fi
+        run: go test -count=1 ./...
 
-      # Data-race detection, on the modules where concurrent code actually runs.
+      # Data-race detection, on every module except the exempt ones.
       #
       # 🔴 THE STEP IS UNCONDITIONAL AND THE VERDICT IS A LINE IN THE LOG. An
-      # `if:` here would skip on most of the matrix, and a skipped step and a
+      # `if:` here would skip on the exempt entries, and a skipped step and a
       # passing step render as the same green tick — so "this module was race
       # checked" and "this module was never race checked" would be
       # indistinguishable from the outside. Instead every entry runs the script
       # and every entry prints one of:
       #
       #   race: COVERED backend/core -- go test -race -count=1 ./...
-      #   race: NOT COVERED backend/services/mcp -- not in the race set
+      #   race: NOT COVERED backend/services/event-processing -- exempt (hack/go-race.sh): cost: ...
       #
       # and the step then requires that line to be present. A future edit that
       # leaves this returning 0 without deciding anything fails here rather than
       # passing quietly. The authoritative covered set is printed as a table by
-      # `hack/go-race.sh --list` in `discover`; the set itself, and the reasoning
-      # for its membership, live in hack/go-race.sh.
+      # `hack/go-race.sh --list` in `discover`; the exempt set, and the reason for
+      # each entry, live in hack/go-race.sh.
       #
       # The detector's own liveness is established in `discover` by
       # `hack/go-race.sh --self-test`, which requires a DATA RACE report from a
       # program with a known race. Without that, a green step here would be
       # equally consistent with the instrumentation being off.
-      - name: race detector (covered modules only)
+      - name: race detector
         env:
           MODULE: ${{ matrix.module }}
         run: |

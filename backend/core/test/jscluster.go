@@ -80,7 +80,7 @@ func tryStartJetStreamCluster(tb testing.TB, size int) ([]*natsserver.Server, er
 			Port:       -1,
 			ServerName: fmt.Sprintf("n%d", i+1),
 			JetStream:  true,
-			StoreDir:   tb.TempDir(),
+			StoreDir:   JetStreamStoreDir(tb),
 			Cluster: natsserver.ClusterOpts{
 				Name: "dctest",
 				Host: "127.0.0.1",

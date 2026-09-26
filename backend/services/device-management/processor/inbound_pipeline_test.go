@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/mock"
@@ -44,7 +45,7 @@ const gateTenant = "acme"
 func startGateNats(t *testing.T) (*messaging.NatsManager, string) {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
 	})
 	if err != nil {
 		t.Fatal(err)

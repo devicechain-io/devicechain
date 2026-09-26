@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/credential"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -104,7 +105,7 @@ func replicatedKV(b *testing.B) nats.KeyValue {
 		}
 		opts := &natsserver.Options{
 			ServerName: fmt.Sprintf("n%d", i), Host: "127.0.0.1", Port: -1,
-			JetStream: true, StoreDir: b.TempDir(), NoLog: true, NoSigs: true,
+			JetStream: true, StoreDir: dctest.JetStreamStoreDir(b), NoLog: true, NoSigs: true,
 			Cluster: natsserver.ClusterOpts{Name: "storm", Host: "127.0.0.1", Port: ports[i]},
 			Routes:  natsserver.RoutesFromStr(strings.Join(routes, ",")),
 		}

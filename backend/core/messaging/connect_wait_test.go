@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 )
@@ -119,7 +120,7 @@ func TestUnconnectedConnReportsTheMisleadingVersionError(t *testing.T) {
 func runTestServer(t *testing.T) *natsserver.Server {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
 	})
 	if err != nil {
 		t.Fatalf("new nats server: %v", err)

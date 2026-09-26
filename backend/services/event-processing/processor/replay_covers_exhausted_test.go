@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -183,7 +184,7 @@ type detectBroker struct {
 func startDetectBroker(t *testing.T) *detectBroker {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
 	})
 	require.NoError(t, err)
 	go srv.Start()

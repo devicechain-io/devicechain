@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/kv"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 )
@@ -26,7 +27,7 @@ func newTestManager(t *testing.T) (*NatsManager, func()) {
 		Host:      "127.0.0.1",
 		Port:      -1, // ephemeral
 		JetStream: true,
-		StoreDir:  t.TempDir(),
+		StoreDir:  dctest.JetStreamStoreDir(t),
 	}
 	srv, err := natsserver.NewServer(opts)
 	if err != nil {

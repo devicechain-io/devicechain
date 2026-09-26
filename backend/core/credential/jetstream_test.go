@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/credential"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,7 +32,7 @@ func realKV(t *testing.T) nats.KeyValue {
 func realKVWith(t *testing.T, maxBytes int64) (nats.KeyValue, *nats.Conn, nats.JetStreamContext) {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
 	})
 	require.NoError(t, err)
 	go srv.Start()

@@ -97,7 +97,7 @@ func stopWithin(t *testing.T, es *MqttEventSource, d time.Duration) {
 func TestExternalMqttSourceResubscribesAfterBrokerRestart(t *testing.T) {
 	natsPort := dctest.FreeTCPPort(t)
 	mqttPort := dctest.FreeTCPPort(t)
-	storeDir := t.TempDir()
+	storeDir := dctest.JetStreamStoreDir(t)
 	start := func() *natsserver.Server {
 		srv, err := natsserver.NewServer(&natsserver.Options{
 			Host: "127.0.0.1", Port: natsPort, JetStream: true, StoreDir: storeDir,

@@ -38,7 +38,7 @@ func startGateway(t *testing.T) (*nats.Conn, int) {
 		Host:       "127.0.0.1",
 		Port:       -1,
 		JetStream:  true, // the MQTT gateway is built on JetStream
-		StoreDir:   t.TempDir(),
+		StoreDir:   dctest.JetStreamStoreDir(t),
 		ServerName: "gateway-test",
 		MQTT:       natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
 	})

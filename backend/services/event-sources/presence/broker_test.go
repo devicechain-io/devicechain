@@ -40,7 +40,7 @@ const testInstance = "inst-1"
 func broker(t *testing.T) (*natsserver.Server, int) {
 	t.Helper()
 	mqttPort := dctest.FreeTCPPort(t)
-	dir := t.TempDir()
+	dir := dctest.JetStreamStoreDir(t)
 	conf := filepath.Join(dir, "nats.conf")
 	require.NoError(t, os.WriteFile(conf, []byte(fmt.Sprintf(`
 listen: "127.0.0.1:-1"
@@ -363,7 +363,7 @@ func TestTheAdvisoryAndTheInventoryAgreeOnTheSession(t *testing.T) {
 // password stands, so it connects; a user not in auth_users waits on a responder that
 // does not exist, so it does not.
 func TestTheSystemAccountLoginIsNotDelegatedToTheDeviceCallout(t *testing.T) {
-	dir := t.TempDir()
+	dir := dctest.JetStreamStoreDir(t)
 	conf := filepath.Join(dir, "nats.conf")
 	// A throwaway account nkey: the server validates the issuer's SHAPE at config load,
 	// and the callout is never actually invoked for a user in auth_users — which is the

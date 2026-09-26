@@ -77,7 +77,7 @@ func startEmbeddedNats(t *testing.T) (string, uint32) {
 		Host:      "127.0.0.1",
 		Port:      -1, // ephemeral
 		JetStream: true,
-		StoreDir:  t.TempDir(),
+		StoreDir:  dctest.JetStreamStoreDir(t),
 	})
 	require.NoError(t, err)
 	go srv.Start()
