@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -24,7 +25,7 @@ import (
 func managerOnServer(t *testing.T) (*NatsManager, *natsserver.Server) {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
 	})
 	if err != nil {
 		t.Fatalf("new embedded nats server: %v", err)

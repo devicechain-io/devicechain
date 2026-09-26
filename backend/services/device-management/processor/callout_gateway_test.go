@@ -61,7 +61,7 @@ func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout ti
 	// test is the deployed one. Options assembled in Go can express an arrangement
 	// the config parser would never produce, and the question here is whether the
 	// production arrangement carries the client id — not whether some arrangement does.
-	dir := t.TempDir()
+	dir := dctest.JetStreamStoreDir(t)
 	conf := filepath.Join(dir, "nats.conf")
 	body := fmt.Sprintf(`
 		port: -1

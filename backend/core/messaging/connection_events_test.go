@@ -259,7 +259,7 @@ func startBrokerOnPort(t *testing.T, port int) *natsserver.Server {
 			Host:      "127.0.0.1",
 			Port:      port,
 			JetStream: true,
-			StoreDir:  t.TempDir(),
+			StoreDir:  dctest.JetStreamStoreDir(t),
 		})
 		if err == nil {
 			go srv.Start()

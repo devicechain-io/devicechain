@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -200,22 +201,32 @@ func (suite *EventPersistenceProcessorTestSuite) TestInvalidEvent() {
 	suite.FailedEventFlowFor(badmsg)
 }
 
-// Test valid event flow for a given message.
-func (suite *EventPersistenceProcessorTestSuite) SuccessEventFlowFor(msg messaging.Message) {
-	// Emulate read.
+// SuccessEventFlowFor hands msg to the worker pool and waits until a worker has
+// persisted it through create — the Create*Events method the event's type routes to —
+// and then written its anchors, which PersistEvent does last for an event carrying
+// anchors (EventPersistenceWorker.persistEventAnchors), as every event built here does.
+//
+// The wait is on a signal the anchor write sends, never on the mock's call list: the
+// workers Initialize started append to that list on their own goroutines, and reading
+// it here without the mock's lock is a data race.
+func (suite *EventPersistenceProcessorTestSuite) SuccessEventFlowFor(msg messaging.Message, create string) {
+	anchored := make(chan struct{})
+	var once sync.Once
+	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil).
+		Run(func(mock.Arguments) { once.Do(func() { close(anchored) }) })
+
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
+	readAndHandleOne(suite.EP, context.Background())
 
-	// Send message. The worker pool started in Initialize persists the event
-	// asynchronously, so poll until the API records the corresponding create
-	// call (the persistence side effect) rather than synchronizing on a now
-	// removed persisted channel.
-	ctx := context.Background()
-	readAndHandleOne(suite.EP, ctx)
-
-	// Verify the event was persisted via the API.
-	assert.Eventually(suite.T(), func() bool {
-		return len(suite.API.Mock.Calls) > 0
-	}, 2*time.Second, 10*time.Millisecond, "expected event to be persisted via the API")
+	select {
+	case <-anchored:
+	case <-time.After(2 * time.Second):
+		suite.T().Fatalf("the worker never wrote the anchors for a %s event", create)
+	}
+	// testify records a call before it runs the call's Run func, so both calls are in
+	// the list by now. AssertNumberOfCalls reads it under the mock's lock.
+	suite.API.AssertNumberOfCalls(suite.T(), create, 1)
+	suite.API.AssertNumberOfCalls(suite.T(), "CreateEventAnchors", 1)
 }
 
 // Test locations event with one entry.
@@ -231,8 +242,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleLocationEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateLocationEvents", mock.Anything, mock.Anything).Return([]*model.LocationEvent{{}}, nil)
-	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
-	suite.SuccessEventFlowFor(msg)
+	suite.SuccessEventFlowFor(msg, "CreateLocationEvents")
 }
 
 // Test measurements event with one entry.
@@ -248,8 +258,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateMeasurementEvents", mock.Anything, mock.Anything).Return([]*model.MeasurementEvent{{}, {}}, nil)
-	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
-	suite.SuccessEventFlowFor(msg)
+	suite.SuccessEventFlowFor(msg, "CreateMeasurementEvents")
 }
 
 // Test alerts event with one entry.
@@ -265,8 +274,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
 
 	// Test event flow.
 	suite.API.Mock.On("CreateAlertEvents", mock.Anything, mock.Anything).Return([]*model.AlertEvent{{}}, nil)
-	suite.API.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
-	suite.SuccessEventFlowFor(msg)
+	suite.SuccessEventFlowFor(msg, "CreateAlertEvents")
 }
 
 // Test a state change (presence) event persists to history (ADR-067 S3): it ROUTES to

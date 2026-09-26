@@ -68,7 +68,7 @@ func mqttRigInDomain(t *testing.T, domain string) (*nats.Conn, nats.JetStreamCon
 		ServerName:      "mqtt-purge-test",
 		JetStream:       true,
 		JetStreamDomain: domain,
-		StoreDir:        t.TempDir(),
+		StoreDir:        dctest.JetStreamStoreDir(t),
 		MQTT: natsserver.MQTTOpts{
 			Host: "127.0.0.1",
 			Port: mqttPort,

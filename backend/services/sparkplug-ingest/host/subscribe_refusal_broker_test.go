@@ -46,7 +46,7 @@ func startRefusingBroker(t *testing.T) string {
 		Host:       "127.0.0.1",
 		Port:       -1,
 		JetStream:  true, // the MQTT gateway is built on JetStream
-		StoreDir:   t.TempDir(),
+		StoreDir:   dctest.JetStreamStoreDir(t),
 		ServerName: "sparkplug-refusal-test",
 		MQTT:       natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
 		Users: []*natsserver.User{

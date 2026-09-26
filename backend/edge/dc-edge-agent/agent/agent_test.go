@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 
@@ -103,7 +104,7 @@ func newCloudBroker(t *testing.T, mqttPort int, storeDir string) *natsserver.Ser
 // broker running for the whole test.
 func startCloudBroker(t *testing.T, mqttPort int) {
 	t.Helper()
-	srv := newCloudBroker(t, mqttPort, t.TempDir())
+	srv := newCloudBroker(t, mqttPort, dctest.JetStreamStoreDir(t))
 	t.Cleanup(srv.Shutdown)
 }
 
@@ -253,7 +254,7 @@ func TestBridgeForwardsDeviceTransparently(t *testing.T) {
 	a := startAgent(t, config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://%s", cloudAddr)},
 	})
 	waitUntil(t, 15*time.Second, a.uplink.Connected)
@@ -304,7 +305,7 @@ func TestStampsIdempotencyWhenDeviceOmitsThem(t *testing.T) {
 	a := startAgent(t, config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://%s", cloudAddr)},
 	})
 	waitUntil(t, 15*time.Second, a.uplink.Connected)
@@ -364,7 +365,7 @@ func TestForwardFailureLeavesEventBufferedWithStableKey(t *testing.T) {
 	a := newAgent(t, config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		// Low connect timeout ⇒ AckWait = 2s, so the redelivery after the failed
 		// attempt lands within the test's patience.
 		Uplink: config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://%s", cloudAddr), ConnectTimeoutSeconds: 1},
@@ -443,12 +444,12 @@ func TestForwardFailureLeavesEventBufferedWithStableKey(t *testing.T) {
 // exactly once. A never-severed run would not exercise the buffer at all.
 func TestBuffersAcrossOutageAndRestart(t *testing.T) {
 	cloudPort := freePort(t)
-	cloudStore := t.TempDir()
+	cloudStore := dctest.JetStreamStoreDir(t)
 	srv := newCloudBroker(t, cloudPort, cloudStore)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 	cloudURL := fmt.Sprintf("tcp://%s", cloudAddr)
 
-	storeDir := t.TempDir() // shared across the restart — this is where the spool lives
+	storeDir := dctest.JetStreamStoreDir(t) // shared across the restart — this is where the spool lives
 
 	// Agent boot #1.
 	a1 := newAgent(t, config.Configuration{
@@ -522,7 +523,7 @@ func TestMintedKeyIsStableAcrossRestart(t *testing.T) {
 	cloudPort := freePort(t)
 	startCloudBroker(t, cloudPort) // up throughout so both agents' uplinks are Connected()
 	cloudURL := fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)
-	storeDir := t.TempDir() // shared across the restart
+	storeDir := dctest.JetStreamStoreDir(t) // shared across the restart
 
 	var mu sync.Mutex
 	var keys []string
@@ -648,10 +649,10 @@ func httpGet(t *testing.T, url string) (int, string) {
 // fails (max seq ≠ nEvents-1); zero the drop computation ⇒ dropped_total ≠ published−received.
 func TestSpoolBoundedRingBufferDropsOldestVisibly(t *testing.T) {
 	cloudPort := freePort(t)
-	cloudStore := t.TempDir()
+	cloudStore := dctest.JetStreamStoreDir(t)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 	cloudURL := fmt.Sprintf("tcp://%s", cloudAddr)
-	storeDir := t.TempDir() // shared across the restart; the spool lives here
+	storeDir := dctest.JetStreamStoreDir(t) // shared across the restart; the spool lives here
 
 	const cap = config.SpoolMinBytes // 16 MiB — the floor, tiny on purpose
 	const nEvents = 40
@@ -804,7 +805,7 @@ func TestAckedCountSeedsFromDrainedStoreOnMigration(t *testing.T) {
 	cloudPort := freePort(t)
 	startCloudBroker(t, cloudPort)
 	cloudURL := fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)
-	storeDir := t.TempDir()
+	storeDir := dctest.JetStreamStoreDir(t)
 	const n = 5
 
 	// Boot #1: publish and fully drain n events, so FirstSeq advances past 1.
@@ -854,7 +855,7 @@ func TestMetricsAndHealthEndpoint(t *testing.T) {
 	a := startAgent(t, config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)},
 	})
 	waitUntil(t, 15*time.Second, a.uplink.Connected)
@@ -894,7 +895,7 @@ func TestMetricsDisabledWhenPortZero(t *testing.T) {
 	cfg := config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: t.TempDir(), MetricsPort: &zero},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: dctest.JetStreamStoreDir(t), MetricsPort: &zero},
 		Uplink:     config.UplinkConfiguration{BrokerURL: "tcp://127.0.0.1:1"},
 	}
 	cfg.ApplyDefaults()
@@ -915,7 +916,7 @@ func TestClientPortUnboundMqttOnly(t *testing.T) {
 	cfg := config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		Uplink:     config.UplinkConfiguration{BrokerURL: "tcp://127.0.0.1:1"},
 	}
 	cfg.ApplyDefaults()
@@ -952,7 +953,7 @@ func TestInstanceMismatchIsCounted(t *testing.T) {
 	a := startAgent(t, config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)},
 	})
 
@@ -986,7 +987,7 @@ func TestLocalAuthGatesLocalMqtt(t *testing.T) {
 		InstanceId: "test",
 		AgentId:    "site1",
 		Local: config.LocalConfiguration{
-			ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir(),
+			ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t),
 			Username: user, PasswordEnv: "DC_EDGE_LOCAL_PASSWORD",
 		},
 		Uplink: config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://%s", cloudAddr)},
@@ -1046,7 +1047,7 @@ func TestLocalAuthMissingSecretFailsClosed(t *testing.T) {
 		InstanceId: "test",
 		AgentId:    "site1",
 		Local: config.LocalConfiguration{
-			ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: t.TempDir(),
+			ListenHost: "127.0.0.1", ListenPort: freePort(t), StoreDir: dctest.JetStreamStoreDir(t),
 			Username: "edge", PasswordEnv: "DC_EDGE_LOCAL_PASSWORD_MISSING",
 		},
 		Uplink: config.UplinkConfiguration{BrokerURL: "tcp://127.0.0.1:1"},
@@ -1069,7 +1070,7 @@ func TestLocalAuthOpenByDefaultWarns(t *testing.T) {
 	a := newAgentLog(t, config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)},
 	}, buf)
 	t.Cleanup(runReady(t, a))
@@ -1152,7 +1153,7 @@ func TestStoreDirPermsHardened(t *testing.T) {
 func TestStoreArtifactsArePrivate(t *testing.T) {
 	cloudPort := freePort(t)
 	startCloudBroker(t, cloudPort)
-	storeDir := t.TempDir()
+	storeDir := dctest.JetStreamStoreDir(t)
 	if err := os.Chmod(storeDir, 0o755); err != nil { // the mkdir -p / volume default
 		t.Fatalf("chmod storeDir: %v", err)
 	}
@@ -1188,7 +1189,7 @@ func TestStoreArtifactsArePrivate(t *testing.T) {
 // the post-reconnect payload is byte-identical.
 func TestUplinkReconnectsAndResumesForwarding(t *testing.T) {
 	cloudPort := freePort(t)
-	cloudStore := t.TempDir()
+	cloudStore := dctest.JetStreamStoreDir(t)
 	srv := newCloudBroker(t, cloudPort, cloudStore)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 
@@ -1196,7 +1197,7 @@ func TestUplinkReconnectsAndResumesForwarding(t *testing.T) {
 	a := startAgent(t, config.Configuration{
 		InstanceId: "test",
 		AgentId:    "site1",
-		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: t.TempDir()},
+		Local:      config.LocalConfiguration{ListenHost: "127.0.0.1", ListenPort: agentPort, StoreDir: dctest.JetStreamStoreDir(t)},
 		Uplink:     config.UplinkConfiguration{BrokerURL: fmt.Sprintf("tcp://%s", cloudAddr)},
 	})
 	waitUntil(t, 15*time.Second, a.uplink.Connected)

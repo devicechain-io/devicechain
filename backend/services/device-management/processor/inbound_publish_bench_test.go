@@ -194,7 +194,7 @@ func benchMeasurement(device int) *esmodel.UnresolvedEvent {
 func benchNatsServer(b *testing.B) *natsserver.Server {
 	b.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: b.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(b),
 	})
 	if err != nil {
 		b.Fatal(err)

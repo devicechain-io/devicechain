@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func kvRig(t *testing.T) *nats.Conn {
 		Port:       -1,
 		ServerName: "kv-store-test",
 		JetStream:  true,
-		StoreDir:   t.TempDir(),
+		StoreDir:   dctest.JetStreamStoreDir(t),
 	})
 	require.NoError(t, err)
 	go srv.Start()

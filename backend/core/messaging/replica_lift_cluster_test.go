@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/kv"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -106,7 +107,7 @@ func tryNewTestCluster(t *testing.T) (*NatsManager, func(), error) {
 			Port:       -1,
 			ServerName: fmt.Sprintf("n%d", i+1),
 			JetStream:  true,
-			StoreDir:   t.TempDir(),
+			StoreDir:   dctest.JetStreamStoreDir(t),
 			Cluster: natsserver.ClusterOpts{
 				Name: "dctest",
 				Host: "127.0.0.1",

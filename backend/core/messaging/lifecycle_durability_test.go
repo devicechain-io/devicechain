@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
@@ -62,7 +63,7 @@ func startEmbeddedServer(t *testing.T) *natsserver.Server {
 		Host:      "127.0.0.1",
 		Port:      -1, // ephemeral
 		JetStream: true,
-		StoreDir:  t.TempDir(),
+		StoreDir:  dctest.JetStreamStoreDir(t),
 	})
 	if err != nil {
 		t.Fatalf("new embedded nats server: %v", err)

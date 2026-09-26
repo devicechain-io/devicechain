@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -252,7 +253,7 @@ func startAuthBrokerOnPort(t *testing.T, port int, user, pass string) *natsserve
 			Host:      "127.0.0.1",
 			Port:      port,
 			JetStream: true,
-			StoreDir:  t.TempDir(),
+			StoreDir:  dctest.JetStreamStoreDir(t),
 			Username:  user,
 			Password:  pass,
 		})

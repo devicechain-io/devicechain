@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/require"
 
@@ -36,7 +37,7 @@ func capacityMessage(t *testing.T, ackWait time.Duration) messaging.Message {
 func capacityMessageWith(t *testing.T, ackWait time.Duration, body []byte) messaging.Message {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: t.TempDir(),
+		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
 	})
 	require.NoError(t, err)
 	go srv.Start()

@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/golang-jwt/jwt/v5"
@@ -56,7 +57,7 @@ func jetStreamKV(t *testing.T) (refresh, codes nats.KeyValue) {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, ServerName: "session-epoch-test",
-		JetStream: true, StoreDir: t.TempDir(),
+		JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
 	})
 	require.NoError(t, err)
 	go srv.Start()
