@@ -22,28 +22,18 @@
 // CONTAINS "23505" is not a conflict here; only a *pgconn.PgError whose Code is 23505,
 // or a SQLite driver error whose numeric code is a unique or primary-key violation, is.
 //
-// # Why only 23505
+// # Why only a taken value
 //
-// Foreign-key (23503) and check (23514) violations are a separate decision: they are not
-// "a value that must be unique is already in use", and answering them with this code
-// would tell a client that retries-as-exists to carry on. They pass through unchanged.
+// Foreign-key, check, not-null and every other integrity violation are recognised by
+// core/integrity, which this package uses to recognise a unique violation too, and are
+// answered with their own codes (REFERENCE_VIOLATION, INVALID_VALUE) — never with this
+// one. They are not "a value that must be unique is already in use", and answering them
+// with CONFLICT would tell a client that retries-as-exists to carry on.
 //
-// # Why SQLite is recognised by package path rather than by importing its type
-//
-// No production binary links SQLite; only tests do. Importing the driver's error type
-// into a package every service links would put a transpiled C database into every
-// service binary to recognise an error production can never produce. The SQLite branch
-// therefore matches the error's TYPE IDENTITY (its package path) and its numeric Code()
-// — still a type check, never a text match. The path is pinned by a test over a REAL
-// SQLite error (in core/rdb, whose tests already use the driver), so a driver rename
-// fails a test instead of silently classifying nothing. That test is not in this package
-// on purpose: dcctl links this package, and a driver imported by its tests would enter
-// dcctl's module graph.
-//
-// # Why this is a leaf package
-//
-// dcctl and core/graphql need the code without linking gorm, so it lives outside rdb and
-// imports only the standard library and pgconn.
+// Recognition — the driver's error TYPE and code, never its text, including why SQLite
+// is matched by package path and why the tests over a real SQLite error live in
+// core/rdb rather than here — lives in core/integrity. This package stays a leaf in the
+// same sense: dcctl and core/graphql need the code without linking gorm.
 //
 // # 🔴 WHAT IS NOT A CONFLICT, and must never be made one
 //
@@ -61,10 +51,8 @@ package conflict
 import (
 	"errors"
 	"fmt"
-	"reflect"
-	"strings"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/devicechain-io/dc-microservice/integrity"
 )
 
 // Code is the extensions.code a conflict carries on the wire.
@@ -77,20 +65,6 @@ const Code = "CONFLICT"
 // recognised a duplicate by that word, so an older dcctl still treats a re-create
 // against a newer server as idempotent. Keep it in the sentence.
 const Message = "the request conflicts with an existing record: a value that must be unique is already in use"
-
-// sqlitePkgPath is the package the SQLite driver's *Error type is declared in (see the
-// package doc for why it is matched by path rather than imported).
-const sqlitePkgPath = "github.com/glebarez/go-sqlite"
-
-// SQLite's extended result codes for a uniqueness failure. The driver enables extended
-// codes, so these are what Code() reports.
-const (
-	sqliteConstraintPrimaryKey = 1555 // SQLITE_CONSTRAINT_PRIMARYKEY
-	sqliteConstraintUnique     = 2067 // SQLITE_CONSTRAINT_UNIQUE
-)
-
-// postgresUniqueViolation is the SQLSTATE of a unique violation.
-const postgresUniqueViolation = "23505"
 
 // Error is a conflict: a write collided with, or a service refused because of, a value
 // that must be unique. Its Error() never carries driver text.
@@ -132,6 +106,10 @@ func (e *Error) Extensions() map[string]any { return map[string]any{"code": Code
 // violation (Postgres 23505; SQLite 2067 or 1555). A driver violation is returned
 // wrapped in a new *Error whose cause is the driver error. A *Error in the chain wins
 // over a driver violation, because it is the service's own account of the refusal.
+//
+// A conflict in the chain is not by itself the wire answer: the GraphQL boundary serves
+// CONFLICT only when core/integrity finds no other kind of refusal beside it (see
+// integrity.Refused), because CONFLICT is the one code a client carries on over.
 func As(err error) (*Error, bool) {
 	if err == nil {
 		return nil, false
@@ -140,8 +118,10 @@ func As(err error) (*Error, bool) {
 	if errors.As(err, &ce) {
 		return ce, true
 	}
-	if drv, constraint, ok := driverViolation(err); ok {
-		return &Error{Constraint: constraint, cause: drv}, true
+	for _, v := range integrity.All(err) {
+		if v.Class == integrity.ClassUnique {
+			return &Error{Constraint: v.Constraint, cause: v.Driver}, true
+		}
 	}
 	return nil, false
 }
@@ -150,111 +130,4 @@ func As(err error) (*Error, bool) {
 func Is(err error) bool {
 	_, ok := As(err)
 	return ok
-}
-
-// Redact removes the text of any driver unique violation in err's chain from message,
-// which is what a GraphQL response would otherwise serve. It looks for the violation
-// independently of any *Error above it, so a service refusal joined with a driver error
-// cannot shield the driver's text.
-//
-//   - The driver error's full text, where it appears, is replaced by Message, keeping any
-//     context the service added around it.
-//   - If a fragment that leaks still remains (the Postgres message or constraint name, or
-//     the SQLite message without its code suffix — for example because a caller printed
-//     part of the error with %v), the WHOLE message is replaced by Message.
-//   - A message holding no fragment is returned unchanged: a service's own sentence is
-//     kept.
-//
-// constraint is the violated constraint's name, for server-side logging; changed
-// reports whether message was altered.
-func Redact(message string, err error) (redacted, constraint string, changed bool) {
-	drv, constraint, ok := driverViolation(err)
-	if !ok {
-		return message, "", false
-	}
-	out := message
-	if full := drv.Error(); full != "" {
-		out = strings.ReplaceAll(out, full, Message)
-	}
-	for _, frag := range leakFragments(drv) {
-		if frag != "" && strings.Contains(out, frag) {
-			return Message, constraint, true
-		}
-	}
-	return out, constraint, out != message
-}
-
-// leakFragments are the parts of a driver violation that identify the database's
-// internals, and so must not survive a redaction on their own.
-func leakFragments(drv error) []string {
-	var pg *pgconn.PgError
-	if errors.As(drv, &pg) {
-		return []string{pg.Message, pg.ConstraintName, pg.Detail}
-	}
-	// SQLite prints "<errstr>: <errmsg> (<code>)"; the part before the code suffix is
-	// what a partial print would carry.
-	msg := drv.Error()
-	if i := strings.LastIndex(msg, " ("); i > 0 {
-		msg = msg[:i]
-	}
-	return []string{msg}
-}
-
-// driverViolation walks err's whole chain — both Unwrap forms — for the first driver
-// unique violation. It does not use errors.As with an interface target, which would stop
-// at the FIRST error with a Code() method whatever its package.
-func driverViolation(err error) (drv error, constraint string, ok bool) {
-	walk(err, func(e error) bool {
-		if pg, isPg := e.(*pgconn.PgError); isPg {
-			if pg.Code == postgresUniqueViolation {
-				drv, constraint, ok = pg, pg.ConstraintName, true
-				return true
-			}
-			return false
-		}
-		if isSQLiteUnique(e) {
-			drv, ok = e, true
-			return true
-		}
-		return false
-	})
-	return drv, constraint, ok
-}
-
-// isSQLiteUnique matches the SQLite driver's error by type identity and numeric code.
-func isSQLiteUnique(e error) bool {
-	t := reflect.TypeOf(e)
-	if t == nil || t.Kind() != reflect.Pointer || t.Elem().PkgPath() != sqlitePkgPath {
-		return false
-	}
-	coded, ok := e.(interface{ Code() int })
-	if !ok {
-		return false
-	}
-	switch coded.Code() {
-	case sqliteConstraintUnique, sqliteConstraintPrimaryKey:
-		return true
-	}
-	return false
-}
-
-// walk visits err and every error beneath it, depth first, until visit returns true.
-func walk(err error, visit func(error) bool) bool {
-	if err == nil {
-		return false
-	}
-	if visit(err) {
-		return true
-	}
-	switch u := err.(type) {
-	case interface{ Unwrap() error }:
-		return walk(u.Unwrap(), visit)
-	case interface{ Unwrap() []error }:
-		for _, inner := range u.Unwrap() {
-			if walk(inner, visit) {
-				return true
-			}
-		}
-	}
-	return false
 }

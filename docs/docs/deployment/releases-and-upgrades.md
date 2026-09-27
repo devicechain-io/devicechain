@@ -3034,6 +3034,31 @@ second and 10 about 2900. See [Event resolution](./observability.md#event-resolu
   `resolution.workers`, as it refuses any setting it does not know. Remove the setting before
   rolling back.
 
+#### Refused references and refused values answer with a code
+
+Nothing needs doing unless your own code or scripts recognise these refusals by reading the error
+message. [A reference or a value that is refused](../reference/graphql-api.md#reference-and-invalid-values)
+has the details.
+
+- **A delete refused because other records still refer to the record** now carries
+  `extensions.code` set to `REFERENCE_VIOLATION`: a device profile, device type or other type still
+  in use, an entity group a detection rule still scopes to, a tenant tier that tenants are still
+  at, a tenant that still has memberships, an AI provider that is still granted, and a
+  notification channel a policy rule still names. The message is unchanged.
+- **The database's own wording is replaced.** Where a message used to end in `violates foreign key
+  constraint "…" (SQLSTATE 23503)`, it now ends in `the request refers to a record that does not
+  exist, or removes one that other records still refer to` and carries `REFERENCE_VIOLATION`. A
+  value the database refuses for any other integrity reason, such as a missing required value, is
+  answered the same way with `the request contains a value this record does not allow` and
+  `INVALID_VALUE`. Neither sentence names a table, column or constraint, or repeats a value you
+  sent.
+- **Neither is `CONFLICT`,** so `dcctl` and any code that treats `CONFLICT` as "already exists" do
+  not carry on over them. A refusal that involves both a duplicate and one of these now carries the
+  new code rather than `CONFLICT`.
+- **The server logs each of these database refusals as a warning** naming the constraint, table
+  and column, since the service's own check normally answers first. The detail, which can repeat
+  the values sent, is not logged.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

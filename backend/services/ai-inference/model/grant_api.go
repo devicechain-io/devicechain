@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"gorm.io/gorm"
 )
 
@@ -18,7 +19,10 @@ import (
 // tier or tenant GRANT, or a tenant's function ASSIGNMENT. It names every reason so the
 // operator can act rather than guess (ADR-044's ErrEntityInUse shape, as user-management
 // already uses for a tier that tenants reference).
-var ErrProviderInUse = errors.New("provider is still granted and cannot be deleted")
+//
+// It carries REFERENCE_VIOLATION on the wire, the code the grants' foreign key gets if
+// the database refuses the delete instead.
+var ErrProviderInUse = integrity.NewRefusal(integrity.ClassReference, "provider is still granted and cannot be deleted")
 
 // ErrUnknownProvider is returned when a grant names a provider token that does not
 // exist. The FK would reject the insert anyway; catching it here gives the operator a

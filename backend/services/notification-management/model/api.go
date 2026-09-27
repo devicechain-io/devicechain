@@ -4,15 +4,15 @@
 package model
 
 import (
-	"errors"
-
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 )
 
 // ErrChannelInUse is returned when a channel delete is refused because a routing
-// rule still references it. The GraphQL layer surfaces it as a user error.
-var ErrChannelInUse = errors.New("notification channel is still referenced by a policy rule and cannot be deleted")
+// rule still references it. The GraphQL layer surfaces it as a user error carrying
+// extensions.code REFERENCE_VIOLATION.
+var ErrChannelInUse = integrity.NewRefusal(integrity.ClassReference, "notification channel is still referenced by a policy rule and cannot be deleted")
 
 // Api is the persistence-facing surface of the notification service (ADR-017): the
 // per-tenant delivery channels (SMTP/webhook, with their write-only secrets), the

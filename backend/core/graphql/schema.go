@@ -35,11 +35,12 @@ import (
 // bounds serial mutation work and root fan-out per request, not per-request work in
 // general.
 //
-// 🔴 EXEC IS ALSO WHERE A UNIQUENESS CONFLICT GETS ITS CODE, for the same reason the
-// limit lives here: it is the only execution path, so every service's resolver errors
-// pass through it (see answerConflicts). Subscribe does not do it itself; the one
-// production caller of Subscribe, the WebSocket pump, answers conflicts on each
-// response it forwards, and the pump is the only place those responses are typed.
+// 🔴 EXEC IS ALSO WHERE AN INTEGRITY REFUSAL (a taken unique value, a refused reference,
+// a refused value) GETS ITS CODE, for the same reason the limit lives here: it is the
+// only execution path, so every service's resolver errors pass through it (see
+// answerIntegrity). Subscribe does not do it itself; the one production caller of
+// Subscribe, the WebSocket pump, answers integrity refusals on each response it
+// forwards, and the pump is the only place those responses are typed.
 type Schema struct {
 	inner *graphql.Schema
 
@@ -73,7 +74,7 @@ func (s *Schema) Exec(ctx context.Context, query, operationName string, variable
 		return &graphql.Response{Errors: []*gqlerrors.QueryError{err}}
 	}
 	resp := s.inner.Exec(s.execContext(ctx), query, operationName, variables)
-	answerConflicts(resp.Errors)
+	answerIntegrity(resp.Errors)
 	return resp
 }
 
@@ -84,7 +85,7 @@ func (s *Schema) Exec(ctx context.Context, query, operationName string, variable
 // anything but a subscription before it gets here; this is the second line behind that,
 // for any caller that does not. A refused document arrives as one response carrying the
 // error on an already-closed channel, the same shape graphql-go uses for its own request
-// errors. Unlike Exec it does not answer conflicts on what it returns: its caller reads
+// errors. Unlike Exec it does not answer integrity refusals on what it returns: its caller reads
 // the channel and does (see the Schema doc).
 func (s *Schema) Subscribe(ctx context.Context, query, operationName string, variables map[string]any) (<-chan any, error) {
 	if err := s.checkWork(query); err != nil {

@@ -589,6 +589,50 @@ Some refusals look similar and do not carry `CONFLICT`:
   refused without `CONFLICT`, because the token is not held by a tenant you could use.
 - Creating a command with a token already in use is not refused at all: you get the original
   command back. See [Issue a command](../guides/sending-commands.md#issue-it).
+- Deleting a record that other records still refer to carries `REFERENCE_VIOLATION`. See
+  [A reference or a value that is refused](#reference-and-invalid-values).
+
+### A reference or a value that is refused {#reference-and-invalid-values}
+
+Two other refusals are answered the same way, each with its own code.
+
+`REFERENCE_VIOLATION` means the write was refused because of how records refer to each other.
+Deleting a record that other records still refer to is refused this way: for example a device
+profile a device type still uses, a device type its devices still use, a tenant tier that tenants
+are still at, a tenant that still has memberships, an AI provider that is still granted, or a
+notification channel a policy rule still names. The message is the service's own sentence, which
+says what still refers to the record and may repeat the token you sent:
+
+    entity is still referenced and cannot be deleted: 1 device type(s) reference device profile "rover"
+
+Remove or reassign what still refers to the record, then try again.
+
+When the database refuses the write rather than the service's own check, the message is:
+
+    the request refers to a record that does not exist, or removes one that other records still refer to
+
+That can happen when the records change between the check and the write, for example when a record
+your write refers to is deleted while the write runs. Reload and try again: you then get the
+service's own answer, or the write succeeds. If the same request keeps getting this answer,
+something you cannot see through the API still refers to the record. Report it with the time of
+the request; the server logs which reference refused it.
+
+A write that names a record that does not exist is normally refused by the service's own lookup
+before the write, with a message naming the token and no code. It carries `REFERENCE_VIOLATION`
+only when that record was removed while the write ran.
+
+`INVALID_VALUE` means a value in the request is one the record does not allow, and the service did
+not catch it before the write. The message is:
+
+    the request contains a value this record does not allow
+
+Change the value. Sending the same request again normally gives the same answer.
+
+In both cases the database's own wording is replaced, so these two sentences name no table, column
+or constraint and repeat none of the values you sent. Neither code is `CONFLICT`, so code that
+treats `CONFLICT` as "the record already exists" does not treat them as success. A refusal that
+involves both a value that must be unique and one of these carries `REFERENCE_VIOLATION` or
+`INVALID_VALUE`, never `CONFLICT`.
 
 ## Request limits {#request-limits}
 

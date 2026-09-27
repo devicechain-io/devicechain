@@ -119,12 +119,37 @@ func TestARepeatedCommandKeyAnswersConflict(t *testing.T) {
 	}
 }
 
-// The control: a refusal that is not about a taken value carries no CONFLICT.
+// The control: a refusal that is not about a taken value carries no CONFLICT. Nor is it
+// a REFERENCE_VIOLATION: an unknown token is refused by the service's own lookup, which
+// carries no code, not by a foreign key.
 func TestAnUnknownProfileIsNotAConflict(t *testing.T) {
 	ctx := conflictWireCtx(t)
 	qe := onlyError(t, execServed(t, ctx, wireCreateCommand, map[string]any{"request": map[string]any{
 		"token": "cmd-1", "deviceProfileToken": "nope", "commandKey": "drive"}}))
-	if got, set := qe.Extensions["code"]; set && got == "CONFLICT" {
-		t.Fatalf("a missing profile was answered as a conflict: %s", qe.Message)
+	if got := qe.Extensions["code"]; got != nil {
+		t.Fatalf("a missing profile was answered with code %v: %s", got, qe.Message)
+	}
+}
+
+const wireDeleteProfile = `mutation ($token: String!) { deleteDeviceProfile(token: $token) }`
+
+// Deleting a profile a device type still adopts is refused by the service's own check.
+// The refusal keeps its sentence, which names what refers to the profile, and gains
+// REFERENCE_VIOLATION — the code the database gives the same refusal if it wins a race
+// with the check — so a client sees one code for both.
+func TestDeletingAProfileAnAdoptingTypeStillReferencesAnswersReferenceViolation(t *testing.T) {
+	ctx := conflictWireCtx(t)
+	requireNoErrors(t, execServed(t, ctx, wireCreateProfile,
+		map[string]any{"request": map[string]any{"token": "rover"}}), "the profile create")
+	requireNoErrors(t, execServed(t, ctx, wireCreateType, map[string]any{"request": map[string]any{
+		"token": "sensor", "profileToken": "rover"}}), "the adopting type create")
+
+	qe := onlyError(t, execServed(t, ctx, wireDeleteProfile, map[string]any{"token": "rover"}))
+	if got := qe.Extensions["code"]; got != "REFERENCE_VIOLATION" {
+		t.Fatalf("extensions.code = %v, want REFERENCE_VIOLATION (message %q)", got, qe.Message)
+	}
+	const want = `entity is still referenced and cannot be deleted: 1 device type(s) reference device profile "rover"`
+	if qe.Message != want {
+		t.Fatalf("message = %q, want the service's own sentence %q", qe.Message, want)
 	}
 }

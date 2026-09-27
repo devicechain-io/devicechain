@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -56,8 +57,10 @@ func (api *Api) relationshipSourceDevices(ctx context.Context, cond string, args
 // token names nothing, mirroring DeleteEntityAttribute).
 
 // ErrEntityInUse is returned when a delete is refused because other rows still
-// reference the entity. Callers (the GraphQL layer) surface it as a user error.
-var ErrEntityInUse = errors.New("entity is still referenced and cannot be deleted")
+// reference the entity. It carries REFERENCE_VIOLATION on the wire — the code a
+// foreign-key violation gets when the database refuses the delete instead (after a
+// concurrent change) — so a client sees one code for both.
+var ErrEntityInUse = integrity.NewRefusal(integrity.ClassReference, "entity is still referenced and cannot be deleted")
 
 // hardDeleteByToken hard-deletes the single tenant-scoped row of model identified
 // by token, returning whether a row was removed. model is a zero-value pointer of
@@ -269,9 +272,10 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 // 🔴 THE REPLACEMENT JOURNAL IS PART OF THE CASCADE, AND LEAVING IT OUT DID NOT LOOK
 // LIKE A BUG. device_replacements carries a foreign key to devices, so without this
 // a device that has ever been replaced could not be deleted at all: Postgres refuses
-// the parent delete with a raw `FOREIGN KEY constraint failed`, which surfaces to the
-// caller as a database error rather than as ErrEntityInUse — a device permanently
-// undeletable for a reason the API cannot explain.
+// the parent delete with a foreign-key violation, which reaches the caller as the
+// neutral REFERENCE_VIOLATION sentence rather than as ErrEntityInUse's account of
+// what refers to it — a device permanently undeletable for a reason the API cannot
+// explain. (The boundary logs the constraint at WARN; the caller never sees it.)
 //
 // It went unnoticed because every fixture in this package ran sqlite with foreign
 // keys OFF, where the same sequence passes. That is the "fixture more permissive than
@@ -303,10 +307,10 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 // The type's published version history (ADR-072) goes WITH it, in the same
 // transaction. asset_type_versions carries a foreign key to asset_types, so without
 // this an asset type that has ever been published could not be deleted at all:
-// Postgres refuses the parent delete with a raw constraint error, which reaches the
-// caller as a database fault rather than as ErrEntityInUse — the identical shape as
-// the device-replacement journal, and invisible in a fixture running sqlite with
-// foreign keys off. assetPropertyTestApi turns them on for exactly that reason.
+// Postgres refuses the parent delete with a foreign-key violation, which reaches the
+// caller as the neutral REFERENCE_VIOLATION sentence rather than as ErrEntityInUse —
+// the identical shape as the device-replacement journal, and invisible in a fixture
+// running sqlite with foreign keys off. assetPropertyTestApi turns them on for exactly that reason.
 //
 // The versions do not hold the type back the way an asset does. A version is a
 // record ABOUT this type, addressed only through it, so there is nothing for it to

@@ -89,52 +89,17 @@ func TestWhatIsNotAConflict(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.False(t, conflict.Is(err))
-			_, _, changed := conflict.Redact("anything", err)
-			assert.False(t, changed)
 		})
 	}
 }
 
-func TestRedact(t *testing.T) {
-	pg := pgErr("23505", "uix_widgets_tenant_token")
-	full := pg.Error()
-
-	t.Run("the driver text is replaced and the service's prefix kept", func(t *testing.T) {
-		got, constraint, changed := conflict.Redact("create widget: "+full, fmt.Errorf("create widget: %w", pg))
-		assert.Equal(t, "create widget: "+conflict.Message, got)
-		assert.Equal(t, "uix_widgets_tenant_token", constraint)
-		assert.True(t, changed)
-	})
-
-	t.Run("a fragment printed without the full text replaces the whole message", func(t *testing.T) {
-		msg := "custom: " + pg.Message
-		got, _, changed := conflict.Redact(msg, &wrapping{msg: msg, cause: pg})
-		assert.Equal(t, conflict.Message, got)
-		assert.True(t, changed)
-	})
-
-	t.Run("a constraint name on its own replaces the whole message", func(t *testing.T) {
-		msg := "index uix_widgets_tenant_token refused it"
-		got, _, _ := conflict.Redact(msg, &wrapping{msg: msg, cause: pg})
-		assert.Equal(t, conflict.Message, got)
-	})
-
-	t.Run("a service's own sentence holding no fragment is kept", func(t *testing.T) {
-		msg := "that token is already in use"
-		got, _, changed := conflict.Redact(msg, &wrapping{msg: msg, cause: pg})
-		assert.Equal(t, msg, got)
-		assert.False(t, changed)
-	})
-
-	// A service refusal joined with the driver error: the *Error wins As, but the
-	// driver's text is still found and removed.
-	t.Run("a service conflict cannot shield a driver error beside it", func(t *testing.T) {
-		err := errors.Join(conflict.New("taken"), pg)
-		c, ok := conflict.As(err)
-		require.True(t, ok)
-		assert.Equal(t, "taken", c.Error())
-		got, _, changed := conflict.Redact(err.Error(), err)
-		assert.Equal(t, "taken\n"+conflict.Message, got)
-		assert.True(t, changed)
-	})
+// A service refusal joined with a driver violation: the service's *Error wins As. (That
+// the driver's text beside it is still removed is the boundary's job, tested in
+// core/graphql and core/integrity.)
+func TestAServiceConflictJoinedWithADriverViolationIsTheServices(t *testing.T) {
+	own := conflict.New("taken")
+	c, ok := conflict.As(errors.Join(own, pgErr("23505", "uix_widgets_tenant_token")))
+	require.True(t, ok)
+	assert.Same(t, own, c)
+	assert.Equal(t, "taken", c.Error())
 }

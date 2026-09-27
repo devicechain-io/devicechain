@@ -14,7 +14,7 @@ import (
 // then delegates to the model delete API, which owns the hard-delete + edge-
 // cascade + referential-integrity semantics (see model/api_delete.go). Each
 // returns whether a row was removed; a referential refusal surfaces as a GraphQL
-// error (model.ErrEntityInUse).
+// error (model.ErrEntityInUse) carrying extensions.code REFERENCE_VIOLATION.
 
 // Delete a device type (refused while devices reference it).
 func (r *SchemaResolver) DeleteDeviceType(ctx context.Context, args struct{ Token string }) (bool, error) {
