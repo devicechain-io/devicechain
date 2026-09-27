@@ -320,6 +320,12 @@ var (
 // limit of the API that writes it) into a signal that the username exists. The empty
 // result an unknown username gets is still cheaper than that one row; see checkPassword
 // in processor/callout.go.
+//
+// 🔴 A ROW FROM HERE MUST NEVER REACH evaluateCredential. CredentialType is left empty
+// and Enabled false, and credentialRequiresSecret decides whether to compare a secret
+// from CredentialType: on a row read here it sees no secret-bearing type and SKIPS the
+// compare, so any password would authenticate. Only the password connect, which
+// compares the secret itself, may read through this finder.
 func (api *Api) deviceCredentialForConnect(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
 	found := make([]*DeviceCredential, 0)
 	device := api.RDB.Database.Session(&gorm.Session{NewDB: true}).Select(connectDeviceFields)

@@ -4,7 +4,12 @@
 package model
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 // The connect lookup fills exactly the credential fields the password check reads —
@@ -36,5 +41,29 @@ func TestTheConnectLookupFillsOnlyTheConnectFields(t *testing.T) {
 	}
 	if cred.Device.Metadata != nil || cred.Device.DeviceTypeId != 0 || cred.Device.Name.Valid {
 		t.Errorf("the joined device carries columns the connect does not read: %+v", cred.Device)
+	}
+}
+
+// Two live rows for one presented credential break the invariant the live-rows partial
+// unique index keeps on PostgreSQL. SQLite's AutoMigrate creates no such index, which is
+// what lets this test seed the state at all. Both finders must then refuse — neither may
+// pick a row and authenticate against it — and refuse with an error that is not
+// ErrRecordNotFound, since the credential does exist and the store is what is wrong.
+func TestBothCredentialFindersRefuseAnAmbiguousMatch(t *testing.T) {
+	f := newSQLiteCredentialFixture(t)
+	dup := &DeviceCredential{DeviceId: f.devId, CredentialType: string(CredentialMqttBasic),
+		CredentialId: "cred-1", CredentialValue: sql.NullString{String: "other", Valid: true}, Enabled: true}
+	dup.Token = "c-dup"
+	mustExec(t, f.api.RDB.DB(f.ctx).Create(dup))
+
+	finders := map[string]func(context.Context, string, string) (*DeviceCredential, error){
+		"DeviceCredentialByCredentialId": f.api.DeviceCredentialByCredentialId,
+		"deviceCredentialForConnect":     f.api.deviceCredentialForConnect,
+	}
+	for name, find := range finders {
+		cred, err := find(f.ctx, string(CredentialMqttBasic), "cred-1")
+		if err == nil || errors.Is(err, gorm.ErrRecordNotFound) {
+			t.Errorf("%s over two live rows: got (%v, %v), want an ambiguity refusal", name, cred, err)
+		}
 	}
 }

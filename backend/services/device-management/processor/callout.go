@@ -233,8 +233,9 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	// caller "that tenant is being deleted" would make the callout an oracle for which
 	// tenants exist and what is happening to them. It is the ANSWER that is the same, not
 	// the time: this refusal skips the attempt-store charge and the lookup, so it is
-	// quicker than any other, and a caller who times it can tell a tenant being deleted
-	// from one that is not. That is accepted: equalizing it would put the deleted
+	// quicker than any refusal of a well-formed username (a malformed one is refused
+	// before this gate, with less work still), and a caller who times it can tell a
+	// tenant being deleted from one that is not. That is accepted: equalizing it would put the deleted
 	// tenant's reconnect storm back onto the attempt store, which refusing here prevents.
 	if c.tenantDeleted(tenant) {
 		log.Debug().Str("tenant", tenant).Msg("Auth-callout refused a device connect for a deleted tenant.")
@@ -349,8 +350,9 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 // An access-token connect resolves through AuthenticateDevice instead, which reads every
 // column of both rows. There the credential id IS the secret, so a row found is normally
 // the grant itself and existence is the answer rather than a side channel; only a token
-// that exists but is refused (expired, or presented from the wrong client id) pays for
-// that full row without connecting.
+// that exists but is refused pays for that full row without connecting: one that is
+// expired, presented from the wrong client id, held by a soft-deleted device, or whose
+// device_id names a device in another tenant.
 //
 // Two connects for one username that race (a reconnect overlapping a stale session)
 // are both evaluated: the one whose charge loses the compare-and-set re-reads the

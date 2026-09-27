@@ -61,9 +61,10 @@ var ErrCredentialIdRequired = errors.New("credentialId is required for this cred
 //
 // Credentials are DISABLED, not deleted. The row survives so the historical binding
 // stays readable and the replacement record's RetiredCredentialTokens resolve to
-// something. DeviceCredentialByCredentialId — the resolve every transport
-// authenticates through — matches `enabled = true` only, so a retired credential
-// authenticates nothing.
+// something. presentedCredentialStatement — the one statement both credential
+// finders run, DeviceCredentialByCredentialId (events, access-token connects) and
+// deviceCredentialForConnect (MQTT password connects) — matches `enabled = true`
+// only, so a retired credential authenticates nothing.
 //
 // 🔴 THAT STOPS RECONNECTION, NOT THE SESSION ALREADY IN FLIGHT, and the difference
 // matters to whoever is standing at the device. Nothing here evicts a connected
