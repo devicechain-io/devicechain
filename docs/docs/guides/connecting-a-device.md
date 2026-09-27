@@ -63,9 +63,9 @@ Every inbound event, over any transport, is a JSON object:
 Every payload wraps its content in an `entries` array, and the shape fixes the JSON type of each value:
 
 - Measurement values and every `Location` field are **JSON strings** (`"21.5"`, not `21.5`).
-- An alert's `level` is a **bare JSON integer**.
+- An alert's `level` is a **bare JSON integer** from 0 to 2147483647.
 
-Both rules are enforced. A payload with no entries, an entry with nothing in it, or a value of the wrong JSON type (a bare number where a string is expected, or a quoted alert `level`) is rejected rather than silently accepted: HTTP answers `400`, and an MQTT publish is dead-lettered.
+Both rules are enforced. A payload with no entries, an entry with nothing in it, a value of the wrong JSON type (a bare number where a string is expected, or a quoted alert `level`), or an alert `level` outside that range is rejected rather than silently accepted: HTTP answers `400`, and an MQTT publish is dead-lettered.
 
 One entry is one reading, taken at one instant. An entry may carry its own `occurredTime`. That is the instant the reading is stored, charted, evaluated and returned at, so a device that buffers readings while offline can upload a buffered run (up to the per-message ceiling below) and keep the history it actually recorded.
 

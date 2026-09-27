@@ -1580,6 +1580,10 @@ If you run `dcctl` where the OpenTofu provider registry cannot be reached, or ap
 configuration yourself, read "A failed `dcctl install` can be run again": every run now contacts
 the registry, and a plain `tofu init` refuses an existing lock file.
 
+If devices send alerts with a `level` above 2147483647, or you read a device's latest
+measurements, its state or its alerts through the GraphQL API, read "Alert levels above 2147483647
+are refused, and four more numbers are no longer wrapped".
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2892,6 +2896,38 @@ cause is still there, the re-run fails the same way rather than reporting the cl
   the lock file, which now names provider versions its configuration does not allow.
 - **If you run the OpenTofu configuration directly** rather than through dcctl, run
   `tofu init -upgrade` once in each root: a plain `init` refuses a lock file on the old versions.
+
+#### Alert levels above 2147483647 are refused, and four more numbers are no longer wrapped
+
+An alert's `level` was accepted up to 4294967295 but is served as a GraphQL `Int`, which stops at
+2147483647, so a larger level read back as a negative number. Four fields had the same fault: the
+stored number was cut down to 32 bits on the way out, so a value past 2147483647 became a
+plausible negative one. Each is now an error instead, like the fields listed under "Credential
+values are stored exactly as sent".
+
+- **An alert with a `level` above 2147483647 is now refused when it arrives.** The device's
+  message is refused as bad data, as an alert with no `type` is: HTTP answers `400` and an MQTT
+  publish is dead-lettered. Nothing needs changing unless a device sends such levels.
+- **An alert already stored with such a level makes the alert listing that includes it an
+  error.** `level` cannot be null, so the whole `alertEvents` answer is null with the error,
+  rather than one alert going missing. This applies to rows stored before the upgrade and to any
+  stored while `event-sources` pods on the previous release are still running. The row stays
+  until retention removes it. To see whether you have any, run this against the event-management
+  database:
+  `SELECT tenant_id, device_token, count(*) FROM "event-management".alert_events WHERE level > 2147483647 GROUP BY 1, 2;`
+- **A latest measurement's `classifier`** is the id of the metric definition the reading was
+  bound to. Once those ids pass 2147483647, `classifier` is an error on that field alone: it reads
+  null and the reading's `value`, `unit` and time still come back. The console and the MCP tools
+  do not read this field. (The same id is a string on stored measurement events, where it has no
+  limit.)
+- **A device state's `inactivityTimeout`** and **a tenant's branding `logoMaxHeight`** are only
+  ever written with values that fit, so this affects only a value written to the database some
+  other way. A wide `inactivityTimeout` makes the whole device-state listing that selects it an
+  error. A wide `logoMaxHeight` makes the console's request for the tenant fail, so the console
+  can no longer load that tenant's branding, locale default or map settings, and the branding
+  editor may not open. To clear it, set the logo height again with `setTenantBranding` through
+  the API, sending the title and colors as well: that mutation replaces them together, so one
+  left out is cleared.
 
 ### The one-time durable-ingest cutover
 

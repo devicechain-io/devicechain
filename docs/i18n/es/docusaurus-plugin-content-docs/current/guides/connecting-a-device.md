@@ -63,9 +63,9 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
 Todo payload envuelve su contenido en un arreglo `entries`, y la forma fija el tipo JSON de cada valor:
 
 - Los valores de medición y todos los campos de `Location` son **cadenas JSON** (`"21.5"`, no `21.5`).
-- El `level` de una alerta es un **entero JSON sin comillas**.
+- El `level` de una alerta es un **entero JSON sin comillas** de 0 a 2147483647.
 
-Ambas reglas se aplican. Un payload sin entradas, una entrada vacía o un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) se rechaza en lugar de aceptarse en silencio: HTTP responde `400` y una publicación MQTT va a la cola de mensajes fallidos.
+Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `400` y una publicación MQTT va a la cola de mensajes fallidos.
 
 Una entrada es una lectura, tomada en un instante. Una entrada puede llevar su propio `occurredTime`. Ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se devuelve, de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir una serie acumulada (hasta el tope por mensaje descrito más abajo) y conservar el historial que realmente registró.
 

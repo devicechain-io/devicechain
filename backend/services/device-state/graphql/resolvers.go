@@ -76,8 +76,13 @@ func (r *DeviceStateResolver) InactivityAlarmTime() *string {
 	return nil
 }
 
-func (r *DeviceStateResolver) InactivityTimeout() int32 {
-	return int32(r.M.InactivityTimeout)
+// InactivityTimeout refuses, rather than wraps, a stored timeout a GraphQL Int cannot hold.
+// The only writer is the default on insert, so this fires only on a value written to the
+// database some other way. The field is non-null inside non-null lists, so for a query that
+// selects it (the console's device page and the MCP device-state tool do) a refusal nulls
+// the whole list, not just this one state.
+func (r *DeviceStateResolver) InactivityTimeout() (int32, error) {
+	return util.StoredInt32("inactivityTimeout", r.M.InactivityTimeout)
 }
 
 // ExternalId is the device's transport-native identity, denormalized (ADR-049); nil
@@ -159,12 +164,12 @@ func (r *LatestMeasurementResolver) Value() *float64 {
 	return nil
 }
 
-func (r *LatestMeasurementResolver) Classifier() *int32 {
-	if r.M.Classifier != nil {
-		v := int32(*r.M.Classifier)
-		return &v
-	}
-	return nil
+// Classifier is the id of the metric definition the reading was bound to. It is refused,
+// not wrapped, once that id no longer fits a GraphQL Int — which the normal path reaches
+// once metric-definition ids pass 2147483647. The field is nullable, so on the wire only
+// it goes null and the reading's value still resolves.
+func (r *LatestMeasurementResolver) Classifier() (*int32, error) {
+	return util.StoredInt32Ptr("classifier", r.M.Classifier)
 }
 
 // Unit is the bound metric definition's unit, denormalized (ADR-016); nil for an

@@ -360,8 +360,13 @@ func (r *AlertEventResolver) Type() string {
 	return r.M.Type
 }
 
-func (r *AlertEventResolver) Level() int32 {
-	return int32(r.M.Level)
+// Level refuses, rather than wraps, a stored level a GraphQL Int cannot hold. event-sources
+// refuses such a level when it arrives, so this fires only on a row stored before that
+// check shipped (or by a pod still on the previous release during an upgrade). level is
+// non-null inside a non-null list, so a refusal errors the whole alert listing that
+// includes the row.
+func (r *AlertEventResolver) Level() (int32, error) {
+	return util.StoredInt32("level", r.M.Level)
 }
 
 func (r *AlertEventResolver) Message() *string {

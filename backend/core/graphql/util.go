@@ -90,37 +90,61 @@ func NullStrNonEmpty(value sql.NullString) *string {
 	return &value.String
 }
 
-// ErrStoredIntOutOfRange is returned by NullInt32 and IntPtrInt32 when a stored integer
-// cannot be represented as a GraphQL Int, which is 32-bit by specification.
+// ErrStoredIntOutOfRange is returned by StoredInt32 and every helper built on it when a
+// stored integer cannot be represented as a GraphQL Int, which is 32-bit by specification.
 var ErrStoredIntOutOfRange = errors.New("stored value is outside the range of a GraphQL Int")
 
-// NullInt32 reads a nullable bigint column as an optional GraphQL Int. A stored value
-// outside int32 is REFUSED, not wrapped: a wrapped number is a plausible wrong answer — a
-// throttle of 2147483648 seconds reads as -2147483648 — and a resolver error is a loud one.
-// field is the schema's name for it, so the error names something a caller can act on.
+// StoredInteger is every Go integer type a model can hold a column in.
+type StoredInteger interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+// StoredInt32 reads a stored integer of any Go integer type as a non-null GraphQL Int. A
+// value outside int32 is REFUSED, not wrapped: a wrapped number is a plausible wrong answer
+// — a throttle of 2147483648 seconds reads as -2147483648 — and a resolver error is a loud
+// one. field is the schema's name for it, so the error names something a caller can act on.
+//
+// This is the one range check in this package; NullInt32, IntPtrInt32 and StoredInt32Ptr
+// all come through it. Unsigned values are compared as unsigned, so a uint64 above
+// MaxInt64 is refused rather than first wrapping negative on its way to the check.
+func StoredInt32[T StoredInteger](field string, v T) (int32, error) {
+	if v < 0 {
+		if int64(v) < math.MinInt32 {
+			return 0, fmt.Errorf("%s: %w (%d)", field, ErrStoredIntOutOfRange, int64(v))
+		}
+	} else if uint64(v) > math.MaxInt32 {
+		return 0, fmt.Errorf("%s: %w (%d)", field, ErrStoredIntOutOfRange, uint64(v))
+	}
+	return int32(v), nil
+}
+
+// StoredInt32Ptr is StoredInt32 for a nullable column: nil stays nil and is never coerced
+// to zero, and a refusal returns a nil value alongside the error.
+func StoredInt32Ptr[T StoredInteger](field string, v *T) (*int32, error) {
+	if v == nil {
+		return nil, nil
+	}
+	n, err := StoredInt32(field, *v)
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+// NullInt32 reads a nullable bigint column as an optional GraphQL Int, with StoredInt32's
+// refusal.
 func NullInt32(field string, value sql.NullInt64) (*int32, error) {
 	if !value.Valid {
 		return nil, nil
 	}
-	return int32InRange(field, value.Int64)
+	return StoredInt32Ptr(field, &value.Int64)
 }
 
 // IntPtrInt32 reads a nullable column the model holds as *int (a tenant governance
-// override) as an optional GraphQL Int, with NullInt32's refusal. nil stays nil — "inherit"
-// — and is never coerced to zero.
+// override) as an optional GraphQL Int, with StoredInt32's refusal. nil stays nil —
+// "inherit" — and is never coerced to zero.
 func IntPtrInt32(field string, value *int) (*int32, error) {
-	if value == nil {
-		return nil, nil
-	}
-	return int32InRange(field, int64(*value))
-}
-
-func int32InRange(field string, v int64) (*int32, error) {
-	if v < math.MinInt32 || v > math.MaxInt32 {
-		return nil, fmt.Errorf("%s: %w (%d)", field, ErrStoredIntOutOfRange, v)
-	}
-	n := int32(v)
-	return &n, nil
+	return StoredInt32Ptr(field, value)
 }
 
 // Format time as a string.
