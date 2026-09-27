@@ -665,8 +665,10 @@ blobStorage:
   mountAreas:
     - user-management
 
-# E7 (ADR-022 review): default pod resource requests/limits (override per area
-# under functionalAreas.<area>.resources). These are lightweight Go services
+# E7 (ADR-022 review): default pod resource requests/limits. An area's own
+# functionalAreas.<area>.resources is merged over this map key by key, so an area
+# sets only what differs (see device-management and event-management below, which
+# raise only limits.cpu). These are lightweight Go services
 # (~50MB baseline per the mission); requests size for scheduling, limits cap the
 # blast radius. requests are mandatory (values.schema.json enforces non-empty
 # resources) so pods land in the Burstable/Guaranteed QoS class, not BestEffort.
@@ -1003,6 +1005,27 @@ functionalAreas:
   # allowed lateness (event-processing watermarkLatenessSeconds); an event whose publish
   # failed is republished only after the inbound AckWait (60 s), beyond that lateness.
   device-management:
+    # CPU LIMIT raised from the 500m default. Requests and the memory limit are the
+    # defaults above: this block is merged over them key by key, so --compact still
+    # lowers the requests.
+    #
+    # At 500m this service was the ceiling of the whole ingest path: on a four-node
+    # --ha kind cluster it resolved at most ~720 events/s, CPU-throttled in 99.9% of
+    # scheduling periods, below the 1000 messages/s every tenant is allowed by
+    # default (event-sources DefaultIngestMessagesPerSecond). Measured unthrottled,
+    # it costs up to 0.96 millicores per event at 800-1600 events/s, so the default
+    # ceiling needs ~1 core. The limit is twice that because a CPU quota is spent by
+    # bursts, not by the average: at 500m this service was already throttled in 24%
+    # of periods while averaging 0.29 cores. GOMAXPROCS follows the limit (see
+    # goMemLimitPercent above), so at "2" the Go runtime runs two threads.
+    # backend/cli/bootstrap/sizing_test.go holds the limit to that measurement.
+    #
+    # A limit reserves nothing on the node (scheduling uses the requests), so a small
+    # install pays nothing for it until the service is busy. Lowering it caps
+    # throughput rather than saving capacity.
+    resources:
+      limits:
+        cpu: "2"
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)
       # rejects any inbound event that does not present a valid device credential;
@@ -1142,6 +1165,16 @@ functionalAreas:
       - name: http-ingest
         port: 8081
   event-management:
+    # CPU LIMIT raised from the 500m default, merged over the defaults like
+    # device-management's (above) and by the same rule. Measured unthrottled it costs
+    # up to 0.53 millicores per stored event, so the default 1000 messages/s tenant
+    # ceiling needs ~0.5 core: exactly the old limit, which it would have hit as soon
+    # as device-management stopped holding it back (it was already throttled in 4% of
+    # periods at ~720 events/s). "2" keeps it under half its limit there, and gives
+    # both per-event services one number.
+    resources:
+      limits:
+        cpu: "2"
     config: {}
     # anchorSweepIntervalSeconds: 3600  # ADR-044 decision 3 reconciliation-sweep
     # cadence. Unset defaults to hourly; a negative value disables the sweep (the

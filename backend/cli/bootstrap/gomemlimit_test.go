@@ -43,6 +43,18 @@ type renderedContainer struct {
 func renderContainers(t *testing.T, vals map[string]interface{}) []renderedContainer {
 	t.Helper()
 
+	manifest, err := renderChart(t, vals)
+	if err != nil {
+		t.Fatalf("rendering chart: %v", err)
+	}
+	return containersOf(t, manifest)
+}
+
+// renderChart renders the embedded chart the way the tests here need it and
+// returns the manifest, or the render error for a test that expects a refusal.
+func renderChart(t *testing.T, vals map[string]interface{}) (string, error) {
+	t.Helper()
+
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)
@@ -74,11 +86,23 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 
 	rel, err := inst.RunWithContext(t.Context(), ch, vals)
 	if err != nil {
-		t.Fatalf("rendering chart: %v", err)
+		return "", err
 	}
+	return rel.Manifest, nil
+}
+
+// containersOf decodes one entry per container in every Deployment of a manifest.
+func containersOf(t *testing.T, manifest string) []renderedContainer {
+	t.Helper()
 
 	var out []renderedContainer
-	for _, doc := range releaseutil.SplitManifests(rel.Manifest) {
+	for _, doc := range releaseutil.SplitManifests(manifest) {
+		var kind struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &kind); err != nil || kind.Kind != "Deployment" {
+			continue
+		}
 		var obj struct {
 			Kind string `json:"kind"`
 			Spec struct {
@@ -99,8 +123,11 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 				} `json:"template"`
 			} `json:"spec"`
 		}
-		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil || obj.Kind != "Deployment" {
-			continue
+		// A Deployment this decoder cannot read is a failure, not a skip. Skipping it
+		// drops that area from every test that ranges over the rendered areas, and
+		// those tests then pass for the one they never saw.
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("decoding a rendered Deployment: %v\n%s", err, doc)
 		}
 		for _, c := range obj.Spec.Template.Spec.Containers {
 			rc := renderedContainer{
@@ -209,6 +236,37 @@ func TestGoMemLimitConvertsGibibytesBeforeTakingThePercentage(t *testing.T) {
 		t.Errorf("a 1Gi limit produced GOMEMLIMIT %s (%d MiB), want 768 MiB: the "+
 			"percentage was taken of the magnitude instead of the converted size, "+
 			"which is the trap that made PV = sum/0.9 unsafe", got, n)
+	}
+}
+
+// A fractional limit converts at its full size. The limit is read by the same
+// parser as the request/limit comparison; the one before it took the leading
+// integer, so 1.5Gi read as 1Gi and the derived GOMEMLIMIT was a third low.
+func TestGoMemLimitReadsAFractionalLimit(t *testing.T) {
+	got := goMemLimitForArea(t, goContainers(renderContainers(t, enabled(map[string]interface{}{
+		"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
+			"limits":   map[string]interface{}{"cpu": "500m", "memory": "1.5Gi"},
+		},
+	}))))
+	if n := mib(t, got); n != 1152 {
+		t.Errorf("a 1.5Gi limit produced GOMEMLIMIT %s (%d MiB), want 1152 MiB (75%% of 1536)", got, n)
+	}
+}
+
+// A decimal limit is a valid Kubernetes quantity but is refused as a source for
+// GOMEMLIMIT: 1G is 1000^3 bytes, and whoever wrote it most likely meant 1Gi. The
+// refusal is a policy on top of the shared parser, which reads 1G for the
+// request/limit comparison.
+func TestGoMemLimitRefusesADecimalLimit(t *testing.T) {
+	_, err := renderChart(t, enabled(map[string]interface{}{
+		"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
+			"limits":   map[string]interface{}{"cpu": "500m", "memory": "1G"},
+		},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "binary suffix") {
+		t.Fatalf("a 1G memory limit with the derivation on: got %v, want a refusal asking for a binary suffix", err)
 	}
 }
 

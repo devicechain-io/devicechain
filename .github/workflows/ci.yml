@@ -1627,6 +1627,17 @@ jobs:
           refuses "hand-set shutdown block" "set by the chart, not by hand" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set instance.config.infrastructure.shutdown.drainSeconds=9
+          # An area's resources merge over the top-level ones, so a request raised for
+          # one area can land above the limit it inherits; the API server would only
+          # refuse the pod when the ReplicaSet creates it.
+          refuses "area request above its merged limit" "request 512Mi is above the 256Mi limit" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.event-sources.resources.requests.memory=512Mi
+          # A typo such as `limit:` would otherwise merge into the pod spec and the
+          # limit it meant would silently not apply.
+          refuses "unknown key under an area's resources" "additional properties 'limit' not allowed" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.event-sources.resources.limit.cpu=4
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "inline config, ingest-only" --set profile=ingest-only \

@@ -3059,6 +3059,50 @@ has the details.
   and column, since the service's own check normally answers first. The detail, which can repeat
   the values sent, is not logged.
 
+#### device-management and event-management may use more CPU
+
+`device-management` and `event-management` may now each use up to 2 CPU cores; every other backend
+service keeps the 500m limit. At 500m, `device-management` resolved at most about 720 events per
+second on a four-node test cluster, below the 1000 messages per second each tenant is allowed by
+default, so a tenant sending at its allowance built a backlog that grew for as long as it kept
+sending. `event-management` needs about half a core at that rate, its whole old limit, so it would
+have been the next limit. See [Service sizing](./bootstrap.md#service-sizing).
+
+The upgrade restarts those two services once, one pod at a time. Requests are unchanged, so no pod
+needs more room on a node, and `--compact` instances keep their lower requests.
+
+- **A service's `functionalAreas.<service>.resources` is now merged over the top-level
+  `resources`, key by key,** instead of replacing it. The console's `frontend.resources` is not
+  affected. Check the rendered pods before upgrading if your values set `resources` for a single
+  service:
+  - If you set only `requests` for a service, it had no limits and now gets the top-level limits.
+    To keep a service running without a limit, remove that limit from the top-level `resources`
+    and set it on the services that want one.
+  - If you set only `limits` for a service, Kubernetes gave it requests equal to those limits; it
+    now gets the top-level requests (100m and 128Mi, or 25m and 64Mi under `--compact`), which
+    reserve less on the node and can change the pod's QoS class. Set that service's `requests` to
+    keep its reservation.
+  - If your block for `device-management` or `event-management` does not set `limits.cpu`, that
+    service now gets the new 2-core limit.
+  - A request above the merged limit is refused when the chart renders, naming the service; for
+    example a service that sets only `requests.memory: 512Mi` against the top-level 256Mi limit.
+    Set its limit too.
+  - A key other than `requests`, `limits` or `claims` under a service's `resources` is refused.
+- **A top-level `resources.limits.cpu` above 2 cores no longer reaches `device-management` or
+  `event-management`,** because their new 2-core limit is their own and a service's own key wins
+  over the top-level one. If your values raise only the top-level CPU limit, for example to 4,
+  the upgrade LOWERS these two services to 2 cores. Set
+  `functionalAreas.device-management.resources.limits.cpu` and
+  `functionalAreas.event-management.resources.limits.cpu` to keep what they had. For the same
+  reason, a top-level `resources.requests.cpu` above 2 cores, which rendered before, is now
+  refused, naming the service's own limit as the one it is above; raise that limit too.
+- **A namespace `ResourceQuota` on `limits.cpu`, or a `LimitRange` with a CPU `max`, can refuse
+  the two pods** now that their limits are higher. Nothing DeviceChain installs creates either;
+  check any you added.
+- **To keep the previous limits,** set `functionalAreas.device-management.resources.limits.cpu`
+  and `functionalAreas.event-management.resources.limits.cpu` to `500m`. That restores the old
+  ceiling of about 720 events per second.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

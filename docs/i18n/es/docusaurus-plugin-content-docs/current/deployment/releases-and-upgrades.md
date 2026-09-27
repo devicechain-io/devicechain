@@ -3279,6 +3279,55 @@ tiene los detalles.
   nombra la restricción, la tabla y la columna, porque normalmente responde antes la propia
   comprobación del servicio. El detalle, que puede repetir los valores enviados, no se registra.
 
+#### device-management y event-management pueden usar más CPU
+
+`device-management` y `event-management` pueden usar ahora hasta 2 núcleos de CPU cada uno; los
+demás servicios de backend mantienen el límite de 500m. Con 500m, `device-management` resolvía como
+máximo unos 720 eventos por segundo en un clúster de pruebas de cuatro nodos, por debajo de los 1000
+mensajes por segundo que cada inquilino tiene permitidos por defecto, así que un inquilino que
+enviaba a ese ritmo acumulaba un retraso que crecía mientras siguiera enviando. `event-management`
+necesita alrededor de medio núcleo a ese ritmo, todo su límite anterior, así que habría sido el
+siguiente límite. Consulte [Dimensionamiento de los servicios](./bootstrap.md#service-sizing).
+
+La actualización reinicia esos dos servicios una vez, pod a pod. Las solicitudes no cambian, así que
+ningún pod necesita más espacio en un nodo, y las instancias `--compact` conservan sus solicitudes
+reducidas.
+
+- **El bloque `functionalAreas.<servicio>.resources` de un servicio se combina ahora clave a clave
+  sobre los `resources` de nivel superior,** en lugar de sustituirlos. El `frontend.resources` de la
+  consola no cambia. Revise los pods generados antes de actualizar si sus valores definen
+  `resources` para un solo servicio:
+  - Si definía solo `requests` para un servicio, no tenía límites y ahora recibe los de nivel
+    superior. Para que un servicio siga sin límite, quite ese límite de los `resources` de nivel
+    superior y defínalo en los servicios que lo necesiten.
+  - Si definía solo `limits` para un servicio, Kubernetes le daba solicitudes iguales a esos
+    límites; ahora recibe las solicitudes de nivel superior (100m y 128Mi, o 25m y 64Mi con
+    `--compact`), que reservan menos en el nodo y pueden cambiar la clase QoS del pod. Defina las
+    `requests` de ese servicio para conservar su reserva.
+  - Si su bloque para `device-management` o `event-management` no define `limits.cpu`, ese servicio
+    recibe ahora el nuevo límite de 2 núcleos.
+  - Una solicitud por encima del límite combinado se rechaza al generar el chart, indicando el
+    servicio; por ejemplo, un servicio que define solo `requests.memory: 512Mi` frente al límite de
+    256Mi de nivel superior. Defina también su límite.
+  - Se rechaza cualquier clave distinta de `requests`, `limits` o `claims` bajo los `resources` de
+    un servicio.
+- **Un `resources.limits.cpu` de nivel superior por encima de 2 núcleos ya no llega a
+  `device-management` ni a `event-management`,** porque su nuevo límite de 2 núcleos es propio y la
+  clave propia de un servicio prevalece sobre la de nivel superior. Si sus valores suben solo el
+  límite de CPU de nivel superior, por ejemplo a 4, la actualización BAJA estos dos servicios a 2
+  núcleos. Defina `functionalAreas.device-management.resources.limits.cpu` y
+  `functionalAreas.event-management.resources.limits.cpu` para conservar lo que tenían. Por la misma
+  razón, un `resources.requests.cpu` de nivel superior por encima de 2 núcleos, que antes se
+  generaba, ahora se rechaza, indicando como límite superado el propio del servicio; suba también
+  ese límite.
+- **Un `ResourceQuota` de espacio de nombres sobre `limits.cpu`, o un `LimitRange` con un `max` de
+  CPU, puede rechazar los dos pods** ahora que sus límites son más altos. Nada de lo que instala
+  DeviceChain crea ninguno de los dos; revise los que haya añadido.
+- **Para conservar los límites anteriores,** defina
+  `functionalAreas.device-management.resources.limits.cpu` y
+  `functionalAreas.event-management.resources.limits.cpu` en `500m`. Eso restaura el techo anterior
+  de unos 720 eventos por segundo.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

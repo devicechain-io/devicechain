@@ -219,7 +219,7 @@ spec:
             default. Derived from THIS area's own limit so the two cannot drift; see
             devicechain.goMemLimit. Omitted entirely when the area has no memory
             limit to derive from, rather than guessed. */}}
-            {{- with include "devicechain.goMemLimit" (dict "areaCfg" $areaCfg "root" $root) }}
+            {{- with include "devicechain.goMemLimit" (dict "area" $area "areaCfg" $areaCfg "root" $root) }}
             - name: GOMEMLIMIT
               value: {{ . | quote }}
             {{- end }}
@@ -279,7 +279,7 @@ spec:
             periodSeconds: 20
             failureThreshold: {{ $root.Values.livenessProbe.failureThreshold }}
           resources:
-            {{- get $areaCfg "resources" | default $root.Values.resources | toYaml | nindent 12 }}
+            {{- include "devicechain.areaResources" (dict "area" $area "areaCfg" $areaCfg "root" $root) | nindent 12 }}
           volumeMounts:
             - name: instance-config
               mountPath: /etc/dci-config

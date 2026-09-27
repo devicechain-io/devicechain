@@ -483,7 +483,10 @@ func helmValues(st *State) map[string]interface{} {
 	}
 
 	// Compact lowers the SCHEDULING requests so the pods fit a small node. It does
-	// not touch limits — see compactSizing.CPURequest.
+	// not touch limits — see compactSizing.CPURequest. These are the TOP-LEVEL
+	// resources; the chart merges an area's own block (device-management's and
+	// event-management's raised CPU limits) over them key by key, so the lowered
+	// requests reach every area without this knowing which areas have one.
 	if st.Compact {
 		vals["resources"] = compact.resourceValues()
 	}
