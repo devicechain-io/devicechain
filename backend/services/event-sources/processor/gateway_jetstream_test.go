@@ -112,7 +112,7 @@ func (h *captureHarness) quiesce(t *testing.T, n int) {
 		defer h.mu.Unlock()
 		return h.settles >= n
 	}, 2*time.Second, time.Millisecond, "the publish was never settled")
-	h.source.poisonRoutes.Wait()
+	h.source.poison.running.Wait()
 }
 
 func newCaptureHarness(t *testing.T) *captureHarness {

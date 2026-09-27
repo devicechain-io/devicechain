@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,7 +56,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 			return err
 		}
 		reader = r
-		writer, err = n.NewOrderedWriter(streams.InboundEvents, CAPTURE_PUBLISH_WINDOW)
+		writer, err = NewInboundWriter(n)
 		return err
 	})
 	nmgr.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
@@ -127,4 +129,96 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 		}
 		return false
 	}, 10*time.Second, 10*time.Millisecond, "the capture consumer still has messages awaiting an ack")
+}
+
+// measuredWindow is the window BenchmarkCaptureIngestThroughput chose (see
+// CAPTURE_PUBLISH_WINDOW). It is written out rather than read from the constant, so that a
+// change to the window is a change to a measured value, made here too, with a new
+// measurement — not a silent edit a test compared against itself. At a window of 1 the
+// benchmark ran several times slower than the synchronous path this replaced.
+const measuredWindow = 128
+
+// THE SHIPPED WINDOW, through the writer the service builds. The inbound-events stream is
+// replaced by a responder that holds every publish unanswered, so what the broker is
+// holding at once is the writer's window, counted exactly: the writer must have
+// measuredWindow publishes out and be waiting for room with the rest.
+func TestTheInboundWriterKeepsTheMeasuredWindowInFlight(t *testing.T) {
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
+		StoreDir: dctest.JetStreamStoreDir(t),
+	})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second), "embedded nats server not ready")
+	t.Cleanup(srv.Shutdown)
+	u, err := url.Parse(srv.ClientURL())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(u.Port())
+	require.NoError(t, err)
+
+	const instance = "window"
+	ms := &core.Microservice{InstanceId: instance, FunctionalArea: "event-sources", Readiness: core.NewReadinessGate()}
+	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: u.Hostname(), Port: uint32(port)}
+	ms.Readiness.MarkReadyWithoutAuthSurface()
+	var writer messaging.OrderedWriter
+	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *messaging.NatsManager) error {
+		writer, err = NewInboundWriter(n)
+		return err
+	})
+	ctx := context.Background()
+	require.NoError(t, nmgr.Initialize(ctx))
+	require.NoError(t, nmgr.Start(ctx))
+	t.Cleanup(func() { _ = nmgr.Stop(context.Background()) })
+
+	nc, err := nats.Connect(srv.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	stream := messaging.StreamName(instance, streams.InboundEvents)
+	require.NoError(t, js.DeleteStream(stream))
+	var mu sync.Mutex
+	var held []*nats.Msg
+	_, err = messaging.SubscribeSynced(nc, messaging.ScopedSubject(instance, "acme", streams.InboundEvents),
+		func(m *nats.Msg) {
+			mu.Lock()
+			defer mu.Unlock()
+			held = append(held, m)
+		})
+	require.NoError(t, err)
+	seen := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(held)
+	}
+
+	const total = measuredWindow + 8
+	var settled atomic.Int32
+	submitted := make(chan struct{})
+	go func() {
+		defer close(submitted)
+		for i := 0; i < total; i++ {
+			writer.Publish(core.WithTenant(context.Background(), "acme"),
+				messaging.Message{Value: []byte(strconv.Itoa(i)), DedupID: fmt.Sprintf("acme:%d", i+1)},
+				func(error) { settled.Add(1) })
+		}
+	}()
+
+	require.Eventually(t, func() bool { return seen() >= measuredWindow }, 10*time.Second, time.Millisecond,
+		"the inbound writer never had the measured window of publishes out at once")
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, measuredWindow, seen(),
+		"publishes the broker held at once, all unanswered: the gateway source's inbound window")
+
+	// Answer everything as it arrives, so the writer can finish and close.
+	for answered := 0; answered < total; answered++ {
+		require.Eventually(t, func() bool { return seen() > answered }, 10*time.Second, time.Millisecond)
+		mu.Lock()
+		m := held[answered]
+		mu.Unlock()
+		require.NoError(t, m.Respond([]byte(fmt.Sprintf(`{"stream":%q,"seq":%d}`, stream, answered+1))))
+	}
+	<-submitted
+	writer.Close()
+	require.Equal(t, int32(total), settled.Load(), "every publish must be settled by Close")
 }

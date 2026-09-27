@@ -40,8 +40,10 @@ type heldWriter struct {
 	released []bool
 	inFlight int
 	maxIn    int
-	busy     atomic.Bool
-	closed   bool
+	// blocked counts the Publish calls waiting for room in a full window.
+	blocked int
+	busy    atomic.Bool
+	closed  bool
 	// misuse records a contract violation (overlapping submitters, a publish after
 	// Close) instead of panicking on a goroutine the test does not own.
 	misuse []string
@@ -64,7 +66,10 @@ func (w *heldWriter) Publish(_ context.Context, msg messaging.Message, done func
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for w.window > 0 && w.inFlight >= w.window {
+		w.blocked++
+		w.cond.Broadcast()
 		w.cond.Wait()
+		w.blocked--
 	}
 	if w.closed {
 		w.misuse = append(w.misuse, "Publish after Close")
@@ -155,6 +160,49 @@ func (w *heldWriter) waitHeld(t *testing.T, n int) {
 	}, 5*time.Second, time.Millisecond, "fewer than %d publishes reached the writer", n)
 }
 
+// waitBlocked blocks until n Publish calls are waiting for room in the window.
+func (w *heldWriter) waitBlocked(t *testing.T, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.blocked >= n
+	}, 5*time.Second, time.Millisecond, "fewer than %d publishes are waiting for room in the window", n)
+}
+
+// releaseWithin is release bounded by a deadline, so a settle that blocks fails the test
+// by name instead of hanging it until go test's own timeout.
+func (w *heldWriter) releaseWithin(t *testing.T, i int, err error, limit time.Duration) {
+	t.Helper()
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		w.release(i, err)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(limit):
+		t.Fatalf("the settle of held publish %d did not return within %v: an outcome blocked the writer's goroutine", i, limit)
+	}
+}
+
+// stopUntilDone stops the source, releasing whatever the writer holds until the stop
+// returns, and fails the test if it does not.
+func (pc *pipelineCase) stopUntilDone(t *testing.T, stopped <-chan struct{}) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		pc.writer.releaseAll()
+		select {
+		case <-stopped:
+			return
+		case <-deadline:
+			t.Fatal("the source did not stop")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func (w *heldWriter) snapshot() (calls []string, maxIn int, misuse []string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -206,6 +254,20 @@ type pipelineCase struct {
 // delivered numDelivered times each. failed, if non-nil, is the failed-decode route.
 func startPipelineCase(t *testing.T, w *heldWriter, n, numDelivered int, failed func() error) *pipelineCase {
 	t.Helper()
+	return startPipelineCaseWith(t, w, n, numDelivered, failed, nil)
+}
+
+// startPipelineCaseWith is startPipelineCase with the message builder replaced, when build
+// is non-nil.
+func startPipelineCaseWith(t *testing.T, w *heldWriter, n, numDelivered int, failed func() error,
+	build InboundMessageFunc) *pipelineCase {
+	t.Helper()
+	if build == nil {
+		build = func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, seq uint64) (context.Context, messaging.Message, bool) {
+			return core.WithTenant(context.Background(), tenant),
+				messaging.Message{Value: []byte(event.Device), DedupID: DedupID(tenant, seq)}, true
+		}
+	}
 	pc := &pipelineCase{writer: w, reader: &sliceReader{}}
 	for i := 0; i < n; i++ {
 		ack := &recordingAck{}
@@ -216,10 +278,7 @@ func startPipelineCase(t *testing.T, w *heldWriter, n, numDelivered int, failed 
 	}
 	pc.source = NewGatewayJetStreamSource(nil, "gw-pipeline", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {},
-		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, seq uint64) (context.Context, messaging.Message, bool) {
-			return core.WithTenant(context.Background(), tenant),
-				messaging.Message{Value: []byte(event.Device), DedupID: DedupID(tenant, seq)}, true
-		},
+		build,
 		func(string, string, []byte, error) error {
 			pc.mu.Lock()
 			pc.failedCalls++
@@ -337,7 +396,8 @@ func TestStartingWithoutAnInboundWriterFailsLoudly(t *testing.T) {
 // first, every message the source holds handed to the writer, and only then Close — which
 // the stop waits on, so it returns after every outcome. The window here is smaller than
 // what the source holds, so messages are still queued behind the submitter when Stop
-// begins: a Close that did not wait for the submitter would come before their publishes.
+// begins. Whether Close waits for the submitter is pinned exactly, rather than by the
+// timing of these releases, by TestStopClosesTheWriterOnlyAfterTheSubmitterReturns.
 func TestStopDrainsThenSettlesEveryPublishBeforeClosing(t *testing.T) {
 	const n, window = 10, 4
 	w := newHeldWriter(window)
@@ -441,7 +501,7 @@ func TestAPoisonRouteDoesNotHoldTheWriterGoroutine(t *testing.T) {
 	require.Equal(t, []int{0}, pc.acked(), "acked before the route had stored it")
 
 	close(unblock)
-	pc.source.poisonRoutes.Wait()
+	pc.source.poison.running.Wait()
 	require.Equal(t, []int{1}, pc.acked(), "a routed poison message must be acked")
 	require.Equal(t, 1, pc.failed())
 }
@@ -461,15 +521,24 @@ func TestPoisonRoutesBeyondTheLimitAreLeftUnacked(t *testing.T) {
 	})
 	w.waitHeld(t, n)
 
+	// Every route is held open, so a settle that WAITED for a free slot would never
+	// return: each release is bounded, and that reads as a failure, not a hang.
+	t.Cleanup(func() {
+		select {
+		case <-unblock:
+		default:
+			close(unblock)
+		}
+	})
 	for i := 0; i < POISON_ROUTE_LIMIT; i++ {
-		w.release(i, errors.New("permanently unpublishable"))
+		w.releaseWithin(t, i, errors.New("permanently unpublishable"), 2*time.Second)
 	}
 	require.Eventually(t, func() bool { return entered.Load() == POISON_ROUTE_LIMIT },
 		2*time.Second, time.Millisecond, "the routes within the limit never started")
-	w.release(POISON_ROUTE_LIMIT, errors.New("permanently unpublishable"))
+	w.releaseWithin(t, POISON_ROUTE_LIMIT, errors.New("permanently unpublishable"), 2*time.Second)
 
 	close(unblock)
-	pc.source.poisonRoutes.Wait()
+	pc.source.poison.running.Wait()
 	want := make([]int, n)
 	for i := 0; i < n; i++ {
 		want[i] = 1
@@ -513,4 +582,102 @@ func TestStopWaitsForPoisonRoutes(t *testing.T) {
 		t.Fatal("Stop did not return once the route finished")
 	}
 	require.Equal(t, []int{1}, pc.acked(), "the route's ack must land before Stop returns")
+}
+
+// Close only once the submitter has returned: the writer's contract forbids Close while a
+// submission is in progress, and the real writer panics on it. The state is built exactly
+// rather than raced for: the window is full, the submitter is INSIDE Publish waiting for
+// room with the last message, and every decode worker has handed its message over — so the
+// moment the stop sees the workers finish, the one thing between it and Close is the wait
+// for the submitter. Nothing is released until that moment has passed.
+func TestStopClosesTheWriterOnlyAfterTheSubmitterReturns(t *testing.T) {
+	const window = 4
+	w := newHeldWriter(window)
+	pc := startPipelineCase(t, w, window+1, 1, nil)
+	w.waitHeld(t, window)
+	w.waitBlocked(t, 1)
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = pc.source.Stop(context.Background())
+	}()
+	select {
+	case <-pc.source.workersDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the decode workers did not return once the stop began")
+	}
+	time.Sleep(200 * time.Millisecond)
+	calls, _, _ := w.snapshot()
+	require.NotContains(t, calls, "close",
+		"the writer was closed while the submitter was still inside Publish: %v", calls)
+
+	pc.stopUntilDone(t, stopped)
+	calls, _, misuse := w.snapshot()
+	require.Empty(t, misuse, "the writer's contract was broken: %v", calls)
+	require.Equal(t, window+1, countOf(calls, "publish"))
+	require.Equal(t, "close", calls[len(calls)-1], "Close must come after every publish: %v", calls)
+}
+
+// The writer is told it is draining BEFORE the stop waits for the read loop. With the
+// pipeline full, the read loop is blocked handing its last message in, and room frees only
+// as publishes settle — one backoff at a time while a failing stream holds the writer in
+// backoff. Draining is what ends that backoff, so it cannot wait behind the loop it frees.
+func TestStopTellsTheWriterItIsDrainingWhileTheReadLoopIsBlocked(t *testing.T) {
+	const window = 8
+	w := newHeldWriter(window)
+	pc := startPipelineCase(t, w, 500, 1, nil)
+	w.waitHeld(t, window)
+	full := 1 + DECODE_CHANNEL_DEPTH + DECODE_WORKER_COUNT + 1 + window
+	require.Eventually(t, func() bool { return pc.reader.takenCount() >= full },
+		5*time.Second, time.Millisecond, "the pipeline never filled")
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = pc.source.Stop(context.Background())
+	}()
+	// Nothing is released: the read loop stays blocked until the draining call lands.
+	require.Eventually(t, func() bool {
+		calls, _, _ := w.snapshot()
+		return countOf(calls, "draining") > 0
+	}, 2*time.Second, time.Millisecond,
+		"the stop did not tell the writer it was draining while the read loop was blocked on a full pipeline")
+	select {
+	case <-pc.source.drained:
+		t.Fatal("the read loop returned with nothing released; this test did not hold it blocked")
+	default:
+	}
+	pc.stopUntilDone(t, stopped)
+}
+
+// A source that was never started — the shutdown after a startup failure that came before
+// its reader and writer were wired — stops cleanly, without touching the writer it never got.
+func TestStoppingASourceThatNeverStartedDoesNothing(t *testing.T) {
+	source := NewGatewayJetStreamSource(nil, "gw-never-started", NewJsonDecoder(map[string]string{}, 0),
+		func(string, []byte) {},
+		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+			return nil, messaging.Message{}, false
+		},
+		func(string, string, []byte, error) error { return nil },
+		nil)
+	ctx := context.Background()
+	require.NoError(t, source.Initialize(ctx))
+
+	require.NotPanics(t, func() { require.NoError(t, source.Stop(ctx)) })
+}
+
+// A message the builder deliberately drops (ok=false) is settled nil — ACKED — and not
+// published: the ACK TRAP rule, on the pipelined path. Settling it with an error would ask
+// the broker to redeliver a message that will be dropped identically every time.
+func TestADeliberateDropOnThePipelinedPathIsAcked(t *testing.T) {
+	w := newHeldWriter(0)
+	pc := startPipelineCaseWith(t, w, 1, 1, nil,
+		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+			return nil, messaging.Message{}, false
+		})
+
+	require.True(t, pc.acks[0].settled(t), "a deliberately dropped message was left unacked: it will redeliver forever")
+	calls, _, _ := w.snapshot()
+	require.Zero(t, countOf(calls, "publish"), "a dropped message must not be published")
 }

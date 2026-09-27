@@ -2962,7 +2962,7 @@ Nothing needs doing at the upgrade.
   recorded as a dead letter instead of on failed-decode.
 - **A device's events can reach inbound-events slightly out of order, as they could before:** five
   decoders work through the captured messages at once, and every replica publishes.
-- **`devicechain_event-sources_jetstream_publish_duration_seconds` gains a `mode="pipelined"`
+- **`devicechain_eventsources_jetstream_publish_duration_seconds` gains a `mode="pipelined"`
   series for `suffix="inbound-events"`.** [Observability](./observability.md) describes the modes.
 
 ### The one-time durable-ingest cutover

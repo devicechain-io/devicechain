@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
 
 // CAPTURE_PUBLISH_WINDOW is how many inbound-events publishes the gateway source keeps
@@ -49,6 +50,27 @@ const POISON_ROUTE_LIMIT = 4
 // settled nil and nothing is published — the ACK TRAP rule, as for every other drop.
 type InboundMessageFunc func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
 	captureSeq uint64) (ctx context.Context, msg messaging.Message, ok bool)
+
+// poisonRoutes bounds the failed-decode routes running at once (slots, POISON_ROUTE_LIMIT)
+// and counts them (running), so a stop can wait for them before the connection drains.
+//
+// It is per start, like the rest of the pipeline, and each message's settler holds the one
+// that was current when the message was taken. A stop that gives up at its deadline leaves
+// that start's writer settling on its own, and those outcomes can still start routes; were
+// the count shared, they would Add to a WaitGroup the next start's stop is waiting on, which
+// the WaitGroup forbids. They count against their own start's instead, which nobody waits
+// for any more.
+type poisonRoutes struct {
+	slots   chan struct{}
+	running sync.WaitGroup
+}
+
+// NewInboundWriter builds the gateway source's ordered writer to inbound-events, with the
+// CAPTURE_PUBLISH_WINDOW it was measured at. It lives here rather than in main.go so that
+// the window the source actually runs with is the one a test in this package observes.
+func NewInboundWriter(nmgr *messaging.NatsManager) (messaging.OrderedWriter, error) {
+	return nmgr.NewOrderedWriter(streams.InboundEvents, CAPTURE_PUBLISH_WINDOW)
+}
 
 // pendingPublish is one built message on its way from a decode worker to the submitter.
 type pendingPublish struct {
@@ -106,10 +128,8 @@ type GatewayJetStreamSource struct {
 	// of the current start have returned.
 	workersDone   chan struct{}
 	submitterDone chan struct{}
-	// poisonSlots bounds the failed-decode routes running at once (POISON_ROUTE_LIMIT);
-	// poisonRoutes counts them, so a stop can wait for them before the connection drains.
-	poisonSlots  chan struct{}
-	poisonRoutes sync.WaitGroup
+	// poison is the current start's failed-decode routes; see poisonRoutes.
+	poison *poisonRoutes
 
 	lifecycle core.LifecycleManager
 	cancel    context.CancelFunc
@@ -141,14 +161,13 @@ func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder
 	failed func(string, string, []byte, error) error,
 	allow RateGate) *GatewayJetStreamSource {
 	es := &GatewayJetStreamSource{
-		Id:          id,
-		Decoder:     decoder,
-		received:    received,
-		build:       build,
-		failed:      failed,
-		allow:       allow,
-		readPacer:   core.NewReadPacer(ms, "gateway capture"),
-		poisonSlots: make(chan struct{}, POISON_ROUTE_LIMIT),
+		Id:        id,
+		Decoder:   decoder,
+		received:  received,
+		build:     build,
+		failed:    failed,
+		allow:     allow,
+		readPacer: core.NewReadPacer(ms, "gateway capture"),
 	}
 	es.lifecycle = core.NewLifecycleManager("gateway-jetstream-event-source", es, core.NewNoOpLifecycleCallbacks())
 	return es
@@ -242,6 +261,7 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 	submitterDone := make(chan struct{})
 	es.messages, es.publishes = messages, publishes
 	es.workersDone, es.submitterDone = workersDone, submitterDone
+	es.poison = &poisonRoutes{slots: make(chan struct{}, POISON_ROUTE_LIMIT)}
 
 	submit := es.submitter(publishes)
 	var running sync.WaitGroup
@@ -316,9 +336,10 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 		return nil
 	}
 	// Draining before the read loop is waited for, not after: the loop can be blocked
-	// handing its last message into a pipeline that a failing stream's backoff is
-	// slowing to one publish per backoff, and waiting for it first would spend the
-	// stop's budget there. Nothing more is fetched once the loop sees the cancel.
+	// handing a message into a full pipeline, and while a failing stream holds the
+	// writer in backoff, room frees only one backoff at a time. Draining ends that
+	// backoff, so the loop's last hand-off does not wait out one first. Nothing more is
+	// fetched once the loop sees the cancel.
 	es.writer.Draining()
 	if !es.await(ctx, es.drained, "read loop") {
 		return nil
@@ -352,9 +373,10 @@ func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
 	// Every done has run, so every poison route that will ever start has started: the
 	// wait below cannot miss one.
 	routed := make(chan struct{})
+	poison := es.poison
 	go func() {
 		defer close(routed)
-		es.poisonRoutes.Wait()
+		poison.running.Wait()
 	}()
 	return es.await(ctx, routed, "failed-decode routes")
 }
@@ -519,6 +541,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 // would be redelivered until the broker gave up on it, taking the diagnostic with
 // it — the same shape as the drop trap above, one level down.
 func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) func(error) {
+	poison := es.poison
 	return func(handleErr error) {
 		if handleErr == nil {
 			if err := msg.Ack(); err != nil {
@@ -550,18 +573,18 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) 
 			// max-delivery recorder letters it — recorded, loudly, rather than holding
 			// back every other message's ack.
 			select {
-			case es.poisonSlots <- struct{}{}:
+			case poison.slots <- struct{}{}:
 			default:
 				log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
 					Int("attempts", msg.NumDelivered).
 					Msg("Captured message is poison and every failed-decode route is busy; leaving it unacked for the max-delivery record.")
 				return
 			}
-			es.poisonRoutes.Add(1)
+			poison.running.Add(1)
 			go func() {
 				defer func() {
-					<-es.poisonSlots
-					es.poisonRoutes.Done()
+					<-poison.slots
+					poison.running.Done()
 				}()
 				es.routePoison(msg, tenant, handleErr)
 			}()

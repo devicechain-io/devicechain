@@ -674,13 +674,13 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	//
 	// The gateway source also gets its OWN ordered writer to inbound-events, which keeps
 	// processor.CAPTURE_PUBLISH_WINDOW publishes in flight instead of one per decode
-	// worker. The source owns it from here and settles and closes it in its own stop,
+	// worker; processor.NewInboundWriter builds it at that window. The source owns it from here and settles and closes it in its own stop,
 	// which runs before the manager drains the connection. InboundEventsWriter above
 	// stays for the sources and the presence tap that publish synchronously; the two do
 	// not share a JetStream context, since the ordered writer builds its own.
 	if GatewaySource != nil {
 		GatewaySource.SetReader(capture)
-		pipeline, err := nmgr.NewOrderedWriter(streams.InboundEvents, processor.CAPTURE_PUBLISH_WINDOW)
+		pipeline, err := processor.NewInboundWriter(nmgr)
 		if err != nil {
 			return err
 		}

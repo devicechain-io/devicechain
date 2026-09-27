@@ -3176,7 +3176,7 @@ No hay que hacer nada en la actualización.
 - **Los eventos de un dispositivo pueden llegar a inbound-events ligeramente desordenados, como
   ya podían:** cinco decodificadores procesan a la vez los mensajes capturados, y cada réplica
   publica.
-- **`devicechain_event-sources_jetstream_publish_duration_seconds` añade una serie
+- **`devicechain_eventsources_jetstream_publish_duration_seconds` añade una serie
   `mode="pipelined"` para `suffix="inbound-events"`.** [Observabilidad](./observability.md)
   describe los modos.
 
