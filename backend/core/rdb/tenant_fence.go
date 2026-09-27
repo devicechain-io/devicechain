@@ -171,12 +171,29 @@ func RegisterTenantFence(db *gorm.DB) error {
 // later sweep collects its rows — more rows swept, more settle restarts, never a row the
 // sweep cannot see. Both before and after, the argument assumes no transaction stays open
 // longer than the purge's settle window: one that did could commit after completion, and
-// nothing catches that, memo or not. Nothing enforces that bound today (no idle-in-
-// transaction or statement timeout is configured); the memo adds rows to such a
-// transaction, it does not create one. (On Postgres the first fence read also takes a
-// share lock on the fence table until the transaction ends, so no other session can drop
-// or alter it under a memoised transaction and turn a remembered answer into one that
-// should have failed closed.)
+// nothing would catch it, memo or not. What bounds that, and what does not:
+//
+//   - Every connection this package opens carries idle_in_transaction_session_timeout
+//     (IdleInTransactionTimeout, connstring.go). A transaction whose client goes quiet — a
+//     frozen pod, a partition, code blocked mid-transaction — is ended by the server and
+//     rolled back well inside the settle floor, and a COMMIT delayed in a partition
+//     arrives to a session that is already gone.
+//   - A transaction that keeps the server BUSY is not bounded by the database. The one
+//     the platform issues on purpose is the purge sweep, which is the eraser rather than
+//     a straggler; a write blocked behind its row locks commits just after it, and the
+//     next residual scan sees it and restarts the window.
+//   - A COMMIT waiting for a synchronous standby (the HA relational store) is active, not
+//     idle, so the bound does not reach it. Its rows stay invisible to the sweep and the
+//     residual scan until the standby acknowledges, which can be after completion. That
+//     residual is NOT closed here.
+//   - A backend blocked sending a result to a client it has lost is active too, until
+//     the kernel gives up on the socket. Writer transactions here do not stream large
+//     results mid-transaction, which is what keeps that narrow; it is not bounded either.
+//
+// The memo adds rows to a long transaction; it does not create one. (On Postgres the first
+// fence read also takes a share lock on the fence table until the transaction ends, so no
+// other session can drop or alter it under a memoised transaction and turn a remembered
+// answer into one that should have failed closed.)
 //
 // What the memo must never do is outlive its transaction, which is why it is a field of
 // the transaction's own connection wrapper rather than an entry in a registry.

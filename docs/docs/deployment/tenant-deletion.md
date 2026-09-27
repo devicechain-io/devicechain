@@ -193,10 +193,20 @@ each refuses every write for the deleted tenant, whether it arrives through the 
 a service consumes, or through a background job of its own. The check runs inside the same database
 transaction as the write it refuses.
 
-This is what makes the guarantee an erasure rather than a cleanup: reclaimed rows cannot come back
-while the deletion is in progress, even if everything that was supposed to stop the traffic earlier
-failed. The refusal is lifted only when the deletion completes, which is also when the token is
-released, so a new tenant created at that token writes normally from its first request.
+This is what makes the guarantee an erasure rather than a cleanup: reclaimed rows cannot come back to
+stay, even if everything that was supposed to stop the traffic earlier failed. A late write is swept
+again, and the deletion does not complete until the writes have stopped. The refusal is lifted only
+when the deletion completes, which is also when the token is released, so a new tenant created at
+that token writes normally from its first request.
+
+The refusal is checked when a write is made, so a write that was already in a transaction when the
+deletion began can still commit. The deletion catches such a write, provided it commits before the
+settle window ends. The databases guarantee that for a transaction whose service stops talking to
+them, for example because its pod froze or lost the network: a transaction left idle for 60 seconds
+is ended and rolled back, well inside the shortest settle window allowed. The database logs
+`terminating connection due to idle-in-transaction timeout` and nothing the transaction wrote is
+kept. The request it belonged to fails with an error, and work a service takes from a stream is
+delivered to it again.
 
 The refusal covers the two databases, which is where a tenant's records live. The broker, the
 key-value store and the object store are reclaimed by the same passes but have no equivalent refusal.

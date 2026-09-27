@@ -125,7 +125,8 @@ func (rdb *RdbManager) computePostgresDsn(pg *PostgresConfig) (string, error) {
 	// sslMode is logged deliberately: "is this link encrypted" is the kind of
 	// question that should be answerable from a pod's logs.
 	log.Info().Str("username", pg.Username).Str("hostname", pg.Hostname).
-		Int32("port", pg.Port).Str("ssl_mode", sslMode).Msg("Initializing database connectivity")
+		Int32("port", pg.Port).Str("ssl_mode", sslMode).
+		Dur("idle_in_transaction_timeout", IdleInTransactionTimeout).Msg("Initializing database connectivity")
 	return dsn, nil
 }
 

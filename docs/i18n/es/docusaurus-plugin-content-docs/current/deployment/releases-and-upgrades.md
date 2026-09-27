@@ -3138,6 +3138,20 @@ campos enumerados en «Los valores de las credenciales se guardan exactamente co
   con `setTenantBranding` a través de la API, enviando también el título y los colores: esa
   mutación los reemplaza juntos, así que uno que se omita se borra.
 
+#### Una transacción de base de datos inactiva durante un minuto se termina
+
+No hay que hacer nada en la actualización.
+
+Cada servicio pide ahora a la base de datos que termine cualquiera de sus transacciones que lleve 60
+segundos inactiva. Esto cubre un pod que se congela o pierde la red en mitad de una transacción.
+Antes, esa transacción seguía abierta, con sus bloqueos, hasta que se detectaba que la conexión
+estaba muerta, lo que con la configuración predeterminada del sistema operativo puede tardar horas,
+y aún podía confirmarse al volver la red. Eso podía escribir datos de un inquilino cuya eliminación
+ya se había dado por completada. Cuando se alcanza el límite, la base de datos registra
+`terminating connection due to idle-in-transaction timeout` y revierte la transacción. La solicitud
+a la que pertenecía falla con un error, y el trabajo que un servicio toma de un flujo se le vuelve a
+entregar. Vea [Rechazo de escrituras en la base de datos](./tenant-deletion.md#database-writes).
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
