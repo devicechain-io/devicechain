@@ -45,6 +45,7 @@ func (w *dropNthWriter) HandleResponse(err error) { w.inner.HandleResponse(err) 
 // durable, persists the first and never hears of the second. The stream itself is the witness that
 // the drop happened where production drops it. The sweep then heals it.
 func TestAFactDroppedOnTheStreamIsHealedByTheSweep(t *testing.T) {
+	t.Parallel()
 	b := startDetectBroker(t)
 	var writer messaging.MessageWriter
 	var reader messaging.MessageReader

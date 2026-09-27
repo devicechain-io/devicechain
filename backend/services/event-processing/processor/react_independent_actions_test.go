@@ -15,7 +15,6 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -179,6 +178,11 @@ func (s *hungCommandSink) snapshot() []hungCall {
 //
 // Real broker, real reader options, real constructor. The broker's AckWait is shortened to one
 // second so the bound is visible against the hung sink's much longer ceiling.
+//
+// Not parallel: the claim is a wall-clock bound (the alarm within ackWait+500ms of the first
+// command), and a parallel neighbour's CPU would spend that slack on scheduling rather than on
+// the defect. Go runs every serial test before it releases the parallel ones, so this one never
+// overlaps them.
 func TestAnAttemptEndsWithItsDelivery(t *testing.T) {
 	const ackWait = time.Second
 	rule := commandThenAlarmRule()
@@ -222,9 +226,9 @@ func startReactOnBroker(t *testing.T, ackWait time.Duration,
 	t.Helper()
 	b := startDetectBroker(t)
 
-	ms := &core.Microservice{InstanceId: coveredInstance, FunctionalArea: "event-processing"}
+	ms := &core.Microservice{InstanceId: b.instance, FunctionalArea: "event-processing"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
-	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: b.host, Port: b.port}
+	ms.InstanceConfiguration.Infrastructure.Nats = b.natsConfig()
 	var reader messaging.MessageReader
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(m *messaging.NatsManager) error {
 		r, err := m.NewReader(streams.DerivedEvents, ReactReaderOptions(func() bool { return true })...)
@@ -299,6 +303,7 @@ func (d *ctxDeadRecorder) letters(t *testing.T) []deadletter.Envelope {
 // Real broker, real reader options, real constructor: only a capacity reader's message carries an
 // ack deadline, so a hand-built message cannot show this.
 func TestTheExhaustedLetterOutlivesTheDeliveryDeadline(t *testing.T) {
+	t.Parallel()
 	const ackWait = time.Second
 	dead := &ctxDeadRecorder{}
 	publish := startReactOnBroker(t, ackWait, func(ms *core.Microservice, reader messaging.MessageReader, dl *deadletter.Producer) *ReactDispatcher {
@@ -334,6 +339,7 @@ func (hungSuccessSink) Send(ctx context.Context, _ react.CommandRequest) error {
 // whose sinks took the whole ack deadline they too are written when the deadline has passed. They
 // must still be written, on the same two protections as the exhausted letter.
 func TestShedLettersOutliveTheDeliveryDeadline(t *testing.T) {
+	t.Parallel()
 	const ackWait = time.Second
 	dead := &ctxDeadRecorder{}
 	// The shed action first, so the command after it is the one that spends the deadline: each

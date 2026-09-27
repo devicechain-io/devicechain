@@ -20,7 +20,6 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -31,9 +30,9 @@ import (
 // manager's create callback, where a reader has to be made.
 func (b *detectBroker) brokerManager(t *testing.T, build func(*messaging.NatsManager) error) (*messaging.NatsManager, *core.Microservice, *deadletter.Producer) {
 	t.Helper()
-	ms := &core.Microservice{InstanceId: coveredInstance, FunctionalArea: "event-processing"}
+	ms := &core.Microservice{InstanceId: b.instance, FunctionalArea: "event-processing"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
-	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: b.host, Port: b.port}
+	ms.InstanceConfiguration.Infrastructure.Nats = b.natsConfig()
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), build)
 	producer := deadletter.NewProducer(ms)
 	nmgr.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(producer))
@@ -52,7 +51,7 @@ func (b *detectBroker) streamHeld(t *testing.T, suffix string) uint64 {
 	t.Helper()
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)
-	info, err := js.StreamInfo(messaging.StreamName(coveredInstance, suffix))
+	info, err := js.StreamInfo(messaging.StreamName(b.instance, suffix))
 	if errors.Is(err, nats.ErrStreamNotFound) {
 		return 0
 	}
@@ -67,6 +66,7 @@ func (b *detectBroker) streamHeld(t *testing.T, suffix string) uint64 {
 // take the exhausted letter for a duplicate of it and drop it — the one record that the event's
 // other actions never ran.
 func TestAShedLetterDoesNotSwallowTheExhaustedLetter(t *testing.T) {
+	t.Parallel()
 	b := startDetectBroker(t)
 	nmgr, _, _ := b.brokerManager(t, func(*messaging.NatsManager) error { return nil })
 	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
@@ -89,6 +89,7 @@ func TestAShedLetterDoesNotSwallowTheExhaustedLetter(t *testing.T) {
 // event — its ack lost — adds neither again: each part's id collapses onto its first write inside
 // the stream's real duplicate window.
 func TestTwoShedActionsInOneEventAreTwoStoredLetters(t *testing.T) {
+	t.Parallel()
 	b := startDetectBroker(t)
 	nmgr, _, _ := b.brokerManager(t, func(*messaging.NatsManager) error { return nil })
 	deadWriter, err := nmgr.NewWriter(streams.DeadLetters)
@@ -129,6 +130,7 @@ func (s *flakySink) Send(context.Context, react.CommandRequest) error {
 // firing at 50 a second over the last 10 seconds, against a 100-a-second ceiling, is replayed from
 // the start by a successor that lost the checkpoint.
 func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
+	t.Parallel()
 	const events = 500
 	b := startDetectBroker(t)
 
@@ -170,7 +172,7 @@ func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
 		}
 		body, err := dmproto.MarshalResolvedEvent(ev)
 		require.NoError(t, err)
-		_, err = js.Publish(messaging.ScopedSubject(coveredInstance, "acme", streams.ResolvedEvents), body)
+		_, err = js.Publish(messaging.ScopedSubject(b.instance, "acme", streams.ResolvedEvents), body)
 		require.NoError(t, err)
 	}
 
@@ -198,8 +200,11 @@ func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
 		require.NoError(t, rp.replayToHead(), "run %d", run)
 	}
 
-	// REACT has consumed everything once the durable has nothing pending or in flight.
-	deadline := time.Now().Add(30 * time.Second)
+	// REACT has consumed everything once the durable has nothing pending or in flight. The bound
+	// is a hang guard, not the claim, so it is written in the test's own work — a generous 100ms
+	// per event — rather than in wall-clock seconds a slower (instrumented, shared) run could
+	// spend on scheduling. The loop leaves as soon as the backlog drains.
+	deadline := time.Now().Add(time.Duration(events) * 100 * time.Millisecond)
 	for {
 		pending, ackPending, err := reactReader.(interface {
 			Backlog(context.Context) (uint64, uint64, error)
@@ -219,7 +224,7 @@ func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
 	// The replay above is seconds old, well inside the broker's own two-minute default window, so
 	// the collapse alone does not show the window a restart after a bad rollout needs. Read it off
 	// the stream the writer created.
-	info, err := js.StreamInfo(messaging.StreamName(coveredInstance, streams.DerivedEvents))
+	info, err := js.StreamInfo(messaging.StreamName(b.instance, streams.DerivedEvents))
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, info.Config.Duplicates, 15*time.Minute,
 		"the derived-events stream's duplicate window is shorter than the restart it must cover")

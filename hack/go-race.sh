@@ -19,7 +19,7 @@
 # UNCONDITIONAL and the verdict is a line in the log naming the module and the flag:
 #
 #   race: COVERED backend/core -- go test -race -count=1 ./...
-#   race: NOT COVERED backend/services/event-processing -- exempt (hack/go-race.sh): cost: ...
+#   race: NOT COVERED <module> -- exempt (hack/go-race.sh): <reason>
 #
 # The workflow greps its own output for that line, so a future edit that leaves
 # the step returning 0 without deciding anything fails instead of passing.
@@ -94,27 +94,18 @@ race_test() { "${RACE_TEST[@]}" "$@"; }
 # Not covered here whatever this set says: `//go:build integration` tests. They run
 # in the `integration` job (hack/integration-tests.sh), never under -race.
 #
-# 🔴 EVENT-PROCESSING IS THE ONE THIS CANNOT AFFORD, AND IT IS NOT BECAUSE THE
-# MODULE IS WRONG — it has the most concurrency of any service here, and it is the
-# one you would pick first. Measured on a real runner against its own merge base,
-# instrumented execution took its `go` job from 101s to 647s, the slowest job in
-# the workflow by a factor of two, and the ci run from 5m42s to 15m47s, since the
-# extra runner minutes also queue behind a pool that is regularly saturated. A warm
-# build cache did not help: a second run measured 676s, so the cost is instrumented
-# EXECUTION, not an instrumented build. Those figures predate later changes to the
-# module's tests; re-measure before relying on them to keep the entry or to drop it.
-#
-# It is worth knowing where that time goes before anyone re-litigates the entry,
-# because it is not the concurrency. Nine tests in `processor` that each stand up
-# an embedded NATS server were 338s of the 354s race step, at roughly 7x their
-# uninstrumented time, while the lease, sweep and dead-letter tests — the ones
-# actually exercising the concurrency — are sub-second either way. So the bill is
-# the FIXTURE, and a cheaper shape for those nine would bring the module inside
-# budget without giving up anything the detector is for.
+# 🔴 A SLOW RACE STEP IS USUALLY PAYING FOR A FIXTURE, NOT FOR CONCURRENCY. The
+# instrumentation covers everything in the test binary, embedded servers and fixture
+# builders included, so a fixture rebuilt per test multiplies the bill. Before reaching
+# for this set: share the fixture across the package (one embedded broker, a distinct
+# instance id per test — the way instances are kept apart on a production broker; an
+# expensive immutable value minted once), run tests that assert no wall-clock bound in
+# parallel, and shorten test-only ack waits. event-processing's processor package is the
+# worked example (processor/shared_broker_test.go): it was exempt here on cost until those
+# changes took its race step from about 450s to about 150s on four cores, measured
+# locally, and the cost had never been its concurrency.
 exempt_modules() {
-  cat <<'EOF'
-backend/services/event-processing|cost: instrumented, its go job went from 101s to 647s (the slowest job in the workflow by 2x) and the ci run from 5m42s to 15m47s; nine embedded-NATS tests in processor are nearly all of that
-EOF
+  : # Empty: every workspace module is race checked. One line per entry, <path>|<reason>.
 }
 
 exempt_paths()  { exempt_modules | cut -d'|' -f1; }

@@ -12,11 +12,11 @@ import (
 
 // No test ANYWHERE in this repository may write the global zerolog logger.
 //
-// The race a swap reintroduces is only visible under `go test -race`, which the
-// required CI gates do not run — so without this check the next swap would be caught
-// by nobody until someone ran the race detector by hand while chasing something else,
-// and its report would name whichever test happened to be running when a callback
-// goroutine fired rather than the test that did the swapping.
+// The race a swap reintroduces is visible only under `go test -race`. CI runs every
+// module's tests that way (hack/go-race.sh), but the detector reports it only when the
+// interleaving happens, and its report names whichever test happened to be running when
+// a callback goroutine fired rather than the test that did the swapping. This check
+// names the file that swapped, on every run.
 //
 // 🔴 IT IS DELIBERATELY NOT A PER-PACKAGE OPT-IN. The first version of this guard took
 // a directory and was called from the one package that had just been fixed, which left

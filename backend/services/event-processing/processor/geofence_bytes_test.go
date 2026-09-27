@@ -53,6 +53,7 @@ import (
 // would have rescued an under-sized chunk silently, and the common case would then be paying
 // for retries it should never need.
 func TestHighPrecisionFenceSetStillResolvesWhole(t *testing.T) {
+	t.Parallel()
 	api, facts := ceilingFenceSetAt(t, 20)
 	_, manifest := lastFact(t, facts)
 
@@ -114,6 +115,7 @@ func TestHighPrecisionFenceSetStillResolvesWhole(t *testing.T) {
 // it is still a well-formed request for exactly the bodies that have not arrived, where the old
 // walk had to restart from page one at a halved size and throw away everything it had.
 func TestAStoredFenceOverTheByteBoundIsStillReadable(t *testing.T) {
+	t.Parallel()
 	api := newFenceDmApi(t)
 	ctx := dccore.WithTenant(context.Background(), "acme")
 	facts := &fenceFactWriter{}

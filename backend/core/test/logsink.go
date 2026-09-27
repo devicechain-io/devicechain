@@ -156,10 +156,10 @@ func (s *LogSink) String() string {
 // package that holds it.
 //
 // This is the gate that keeps the sink above adopted once a package has adopted it. It
-// is worth having as a separate check because the failure it guards against is only
-// visible under `go test -race`, which the required CI gates do not run — so a
-// reintroduced swap would otherwise be caught by nobody until the next person to run
-// -race by hand, at the moment they are chasing something else.
+// is worth having as a separate check even though CI runs every module's tests under
+// `go test -race` (hack/go-race.sh), because the detector reports a swap as a race in
+// whichever test happened to be running when a logging goroutine fired, and only when
+// that interleaving happens. This names the offending file and line, every time.
 //
 // 🔴 IT SCANS A TREE, NOT A DIRECTORY, AND THAT IS THE DIFFERENCE THAT MAKES IT A
 // GATE. The first version took one directory and was called from one package's test,

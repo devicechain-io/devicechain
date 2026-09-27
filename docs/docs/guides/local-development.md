@@ -102,6 +102,18 @@ anything:
   status would be that of the last `echo`. Every module could fail and the sweep would still look
   green.
 
+CI also runs every module's tests under Go's race detector. To run the same check locally on the
+module you changed, from the repository root:
+
+```bash
+hack/go-race.sh backend/services/event-processing   # or whichever module you touched
+```
+
+It prints `race: COVERED <module>` and then runs `go test -race -count=1 ./...` in that module. The
+detector slows tests down several times over, so a test that asserts a wall-clock budget can fail
+under it without any race. Fix such a test so that its budget does not depend on how fast the
+binary runs.
+
 ## 3. Run a service
 
 Each service is a single binary that takes no flags. It does not start on an empty environment. At

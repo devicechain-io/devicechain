@@ -4,11 +4,13 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
@@ -798,11 +800,27 @@ var (
 // manifestFactFor mints a real fence set and returns the manifest fact device-management
 // published for it, so the consumer tests below run on a real fact rather than a hand-written
 // one.
+//
+// The fact is minted ONCE per test binary and each caller gets its own copy of the bytes.
+// Minting it authors a full ceiling fence set through device-management's real Api, which is
+// the most expensive fixture in this package — several seconds uninstrumented and many times
+// that under the race detector — and the four consumer tests below only read the bytes it
+// ends with. A fact is an immutable value, so sharing it changes nothing any of them asserts.
 func manifestFactFor(t *testing.T) []byte {
 	t.Helper()
-	_, facts := ceilingFenceSet(t)
-	raw, _ := lastFact(t, facts)
-	return raw
+	sharedManifestFact.once.Do(func() {
+		_, facts := ceilingFenceSet(t)
+		sharedManifestFact.raw, _ = lastFact(t, facts)
+	})
+	if sharedManifestFact.raw == nil {
+		t.Fatal("the shared manifest fact could not be minted; the first test that asked for it says why")
+	}
+	return bytes.Clone(sharedManifestFact.raw)
+}
+
+var sharedManifestFact struct {
+	once sync.Once
+	raw  []byte
 }
 
 // A manifest fact whose resolve FAILS is acked, and installs nothing.
@@ -813,6 +831,7 @@ func manifestFactFor(t *testing.T) []byte {
 // unreadable version would otherwise park the stream behind it. Installing nothing, because the
 // alternative — an empty set — reads as "this tenant has no fences" and never fires again.
 func TestAManifestFactWhoseResolveFailsIsAckedAndInstallsNothing(t *testing.T) {
+	t.Parallel()
 	raw := manifestFactFor(t)
 	resolver := &failingManifestResolver{err: errors.New("device-management is down")}
 
@@ -843,6 +862,7 @@ func TestAManifestFactWhoseResolveFailsIsAckedAndInstallsNothing(t *testing.T) {
 
 // A resolver that returns neither a set nor an error is treated as a failure, not installed.
 func TestAManifestFactWithAnEmptyResolverAnswerInstallsNothing(t *testing.T) {
+	t.Parallel()
 	raw := manifestFactFor(t)
 	resolver := &nilManifestResolver{}
 
@@ -873,6 +893,7 @@ func TestAManifestFactWithAnEmptyResolverAnswerInstallsNothing(t *testing.T) {
 // own metric increment read as coverage of a state nothing could reach. Folded into the
 // ordinary failure path it is reachable, reported once, and tested here.
 func TestAManifestFactWithNoArchiveSeamIsAckedAndInstallsNothing(t *testing.T) {
+	t.Parallel()
 	raw := manifestFactFor(t)
 
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), &captureWriter{}, nil)
@@ -895,6 +916,7 @@ func TestAManifestFactWithNoArchiveSeamIsAckedAndInstallsNothing(t *testing.T) {
 // nothing. That is the counterweight to the three tests above: this deployment does no
 // containment at all, so there is nothing degraded here to report.
 func TestAManifestFactWithNoProjectionIsAcked(t *testing.T) {
+	t.Parallel()
 	raw := manifestFactFor(t)
 
 	rp := newFenceProcessor(t, fenceRuleReg(t, "acme", "p@1", "yard"), &captureWriter{}, nil)

@@ -132,6 +132,7 @@ func TestTheManifestSubjectIsNoneOfTheOnesAnOldConsumerSubscribedTo(t *testing.T
 // its tenant out of — so this also asserts that the subject the producer targets is one this
 // service can read a tenant from.
 func TestANewConsumerInstallsAManifestFromTheManifestSubject(t *testing.T) {
+	t.Parallel()
 	api, facts := ceilingFenceSet(t)
 	raw, manifest := lastFact(t, facts)
 

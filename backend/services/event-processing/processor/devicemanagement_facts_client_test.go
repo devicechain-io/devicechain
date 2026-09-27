@@ -24,6 +24,7 @@ import (
 // the grammar allows, every attribute key at its column's width — fit under the cap at the doors'
 // maximum page sizes. Measured through device-management's real schema, not estimated.
 func TestReconcilePagesFitTheResponseCap(t *testing.T) {
+	t.Parallel()
 	dm := newDmWorld(t)
 	longProfile := strings.Repeat("p", core.MaxTokenLen)
 	dm.profile(longProfile, nil)
@@ -82,6 +83,7 @@ func TestReconcilePagesFitTheResponseCap(t *testing.T) {
 // still returns every profile; a single profile too large on its own is an error naming the walk's
 // position, never a silently shorter answer.
 func TestTheRulesWalkHalvesAPageTooLargeForTheCap(t *testing.T) {
+	t.Parallel()
 	dm := newDmWorld(t)
 	// ~40 KB per profile: 50 of them (one full page) exceed the 1 MiB cap, 25 do not.
 	big := `{"name":"hot","type":"threshold","description":"` + strings.Repeat("x", 40_000) +

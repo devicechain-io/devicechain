@@ -519,7 +519,7 @@ jobs:
       # and every entry prints one of:
       #
       #   race: COVERED backend/core -- go test -race -count=1 ./...
-      #   race: NOT COVERED backend/services/event-processing -- exempt (hack/go-race.sh): cost: ...
+      #   race: NOT COVERED <module> -- exempt (hack/go-race.sh): <reason>
       #
       # and the step then requires that line to be present. A future edit that
       # leaves this returning 0 without deciding anything fails here rather than
