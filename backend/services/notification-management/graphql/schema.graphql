@@ -296,7 +296,14 @@ type Mutation {
 
     # Routing policies.
     createNotificationPolicy(request: NotificationPolicyCreateRequest!): NotificationPolicy!
-    updateNotificationPolicy(token: String!, request: NotificationPolicyUpdateRequest!): NotificationPolicy!
+    # Partially update the routing policy with the given token: an omitted field is left
+    # alone, an explicit null clears it, and a `rules` list replaces the whole rule set.
+    # expectedUpdatedAt is an optional optimistic-concurrency precondition: pass the
+    # updatedAt you last read, or the one an update returned, and the update is refused
+    # with nothing written if the policy has changed since ("notification policy was
+    # modified by another writer; reload and try again"; this is not the CONFLICT code).
+    # Omit it and the last write wins.
+    updateNotificationPolicy(token: String!, request: NotificationPolicyUpdateRequest!, expectedUpdatedAt: String): NotificationPolicy!
     deleteNotificationPolicy(token: String!): Boolean!
 }
 

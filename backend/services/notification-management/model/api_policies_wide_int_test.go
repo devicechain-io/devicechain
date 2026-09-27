@@ -33,7 +33,7 @@ func TestAnUpdateLeavesAWideIntervalItDidNotName(t *testing.T) {
 
 	if _, err := api.UpdateNotificationPolicy(ctx, "ops", &NotificationPolicyUpdateRequest{
 		Name: dcgraphql.OptionalStringOf("renamed"),
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 

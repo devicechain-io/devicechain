@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -46,7 +45,7 @@ var ErrInvalidEndpoint = errors.New("provider endpoint must be an absolute http(
 // means "a value that must be unique is already in use", and a client (dcctl among them)
 // may treat it as "already exists, carry on" — which, for a lost update, would report a
 // save that never happened as done.
-var ErrConflict = errors.New("provider was modified by another writer; reload and try again")
+var ErrConflict = rdb.NewStaleWriteError("provider")
 
 // Api is the ai-inference persistence surface: the instance-scoped AIProvider list
 // plus each provider's write-only API key (sealed in the ADR-059 secret store).
@@ -289,23 +288,14 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 
 	// Optimistic concurrency: a clean early-out, then an ATOMIC guarded write so a
 	// concurrent save slipping in between the read and this write moves updated_at and
-	// matches zero rows instead of being silently clobbered.
-	//
-	// 🔴 The layout must match core/graphql.FormatTime, which produced the string the
-	// caller echoes back; the guarded write re-reads updated_at, so this comparison is
-	// the only enforcement of the CALLER's version. At RFC3339 it enforced it to the
-	// whole second.
-	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
-		return nil, ErrConflict
+	// matches zero rows instead of being silently clobbered. Both halves are core's
+	// (rdb.RefuseIfMoved, rdb.UpdateIfUnmoved), shared with every update that offers the
+	// precondition.
+	if err := rdb.RefuseIfMoved(current.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+		return nil, err
 	}
-	res := api.sys(ctx).Model(current).
-		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
-		Updates(fields)
-	if res.Error != nil {
-		return nil, res.Error
-	}
-	if res.RowsAffected == 0 {
-		return nil, ErrConflict
+	if err := rdb.UpdateIfUnmoved(api.sys(ctx), current, current.UpdatedAt, fields, ErrConflict); err != nil {
+		return nil, err
 	}
 	// Reload by the token ARGUMENT, which is the only thing that ever named this row.
 	// The payload used to carry one, and reloading by IT is how a blank payload token

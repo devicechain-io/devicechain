@@ -43,9 +43,10 @@
 //
 //   - a deleted tenant's reserved token (user-management's ErrTenantTokenReserved): the
 //     token is held by a tenant nobody can enter;
-//   - a stale-version save (the ErrConflict sentinels in ai-inference,
-//     dashboard-management and outbound-connectors, "modified by another writer; reload
-//     and try again"): despite the name, that is a lost update, not a taken value.
+//   - a stale-version save (rdb.StaleWriteError, which each service offering an
+//     `expectedUpdatedAt` precondition declares as its ErrConflict, "modified by another
+//     writer; reload and try again"): despite the name, that is a lost update, not a
+//     taken value.
 package conflict
 
 import (

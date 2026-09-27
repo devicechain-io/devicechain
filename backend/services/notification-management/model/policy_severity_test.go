@@ -129,7 +129,7 @@ func TestAnUnknownRuleSeverityIsRefused(t *testing.T) {
 		})
 
 		t.Run("update "+severity, func(t *testing.T) {
-			if _, err := api.UpdateNotificationPolicy(ctx, "live", updateWithSeverity(severity)); err == nil {
+			if _, err := api.UpdateNotificationPolicy(ctx, "live", updateWithSeverity(severity), nil); err == nil {
 				t.Fatalf("severity %q was accepted on update", severity)
 			}
 			// An update that names a rule set replaces it wholesale, so a refusal that

@@ -120,7 +120,7 @@ func TestDeviceTypeScopedPolicyIsRefused(t *testing.T) {
 		// unrepresentability above was not bought by the update path being broken.
 		if _, err := api.UpdateNotificationPolicy(ctx, "tenant-wide", &NotificationPolicyUpdateRequest{
 			Name: dcgraphql.OptionalStringOf("Still editable"),
-		}); err != nil {
+		}, nil); err != nil {
 			t.Fatalf("an ordinary update of the tenant-wide policy was refused: %v", err)
 		}
 		found, err := api.NotificationPoliciesByToken(ctx, []string{"tenant-wide"})

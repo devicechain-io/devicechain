@@ -125,6 +125,8 @@ mutation {
 
 On update, the request's `rules` **replaces** the policy's existing rule set. Omit `rules` to leave the stored rules untouched; sending `null` or `[]` leaves the policy with no rules. As with a channel's `secret`, a client that binds one variable per field sends an unsupplied `rules` as `null` and empties the rule set, so send the whole request as a single variable. Naming an unknown channel token fails the whole write.
 
+Two people editing the same policy can overwrite each other: a field both of them change keeps only the last save, and because a `rules` list replaces the whole set, the second save drops every rule the first one wrote. To prevent that, pass `expectedUpdatedAt` with the policy's `updatedAt` as you read it (or as your previous update returned it). If the policy has changed since, the update is refused with "notification policy was modified by another writer; reload and try again" and nothing is written. Reload, reapply your change, and send it again.
+
 ## Verify the path end to end
 
 1. **Create a channel** (as above). Confirm `enabled: true` on the result, and that `hasSecret` is `true` for an SMTP channel with a username or a webhook declaring `bearer` or `header`, and `false` for a webhook declaring `none`.
