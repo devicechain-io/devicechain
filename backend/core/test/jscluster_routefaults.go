@@ -4,6 +4,7 @@
 package test
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -31,7 +32,9 @@ type RouteFaults struct {
 	closed   bool
 
 	listeners []net.Listener
-	conns     map[net.Conn]struct{}
+	// conns maps each open proxied connection to the ordered pair of servers (from, to)
+	// whose route it carries.
+	conns map[net.Conn][2]int
 	// live counts the proxied connection pairs that are open: one per route connection
 	// the servers can have made through a proxy.
 	live int
@@ -71,6 +74,26 @@ func (f *RouteFaults) LiveRouteConnections() int {
 	return f.live
 }
 
+// sever closes every proxied route connection with server i at either end and reports
+// how many connection pairs it closed. Unlike Silence it DOES close them, so the servers
+// drop those routes at once and dial them again through the proxies, which keep
+// listening. It exists to reproduce what registering a route again does to a running
+// cluster: see awaitJetStreamClusterFormed.
+func (f *RouteFaults) sever(i int) int {
+	f.mu.Lock()
+	var hit []net.Conn
+	for c, pair := range f.conns {
+		if pair[0] == i || pair[1] == i {
+			hit = append(hit, c)
+		}
+	}
+	f.mu.Unlock()
+	for _, c := range hit {
+		c.Close()
+	}
+	return len(hit) / 2
+}
+
 func (f *RouteFaults) close() {
 	f.mu.Lock()
 	f.closed = true
@@ -91,8 +114,8 @@ func (f *RouteFaults) close() {
 
 // StartJetStreamClusterWithRouteFaults starts an in-process JetStream cluster of size
 // servers whose every route runs through a proxy the returned RouteFaults can silence.
-// Like StartJetStreamCluster it returns once every server is in the JetStream meta group,
-// and shuts everything down when tb ends.
+// Like StartJetStreamCluster it returns once the cluster is formed (see
+// awaitJetStreamClusterFormed), and shuts everything down when tb ends.
 //
 // Server i reaches server j only through the proxy for the ordered pair (i, j), so
 // silencing server i gates every proxy with i at either end.
@@ -102,7 +125,8 @@ func (f *RouteFaults) close() {
 // whatever they are told about, so each server advertises a closed port: a gossiped
 // address is refused, and the only routes that can form are the configured ones through
 // the proxies. And readiness is not taken on trust: every route connection every server
-// reports must be matched by a proxied connection, or the construction is retried.
+// reports must be matched by a proxied connection, or the fixture fails the test rather
+// than retrying into an attempt where the bypass has not formed yet.
 func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserver.Server, *RouteFaults) {
 	tb.Helper()
 	const attempts = 3
@@ -117,33 +141,17 @@ func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserve
 			})
 			return servers, faults
 		}
+		// A route around the proxies is the fixture failing at its one job, not a port
+		// race, and a fresh attempt that happens to mesh before the bypass forms would
+		// hide it. So it is not retried.
+		if errors.Is(err, errRoutesBypassProxies) {
+			tb.Fatalf("the route-fault cluster cannot fault its routes: %v", err)
+		}
 		if attempt == attempts {
 			tb.Fatalf("could not start a %d-node route-fault JetStream cluster in %d attempts: %v", size, attempts, err)
 		}
 		tb.Logf("route-fault cluster attempt %d/%d failed (%v); retrying on fresh ports", attempt, attempts, err)
 	}
-}
-
-// reservePorts reserves n distinct ports and releases them, for the reason freePorts in
-// core/messaging gives: holding all of them open until each is chosen makes a duplicate
-// impossible.
-func reservePorts(n int) ([]int, error) {
-	listeners := make([]net.Listener, 0, n)
-	defer func() {
-		for _, l := range listeners {
-			l.Close()
-		}
-	}()
-	ports := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return nil, fmt.Errorf("reserving a port: %w", err)
-		}
-		listeners = append(listeners, l)
-		ports = append(ports, l.Addr().(*net.TCPAddr).Port)
-	}
-	return ports, nil
 }
 
 func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserver.Server, *RouteFaults, error) {
@@ -157,7 +165,7 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsse
 	faults := &RouteFaults{
 		silenced: map[int]bool{},
 		held:     map[int]int64{},
-		conns:    map[net.Conn]struct{}{},
+		conns:    map[net.Conn][2]int{},
 	}
 	faults.cond = sync.NewCond(&faults.mu)
 
@@ -221,23 +229,9 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsse
 			return nil, nil, fmt.Errorf("clustered nats server %d not ready", i)
 		}
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		joined := false
-		for _, srv := range servers {
-			if len(srv.JetStreamClusterPeers()) == size {
-				joined = true
-				break
-			}
-		}
-		if joined {
-			break
-		}
-		if time.Now().After(deadline) {
-			shutdown()
-			return nil, nil, fmt.Errorf("JetStream meta group never reached %d peers", size)
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err := awaitJetStreamClusterFormed(servers, clusterFormBudget); err != nil {
+		shutdown()
+		return nil, nil, err
 	}
 	if err := faults.awaitAllRoutesProxied(servers, 15*time.Second); err != nil {
 		shutdown()
@@ -245,6 +239,10 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsse
 	}
 	return servers, faults, nil
 }
+
+// errRoutesBypassProxies marks a cluster whose servers hold more route connections than
+// the proxies carry: some route went around them, so Silence would not silence it.
+var errRoutesBypassProxies = errors.New("a route bypasses the proxies")
 
 // awaitAllRoutesProxied waits until every server is routed to every other one and every
 // route connection the servers report is carried by a proxy.
@@ -277,8 +275,12 @@ func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within
 			stable = 0
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("routes are not all carried by the proxies: the servers report %d route "+
+			err := fmt.Errorf("routes are not all carried by the proxies: the servers report %d route "+
 				"connections, the proxies carry %d (each should be counted twice)", routes, proxied)
+			if meshed && routes > 2*proxied {
+				return fmt.Errorf("%w: %w", errRoutesBypassProxies, err)
+			}
+			return err
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -302,8 +304,8 @@ func (f *RouteFaults) accept(l net.Listener, from, to int, target string) {
 			out.Close()
 			return
 		}
-		f.conns[in] = struct{}{}
-		f.conns[out] = struct{}{}
+		f.conns[in] = [2]int{from, to}
+		f.conns[out] = [2]int{from, to}
 		f.live++
 		f.mu.Unlock()
 

@@ -7,14 +7,12 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/credential"
 	dctest "github.com/devicechain-io/dc-microservice/test"
-	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
@@ -87,41 +85,12 @@ func BenchmarkDeviceConnectStormOnReplicatedJetStream(b *testing.B) {
 	}
 }
 
-// replicatedKV is an R3 attempt bucket on a three-node in-process JetStream cluster.
+// replicatedKV is an R3 attempt bucket on a three-node in-process JetStream cluster,
+// the shared fixture's, so the bucket is created on a cluster already able to place it.
 func replicatedKV(b *testing.B) nats.KeyValue {
 	b.Helper()
 	const nodes = 3
-	ports := make([]int, nodes)
-	for i := range ports {
-		ports[i] = 17_222 + i
-	}
-	var servers []*natsserver.Server
-	for i := 0; i < nodes; i++ {
-		var routes []string
-		for j, p := range ports {
-			if j != i {
-				routes = append(routes, fmt.Sprintf("nats://127.0.0.1:%d", p))
-			}
-		}
-		opts := &natsserver.Options{
-			ServerName: fmt.Sprintf("n%d", i), Host: "127.0.0.1", Port: -1,
-			JetStream: true, StoreDir: dctest.JetStreamStoreDir(b), NoLog: true, NoSigs: true,
-			Cluster: natsserver.ClusterOpts{Name: "storm", Host: "127.0.0.1", Port: ports[i]},
-			Routes:  natsserver.RoutesFromStr(strings.Join(routes, ",")),
-		}
-		srv, err := natsserver.NewServer(opts)
-		if err != nil {
-			b.Fatal(err)
-		}
-		go srv.Start()
-		b.Cleanup(srv.Shutdown)
-		servers = append(servers, srv)
-	}
-	for _, s := range servers {
-		if !s.ReadyForConnections(20 * time.Second) {
-			b.Fatal("a cluster node never became ready")
-		}
-	}
+	servers := dctest.StartJetStreamCluster(b, nodes)
 	nc, err := nats.Connect(servers[0].ClientURL())
 	if err != nil {
 		b.Fatal(err)
@@ -131,18 +100,11 @@ func replicatedKV(b *testing.B) nats.KeyValue {
 	if err != nil {
 		b.Fatal(err)
 	}
-	// The meta leader takes a moment to elect; retry the create until it has.
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-			Bucket: "device_credential_attempts_storm", TTL: credential.AttemptTTL, Replicas: nodes,
-		})
-		if err == nil {
-			return kv
-		}
-		if time.Now().After(deadline) {
-			b.Fatalf("creating the R3 bucket: %v", err)
-		}
-		time.Sleep(200 * time.Millisecond)
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket: "device_credential_attempts_storm", TTL: credential.AttemptTTL, Replicas: nodes,
+	})
+	if err != nil {
+		b.Fatalf("creating the R3 bucket: %v", err)
 	}
+	return kv
 }

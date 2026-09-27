@@ -30,6 +30,8 @@ type silentReplicaRig struct {
 	servers []*natsserver.Server
 	faults  *dctest.RouteFaults
 	leader  int
+	js      nats.JetStreamContext // a setup connection, for reading the bucket's state
+	stream  string                // the bucket's backing stream
 	cache   *Cache
 	metrics *streamMetrics
 	keys    []string
@@ -64,14 +66,19 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 	servers, faults := dctest.StartJetStreamClusterWithRouteFaults(t, 3)
 
 	setup, _ := replicatedCacheManager(t, servers[0])
-	writer, err := setup.NewCache(kv.BucketDeviceByToken, time.Hour)
-	if err != nil {
-		t.Fatalf("create the cache: %v", err)
-	}
+	// The first create places a new R3 group, and meets the same settling window every
+	// other create on these clusters is retried through; a refused placement is not in
+	// that window and still fails here at once.
+	var writer *Cache
+	retryWhileGroupSettles(t, "create the cache", func() error {
+		var err error
+		writer, err = setup.NewCache(kv.BucketDeviceByToken, time.Hour)
+		return err
+	})
 	stream := kvStreamPrefix + CacheBucketName("test", "area", kv.BucketDeviceByToken)
 	waitForReplicated(t, setup.js, stream, 3)
 
-	rig := &silentReplicaRig{servers: servers, faults: faults}
+	rig := &silentReplicaRig{servers: servers, faults: faults, js: setup.js, stream: stream}
 	for i := 0; i < silentRigKeys; i++ {
 		key := fmt.Sprintf("tenant|device-%02d", i)
 		rig.keys = append(rig.keys, key)
@@ -83,6 +90,7 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 	// has not caught up answers a direct get with not-found, which would read as a key
 	// that exists coming back absent, and that is the one outcome the test forbids.
 	info := waitForReplicated(t, setup.js, stream, 3)
+	var err error
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		lagging := false
@@ -171,6 +179,28 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 	return rig
 }
 
+// leaderAtFault is the recorded leader, checked again just before a fault is injected.
+// The rig chose which server to fault, and which one the client uses, by the leader it
+// found during setup; if the leadership has moved since, faulting that server would
+// test a healthy leader, and the failure would read as the cache's. So it fails as the
+// rig's instead.
+func (r *silentReplicaRig) leaderAtFault(t *testing.T) int {
+	t.Helper()
+	info, err := r.js.StreamInfo(r.stream)
+	if err != nil {
+		t.Fatalf("rig: reading the bucket's leader before the fault: %v", err)
+	}
+	if want := r.servers[r.leader].Name(); info.Cluster == nil || info.Cluster.Leader != want {
+		got := ""
+		if info.Cluster != nil {
+			got = info.Cluster.Leader
+		}
+		t.Fatalf("rig: the bucket's leader moved from %s to %q during setup, so the fault would not reach "+
+			"the leader; this is the rig's failure, not the cache's", want, got)
+	}
+	return r.leader
+}
+
 // readSummary is what a run of timed Gets came to. It is aggregated as the reads happen,
 // not collected: a bypassed read takes microseconds, and a slice of millions of them is
 // a memory problem rather than evidence.
@@ -256,7 +286,7 @@ func assertReadsStayedFast(t *testing.T, s *readSummary) {
 func TestCacheReadsStayFastWhenAReplicaGoesSilent(t *testing.T) {
 	rig := newSilentReplicaRig(t)
 
-	rig.faults.Silence(rig.leader)
+	rig.faults.Silence(rig.leaderAtFault(t))
 	reads := rig.readFor(10*time.Second, 1)
 
 	if held := rig.faults.Held(rig.leader); held == 0 {
@@ -282,7 +312,7 @@ func TestCacheReadsStayFastWhenAReplicaGoesSilent(t *testing.T) {
 func TestCacheWriteIsBoundedWhenTheLeaderGoesSilent(t *testing.T) {
 	rig := newSilentReplicaRig(t)
 
-	rig.faults.Silence(rig.leader)
+	rig.faults.Silence(rig.leaderAtFault(t))
 	start := time.Now()
 	err := rig.cache.Set(context.Background(), rig.keys[0], silentRigValue(rig.keys[0]))
 	took := time.Since(start)
@@ -311,7 +341,7 @@ func TestCacheWriteIsBoundedWhenTheLeaderGoesSilent(t *testing.T) {
 func TestCacheReadsStayFastWhenTheLeaderIsShutDown(t *testing.T) {
 	rig := newSilentReplicaRig(t)
 
-	rig.servers[rig.leader].Shutdown()
+	rig.servers[rig.leaderAtFault(t)].Shutdown()
 	assertReadsStayedFast(t, rig.readFor(5*time.Second, 1))
 }
 
@@ -349,7 +379,7 @@ func TestCacheBreakerHoldsForConcurrentReaders(t *testing.T) {
 	rig := newSilentReplicaRig(t)
 	logs := captureLogs(t)
 
-	rig.faults.Silence(rig.leader)
+	rig.faults.Silence(rig.leaderAtFault(t))
 	reads := rig.readFor(10*time.Second, 5)
 
 	assertReadsStayedFast(t, reads)
@@ -384,7 +414,7 @@ func TestAnUnavailableCacheIsReportedAndRecovers(t *testing.T) {
 		t.Fatalf("kv_cache_unavailable = %v on a healthy cache, want 0", got)
 	}
 
-	rig.faults.Silence(rig.leader)
+	rig.faults.Silence(rig.leaderAtFault(t))
 	// Shorter than one bypass, so no probe runs: whatever a probe found, one silent stretch
 	// is then exactly one "stopped answering" line.
 	reads := rig.readFor(cacheBypassFor-time.Second, 1)

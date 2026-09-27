@@ -144,21 +144,38 @@ func TestCollectPassesAFullyReplicatedCluster(t *testing.T) {
 	for _, n := range names {
 		waitForReplicated(t, nmgr.js, n, 3)
 	}
-	// The consumer groups remap onto the stream's peers asynchronously, so give
-	// them the same settle the streams get rather than racing them.
-	waitForConsumersReplicated(t, nmgr.js, names, 3)
 
+	// The consumer groups remap onto the stream's peers asynchronously, and a RAFT peer
+	// that is catching up is legitimately not current for a moment, so the check is the
+	// collector's own verdict, taken until it passes or the deadline does: the assertion
+	// is that a replicated cluster ARRIVES at a clean report.
+	//
+	// 🔴 THE VERDICT IS THE ONLY READER. An earlier wait ranged over the consumer
+	// listing first, and a listing whose request fails closes empty with no error, so it
+	// read "no answer" as "every consumer settled" and the collector, asked a moment
+	// later, found a peer still catching up. A collector that reported everything broken
+	// still fails here, on the last report.
 	exp := replicationTestExpectation(t, 3, names)
-	snap, err := replication.Collect(nmgr.js, exp)
-	if err != nil {
-		t.Fatalf("collect: %v", err)
-	}
-	rep := replication.Verify(snap, exp)
-	if !rep.OK() {
-		t.Fatalf("a fully replicated cluster must pass:\n%s", rep.Format())
-	}
-	if rep.Checked.Consumers == 0 {
-		t.Fatal("the consumer axis examined nothing, so its pass means nothing")
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		snap, err := replication.Collect(nmgr.js, exp)
+		var rep replication.Report
+		if err == nil {
+			rep = replication.Verify(snap, exp)
+			if rep.OK() {
+				if rep.Checked.Consumers == 0 {
+					t.Fatal("the consumer axis examined nothing, so its pass means nothing")
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("collect: %v", err)
+			}
+			t.Fatalf("a fully replicated cluster must pass:\n%s", rep.Format())
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
@@ -193,7 +210,7 @@ func TestCollectCountsConsumersPerStream(t *testing.T) {
 // mustAddStream creates a stream and does not return until its own RAFT group has
 // elected a leader.
 //
-// The wait is load-bearing, not politeness: newTestCluster gates on the META group,
+// The wait is load-bearing, not politeness: newTestCluster waits for a formed cluster,
 // but a freshly created stream forms a SEPARATE group, and a consumer cannot be
 // added to one that has no leader yet. Without this,
 // TestCollectCountsConsumersPerStream added a durable in that window and failed
@@ -235,41 +252,4 @@ func objectNamed(t *testing.T, snap replication.Snapshot, name string) replicati
 		"expectation NAMES going missing from the snapshot means the check silently "+
 		"stopped covering it", name, len(snap.Objects))
 	return replication.Object{}
-}
-
-// waitForConsumersReplicated blocks until every durable on the named streams has
-// settled onto a full peer set.
-//
-// A consumer group is created on the stream's leader and remapped onto the
-// stream's peers afterwards, so reading it immediately catches a legitimately
-// transient state. Waiting is not papering over a race: the assertion is that the
-// group ARRIVES at the stream's width, and "eventually" is the honest form of it.
-func waitForConsumersReplicated(t *testing.T, js nats.JetStreamContext, streams []string, want int) {
-	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		settled := true
-		for _, s := range streams {
-			for ci := range js.ConsumersInfo(s) {
-				if ci == nil || ci.Cluster == nil || len(ci.Cluster.Replicas) != want-1 {
-					settled = false
-					continue
-				}
-				for _, p := range ci.Cluster.Replicas {
-					if !p.Current || p.Offline {
-						settled = false
-					}
-				}
-			}
-		}
-		if settled {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("consumer groups on %v never reached %d replicas with all peers "+
-				"current — JetStream is documented to remap them onto the stream's "+
-				"peers, and this is the assertion that it does so in our topology", streams, want)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
 }
