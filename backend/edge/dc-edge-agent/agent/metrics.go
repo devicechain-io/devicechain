@@ -173,4 +173,14 @@ func (m *edgeMetrics) stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = m.srv.Shutdown(ctx)
+
+	// 🔴 THE PORT IS RELEASED HERE, NOT BY net/http ALONE. http.Server.Shutdown closes
+	// only the listeners Serve has already registered, and start hands the listener to
+	// Serve in a goroutine. A stop that lands before that goroutine runs — Run returning
+	// straight after startMetrics, through its deferred stopMetrics — would otherwise
+	// leave the socket bound until Serve got round to closing it, and a restart on the
+	// same fixed port in between fails with "address already in use". Closing it again
+	// after Serve did is harmless, and its error is ignored for that reason. It runs after
+	// Shutdown so the serve loop sees a server shutting down, not an Accept error.
+	_ = m.ln.Close()
 }
