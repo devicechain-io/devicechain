@@ -2942,6 +2942,29 @@ the limit is hit, the database logs `terminating connection due to idle-in-trans
 rolls the transaction back. The request it belonged to fails with an error, and work a service takes
 from a stream is delivered to it again. See [Database write refusal](./tenant-deletion.md#database-writes).
 
+#### Device events sent over MQTT are forwarded several at a time
+
+Nothing needs doing at the upgrade.
+
+- **`event-sources` keeps up to 128 publishes to inbound-events waiting for the broker at once**
+  for the events devices send over MQTT to the platform broker, instead of at most five. A
+  device's message is still acknowledged only after the event it carried has been stored, and one
+  whose publish fails is still left for redelivery. Events sent over HTTP, and through an external
+  MQTT broker you configured, are published as before.
+- **When publishing to inbound-events keeps failing, `event-sources` slows down** the same way
+  `device-management` does: after a failed publish it waits half a second, doubling up to two
+  seconds, and until a publish succeeds it sends one at a time.
+- **More device messages can be redelivered after `event-sources` stops abruptly:** up to the 128
+  that were waiting for the broker, on top of those it held before. Each carries the same
+  duplicate-detection id as before, so an event that was already stored is not stored twice.
+- **A device message that failed on every delivery is still routed to failed-decode, at most four
+  at a time.** One that arrives while four are being routed is left for the broker to end, and is
+  recorded as a dead letter instead of on failed-decode.
+- **A device's events can reach inbound-events slightly out of order, as they could before:** five
+  decoders work through the captured messages at once, and every replica publishes.
+- **`devicechain_eventsources_jetstream_publish_duration_seconds` gains a `mode="pipelined"`
+  series for `suffix="inbound-events"`.** [Observability](./observability.md) describes the modes.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

@@ -76,17 +76,33 @@ func (r rawMessage) settle(err error) {
 // just failed and leave the message unacked instead.
 var ErrDeadLetterUnavailable = errors.New("failed-decode route unavailable")
 
+// DecodedFunc hands a decoded event on for publishing and reports the outcome to done
+// exactly once: nil ONLY once the event is durably stored (or deliberately dropped — see
+// rawMessage.settle), non-nil otherwise, so a transport that acknowledges its broker does
+// so on the real outcome and never on the strength of having merely attempted the
+// publish. It may call done before returning (a synchronous publish, a terminal drop) or
+// later, from another goroutine (a pipelined publish). done is never nil: the worker
+// passes rawMessage.settle, which tolerates a transport with nothing to acknowledge.
+type DecodedFunc func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
+	captureSeq uint64, done func(error))
+
+// Inline adapts a synchronous publish callback to a DecodedFunc: it publishes on the
+// calling worker and reports the result to done before returning.
+func Inline(decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error) DecodedFunc {
+	return func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
+		captureSeq uint64, done func(error)) {
+		done(decoded(source, tenant, event, payload, captureSeq))
+	}
+}
+
 // Worker used to decode event payloads.
 type DecodeWorker struct {
 	WorkerId    int
 	SourceId    string
 	Decoder     Decoder
 	RawMessages <-chan rawMessage
-	// Callback publishes a decoded event and reports whether the publish DURABLY
-	// succeeded. It returns an error so the worker can settle the source's message
-	// on the real outcome: a transport that acknowledges its broker must not do so
-	// on the strength of having merely attempted the publish.
-	Callback func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+	// Callback hands a decoded event on for publishing; see DecodedFunc.
+	Callback DecodedFunc
 	// Failed routes an undecodable payload to the failed-decode path, likewise
 	// reporting whether that routing itself succeeded.
 	Failed func(string, string, []byte, error) error
@@ -94,7 +110,7 @@ type DecodeWorker struct {
 
 // Create a new decode worker.
 func NewDecodeWorker(workerId int, sourceId string, decoder Decoder, rawMessages <-chan rawMessage,
-	callback func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
+	callback DecodedFunc,
 	failed func(string, string, []byte, error) error) *DecodeWorker {
 	worker := &DecodeWorker{
 		WorkerId:    workerId,
@@ -134,7 +150,7 @@ func (wrk *DecodeWorker) Process() {
 					raw.settle(nil)
 				}
 			} else {
-				raw.settle(wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.captureSeq))
+				wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.captureSeq, raw.settle)
 			}
 		} else {
 			log.Debug().Msg("Decode worker received shutdown signal.")

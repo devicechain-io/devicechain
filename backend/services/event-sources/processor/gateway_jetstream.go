@@ -8,13 +8,76 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 )
+
+// CAPTURE_PUBLISH_WINDOW is how many inbound-events publishes the gateway source keeps
+// awaiting their PubAck at once (messaging.OrderedWriter), where it used to keep one per
+// decode worker (DECODE_WORKER_COUNT). It is the same window device-management uses, and
+// the curve that confirmed it is BenchmarkCaptureIngestThroughput's: in-process over
+// loopback with 20,000 captured events (one tenant, 1,000 devices), median of three, in
+// events per second,
+//
+//	      none     sync     w=1    w=128    w=256
+//	R1  78,451   10,424   2,611   64,085   58,929
+//	R3  39,705    4,704     828   23,062   21,574
+//
+// where none builds each message and publishes nothing — the stage's ceiling without a
+// publish — and sync is the five synchronous publishes this replaced. The rule, fixed
+// before measuring, was that the publish is a ceiling if sync falls below half of none at
+// R3 (it is under an eighth), and that a window ships only if it at least doubles sync at
+// R3 (128 is about 4.9x) and a wider one gains nothing (256 is within noise, and lower).
+// The absolute numbers are a floor — a real network adds a round trip to every publish —
+// and the ratios are the result.
+const CAPTURE_PUBLISH_WINDOW = 128
+
+// POISON_ROUTE_LIMIT bounds how many poison messages are routed to failed-decode at once.
+// The route is a synchronous publish of up to 5 s, and it used to run on the decode worker
+// that settled the message; it now runs off the ordered writer's settle goroutine, whose
+// done callbacks must be quick. See settler.
+const POISON_ROUTE_LIMIT = 4
+
+// InboundMessageFunc builds the inbound-events message for one decoded event, with the
+// context it is published under (it carries the tenant). ok=false is a terminal,
+// deliberate drop (no tenant, an event that cannot be marshalled): the source message is
+// settled nil and nothing is published — the ACK TRAP rule, as for every other drop.
+type InboundMessageFunc func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
+	captureSeq uint64) (ctx context.Context, msg messaging.Message, ok bool)
+
+// poisonRoutes bounds the failed-decode routes running at once (slots, POISON_ROUTE_LIMIT)
+// and counts them (running), so a stop can wait for them before the connection drains.
+//
+// It is per start, like the rest of the pipeline, and each message's settler holds the one
+// that was current when the message was taken. A stop that gives up at its deadline leaves
+// that start's writer settling on its own, and those outcomes can still start routes; were
+// the count shared, they would Add to a WaitGroup the next start's stop is waiting on, which
+// the WaitGroup forbids. They count against their own start's instead, which nobody waits
+// for any more.
+type poisonRoutes struct {
+	slots   chan struct{}
+	running sync.WaitGroup
+}
+
+// NewInboundWriter builds the gateway source's ordered writer to inbound-events, with the
+// CAPTURE_PUBLISH_WINDOW it was measured at. It lives here rather than in main.go so that
+// the window the source actually runs with is the one a test in this package observes.
+func NewInboundWriter(nmgr *messaging.NatsManager) (messaging.OrderedWriter, error) {
+	return nmgr.NewOrderedWriter(streams.InboundEvents, CAPTURE_PUBLISH_WINDOW)
+}
+
+// pendingPublish is one built message on its way from a decode worker to the submitter.
+type pendingPublish struct {
+	ctx  context.Context
+	msg  messaging.Message
+	done func(error)
+}
 
 // GatewayJetStreamSource ingests device telemetry by consuming the durable
 // capture stream the broker writes every device publish into, rather than by
@@ -53,6 +116,21 @@ type GatewayJetStreamSource struct {
 	messages chan rawMessage
 	workers  []*DecodeWorker
 
+	// writer publishes to inbound-events with CAPTURE_PUBLISH_WINDOW publishes in flight.
+	// Its ONE submitter is the goroutine submitLoop runs; the decode workers hand it
+	// their built messages over publishes, which is UNBUFFERED on purpose: the window is
+	// already the buffer, and a queue in front of it would only hold captured messages
+	// here while the broker's AckWait clock runs on them — during a failure episode, when
+	// the writer admits one publish per backoff, long enough to be redelivered unattempted.
+	writer    messaging.OrderedWriter
+	publishes chan pendingPublish
+	// workersDone and submitterDone close when every decode worker, and the submitter,
+	// of the current start have returned.
+	workersDone   chan struct{}
+	submitterDone chan struct{}
+	// poison is the current start's failed-decode routes; see poisonRoutes.
+	poison *poisonRoutes
+
 	lifecycle core.LifecycleManager
 	cancel    context.CancelFunc
 	// drained closes once the read loop has returned, so Stop does not race the
@@ -60,7 +138,7 @@ type GatewayJetStreamSource struct {
 	drained chan struct{}
 
 	received func(string, []byte)
-	decoded  func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+	build    InboundMessageFunc
 	failed   func(string, string, []byte, error) error
 	// allow meters an inbound message against its tenant's ingest ceiling before it
 	// is queued for decode; a false return sheds the message. nil disables metering.
@@ -74,19 +152,19 @@ type GatewayJetStreamSource struct {
 	readPacer *core.ReadPacer
 }
 
-// NewGatewayJetStreamSource builds the capture-stream source. The reader is
-// supplied separately by SetReader, because at the point sources are built there
-// is no reader to pass — see SetReader.
+// NewGatewayJetStreamSource builds the capture-stream source. The reader and the
+// inbound-events writer are supplied separately by SetReader and SetWriter, because at
+// the point sources are built neither exists yet — see SetReader.
 func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder,
 	received func(string, []byte),
-	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
+	build InboundMessageFunc,
 	failed func(string, string, []byte, error) error,
 	allow RateGate) *GatewayJetStreamSource {
 	es := &GatewayJetStreamSource{
 		Id:        id,
 		Decoder:   decoder,
 		received:  received,
-		decoded:   decoded,
+		build:     build,
 		failed:    failed,
 		allow:     allow,
 		readPacer: core.NewReadPacer(ms, "gateway capture"),
@@ -111,6 +189,15 @@ func (es *GatewayJetStreamSource) SetReader(reader messaging.MessageReader) {
 	es.reader = reader
 }
 
+// SetWriter supplies the ordered writer to inbound-events. Like the reader it exists only
+// from NATS component creation (START), after sources are built (INITIALIZE), so it is a
+// setter, called beside SetReader. The source owns the writer from here: its ExecuteStop
+// calls Draining and Close in the order the writer's contract requires, so the whole stop
+// order lives in one place a test can run rather than in main.go, which none does.
+func (es *GatewayJetStreamSource) SetWriter(writer messaging.OrderedWriter) {
+	es.writer = writer
+}
+
 func (es *GatewayJetStreamSource) Initialize(ctx context.Context) error {
 	return es.lifecycle.Initialize(ctx)
 }
@@ -121,16 +208,22 @@ func (es *GatewayJetStreamSource) Start(ctx context.Context) error {
 	return es.lifecycle.Start(ctx)
 }
 
-// ExecuteStart brings up the decode workers and the read loop.
+// ExecuteStart brings up the publish pipeline (decode workers and the submitter) and the
+// read loop.
 func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 	// Refuse to start unwired. Without this the nil reader is not touched until the
 	// read loop's first fetch, on a goroutine, where it panics the process with a
 	// bare SIGSEGV that names neither the source nor the missing dependency. This
 	// is the point of consumption, and it is the only place the wiring can be
 	// checked at all: the service's own wiring lives in main.go, which no test runs.
+	// The reader is checked first; the writer, wired beside it, next.
 	if es.reader == nil {
 		return fmt.Errorf("event source %q was started without a capture-stream reader: "+
 			"SetReader must be called during NATS component creation, before start", es.Id)
+	}
+	if es.writer == nil {
+		return fmt.Errorf("event source %q was started without an inbound-events writer: "+
+			"SetWriter must be called during NATS component creation, before start", es.Id)
 	}
 	// Per-Start, not per-construction. These belong to the read loop this start is
 	// about to spawn and to nothing else: ExecuteStop cancels that loop and closes the
@@ -141,13 +234,7 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 	// instantly and race a live loop into a closed channel.
 	drained := make(chan struct{})
 	es.drained = drained
-	es.messages = make(chan rawMessage, DECODE_CHANNEL_DEPTH)
-	es.workers = make([]*DecodeWorker, 0, DECODE_WORKER_COUNT)
-	for w := 1; w <= DECODE_WORKER_COUNT; w++ {
-		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.decoded, es.failed)
-		es.workers = append(es.workers, worker)
-		go worker.Process()
-	}
+	es.startPipeline(DECODE_WORKER_COUNT)
 
 	loopCtx, cancel := context.WithCancel(context.Background())
 	es.cancel = cancel
@@ -162,28 +249,148 @@ func (es *GatewayJetStreamSource) Stop(ctx context.Context) error {
 	return es.lifecycle.Stop(ctx)
 }
 
-// ExecuteStop stops the read loop and then the workers, in that order.
+// startPipeline brings up, for one start, the decode workers and the ONE submitter that
+// hands their messages to the writer. Everything it builds is per start, for the reason
+// ExecuteStart gives, and the workers are handed the start's own publishes channel
+// rather than reading the field, so a worker lingering from a stop cut short by its
+// deadline cannot send into a later start's channel.
+func (es *GatewayJetStreamSource) startPipeline(workers int) {
+	messages := make(chan rawMessage, DECODE_CHANNEL_DEPTH)
+	publishes := make(chan pendingPublish)
+	workersDone := make(chan struct{})
+	submitterDone := make(chan struct{})
+	es.messages, es.publishes = messages, publishes
+	es.workersDone, es.submitterDone = workersDone, submitterDone
+	es.poison = &poisonRoutes{slots: make(chan struct{}, POISON_ROUTE_LIMIT)}
+
+	submit := es.submitter(publishes)
+	var running sync.WaitGroup
+	es.workers = make([]*DecodeWorker, 0, workers)
+	for w := 1; w <= workers; w++ {
+		worker := NewDecodeWorker(w, es.Id, es.Decoder, messages, submit, es.failed)
+		es.workers = append(es.workers, worker)
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			worker.Process()
+		}()
+	}
+	go func() {
+		running.Wait()
+		close(workersDone)
+	}()
+	go submitLoop(publishes, es.writer, submitterDone)
+}
+
+// submitter returns the workers' DecodedFunc for one start: build the message and hand it
+// to the ONE submitter. A terminal drop settles nil here, on the worker. done goes to the
+// writer as it is: the writer's settle loop already logs a failed publish, and the settler
+// logs it again with the tenant and capture sequence.
+func (es *GatewayJetStreamSource) submitter(publishes chan<- pendingPublish) DecodedFunc {
+	return func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
+		captureSeq uint64, done func(error)) {
+		ctx, msg, ok := es.build(source, tenant, event, payload, captureSeq)
+		if !ok {
+			done(nil)
+			return
+		}
+		publishes <- pendingPublish{ctx: ctx, msg: msg, done: done}
+	}
+}
+
+// submitLoop is the writer's ONE submitter (the messaging.OrderedWriter contract). It
+// returns when publishes is closed and drained, then closes done.
+func submitLoop(publishes <-chan pendingPublish, writer messaging.OrderedWriter, done chan<- struct{}) {
+	defer close(done)
+	for p := range publishes {
+		writer.Publish(p.ctx, p.msg, p.done)
+	}
+}
+
+// ExecuteStop stops the read loop, then the decode workers, then the submitter, and
+// returns once every message it took has been settled.
 //
-// The order is not cosmetic. Closing the message channel while the read loop
-// could still enqueue would panic on a send to a closed channel, and the loop is
-// the only writer — so it must be observed to have returned first. Messages
-// already in flight are simply left UNACKED, which is the correct outcome: the
-// capture stream redelivers them to whichever pod is running, and at-least-once
-// is exactly the guarantee this source exists to provide.
+// The order is not cosmetic. Closing a channel while the goroutine ahead of it could still
+// send would panic on a send to a closed channel, so each stage is observed to have
+// returned before the channel behind it is closed: the read loop before the message
+// channel, every decode worker before the publish channel, and the submitter before the
+// writer's Close, which the writer's contract forbids while a submission is in progress.
+// Close returns once every publish has settled — acked on its PubAck, or left UNACKED on a
+// failure — and the poison routes those outcomes started are waited for last, so all of it
+// happens before the service drains the NATS connection. The writer is told it is
+// draining as soon as the read loop is cancelled, so a failing stream no longer holds the
+// shutdown in backoff.
+//
+// Every wait is bounded by ctx. Past it the stop logs which stage it gave up on and
+// returns, leaving what is unsettled UNACKED, which is the correct outcome: the capture
+// stream redelivers it to whichever pod is running, the capture dedup id stores it once,
+// and at-least-once is exactly the guarantee this source exists to provide.
 func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 	if es.cancel != nil {
 		es.cancel()
 	}
-	select {
-	case <-es.drained:
-	case <-ctx.Done():
-		log.Warn().Str("source", es.Id).Msg("Gateway capture read loop did not drain before shutdown deadline.")
+	// A source stopped without ever having started has nothing to stop. The lifecycle
+	// permits that stop, and without this it would wait out the whole deadline on a nil
+	// channel.
+	if es.drained == nil {
 		return nil
 	}
-	if es.messages != nil {
-		close(es.messages)
+	// Draining before the read loop is waited for, not after: the loop can be blocked
+	// handing a message into a full pipeline, and while a failing stream holds the
+	// writer in backoff, room frees only one backoff at a time. Draining ends that
+	// backoff, so the loop's last hand-off does not wait out one first. Nothing more is
+	// fetched once the loop sees the cancel.
+	es.writer.Draining()
+	if !es.await(ctx, es.drained, "read loop") {
+		return nil
 	}
+	es.stopPipeline(ctx)
 	return nil
+}
+
+// stopPipeline stops what startPipeline started; see ExecuteStop. It reports whether
+// every stage finished inside ctx. It calls Draining itself (a second call is a no-op) so
+// that it is complete on its own, as the tests that run the pipeline without a read loop
+// use it.
+func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
+	es.writer.Draining()
+	close(es.messages)
+	if !es.await(ctx, es.workersDone, "decode workers") {
+		return false
+	}
+	close(es.publishes)
+	if !es.await(ctx, es.submitterDone, "publish submitter") {
+		return false
+	}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		es.writer.Close()
+	}()
+	if !es.await(ctx, closed, "inbound-events publishes") {
+		return false
+	}
+	// Every done has run, so every poison route that will ever start has started: the
+	// wait below cannot miss one.
+	routed := make(chan struct{})
+	poison := es.poison
+	go func() {
+		defer close(routed)
+		poison.running.Wait()
+	}()
+	return es.await(ctx, routed, "failed-decode routes")
+}
+
+// await waits for done or ctx, logging the stage it gave up on.
+func (es *GatewayJetStreamSource) await(ctx context.Context, done <-chan struct{}, stage string) bool {
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		log.Warn().Str("source", es.Id).Str("stage", stage).
+			Msg("Gateway capture source did not stop before the shutdown deadline; what it has not settled is left unacked for redelivery.")
+		return false
+	}
 }
 
 func (es *GatewayJetStreamSource) Terminate(ctx context.Context) error {
@@ -334,6 +541,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 // would be redelivered until the broker gave up on it, taking the diagnostic with
 // it — the same shape as the drop trap above, one level down.
 func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) func(error) {
+	poison := es.poison
 	return func(handleErr error) {
 		if handleErr == nil {
 			if err := msg.Ack(); err != nil {
@@ -357,18 +565,29 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) 
 					Msg("Captured message is poison and the failed-decode route is unavailable; leaving it unacked.")
 				return
 			}
-			log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
-				Int("attempts", msg.NumDelivered).
-				Msg("Captured message failed every delivery attempt; routing to failed-decode.")
-			if err := es.failed(es.Id, tenant, msg.Value, handleErr); err != nil {
-				// Even the dead-letter route failed. Leave it UNACKED: the broker's own
-				// MaxDeliver terminates it eventually, and losing it loudly later beats
-				// discarding it silently now.
-				log.Error().Err(err).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
-					Msg("Failed to route a poison captured message to failed-decode; leaving it unacked.")
+			// The route is a synchronous publish of up to 5 s, and this runs on the
+			// inbound-events writer's settle goroutine, which reports every other
+			// outcome in order behind it. So it runs on its own goroutine, at most
+			// POISON_ROUTE_LIMIT at once. With every slot busy the message is left
+			// UNACKED: this is its last delivery, so the broker terminates it and the
+			// max-delivery recorder letters it — recorded, loudly, rather than holding
+			// back every other message's ack.
+			select {
+			case poison.slots <- struct{}{}:
+			default:
+				log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
+					Int("attempts", msg.NumDelivered).
+					Msg("Captured message is poison and every failed-decode route is busy; leaving it unacked for the max-delivery record.")
 				return
 			}
-			ackDrop(msg, "poison after MaxDeliver attempts")
+			poison.running.Add(1)
+			go func() {
+				defer func() {
+					<-poison.slots
+					poison.running.Done()
+				}()
+				es.routePoison(msg, tenant, handleErr)
+			}()
 			return
 		}
 		// LEFT UNACKED ON PURPOSE — deliberately NOT naked.
@@ -397,6 +616,23 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) 
 			Int("attempt", msg.NumDelivered).
 			Msg("Captured message not durably forwarded; leaving it unacked for AckWait-paced redelivery.")
 	}
+}
+
+// routePoison routes a message that failed every delivery attempt to failed-decode, and
+// acks it once it is there.
+func (es *GatewayJetStreamSource) routePoison(msg messaging.Message, tenant string, handleErr error) {
+	log.Error().Err(handleErr).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
+		Int("attempts", msg.NumDelivered).
+		Msg("Captured message failed every delivery attempt; routing to failed-decode.")
+	if err := es.failed(es.Id, tenant, msg.Value, handleErr); err != nil {
+		// Even the dead-letter route failed. Leave it UNACKED: the broker's own
+		// MaxDeliver terminates it eventually, and losing it loudly later beats
+		// discarding it silently now.
+		log.Error().Err(err).Str("tenant", tenant).Uint64("captureSeq", msg.StreamSeq).
+			Msg("Failed to route a poison captured message to failed-decode; leaving it unacked.")
+		return
+	}
+	ackDrop(msg, "poison after MaxDeliver attempts")
 }
 
 // ackDrop acknowledges a message the source is terminally, deliberately not going

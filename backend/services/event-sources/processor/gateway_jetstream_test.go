@@ -79,6 +79,40 @@ type captureHarness struct {
 	gate RateGate
 	// events records every event the source handed its publish callback, in order.
 	events []*model.UnresolvedEvent
+	// settles counts the publishes whose done has RETURNED — so the settler has run,
+	// and a test may assert what it did (or did not do) to the message.
+	settles int
+}
+
+// harnessWriter is the harness's inbound-events writer: every publish is answered at
+// once with the harness's publishErr, on the submitting goroutine, which the source's
+// one submitter makes a single goroutine.
+type harnessWriter struct{ h *captureHarness }
+
+func (w harnessWriter) Publish(_ context.Context, _ messaging.Message, done func(error)) {
+	w.h.mu.Lock()
+	err := w.h.publishErr
+	w.h.mu.Unlock()
+	done(err)
+	w.h.mu.Lock()
+	w.h.settles++
+	w.h.mu.Unlock()
+}
+func (w harnessWriter) Fail(err error, done func(error)) { done(err) }
+func (harnessWriter) Draining()                          {}
+func (harnessWriter) Close()                             {}
+
+// quiesce waits until n publishes have settled and every poison route they started has
+// returned, so an assertion that something did NOT happen is taken after the code that
+// could have done it ran, not before.
+func (h *captureHarness) quiesce(t *testing.T, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.settles >= n
+	}, 2*time.Second, time.Millisecond, "the publish was never settled")
+	h.source.poison.running.Wait()
 }
 
 func newCaptureHarness(t *testing.T) *captureHarness {
@@ -90,13 +124,13 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			defer h.mu.Unlock()
 			h.received++
 		},
-		func(_ string, _ string, event *model.UnresolvedEvent, _ interface{}, seq uint64) error {
+		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, seq uint64) (context.Context, messaging.Message, bool) {
 			h.mu.Lock()
 			h.published++
 			h.lastSeq = seq
 			h.events = append(h.events, event)
 			h.mu.Unlock()
-			return h.publishErr
+			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
 		func(string, string, []byte, error) error {
 			h.mu.Lock()
@@ -122,15 +156,16 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			return h.allowResult
 		})
 
-	// Start only the decode side; the read loop is bypassed so tests drive handle
-	// directly with the exact message they mean to exercise.
-	h.source.messages = make(chan rawMessage, DECODE_CHANNEL_DEPTH)
-	for w := 1; w <= 2; w++ {
-		worker := NewDecodeWorker(w, h.source.Id, h.source.Decoder, h.source.messages,
-			h.source.decoded, h.source.failed)
-		go worker.Process()
-	}
-	t.Cleanup(func() { close(h.source.messages) })
+	// Start only the publish pipeline, through the code ExecuteStart runs; the read loop
+	// is bypassed so tests drive handle directly with the exact message they mean to
+	// exercise.
+	h.source.SetWriter(harnessWriter{h})
+	h.source.startPipeline(2)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.True(t, h.source.stopPipeline(ctx), "the harness pipeline did not stop")
+	})
 	return h
 }
 
@@ -289,9 +324,8 @@ func TestAPublishFailureIsLeftUnackedForAckWaitPacedRedelivery(t *testing.T) {
 	ack := &recordingAck{}
 	h.source.handle(capturedMsg(captureSubject, validEvent, 1, 9, ack))
 
-	// Wait for the publish attempt, then assert nothing was settled either way.
-	require.Eventually(t, func() bool { published, _, _, _ := h.counts(); return published == 1 },
-		2*time.Second, time.Millisecond, "the publish was never attempted")
+	// Wait for the publish to settle, then assert nothing was acked.
+	h.quiesce(t, 1)
 
 	acks := ack.counts()
 	require.Zero(t, acks,
@@ -325,9 +359,10 @@ func TestAPoisonMessageIsNotAckedWhenDeadLetteringAlsoFails(t *testing.T) {
 	ack := &recordingAck{}
 	h.source.handle(capturedMsg(captureSubject, validEvent, messaging.MaxDeliver, 12, ack))
 
-	// Give the worker time to run; the assertion is that NOTHING was acked.
-	require.Eventually(t, func() bool { _, failed, _, _ := h.counts(); return failed == 1 },
-		2*time.Second, time.Millisecond, "dead-letter route was never attempted")
+	// Wait for the route to have run; the assertion is that NOTHING was acked.
+	h.quiesce(t, 1)
+	_, failed, _, _ := h.counts()
+	require.Equal(t, 1, failed, "dead-letter route was never attempted")
 	acks := ack.counts()
 	require.Zero(t, acks,
 		"acking after the dead-letter route failed discards the payload with no record anywhere")
@@ -586,9 +621,14 @@ func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
 func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
 	source := NewGatewayJetStreamSource(nil, "gw-unwired", NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {},
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+			return nil, messaging.Message{}, false
+		},
 		func(string, string, []byte, error) error { return nil },
 		nil)
+	// The writer IS wired, so the refusal this reaches is the reader's, whichever order
+	// the two checks run in.
+	source.SetWriter(harnessWriter{&captureHarness{}})
 
 	// Driven through the real lifecycle, in the order the service uses it: sources
 	// are Initialized in one phase and Started in a later one, and it is exactly

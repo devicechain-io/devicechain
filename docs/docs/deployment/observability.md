@@ -404,7 +404,8 @@ No alert reads the next series, but it is the one to look at when publishing is 
   to a JetStream stream took, from sending it to the service acting on the broker's
   acknowledgement or on its failure, by the stream it was sent to. `mode="sync"` is a publish the
   service waited on alone. `mode="pipelined"` is one of several in flight at once (the resolved
-  events `device-management` publishes), and its time also includes waiting for every earlier
+  events `device-management` publishes, and the device events `event-sources` forwards from what
+  devices publish over MQTT to the platform broker), and its time also includes waiting for every earlier
   publish to be settled, and for the pause the service takes after a failed one, so the two modes
   are not directly comparable. A `mode="sync"` publish the broker never answered is counted at the
   5-second limit, so for that mode the count above the `le="5"` bucket is the publishes that ran

@@ -3152,6 +3152,34 @@ ya se había dado por completada. Cuando se alcanza el límite, la base de datos
 a la que pertenecía falla con un error, y el trabajo que un servicio toma de un flujo se le vuelve a
 entregar. Vea [Rechazo de escrituras en la base de datos](./tenant-deletion.md#database-writes).
 
+#### Los eventos que los dispositivos envían por MQTT se reenvían varios a la vez
+
+No hay que hacer nada en la actualización.
+
+- **`event-sources` mantiene hasta 128 publicaciones en inbound-events esperando al bróker a la
+  vez** para los eventos que los dispositivos envían por MQTT al bróker de la plataforma, en lugar
+  de cinco como máximo. El mensaje de un dispositivo se sigue confirmando solo después de que el
+  evento que llevaba se haya guardado, y uno cuya publicación falla se sigue dejando para volver a
+  entregarse. Los eventos enviados por HTTP, y a través de un bróker MQTT externo que usted haya
+  configurado, se publican como antes.
+- **Cuando publicar en inbound-events sigue fallando, `event-sources` frena** igual que
+  `device-management`: tras una publicación fallida espera medio segundo, duplicándolo hasta dos
+  segundos, y hasta que una publicación tiene éxito envía una cada vez.
+- **Pueden volver a entregarse más mensajes de dispositivos cuando `event-sources` se detiene de
+  golpe:** hasta los 128 que esperaban al bróker, además de los que ya retenía antes. Cada uno lleva
+  el mismo identificador de detección de duplicados que antes, así que un evento que ya se guardó no
+  se guarda dos veces.
+- **Un mensaje de dispositivo que falló en todas sus entregas se sigue enviando a failed-decode,
+  como mucho cuatro a la vez.** Uno que llega mientras se envían cuatro se deja para que el bróker
+  lo termine, y se registra como mensaje fallido (dead letter) en lugar de en
+  failed-decode.
+- **Los eventos de un dispositivo pueden llegar a inbound-events ligeramente desordenados, como
+  ya podían:** cinco decodificadores procesan a la vez los mensajes capturados, y cada réplica
+  publica.
+- **`devicechain_eventsources_jetstream_publish_duration_seconds` añade una serie
+  `mode="pipelined"` para `suffix="inbound-events"`.** [Observabilidad](./observability.md)
+  describe los modos.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
