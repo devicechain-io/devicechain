@@ -866,6 +866,11 @@ mensajes por segundo, con una lectura por mensaje. La consola se dimensiona por 
   cuando el nodo está saturado, aumenta también la solicitud. Una solicitud por encima del límite
   de su servicio se rechaza al generar el chart.
 
+  El límite de CPU propio de esos dos servicios se define de la misma forma, así que un
+  `resources.limits.cpu` de nivel superior no lo sustituye: un límite de nivel superior de 4
+  núcleos da 4 núcleos a los demás servicios de backend y deja estos dos en 2. Define el suyo en
+  `functionalAreas`, como arriba.
+
 La métrica que muestra un servicio frenado por su límite es
 `container_cpu_cfs_throttled_periods_total` de su contenedor.
 

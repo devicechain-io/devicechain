@@ -3311,6 +3311,15 @@ reducidas.
     256Mi de nivel superior. Defina también su límite.
   - Se rechaza cualquier clave distinta de `requests`, `limits` o `claims` bajo los `resources` de
     un servicio.
+- **Un `resources.limits.cpu` de nivel superior por encima de 2 núcleos ya no llega a
+  `device-management` ni a `event-management`,** porque su nuevo límite de 2 núcleos es propio y la
+  clave propia de un servicio prevalece sobre la de nivel superior. Si sus valores suben solo el
+  límite de CPU de nivel superior, por ejemplo a 4, la actualización BAJA estos dos servicios a 2
+  núcleos. Defina `functionalAreas.device-management.resources.limits.cpu` y
+  `functionalAreas.event-management.resources.limits.cpu` para conservar lo que tenían. Por la misma
+  razón, un `resources.requests.cpu` de nivel superior por encima de 2 núcleos, que antes se
+  generaba, ahora se rechaza, indicando como límite superado el propio del servicio; suba también
+  ese límite.
 - **Un `ResourceQuota` de espacio de nombres sobre `limits.cpu`, o un `LimitRange` con un `max` de
   CPU, puede rechazar los dos pods** ahora que sus límites son más altos. Nada de lo que instala
   DeviceChain crea ninguno de los dos; revise los que haya añadido.

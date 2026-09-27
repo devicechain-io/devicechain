@@ -807,6 +807,10 @@ console is sized separately.
   by key, so set only what differs. To guarantee the CPU when the node is contended, raise the
   request as well. A request above its service's limit is refused when the chart renders.
 
+  The two services' own CPU limit is set that way too, so a top-level `resources.limits.cpu`
+  does not replace it: a top-level limit of 4 cores gives every other backend service 4 cores
+  and leaves these two at 2. Set theirs under `functionalAreas`, as above.
+
 The metric that shows a service held back by its limit is
 `container_cpu_cfs_throttled_periods_total` for its container.
 

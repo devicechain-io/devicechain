@@ -3088,6 +3088,14 @@ needs more room on a node, and `--compact` instances keep their lower requests.
     example a service that sets only `requests.memory: 512Mi` against the top-level 256Mi limit.
     Set its limit too.
   - A key other than `requests`, `limits` or `claims` under a service's `resources` is refused.
+- **A top-level `resources.limits.cpu` above 2 cores no longer reaches `device-management` or
+  `event-management`,** because their new 2-core limit is their own and a service's own key wins
+  over the top-level one. If your values raise only the top-level CPU limit, for example to 4,
+  the upgrade LOWERS these two services to 2 cores. Set
+  `functionalAreas.device-management.resources.limits.cpu` and
+  `functionalAreas.event-management.resources.limits.cpu` to keep what they had. For the same
+  reason, a top-level `resources.requests.cpu` above 2 cores, which rendered before, is now
+  refused, naming the service's own limit as the one it is above; raise that limit too.
 - **A namespace `ResourceQuota` on `limits.cpu`, or a `LimitRange` with a CPU `max`, can refuse
   the two pods** now that their limits are higher. Nothing DeviceChain installs creates either;
   check any you added.

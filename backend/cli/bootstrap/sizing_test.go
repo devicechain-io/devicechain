@@ -275,3 +275,105 @@ func TestAreaRequestAboveItsLimitIsRefused(t *testing.T) {
 		}
 	})
 }
+
+// device-management and event-management carry a CPU limit of their own, and a
+// top-level limit does not replace it. So a top-level request above that limit
+// (valid against the top-level limit) is refused, and the refusal has to say where
+// the limit came from: the operator never wrote the key it names.
+func TestTopLevelRequestAboveAnAreasOwnLimitNamesWhereTheLimitIsSet(t *testing.T) {
+	_, err := renderChart(t, map[string]interface{}{
+		"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": "3", "memory": "128Mi"},
+			"limits":   map[string]interface{}{"cpu": "4", "memory": "256Mi"},
+		},
+	})
+	if err == nil {
+		t.Fatal("a top-level cpu request of 3 rendered against device-management's 2-core limit")
+	}
+	msg := err.Error()
+	var area string
+	for _, a := range []string{"device-management", "event-management"} {
+		if strings.Contains(msg, "functionalAreas."+a+".resources.limits.cpu") {
+			area = a
+		}
+	}
+	if area == "" {
+		t.Fatalf("the refusal does not name the area-level limit key it came from: %v", msg)
+	}
+	for _, want := range []string{
+		"the top-level resources.requests.cpu", // where the request came from
+		"the chart's own default",              // the operator may not have written the limit
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not say %q: %v", want, msg)
+		}
+	}
+}
+
+// The per-area resources schema refuses a key it does not know. Without that, a
+// typo such as `limit:` for `limits:` is merged into the pod spec and the limit
+// it meant is silently not applied.
+func TestAreaResourcesRefuseAnUnknownKey(t *testing.T) {
+	_, err := renderChart(t, map[string]interface{}{
+		"functionalAreas": map[string]interface{}{
+			"event-sources": map[string]interface{}{
+				"resources": map[string]interface{}{
+					"limit": map[string]interface{}{"cpu": "4"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("functionalAreas.event-sources.resources.limit rendered; the limit it meant was not applied")
+	}
+	for _, want := range []string{"event-sources/resources", "'limit'"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+// A quantity the chart cannot read is refused, not read as zero: a zero request
+// is below every limit, which is the one answer the comparison exists to withhold.
+// ".5" is the counterweight, a valid form that must still render.
+func TestAreaResourcesRefuseAnUnreadableQuantity(t *testing.T) {
+	for _, tc := range []struct{ dim, quantity string }{
+		{"memory", "1gi"},
+		{"cpu", "2cores"},
+	} {
+		t.Run(tc.dim, func(t *testing.T) {
+			_, err := renderChart(t, map[string]interface{}{
+				"functionalAreas": map[string]interface{}{
+					"event-sources": map[string]interface{}{
+						"resources": map[string]interface{}{
+							"requests": map[string]interface{}{tc.dim: tc.quantity},
+						},
+					},
+				},
+			})
+			if err == nil {
+				t.Fatalf("a %s request of %q rendered", tc.dim, tc.quantity)
+			}
+			for _, want := range []string{"event-sources", tc.quantity, "is not a form the chart reads"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+		})
+	}
+
+	t.Run("a leading decimal point renders", func(t *testing.T) {
+		got := byArea(t, renderContainers(t, map[string]interface{}{
+			"functionalAreas": map[string]interface{}{
+				"event-sources": map[string]interface{}{
+					"resources": map[string]interface{}{
+						"requests": map[string]interface{}{"cpu": ".5"},
+					},
+				},
+			},
+		}))
+		if have := got["event-sources"].requests["cpu"]; have != ".5" {
+			t.Errorf("event-sources requests.cpu = %q, want .5", have)
+		}
+	})
+}

@@ -576,7 +576,7 @@ devicechain.io/functional-area: {{ .area }}
 
 {{/*
 devicechain.memoryQuantityMiB converts a Kubernetes memory quantity to a whole
-number of MiB.
+number of MiB (rounded down). Parameters: q (the quantity), area (for messages).
 
 The conversion has to happen BEFORE any percentage is applied, and that ordering
 is the entire reason this helper exists. Helm arithmetic is integer, so taking a
@@ -586,27 +586,21 @@ floor(1 * 0.75) = "0Gi" — the identical trap that made sizing the JetStream PV
 ceiling below the sum it was meant to cover. Normalising to MiB first means 1Gi
 becomes 1024, and 75% of it is 768.
 
-Only the binary suffixes are accepted. A decimal quantity (1G, 500M) or a bare
-byte count would each need a different conversion, and guessing wrong here does
-not fail — it silently sets a memory limit off by a factor of 1.07 or 1048576. So
-an unrecognised unit is an error rather than a default.
+It does not parse the quantity itself: devicechain.quantityScalar does, for this
+and for the request/limit comparison, so the chart has one reading of a memory
+quantity rather than two that disagree. What it adds is a POLICY: only the binary
+suffixes are accepted. A limit written as 1G or 500M is a valid Kubernetes
+quantity, but a GOMEMLIMIT derived from it is off by the factor between 1G and 1Gi
+from what an operator who wrote "G" most likely meant, and that error would not
+fail, only mislead. So a decimal or unitless limit is refused here.
 */}}
 {{- define "devicechain.memoryQuantityMiB" -}}
-{{- $q := . | toString -}}
-{{- $mag := regexFind "^[0-9]+" $q -}}
-{{- $unit := regexFind "[A-Za-z]*$" $q -}}
-{{- if not $mag -}}
-  {{- fail (printf "memory quantity %q has no numeric magnitude" $q) -}}
+{{- $q := .q | toString -}}
+{{- if not (regexMatch "(Ki|Mi|Gi)$" $q) -}}
+  {{- fail (printf "memory quantity %q must use a binary suffix (Ki/Mi/Gi) so GOMEMLIMIT can be derived from it; a decimal or unitless limit is refused rather than read as the binary size it most likely meant" $q) -}}
 {{- end -}}
-{{- if eq $unit "Mi" -}}
-{{- $mag -}}
-{{- else if eq $unit "Gi" -}}
-{{- mul (int64 $mag) 1024 -}}
-{{- else if eq $unit "Ki" -}}
-{{- div (int64 $mag) 1024 -}}
-{{- else -}}
-  {{- fail (printf "memory quantity %q must use a binary suffix (Ki/Mi/Gi) so GOMEMLIMIT can be derived from it; a decimal or unitless quantity would be converted wrongly and silently" $q) -}}
-{{- end -}}
+{{- $bytes := include "devicechain.quantityScalar" (dict "dim" "memory" "q" $q "area" .area) | float64 -}}
+{{- divf $bytes 1048576.0 | floor | int64 -}}
 {{- end -}}
 
 {{/*
@@ -636,7 +630,11 @@ template sees it, so it arrives here as "not set" and the default fills it). To
 run an area without a limit, remove it from the top-level map and set it on the
 areas that want one.
 
-A request above its limit is refused here, naming the area. The API server would
+A request above its limit is refused here, naming the area and which map each of
+the two came from: a top-level request can be refused against an area's own limit
+that the operator never wrote (the chart sets device-management's and
+event-management's CPU limits), and a message naming only the area would send
+them looking for a key that is not in their values. The API server would
 refuse the pod anyway, but only when the ReplicaSet creates it, where `helm
 upgrade` merely times out; and the merge makes it reachable from a values file
 that used to be valid (an area that set only requests.memory above the top-level
@@ -655,7 +653,15 @@ Parameters: area (the name, for messages), areaCfg, root.
 {{- $r := include "devicechain.quantityScalar" (dict "dim" $dim "q" $req "area" $.area) | float64 -}}
 {{- $l := include "devicechain.quantityScalar" (dict "dim" $dim "q" $lim "area" $.area) | float64 -}}
 {{- if gt $r $l -}}
-  {{- fail (printf "functionalAreas.%s.resources: the %s request %s is above the %s limit, and Kubernetes refuses such a pod. A service's resources are merged over the top-level resources key by key, so a request raised for one service also needs its limit raised there." $.area $dim $req $lim) -}}
+{{- $area := printf "functionalAreas.%s.resources" $.area -}}
+{{- $reqAt := ternary (printf "%s.requests.%s" $area $dim) (printf "the top-level resources.requests.%s" $dim) (hasKey (dig "requests" dict $own) $dim) -}}
+{{- $limAt := printf "the top-level resources.limits.%s" $dim -}}
+{{- $fix := "Raise the limit or lower the request." -}}
+{{- if hasKey (dig "limits" dict $own) $dim -}}
+{{- $limAt = printf "%s.limits.%s, which is set by your values or by the chart's own default for this service" $area $dim -}}
+{{- $fix = printf "A service's own limit is not replaced by a top-level one, so raise %s.limits.%s as well, or lower the request." $area $dim -}}
+{{- end -}}
+  {{- fail (printf "%s: the %s request %s is above the %s limit, and Kubernetes refuses such a pod. The request comes from %s and the limit from %s. %s" $area $dim $req $lim $reqAt $limAt $fix) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -664,19 +670,26 @@ Parameters: area (the name, for messages), areaCfg, root.
 
 {{/*
 devicechain.quantityScalar converts a Kubernetes quantity to a comparable number:
-millicores for dim "cpu", bytes for dim "memory". It exists only so
-devicechain.areaResources can compare a request with its limit across units
-(1Gi against 256Mi, 1 against 750m).
+millicores for dim "cpu", bytes for dim "memory". It is the chart's one reader of a
+quantity: devicechain.areaResources uses it to compare a request with its limit
+across units (1Gi against 256Mi, 1 against 750m), and devicechain.memoryQuantityMiB
+to derive GOMEMLIMIT.
 
 A form it does not recognise is an error, not a zero: a zero would make every
 request look below its limit, which is the one answer the comparison exists to
-withhold.
+withhold. It reads the forms a values file uses (a decimal number with an optional
+exponent, then "m" for cpu or a binary or decimal suffix for memory), not every
+form Kubernetes accepts; the rest (memory in millibytes, cpu with a decimal
+suffix) are refused rather than guessed.
+
+Parameters: dim, q, area (for messages).
 */}}
 {{- define "devicechain.quantityScalar" -}}
 {{- $q := .q | toString -}}
+{{- $number := "^([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?" -}}
 {{- if eq .dim "cpu" -}}
-{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?m?$" $q) -}}
-  {{- fail (printf "functionalAreas.%s.resources: cpu quantity %q is not a number of cores (\"2\", \"1.5\") or of millicores (\"500m\")" .area $q) -}}
+{{- if not (regexMatch (printf "%sm?$" $number) $q) -}}
+  {{- fail (printf "functionalAreas.%s.resources: cpu quantity %q is not a form the chart reads: write cores (\"2\", \"1.5\") or millicores (\"500m\")" .area $q) -}}
 {{- end -}}
 {{- if hasSuffix "m" $q -}}
 {{- trimSuffix "m" $q | float64 -}}
@@ -684,10 +697,10 @@ withhold.
 {{- mulf (float64 $q) 1000 -}}
 {{- end -}}
 {{- else -}}
-{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" $q) -}}
-  {{- fail (printf "functionalAreas.%s.resources: memory quantity %q is not a number of bytes with an optional unit (Ki, Mi, Gi, Ti, k, M, G, T)" .area $q) -}}
+{{- if not (regexMatch (printf "%s(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" $number) $q) -}}
+  {{- fail (printf "functionalAreas.%s.resources: memory quantity %q is not a form the chart reads: write a number of bytes with an optional unit (Ki, Mi, Gi, Ti, k, M, G, T)" .area $q) -}}
 {{- end -}}
-{{- $num := regexFind "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?" $q -}}
+{{- $num := regexFind $number $q -}}
 {{- $mag := float64 $num -}}
 {{- $unit := trimPrefix $num $q -}}
 {{- $scale := get (dict "" 1.0 "k" 1e3 "M" 1e6 "G" 1e9 "T" 1e12 "P" 1e15 "E" 1e18 "Ki" 1024.0 "Mi" 1048576.0 "Gi" 1073741824.0 "Ti" 1099511627776.0 "Pi" 1125899906842624.0 "Ei" 1152921504606846976.0) $unit -}}
@@ -742,7 +755,7 @@ turns out to want an unbounded heap more than a small one.
 {{- $res := include "devicechain.areaResources" (dict "area" .area "areaCfg" $areaCfg "root" $root) | fromYaml -}}
 {{- $limit := dig "limits" "memory" "" $res -}}
 {{- if and (gt $pct 0) $limit -}}
-{{- $mib := include "devicechain.memoryQuantityMiB" $limit | int64 -}}
+{{- $mib := include "devicechain.memoryQuantityMiB" (dict "q" $limit "area" .area) | int64 -}}
 {{- $derived := div (mul $mib $pct) 100 -}}
 {{- if lt $derived 1 -}}
   {{- fail (printf "GOMEMLIMIT derived from a %s memory limit at %d%% rounds to zero; raise the limit or set goMemLimit explicitly" $limit $pct) -}}

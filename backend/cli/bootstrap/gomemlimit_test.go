@@ -239,6 +239,37 @@ func TestGoMemLimitConvertsGibibytesBeforeTakingThePercentage(t *testing.T) {
 	}
 }
 
+// A fractional limit converts at its full size. The limit is read by the same
+// parser as the request/limit comparison; the one before it took the leading
+// integer, so 1.5Gi read as 1Gi and the derived GOMEMLIMIT was a third low.
+func TestGoMemLimitReadsAFractionalLimit(t *testing.T) {
+	got := goMemLimitForArea(t, goContainers(renderContainers(t, enabled(map[string]interface{}{
+		"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
+			"limits":   map[string]interface{}{"cpu": "500m", "memory": "1.5Gi"},
+		},
+	}))))
+	if n := mib(t, got); n != 1152 {
+		t.Errorf("a 1.5Gi limit produced GOMEMLIMIT %s (%d MiB), want 1152 MiB (75%% of 1536)", got, n)
+	}
+}
+
+// A decimal limit is a valid Kubernetes quantity but is refused as a source for
+// GOMEMLIMIT: 1G is 1000^3 bytes, and whoever wrote it most likely meant 1Gi. The
+// refusal is a policy on top of the shared parser, which reads 1G for the
+// request/limit comparison.
+func TestGoMemLimitRefusesADecimalLimit(t *testing.T) {
+	_, err := renderChart(t, enabled(map[string]interface{}{
+		"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
+			"limits":   map[string]interface{}{"cpu": "500m", "memory": "1G"},
+		},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "binary suffix") {
+		t.Fatalf("a 1G memory limit with the derivation on: got %v, want a refusal asking for a binary suffix", err)
+	}
+}
+
 // GOMEMLIMIT must always land strictly below the container limit it came from.
 //
 // This is the safety direction. GOMEMLIMIT is a soft target the collector aims at,

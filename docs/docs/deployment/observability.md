@@ -366,7 +366,8 @@ bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 | `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it authenticates an event's credential, which it does for every event that carries one (every event, under the default `required` device authentication). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. |
 
 Raise it when `resolve_inflight` stays at `resolve_workers` while the pod has CPU to spare. If the
-pod is at its CPU limit instead, more resolvers do not help: give it more CPU. Measured in-process
+pod is at its CPU limit instead, more resolvers do not help: give it more CPU (see
+[Service sizing](./bootstrap.md#service-sizing)). Measured in-process
 against a three-server broker, with every lookup taking 750 µs, 5 resolvers resolved about 1,500
 events a second and 10 about 2,900. Resolvers finish events out of arrival order, by a fraction of a
 second; detection applies them in the order they reach the resolved stream. An out-of-range value

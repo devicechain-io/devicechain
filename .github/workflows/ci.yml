@@ -1633,6 +1633,11 @@ jobs:
           refuses "area request above its merged limit" "request 512Mi is above the 256Mi limit" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set functionalAreas.event-sources.resources.requests.memory=512Mi
+          # A typo such as `limit:` would otherwise merge into the pod spec and the
+          # limit it meant would silently not apply.
+          refuses "unknown key under an area's resources" "additional properties 'limit' not allowed" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.event-sources.resources.limit.cpu=4
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "inline config, ingest-only" --set profile=ingest-only \
