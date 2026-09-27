@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,8 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// conflict.As over REAL SQLite driver errors. These live here rather than beside the
+// conflict.As (and the core/integrity recognition beneath it) over REAL SQLite driver
+// errors. These live here rather than beside the
 // classifier so that core/conflict's own tests import no database driver: that package is
 // linked by dcctl, and a test import there would pull SQLite into dcctl's module graph.
 
@@ -82,9 +84,12 @@ func errorCode(t *testing.T, err error) int {
 
 func TestARealSQLiteDuplicateIsRedactedAtTheBoundary(t *testing.T) {
 	err := fmt.Errorf("save: %w", realSQLiteError(t, true))
-	got, _, changed := conflict.Redact(err.Error(), err)
+	vs := integrity.All(err)
+	require.Len(t, vs, 1)
+	require.Equal(t, integrity.ClassUnique, vs[0].Class)
+	got, whole := integrity.Redact(err.Error(), vs[0], conflict.Message)
 	assert.Equal(t, "save: "+conflict.Message, got)
-	assert.True(t, changed)
+	assert.False(t, whole)
 }
 
 // A duplicate PRIMARY KEY is its own SQLite extended code (1555,

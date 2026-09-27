@@ -297,7 +297,8 @@ type Tenant struct {
 	// answered. The FK is RESTRICT on delete, so a tier in use cannot be removed out
 	// from under its tenants (ADR-044: validate invariants sync); the store's
 	// CountTenantsAtTier check exists to turn that into a legible refusal rather
-	// than a raw constraint violation, not to replace it.
+	// than the database's (answered on the wire as a neutral REFERENCE_VIOLATION
+	// sentence that names no tenant), not to replace it.
 	TierID uint        `gorm:"not null;index"`
 	Tier   *TenantTier `gorm:"foreignKey:TierID;constraint:OnDelete:RESTRICT"`
 

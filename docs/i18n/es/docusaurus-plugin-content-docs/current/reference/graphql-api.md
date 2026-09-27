@@ -623,6 +623,54 @@ Algunos rechazos parecen similares y no llevan `CONFLICT`:
   usar.
 - Crear un comando con un token que ya está en uso no se rechaza: recibes el comando original.
   Consulta [Emite un comando](../guides/sending-commands.md#issue-it).
+- Eliminar un registro al que otros registros todavía se refieren lleva `REFERENCE_VIOLATION`.
+  Consulta [Una referencia o un valor que se rechaza](#reference-and-invalid-values).
+
+### Una referencia o un valor que se rechaza {#reference-and-invalid-values}
+
+Otros dos rechazos se responden de la misma forma, cada uno con su propio código.
+
+`REFERENCE_VIOLATION` significa que la escritura se rechazó por cómo se refieren unos registros a
+otros. Eliminar un registro al que otros registros todavía se refieren se rechaza así: por ejemplo
+un perfil de dispositivo que un tipo de dispositivo todavía usa, un tipo de dispositivo que sus
+dispositivos todavía usan, un nivel de inquilino en el que todavía hay inquilinos, un inquilino que
+todavía tiene membresías, un proveedor de IA que todavía tiene concesiones o un canal de
+notificación que una regla de política todavía nombra. El mensaje es la propia frase del servicio,
+que dice qué se refiere todavía al registro y puede repetir el token que enviaste:
+
+    entity is still referenced and cannot be deleted: 1 device type(s) reference device profile "rover"
+
+Elimina o reasigna lo que todavía se refiere al registro y vuelve a intentarlo.
+
+Cuando rechaza la escritura la base de datos y no la propia comprobación del servicio, el mensaje
+es:
+
+    the request refers to a record that does not exist, or removes one that other records still refer to
+
+Eso puede ocurrir cuando los registros cambian entre la comprobación y la escritura, por ejemplo
+cuando un registro al que se refiere tu escritura se elimina mientras la escritura se ejecuta.
+Vuelve a cargar y a intentarlo: entonces recibes la respuesta propia del servicio, o la escritura
+funciona. Si la misma solicitud sigue recibiendo esta respuesta, algo que no puedes ver a través de
+la API todavía se refiere al registro. Infórmalo con la hora de la solicitud; el servidor registra
+qué referencia la rechazó.
+
+Una escritura que nombra un registro que no existe la rechaza normalmente la búsqueda propia del
+servicio antes de la escritura, con un mensaje que nombra el token y sin código. Solo lleva
+`REFERENCE_VIOLATION` cuando ese registro se eliminó mientras la escritura se ejecutaba.
+
+`INVALID_VALUE` significa que un valor de la solicitud no está permitido en el registro y el
+servicio no lo detectó antes de la escritura. El mensaje es:
+
+    the request contains a value this record does not allow
+
+Cambia el valor. Enviar la misma solicitud otra vez normalmente da la misma respuesta.
+
+En ambos casos se sustituye el texto propio de la base de datos, así que estas dos frases no
+nombran ninguna tabla, columna ni restricción, ni repiten ninguno de los valores que enviaste.
+Ninguno de los dos códigos es `CONFLICT`, así que el código que trata `CONFLICT` como "el registro
+ya existe" no los trata como un éxito. Un rechazo en el que intervienen a la vez un valor que debe
+ser único y uno de estos lleva `REFERENCE_VIOLATION` o `INVALID_VALUE`, nunca `CONFLICT`, y su
+mensaje usa la frase de ese código en lugar de la de un valor que ya está en uso.
 
 ## Límites de las solicitudes {#request-limits}
 

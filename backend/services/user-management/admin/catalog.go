@@ -15,18 +15,26 @@ import (
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/governance"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
 )
 
 // Role-catalog and tenant errors (ADR-033). Sentinels for the resolver layer.
+//
+// ErrTenantHasMemberships and ErrTierInUse carry REFERENCE_VIOLATION on the wire: the
+// tier refusal is the one the tenants' foreign key gets if the database refuses the
+// delete instead, so a client sees one code for both. The memberships refusal is a
+// policy refusal rather than a foreign key (deleting a tenant is a soft purge, and
+// removing the memberships is what revokes access), but it is still "removes a record
+// other records still refer to", so it carries the same code.
 var (
 	ErrRoleNotFound         = errors.New("role not found")
 	ErrProtectedRole        = errors.New("the superuser system role cannot be deleted")
-	ErrTenantHasMemberships = errors.New("tenant still has memberships; remove them first")
+	ErrTenantHasMemberships = integrity.NewRefusal(integrity.ClassReference, "tenant still has memberships; remove them first")
 	ErrTierNotFound         = errors.New("tenant tier not found")
-	ErrTierInUse            = errors.New("tenant tier still has tenants; move them to another tier first")
+	ErrTierInUse            = integrity.NewRefusal(integrity.ClassReference, "tenant tier still has tenants; move them to another tier first")
 	ErrUnknownTierColor     = errors.New("unknown tier color (must be a palette token or empty)")
 
 	// ErrTenantTokenReserved refuses a create at the token of a tenant that is being

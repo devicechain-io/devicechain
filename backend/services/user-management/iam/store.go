@@ -481,8 +481,9 @@ func (s *Store) UpdateTenantTier(ctx context.Context, t *TenantTier) error {
 
 // DeleteTenantTier hard-deletes a tier row. The caller must first establish that no
 // tenant still references it (see CountTenantsAtTier); the FK is RESTRICT, so a
-// missed check fails loudly rather than orphaning tenants — but it fails as a raw
-// constraint violation, which is why the caller checks.
+// missed check fails loudly rather than orphaning tenants — but it fails as a
+// REFERENCE_VIOLATION with a neutral sentence that names no tenant, which is why the
+// caller checks and refuses with ErrTierInUse's account instead.
 //
 // Unscoped (hard), like every other iam delete: these entities embed gorm.Model, so
 // a default delete would only set deleted_at and leave the row occupying the unique

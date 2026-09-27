@@ -3253,6 +3253,32 @@ eventos por segundo y 10 unos 2900. Consulte [Resolución de eventos](./observab
   que fija `resolution.workers`, como rechaza cualquier ajuste que no conoce. Quite el ajuste antes
   de volver atrás.
 
+#### Las referencias y los valores rechazados responden con un código
+
+No hay que hacer nada salvo que su propio código o sus scripts reconozcan estos rechazos leyendo el
+mensaje de error. [Una referencia o un valor que se rechaza](../reference/graphql-api.md#reference-and-invalid-values)
+tiene los detalles.
+
+- **Una eliminación rechazada porque otros registros todavía se refieren al registro** lleva ahora
+  `extensions.code` igual a `REFERENCE_VIOLATION`: un perfil de dispositivo, un tipo de dispositivo
+  u otro tipo todavía en uso, un grupo de entidades al que una regla de detección todavía se
+  limita, un nivel de inquilino en el que todavía hay inquilinos, un inquilino que todavía tiene
+  membresías, un proveedor de IA que todavía tiene concesiones y un canal de notificación que una
+  regla de política todavía nombra. El mensaje no cambia.
+- **Se sustituye el texto propio de la base de datos.** Donde un mensaje terminaba en `violates
+  foreign key constraint "…" (SQLSTATE 23503)`, ahora termina en `the request refers to a record
+  that does not exist, or removes one that other records still refer to` y lleva
+  `REFERENCE_VIOLATION`. Un valor que la base de datos rechaza por cualquier otro motivo de
+  integridad, como un valor obligatorio que falta, se responde igual con `the request contains a
+  value this record does not allow` e `INVALID_VALUE`. Ninguna de las dos frases nombra una tabla,
+  una columna ni una restricción, ni repite un valor que usted envió.
+- **Ninguno de los dos es `CONFLICT`,** así que ni `dcctl` ni el código que trata `CONFLICT` como
+  «ya existe» continúan como si nada. Un rechazo en el que intervienen a la vez un duplicado y uno
+  de estos lleva ahora el código nuevo en lugar de `CONFLICT`.
+- **El servidor registra cada uno de estos rechazos de la base de datos como una advertencia** que
+  nombra la restricción, la tabla y la columna, porque normalmente responde antes la propia
+  comprobación del servicio. El detalle, que puede repetir los valores enviados, no se registra.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
