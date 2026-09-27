@@ -51,6 +51,8 @@ func main() {
 		"max time to wait for the persisted count to settle after the drive stops")
 	quiesceSettle := flag.Duration("quiesce-settle", envDurationOr("DC_LOADTEST_QUIESCE_SETTLE", loadtest.DefaultQuiesceSettle),
 		"how long to keep watching the count after it reaches the target, to catch a late over-persist (duplicate)")
+	stateTimeout := flag.Duration("state-timeout", envDurationOr("DC_LOADTEST_STATE_TIMEOUT", loadtest.DefaultStateTimeout),
+		"how long after the drive the live device state may take to reach every device's last accepted event (0 = do not check)")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
 		"write the JSON correctness report to this path (also printed to stderr)")
 	flag.Parse()
@@ -84,6 +86,7 @@ func main() {
 		MinAccepted:    *minAccepted,
 		QuiesceTimeout: *quiesceTimeout,
 		QuiesceSettle:  *quiesceSettle,
+		StateTimeout:   *stateTimeout,
 	}
 
 	// SIGINT/SIGTERM abort the run (drive returns an error, no verdict) rather

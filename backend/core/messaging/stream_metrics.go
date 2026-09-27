@@ -124,6 +124,23 @@ type streamMetrics struct {
 	unreadSkipped *prometheus.CounterVec
 	unreadGap     *prometheus.GaugeVec
 
+	// consumerPending / consumerAckPending are each reader durable's backlog, from the
+	// ConsumerInfo sampleDurable already fetches: messages in the stream not yet handed to
+	// the durable (NumPending), and messages handed out but not yet acknowledged
+	// (NumAckPending). Together they say how far behind its stream a consumer is, which the
+	// unread pair cannot: a consumer can lose nothing and still be an hour behind.
+	//
+	// 🔴 A PRESENT SERIES IS A MEASUREMENT, AND ONLY A MEASUREMENT. So, unlike the unread
+	// pair, they are NOT created at 0 — a zero there is a claim ("no loss yet") that is true
+	// from the moment the reader exists, while a zero here would claim "no backlog" for the
+	// 30 s before the first sample, which is exactly when a restarted pod attaching to a large
+	// backlog is reporting. And they are WITHDRAWN when a sample fails (the durable or its
+	// stream could not be read) rather than left at the last value: a gauge frozen at an old
+	// small number reads as a current one, and the backlog alert would be silent over a
+	// consumer nobody is measuring. Absent means "not measured", never "nothing waiting".
+	consumerPending    *prometheus.GaugeVec
+	consumerAckPending *prometheus.GaugeVec
+
 	// durables holds each durable's previous sample, which the counter is the difference
 	// against. Accessed only from the single sampler goroutine, like warned.
 	durables map[durableRef]durableSample
@@ -213,6 +230,14 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		unreadGap: ms.NewGaugeVec("jetstream_consumer_unread_gap_messages",
 			"Messages removed ahead of this durable's cursor, reported while the durable has been handed "+
 				"nothing since the previous sample (0 while it is reading).",
+			[]string{"stream", "durable"}),
+		consumerPending: ms.NewGaugeVec("jetstream_consumer_pending_messages",
+			"Messages in the stream this durable has not been handed yet, as of the last 30 s sample. "+
+				"Absent until the first sample, and while the durable cannot be read.",
+			[]string{"stream", "durable"}),
+		consumerAckPending: ms.NewGaugeVec("jetstream_consumer_ack_pending_messages",
+			"Messages handed to this durable and not yet acknowledged, as of the last 30 s sample. "+
+				"Absent until the first sample, and while the durable cannot be read.",
 			[]string{"stream", "durable"}),
 		heldPastAckWait: ms.NewCounterVec("reader_held_past_ack_wait_total",
 			"Messages a capacity-bounded reader held past their acknowledgement window, so the broker "+
@@ -515,6 +540,13 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 		if err != nil {
 			sampleFailureLog(ctx).Err(err).Str("stream", name).Msg("Stream utilization sample failed")
 			m.forgetReplication(name)
+			// Its durables are not measured this pass either (they are sampled against
+			// this StreamInfo), so their backlog is withdrawn with it.
+			for _, d := range durables {
+				if d.stream == name {
+					m.forgetBacklog(d)
+				}
+			}
 			continue
 		}
 		m.sampleReplication(name, info, desired)
@@ -594,7 +626,9 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 //
 // A ConsumerInfo failure skips the durable for this pass and keeps its previous sample,
 // so the next good sample covers the whole interval and nothing is lost to the counter
-// by a transient broker error.
+// by a transient broker error. The backlog gauges are the opposite case and are withdrawn
+// on that failure: a kept baseline loses nothing, but a kept gauge is an old reading
+// exported as a current one (see consumerPending on streamMetrics).
 //
 // PRECONDITION, held by construction: the durable filters on its stream's WHOLE subject.
 // Every reader is made by NewReader, which filters on StreamSubject(suffix) — the same
@@ -609,8 +643,11 @@ func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamCont
 	if err != nil {
 		sampleFailureLog(ctx).Err(err).Str("stream", d.stream).Str("durable", d.durable).
 			Msg("Durable unread-loss sample failed")
+		m.forgetBacklog(d)
 		return
 	}
+	m.consumerPending.WithLabelValues(d.stream, d.durable).Set(float64(ci.NumPending))
+	m.consumerAckPending.WithLabelValues(d.stream, d.durable).Set(float64(ci.NumAckPending))
 	cur := durableSample{
 		deliveredStream:   ci.Delivered.Stream,
 		deliveredConsumer: ci.Delivered.Consumer,
@@ -634,6 +671,12 @@ func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamCont
 	}
 	m.durables[d] = cur
 	m.unreadGap.WithLabelValues(d.stream, d.durable).Set(float64(gap))
+}
+
+// forgetBacklog withdraws a durable's backlog series: it was not measured this pass.
+func (m *streamMetrics) forgetBacklog(d durableRef) {
+	m.consumerPending.DeleteLabelValues(d.stream, d.durable)
+	m.consumerAckPending.DeleteLabelValues(d.stream, d.durable)
 }
 
 // unreadGap is how many sequences were removed between a durable's cursor and the

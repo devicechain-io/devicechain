@@ -394,6 +394,9 @@ func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
 		return fmt.Errorf("ingress %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
+	// Accepted: this is the one tail every emitter shares, so recording here covers every
+	// event shape the simulator sends.
+	rt.Accepted.Record(d.Token, occurredTime)
 	return nil
 }
 

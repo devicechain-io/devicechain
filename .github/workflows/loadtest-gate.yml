@@ -14,7 +14,9 @@
 #            this binary was built by no workflow and run by no script, so the L1
 #            oracle's ability to fail had never once been asserted by a gate.
 #   - L1  -- aggregate reconciliation: drive the seeded devicepulse scenario over
-#            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED.
+#            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED, and
+#            require every device's live state to reach its last accepted event
+#            (a lag guard at this load, not a throughput measurement).
 #   - L2d-1 detection -> durable alarm: safety/edge/background populations through
 #            an authored raiseAlarm rule; gate on the durable CLEARED+MAJOR alarm.
 #   - L2d-3 command round-trip: authored threshold->sendCommand rule enqueues a
@@ -623,8 +625,9 @@ jobs:
           # writes ~/.devicechain/sims/l1probe.json (the handshake dc-loadtest reads).
           "$RUNNER_TEMP/dcctl" sim create l1probe -s localhost
           # dc-loadtest drives the seeded scenario over the ingress, then reconciles
-          # persisted==accepted (plus clean-drive and load-floor); non-zero exit on any
-          # failed invariant IS the gate. Inputs are empty on a push event -> defaulted.
+          # persisted==accepted (plus clean-drive and load-floor) and waits for every
+          # device's live state to reach its last accepted event (state-caught-up, on by
+          # default); non-zero exit on any failed invariant IS the gate. Inputs are empty on a push event -> defaulted.
           "$RUNNER_TEMP/bin/dc-loadtest" \
             --handshake "$HOME/.devicechain/sims/l1probe.json" \
             --devices "${DEVICES_IN:-80}" \
@@ -1188,6 +1191,8 @@ jobs:
                 accepted:  .drive.accepted,
                 persisted: .persistedEvents,
                 failed:    .drive.failed,
+                stateCaughtUp:   .stateCaughtUp,
+                stateLagSeconds: .stateLagSeconds,
                 passed:    verdict
               } end),
               detection: ($det | if . == null then null else {

@@ -24,6 +24,11 @@ the same removal, so summing across pods would multiply one loss by the replica
 count. The held-past-AckWait counter is the opposite case and is summed: each pod
 counts only the messages IT held (see that rule).
 
+A CONSUMER THAT STAYS BEHIND loses nothing and fails nothing, and is still wrong: what
+its service derives from the stream (device-state's live state, say) lags by however
+far behind it is. The per-durable backlog gauge, sampled beside the unread pair, is
+that number; JetStreamDurableFallingBehind watches it.
+
 A LATE DELIVERY is the other way a reader goes wrong without failing. A consumer that
 falls behind its broker does not error: the broker redelivers what the consumer held
 too long, and the consumer handles the redelivery as though it were new. For a service
@@ -84,6 +89,34 @@ spec:
           annotations:
             summary: "a consumer that stopped reading is losing messages it has not read"
             description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} has been handed no messages for at least two minutes, and the stream has already discarded {{ "{{ $value }}" }} messages ahead of it. They will never be delivered. The consuming service is running, since it reports this, but its consumer is not reading: look for message handling stuck on a dependency such as the database, or pods waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding."
+        # A durable that has stayed behind its stream: it is reading, and losing nothing
+        # yet, but whatever its service derives from the stream is that far behind. The
+        # backlog gauge is sampled every 30 s by every service for the durables it reads.
+        #
+        # 🔑 `for: 15m` over the CURRENT value, not min_over_time() over a window. The
+        # gauge is absent until a pod's first sample, and min_over_time() over a series
+        # 30 s old is that one sample -- so a pod restarting onto a backlog (every rolling
+        # upgrade under load) would fire on its first scrape. `for` is held on the
+        # aggregated (stream, durable) series, which carries no pod label, so one pod's
+        # restart does not restart it while another replica keeps that series alive; any
+        # sample at or below the threshold does, which is what keeps a burst worked off
+        # within 15 minutes quiet. With ONE replica (device-state in a small install), a
+        # restart withdraws the series until the new pod's first sample, and that DOES
+        # restart the clock: a pod that restarts more often than every 15 minutes under a
+        # backlog never raises this warning, so its restarts are the signal there.
+        #
+        # event-processing's resolved-events durable is excluded: DETECT has its own tuned
+        # backlog alert (DetectConsumerBacklogHigh) and a takeover replays that durable by
+        # design, so this rule would page first on every long replay.
+        - alert: JetStreamDurableFallingBehind
+          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable!~".+_event-processing_resolved-events", namespace="{{ $ns }}"}) > 10000
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
+            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} has had more than 10000 messages waiting for it for the last 15 minutes ({{ "{{ $value }}" }} now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, JetStreamStreamNearFull fires, and messages the consumer has not reached will be lost."
         # Renamed and widened from EventProcessingStreamNearFull, which selected one
         # service's streams only. Every service exports the fill gauges for the streams
         # it ensures, and a stream's owner is not knowable here, so this selects all of

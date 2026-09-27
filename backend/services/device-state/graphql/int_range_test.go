@@ -78,9 +78,9 @@ func intRangeWireCtx(t *testing.T) context.Context {
 	wide := uint(math.MaxInt32 + 1)
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	rows := []any{
-		&model.LatestMeasurement{TenantScoped: rdb.TenantScoped{TenantId: "acme"}, DeviceToken: "pump-1",
+		&model.LatestMeasurement{TenantId: "acme", DeviceToken: "pump-1",
 			Name: "temp", Value: sql.NullFloat64{Float64: 21.5, Valid: true}, Classifier: &wide, OccurredTime: now},
-		&model.DeviceState{TenantScoped: rdb.TenantScoped{TenantId: "acme"}, DeviceToken: "pump-1",
+		&model.DeviceState{TenantId: "acme", DeviceToken: "pump-1",
 			InactivityTimeout: math.MaxInt32 + 1, PresenceSource: "INFERRED"},
 	}
 	for _, row := range rows {

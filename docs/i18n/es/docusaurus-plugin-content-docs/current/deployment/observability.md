@@ -263,6 +263,30 @@ del servicio lector se reinician a la vez puede quedar sin contar. Un servicio s
 informa ninguna de las dos series, así que ninguna alerta puede dispararse por él; la advertencia de
 flujo casi lleno y sus alertas de salud de los pods cubren ese caso.
 
+## Un consumidor que se queda atrás {#consumer-backlog}
+
+Un consumidor puede no perder nada y aun así ir muy atrasado: todo lo que su servicio deriva del
+flujo va entonces igual de desfasado. Cada servicio informa, para cada consumidor duradero que lee,
+de cuántos mensajes le esperan, con una muestra cada 30 segundos:
+
+- **`devicechain_<area>_jetstream_consumer_pending_messages{stream, durable}`**: mensajes del flujo
+  que todavía no se le han entregado al consumidor.
+- **`devicechain_<area>_jetstream_consumer_ack_pending_messages{stream, durable}`**: mensajes que
+  se le han entregado y aún no ha confirmado.
+
+Ambas series aparecen con la primera muestra tras arrancar el servicio, no antes, y vuelven a
+desaparecer mientras no se puede leer el consumidor. Una serie ausente significa «no medido», nunca
+«no hay nada esperando». Todas las réplicas informan del mismo consumidor, así que combínelas con
+`max`. Un atraso que crece y se reduce es normal durante las ráfagas. El que se mantiene es el que
+vigila la alerta. Sus 15 minutos sobreviven al reinicio de un pod mientras otra réplica siga
+informando. Con una sola réplica, un reinicio retira la serie hasta la primera muestra del pod nuevo
+y los 15 minutos vuelven a empezar, así que un pod que se reinicia una y otra vez con atraso puede no
+dispararla nunca: vigile también su número de reinicios.
+
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `JetStreamDurableFallingBehind` | warning | Un consumidor ha tenido más de 10000 mensajes esperándole durante 15 minutos. Todo lo que ese servicio deriva del flujo va así de atrasado: en `device-state`, el estado en vivo de un dispositivo va por detrás de sus eventos almacenados. No cubre el consumidor de detección de `event-processing`, porque lo vigila `DetectConsumerBacklogHigh` y una toma de control lo vuelve a leer por diseño. | Compare el ritmo del consumidor con el del flujo. Si mantiene el paso pero no recupera, dele capacidad (en `device-state`, consulte [sus ajustes](#live-state-projection) y su base de datos). Si se ha detenido, `JetStreamDurableStalledBehindStream` y los registros del servicio indican por qué. Si el flujo se llena antes de que se ponga al día, se descartarán los mensajes a los que aún no ha llegado. |
+
 ## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
 
 El broker da a un servicio una ventana fija para confirmar cada mensaje que le entrega. Un
@@ -364,11 +388,44 @@ rendimiento mucho más que los escritores adicionales, y no usan conexiones extr
 rango impide que el servicio arranque, y el error nombra el ajuste. El servicio registra los
 valores que usa al arrancar.
 
-`device-state` tiene un ajuste equivalente, `projection.writers` (por defecto `5`, menor que su
-pool `rdbConfiguration.maxOpenConnections`). No usa lotes: la fusión de cada evento en el estado en
-vivo de un dispositivo sigue siendo una transacción, así que el número de escritores es su única
-palanca. Las fusiones de un mismo dispositivo se esperan entre sí, así que los escritores adicionales
-solo ayudan mientras los eventos procedan de más dispositivos que escritores haya.
+### Estado en vivo de los dispositivos {#live-state-projection}
+
+`device-state` mantiene el estado en vivo de cada dispositivo (conectividad, actividad, últimas
+lecturas y última posición) a partir del mismo flujo de eventos, y los fusiona de la misma manera:
+cada escritor toma los eventos que ya lo esperan, hasta un límite, y los fusiona en una sola
+transacción. Un evento se reconoce solo después de que esa transacción se confirme. Varios eventos
+de un mismo dispositivo en un lote dejan exactamente lo que dejaría fusionarlos de uno en uno. Una
+lectura o una posición sustituye a la almacenada solo si es estrictamente más reciente, así que una
+más antigua o igual de antigua nunca la sobrescribe; las horas se comparan tal como las guarda la
+base de datos, al microsegundo. Si se rechaza la parte de un lote que corresponde a un inquilino,
+los eventos de ese inquilino se vuelven a fusionar de uno en uno, de modo que solo se reintenta un
+evento que es rechazado por sí mismo, y los eventos de los demás inquilinos se confirman juntos sin
+ellos. Si la transacción falla por una causa que no se debe a ningún inquilino, como una conexión
+perdida con la base de datos, cada uno de sus eventos se vuelve a fusionar por separado.
+
+| Métrica | Qué indica |
+| --- | --- |
+| `devicechain_devicestate_state_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. |
+| `devicechain_devicestate_state_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a fusionar. Un ritmo constante indica que las escrituras de un inquilino se rechazan una y otra vez, por ejemplo las de un inquilino eliminado cuyos dispositivos siguen enviando. |
+| `devicechain_devicestate_state_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
+
+`state_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se
+confirma.
+
+| Ajuste (configuración de `device-state`) | Valor por defecto | Qué hace |
+| --- | --- | --- |
+| `projection.writers` | `5` | Escritores en paralelo; cada uno ocupa una conexión a la base de datos mientras fusiona. Debe ser menor que `rdbConfiguration.maxOpenConnections` (20 si no se indica). |
+| `projection.maxBatch` | `32` | Máximo de eventos fusionados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
+| `projection.lingerMillis` | `0` | Cuánto espera un escritor a más eventos antes de fusionar un lote incompleto, hasta `1000`. `0` fusiona lo que ya está esperando. |
+
+Deje `writers` en su valor por defecto salvo que los lotes vayan llenos y la base de datos tenga
+margen. En una base de datos replicada, lo que sostiene el rendimiento son los lotes. Las fusiones de
+un mismo dispositivo se esperan entre sí, así que cuando los dispositivos envían por turnos, más
+escritores significan más lotes esperando a los mismos dispositivos, y a partir de unos pocos
+escritores el rendimiento puede bajar en lugar de subir. El servicio registra los valores que usa al
+arrancar. Si el
+estado en vivo sigue quedándose atrás, `JetStreamDurableFallingBehind` salta para el consumidor de
+`device-state` (consulte [Un consumidor que se queda atrás](#consumer-backlog)).
 
 ## Replicación {#replication}
 

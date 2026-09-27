@@ -40,7 +40,7 @@ var (
 
 	// StateMetrics is built ONCE, in the initialize phase, and shared by every
 	// StateProcessor the NATS manager's oncreate callback builds. See buildMetrics.
-	StateMetrics *core.ProcessorMetrics
+	StateMetrics *processor.StateMetrics
 	// InactivitySweepMetrics is the inactivity monitor's pass signals, built once for the
 	// same reason and in the same place.
 	InactivitySweepMetrics *core.PeriodicTaskMetrics
@@ -101,7 +101,7 @@ func buildMetrics() {
 // configuration reaches the processor, which nothing else exercises.
 func newStateProcessor(reader messaging.MessageReader) *processor.StateProcessor {
 	return processor.NewStateProcessor(Microservice, reader, core.NewNoOpLifecycleCallbacks(), Api,
-		StateMetrics, InactivitySweepMetrics, processor.WithWriters(Configuration.Projection.Writers))
+		StateMetrics, InactivitySweepMetrics, processor.WithProjection(Configuration.Projection))
 }
 
 // Create messaging components used by this microservice.

@@ -5,21 +5,15 @@ package processor
 
 import (
 	"context"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"strings"
-	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -109,56 +103,11 @@ func (ep *EventPersistenceWorker) admit(ctx context.Context, msg messaging.Messa
 	return pendingEvent{msg: msg, ctx: msgctx, tenant: tenant, event: event, done: done}, true
 }
 
-// collect blocks for one message, then takes whatever else is already waiting — and, with
-// a Linger, whatever arrives within it — until the batch holds MaxBatch admitted messages.
-// Messages that are not admitted do not count. open is false once the channel is closed;
-// the batch returned alongside it is still to be persisted.
+// collect fills the next batch from the channel the read loop feeds (messaging.CollectBatch,
+// the one definition every batching writer shares). Messages admit refuses do not count.
 func (ep *EventPersistenceWorker) collect(ctx context.Context) (batch []pendingEvent, open bool) {
-	msg, ok := <-ep.Unpersisted
-	if !ok {
-		return nil, false
-	}
-	limit := max(ep.MaxBatch, 1)
-	batch = make([]pendingEvent, 0, limit)
-	if p, ok := ep.admit(ctx, msg); ok {
-		batch = append(batch, p)
-	}
-	var linger <-chan time.Time
-	if ep.Linger > 0 {
-		timer := time.NewTimer(ep.Linger)
-		defer timer.Stop()
-		linger = timer.C
-	}
-	for len(batch) < limit {
-		select {
-		case msg, ok := <-ep.Unpersisted:
-			if !ok {
-				return batch, false
-			}
-			if p, ok := ep.admit(ctx, msg); ok {
-				batch = append(batch, p)
-			}
-			continue
-		default:
-		}
-		// Nothing is waiting. Without a linger — or once it has run out — commit what
-		// there is; a batch of one is simply a message persisted on its own.
-		if linger == nil {
-			return batch, true
-		}
-		select {
-		case msg, ok := <-ep.Unpersisted:
-			if !ok {
-				return batch, false
-			}
-			if p, ok := ep.admit(ctx, msg); ok {
-				batch = append(batch, p)
-			}
-		case <-linger:
-			linger = nil
-		}
-	}
-	return batch, true
+	return messaging.CollectBatch(ep.Unpersisted, ep.MaxBatch, ep.Linger,
+		func(msg messaging.Message) (pendingEvent, bool) { return ep.admit(ctx, msg) })
 }
 
 // persistBatch commits batch in one transaction and acknowledges it, or — when that
@@ -197,7 +146,7 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 			return
 		}
 		ep.metrics.fallback()
-		if failedAt < 0 || connectionFailure(err) {
+		if failedAt < 0 || rdb.IsConnectionFailure(err) {
 			// Nothing in the batch is to blame — the transaction could not begin or commit,
 			// or the connection went — so every message is written on its own, as it
 			// would have been before batching. During an outage each of those fails fast
@@ -274,32 +223,4 @@ func (ep *EventPersistenceWorker) dispose(p pendingEvent, err error) {
 		// outage. Reference disposition: event-sources' settler (ADR-030).
 		p.done(core.ResultRetry)
 	}
-}
-
-// connectionFailure reports whether err says the database connection failed rather than
-// that a statement was refused, so no message in the batch can be blamed for it. It only
-// decides how a failed batch is replayed — one message set aside, or every message on its
-// own — never a message's disposition, which its own persist decides. A connection
-// failure it does not recognise costs extra transactions, not correctness.
-func connectionFailure(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, driver.ErrBadConn) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
-		pgconn.Timeout(err) {
-		return true
-	}
-	var nerr net.Error
-	if errors.As(err, &nerr) {
-		return true
-	}
-	var cerr *pgconn.ConnectError
-	if errors.As(err, &cerr) {
-		return true
-	}
-	// Class 08 is connection exception; 57P01-57P05 are the server shutting down or
-	// cancelling the session.
-	var pgerr *pgconn.PgError
-	if errors.As(err, &pgerr) {
-		return strings.HasPrefix(pgerr.Code, "08") || strings.HasPrefix(pgerr.Code, "57P")
-	}
-	return false
 }

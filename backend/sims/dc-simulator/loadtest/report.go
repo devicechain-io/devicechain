@@ -42,15 +42,20 @@ type DriveStats struct {
 // profile that produced it (for reproducibility), the driver's applied load, the
 // oracle's quiesce observation, and the per-invariant verdicts.
 type Report struct {
-	Manifest      string      `json:"manifest"`
-	Seed          int64       `json:"seed"`
-	Tenant        string      `json:"tenant"`
-	StartedAt     time.Time   `json:"startedAt"`
-	FinishedAt    time.Time   `json:"finishedAt"`
-	Drive         DriveStats  `json:"drive"`
-	PersistedSeen int64       `json:"persistedEvents"`
-	Reached       bool        `json:"reachedTarget"`
-	QuiesceSecs   float64     `json:"quiesceSeconds"`
+	Manifest      string     `json:"manifest"`
+	Seed          int64      `json:"seed"`
+	Tenant        string     `json:"tenant"`
+	StartedAt     time.Time  `json:"startedAt"`
+	FinishedAt    time.Time  `json:"finishedAt"`
+	Drive         DriveStats `json:"drive"`
+	PersistedSeen int64      `json:"persistedEvents"`
+	Reached       bool       `json:"reachedTarget"`
+	QuiesceSecs   float64    `json:"quiesceSeconds"`
+	// StateCaughtUp is whether the live device state reached every device's last accepted
+	// event, and StateLagSecs how long after the drive ended the check finished; both
+	// absent when the check was not run (--state-timeout 0).
+	StateCaughtUp *bool       `json:"stateCaughtUp,omitempty"`
+	StateLagSecs  float64     `json:"stateLagSeconds,omitempty"`
 	Invariants    []Invariant `json:"invariants"`
 }
 
@@ -87,6 +92,14 @@ func (r *Report) Human() string {
 		r.Drive.Devices, r.Drive.TargetRatePS, r.Drive.AchievedRatePS, r.Drive.HoldSeconds,
 		r.Drive.Accepted, r.Drive.Shed, r.Drive.Failed, r.Drive.Ticks)
 	fmt.Fprintf(&b, "  oracle: persisted %d, reached-target %v in %.0fs\n", r.PersistedSeen, r.Reached, r.QuiesceSecs)
+	switch {
+	case r.StateCaughtUp == nil:
+		fmt.Fprintf(&b, "  state: not checked\n")
+	case *r.StateCaughtUp:
+		fmt.Fprintf(&b, "  state: caught up %.0fs after the drive\n", r.StateLagSecs)
+	default:
+		fmt.Fprintf(&b, "  state: NOT caught up %.0fs after the drive\n", r.StateLagSecs)
+	}
 	for _, inv := range r.Invariants {
 		mark := "FAIL"
 		if inv.Passed {

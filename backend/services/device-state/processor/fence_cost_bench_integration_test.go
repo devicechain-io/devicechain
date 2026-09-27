@@ -259,8 +259,8 @@ func TestTheFenceRefusesADeviceStateWriteOnPostgres(t *testing.T) {
 }
 
 // BenchmarkFenceCostMergeMeasurementEvent times mergeOne on a 3-metric measurement with
-// the fence on and off, for a newer event (every row updated) and a stale one (only the
-// device-state row saved).
+// the fence on and off, for a newer event (every row updated) and a stale one (the
+// device-state row saved, and a latest-value upsert whose guard updates nothing).
 //
 // It reports only what it measured: ns/op, statements and fence reads per op (counted on
 // this server during calibration), and the median loopback round trip. Round trips per
@@ -293,10 +293,11 @@ func BenchmarkFenceCostMergeMeasurementEvent(b *testing.B) {
 
 	for _, c := range []struct {
 		name string
-		// fence reads per op with the fence on: one per transaction that writes. A newer
-		// event writes in both of the merge's transactions, a stale one only in the first.
+		// fence reads per op with the fence on: one per transaction that writes. Both cases
+		// write in both of the merge's transactions: a stale event's latest values are still
+		// sent as an upsert, and its guard, not a read in Go, is what leaves them alone.
 		wantFence int64
-	}{{"newer", 2}, {"stale", 1}} {
+	}{{"newer", 2}, {"stale", 2}} {
 		for _, fence := range []string{"on", "off"} {
 			b.Run("case="+c.name+"/fence="+fence, func(b *testing.B) {
 				sp, counter, mgr := legs[fence], counters[fence], mgrs[fence]

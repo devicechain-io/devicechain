@@ -54,10 +54,14 @@ tenant-scoped, holding `Active`, the connect/disconnect/activity stamps, and the
 carry the whole design: `PresenceSource` (`INFERRED` or `ASSERTED`), `SessionId`, and
 `PresenceTime`.
 
-There is still exactly **one writer**: `MergeDeviceState`
-(`backend/services/device-state/model/api.go:158-316`), driven for *every* resolved event, plus the
-inactivity sweep. It is a row-locked read-modify-write because five decode workers can race on one
-device. The demotion door does not break that, and it is worth being precise about why:
+There is still exactly **one merge rule**: `applyEvent` (with `newDeviceState` for a device's
+first event), in `backend/services/device-state/model/api.go`, driven for *every* resolved event,
+plus the inactivity sweep. It runs in two transaction shapes: `MergeDeviceState`, one event per
+transaction, and `MergeProjectionBatch` (`model/projection_merge.go`), which locks the row of every
+device in a batch and folds each device's events into it in arrival order. Both are row-locked
+read-modify-writes, because several projection writers can race on one device, and both compare
+times at the precision the database stores, so a batch leaves what merging its events one at a time
+would. The demotion door does not break that, and it is worth being precise about why:
 `DemoteAssertedPresence` (`backend/services/device-state/model/emit.go:230`) never touches
 `device_states` at all. It READS the rows a source still has asserted and **emits** a demotion event
 per row, and each one reaches the projection through the same resolve-and-merge path as every other

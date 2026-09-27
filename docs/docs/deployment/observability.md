@@ -256,6 +256,29 @@ loss the consumer moves past while every pod of the reading service is restartin
 uncounted. A service with no running pods reports neither series, so neither alert can fire for
 it; the near-full warning and your pod-health alerts cover that case.
 
+## A consumer that stays behind {#consumer-backlog}
+
+A consumer can lose nothing and still be far behind: whatever its service derives from the stream
+is then that far out of date. Every service reports, for each durable consumer it reads, how many
+messages are waiting for it, sampled every 30 seconds:
+
+- **`devicechain_<area>_jetstream_consumer_pending_messages{stream, durable}`**: messages in the
+  stream that the consumer has not been handed yet.
+- **`devicechain_<area>_jetstream_consumer_ack_pending_messages{stream, durable}`**: messages
+  handed to it and not yet acknowledged.
+
+Both appear at the first sample after the service starts, not before, and they disappear again
+while the consumer cannot be read. A missing series means "not measured", never "nothing waiting".
+Every replica reports the same consumer, so combine them with `max`. A backlog that grows and
+shrinks is normal during bursts. One that stays is what the alert watches. The alert's 15 minutes
+survive one pod restarting while another replica keeps reporting. With a single replica, a restart
+removes the series until the new pod's first sample and the 15 minutes start again, so a pod that
+keeps restarting under a backlog may never raise it: watch its restart count as well.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `JetStreamDurableFallingBehind` | warning | A consumer has had more than 10000 messages waiting for it for 15 minutes. Whatever that service derives from the stream is that far behind: for `device-state`, a device's live state lags its stored events. `event-processing`'s detection consumer is not covered, because `DetectConsumerBacklogHigh` watches it and a takeover replays it by design. | Compare the consumer's rate with the stream's. If it is keeping pace but not catching up, give it capacity (for `device-state`, see [its settings](#live-state-projection) and its database). If it has stopped, `JetStreamDurableStalledBehindStream` and the service's logs say why. If the stream fills before it catches up, messages it has not reached will be discarded. |
+
 ## Messages held past their acknowledgement window {#held-past-ack-wait}
 
 The broker gives a service a fixed window to acknowledge each message it hands out. A
@@ -351,11 +374,40 @@ Raise `maxBatch` before `writers`. On a replicated event store, batching raises 
 than extra writers do, and it uses no extra connections. Out-of-range values stop the service from
 starting, and the error names the setting. The service logs the values it is using when it starts.
 
-`device-state` has a matching `projection.writers` setting (default `5`, below its
-`rdbConfiguration.maxOpenConnections` pool). It does not batch: each event's merge into a
-device's live state is still one transaction, so its writer count is its only lever. Merges for the
-same device wait for each other, so extra writers help only while events come from more devices than
-there are writers.
+### Live device state {#live-state-projection}
+
+`device-state` keeps each device's live state (connectivity, activity, latest readings and last
+position) from the same stream of events, and merges them the same way: each writer takes the
+events already waiting for it, up to a limit, and merges them in one transaction. An event is
+acknowledged only after that transaction commits. Several events for one device in the same batch
+leave exactly what merging them one at a time would. A reading or a position replaces the stored
+one only when it is strictly newer, so an older or equally old one never overwrites it; times are
+compared as the database stores them, to the microsecond. If one tenant's part of a batch is
+refused, that tenant's events are merged again one at a time, so only an event that is itself
+refused is retried, and the other tenants' events are committed together without them. If the
+transaction fails for a reason no tenant caused, such as a lost database connection, every event in
+it is merged again on its own.
+
+| Metric | What it tells you |
+| --- | --- |
+| `devicechain_devicestate_state_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. |
+| `devicechain_devicestate_state_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were merged again. A steady rate means one tenant's writes are being refused repeatedly, such as a deleted tenant whose devices are still sending. |
+| `devicechain_devicestate_state_inflight` | Events writers hold, including those waiting for their batch to commit. |
+
+`state_duration_seconds` measures each event from when a writer takes it until its batch commits.
+
+| Setting (`device-state` config) | Default | What it does |
+| --- | --- | --- |
+| `projection.writers` | `5` | Writers running in parallel, each holding one database connection while it merges. Must be below `rdbConfiguration.maxOpenConnections` (20 unless set). |
+| `projection.maxBatch` | `32` | Most events merged in one transaction, from `1` to `64`. `1` turns batching off. |
+| `projection.lingerMillis` | `0` | How long a writer waits for more events before merging a batch that is not full, up to `1000`. `0` merges what is already waiting. |
+
+Leave `writers` at its default unless the batches are full and the database has room to spare.
+Batching is what carries throughput on a replicated database. Merges for one device wait for each
+other, so when devices send in turn, more writers mean more batches waiting on the same devices, and
+past a handful of writers throughput can fall rather than rise. The service logs the values it is
+using when it starts. If the live state still falls behind, `JetStreamDurableFallingBehind` fires for the
+`device-state` consumer (see [A consumer that stays behind](#consumer-backlog)).
 
 ## Replication {#replication}
 

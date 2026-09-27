@@ -64,3 +64,31 @@ func TestCheckWriterCountLogsWritersOverHalfThePool(t *testing.T) {
 		})
 	}
 }
+
+// The batch bound is exact at both edges of both settings, and names the setting under the
+// prefix the caller passes, so each service's error reads as its own document.
+func TestCheckWriterBatchBoundsBatchAndLinger(t *testing.T) {
+	for _, tc := range []struct {
+		maxBatch, linger int
+		wantErr          string
+	}{
+		{0, 0, "p.maxBatch must be between 1 and 64, got 0"},
+		{1, 0, ""},
+		{64, 0, ""},
+		{65, 0, "p.maxBatch must be between 1 and 64, got 65"},
+		{32, -1, "p.lingerMillis must be between 0 and 1000, got -1"},
+		{32, 0, ""},
+		{32, 1000, ""},
+		{32, 1001, "p.lingerMillis must be between 0 and 1000, got 1001"},
+	} {
+		t.Run(fmt.Sprintf("%d/%d", tc.maxBatch, tc.linger), func(t *testing.T) {
+			err := CheckWriterBatch("p", tc.maxBatch, tc.linger)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("CheckWriterBatch(%d, %d) = %v; want nil", tc.maxBatch, tc.linger, err)
+			case tc.wantErr != "" && (err == nil || err.Error() != tc.wantErr):
+				t.Errorf("CheckWriterBatch(%d, %d) = %v; want %q", tc.maxBatch, tc.linger, err, tc.wantErr)
+			}
+		})
+	}
+}

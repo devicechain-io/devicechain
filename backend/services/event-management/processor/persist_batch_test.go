@@ -8,7 +8,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"testing"
@@ -20,7 +19,6 @@ import (
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus"
@@ -559,32 +557,6 @@ func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 				t.Errorf("reported %d failures; want none", got)
 			}
 		})
-	}
-}
-
-// connectionFailure sorts errors by what they say about the connection, however wrapped.
-func TestConnectionFailureRecognisesConnectionErrors(t *testing.T) {
-	for _, tc := range []struct {
-		err  error
-		want bool
-	}{
-		{&pgconn.PgError{Code: "08006"}, true},
-		{&pgconn.PgError{Code: "08001"}, true},
-		{&pgconn.PgError{Code: "57P01"}, true},
-		{&pgconn.PgError{Code: "57P03"}, true},
-		{fmt.Errorf("wrapped: %w", driver.ErrBadConn), true},
-		{io.ErrUnexpectedEOF, true},
-		{context.DeadlineExceeded, true},
-		{&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}, true},
-		{&pgconn.PgError{Code: "22003"}, false},
-		{&pgconn.PgError{Code: "40001"}, false},
-		{&pgconn.PgError{Code: "57014"}, false},
-		{fmt.Errorf("%w (tenant %q)", rdb.ErrTenantPurged, "gone"), false},
-		{errors.New("some statement error"), false},
-	} {
-		if got := connectionFailure(tc.err); got != tc.want {
-			t.Errorf("connectionFailure(%v) = %v; want %v", tc.err, got, tc.want)
-		}
 	}
 }
 

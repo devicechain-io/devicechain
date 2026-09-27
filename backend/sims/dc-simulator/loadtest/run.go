@@ -6,6 +6,7 @@ package loadtest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-simulator/sim"
@@ -13,8 +14,9 @@ import (
 
 // Run executes one load-test profile end to end against the platform the
 // handshake points at: provision the scenario, drive it at load for the hold,
-// wait for the pipeline to quiesce, reconcile persisted vs. accepted, and return
-// the report. It is the L1 orchestration; the caller (cmd/loadtest) turns the
+// wait for the pipeline to quiesce, reconcile persisted vs. accepted, wait for
+// the live device state to reach every device's last accepted event (unless
+// StateTimeout is 0), and return the report. It is the L1 orchestration; the caller (cmd/loadtest) turns the
 // report's verdict into a process exit code (the CI gate).
 func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	p = p.withDefaults()
@@ -27,6 +29,10 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	eventEndpoint, err := httpGraphQLFromWS(hs.Endpoints.EventMgmtWS)
 	if err != nil {
 		return nil, err
+	}
+	checkState := p.StateTimeout > 0
+	if checkState && strings.TrimSpace(hs.Endpoints.DeviceStateGraphQL) == "" {
+		return nil, fmt.Errorf("handshake has no endpoints.deviceStateGraphQL — the state-caught-up check reads the live projection over device-state's tenant API and cannot run without it; re-create the sim record with a current dcctl, or pass --state-timeout 0 to skip the check")
 	}
 
 	// Build the driver (validates the load profile against the scenario) and the
@@ -42,6 +48,9 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 		return nil, err
 	}
 	counter := &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint}
+	if checkState {
+		rt.Accepted = sim.NewAcceptedLedger()
+	}
 
 	// Fresh-tenant precondition. The window reconciliation assumes this tenant is
 	// ours exclusively for the run; a persistent sim on the same tenant (dcctl sim
@@ -76,6 +85,18 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 		return nil, fmt.Errorf("oracle read-back: %w", err)
 	}
 
+	invariants := Reconcile(snap.Emitted, snap.Failed, qr.Persisted, p.MinAccepted)
+	var stateCaughtUp *bool
+	var stateLag float64
+	if checkState {
+		inv, caughtUp, lag, err := awaitLiveState(ctx, rt, hs.Endpoints.DeviceStateGraphQL, end, p)
+		if err != nil {
+			return nil, err
+		}
+		invariants = append(invariants, inv)
+		stateCaughtUp, stateLag = &caughtUp, lag.Seconds()
+	}
+
 	report := &Report{
 		Manifest:   p.Manifest,
 		Seed:       p.Seed,
@@ -94,9 +115,31 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 		PersistedSeen: qr.Persisted,
 		Reached:       qr.Reached,
 		QuiesceSecs:   qr.Elapsed.Seconds(),
-		Invariants:    Reconcile(snap.Emitted, snap.Failed, qr.Persisted, p.MinAccepted),
+		StateCaughtUp: stateCaughtUp,
+		StateLagSecs:  stateLag,
+		Invariants:    invariants,
 	}
 	return report, nil
+}
+
+// awaitLiveState is the state-caught-up check: it waits for device-state to reflect every
+// device's last accepted event, and returns the verdict, whether it caught up, and how long
+// after the drive ended the wait finished.
+func awaitLiveState(ctx context.Context, rt *sim.Runtime, endpoint string, end time.Time, p Profile) (Invariant, bool, time.Duration, error) {
+	want, unparsed := rt.Accepted.Snapshot()
+	if unparsed > 0 {
+		// The simulator formats every occurredTime itself, so this is a harness defect, and
+		// the ledger cannot say what was accepted.
+		return Invariant{Name: InvStateCaughtUp, Passed: false,
+			Detail: fmt.Sprintf("inconclusive: %d accepted events' times could not be recorded, so the ledger cannot say what the live state should hold", unparsed)}, false, 0, nil
+	}
+	reader := &presenceOracle{session: rt.Session, endpoint: endpoint}
+	res, err := AwaitState(ctx, reader, want, p.QuiescePoll, p.StateTimeout)
+	if err != nil {
+		return Invariant{}, false, 0, fmt.Errorf("live-state read-back: %w", err)
+	}
+	lag := time.Since(end)
+	return StateInvariant(res, lag), res.CaughtUp, lag, nil
 }
 
 // cleanTenantLookback is how far back requireCleanTenant looks for a competing

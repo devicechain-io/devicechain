@@ -386,6 +386,9 @@ type deviceStateObs struct {
 	PresenceSource string
 	SessionID      int64
 	Source         string
+	// LastActivity is the projection's lastActivityTime; zero when it holds none. The
+	// load test's state-caught-up check reads it through this same query.
+	LastActivity time.Time
 }
 
 func (o deviceStateObs) assertedActive() bool {
@@ -678,6 +681,7 @@ const queryDeviceStates = `query($tokens:[String!]!){
     presenceSource
     sessionId
     source
+    lastActivityTime
   }
 }`
 
@@ -706,11 +710,12 @@ type presenceOracle struct {
 func (o *presenceOracle) states(ctx context.Context, tokens []string) (map[string]deviceStateObs, error) {
 	var out struct {
 		DeviceStatesByDeviceToken []struct {
-			DeviceToken    string `json:"deviceToken"`
-			Active         bool   `json:"active"`
-			PresenceSource string `json:"presenceSource"`
-			SessionID      string `json:"sessionId"`
-			Source         string `json:"source"`
+			DeviceToken    string  `json:"deviceToken"`
+			Active         bool    `json:"active"`
+			PresenceSource string  `json:"presenceSource"`
+			SessionID      string  `json:"sessionId"`
+			Source         string  `json:"source"`
+			LastActivity   *string `json:"lastActivityTime"`
 		} `json:"deviceStatesByDeviceToken"`
 	}
 	if err := o.session.Query(ctx, o.endpoint, queryDeviceStates, map[string]any{"tokens": tokens}, &out); err != nil {
@@ -728,12 +733,19 @@ func (o *presenceOracle) states(ctx context.Context, tokens []string) (map[strin
 		if perr != nil {
 			return nil, fmt.Errorf("device %q returned a sessionId %q that is not an integer: %w", r.DeviceToken, r.SessionID, perr)
 		}
+		var activity time.Time
+		if r.LastActivity != nil {
+			if activity, perr = time.Parse(time.RFC3339Nano, *r.LastActivity); perr != nil {
+				return nil, fmt.Errorf("device %q returned a lastActivityTime %q that is not a time: %w", r.DeviceToken, *r.LastActivity, perr)
+			}
+		}
 		obs[r.DeviceToken] = deviceStateObs{
 			Present:        true,
 			Active:         r.Active,
 			PresenceSource: r.PresenceSource,
 			SessionID:      session,
 			Source:         r.Source,
+			LastActivity:   activity,
 		}
 	}
 	return obs, nil

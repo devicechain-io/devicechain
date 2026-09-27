@@ -356,6 +356,27 @@ func CheckWriterCount(key string, writers int, cfg config.MicroserviceDatastoreC
 	return nil
 }
 
+// MaxWriterBatch caps the messages one batching writer commits in one transaction. Past the
+// knee a bigger batch buys little, and it lengthens how long the erasure fence's first answer
+// is remembered for and how much a batch that cannot commit has to replay.
+const MaxWriterBatch = 64
+
+// MaxWriterLingerMillis caps how long a batching writer may wait for its batch to fill.
+const MaxWriterLingerMillis = 1000
+
+// CheckWriterBatch is the ONE bound on a batching writer's batch size and linger, shared by
+// every service whose writers batch. prefix is the settings' parent key ("persistence",
+// "projection"), so the error names the setting as the operator wrote it.
+func CheckWriterBatch(prefix string, maxBatch, lingerMillis int) error {
+	if maxBatch < 1 || maxBatch > MaxWriterBatch {
+		return fmt.Errorf("%s.maxBatch must be between 1 and %d, got %d", prefix, MaxWriterBatch, maxBatch)
+	}
+	if lingerMillis < 0 || lingerMillis > MaxWriterLingerMillis {
+		return fmt.Errorf("%s.lingerMillis must be between 0 and %d, got %d", prefix, MaxWriterLingerMillis, lingerMillis)
+	}
+	return nil
+}
+
 // poolSizing resolves the configured open/idle connection counts into the values
 // actually applied to the pool, substituting defaults for unset (zero/negative)
 // values. A zero/unset value falls back to a default rather than being passed

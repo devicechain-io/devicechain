@@ -53,6 +53,11 @@ const (
 	// lost its load flags and drove a handful of events fails rather than
 	// certifying "correctness under load" it never tested.
 	DefaultMinAccepted = 1000
+	// DefaultStateTimeout is how long after the drive the live device state may take to
+	// reach every device's last accepted event (the state-caught-up invariant). It is the
+	// command line's default rather than withDefaults', because 0 is meaningful: it turns
+	// the check off.
+	DefaultStateTimeout = 5 * time.Minute
 )
 
 // Profile is one load-test run's configuration. Manifest/Seed/Devices/
@@ -92,6 +97,12 @@ type Profile struct {
 	QuiescePoll    time.Duration
 	QuiesceTimeout time.Duration
 	QuiesceSettle  time.Duration
+
+	// StateTimeout is how long after the drive the live device state may take to reach
+	// every device's last accepted event (InvStateCaughtUp). 0 does not check it: it is NOT
+	// defaulted here, so a harness that builds a Profile without it runs as it always has,
+	// and cmd/loadtest supplies DefaultStateTimeout unless told otherwise.
+	StateTimeout time.Duration
 }
 
 // Load returns the sim load profile this run drives with.
@@ -160,6 +171,9 @@ func (p Profile) Validate() error {
 	}
 	if p.QuiescePoll < 0 || p.QuiesceTimeout < 0 || p.QuiesceSettle < 0 {
 		return fmt.Errorf("quiesce poll/timeout/settle must not be negative")
+	}
+	if p.StateTimeout < 0 {
+		return fmt.Errorf("state timeout %s is negative (0 turns the live-state check off)", p.StateTimeout)
 	}
 	if p.MinAccepted < 0 {
 		return fmt.Errorf("min accepted %d is negative", p.MinAccepted)
