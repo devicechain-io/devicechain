@@ -20,6 +20,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,6 +188,77 @@ func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhileOnPostgres(t *testing.T
 		!got.LastActivityTime.Time.Equal(t0.Add(2*time.Minute)) || !got.LastConnectTime.Time.Equal(t0) {
 		t.Errorf("row = ext %q src %q activity %v connect %v; want theirs/mqtt1, %v, %v", got.ExternalId, got.Source,
 			got.LastActivityTime.Time, got.LastConnectTime.Time, t0.Add(2*time.Minute), t0)
+	}
+}
+
+// 🔴 THE BATCH HOLDS EVERY ROW IT READS UNTIL IT COMMITS. Step 1 reads each existing row
+// with SELECT … FOR UPDATE, folds the batch into its copy and saves it. Without the lock that
+// is an unlocked read-modify-write: another writer (here the single-event merge) commits a
+// newer activity between the batch's read and its save, and the batch then writes its stale
+// copy over it — the device's activity goes backwards. The other writer starts right after
+// the batch's read, from a connection of its own, and must still be waiting for the row when
+// the batch moves on; once the batch commits it reads the batch's row and moves it forward.
+func TestABatchHoldsTheRowsItReadUntilItCommitsOnPostgres(t *testing.T) {
+	api := newPostgresProjectionApi(t, "lock")
+	ctx := core.WithTenant(context.Background(), "acme")
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	if err := api.MergeProjectionBatch(context.Background(), []ProjectionUpdate{
+		{Tenant: "acme", DeviceToken: "lock-1", OccurredAt: t0},
+	}); err != nil {
+		t.Fatalf("seed the row: %v", err)
+	}
+
+	var armed atomic.Bool
+	armed.Store(true)
+	done := make(chan error, 1)
+	var finishedInsideBatch bool
+	if err := api.RDB.Database.Callback().Query().After("gorm:query").Register("test:write_meanwhile", func(tx *gorm.DB) {
+		if tx.Statement.Table != "device_states" || !armed.CompareAndSwap(true, false) {
+			return
+		}
+		go func() {
+			_, err := api.MergeDeviceState(ctx, "lock-1", t0.Add(5*time.Minute), nil, DeviceIdentity{})
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			finishedInsideBatch = true
+			done <- err
+		case <-time.After(2 * time.Second):
+		}
+	}); err != nil {
+		t.Fatalf("register callback: %v", err)
+	}
+
+	if err := api.MergeProjectionBatch(context.Background(), []ProjectionUpdate{
+		{Tenant: "acme", DeviceToken: "lock-1", OccurredAt: t0.Add(time.Minute)},
+	}); err != nil {
+		t.Fatalf("MergeProjectionBatch: %v", err)
+	}
+	if armed.Load() {
+		t.Fatal("the callback never ran, so no other writer met the batch")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the other writer's merge: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the other writer never finished")
+	}
+	if finishedInsideBatch {
+		t.Error("the other writer committed while the batch still had the row it read: the batch does not lock it")
+	}
+	var rows []DeviceState
+	if err := api.RDB.DB(ctx).Where("device_token = ?", "lock-1").Find(&rows).Error; err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%d rows for lock-1; want exactly 1", len(rows))
+	}
+	if got := rows[0].LastActivityTime.Time; !got.Equal(t0.Add(5 * time.Minute)) {
+		t.Errorf("last activity = %v; want the other writer's newer %v — the batch saved a stale copy over it",
+			got, t0.Add(5*time.Minute))
 	}
 }
 

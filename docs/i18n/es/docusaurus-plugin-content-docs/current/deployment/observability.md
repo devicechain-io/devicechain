@@ -278,7 +278,10 @@ Ambas series aparecen con la primera muestra tras arrancar el servicio, no antes
 desaparecer mientras no se puede leer el consumidor. Una serie ausente significa «no medido», nunca
 «no hay nada esperando». Todas las réplicas informan del mismo consumidor, así que combínelas con
 `max`. Un atraso que crece y se reduce es normal durante las ráfagas. El que se mantiene es el que
-vigila la alerta:
+vigila la alerta. Sus 15 minutos sobreviven al reinicio de un pod mientras otra réplica siga
+informando. Con una sola réplica, un reinicio retira la serie hasta la primera muestra del pod nuevo
+y los 15 minutos vuelven a empezar, así que un pod que se reinicia una y otra vez con atraso puede no
+dispararla nunca: vigile también su número de reinicios.
 
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |

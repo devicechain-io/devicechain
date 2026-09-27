@@ -470,6 +470,13 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 // mergeAdmitted is the per-message path: the originating device's live state, then its
 // latest values or position, each in a transaction of its own, and the A3 disposition of the
 // outcome. A batch of one takes it, and so does every message a batch gives up on.
+//
+// Its latest-value write is the guarded upsert, issued whether or not any reading is newer
+// than what is stored: the guard, not a read in Go, leaves an older reading alone. So a
+// redelivery of a message already applied pays a fence read in both transactions, where the
+// read-then-write loop this replaced skipped the second (fence_cost_test.go pins both
+// counts). That is one extra read on a path that carries redeliveries and batches of one,
+// accepted rather than paid for with a read to decide whether to write.
 func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	msg, event, u := p.msg, p.event, p.update
 

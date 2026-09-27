@@ -116,3 +116,24 @@ func TestConsumerBacklogIsWithdrawnWhenTheSampleFails(t *testing.T) {
 		}
 	}
 }
+
+// The same when it is the durable's STREAM that cannot be read: the durable is sampled
+// against its stream's StreamInfo, so a failed StreamInfo leaves it unmeasured too, and
+// its backlog is withdrawn with the stream's own series rather than frozen at the last pass.
+func TestConsumerBacklogIsWithdrawnWhenItsStreamCannotBeRead(t *testing.T) {
+	g := newUnreadRig(t, 0)
+	g.publish("t1", 10)
+	g.sample()
+	if got := g.mustSeries(pendingSeries); got != 10 {
+		t.Fatalf("pending = %v; want 10 before the stream goes", got)
+	}
+	if err := g.nmgr.js.DeleteStream(g.stream); err != nil {
+		t.Fatalf("delete stream: %v", err)
+	}
+	g.sample()
+	for _, s := range []string{pendingSeries, ackPendingSeries} {
+		if v, found := g.series(s); found {
+			t.Errorf("%s is still exported as %v for a durable whose stream could not be read; want it absent", s, v)
+		}
+	}
+}

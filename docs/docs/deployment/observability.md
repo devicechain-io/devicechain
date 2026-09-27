@@ -270,7 +270,10 @@ messages are waiting for it, sampled every 30 seconds:
 Both appear at the first sample after the service starts, not before, and they disappear again
 while the consumer cannot be read. A missing series means "not measured", never "nothing waiting".
 Every replica reports the same consumer, so combine them with `max`. A backlog that grows and
-shrinks is normal during bursts. One that stays is what the alert watches:
+shrinks is normal during bursts. One that stays is what the alert watches. The alert's 15 minutes
+survive one pod restarting while another replica keeps reporting. With a single replica, a restart
+removes the series until the new pod's first sample and the 15 minutes start again, so a pod that
+keeps restarting under a backlog may never raise it: watch its restart count as well.
 
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |

@@ -18,6 +18,8 @@ func TestAcceptedLedgerKeepsTheLatestTimePerDevice(t *testing.T) {
 	l.Record("a", t0.Format(time.RFC3339Nano))
 	l.Record("b", t0.Add(2*time.Second).Format(time.RFC3339Nano))
 	l.Record("a", t0.Add(1500*time.Millisecond).Format(time.RFC3339Nano))
+	// The newest time is not the last one recorded: an older one after it must not replace it.
+	l.Record("a", t0.Add(500*time.Millisecond).Format(time.RFC3339Nano))
 	got, unparsed := l.Snapshot()
 	if unparsed != 0 || len(got) != 2 {
 		t.Fatalf("snapshot = %v (unparsed %d); want two devices", got, unparsed)
