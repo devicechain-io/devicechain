@@ -14,6 +14,16 @@ import (
 // extensions.code REFERENCE_VIOLATION.
 var ErrChannelInUse = integrity.NewRefusal(integrity.ClassReference, "notification channel is still referenced by a policy rule and cannot be deleted")
 
+// ErrConflict is returned by UpdateNotificationPolicy when the caller passes the version
+// it edited (expectedUpdatedAt) and the policy has moved on since — a concurrent edit.
+// The caller should reload, reapply its change and send it again.
+//
+// 🔴 DESPITE THE NAME, IT MUST NEVER BECOME A conflict.Error. That type's code, CONFLICT,
+// means "a value that must be unique is already in use", and a client may treat it as
+// "already exists, carry on" — which, for a lost update, would report a save that never
+// happened as done.
+var ErrConflict = rdb.NewStaleWriteError("notification policy")
+
 // Api is the persistence-facing surface of the notification service (ADR-017): the
 // per-tenant delivery channels (SMTP/webhook, with their write-only secrets), the
 // routing policies that map alarm severities to channels + recipients, and the
@@ -26,16 +36,6 @@ var ErrChannelInUse = integrity.NewRefusal(integrity.ClassReference, "notificati
 // the read API's hasSecret is store.Exists; dispatch (the processor) Resolves the
 // cleartext server-internal at delivery time. It is never nil in production; a unit
 // test that does not exercise the secret path may leave it nil.
-// ErrConflict is returned by UpdateNotificationPolicy when the caller passes the version
-// it edited (expectedUpdatedAt) and the policy has moved on since — a concurrent edit.
-// The caller should reload, reapply its change and send it again.
-//
-// 🔴 DESPITE THE NAME, IT MUST NEVER BECOME A conflict.Error. That type's code, CONFLICT,
-// means "a value that must be unique is already in use", and a client may treat it as
-// "already exists, carry on" — which, for a lost update, would report a save that never
-// happened as done.
-var ErrConflict = rdb.NewStaleWriteError("notification policy")
-
 type Api struct {
 	RDB     *rdb.RdbManager
 	Secrets secrets.SecretStore
