@@ -123,6 +123,39 @@ detector slows tests down several times over, so a test that asserts a wall-cloc
 under it without any race. Fix such a test so that its budget does not depend on how fast the
 binary runs.
 
+### Fuzzing
+
+Plain `go test` runs each fuzz test's seed inputs only. To fuzz, use the wrapper. It finds every
+fuzz test committed to the workspace (untracked files are ignored) and runs each one for a fixed time:
+
+```bash
+hack/fuzz.sh                         # every fuzz test, 60 s each
+FUZZTIME=300s hack/fuzz.sh           # longer
+hack/fuzz.sh --list                  # what it would run
+hack/fuzz.sh --target backend/core/graphql FuzzRootFieldLimit   # just one
+```
+
+It judges each run by what the run reported, not only by its exit status. Anything other than
+`PASS` or `TOLERATED` fails:
+
+- `FINDING`: an input failed. Go saves it under the package's `testdata/fuzz/<Name>/`, and the
+  wrapper copies it into its log directory. Commit it there to make it a permanent regression test.
+- `NOT-RUN`: no fuzzing happened. `go test -fuzz` exits 0 when its pattern matches no fuzz test, so
+  an exit status alone would call this a pass.
+- `SEED-FAIL`: one of the committed seed inputs failed before fuzzing started.
+- `HANG`: the run did not finish within its time budget. `KILLED`: it was killed outright, either
+  by the budget or by the system running out of memory.
+- `TOLERATED`: the run fuzzed for its whole time and found nothing, but Go's fuzzing engine then
+  reported `context deadline exceeded` as a failure. That is a known race in the Go toolchain's
+  fuzz coordinator at the end of the time budget, not a finding. Only that exact, single line is
+  accepted, and only when the run reached its full time; it is still reported as a warning.
+- `FAILED`: anything else, such as a fuzzing worker that died. The full log says why.
+
+Each run gets its own temporary directory, and its whole log is kept. Outside CI it uses two
+fuzzing workers, because each worker is a separate process with its own memory; set
+`FUZZ_PARALLEL` to change that. The same runs happen every night on `main`, and their logs are kept
+as a workflow artifact.
+
 ## 3. Run a service
 
 Each service is a single binary that takes no flags. It does not start on an empty environment. At

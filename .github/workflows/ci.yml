@@ -1089,6 +1089,14 @@ jobs:
       - name: shellcheck every tracked script
         run: hack/shellcheck.sh
 
+      # The fuzz tests are fuzzed nightly (fuzz-nightly.yml), not per PR, and that
+      # run is only as good as the script deciding what counts as a pass. Gating
+      # the classifier HERE means it cannot lose its ability to fail between
+      # nights -- for instance by reading `go test -fuzz`'s exit 0 on a pattern
+      # that matched nothing as a clean run. Needs no Go toolchain and no fuzzing.
+      - name: fuzz wrapper self-test
+        run: hack/fuzz.sh --self-test
+
       # The base image of every artifact we publish lives on one line of
       # .ko.yaml, and no scanner reads it — Scorecard only parses Dockerfiles,
       # which is how it came to flag a dead kubebuilder Dockerfile while missing

@@ -1,0 +1,88 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# A nightly fuzzing run of `main`.
+#
+# WHY THIS EXISTS
+#
+# The workspace's native Go fuzz tests (today: the GraphQL document reader's
+# differential fuzzers in backend/core/graphql, with graphql-go as the arbiter)
+# were written to find the next input on which our reader and the library
+# disagree. CI's per-module `go test` runs their SEED inputs only — it never
+# fuzzes — so until this workflow nothing searched for that input at all.
+#
+# WHY IT IS NOT A GATE
+#
+# Fuzzing is time-budgeted and randomised: two runs of the same commit explore
+# different inputs. As a required check, that randomness would land on whatever
+# unrelated pull request happened to draw the unlucky input. A red run here is a
+# property of `main`, and is investigated from its log, not from a PR.
+#
+# What IS gated per PR is the thing that decides red or green: ci.yml runs
+# `hack/fuzz.sh --self-test` in its `actions` job, so the classifier cannot
+# quietly lose its ability to fail between nights. It runs first here too, for
+# the same reason govulncheck-nightly.yml self-tests its wrapper before trusting
+# it.
+#
+# READING A RED RUN
+#
+# The job summary names each target's verdict; the `fuzz-logs` artifact holds
+# every target's full log and, under inputs/<Name>/, any input that failed.
+# Committing that input under the package's testdata/fuzz/<Name>/ turns it into
+# a plain `go test` regression that CI runs on every PR from then on. Exactly one
+# failure shape is tolerated, as a warning annotation rather than a red run: the
+# Go fuzz coordinator's own deadline race, a lone `context deadline exceeded`
+# after the run fuzzed for its full time with nothing found. hack/fuzz.sh's
+# header gives the source-level reason and the exact conditions; every other
+# non-PASS run is red, with its log kept.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#
+# It carries no corpus across nights (`cache: false`): each night explores from
+# the committed seeds. setup-go's cache keys on a root go.sum this workspace does
+# not have, so `cache: true` would restore and save nothing while printing a
+# warning every night; and a GitHub cache key is write-once, so even a working key
+# would freeze the corpus at its first save rather than let it grow. It opens no
+# issue, for the reason govulncheck-nightly.yml gives: GitHub already emails the
+# maintainer when a scheduled workflow fails on the default branch.
+name: fuzz-nightly
+
+on:
+  schedule:
+    # 06:50 UTC daily: off the hour, and twenty minutes after govulncheck-nightly.
+    - cron: '50 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FUZZTIME: 300s
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: fuzz wrapper self-test
+        run: hack/fuzz.sh --self-test
+
+      - name: fuzz every target
+        run: FUZZ_LOG_DIR="$RUNNER_TEMP/fuzz" hack/fuzz.sh
+
+      - name: keep logs and failing inputs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fuzz-logs
+          path: ${{ runner.temp }}/fuzz
+          # A run whose script died before writing a single log must look broken,
+          # not like a night with nothing to report.
+          if-no-files-found: error
+          retention-days: 14
