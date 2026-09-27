@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -198,6 +199,55 @@ func TestATrailingRuntimeParameterCannotOverrideSslMode(t *testing.T) {
 	}
 	if cfg.Host != "dc-postgresql.dc-system" {
 		t.Errorf("the connection was redirected to %q", cfg.Host)
+	}
+}
+
+// Every connection the package opens asks the server to end a transaction left idle, so a
+// writer that goes quiet mid-transaction cannot commit after a tenant purge has finished
+// watching (see IdleInTransactionTimeout). The parameter NAME and the VALUE are literals
+// here on purpose, not sessionParameters() or the constant: a misspelled GUC or a unit
+// dropped from the value ("60" is sixty MILLISECONDS to this parameter) must fail this.
+func TestEveryBuilderEndsATransactionLeftIdle(t *testing.T) {
+	for _, b := range builders() {
+		t.Run(b.fn, func(t *testing.T) {
+			got, err := b.build(t, basePg("prefer"))
+			if err != nil {
+				t.Fatalf("%s: %v", b.fn, err)
+			}
+			cfg := parse(t, got)
+			if v := cfg.RuntimeParams["idle_in_transaction_session_timeout"]; v != "60s" {
+				t.Errorf("%s: idle_in_transaction_session_timeout = %q, want \"60s\".\n"+
+					"  A connection without it can hold a transaction open, and commit it, long after\n"+
+					"  a tenant purge has stopped watching for late writes.", b.fn, v)
+			}
+		})
+	}
+
+	// The merge must not cost a caller its own parameters.
+	got, err := rdbFixture(t, nil).computePostgresDsn(basePg("prefer"))
+	if err != nil {
+		t.Fatalf("computePostgresDsn: %v", err)
+	}
+	cfg := parse(t, got)
+	if v := cfg.RuntimeParams["search_path"]; v != "device-management,public" {
+		t.Errorf("computePostgresDsn lost its search_path: %q", v)
+	}
+	if cfg.ConnectTimeout != 5*time.Second {
+		t.Errorf("computePostgresDsn lost its connect_timeout: %v", cfg.ConnectTimeout)
+	}
+}
+
+// A caller's extra parameters are applied first and the session parameters last, in both
+// builders, so no call site can switch the bound off by passing its own value.
+func TestACallerCannotWeakenTheIdleTimeout(t *testing.T) {
+	weaken := map[string]string{"idle_in_transaction_session_timeout": "0"}
+	for name, got := range map[string]string{
+		"postgresKeywordDSN": postgresKeywordDSN("u", "p", "h", 5432, "d", "disable", weaken),
+		"postgresURL":        postgresURL("u", "p", "h", 5432, "d", "disable", weaken),
+	} {
+		if v := parse(t, got).RuntimeParams["idle_in_transaction_session_timeout"]; v != "60s" {
+			t.Errorf("%s let a caller set idle_in_transaction_session_timeout to %q, want \"60s\"", name, v)
+		}
 	}
 }
 

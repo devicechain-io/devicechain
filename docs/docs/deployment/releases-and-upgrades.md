@@ -2929,6 +2929,19 @@ values are stored exactly as sent".
   the API, sending the title and colors as well: that mutation replaces them together, so one
   left out is cleared.
 
+#### A database transaction left idle for a minute is ended
+
+Nothing needs doing at the upgrade.
+
+Every service now asks the database to end any of its transactions that sits idle for 60 seconds.
+This covers a pod that freezes, or loses the network, in the middle of a transaction. Before, such a
+transaction stayed open, holding its locks, until the connection was noticed to be dead, which with
+default operating-system settings can take hours, and it could still commit when the network came
+back. That could write data for a tenant whose deletion had already been reported complete. When
+the limit is hit, the database logs `terminating connection due to idle-in-transaction timeout` and
+rolls the transaction back. The request it belonged to fails with an error, and work a service takes
+from a stream is delivered to it again. See [Database write refusal](./tenant-deletion.md#database-writes).
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

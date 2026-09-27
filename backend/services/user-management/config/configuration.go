@@ -276,7 +276,9 @@ const (
 	// record saying the tenant's data is gone while the broker was still handing its
 	// retained payloads to new subscribers. The default clears it by a wide margin, and
 	// TestTheSettleDefaultOutlastsTheBrokersRetainedCache is what keeps that true rather
-	// than coincidental.
+	// than coincidental. That floor also has to outlast a database transaction left idle
+	// (rdb.IdleInTransactionTimeout), after which the database rolls back a writer that
+	// went quiet; TestTheSettleFloorOutlastsAnIdleTransaction holds that.
 	//
 	// 🔴 IT IS NOT THE BOUND ON WHEN THE TOKEN MAY BE RELEASED, and reading it that way
 	// is the misreading governance.TenantLifecycleResolver's own doc warns about: the 60s

@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -346,6 +347,30 @@ func TestTheSettleDefaultOutlastsTheBrokersRetainedCache(t *testing.T) {
 			"(%s) plus the time one broker purge may take (%s), so a purge can complete while the "+
 			"broker is still delivering this tenant's retained payloads to new subscribers",
 			settle, messaging.RetainedCacheWindow, messaging.PurgeTimeout)
+	}
+}
+
+// TestTheSettleFloorOutlastsAnIdleTransaction pins the other relationship the settle window
+// depends on, and it is a guard rather than a defect test.
+//
+// A write transaction that read the erasure fence clear before a purge planted it can still
+// commit, and the purge catches it only if it commits while the settle window is still
+// running. A writer that goes quiet mid-transaction is rolled back by the database after
+// rdb.IdleInTransactionTimeout (every service connection asks for it), so the shortest
+// settle window an operator is allowed — anything above the broker floor, which Validate
+// enforces — has to be longer than that bound, and so does the default. If either constant
+// moves the wrong way this fails, rather than the erasure argument quietly losing its
+// premise.
+func TestTheSettleFloorOutlastsAnIdleTransaction(t *testing.T) {
+	floor := messaging.RetainedCacheWindow + messaging.PurgeTimeout
+	if floor <= rdb.IdleInTransactionTimeout {
+		t.Errorf("the shortest settle window allowed (just over %s) does not outlast a database "+
+			"transaction left idle (%s): a quiet writer could commit after a purge has completed",
+			floor, rdb.IdleInTransactionTimeout)
+	}
+	if settle := NewUserManagementConfiguration().TenantPurgeSettle(); settle <= rdb.IdleInTransactionTimeout {
+		t.Errorf("the default settle window (%s) does not outlast a database transaction left "+
+			"idle (%s)", settle, rdb.IdleInTransactionTimeout)
 	}
 }
 

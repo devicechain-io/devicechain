@@ -213,10 +213,21 @@ comprobación se ejecuta dentro de la misma transacción de base de datos que la
 rechaza.
 
 Esto es lo que convierte la garantía en un borrado y no en una limpieza: las filas recuperadas no
-pueden volver mientras la eliminación está en curso, aunque haya fallado todo lo que debía detener
-el tráfico antes. El rechazo se levanta únicamente cuando la eliminación se completa, que es también
-cuando se libera el identificador, de modo que un inquilino nuevo creado con ese identificador
-escribe con normalidad desde su primera petición.
+pueden volver para quedarse, aunque haya fallado todo lo que debía detener el tráfico antes. Una
+escritura tardía se barre de nuevo, y la eliminación no se completa hasta que las escrituras han
+cesado. El rechazo se levanta únicamente cuando la eliminación se completa, que es también cuando se
+libera el identificador, de modo que un inquilino nuevo creado con ese identificador escribe con
+normalidad desde su primera petición.
+
+El rechazo se comprueba en el momento de la escritura, así que una escritura que ya estaba dentro de
+una transacción cuando empezó la eliminación todavía puede confirmarse. La eliminación la recoge
+siempre que se confirme antes de que termine el periodo de calma. Las bases de datos lo garantizan
+para una transacción cuyo servicio deja de comunicarse con ellas, por ejemplo porque su pod se ha
+congelado o ha perdido la red: una transacción inactiva durante 60 segundos se termina y se revierte,
+muy por debajo del periodo de calma más corto permitido. La base de datos registra
+`terminating connection due to idle-in-transaction timeout` y no se conserva nada de lo que escribió
+la transacción. La solicitud a la que pertenecía falla con un error, y el trabajo que un servicio
+toma de un flujo se le vuelve a entregar.
 
 El rechazo cubre las dos bases de datos, que es donde viven los registros de un inquilino. El
 bróker, el almacén clave-valor y el almacén de objetos se recuperan en las mismas pasadas, pero no
