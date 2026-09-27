@@ -315,7 +315,8 @@ func (s *HttpServer) Addr() string {
 // active responses, which Shutdown does wait on.
 func (s *HttpServer) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
-	started := s.ln != nil
+	ln := s.ln
+	started := ln != nil
 	if started {
 		s.stopped = true
 	}
@@ -326,5 +327,16 @@ func (s *HttpServer) Shutdown(ctx context.Context) error {
 	if !started {
 		return nil
 	}
-	return s.server.Shutdown(ctx)
+	err := s.server.Shutdown(ctx)
+
+	// 🔴 THE PORT IS RELEASED HERE, NOT BY net/http ALONE. http.Server.Shutdown closes
+	// only the listeners Serve has already registered, and Start hands the listener to
+	// Serve in a goroutine. A Shutdown that lands before that goroutine runs would
+	// otherwise return with the socket still bound; Serve would close it later, on its
+	// way out, and a restart on the same port in between fails with "address already
+	// in use". Closing it again after Serve did is harmless, and its error is ignored
+	// for that reason. It runs after http.Server.Shutdown so the serve loop sees a
+	// server shutting down, not an Accept error it would log as a failure.
+	_ = ln.Close()
+	return err
 }
