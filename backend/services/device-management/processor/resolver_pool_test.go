@@ -76,6 +76,11 @@ func TestTheResolverPoolResolvesAsManyEventsAtOnceAsItIsSized(t *testing.T) {
 			if err := iproc.Initialize(context.Background()); err != nil {
 				t.Fatalf("initialize: %v", err)
 			}
+			// Resolvers reports the width the pool runs, including the default it applied
+			// when none was set.
+			if got := iproc.Resolvers(); got != arm.want {
+				t.Errorf("Resolvers() after Initialize = %d, want %d", got, arm.want)
+			}
 			if err := iproc.Start(context.Background()); err != nil {
 				t.Fatalf("start: %v", err)
 			}

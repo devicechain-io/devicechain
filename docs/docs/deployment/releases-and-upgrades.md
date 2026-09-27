@@ -3021,7 +3021,8 @@ second and 10 about 2900. See [Event resolution](./observability.md#event-resolu
 - **device-management holds more database connections while it resolves events.** Each resolver
   holds one while it authenticates an event's credential, which under the default `required` device
   authentication is every event. With every resolver busy that is now up to 10 connections instead
-  of 5, from the pool the GraphQL API and the MQTT connect checks also use. If you set
+  of 5, from the pool the GraphQL API, the MQTT connect checks and the consumer that applies alarm
+  raises and resolves also use. If you set
   `maxOpenConnections` below 20, check that what is left is enough for them. More than half the pool
   is allowed, and logged at startup.
 - **A pod at its CPU limit gains nothing from more resolvers.** This raises the rate only where the

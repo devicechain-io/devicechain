@@ -363,7 +363,7 @@ bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 
 | Setting (`device-management` config) | Default | What it does |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it authenticates an event's credential, which it does for every event that carries one (every event, under the default `required` device authentication). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API and the MQTT connect checks. More than half the pool is allowed, and logged at startup. |
+| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it authenticates an event's credential, which it does for every event that carries one (every event, under the default `required` device authentication). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. |
 
 Raise it when `resolve_inflight` stays at `resolve_workers` while the pod has CPU to spare. If the
 pod is at its CPU limit instead, more resolvers do not help: give it more CPU. Measured in-process

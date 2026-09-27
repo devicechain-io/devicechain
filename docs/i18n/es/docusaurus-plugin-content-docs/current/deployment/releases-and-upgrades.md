@@ -3240,8 +3240,9 @@ eventos por segundo y 10 unos 2900. Consulte [Resolución de eventos](./observab
 - **device-management ocupa más conexiones a la base de datos mientras resuelve eventos.** Cada
   resolvedor ocupa una mientras autentica la credencial de un evento, lo que con la autenticación de
   dispositivos `required` por defecto ocurre con cada evento. Con todos los resolvedores ocupados son
-  ahora hasta 10 conexiones en lugar de 5, del pool que también usan la API GraphQL y las
-  comprobaciones de conexión MQTT. Si fija `maxOpenConnections` por debajo de 20, compruebe que lo
+  ahora hasta 10 conexiones en lugar de 5, del pool que también usan la API GraphQL, las
+  comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de
+  alarmas. Si fija `maxOpenConnections` por debajo de 20, compruebe que lo
   que queda les basta. Se permite más de la mitad del pool, y se registra al arrancar.
 - **Un pod en su límite de CPU no gana nada con más resolvedores.** Esto solo sube el ritmo donde al
   pod le sobra CPU.

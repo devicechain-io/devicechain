@@ -376,7 +376,7 @@ medida.
 
 | Ajuste (configuración de `device-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras autentica la credencial de un evento, lo que hace con cada evento que lleva una (todos los eventos, con la autenticación de dispositivos `required` por defecto). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL y las comprobaciones de conexión MQTT. Se permite más de la mitad del pool, y se registra al arrancar. |
+| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras autentica la credencial de un evento, lo que hace con cada evento que lleva una (todos los eventos, con la autenticación de dispositivos `required` por defecto). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. |
 
 Súbalo cuando `resolve_inflight` se mantenga en `resolve_workers` mientras al pod le sobra CPU. Si
 el pod está en su límite de CPU, más resolvedores no ayudan: dele más CPU. Medido dentro del

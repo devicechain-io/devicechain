@@ -135,8 +135,9 @@ type ResolutionConfiguration struct {
 	// revocation takes effect on the next event). A resolver makes its lookups one after
 	// another, so it holds at most one connection at a time, and with every resolver busy
 	// the pool gives up to this many connections to resolution. So the count is bounded below
-	// the relational pool it shares with GraphQL and the MQTT connect checks, by the same
-	// check the other services' writer counts use.
+	// the relational pool it shares with GraphQL, the MQTT connect checks and the raise-alarm
+	// consumer (which applies every alarm raise and resolve edge), by the same check the
+	// other services' writer counts use.
 	Workers int
 }
 
