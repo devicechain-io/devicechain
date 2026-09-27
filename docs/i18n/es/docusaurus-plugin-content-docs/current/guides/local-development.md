@@ -103,6 +103,19 @@ nada:
   salida del bucle sería el del último `echo`. Todos los módulos podrían fallar y el recorrido
   seguiría pareciendo correcto.
 
+La CI también ejecuta las pruebas de cada módulo con el detector de condiciones de carrera de Go.
+Para ejecutar la misma comprobación en local sobre el módulo que cambiaste, desde la raíz del
+repositorio:
+
+```bash
+hack/go-race.sh backend/services/event-processing   # o el módulo que hayas tocado
+```
+
+Imprime `race: COVERED <module>` y después ejecuta `go test -race -count=1 ./...` en ese módulo. El
+detector ralentiza las pruebas varias veces, así que una prueba que afirma un presupuesto de tiempo
+de reloj puede fallar con él sin que haya ninguna condición de carrera. Corrige esa prueba para que
+su presupuesto no dependa de lo rápido que se ejecute el binario.
+
 ## 3. Ejecutar un servicio
 
 Cada servicio es un único binario que no acepta banderas. No arranca con un entorno vacío. Al

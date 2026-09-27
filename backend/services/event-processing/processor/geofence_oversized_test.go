@@ -166,6 +166,7 @@ func refusingTransport(t *testing.T) fenceSetExec {
 // real GraphQL schema under the real response cap; the real projection files the result by
 // version; and a real resolved location event fires a real compiled containment rule against it.
 func TestAFenceSetLargerThanOneResponseIsAnnouncedByATinyFactAndResolvesWhole(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	api, facts := ceilingFenceSet(t)
 	raw, manifest := lastFact(t, facts)
@@ -393,6 +394,7 @@ func TestNeverFencedTenantResolvesToTheVersionZeroEmptySet(t *testing.T) {
 // is the shipped chunking: every fence comes back, in bounded requests, with no response
 // approaching the cap.
 func TestTheGeometryBatchReadReassemblesASetLargerThanOneResponse(t *testing.T) {
+	t.Parallel()
 	api, facts := ceilingFenceSet(t)
 	_, manifest := lastFact(t, facts)
 
@@ -464,6 +466,7 @@ func TestTheGeometryBatchReadReassemblesASetLargerThanOneResponse(t *testing.T) 
 // everything. Without it, "one request of one address" would be satisfied by a client that had
 // somehow fetched nothing at all.
 func TestEditingOneFenceOfManyTransfersOnlyTheChangedBody(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	api, facts := ceilingFenceSet(t)
 	src := newSchemaFenceSource(t, api)

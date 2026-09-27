@@ -154,3 +154,28 @@ func TestAWriteAfterShutdownDoesNotFailCleanup(t *testing.T) {
 		t.Fatal("the writer never stopped")
 	}
 }
+
+// The removal a package-wide store is torn down with removes a populated store whole —
+// the shape a JetStream store has once a consumer has flushed its state into it.
+func TestRemoveJetStreamStoreDirRemovesAPopulatedStore(t *testing.T) {
+	dir, err := os.MkdirTemp("", "js-store-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "jetstream", "$G", "streams", "s", "obs", "c", "o.dat")
+	if err := os.MkdirAll(filepath.Dir(state), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state, []byte("consumer state"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Fatalf("fixture: the consumer state file is not there to remove: %v", err)
+	}
+	if err := RemoveJetStreamStoreDir(dir); err != nil {
+		t.Fatalf("RemoveJetStreamStoreDir: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the store %s is still there after removal (stat err = %v)", dir, err)
+	}
+}

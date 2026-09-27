@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -19,7 +20,17 @@ var logSink *dctest.LogSink
 // global logger is safe, because nothing is logging yet. The processor logs from
 // goroutines that outlive the test that started them, so a per-test swap would write
 // the global underneath a live reader. The reasoning in full is on dctest.LogSink.
+//
+// It also stops the package's shared embedded JetStream server (shared_broker_test.go),
+// which outlives every test and so has no test to clean it up.
 func TestMain(m *testing.M) {
 	logSink = dctest.InstallLogSink()
-	os.Exit(m.Run())
+	code := m.Run()
+	if err := stopSharedBroker(); err != nil {
+		fmt.Fprintf(os.Stderr, "processor tests: shared JetStream broker teardown: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }

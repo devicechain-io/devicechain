@@ -36,11 +36,20 @@ func JetStreamStoreDir(tb testing.TB) string {
 	// still swept by TempDir's own cleanup, which runs after this one and finds nothing.
 	dir := tb.TempDir()
 	tb.Cleanup(func() {
-		if err := removeStoreDir(dir, os.RemoveAll, storeDirRemovalBudget, time.Sleep); err != nil {
+		if err := RemoveJetStreamStoreDir(dir); err != nil {
 			tb.Errorf("remove JetStream store dir %s: %v", dir, err)
 		}
 	})
 	return dir
+}
+
+// RemoveJetStreamStoreDir removes an embedded server's JetStream store directory,
+// retrying while the server's consumer flusher can still land a write in it (see
+// JetStreamStoreDir). It is the removal JetStreamStoreDir registers, for a store that
+// outlives any single test — one server shared by a whole test binary, shut down from
+// TestMain where there is no testing.TB to hand. Call it after the server's Shutdown.
+func RemoveJetStreamStoreDir(dir string) error {
+	return removeStoreDir(dir, os.RemoveAll, storeDirRemovalBudget, time.Sleep)
 }
 
 // storeDirRemovalBudget bounds the retry. A consumer's flush is one small file write,

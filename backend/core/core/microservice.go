@@ -224,7 +224,7 @@ type Microservice struct {
 	// LifecycleManager has no synchronization of its own, so reading its State from the
 	// signal goroutine while startup writes it is a data race — one that now decides an
 	// exit status. Startup's CAS publishes every state write it made, and the shutdown
-	// path's CAS observes them. ⚠️ CI runs no -race, so this was proven by hand.
+	// path's CAS observes them. CI runs this module's tests under -race (hack/go-race.sh).
 	phase atomic.Int32
 
 	// rootCtx is the cancelable context handed to Initialize/Start; cancel is

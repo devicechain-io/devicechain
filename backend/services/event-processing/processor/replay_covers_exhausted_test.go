@@ -7,15 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	dctest "github.com/devicechain-io/dc-microservice/test"
-	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -24,7 +20,6 @@ import (
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -43,7 +38,8 @@ import (
 // — this is the ordinary shape of a database outage, not an edge case — and without the
 // declaration each of those would be a dead letter about an event that was never lost.
 //
-// So each test here drives the REAL live loop over a REAL durable on an embedded broker, holds
+// So each test here drives the REAL live loop over a REAL durable — on the package's shared
+// embedded broker, under this test's own instance (shared_broker_test.go) — holds
 // the snapshot store down until the broker has published its own max-delivery advisory for
 // every event in the window, and then checks that every one of them is in a committed
 // checkpoint anyway. The three tests are the three ways the window can end:
@@ -173,35 +169,6 @@ func firstSightInOrder(t *testing.T, seqs []uint64, n uint64) {
 	require.Equal(t, want, firsts, "the order in which each event FIRST reached the loop (all hand-outs: %v)", seqs)
 }
 
-// detectBroker is one embedded JetStream broker shared by the managers of one test.
-type detectBroker struct {
-	srv  *natsserver.Server
-	host string
-	port uint32
-	nc   *nats.Conn
-}
-
-func startDetectBroker(t *testing.T) *detectBroker {
-	t.Helper()
-	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
-	})
-	require.NoError(t, err)
-	go srv.Start()
-	require.True(t, srv.ReadyForConnections(10*time.Second), "embedded nats server not ready")
-	t.Cleanup(srv.Shutdown)
-	u, err := url.Parse(srv.ClientURL())
-	require.NoError(t, err)
-	port, err := strconv.Atoi(u.Port())
-	require.NoError(t, err)
-	nc, err := nats.Connect(srv.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(nc.Close)
-	return &detectBroker{srv: srv, host: u.Hostname(), port: uint32(port), nc: nc}
-}
-
-const coveredInstance = "detectreplay"
-
 // detectManager is one event-processing process's broker side: a manager with the production
 // resolved-events reader on it (the same NewReader call main.go makes, less the term gate that
 // a lease adds) and the platform's max-delivery recorder, which a manager with readers refuses
@@ -215,10 +182,10 @@ func (b *detectBroker) detectManager(t *testing.T) (*messaging.NatsManager, mess
 // detectManagerWithMetrics is detectManager that also returns the registry its /metrics serves.
 func (b *detectBroker) detectManagerWithMetrics(t *testing.T) (*messaging.NatsManager, messaging.MessageReader, *prometheus.Registry) {
 	t.Helper()
-	ms := &core.Microservice{InstanceId: coveredInstance, FunctionalArea: "event-processing"}
+	ms := &core.Microservice{InstanceId: b.instance, FunctionalArea: "event-processing"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: b.host, Port: b.port}
+	ms.InstanceConfiguration.Infrastructure.Nats = b.natsConfig()
 	var reader messaging.MessageReader
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(m *messaging.NatsManager) error {
 		r, err := m.NewReader(streams.ResolvedEvents)
@@ -226,7 +193,7 @@ func (b *detectBroker) detectManagerWithMetrics(t *testing.T) (*messaging.NatsMa
 		return err
 	})
 	nmgr.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(ms)))
-	nmgr.SetAckWaitForTesting(t, time.Second)
+	nmgr.SetAckWaitForTesting(t, brokerAckWait)
 	require.NoError(t, nmgr.Initialize(context.Background()))
 	require.NoError(t, nmgr.Start(context.Background()))
 	t.Cleanup(func() {
@@ -242,7 +209,7 @@ func (b *detectBroker) publish(t *testing.T, occurred time.Time) uint64 {
 	t.Helper()
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)
-	ack, err := js.Publish(messaging.ScopedSubject(coveredInstance, "acme", streams.ResolvedEvents),
+	ack, err := js.Publish(messaging.ScopedSubject(b.instance, "acme", streams.ResolvedEvents),
 		resolvedBytes(t, occurred))
 	require.NoError(t, err)
 	return ack.Sequence
@@ -259,8 +226,8 @@ func (b *detectBroker) watchExhaustions(t *testing.T) *exhaustions {
 	t.Helper()
 	e := &exhaustions{seqs: map[uint64]bool{}}
 	subject := messaging.AdvisorySubject(
-		messaging.StreamName(coveredInstance, streams.ResolvedEvents),
-		messaging.DurableName(coveredInstance, "event-processing", streams.ResolvedEvents))
+		messaging.StreamName(b.instance, streams.ResolvedEvents),
+		messaging.DurableName(b.instance, "event-processing", streams.ResolvedEvents))
 	sub, err := b.nc.Subscribe(subject, func(m *nats.Msg) {
 		var adv struct {
 			StreamSeq uint64 `json:"stream_seq"`
@@ -331,9 +298,40 @@ func liveDetect(t *testing.T, reader messaging.MessageReader, replay ReplayOpene
 	return rp
 }
 
+// brokerAckWait is the AckWait the redelivery tests here shorten the DETECT durable to. Half a
+// second is ten of the loop's 50ms ticks, so an event the loop applies is acked long before it
+// could redeliver, and MaxDeliver deliveries run out in 2.5s rather than 5s.
+const brokerAckWait = 500 * time.Millisecond
+
 // exhaustWithin bounds the wait for the broker to give up on a delivery: MaxDeliver deliveries
-// one AckWait apart, the pull that follows the last, and slack for the pump's fetch timeout.
-const exhaustWithin = time.Duration(messaging.MaxDeliver+6) * time.Second
+// one AckWait apart, the pull that follows the last, the pump's one-second fetch timeout, and
+// slack for a CPU-starved instrumented run. The wait returns as soon as the advisories arrive,
+// so the slack costs nothing on a pass.
+const exhaustWithin = time.Duration(messaging.MaxDeliver)*brokerAckWait + 10*time.Second
+
+// waitForAck waits until the DETECT durable's ack floor has reached seq. The outage in each test
+// below starts only once the event before it is ACKED, not merely checkpointed: DETECT acks after
+// its checkpoint commits, so an outage starting in between would hold that ack too, and the
+// event before the window could exhaust along with it — a count the tests pin exactly.
+func (b *detectBroker) waitForAck(t *testing.T, seq uint64) {
+	t.Helper()
+	js, err := b.nc.JetStream()
+	require.NoError(t, err)
+	stream := messaging.StreamName(b.instance, streams.ResolvedEvents)
+	durable := messaging.DurableName(b.instance, "event-processing", streams.ResolvedEvents)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ci, err := js.ConsumerInfo(stream, durable)
+		require.NoError(t, err)
+		if ci.AckFloor.Stream >= seq {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the DETECT durable never acked seq %d (ack floor %d)", seq, ci.AckFloor.Stream)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
 
 // replayCoveredCount reads devicechain_eventprocessing_max_delivery_records_total for
 // outcome=replay-covered from the registry a scrape reads; -1 when the series is absent.
@@ -362,7 +360,7 @@ func (b *detectBroker) deadLettersHeld(t *testing.T) uint64 {
 	t.Helper()
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)
-	info, err := js.StreamInfo(messaging.StreamName(coveredInstance, streams.DeadLetters))
+	info, err := js.StreamInfo(messaging.StreamName(b.instance, streams.DeadLetters))
 	if errors.Is(err, nats.ErrStreamNotFound) {
 		return 0
 	}
@@ -375,6 +373,7 @@ func (b *detectBroker) deadLettersHeld(t *testing.T) uint64 {
 // recorder (deadletter.MaxDeliveryRecorder): the three exhaustions are counted as
 // replay-covered and none of them becomes a dead letter.
 func TestAnExhaustedEventIsCheckpointedWhenTheStoreReturns(t *testing.T) {
+	t.Parallel()
 	require.True(t, streams.ReplayCoveredBy(streams.ResolvedEvents, "event-processing"),
 		"the declaration this file proves is gone; the recorder would dead-letter every event of a checkpoint outage")
 	b := startDetectBroker(t)
@@ -388,6 +387,7 @@ func TestAnExhaustedEventIsCheckpointedWhenTheStoreReturns(t *testing.T) {
 
 	b.publish(t, testBase.Add(time.Second))
 	waitForCheckpoint(t, store, 1, 10*time.Second)
+	b.waitForAck(t, 1)
 
 	outage.down.Store(true)
 	window := []uint64{
@@ -412,6 +412,7 @@ func TestAnExhaustedEventIsCheckpointedWhenTheStoreReturns(t *testing.T) {
 
 // TestAnExhaustedEventIsReplayedAfterACrash is the pod that dies during the outage.
 func TestAnExhaustedEventIsReplayedAfterACrash(t *testing.T) {
+	t.Parallel()
 	b := startDetectBroker(t)
 	exhausted := b.watchExhaustions(t)
 	nmgr1, reader1 := b.detectManager(t)
@@ -420,6 +421,7 @@ func TestAnExhaustedEventIsReplayedAfterACrash(t *testing.T) {
 
 	b.publish(t, testBase.Add(time.Second))
 	waitForCheckpoint(t, store, 1, 10*time.Second)
+	b.waitForAck(t, 1)
 
 	outage.down.Store(true)
 	window := []uint64{
@@ -440,8 +442,8 @@ func TestAnExhaustedEventIsReplayedAfterACrash(t *testing.T) {
 	// nothing on it is undelivered. Whatever brings them back, it is not the durable.
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)
-	ci, err := js.ConsumerInfo(messaging.StreamName(coveredInstance, streams.ResolvedEvents),
-		messaging.DurableName(coveredInstance, "event-processing", streams.ResolvedEvents))
+	ci, err := js.ConsumerInfo(messaging.StreamName(b.instance, streams.ResolvedEvents),
+		messaging.DurableName(b.instance, "event-processing", streams.ResolvedEvents))
 	require.NoError(t, err)
 	require.Zero(t, ci.NumPending, "the durable still had undelivered messages; the crash case is vacuous")
 
@@ -462,28 +464,40 @@ func TestAnExhaustedEventIsReplayedAfterACrash(t *testing.T) {
 // longer than AckWait x MaxDeliver, no advisory, and every event applied on its first sight
 // once the loop moves again.
 func TestABlockedLoopSpendsNoDeliveries(t *testing.T) {
+	t.Parallel()
 	b := startDetectBroker(t)
 	exhausted := b.watchExhaustions(t)
 	nmgr, reader := b.detectManager(t)
 	store, outage := outageStore(t)
 	seen := &handedOut{MessageReader: reader}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() {
+		outage.hung.Store(nil)
+		releaseOnce.Do(func() { close(release) })
+	}
 	rp := liveDetect(t, seen, nmgr, store)
 	t.Cleanup(func() { _ = rp.ExecuteStop(context.Background()) })
+	// Registered AFTER the stop, so it runs BEFORE it: a failed assertion below leaves the loop
+	// inside the hung checkpoint, and without this the stop would wait on it forever — the
+	// package would hit go test's timeout instead of reporting this one FAIL.
+	t.Cleanup(unblock)
 
 	b.publish(t, testBase.Add(time.Second))
 	waitForCheckpoint(t, store, 1, 10*time.Second)
+	b.waitForAck(t, 1)
 
-	release := make(chan struct{})
 	outage.hung.Store(&release)
 	for i := 2; i <= 4; i++ {
 		b.publish(t, testBase.Add(time.Duration(i)*time.Second))
 	}
-	stall := time.Duration(messaging.MaxDeliver+3) * time.Second
+	// Longer than MaxDeliver deliveries one AckWait apart plus the pump's one-second fetch
+	// timeout, by two seconds: a delivery WOULD run out inside it if one were being spent.
+	stall := time.Duration(messaging.MaxDeliver)*brokerAckWait + 3*time.Second
 	time.Sleep(stall)
 	require.Zero(t, exhausted.count(), "a delivery ran out while the loop was stalled")
 
-	outage.hung.Store(nil)
-	close(release)
+	unblock()
 	waitForCheckpoint(t, store, 4, 15*time.Second)
 	firstSightInOrder(t, seen.snapshot(), 4)
 }
