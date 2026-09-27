@@ -31,9 +31,19 @@ var testRootKey = []byte("0123456789abcdef0123456789abcdef")
 // behavior, not the DB constraints.
 func newTestApi(t *testing.T) *Api {
 	t.Helper()
+	return newTestApiConfigured(t, nil)
+}
+
+// newTestApiConfigured is newTestApi with a hook that runs on the fresh database before
+// anything else touches it — for a test that needs one connection, or a clock of its own.
+func newTestApiConfigured(t *testing.T, configure func(t *testing.T, db *gorm.DB)) *Api {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
+	}
+	if configure != nil {
+		configure(t, db)
 	}
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
@@ -293,7 +303,7 @@ func TestPolicyRulesLifecycle(t *testing.T) {
 	updated, err := api.UpdateNotificationPolicy(ctx, "ops-policy", &NotificationPolicyUpdateRequest{
 		Rules: OptionalNotificationRuleListOf(
 			[]*NotificationRuleCreateRequest{{Severity: "CRITICAL", ChannelToken: "smtp-crit"}}),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("update policy: %v", err)
 	}
@@ -409,7 +419,7 @@ func TestUpdatePolicyRefusesMalformedMetadataBeforeWriting(t *testing.T) {
 	if _, err := api.UpdateNotificationPolicy(ctx, "ops-policy", &NotificationPolicyUpdateRequest{
 		Name:     dcgraphql.OptionalStringOf("Renamed"),
 		Metadata: dcgraphql.OptionalStringOf("{nope"),
-	}); err == nil {
+	}, nil); err == nil {
 		t.Fatal("malformed metadata was accepted")
 	}
 	rows, err := api.NotificationPoliciesByToken(ctx, []string{"ops-policy"})
@@ -452,7 +462,7 @@ func TestUpdatePolicyUnknownChannelTokenRefusesTheWholeUpdate(t *testing.T) {
 		Rules: OptionalNotificationRuleListOf([]*NotificationRuleCreateRequest{
 			{Severity: "MAJOR", ChannelToken: "does-not-exist"},
 		}),
-	}); err == nil {
+	}, nil); err == nil {
 		t.Fatal("a rule naming an unknown channel was accepted, leaving a rule that routes nowhere")
 	}
 

@@ -239,9 +239,12 @@ destructivo — consulta [el aviso de más abajo](#where-the-default-does-not-ho
 
 Una actualización parcial reduce los conflictos de concurrencia sin eliminarlos. Dos escritores que
 tocan campos distintos ya no se pisan, pero dos que tocan el mismo campo sí. `updateDashboard`,
-`updateConnector` y `updateAiProvider` aceptan un `expectedUpdatedAt` opcional y rechazan la
-escritura si la marca de tiempo almacenada se ha movido desde que la leíste. Envía el `updatedAt` que
-leíste por última vez, u omítelo para que gane la última escritura.
+`updateConnector`, `updateAiProvider` y `updateNotificationPolicy` aceptan un `expectedUpdatedAt`
+opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
+Envía el `updatedAt` que leíste por última vez, u omítelo para que gane la última escritura. El
+`updatedAt` que devuelve una respuesta `create*` no sirve para esto: vuelve a leer el registro
+primero, o la primera actualización protegida puede rechazarse como obsoleta aunque nadie lo haya
+cambiado.
 
 #### El argumento `token` nombra el registro {#the-token-argument-names-the-record}
 
@@ -418,7 +421,7 @@ Nombrar uno del par vuelve a comprobar el otro almacenado, y un cambio que dejar
 inutilizable se rechaza al escribir y no en el primer uso.
 
 **notification-management.** Ambas mutaciones `update*` se han convertido: `updateNotificationChannel`
-y `updateNotificationPolicy`. Dos cosas de la política conviene saberlas antes de enviar una:
+y `updateNotificationPolicy`. Tres cosas de la política conviene saberlas antes de enviar una:
 
 - **`rules` es opcional, y omitirlo deja el conjunto de reglas exactamente como está** — las mismas
   filas, no una copia reconstruida. Antes era obligatorio y cada actualización reemplazaba el conjunto
@@ -431,6 +434,10 @@ y `updateNotificationPolicy`. Dos cosas de la política conviene saberlas antes 
   aceptarlo devolvería éxito sobre una política que no entrega nada. Eso dejaba al campo sin ninguna
   petición aceptable más allá de una operación nula. Sigue en la entrada de creación, donde el rechazo
   se explica solo.
+- **Acepta un `expectedUpdatedAt` opcional.** Envía el `updatedAt` que leíste por última vez, o el
+  que devolvió una actualización, y la actualización se rechaza, sin escribir nada, si alguien ha
+  cambiado la política desde entonces, reglas incluidas. Si lo omites, gana la última escritura, como
+  hasta ahora.
 
 **dashboard-management.** `updateDashboard` toma un `DashboardUpdateRequest` y no lleva token alguno.
 Su única particularidad es `definition`: el campo es anulable para poder *omitirse*, que es como se

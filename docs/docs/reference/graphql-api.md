@@ -229,9 +229,11 @@ destructive — see [the warning below](#where-the-default-does-not-hold).
 
 A partial update narrows concurrency conflicts without removing them. Two writers who touch
 different fields no longer overwrite each other, but two who touch the same field still do.
-`updateDashboard`, `updateConnector` and `updateAiProvider` take an optional `expectedUpdatedAt` and
-refuse the write when the stored timestamp has moved since you read it. Pass the `updatedAt` you last
-read, or omit it for last-write-wins.
+`updateDashboard`, `updateConnector`, `updateAiProvider` and `updateNotificationPolicy` take an
+optional `expectedUpdatedAt` and refuse the write when the stored timestamp has moved since you read
+it. Pass the `updatedAt` you last read, or omit it for last-write-wins. The `updatedAt` a `create*`
+response carries is not one to send: read the record back first, or the first guarded update may be
+refused as stale although nothing changed it.
 
 #### The `token` argument names the record {#the-token-argument-names-the-record}
 
@@ -400,7 +402,7 @@ pair against the values the record will hold. Naming one of a pair re-checks the
 and a change that would leave the record unusable is refused at the write rather than at first use.
 
 **notification-management.** Both `update*` mutations have converted: `updateNotificationChannel` and
-`updateNotificationPolicy`. Two things about the policy are worth knowing before you send one:
+`updateNotificationPolicy`. Three things about the policy are worth knowing before you send one:
 
 - **`rules` is optional, and omitting it leaves the rule set exactly as it is** — the same rows, not
   a rebuilt copy of them. It used to be required, and every update replaced the whole rule set, so an
@@ -411,6 +413,9 @@ and a change that would leave the record unusable is refused at the write rather
   because the dispatcher skips a device-type-scoped policy, so accepting one would return success on
   a policy that delivers nothing. That left the field with no request it could accept beyond a no-op.
   It stays on the create input, where the refusal explains itself.
+- **It takes an optional `expectedUpdatedAt`.** Send the `updatedAt` you last read, or the one an
+  update returned, and the update is refused, with nothing written, if anyone has changed the policy
+  since — its rules included. Leave it out and the last write wins, as before.
 
 **dashboard-management.** `updateDashboard` takes a `DashboardUpdateRequest` and carries no token at
 all. Its one wrinkle is `definition`: the field is nullable so it can be *omitted*, which is how you

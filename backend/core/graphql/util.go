@@ -163,9 +163,9 @@ func IntPtrInt32(field string, value *int) (*int32, error) {
 //
 // This is also load-bearing for optimistic concurrency: the UpdatedAt string a client
 // echoes back as a CAS precondition is produced here, and the model-side comparison
-// must format with the SAME layout or every precondition fails. See UpdateConnector,
-// UpdateDashboard and UpdateAIProvider — they were matched to this deliberately, and
-// a change here without a change there breaks all three.
+// must format with the SAME layout or every precondition fails. That comparison is
+// rdb.RefuseIfMoved, the one every such update calls; its layout constant is pinned to
+// this function by a test, so a change here without a change there fails that test.
 func FormatTime(input time.Time) *string {
 	if input.IsZero() {
 		return nil

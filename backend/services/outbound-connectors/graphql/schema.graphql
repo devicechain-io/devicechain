@@ -124,8 +124,9 @@ type Mutation {
     createConnector(request: ConnectorCreateRequest!): Connector!
     # Partially update the connector (draft) with the given (current) token: an omitted
     # field is left alone, an explicit null clears it. When expectedUpdatedAt is
-    # supplied it is an optimistic-concurrency precondition: the update fails (CONFLICT)
-    # if the connector's updatedAt has changed since (a concurrent edit). Pass the
+    # supplied it is an optimistic-concurrency precondition: the update is refused if the
+    # connector's updatedAt has changed since, a concurrent edit ("connector was modified
+    # by another writer; reload and try again"; this is not the CONFLICT code). Pass the
     # updatedAt the caller last read.
     updateConnector(token: String!, request: ConnectorUpdateRequest!, expectedUpdatedAt: String): Connector!
     # Rename a connector. A blank newToken is refused; renaming to the token the
@@ -136,7 +137,8 @@ type Mutation {
     renameConnector(token: String!, newToken: String!): Connector!
     # Freeze the current draft {type, config} into a new immutable version (N+1).
     # expectedUpdatedAt is the same optimistic-concurrency precondition as
-    # updateConnector: publish fails (CONFLICT) if the draft changed since.
+    # updateConnector: publish is refused, with the same message, if the draft changed
+    # since.
     publishConnector(token: String!, label: String, description: String, expectedUpdatedAt: String): ConnectorVersion!
     # Re-draft: copy a published version's {type, config} back into the draft. Returns
     # the updated connector. History is append-only; nothing is deleted.

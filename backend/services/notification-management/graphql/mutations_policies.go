@@ -28,15 +28,19 @@ func (r *SchemaResolver) CreateNotificationPolicy(ctx context.Context, args stru
 // UpdateNotificationPolicy applies a partial update to a routing policy: a field the
 // request omits is left alone, an explicit null clears it, a value sets it. An omitted
 // `rules` leaves the stored rule set untouched; a list replaces it wholesale.
+//
+// ExpectedUpdatedAt is the optional optimistic-concurrency precondition: when set, the
+// update is refused (model.ErrConflict) if the policy changed since the caller loaded it.
 func (r *SchemaResolver) UpdateNotificationPolicy(ctx context.Context, args struct {
-	Token   string
-	Request model.NotificationPolicyUpdateRequest
+	Token             string
+	Request           model.NotificationPolicyUpdateRequest
+	ExpectedUpdatedAt *string
 }) (*NotificationPolicyResolver, error) {
 	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	updated, err := api.UpdateNotificationPolicy(ctx, args.Token, &args.Request)
+	updated, err := api.UpdateNotificationPolicy(ctx, args.Token, &args.Request, args.ExpectedUpdatedAt)
 	if err != nil {
 		return nil, err
 	}

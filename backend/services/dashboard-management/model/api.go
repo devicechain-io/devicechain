@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
@@ -36,7 +35,7 @@ var ErrDefinitionTooLarge = errors.New("dashboard definition exceeds the maximum
 // means "a value that must be unique is already in use", and a client (dcctl among them)
 // may treat it as "already exists, carry on" — which, for a lost update, would report a
 // save that never happened as done.
-var ErrConflict = errors.New("dashboard was modified by another writer; reload and try again")
+var ErrConflict = rdb.NewStaleWriteError("dashboard")
 
 type Api struct {
 	RDB *rdb.RdbManager
@@ -175,18 +174,11 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	// as it was READ, since nothing above touched it; reloading instead would hand a
 	// caller who wrote nothing a baseline advanced past a concurrent writer's content
 	// they have never seen.
-	if expectedUpdatedAt != nil {
-		// The clean early-out against the caller's stated version — the exact string the
-		// caller was handed by core/graphql.FormatTime, so the layout must match it.
-		//
-		// 🔴 This used to say "RFC3339 second precision" as though the coarseness were
-		// part of the contract. It was not — the guarded write re-reads updated_at, so
-		// this comparison is the only enforcement of the CALLER's version, and
-		// truncating it to the second let a client whose view was stale by under a
-		// second publish over a change it had never seen.
-		if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
-			return nil, ErrConflict
-		}
+	//
+	// The clean early-out against the caller's stated version. The comparison, and the
+	// layout it must share with core/graphql.FormatTime, live in rdb.RefuseIfMoved.
+	if err := rdb.RefuseIfMoved(current.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+		return nil, err
 	}
 	if len(assignments) == 0 {
 		return current, nil
@@ -199,19 +191,18 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	// last-write-wins (backward-compatible; used by non-interactive callers that don't
 	// track a version), and zero rows can then only mean the row was deleted since the
 	// read.
-	write := api.RDB.DB(ctx).Model(current).Where("id = ?", current.ID)
 	if expectedUpdatedAt != nil {
-		write = write.Where("updated_at = ?", current.UpdatedAt)
-	}
-	res := write.Updates(assignments)
-	if res.Error != nil {
-		return nil, res.Error
-	}
-	if res.RowsAffected == 0 {
-		if expectedUpdatedAt != nil {
-			return nil, ErrConflict
+		if err := rdb.UpdateIfUnmoved(api.RDB.DB(ctx), current, current.UpdatedAt, assignments, ErrConflict); err != nil {
+			return nil, err
 		}
-		return nil, gorm.ErrRecordNotFound
+	} else {
+		res := api.RDB.DB(ctx).Model(current).Where("id = ?", current.ID).Updates(assignments)
+		if res.Error != nil {
+			return nil, res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil, gorm.ErrRecordNotFound
+		}
 	}
 
 	// Reload for the freshly-bumped updated_at — the caller advances its precondition
@@ -245,9 +236,10 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 	// Optimistic precondition (same contract as UpdateDashboard): refuse to freeze a
 	// draft that moved on since the caller loaded it — otherwise publish could snapshot
 	// another writer's content while the author believes they froze their own view.
-	// Same layout coupling as UpdateDashboard — see the comment there.
-	if expectedUpdatedAt != nil && dash.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
-		return nil, ErrConflict
+	// The same check as UpdateDashboard's, rdb.RefuseIfMoved. Publish has no guarded write
+	// of the draft row: it only reads it, and freezes what it read.
+	if err := rdb.RefuseIfMoved(dash.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+		return nil, err
 	}
 
 	// Next version = max existing + 1 for this dashboard (tenant-confined already,

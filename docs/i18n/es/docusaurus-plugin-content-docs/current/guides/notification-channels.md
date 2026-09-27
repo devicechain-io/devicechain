@@ -125,6 +125,8 @@ mutation {
 
 En una actualización, las `rules` de la solicitud **reemplazan** el conjunto de reglas existente de la política. Omite `rules` para dejar intactas las reglas almacenadas; enviar `null` o `[]` deja la política sin reglas. Igual que con el `secret` de un canal, un cliente que enlaza una variable por campo envía unas `rules` no suministradas como `null` y vacía el conjunto de reglas, así que envía la solicitud completa como una sola variable. Nombrar un token de canal desconocido hace fallar toda la escritura.
 
+Dos personas que editan la misma política pueden pisarse: un campo que cambian ambas conserva solo el último guardado y, como una lista `rules` reemplaza el conjunto entero, el segundo guardado descarta todas las reglas que escribió el primero. Para evitarlo, pasa `expectedUpdatedAt` con el `updatedAt` de la política tal como la leíste (o tal como lo devolvió tu actualización anterior). Si la política ha cambiado desde entonces, la actualización se rechaza con «notification policy was modified by another writer; reload and try again» y no se escribe nada. Vuelve a cargarla, aplica tu cambio de nuevo y envíala otra vez.
+
 ## Verificar la ruta de extremo a extremo
 
 1. **Crea un canal** (como arriba). Confirma `enabled: true` en el resultado, y que `hasSecret` es `true` para un canal SMTP con usuario o un webhook que declara `bearer` o `header`, y `false` para un webhook que declara `none`.

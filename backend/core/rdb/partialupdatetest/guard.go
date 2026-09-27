@@ -109,8 +109,8 @@ type UpdateSurface[A any] struct {
 //
 // 🔴 IT LOOKS FOR A SHAPE, NOT A POSITION, and that is the whole point. "Parameter 3 of
 // 4" is a description of one service's convention, not of what an update input IS, and
-// three of this platform's updates already carry a trailing `expectedUpdatedAt *string`
-// while four take a leading scope argument. A positional rule reads those as "not an
+// some of this platform's updates carry a trailing `expectedUpdatedAt *string` while
+// others take a leading scope argument. A positional rule reads those as "not an
 // update" and certifies them by omission.
 //
 // A candidate is a struct, or a pointer to one. That excludes the receiver (skipped

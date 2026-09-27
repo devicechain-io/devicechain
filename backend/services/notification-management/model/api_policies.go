@@ -89,8 +89,25 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 // a cleared `enabled`, an unknown channel token or a mistyped severity inside a rule all
 // fail the WHOLE update. The rule-set half is inside the transaction with the header
 // write, so a rule that buildRules refuses rolls the header back with it.
+//
+// When expectedUpdatedAt is non-nil it is an optimistic-concurrency precondition, the
+// same one updateDashboard, updateConnector and updateAiProvider take and enforced by the
+// same core code (rdb.RefuseIfMoved, rdb.UpdateIfUnmoved): the update is refused with
+// ErrConflict, and nothing is written, if the policy's updated_at is no longer the one
+// the caller names. It matters most here because a `rules` list replaces the whole rule
+// set, so two operators saving at once would otherwise silently lose one set. Without it
+// the last write wins, as it always has.
+//
+// Every guarded save writes the header row and so moves updated_at — a rules-only edit
+// too, which is what makes a rule change stale every other editor's copy. That includes
+// an update that names nothing: this is the connectors and AI-providers shape, not the
+// dashboard one, where an empty update writes nothing at all.
+//
+// The response is always the policy as re-read after the commit, so its updatedAt is the
+// STORED one and can be sent straight back as the next precondition. The in-memory value
+// gorm leaves behind is not: PostgreSQL keeps microseconds of the nanoseconds it was sent.
 func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
-	request *NotificationPolicyUpdateRequest) (*NotificationPolicy, error) {
+	request *NotificationPolicyUpdateRequest, expectedUpdatedAt *string) (*NotificationPolicy, error) {
 	matches, err := api.NotificationPoliciesByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -119,7 +136,31 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 
 	requestedRules, replaceRules := request.Rules.Requested()
 
-	var updated *NotificationPolicy
+	// The rule checks that need nothing but the request, run before the precondition so a
+	// malformed request is refused as malformed whoever else is writing — reporting it as
+	// stale would send the caller off to reload and retry a request that can never succeed.
+	// This covers the VALUE checks only. The unknown-channel check needs the transaction,
+	// so it stays in buildRules, and a stale request naming an unknown channel is refused
+	// as stale; the retry then reports the channel. buildRules repeats these two checks:
+	// it is the one choke point create and update share, and this is only an early-out.
+	if replaceRules {
+		for _, rr := range requestedRules {
+			if err := validateSeverity(rr.Severity); err != nil {
+				return nil, err
+			}
+			if err := validateStringArray(rr.Recipients, "recipients"); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := rdb.RefuseIfMoved(policy.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+		return nil, err
+	}
+	// Captured before the transaction: the header write below overwrites UpdatedAt in
+	// memory, and the guard must name the version that was READ.
+	readAt := policy.UpdatedAt
+
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		policy.Name = request.Name.ApplyToNullString(policy.Name)
 		policy.Description = request.Description.ApplyToNullString(policy.Description)
@@ -128,15 +169,33 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.EscalateAfterSeconds = request.EscalateAfterSeconds.ApplyToNullInt64(policy.EscalateAfterSeconds)
 		policy.MaxEscalations = request.MaxEscalations.ApplyToNullInt64(policy.MaxEscalations)
 		policy.Enabled = enabled
-		if err := tx.Omit("Rules").Save(policy).Error; err != nil {
-			return err
+		if expectedUpdatedAt == nil {
+			// No precondition: the unconditional write, last write wins.
+			if err := tx.Omit("Rules").Save(policy).Error; err != nil {
+				return err
+			}
+		} else {
+			// The FIRST statement in the transaction, before the rule set is touched: a
+			// refusal returns before the delete below, and the rollback covers the rest.
+			//
+			// The map names every header column this update can change, so it is never
+			// empty, and each value is the folded one — an omitted field writes back what
+			// was read, a cleared one writes NULL, and false and 0 are written rather than
+			// skipped as a struct update would.
+			if err := rdb.UpdateIfUnmoved(tx, policy, readAt, map[string]any{
+				"name":                   policy.Name,
+				"description":            policy.Description,
+				"metadata":               policy.Metadata,
+				"throttle_seconds":       policy.ThrottleSeconds,
+				"escalate_after_seconds": policy.EscalateAfterSeconds,
+				"max_escalations":        policy.MaxEscalations,
+				"enabled":                policy.Enabled,
+			}, ErrConflict); err != nil {
+				return err
+			}
 		}
 		if !replaceRules {
 			// The caller said nothing about rules, so the stored rows stay as they are.
-			// policy.Rules already holds them: NotificationPoliciesByToken preloaded them
-			// above, so the response renders the rule set the policy still has rather
-			// than an empty one.
-			updated = policy
 			return nil
 		}
 		// Replace the rule set: drop the old rows, insert the new ones.
@@ -155,14 +214,22 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 				return err
 			}
 		}
-		policy.Rules = derefRules(rules)
-		updated = policy
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return updated, nil
+
+	// Re-read by the token ARGUMENT, the only thing that names the row: the response must
+	// carry the stored updatedAt (see above) and the stored rule set.
+	reloaded, err := api.NotificationPoliciesByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // buildRules resolves each rule request to a NotificationRule owned by policyId,
@@ -201,9 +268,9 @@ func (api *Api) buildRules(tx *gorm.DB, policyId uint,
 			PolicyId:  policyId,
 			Severity:  rr.Severity,
 			ChannelId: channel.ID,
-			// Carry the resolved channel so the create/update response renders it
-			// without a reload (reads preload it); the Create call Omits the
-			// association so this pointer never re-saves the channel row.
+			// Carry the resolved channel so the create response renders it without a
+			// reload (reads preload it; the update response is a reload); the Create
+			// call Omits the association so this pointer never re-saves the channel row.
 			Channel:    channel,
 			Recipients: recipientsJSON,
 		})

@@ -224,8 +224,9 @@ type Mutation {
     createAiProvider(request: AiProviderCreateRequest!): AiProvider!
     # Partially update the provider with the given (current) token: an omitted field is
     # left alone, an explicit null clears it. When expectedUpdatedAt is supplied it is
-    # an optimistic-concurrency precondition: the update fails (CONFLICT) if the
-    # provider's updatedAt has changed since. Grants are not changed here.
+    # an optimistic-concurrency precondition: the update is refused if the provider's
+    # updatedAt has changed since ("provider was modified by another writer; reload and
+    # try again"; this is not the CONFLICT code). Grants are not changed here.
     updateAiProvider(token: String!, request: AiProviderUpdateRequest!, expectedUpdatedAt: String): AiProvider!
     # Rename a provider. A blank newToken is refused; renaming to the token the provider
     # already has is an idempotent success; a token another provider holds is refused by

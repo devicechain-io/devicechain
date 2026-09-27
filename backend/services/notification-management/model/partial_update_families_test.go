@@ -33,6 +33,7 @@ func partialUpdateFamilies() []putest.Family[*Api] {
 	return []putest.Family[*Api]{
 		notificationChannelFamily(),
 		notificationPolicyFamily(),
+		guardedNotificationPolicyFamily(),
 	}
 }
 
@@ -206,7 +207,7 @@ func notificationPolicyFamily() putest.Family[*Api] {
 		Migrate:    []any{&NotificationPolicy{}, &NotificationRule{}, &NotificationChannel{}},
 		NewRequest: func() any { return &NotificationPolicyUpdateRequest{} },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
-			_, err := api.UpdateNotificationPolicy(ctx, token, req.(*NotificationPolicyUpdateRequest))
+			_, err := api.UpdateNotificationPolicy(ctx, token, req.(*NotificationPolicyUpdateRequest), nil)
 			return err
 		},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
@@ -265,6 +266,34 @@ func notificationPolicyFamily() putest.Family[*Api] {
 				func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
+}
+
+// guardedNotificationPolicyFamily drives the same policy fields through the OTHER write:
+// every update carries a fresh expectedUpdatedAt, so it takes the guarded path, which
+// names its columns in a map rather than saving the whole struct.
+//
+// 🔴 THAT MAP IS WRITTEN BY HAND, AND A COLUMN LEFT OUT OF IT WOULD RETURN SUCCESS
+// WITHOUT WRITING THE FIELD. The family above only ever sends no precondition, so
+// without this one nothing would notice — every property here (set one field, clear
+// one, leave the rest alone) is what catches a missing or misspelt key.
+func guardedNotificationPolicyFamily() putest.Family[*Api] {
+	fam := notificationPolicyFamily()
+	fam.Name = "notificationPolicy (with expectedUpdatedAt)"
+	fam.Update = func(api *Api, ctx context.Context, token string, req any) error {
+		found, err := api.NotificationPoliciesByToken(ctx, []string{token})
+		if err != nil {
+			return err
+		}
+		// An unknown token has no version to send. Any string will do: the lookup
+		// refuses before the precondition is read, which UnknownTokenIsNotFound pins.
+		expected := "2000-01-01T00:00:00Z"
+		if len(found) == 1 {
+			expected = *dcgraphql.FormatTime(found[0].UpdatedAt)
+		}
+		_, err = api.UpdateNotificationPolicy(ctx, token, req.(*NotificationPolicyUpdateRequest), &expected)
+		return err
+	}
+	return fam
 }
 
 // rulesField declares the policy's rule set to the harness.

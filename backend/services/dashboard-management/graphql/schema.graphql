@@ -103,7 +103,8 @@ type Mutation {
     updateDashboard(token: String!, request: DashboardUpdateRequest!, expectedUpdatedAt: String): Dashboard!
     # Freeze the current draft into a new immutable version (N+1) and return it.
     # expectedUpdatedAt is the same optimistic-concurrency precondition as
-    # updateDashboard: publish fails (CONFLICT) if the draft changed since.
+    # updateDashboard: publish is refused if the draft changed since ("dashboard was
+    # modified by another writer; reload and try again"; this is not the CONFLICT code).
     publishDashboard(
         token: String!
         label: String

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -44,7 +43,7 @@ var ErrConfigTooLarge = errors.New("connector config exceeds the maximum size")
 // means "a value that must be unique is already in use", and a client (dcctl among them)
 // may treat it as "already exists, carry on" — which, for a lost update, would report a
 // save that never happened as done.
-var ErrConflict = errors.New("connector was modified by another writer; reload and try again")
+var ErrConflict = rdb.NewStaleWriteError("connector")
 
 // Api is the outbound-connectors persistence surface: the versioned Connector entity
 // plus its write-only credential (sealed in the ADR-059 secret store). Secrets is
@@ -164,9 +163,9 @@ func (api *Api) CreateConnector(ctx context.Context, request *ConnectorCreateReq
 // When expectedUpdatedAt is non-nil it is an optimistic-concurrency precondition (same
 // contract as the dashboard precedent): the save is rejected with ErrConflict if the
 // row's current UpdatedAt no longer matches — another writer changed it since the
-// caller loaded it. The comparison uses RFC3339 (second precision), the exact string
-// the caller was handed by the `updatedAt` query field, so a value that round-trips
-// unchanged always matches.
+// caller loaded it. The comparison is rdb.RefuseIfMoved's: to the nanosecond, in the
+// layout core/graphql.FormatTime serves the `updatedAt` query field in, so a value that
+// round-trips unchanged always matches.
 func (api *Api) UpdateConnector(ctx context.Context, token string, request *ConnectorUpdateRequest, expectedUpdatedAt *string) (*Connector, error) {
 	matches, err := api.ConnectorsByToken(ctx, []string{token})
 	if err != nil {
@@ -216,30 +215,18 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 	// Optimistic concurrency: a clean early-out against the caller's stated version,
 	// then an ATOMIC guarded write (UPDATE ... WHERE updated_at = <the value just read>)
 	// so a concurrent save slipping in between the read and this write moves updated_at
-	// and matches zero rows instead of being silently clobbered.
-	//
-	// 🔴 The layout must match core/graphql.FormatTime, which produced the string the
-	// caller is echoing back. It does NOT merely need to be self-consistent: the guarded
-	// write below re-reads updated_at, so this comparison is the ONLY thing enforcing the
-	// CALLER's version, and at RFC3339 it enforced it to the whole second — a client whose
-	// view was stale by less than a second passed the precondition and overwrote a change
-	// it had never seen.
-	if current.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
-		return nil, ErrConflict
+	// and matches zero rows instead of being silently clobbered. Both halves are core's,
+	// so every update that offers the precondition means the same thing by it.
+	if err := rdb.RefuseIfMoved(current.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+		return nil, err
 	}
-	res := api.RDB.DB(ctx).Model(current).
-		Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
-		Updates(map[string]any{
-			"name":        name,
-			"description": description,
-			"type":        connectorType,
-			"config":      cfg,
-		})
-	if res.Error != nil {
-		return nil, res.Error
-	}
-	if res.RowsAffected == 0 {
-		return nil, ErrConflict
+	if err := rdb.UpdateIfUnmoved(api.RDB.DB(ctx), current, current.UpdatedAt, map[string]any{
+		"name":        name,
+		"description": description,
+		"type":        connectorType,
+		"config":      cfg,
+	}, ErrConflict); err != nil {
+		return nil, err
 	}
 
 	// Reload for the freshly-bumped updated_at — the caller advances its precondition
@@ -425,9 +412,9 @@ func (api *Api) PublishConnector(ctx context.Context, token string, label, descr
 	}
 	conn := matches[0]
 
-	// Same layout coupling as UpdateConnector — see the comment there.
-	if expectedUpdatedAt != nil && conn.UpdatedAt.Format(time.RFC3339Nano) != *expectedUpdatedAt {
-		return nil, ErrConflict
+	// The same check as UpdateConnector's, rdb.RefuseIfMoved.
+	if err := rdb.RefuseIfMoved(conn.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+		return nil, err
 	}
 
 	// Next version = max existing + 1 for this connector (tenant-confined already, both
