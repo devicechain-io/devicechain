@@ -38,8 +38,14 @@ const MaxAssertedPageSize = 1000
 // append-only event history. One row per device.
 type DeviceState struct {
 	gorm.Model
-	rdb.TenantScoped
-	DeviceToken string
+	// TenantId is spelled out rather than embedded from rdb.TenantScoped (the tenant-scope
+	// callback finds it by name either way) so it can LEAD the unique index the projection's
+	// upserts arbitrate on: a device token is unique only per tenant. Production never
+	// AutoMigrates this struct — the migrations create that index from their own snapshots —
+	// so the tag is for the databases tests build from the live model, where without it
+	// `ON CONFLICT (tenant_id, device_token)` has no arbiter and is refused.
+	TenantId    string `gorm:"uniqueIndex:idx_device_state_tenant_token,priority:1;index;not null;size:128"`
+	DeviceToken string `gorm:"uniqueIndex:idx_device_state_tenant_token,priority:2"`
 	// ExternalId denormalizes the device's external id (ADR-049) from the resolved
 	// event so the projection is queryable by transport-native identity (ADR-067 SP4b
 	// failover reconciliation enumerates asserted-active devices by their Sparkplug
@@ -87,10 +93,9 @@ type DeviceState struct {
 // row id.
 //
 // The tiebreak is id rather than a token because this table has no registry token —
-// device_token names the DEVICE, and while the projection holds one row per device
-// today, that is an invariant of the merge path rather than a declared unique
-// constraint, so it is not the column to hang a total order on. id is both unique and
-// monotonic, which makes it a truthful tiebreak for "newest" as well as a correct one.
+// device_token names the DEVICE, and it is unique only together with the tenant, so it
+// is not the column to hang a total order on. id is both unique and monotonic, which
+// makes it a truthful tiebreak for "newest" as well as a correct one.
 //
 // 🔴 This is the order for the PAGED search only (DeviceStates). AssertedDeviceStates
 // walks a keyset cursor with its own `id ASC` and does not go through ListOf — its
@@ -113,9 +118,15 @@ func (DeviceState) AuditExempt() bool { return true }
 // never grows with history.
 type LatestMeasurement struct {
 	gorm.Model
-	rdb.TenantScoped
-	DeviceToken string
-	Name        string
+	// TenantId is spelled out rather than embedded from rdb.TenantScoped (the tenant-scope
+	// callback finds it by name either way) so it can LEAD the unique index the projection's
+	// upserts arbitrate on: a device token is unique only per tenant. Production never
+	// AutoMigrates this struct — the migrations create that index from their own snapshots —
+	// so the tag is for the databases tests build from the live model, where without it
+	// `ON CONFLICT (tenant_id, device_token, name)` has no arbiter and is refused.
+	TenantId    string `gorm:"uniqueIndex:idx_latest_measurement_tenant_device_name,priority:1;index;not null;size:128"`
+	DeviceToken string `gorm:"uniqueIndex:idx_latest_measurement_tenant_device_name,priority:2"`
+	Name        string `gorm:"uniqueIndex:idx_latest_measurement_tenant_device_name,priority:3"`
 	Value       sql.NullFloat64
 	Classifier  *uint
 	// Unit + DataType are denormalized from the bound metric definition (ADR-016),
@@ -164,8 +175,14 @@ type LatestMeasurementInput struct {
 // speed or heading — most do not — and NULL says "not reported", which zero does not.
 type LatestLocation struct {
 	gorm.Model
-	rdb.TenantScoped
-	DeviceToken string
+	// TenantId is spelled out rather than embedded from rdb.TenantScoped (the tenant-scope
+	// callback finds it by name either way) so it can LEAD the unique index the projection's
+	// upserts arbitrate on: a device token is unique only per tenant. Production never
+	// AutoMigrates this struct — the migrations create that index from their own snapshots —
+	// so the tag is for the databases tests build from the live model, where without it
+	// `ON CONFLICT (tenant_id, device_token)` has no arbiter and is refused.
+	TenantId    string          `gorm:"uniqueIndex:idx_latest_location_tenant_device,priority:1;index;not null;size:128"`
+	DeviceToken string          `gorm:"uniqueIndex:idx_latest_location_tenant_device,priority:2"`
 	Latitude    sql.NullFloat64 `gorm:"type:decimal(10,8)"`
 	Longitude   sql.NullFloat64 `gorm:"type:decimal(11,8)"`
 	Elevation   sql.NullFloat64 `gorm:"type:decimal(12,4)"`

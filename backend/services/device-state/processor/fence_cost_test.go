@@ -31,8 +31,9 @@ import (
 // that change red: they are the guard on the side the defect is on.
 //
 // The numbers are STATEMENTS, not round trips: gorm does not trace BEGIN/COMMIT, and a
-// merge opens two transactions (MergeDeviceState, then the latest-value merge) — which is
-// also why a merge that writes both pays two fence reads, never fewer.
+// merge on its own opens two transactions (MergeDeviceState, then the latest-value merge) —
+// which is also why a merge that writes both pays two fence reads, never fewer. What a
+// BATCH of merges costs is batch_cost_test.go's.
 
 // fenceTenant is the tenant the shared message subject carries (locationTestSubject).
 const fenceTenant = "tenant1"
@@ -198,41 +199,41 @@ func TestFenceCostOfAMeasurementEvent(t *testing.T) {
 		check func(t *testing.T, sp *StateProcessor)
 	}{
 		{
-			// Rows created: device state (lock read, fence, insert), then per metric a lock
-			// read and an insert. One fence read per transaction: device state, then latest
-			// measurements, whose three inserts share the one read.
+			// Rows created: device state (lock read, fence, insert), then the three latest
+			// values in ONE upsert (fence, upsert). One fence read per transaction.
 			name:    "first sight",
 			msg:     func(t *testing.T) messaging.Message { return threeMetrics(t, "fc-01", t0) },
-			wantAll: 10, wantFence: 2,
+			wantAll: 5, wantFence: 2,
 			check: func(t *testing.T, sp *StateProcessor) { assertProjectedAt(t, sp, "fc-01", t0) },
 		},
 		{
 			// The steady state: every reading newer than the stored one, so every row is
-			// updated. One fence read per transaction: device state, then latest
-			// measurements, whose three updates share the one read.
+			// updated — the same shape as first sight, an update where that inserted: device
+			// state (lock read, fence, save), then one upsert (fence, upsert).
 			name:    "every reading newer",
 			seed:    func(t *testing.T, sp *StateProcessor) { seed(t, sp, threeMetrics(t, "fc-01", t0)) },
 			msg:     func(t *testing.T) messaging.Message { return threeMetrics(t, "fc-01", t1) },
-			wantAll: 10, wantFence: 2,
+			wantAll: 5, wantFence: 2,
 			check: func(t *testing.T, sp *StateProcessor) { assertProjectedAt(t, sp, "fc-01", t1) },
 		},
 		{
 			// A redelivery of the message already applied. MergeDeviceState still saves
-			// its row (and pays the fence read); the latest-value merge only reads, because
-			// no reading is strictly newer, so it pays none.
+			// its row (and pays the fence read). The latest-value upsert is still ISSUED —
+			// its guard, not a read in Go, is what leaves every row alone — so it pays the
+			// fence read too, which the old read-then-write loop, writing nothing, did not.
 			name:    "stale redelivery",
 			seed:    func(t *testing.T, sp *StateProcessor) { seed(t, sp, threeMetrics(t, "fc-01", t1)) },
 			msg:     func(t *testing.T) messaging.Message { return threeMetrics(t, "fc-01", t1) },
-			wantAll: 6, wantFence: 1,
+			wantAll: 5, wantFence: 2,
 			check: func(t *testing.T, sp *StateProcessor) { assertProjectedAt(t, sp, "fc-01", t1) },
 		},
 		{
-			// A newer fix: device state and the last-known position, one fence read each
-			// (two transactions, one fenced write in each).
+			// A newer fix: device state (lock read, fence, save) and the last-known position
+			// (fence, upsert), one fence read in each of the two transactions.
 			name:    "location event",
 			seed:    func(t *testing.T, sp *StateProcessor) { seed(t, sp, aFix(t, "fc-01", t0, "28.5")) },
 			msg:     func(t *testing.T) messaging.Message { return aFix(t, "fc-01", t1, "28.75") },
-			wantAll: 6, wantFence: 2,
+			wantAll: 5, wantFence: 2,
 			check: func(t *testing.T, sp *StateProcessor) {
 				ctx := core.WithTenant(context.Background(), fenceTenant)
 				if got := loadProjectedLocation(t, sp, ctx, "fc-01"); !got.OccurredTime.Equal(t1) ||
