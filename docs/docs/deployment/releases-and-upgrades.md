@@ -1588,6 +1588,10 @@ If you watch `device-state`'s metrics or set its `projection` settings, or route
 name, read "Live device state is merged in batches, and a consumer that stays behind raises a
 warning": one warning, `JetStreamDurableFallingBehind`, is added.
 
+If your values set `rdbConfiguration.maxOpenConnections` for `device-management`, or you watch its
+database connections, read "device-management resolves more events at once": it now holds up to 10
+connections while it resolves events, and a pool of 10 or fewer stops it from starting.
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2996,6 +3000,39 @@ a synchronous standby, five writers merged about 3500 events a second, against a
   waiting for it for 15 minutes. `event-processing`'s detection consumer is left to
   `DetectConsumerBacklogHigh`, which is unchanged. See
   [A consumer that stays behind](./observability.md#consumer-backlog).
+
+#### device-management resolves more events at once
+
+`device-management` resolved inbound events with five resolvers, a number fixed in code. Resolving
+an event is mostly waiting: for the database to authenticate its credential, then for the message
+broker's key-value store to return its profile and relationships, one after another. So five
+resolvers limited how many events a pod could resolve a second while most of its CPU sat idle. On a
+test cluster the pod resolved about 1600 events a second on 1.5 of its 4 cores, and the events above
+that rate waited in the pod, about 140 at a time, then in the stream, with detection falling behind
+them. It now runs 10 by default, and the number is configurable. Measured in-process against a
+three-server broker, with every lookup taking 750 µs, 5 resolvers resolved about 1500 events a
+second and 10 about 2900. See [Event resolution](./observability.md#event-resolution).
+
+- **The new setting is `resolution.workers`** (default `10`). It must be below the service's
+  connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set). A value out of range stops
+  the service from starting, and the error names the setting. The default is refused only if you set
+  `maxOpenConnections` for `device-management` to 10 or fewer: set `resolution.workers` below it
+  before upgrading.
+- **device-management holds more database connections while it resolves events.** Each resolver
+  holds one while it authenticates an event's credential, which under the default `required` device
+  authentication is every event. With every resolver busy that is now up to 10 connections instead
+  of 5, from the pool the GraphQL API, the MQTT connect checks and the consumer that applies alarm
+  raises and resolves also use. If you set
+  `maxOpenConnections` below 20, check that what is left is enough for them. More than half the pool
+  is allowed, and logged at startup.
+- **A pod at its CPU limit gains nothing from more resolvers.** This raises the rate only where the
+  pod has CPU to spare.
+- **A new metric, `resolve_workers`,** reports how many resolvers the pod runs, and
+  `resolve_inflight` can now reach 10. `resolve_inflight` held at `resolve_workers` means events are
+  arriving faster than the pod resolves them.
+- **Rolling back:** an earlier `device-management` refuses a configuration that sets
+  `resolution.workers`, as it refuses any setting it does not know. Remove the setting before
+  rolling back.
 
 ### The one-time durable-ingest cutover
 

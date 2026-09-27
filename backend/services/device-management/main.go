@@ -181,6 +181,18 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 	return DeadLetters.NewSink(w), nil
 }
 
+// newInboundEventsProcessor assembles the inbound processor from this service's globals, its
+// resolver pool sized by the loaded configuration. It is a function of its own so
+// resolution_wiring_test.go can check the configuration reaches the processor: a processor
+// test builds the processor itself, so a service that stopped passing resolution.workers
+// would run the default while every other test stayed green.
+func newInboundEventsProcessor(reader messaging.MessageReader) *processor.InboundEventsProcessor {
+	return processor.NewInboundEventsProcessor(Microservice, reader, ResolvedEventsWriter, FailedEventsWriter,
+		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
+		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
+		processor.WithResolvers(Configuration.Resolution.Workers))
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound events (wildcard across tenants).
 	ievents, err := nmgr.NewReader(streams.InboundEvents)
@@ -296,9 +308,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		GeoFencePublishFails)
 
 	// Add and initialize inbound events processor.
-	InboundEventsProcessor = processor.NewInboundEventsProcessor(Microservice, InboundEventsReader,
-		ResolvedEventsWriter, FailedEventsWriter, core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
-		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics)
+	InboundEventsProcessor = newInboundEventsProcessor(InboundEventsReader)
 	err = InboundEventsProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

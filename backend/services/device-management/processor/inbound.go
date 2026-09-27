@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -22,8 +23,14 @@ import (
 )
 
 const (
-	EVENT_RESOLVER_COUNT        = 5   // Number of event resolvers running in parallel
-	MESSAGE_BACKLOG_SIZE        = 100 // Number of inbound messages that can be read and waiting to be processed
+	// MESSAGE_BACKLOG_SIZE is how many inbound messages can wait for a free resolver. With
+	// every resolver busy, events wait here and, behind these, in the reader's fetched batch
+	// (up to 64, fetched again only once empty): about 100 + 32 on average, measured by
+	// BenchmarkInboundStageOccupancy, which matches the ack-pending the inbound consumer
+	// shows on a saturated kind cluster. That queue is inherent in a saturated stage; the
+	// pool width (resolution.workers) is what sets how fast it drains. The consumer's
+	// MaxAckPending is far above it, so that is not what caps the in-flight count.
+	MESSAGE_BACKLOG_SIZE        = 100
 	FAILED_EVENT_BACKLOG_SIZE   = 100 // Number of failed events that can be waiting to publish
 	RESOLVED_EVENT_BACKLOG_SIZE = 100 // Number of resolved events that can be waiting to publish
 
@@ -95,9 +102,9 @@ type InboundEventsProcessor struct {
 	resolved  chan resolvedItem
 	resolvers []*EventResolver
 
-	// resolverCount is the size of the resolver pool; 0 means EVENT_RESOLVER_COUNT. It is
-	// set only by the throughput benchmark, which measures how the pool width interacts
-	// with the publish stage.
+	// resolverCount is the size of the resolver pool, set by WithResolvers from the
+	// service's resolution.workers. 0 (a processor built without the option, or by literal
+	// in a test) means the configuration's default, which initializeEventResolvers applies.
 	resolverCount int
 
 	// metrics is every Prometheus instrument this processor exports. It is built ONCE,
@@ -151,6 +158,10 @@ type ResolveMetrics struct {
 	// ONE counter for the whole worker pool: the workers share the inbound channel, so a
 	// per-worker counter would report a fleet's clock skew as N unrelated series.
 	eventTimeBounded prometheus.Counter
+
+	// workers is the resolver pool width this pod runs. Beside red's resolve_inflight it
+	// says whether the pool is saturated. Nil in a zero ResolveMetrics.
+	workers prometheus.Gauge
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -167,7 +178,24 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		eventTimeBounded: ms.NewCounter(
 			"resolve_event_time_bounded_total",
 			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling"),
+		workers: ms.NewGauge("resolve_workers",
+			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
+}
+
+// InboundOption configures an InboundEventsProcessor.
+type InboundOption func(*InboundEventsProcessor)
+
+// WithResolvers sets the resolver pool width from the service's configuration
+// (resolution.workers). Without it the processor runs the configuration's default.
+func WithResolvers(n int) InboundOption {
+	return func(p *InboundEventsProcessor) { p.resolverCount = n }
+}
+
+// Resolvers is the resolver pool width: the one WithResolvers set, or, once the processor
+// is initialized, the default it applied when none was set.
+func (iproc *InboundEventsProcessor) Resolvers() int {
+	return iproc.resolverCount
 }
 
 // Create a new inbound events processor. authMode is the device authentication
@@ -179,7 +207,7 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 // start.
 func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.OrderedWriter,
 	failed messaging.OrderedWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string,
-	maxFutureSkew time.Duration, metrics ResolveMetrics) *InboundEventsProcessor {
+	maxFutureSkew time.Duration, metrics ResolveMetrics, opts ...InboundOption) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
 		InboundEventsReader:  inbound,
@@ -189,6 +217,9 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageR
 		AuthMode:             authMode,
 		MaxFutureSkew:        maxFutureSkew,
 		metrics:              metrics,
+	}
+	for _, opt := range opts {
+		opt(iproc)
 	}
 
 	// Create lifecycle manager.
@@ -403,8 +434,9 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 		// There is more than one writer, and nothing should assume otherwise. Every
 		// device-management replica runs this loop; a rolling update runs the old
 		// and the new pod side by side; and even inside one pod the resolver pool
-		// finishes events out of arrival order, so two events from one device can
-		// reach this loop — and the stream — in either order. The writer then keeps
+		// (resolution.workers resolvers wide) finishes events out of arrival order, so
+		// two events from one device can reach this loop — and the stream — in either
+		// order. The writer then keeps
 		// several publishes in flight (messaging.OrderedWriter); they reach the
 		// stream in the order they are submitted here.
 		//
@@ -511,7 +543,7 @@ func (iproc *InboundEventsProcessor) OnResolvedEvent(src messaging.Message, tena
 }
 
 // Initialize pool of workers for resolving events.
-func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Context) {
+func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Context) error {
 	// Make channels and workers for distributed processing.
 	iproc.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
 	iproc.resolvers = make([]*EventResolver, 0)
@@ -533,10 +565,20 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		MaxFutureSkew: iproc.MaxFutureSkew,
 		Bounded:       iproc.metrics.eventTimeBounded,
 	}
-	count := iproc.resolverCount
-	if count == 0 {
-		count = EVENT_RESOLVER_COUNT
+	// The ONE place the pool's width is decided: the configured count, or the configuration's
+	// default when none was set. A count the configuration would refuse is refused here too,
+	// rather than starting a pool that resolves nothing.
+	width := config.ResolutionConfiguration{Workers: iproc.resolverCount}
+	width.ApplyDefaults()
+	count := width.Workers
+	if count < 1 {
+		return fmt.Errorf("the inbound resolver pool needs at least one resolver, got %d", count)
 	}
+	iproc.resolverCount = count
+	if iproc.metrics.workers != nil {
+		iproc.metrics.workers.Set(float64(count))
+	}
+	log.Info().Int("resolution.workers", count).Msg("Resolving inbound events")
 	for w := 1; w <= count; w++ {
 		resolver := NewEventResolver(w, iproc.Api, iproc.AuthMode, eventTime, iproc.messages,
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics.red,
@@ -552,6 +594,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 			r.Process(context.Background())
 		}(resolver)
 	}
+	return nil
 }
 
 // Initialize outbound processing.
@@ -571,7 +614,9 @@ func (iproc *InboundEventsProcessor) ExecuteInitialize(ctx context.Context) erro
 	iproc.procCtx, iproc.procCancel = context.WithCancel(ctx)
 
 	// Initialize pool of event resolvers.
-	iproc.initializeEventResolvers(ctx)
+	if err := iproc.initializeEventResolvers(ctx); err != nil {
+		return err
+	}
 
 	// Initialize outbound processing channels.
 	iproc.initializeOutboundProcessing(ctx)
