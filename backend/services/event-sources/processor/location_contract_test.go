@@ -392,6 +392,25 @@ func TestMeasurementAndAlertDecodeAlsoFailClosed(t *testing.T) {
 			body: `{"device":"d1","eventType":"Alert","payload":{"entries":[{"message":"m","source":"s"}]}}`,
 			want: "alert entry 0 has no type",
 		},
+		// An alert level is served as a GraphQL Int, which is 32-bit. 2147483648 fits the
+		// uint32 the wire decodes into, so nothing before this check refuses it: without
+		// the check it is stored and reads back wrapped to -2147483648.
+		{
+			name: "alert level just above a GraphQL Int",
+			body: `{"device":"d1","eventType":"Alert","payload":{"entries":[{"type":"a","level":2147483648}]}}`,
+			want: "alert entry 0 has level 2147483648",
+		},
+		{
+			name: "alert level at the uint32 ceiling",
+			body: `{"device":"d1","eventType":"Alert","payload":{"entries":[{"type":"a","level":4294967295}]}}`,
+			want: "alert entry 0 has level 4294967295",
+		},
+		{
+			name: "one out-of-range alert level among good entries",
+			body: `{"device":"d1","eventType":"Alert","payload":{"entries":[` +
+				`{"type":"a"},{"type":"b","level":2147483648}]}}`,
+			want: "alert entry 1 has level 2147483648",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := jd.Decode([]byte(tc.body), time.Time{}); err == nil {
@@ -418,5 +437,24 @@ func TestTheCanonicalMeasurementAndAlertBodiesStillDecode(t *testing.T) {
 		if _, _, err := jd.Decode([]byte(body), time.Time{}); err != nil {
 			t.Fatalf("%s must decode, got: %v", body, err)
 		}
+	}
+}
+
+// The counterweight to refusing an alert level above a GraphQL Int: the largest level
+// that fits still decodes, and decodes to itself — a bound that clamped or zeroed levels
+// instead of refusing them would pass a check that only looked for no error.
+func TestTheLargestAlertLevelAGraphQLIntHoldsStillDecodes(t *testing.T) {
+	jd := NewJsonDecoder(map[string]string{}, 0)
+	body := `{"device":"d1","eventType":"Alert","payload":{"entries":[{"type":"a","level":1},{"type":"b","level":2147483647}]}}`
+	_, payload, err := jd.Decode([]byte(body), time.Time{})
+	if err != nil {
+		t.Fatalf("level 2147483647 must decode, got: %v", err)
+	}
+	alerts, ok := payload.(*model.UnresolvedAlertsPayload)
+	if !ok {
+		t.Fatalf("decoded payload is %T, want *model.UnresolvedAlertsPayload", payload)
+	}
+	if len(alerts.Entries) != 2 || alerts.Entries[0].Level != 1 || alerts.Entries[1].Level != 2147483647 {
+		t.Fatalf("decoded entries = %+v, want levels 1 and 2147483647", alerts.Entries)
 	}
 }

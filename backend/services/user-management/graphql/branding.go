@@ -42,12 +42,22 @@ func (r *TenantBrandingResolver) Foreground() *string { return r.b.Foreground }
 func (r *TenantBrandingResolver) Accent() *string     { return r.b.Accent }
 func (r *TenantBrandingResolver) UpdatedAt() *string  { return r.updatedAt }
 
-func (r *TenantBrandingResolver) LogoMaxHeight() *int32 {
-	if r.b.LogoMaxHeight == nil {
-		return nil
-	}
-	v := int32(*r.b.LogoMaxHeight)
-	return &v
+// LogoMaxHeight refuses, rather than wraps, a stored height a GraphQL Int cannot hold.
+// Writes through the API are bounded to MinLogoHeight..MaxLogoHeight, so this fires only
+// on a value written to the database some other way.
+//
+// The refusal is not contained to this field for the console. logoMaxHeight is nullable, so
+// on the wire only it goes null — but the console treats any error in a response as a
+// failed request, and it selects this field for both branding and brandingOverride in its
+// boot query. That tenant's console therefore cannot load its branding, locale default or
+// basemap (it falls back to a cached copy, or to none), and without a cached copy its
+// branding editor does not open, since the editor waits on brandingOverride. It is chosen
+// over a wrapped number all the same, because the value can only come from an out-of-band
+// write, and the way out is to put a valid height back: setTenantBranding through the API,
+// which validates it (and replaces every theme field, so the caller sends the ones it
+// means to keep).
+func (r *TenantBrandingResolver) LogoMaxHeight() (*int32, error) {
+	return util.IntPtrInt32("logoMaxHeight", r.b.LogoMaxHeight)
 }
 
 // Branding resolves the tenant's white-labeling: its override columns folded over

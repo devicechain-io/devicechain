@@ -1688,6 +1688,10 @@ configuración de OpenTofu usted mismo, lea «Un `dcctl install` fallido puede v
 cada ejecución consulta ahora el registro, y un `tofu init` normal rechaza un archivo de bloqueo
 existente.
 
+Si hay dispositivos que envían alertas con un `level` mayor que 2147483647, o lee las últimas
+mediciones, el estado o las alertas de un dispositivo a través de la API GraphQL, lea «Los niveles
+de alerta mayores que 2147483647 se rechazan, y cuatro números más ya no se desbordan».
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -3099,6 +3103,40 @@ dar el clúster por instalado.
 - **Si ejecuta la configuración de OpenTofu directamente** en lugar de a través de dcctl, ejecute
   `tofu init -upgrade` una vez en cada raíz: un `init` normal rechaza un archivo de bloqueo con las
   versiones anteriores.
+
+#### Los niveles de alerta mayores que 2147483647 se rechazan, y cuatro números más ya no se desbordan
+
+El `level` de una alerta se aceptaba hasta 4294967295, pero se sirve como un `Int` de GraphQL, que
+llega hasta 2147483647, así que un nivel mayor se leía como un número negativo. Cuatro campos
+tenían el mismo fallo: el número guardado se recortaba a 32 bits al salir, así que un valor mayor
+que 2147483647 se convertía en un número negativo verosímil. Cada uno es ahora un error, como los
+campos enumerados en «Los valores de las credenciales se guardan exactamente como se envían».
+
+- **Una alerta con un `level` mayor que 2147483647 se rechaza ahora al llegar.** El mensaje del
+  dispositivo se rechaza como datos erróneos, igual que una alerta sin `type`: HTTP responde `400`
+  y una publicación MQTT va a la cola de mensajes fallidos. No hay nada que cambiar salvo que un
+  dispositivo envíe esos niveles.
+- **Una alerta ya guardada con un nivel así convierte en error el listado de alertas que la
+  incluye.** `level` no puede ser nulo, así que toda la respuesta de `alertEvents` es nula con el
+  error, en lugar de faltar una sola alerta. Esto se aplica a las filas guardadas antes de la
+  actualización y a las que se guarden mientras sigan en ejecución pods de `event-sources` de la
+  versión anterior. La fila permanece hasta que la retención la elimina. Para saber si tiene
+  alguna, ejecute esto en la base de datos de event-management:
+  `SELECT tenant_id, device_token, count(*) FROM "event-management".alert_events WHERE level > 2147483647 GROUP BY 1, 2;`
+- **El `classifier` de una última medición** es el id de la definición de métrica a la que se
+  asoció la lectura. Cuando esos ids superan 2147483647, `classifier` es un error solo en ese
+  campo: se lee como nulo y el `value`, la `unit` y la hora de la lectura se siguen devolviendo.
+  La consola y las herramientas MCP no leen este campo. (El mismo id es una cadena en los eventos
+  de medición guardados, donde no tiene límite).
+- **El `inactivityTimeout` del estado de un dispositivo** y **el `logoMaxHeight` de la marca de un
+  inquilino** solo se escriben con valores que caben, así que esto afecta solo a un valor escrito
+  en la base de datos por otra vía. Un `inactivityTimeout` demasiado grande convierte en error todo
+  el listado de estados de dispositivo que lo selecciona. Un `logoMaxHeight` demasiado grande hace
+  que falle la petición de la consola para el inquilino, así que la consola ya no puede cargar la
+  marca, la configuración regional predeterminada ni la configuración de mapa de ese inquilino, y
+  puede que el editor de marca no se abra. Para resolverlo, vuelva a fijar la altura del logotipo
+  con `setTenantBranding` a través de la API, enviando también el título y los colores: esa
+  mutación los reemplaza juntos, así que uno que se omita se borra.
 
 ### La transición única a la ingesta duradera
 

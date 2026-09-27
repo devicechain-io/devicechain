@@ -143,3 +143,61 @@ func TestNullStrNonEmpty(t *testing.T) {
 		t.Errorf("a value: got %v, want \" Ada\" exactly", got)
 	}
 }
+
+// StoredInt32 is the one range check every stored-integer read goes through, so it is
+// exercised across the integer types its callers hold. Every row asserts the VALUE as well
+// as the refusal: a refusal that also returned the wrapped number, or an in-range read that
+// returned zero, would each pass an error-only check.
+func TestStoredInt32RefusesOutOfRangeForEveryIntegerType(t *testing.T) {
+	type result struct {
+		got int32
+		err error
+	}
+	of := func(n int32, err error) result { return result{n, err} }
+	for _, tc := range []struct {
+		name    string
+		r       result
+		want    int32
+		refused bool
+	}{
+		{"int64 MaxInt32", of(StoredInt32("f", int64(math.MaxInt32))), math.MaxInt32, false},
+		{"int64 MaxInt32+1", of(StoredInt32("f", int64(math.MaxInt32+1))), 0, true},
+		{"int64 MinInt32", of(StoredInt32("f", int64(math.MinInt32))), math.MinInt32, false},
+		{"int64 MinInt32-1", of(StoredInt32("f", int64(math.MinInt32-1))), 0, true},
+		{"int -5", of(StoredInt32("f", int(-5))), -5, false},
+		{"int 600", of(StoredInt32("f", int(600))), 600, false},
+		{"uint MaxInt32+1", of(StoredInt32("f", uint(math.MaxInt32+1))), 0, true},
+		{"uint32 0", of(StoredInt32("f", uint32(0))), 0, false},
+		{"uint32 MaxInt32", of(StoredInt32("f", uint32(math.MaxInt32))), math.MaxInt32, false},
+		{"uint32 MaxInt32+1", of(StoredInt32("f", uint32(math.MaxInt32+1))), 0, true},
+		{"uint32 MaxUint32", of(StoredInt32("f", uint32(math.MaxUint32))), 0, true},
+		// No live caller holds a uint64; this row guards the helper's contract. A check that
+		// first converted to int64 would see -1 here and ACCEPT it.
+		{"uint64 MaxUint64", of(StoredInt32("f", uint64(math.MaxUint64))), 0, true},
+	} {
+		if tc.refused != errors.Is(tc.r.err, ErrStoredIntOutOfRange) {
+			t.Errorf("%s: err = %v, refused want %v", tc.name, tc.r.err, tc.refused)
+		}
+		if tc.r.got != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, tc.r.got, tc.want)
+		}
+	}
+}
+
+func TestStoredInt32PtrKeepsNilAndReturnsNoValueOnRefusal(t *testing.T) {
+	if got, err := StoredInt32Ptr[uint]("classifier", nil); got != nil || err != nil {
+		t.Errorf("nil: got (%v, %v), want (nil, nil)", got, err)
+	}
+	seven := uint(7)
+	if got, err := StoredInt32Ptr("classifier", &seven); err != nil || got == nil || *got != 7 {
+		t.Errorf("7: got (%v, %v), want 7", got, err)
+	}
+	wide := uint(math.MaxInt32 + 1)
+	got, err := StoredInt32Ptr("classifier", &wide)
+	if got != nil {
+		t.Errorf("MaxInt32+1: got %d alongside the refusal, want no value", *got)
+	}
+	if !errors.Is(err, ErrStoredIntOutOfRange) || err.Error() != "classifier: stored value is outside the range of a GraphQL Int (2147483648)" {
+		t.Errorf("MaxInt32+1: err = %v, want a refusal naming the field and the stored value", err)
+	}
+}

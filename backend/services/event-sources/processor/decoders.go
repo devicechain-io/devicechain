@@ -465,6 +465,13 @@ func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedA
 		if payload.Entries[i].Type == "" {
 			return nil, fmt.Errorf("alert entry %d has no type: an alert must carry the classifier consumers route on", i)
 		}
+		// Level is served as a GraphQL Int, which is 32-bit, while the wire accepts any
+		// uint32. Without this a level above 2147483647 is stored and then either reads
+		// back as a negative number or — since the read refuses to wrap it — makes every
+		// alert listing that includes the row an error.
+		if payload.Entries[i].Level > math.MaxInt32 {
+			return nil, fmt.Errorf("alert entry %d has level %d: a level must be at most %d", i, payload.Entries[i].Level, math.MaxInt32)
+		}
 	}
 	return payload, nil
 }
