@@ -181,6 +181,8 @@ func (m *edgeMetrics) stop() {
 	// leave the socket bound until Serve got round to closing it, and a restart on the
 	// same fixed port in between fails with "address already in use". Closing it again
 	// after Serve did is harmless, and its error is ignored for that reason. It runs after
-	// Shutdown so the serve loop sees a server shutting down, not an Accept error.
+	// Shutdown to keep the order core's HttpServer uses, where it matters because Shutdown
+	// reports the error of closing its listeners; here both Serve's and Shutdown's errors
+	// are discarded, so the order has no observable effect.
 	_ = m.ln.Close()
 }

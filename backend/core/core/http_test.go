@@ -261,8 +261,8 @@ func TestHttpServerLifecycleOverARealListener(t *testing.T) {
 // the same port, which is what a production restart does, then failed with "address
 // already in use". Each round here is start, immediate stop, and a rebind of the same
 // port. The window is a scheduling race, so this is a probabilistic check rather than a
-// deterministic one: before the fix it failed in some runs under -race with several
-// CPUs, not in every run. The deterministic form of this check is
+// deterministic one, and a weak one: with the fix removed it fails only rarely and can
+// pass many runs in a row. The deterministic form of this check is
 // TestHttpServerShutdownReleasesAListenerServeHasNotTaken; this one stays because it goes
 // through Start and Serve as a service does.
 func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
@@ -349,9 +349,6 @@ func TestHttpServerShutdownLetsAnInFlightRequestFinish(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
-	// A failed assertion must not leave the handler goroutine blocked for the rest of
-	// the package run.
-	t.Cleanup(unblock)
 
 	srv := NewHttpServerForHandler(0, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		entered <- struct{}{}
@@ -361,7 +358,15 @@ func TestHttpServerShutdownLetsAnInFlightRequestFinish(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	// A failed assertion must not leave the handler blocked. The release has to come
+	// BEFORE the Shutdown in this one cleanup: cleanups run last-registered-first, and a
+	// Shutdown with no deadline waits for the blocked handler, so a separate unblock
+	// cleanup registered earlier would never run and a failure would hang the package
+	// until go test's timeout, with its message lost.
+	t.Cleanup(func() {
+		unblock()
+		_ = srv.Shutdown(context.Background())
+	})
 	addr := srv.Addr()
 
 	type result struct {
