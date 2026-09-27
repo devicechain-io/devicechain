@@ -127,11 +127,14 @@ func seedCredential(t *testing.T, api *Api, ctx context.Context,
 	return created
 }
 
-// The retirement is the security-critical half, and this asserts it at the door the
-// property actually lives behind: DeviceCredentialByCredentialId is what every
-// transport resolves a presented credential through, so "the old unit can no longer
-// authenticate" means that call stops finding it. Asserting Enabled == false would
-// be asserting the mechanism; this asserts the consequence.
+// The retirement is the security-critical half, and this asserts it at the doors the
+// property actually lives behind: a presented credential is resolved by one of two
+// finders — DeviceCredentialByCredentialId (events, access-token connects) or
+// deviceCredentialForConnect (MQTT password connects) — so "the old unit can no longer
+// authenticate" means BOTH stop finding it. They share presentedCredentialStatement
+// today, which is exactly why both are asked: a finder that stopped sharing it would
+// otherwise take the property with it unseen. Asserting Enabled == false would be
+// asserting the mechanism; this asserts the consequence.
 //
 // The input class is three live credentials that differ in the ways the code branches
 // on — one never-expiring, one with runway, one already EXPIRED but still enabled.
@@ -152,10 +155,16 @@ func TestReplaceDeviceRetiresEveryLiveCredential(t *testing.T) {
 		"tech@acme.example", time.Now())
 	require.NoError(t, err, "replace device")
 
-	for _, bearer := range []string{"bearer-never", "bearer-future", "bearer-expired"} {
-		_, err := api.DeviceCredentialByCredentialId(ctx, string(CredentialAccessToken), bearer)
-		require.ErrorIs(t, err, gorm.ErrRecordNotFound,
-			"retired bearer %q still resolves: the outgoing unit can still authenticate", bearer)
+	finders := map[string]func(context.Context, string, string) (*DeviceCredential, error){
+		"DeviceCredentialByCredentialId": api.DeviceCredentialByCredentialId,
+		"deviceCredentialForConnect":     api.deviceCredentialForConnect,
+	}
+	for name, find := range finders {
+		for _, bearer := range []string{"bearer-never", "bearer-future", "bearer-expired"} {
+			_, err := find(ctx, string(CredentialAccessToken), bearer)
+			require.ErrorIs(t, err, gorm.ErrRecordNotFound,
+				"%s: retired credential %q still resolves: the outgoing unit can still authenticate", name, bearer)
+		}
 	}
 
 	// The counterweight — a replacement that disabled everything and minted nothing

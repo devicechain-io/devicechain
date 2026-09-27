@@ -204,6 +204,22 @@ func TestCalloutRefusalsAreChargedAndDummyCompared(t *testing.T) {
 			if len(levels) != 1 || levels[0] != tc.level {
 				t.Errorf("want exactly one %s line, got %v\n%s", tc.level, levels, logs.String())
 			}
+
+			// Against EACH OTHER, not just each on its own: a wrong password for a real
+			// credential costs the attempt store exactly what this refusal cost, and one
+			// lookup, so the work done cannot tell a caller which usernames exist.
+			var wrongCompared int
+			wrong := newThrottleRig(t, credential.WithCompareObserver(func([]byte) { wrongCompared++ }))
+			if wrong.connect(t, "acme-corp:dev1", "wrong") {
+				t.Fatal("control: a wrong password was granted")
+			}
+			if got, want := rig.store.Ops(), wrong.store.Ops(); strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("the refusal cost the attempt store %v, a wrong password %v", got, want)
+			}
+			if rig.resolves.Load() != 1 || wrong.resolves.Load() != 1 || wrongCompared != 1 {
+				t.Errorf("lookups: refusal %d, wrong password %d; wrong-password compares %d; want 1 each",
+					rig.resolves.Load(), wrong.resolves.Load(), wrongCompared)
+			}
 		})
 	}
 }

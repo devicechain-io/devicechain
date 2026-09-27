@@ -65,7 +65,7 @@ Consulta [Conexión de un dispositivo](./connecting-a-device.md) para los detall
 
 Tras fallos repetidos, las conexiones MQTT que presentan usuario y contraseña se ralentizan, de modo que una contraseña no puede adivinarse al ritmo al que el broker acepta conexiones.
 
-- **Qué cuenta:** los fallos seguidos de conexión con contraseña para un mismo usuario MQTT (`{tenant}:{credentialId}`). Un usuario desconocido cuenta exactamente igual que uno real, así que la respuesta nunca revela qué usuarios existen.
+- **Qué cuenta:** los fallos seguidos de conexión con contraseña para un mismo usuario MQTT (`{tenant}:{credentialId}`). Un usuario desconocido cuenta exactamente igual que uno real y recibe el mismo rechazo, así que la respuesta nunca revela qué usuarios existen. El tiempo que tarda un rechazo es parecido pero no idéntico: comprobar un usuario que existe lee una fila de la base de datos que un usuario desconocido no lee. Esa fila contiene solo lo que la comprobación necesita, así que la diferencia no crece con lo que el dispositivo guarda en sus metadatos, su nombre o su descripción.
 - **El calendario:** los primeros 10 fallos seguidos no se ralentizan. Tras el décimo, el siguiente intento con ese usuario espera 1 segundo. Cada fallo posterior duplica la espera, hasta 30 segundos.
 - **Durante la espera se rechaza incluso la contraseña correcta.** El broker da el mismo rechazo que para una contraseña incorrecta. El dispositivo se conecta con normalidad cuando termina la espera.
 - **Una conexión correcta pone la cuenta a cero.**

@@ -635,8 +635,9 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 		case errors.Is(err, errStoreFull):
 			// 🔴 FAIL OPEN: the rest of this function runs exactly as it does for an
 			// admitted attempt — the same lookup, the same compare (the dummy for an
-			// unknown principal) — so timing and existence still do not leak. Only the
-			// charge is missing.
+			// unknown principal) — so neither the answer nor the Checker's own work
+			// differs by whether the principal exists (what the caller's lookup does
+			// can: see the caller). Only the charge is missing.
 			failedOpen, hadRecord = true, had
 			c.logStoreFull(p.Kind)
 		case err != nil:

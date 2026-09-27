@@ -119,8 +119,9 @@ something it is careful not to break.
 in someone's hands; until its credential is disabled it authenticates exactly as it always did,
 under the identity now also held by its replacement. Two units answering as one device produce
 telemetry no reader can attribute. Disabled is sufficient, because
-`DeviceCredentialByCredentialId` — the resolve every transport authenticates through — matches
-`enabled = true` only.
+`presentedCredentialStatement` — the one statement both credential finders run
+(`DeviceCredentialByCredentialId` for events and access-token connects,
+`deviceCredentialForConnect` for MQTT password connects) — matches `enabled = true` only.
 
 `DeviceReplaceRequest` carries **no device identity fields at all**: no token, no `externalId`, no
 device type, no name. "Rotate credentials, not identity" is unrepresentable to violate rather than
