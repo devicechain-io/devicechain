@@ -1,0 +1,40 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package model
+
+import (
+	"testing"
+)
+
+// The connect lookup fills exactly the credential fields the password check reads —
+// tenant, device, stored secret, expiry — and leaves the rest, the credential's own
+// metadata included, at their zero values. ResolveDeviceCredential does not return the
+// credential, so this asks the finder directly.
+func TestTheConnectLookupFillsOnlyTheConnectFields(t *testing.T) {
+	f := newSQLiteCredentialFixture(t)
+	storeVariableWidthColumns(t, f)
+
+	cred, err := f.api.deviceCredentialForConnect(f.ctx, string(CredentialMqttBasic), "cred-1")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if cred.ID == 0 || cred.TenantId != "acme" || cred.DeviceId != f.devId ||
+		!cred.CredentialValue.Valid || cred.CredentialValue.String != "s3cret" || cred.ExpiresAt.Valid {
+		t.Errorf("the connect fields were not read: id %d, tenant %q, device %d (want %d), secret %v, expires %v",
+			cred.ID, cred.TenantId, cred.DeviceId, f.devId, cred.CredentialValue, cred.ExpiresAt)
+	}
+	if cred.Metadata != nil {
+		t.Errorf("the credential carries %d bytes of metadata; the connect lookup must not read it", len(*cred.Metadata))
+	}
+	if cred.Token != "" || cred.CredentialId != "" || cred.CredentialType != "" || cred.Enabled {
+		t.Errorf("the connect lookup read columns it does not need: token %q, id %q, type %q, enabled %v",
+			cred.Token, cred.CredentialId, cred.CredentialType, cred.Enabled)
+	}
+	if cred.Device == nil || cred.Device.ID != f.devId || cred.Device.TenantId != "acme" || cred.Device.Token != "dev" {
+		t.Fatalf("the joined device is not the credential's own: %+v", cred.Device)
+	}
+	if cred.Device.Metadata != nil || cred.Device.DeviceTypeId != 0 || cred.Device.Name.Valid {
+		t.Errorf("the joined device carries columns the connect does not read: %+v", cred.Device)
+	}
+}

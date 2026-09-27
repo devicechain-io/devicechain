@@ -274,7 +274,67 @@ func (api *Api) EnabledDeviceCredentialsOfType(ctx context.Context,
 // carries the device's soft-delete predicate in its ON clause, so a soft-deleted device
 // leaves Device nil rather than dropping the credential row. Only enabled credentials
 // match; returns gorm.ErrRecordNotFound if none. This is the lookup behind every
-// credential-bearing event and every MQTT connect (ADR-014).
+// credential-bearing event and every access-token MQTT connect (ADR-014), and it reads
+// every column of both rows. An MQTT password connect runs the same statement over far
+// fewer columns: deviceCredentialForConnect.
+func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
+	found := make([]*DeviceCredential, 0)
+	result := api.presentedCredentialStatement(ctx, credentialType, credentialId).Find(&found)
+	return oneLiveCredential(result, found, credentialType, credentialId)
+}
+
+// connectCredentialColumns and connectDeviceFields are everything an MQTT password
+// connect reads from a resolved credential and its device: what checkExpiry,
+// storedSecret and credentialDevice read on the credential, and the device's id, tenant
+// and token.
+//
+// The credential's columns are written table-qualified, as the WHERE clause is: a
+// root-statement Select by FIELD name renders an unqualified column, and id, tenant_id,
+// created_at and deleted_at exist in both joined tables, so the statement would be
+// refused as ambiguous, and every password connect with it. It is an allowlist on
+// purpose: a column added to either model later is not read here until it is added here.
+//
+// The device's fields go by field name, which gorm qualifies with the join's alias.
+// "ID" must stay in the set: it is NOT NULL, and it is the column gorm reads to decide
+// whether the joined device is there at all (a soft-deleted device leaves Device nil).
+var (
+	connectCredentialColumns = []string{
+		"device_credentials.id",
+		"device_credentials.tenant_id",
+		"device_credentials.device_id",
+		"device_credentials.credential_value",
+		"device_credentials.expires_at",
+	}
+	connectDeviceFields = []string{"ID", "TenantId", "Token"}
+)
+
+// deviceCredentialForConnect is DeviceCredentialByCredentialId reading only
+// connectCredentialColumns and connectDeviceFields: the lookup of an MQTT password
+// connect, through ResolveDeviceCredential.
+//
+// A row read here fills only the fields the password check reads. Every other field, the
+// device's and the credential's metadata, name, description and external id included, is
+// left at its zero value. That is the point: a username that exists costs one row of a
+// fixed set of columns whose size does not depend on how much the device stores, so the
+// time a refusal takes cannot be stretched by metadata (bounded only by the request body
+// limit of the API that writes it) into a signal that the username exists. The empty
+// result an unknown username gets is still cheaper than that one row; see checkPassword
+// in processor/callout.go.
+func (api *Api) deviceCredentialForConnect(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
+	found := make([]*DeviceCredential, 0)
+	device := api.RDB.Database.Session(&gorm.Session{NewDB: true}).Select(connectDeviceFields)
+	result := api.presentedCredentialStatement(ctx, credentialType, credentialId, device).
+		Select(connectCredentialColumns).
+		Find(&found)
+	return oneLiveCredential(result, found, credentialType, credentialId)
+}
+
+// presentedCredentialStatement is the one statement that resolves a presented
+// credential: enabled-only, matched on type and id, tenant-scoped by the callback on the
+// credential's own table, with the owning device on a LEFT JOIN carrying the device's
+// soft-delete predicate. deviceJoin is passed to Joins("Device", ...) as is: nothing for
+// every device column, or a *gorm.DB carrying a Select for fewer. That sub-DB only
+// carries clauses and is never executed, so it owes no tenant scope of its own.
 //
 // 🔴 THE JOINED DEVICE IS NOT TENANT-SCOPED BY THE QUERY. The tenant-scope callback adds
 // its predicate to the statement's own table only — the credential's — and nothing to a
@@ -283,12 +343,16 @@ func (api *Api) EnabledDeviceCredentialsOfType(ctx context.Context,
 // the credential before trusting it, which is what credentialDevice does. The predicates
 // are table-qualified so a column the two tables come to share cannot make the statement
 // ambiguous.
-func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
-	found := make([]*DeviceCredential, 0)
-	result := api.RDB.DB(ctx).Joins("Device").
+func (api *Api) presentedCredentialStatement(ctx context.Context, credentialType string, credentialId string,
+	deviceJoin ...any) *gorm.DB {
+	return api.RDB.DB(ctx).Joins("Device", deviceJoin...).
 		Where("device_credentials.credential_type = ? AND device_credentials.credential_id = ? AND device_credentials.enabled = ?",
-			credentialType, credentialId, true).
-		Find(&found)
+			credentialType, credentialId, true)
+}
+
+// oneLiveCredential is what a presentedCredentialStatement found, as one credential: the
+// statement's error as is, gorm.ErrRecordNotFound for none, and an error for more than one.
+func oneLiveCredential(result *gorm.DB, found []*DeviceCredential, credentialType string, credentialId string) (*DeviceCredential, error) {
 	if result.Error != nil {
 		return nil, result.Error
 	}

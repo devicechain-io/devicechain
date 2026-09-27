@@ -172,6 +172,119 @@ func TestResolvingACredentialForTheCalloutIsOneStatement(t *testing.T) {
 	requireOneJoinedStatement(t, f, "callout resolve")
 }
 
+// bigMetadata is a 64 KiB JSON document: the kind of metadata the connect lookup must not
+// read, and large enough that reading it would be the row's dominant cost.
+func bigMetadata() string {
+	return `{"blob":"` + strings.Repeat("a", 64<<10) + `"}`
+}
+
+// storeVariableWidthColumns gives the fixture's device and its MQTT_BASIC credential
+// everything whose size the device's owner controls: a name, a description and an
+// external id on the device, and a 64 KiB metadata document on both rows. It reads the
+// rows back and fails unless they were stored, so a lookup that returns none of them
+// cannot pass because the fixture never held them.
+func storeVariableWidthColumns(t *testing.T, f credFixture) {
+	t.Helper()
+	blob := bigMetadata()
+	mustExec(t, f.api.RDB.DB(f.ctx).Model(&Device{}).Where("id = ?", f.devId).Updates(map[string]any{
+		"name": "a named device", "description": "a described device", "external_id": "ext-1", "metadata": blob,
+	}))
+	mustExec(t, f.api.RDB.DB(f.ctx).Model(&DeviceCredential{}).Where("credential_id = ?", "cred-1").
+		Update("metadata", blob))
+
+	var dev Device
+	mustExec(t, f.api.RDB.DB(f.ctx).First(&dev, f.devId))
+	if dev.Metadata == nil || len(*dev.Metadata) <= 64<<10 || !dev.Name.Valid || !dev.Description.Valid || !dev.ExternalId.Valid {
+		t.Fatalf("control: the device's variable-width columns were not stored: %+v", dev)
+	}
+	var cred DeviceCredential
+	mustExec(t, f.api.RDB.DB(f.ctx).Where("credential_id = ?", "cred-1").First(&cred))
+	if cred.Metadata == nil || len(*cred.Metadata) <= 64<<10 {
+		t.Fatal("control: the credential's metadata was not stored")
+	}
+	f.stmts.reset()
+}
+
+// requireReadsNoVariableWidthColumn asserts the recorded statement names none of the
+// columns whose size the device's owner controls, and does name the ones the connect
+// check needs. Column names are matched with their quotes on, so a table name cannot
+// match "name".
+func requireReadsNoVariableWidthColumn(t *testing.T, stmt string) {
+	t.Helper()
+	for _, banned := range []string{"metadata", "description", "external_id", "`name`", `"name"`} {
+		if strings.Contains(stmt, banned) {
+			t.Errorf("the connect lookup reads %s: %s", banned, stmt)
+		}
+	}
+	for _, needed := range []string{"token", "credential_value", "expires_at", "device_id"} {
+		if !strings.Contains(stmt, needed) {
+			t.Errorf("the connect lookup does not read %s: %s", needed, stmt)
+		}
+	}
+}
+
+// An MQTT password connect reads a fixed set of columns: the device it resolves carries
+// its id, tenant and token and nothing else, however much the device stores. If it read
+// the whole row, the time an EXISTING username costs would grow with the device's
+// metadata, which is a timing signal an unknown username cannot give.
+func TestTheConnectResolveReadsNoVariableWidthColumn(t *testing.T) {
+	f := newSQLiteCredentialFixture(t)
+	storeVariableWidthColumns(t, f)
+
+	d, stored, err := f.capi.ResolveDeviceCredential(f.ctx, basic("cred-1", "wrong"), time.Now())
+	if err != nil || d == nil {
+		t.Fatalf("resolve: got (%v, %q, %v), want device dev", d, stored, err)
+	}
+	if d.Token != "dev" || d.ID != f.devId || d.TenantId != "acme" || stored != "s3cret" {
+		t.Errorf("resolve: got device (id %d, tenant %q, token %q) with secret %q, want (%d, acme, dev) with s3cret",
+			d.ID, d.TenantId, d.Token, stored, f.devId)
+	}
+	if d.Metadata != nil {
+		t.Errorf("the resolved device carries %d bytes of metadata; the connect lookup must not read it", len(*d.Metadata))
+	}
+	if d.Name.Valid || d.Description.Valid || d.ExternalId.Valid {
+		t.Errorf("the resolved device carries name %q, description %q, external id %q; the connect lookup must read none",
+			d.Name.String, d.Description.String, d.ExternalId.String)
+	}
+	requireOneJoinedStatement(t, f, "callout resolve")
+	requireReadsNoVariableWidthColumn(t, f.stmts.taken()[0])
+
+	// Control: the per-event path still reads the full device, which the event resolver
+	// relies on. Without this, a lookup that read nothing for anyone would pass above.
+	f.stmts.reset()
+	full, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), time.Now())
+	if err != nil || full == nil || full.Metadata == nil || !full.Name.Valid || full.DeviceTypeId == 0 {
+		t.Fatalf("control: AuthenticateDevice must still read the whole device, got (%+v, %v)", full, err)
+	}
+}
+
+// A known and an unknown username cost the connect the SAME statement: one, byte-equal
+// (the recorded text holds placeholders, not values), so an existing username runs no
+// query an unknown one does not.
+func TestTheConnectResolveRunsTheSameStatementForAnUnknownUsername(t *testing.T) {
+	f := newSQLiteCredentialFixture(t)
+	now := time.Now()
+
+	if _, _, err := f.capi.ResolveDeviceCredential(f.ctx, basic("cred-1", "wrong"), now); err != nil {
+		t.Fatalf("known username: %v", err)
+	}
+	known := f.stmts.taken()
+
+	f.stmts.reset()
+	if _, _, err := f.capi.ResolveDeviceCredential(f.ctx, basic("nobody", "wrong"), now); !errors.Is(err, ErrCredentialNotResolved) {
+		t.Fatalf("unknown username: got %v, want ErrCredentialNotResolved", err)
+	}
+	unknown := f.stmts.taken()
+
+	if len(known) != 1 || len(unknown) != 1 {
+		t.Fatalf("known ran %d statements, unknown %d; want 1 each:\nknown:   %v\nunknown: %v",
+			len(known), len(unknown), known, unknown)
+	}
+	if known[0] != unknown[0] {
+		t.Errorf("a known and an unknown username ran different statements:\nknown:   %s\nunknown: %s", known[0], unknown[0])
+	}
+}
+
 // Every refusal the lookup made before, it still makes — each in one statement.
 func TestCredentialLookupRefusesExactlyWhatItRefusedBefore(t *testing.T) {
 	runCredentialLookupControls(t, newSQLiteCredentialFixture)
@@ -190,9 +303,10 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 		alsoResolve bool
 	}{
 		{
-			name:    "unknown credential",
-			arrange: func(t *testing.T, f credFixture) *PresentedCredential { return basic("nobody", "x") },
-			want:    ErrCredentialNotResolved,
+			name:        "unknown credential",
+			arrange:     func(t *testing.T, f credFixture) *PresentedCredential { return basic("nobody", "x") },
+			want:        ErrCredentialNotResolved,
+			alsoResolve: true,
 		},
 		{
 			name: "disabled credential",
@@ -201,7 +315,8 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 					Where("credential_id = ?", "cred-1").Update("enabled", false))
 				return basic("cred-1", "s3cret")
 			},
-			want: ErrCredentialNotResolved,
+			want:        ErrCredentialNotResolved,
+			alsoResolve: true,
 		},
 		{
 			name: "soft-deleted device",
@@ -233,7 +348,8 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 				}
 				return basic("beta-only", "s3cret")
 			},
-			want: ErrCredentialNotResolved,
+			want:        ErrCredentialNotResolved,
+			alsoResolve: true,
 		},
 		{
 			name: "expired credential",

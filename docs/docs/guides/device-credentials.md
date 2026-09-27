@@ -65,7 +65,7 @@ See [Connecting a Device](./connecting-a-device.md) for the transport details.
 
 After repeated failures, MQTT connects that present a username and password are slowed down, so a password cannot be guessed at the rate the broker accepts connections.
 
-- **What counts:** consecutive failed password connects for one MQTT username (`{tenant}:{credentialId}`). An unknown username counts exactly like a real one, so the response never reveals which usernames exist.
+- **What counts:** consecutive failed password connects for one MQTT username (`{tenant}:{credentialId}`). An unknown username counts exactly like a real one and is refused with the same answer, so the answer never reveals which usernames exist. The time a refusal takes is close but not identical: checking a username that exists reads one database row that an unknown username does not. That row holds only what the check needs, so the difference does not grow with how much the device stores in its metadata, name or description.
 - **The schedule:** the first 10 consecutive failures are not slowed down. After the 10th, the next attempt on that username waits 1 second. Each further failure doubles the wait, up to 30 seconds.
 - **During the wait, even the correct password is refused.** The broker gives the same refusal as for a wrong password. The device connects normally once the wait is over.
 - **A successful connect resets the count.**

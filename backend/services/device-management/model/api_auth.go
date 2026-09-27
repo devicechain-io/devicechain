@@ -159,7 +159,7 @@ func storedSecret(cred *DeviceCredential) (string, error) {
 // It returns the owning Device on success, or one of the ErrCredential* sentinels
 // on failure. now is supplied by the caller so expiry is deterministic in tests.
 func (api *Api) AuthenticateDevice(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error) {
-	cred, err := api.lookupPresentedCredential(ctx, presented)
+	cred, err := api.lookupPresentedCredential(ctx, presented, api.DeviceCredentialByCredentialId)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +181,11 @@ func (api *Api) AuthenticateDevice(ctx context.Context, presented *PresentedCred
 // for an access token or a certificate there is nothing left for a Checker to compare,
 // so a device returned for one would be a grant with no check at all.
 //
+// 🔴 THE DEVICE RETURNED CARRIES ONLY ITS ID, TENANT AND TOKEN. The lookup reads
+// nothing else (see deviceCredentialForConnect), so that the row an existing username
+// costs does not grow with the device's metadata; a caller that needs any other field of
+// the device must read it itself, after the Checker has compared.
+//
 // It returns ErrCredentialMisconfigured for a stored credential with no secret, and
 // the other ErrCredential* sentinels as AuthenticateDevice does, except
 // ErrCredentialSecretMismatch, which only a compare can produce.
@@ -189,7 +194,7 @@ func (api *Api) ResolveDeviceCredential(ctx context.Context, presented *Presente
 		!credentialRequiresSecret(presented.CredentialType) {
 		return nil, "", fmt.Errorf("%w: %s carries no secret to compare", ErrCredentialTypeInvalid, presented.CredentialType)
 	}
-	cred, err := api.lookupPresentedCredential(ctx, presented)
+	cred, err := api.lookupPresentedCredential(ctx, presented, api.deviceCredentialForConnect)
 	if err != nil {
 		return nil, "", err
 	}
@@ -208,15 +213,17 @@ func (api *Api) ResolveDeviceCredential(ctx context.Context, presented *Presente
 }
 
 // lookupPresentedCredential validates what was presented and finds the enabled
-// credential it names.
-func (api *Api) lookupPresentedCredential(ctx context.Context, presented *PresentedCredential) (*DeviceCredential, error) {
+// credential it names with find: DeviceCredentialByCredentialId for every column, or
+// deviceCredentialForConnect for the few a password connect reads.
+func (api *Api) lookupPresentedCredential(ctx context.Context, presented *PresentedCredential,
+	find func(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error)) (*DeviceCredential, error) {
 	if presented == nil || presented.CredentialId == "" {
 		return nil, ErrCredentialNotPresented
 	}
 	if !CredentialType(presented.CredentialType).Valid() {
 		return nil, ErrCredentialTypeInvalid
 	}
-	cred, err := api.DeviceCredentialByCredentialId(ctx, presented.CredentialType, presented.CredentialId)
+	cred, err := find(ctx, presented.CredentialType, presented.CredentialId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrCredentialNotResolved

@@ -231,7 +231,11 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 	//
 	// It rides on genericAuthFailure like every other refusal, deliberately: telling a
 	// caller "that tenant is being deleted" would make the callout an oracle for which
-	// tenants exist and what is happening to them.
+	// tenants exist and what is happening to them. It is the ANSWER that is the same, not
+	// the time: this refusal skips the attempt-store charge and the lookup, so it is
+	// quicker than any other, and a caller who times it can tell a tenant being deleted
+	// from one that is not. That is accepted: equalizing it would put the deleted
+	// tenant's reconnect storm back onto the attempt store, which refusing here prevents.
 	if c.tenantDeleted(tenant) {
 		log.Debug().Str("tenant", tenant).Msg("Auth-callout refused a device connect for a deleted tenant.")
 		return "", genericAuthFailure
@@ -331,13 +335,22 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 // caller which usernames exist: what differs is only the returned error, which the
 // caller logs and never sends.
 //
-// 🔴 The TIMING still can, and this does not claim otherwise, though the gap is narrower
-// than it was. The lookup is ONE statement whether or not the username exists (the owning
-// device comes back on a JOIN), so an existing username no longer costs an extra database
-// round trip. A row that comes back still costs more than an empty result: it is decoded,
-// and its expiry and stored secret are read before the compare, and the free attempts are
-// samples enough to measure that. AuthenticateDevice has the same shape. The backoff
-// bounds how many samples a caller gets per username; it does not equalize them.
+// 🔴 The TIMING is closer than the answer, not equal to it, and this does not claim
+// otherwise. Both cost the same attempt-store charge, the byte-identical lookup statement
+// (the owning device comes back on a JOIN, so there is no second one for a hit) and one
+// compare. What an existing username adds is the one row that statement returns, and that
+// row is a fixed set of columns (deviceCredentialForConnect): its cost does not grow with
+// the device's metadata, name or description. Making a miss return a row as well would
+// take hand-written SQL, which the tenant-scope callback does not see, so the tenant
+// predicate would be written a second time by hand on this path; that trade is not made.
+// The backoff bounds how many samples a caller gets per username; it does not equalize
+// them.
+//
+// An access-token connect resolves through AuthenticateDevice instead, which reads every
+// column of both rows. There the credential id IS the secret, so a row found is normally
+// the grant itself and existence is the answer rather than a side channel; only a token
+// that exists but is refused (expired, or presented from the wrong client id) pays for
+// that full row without connecting.
 //
 // Two connects for one username that race (a reconnect overlapping a stale session)
 // are both evaluated: the one whose charge loses the compare-and-set re-reads the
