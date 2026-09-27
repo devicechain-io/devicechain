@@ -126,6 +126,44 @@ detector ralentiza las pruebas varias veces, así que una prueba que afirma un p
 de reloj puede fallar con él sin que haya ninguna condición de carrera. Corrige esa prueba para que
 su presupuesto no dependa de lo rápido que se ejecute el binario.
 
+### Fuzzing
+
+`go test` sin más solo ejecuta las entradas semilla de cada prueba de fuzzing. Para hacer fuzzing,
+usa el script. Encuentra todas las pruebas de fuzzing incluidas en el repositorio (ignora los archivos
+sin seguimiento) y ejecuta cada una durante un
+tiempo fijo:
+
+```bash
+hack/fuzz.sh                         # todas las pruebas de fuzzing, 60 s cada una
+FUZZTIME=300s hack/fuzz.sh           # más tiempo
+hack/fuzz.sh --list                  # qué ejecutaría
+hack/fuzz.sh --target backend/core/graphql FuzzRootFieldLimit   # solo una
+```
+
+Juzga cada ejecución por lo que informó, no solo por su código de salida. Cualquier resultado
+distinto de `PASS` o `TOLERATED` es un fallo:
+
+- `FINDING`: una entrada falló. Go la guarda en `testdata/fuzz/<Nombre>/` dentro del paquete, y el
+  script la copia a su directorio de registros. Haz commit de ella ahí para convertirla en una
+  prueba de regresión permanente.
+- `NOT-RUN`: no hubo fuzzing. `go test -fuzz` sale con 0 cuando su patrón no coincide con ninguna
+  prueba de fuzzing, así que el código de salida por sí solo lo daría por bueno.
+- `SEED-FAIL`: una de las entradas semilla del repositorio falló antes de empezar el fuzzing.
+- `HANG`: la ejecución no terminó dentro de su tiempo límite. `KILLED`: se terminó a la fuerza, ya
+  sea por el límite de tiempo o porque el sistema se quedó sin memoria.
+- `TOLERATED`: la ejecución hizo fuzzing durante todo su tiempo y no encontró nada, pero el motor
+  de fuzzing de Go informó después `context deadline exceeded` como un fallo. Es una condición de
+  carrera conocida en el coordinador de fuzzing de Go al final del tiempo límite, no un hallazgo.
+  Solo se acepta esa línea exacta y única, y solo cuando la ejecución llegó a su tiempo completo;
+  aun así se informa como advertencia.
+- `FAILED`: cualquier otro caso, como un proceso de fuzzing que murió. El registro completo dice por
+  qué.
+
+Cada ejecución tiene su propio directorio temporal, y se conserva su registro completo. Fuera de CI
+usa dos procesos de fuzzing, porque cada uno es un proceso aparte con su propia memoria; cambia eso
+con `FUZZ_PARALLEL`. Las mismas ejecuciones se repiten cada noche sobre `main`, y sus registros se
+guardan como artefacto del workflow.
+
 ## 3. Ejecutar un servicio
 
 Cada servicio es un único binario que no acepta banderas. No arranca con un entorno vacío. Al
