@@ -71,6 +71,7 @@ dentro del módulo en el que estés trabajando, como hace CI:
 ```bash
 cd backend/core     # ...o el módulo que hayas tocado
 gofmt -l .          # no debe imprimir nada
+GOWORK=off go mod tidy -diff   # no debe imprimir nada
 go build ./...
 go vet ./...
 go test ./... -count=1
@@ -84,13 +85,14 @@ rc=0
 for m in $(go list -m -f '{{.Dir}}'); do
   ( cd "$m" || exit 1
     fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
+    GOWORK=off go mod tidy -diff || { echo "not tidy, or tidiness could not be checked (see above)"; exit 1; }
     go build ./... && go vet ./... && go test ./... -count=1
   ) || { echo "FAILED: $m"; rc=1; }
 done
 echo "sweep exit status: $rc"
 ```
 
-Tres detalles de ese bucle importan. Sin cualquiera de ellos, una comprobación pasaría sin mirar
+Cuatro detalles de ese bucle importan. Sin cualquiera de ellos, una comprobación pasaría sin mirar
 nada:
 
 - **La salida de `gofmt -l` se captura, no solo se ejecuta.** Termina con estado 0 *incluso cuando
@@ -99,6 +101,14 @@ nada:
 - **`-count=1` no es opcional.** Unas pocas pruebas leen archivos fuera de su propio módulo. La
   caché de pruebas de Go no rastrea esos archivos, así que un PASS en caché puede sobrevivir a un
   cambio que debería hacerlo fallar.
+- **Cada módulo se comprueba por separado para ver si está ordenado.** El workspace compila cada
+  módulo a través de `go.work`, así que un `go.mod` al que le falta un requisito, o que todavía
+  enumera uno que el código ya no usa, compila y pasa las pruebas sin errores.
+  `GOWORK=off go mod tidy -diff` compara los archivos propios del módulo con lo que dejaría
+  `go mod tidy` e imprime la diferencia. También falla, con el motivo, cuando no puede resolver el
+  módulo en absoluto (sin conexión, por ejemplo), y por eso el mensaje del bucle nombra ambos casos.
+  CI ejecuta la misma comprobación en cada módulo. Cuando imprima una diferencia, ejecuta
+  `GOWORK=off go mod tidy` en ese módulo y confirma el resultado.
 - **`rc` se registra, no solo se imprime.** Con `… || echo "FAILED: $m"` por sí solo, el estado de
   salida del bucle sería el del último `echo`. Todos los módulos podrían fallar y el recorrido
   seguiría pareciendo correcto.

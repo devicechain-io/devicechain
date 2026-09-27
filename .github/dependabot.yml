@@ -12,17 +12,23 @@
 #
 # 🔴 THIS LIST MUST COVER EVERY WORKSPACE MODULE, and the reason is not tidiness.
 # Every module outside core carries `replace github.com/devicechain-io/dc-microservice
-# => ../../core`, and CI validates each module with GOWORK=off — so a module resolves
-# against the LOCAL core on disk, not a published version. The moment Dependabot moves
-# core's requirements without moving a module that replaces it, that module's own
-# go.mod/go.sum are stale relative to the core it points at and it fails with
-# `go: updates to go.mod needed`. It is not the bumped module that breaks; it is the
+# => ../../core`, and CI checks each module is tidy with GOWORK=off (the `go.mod and
+# go.sum are tidy` step of the `go` job, hack/check-go-mod-tidy.sh) — so a module is
+# checked against the LOCAL core on disk, not a published version. The moment
+# Dependabot moves core's requirements without moving a module that replaces it, that
+# module's own go.mod/go.sum are stale relative to that core and the tidy step fails
+# for it, printing the command that fixes it (a GOWORK=off build of it fails with
+# `go: updates to go.mod needed`). It is not the bumped module that breaks; it is the
 # one Dependabot could not see.
 #
 # That is exactly what happened: this list omitted /backend/edge/*, /backend/sims/*
 # and /backend/tools/*, so every weekly gomod PR broke the same four modules
 # (dc-edge-agent, dc-simulator, drdrill, migrationdiff) — and, worse, those four
 # received no dependency or security updates at all. Keep it in step with go.work.
+#
+# A grouped gomod PR tidies only the directories it touched. If the tidy step fails
+# on a module the PR did not touch, run `hack/check-go-mod-tidy.sh` from the repo root
+# and apply the printed command in each module it names.
 version: 2
 
 updates:

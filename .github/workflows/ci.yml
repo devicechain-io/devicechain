@@ -56,12 +56,13 @@ jobs:
         run: hack/check-dependabot-modules.sh --self-test
 
       # A workspace module missing from Dependabot's gomod `directories` does not go
-      # quietly stale — it BREAKS. Each module replaces core with the local ../../core
-      # and CI resolves it with GOWORK=off, so the next bump of core leaves an
-      # unlisted module's go.mod stale and it fails with `go: updates to go.mod
-      # needed`. The module that fails is never the one that was bumped, which is what
-      # made the original gap take four weekly PRs to read correctly. Runs here, in
-      # discover, so it fails before the whole go matrix fans out.
+      # quietly stale — it BREAKS. Each module replaces core with the local ../../core,
+      # so the next bump of core leaves an unlisted module's go.mod stale relative to
+      # the core it resolves, and the `go.mod and go.sum are tidy` step in the `go`
+      # job fails for that module. The module that fails is never the one that was
+      # bumped, which is what made the original gap take four weekly PRs to read
+      # correctly. Runs here, in discover, so it fails before the whole go matrix fans
+      # out.
       - name: dependabot covers every workspace module
         run: hack/check-dependabot-modules.sh
 
@@ -126,6 +127,13 @@ jobs:
       # exactly the failure this pair exists to catch.
       - name: workspace-module reader self-test
         run: hack/list-workspace-modules.sh --self-test
+
+      # Proves the tidy check can fail — on a missing requirement, an unused one, a
+      # module left behind by a core bump, a direct import marked indirect and a stale
+      # go.sum line — and that a module it cannot resolve is a refusal rather than
+      # "tidy" or "drift", before the matrix relies on its green. Fully offline.
+      - name: go.mod tidy check self-test
+        run: hack/check-go-mod-tidy.sh --self-test
 
       - name: Discover Go modules
         id: mod
@@ -428,6 +436,10 @@ jobs:
               *)
                 echo "::error::Could not resolve graphql-go, so the fork could not be verified."
                 echo "$stderr"
+                case "$stderr" in
+                  *"updates to go.mod needed"*)
+                    echo "This module's own go.mod is stale (typically left behind by a core bump); the 'go.mod and go.sum are tidy' step at the end of this job prints the diff and the fix." ;;
+                esac
                 exit 1
                 ;;
             esac
@@ -545,6 +557,37 @@ jobs:
             echo "::error::the race step reached the end without recording a verdict for $MODULE. Its green tick would mean nothing, so it fails instead."
             exit 1
           fi
+
+      # 🔴 THE WORKSPACE HIDES AN UNTIDY go.mod. Every other step here resolves
+      # through go.work, where a module's own requirements are not what gets built,
+      # so a go.mod missing a requirement, still listing one the code dropped,
+      # marking a direct import `// indirect`, or left behind by a core bump that
+      # Dependabot applied elsewhere builds, vets and tests green. (That last shape
+      # also trips the fork guard above, but only when graphql-go is absent from the
+      # module's graph, and under a message about the fork.) This resolves the module
+      # alone with `GOWORK=off go mod tidy -diff` and prints the diff and the fix:
+      # `(cd <module> && GOWORK=off go mod tidy)`. hack/check-go-mod-tidy.sh is the
+      # same script the local sweep runs; its --self-test runs in `discover`.
+      #
+      # LAST, and on `!cancelled()` rather than on success, on purpose: an untidy
+      # module still gets its build, vet, test and race results, which a Dependabot
+      # PR needs, and when an earlier step failed BECAUSE the go.mod is stale this
+      # still runs and names the cause.
+      #
+      # COST, measured rather than assumed: tidy loads every OS and build tag, so it
+      # needs modules the build never fetched (locally, about 0.6 GB for core and 0.3 GB
+      # for k8s on top of the build's, ~15 s). The per-module cache key above hashes the
+      # module's go.mod and go.sum and is write-once, so a cache entry saved before this
+      # step existed lacks them and they are fetched again on each run — but only until
+      # that module's key next changes (any go.mod/go.sum edit, e.g. every Dependabot
+      # bump). setup-go saves the module cache on a key miss after the job succeeds, i.e.
+      # after this step, so the next entry includes them. Entries therefore grow as keys
+      # roll over; against a cache already at its quota that growth is ACCEPTED (it can
+      # evict older warm entries), not avoided. A proxy outage fails this step as a
+      # refusal (exit 2), never as "tidy".
+      - name: go.mod and go.sum are tidy
+        if: ${{ !cancelled() }}
+        run: hack/check-go-mod-tidy.sh --module "${{ matrix.module }}"
 
   # NOTE: a golangci-lint job is intentionally omitted for now — no golangci-lint
   # release yet supports Go 1.26 (it refuses: "the Go language version used to

@@ -19,9 +19,11 @@ version: 2
 
 project_name: dc-edge-agent
 
-# No `go mod tidy` before-hook: this module depends on sibling modules (core) via go.work +
-# a relative `replace ../../core`, and tidying outside the workspace rewrites go.mod/go.sum
-# incorrectly. The committed go.mod is already tidy. (Same trap dcctl's config documents.)
+# No `go mod tidy` before-hook, for the same reason as dcctl's config: a tidy that changed
+# anything would build the release from files that differ from the tag, because goreleaser's
+# dirty-tree check has already run by the time before-hooks execute. CI's `go.mod and go.sum
+# are tidy` step (hack/check-go-mod-tidy.sh, `GOWORK=off go mod tidy -diff` per workspace
+# module) guarantees the committed go.mod/go.sum need no change.
 
 builds:
   - id: dc-edge-agent
