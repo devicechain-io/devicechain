@@ -43,6 +43,12 @@
 #   3. A failing input is not always announced. The crash-minimisation path can
 #      write an input to testdata/fuzz/<Name>/ without a "Failing input written
 #      to" line, so the testdata directory is diffed as well as the text read.
+#      That matters most at the deadline: when the race below fires while a
+#      crasher is being minimised, the coordinator's deferred write
+#      (internal/fuzz/fuzz.go, the crashMinimizing defer) saves the input but
+#      keeps the bare `context deadline exceeded` as the error, so the TEXT is
+#      exactly the tolerated shape and only the written input, or the
+#      `fuzz: minimizing` lines before it, says it was a crash.
 #
 # Each run also gets a private TMPDIR outside the log directory. The engine's
 # worker shared-memory files live in $TMPDIR (internal/fuzz/mem.go), and a
@@ -54,8 +60,10 @@
 #
 # A run that fuzzes cleanly for the whole -fuzztime can still exit 1 with the
 # single line `context deadline exceeded` and no input written. That is a race
-# in Go's fuzz coordinator, not a finding (reported upstream as golang/go#75804;
-# present in the go1.26 toolchain this repo builds with):
+# in Go's fuzz coordinator, not a finding. golang/go#72104 is the upstream issue
+# still open for this failure at the -fuzztime boundary; #75804 reported the same
+# symptom and is closed, but the go1.26 toolchain this repo builds with still
+# shows it, so do not read the closed issue as "fixed here":
 #
 #   - internal/fuzz/fuzz.go wraps the -fuzztime deadline ctx in
 #     `fuzzCtx, cancelWorkers := context.WithCancel(ctx)`, and at the deadline
@@ -70,13 +78,15 @@
 # the graphql fuzzers ended this way (FuzzOperationType, elapsed 1m0s, no input),
 # and a 20-line program that only does WithTimeout + WithCancel shows the parent
 # erred while the child had not in a few of every 20 000 deadlines. The error
-# value is only ever ctx.Err() of the deadline context, so the line cannot mean
-# anything but "the time budget ran out".
+# value is only ever ctx.Err() of the deadline context, so the line itself
+# cannot mean anything but "the time budget ran out" -- though a crasher being
+# minimised at that moment can hide behind it (trap 3 above).
 #
 # The tolerance is therefore as narrow as the cause: rc 1, fuzzing started, no
-# input written or reported, the target's FAIL block holds EXACTLY that one
-# line, and the run's last `fuzz: elapsed:` reached FUZZTIME (the coordinator's
-# clock starts before the deadline is set, so a genuine instance always does).
+# input written or reported, no crasher being minimised, the target's FAIL block
+# holds EXACTLY that one line, and the run's last `fuzz: elapsed:` reached
+# FUZZTIME (the coordinator's clock starts before the deadline is set, so a
+# genuine instance always does).
 # Anything else — another engine error, an extra line, an early end, an
 # interrupt's `context canceled` — is FAILED. A TOLERATED run is reported as a
 # warning, never silently.
@@ -217,7 +227,10 @@ fail_detail() {
 #             a hung run's log can look like anything).
 #   KILLED    rc 137: SIGKILL — the budget's --kill-after, or the OOM killer.
 #             Not called a hang, because it may not have been one.
-#   FINDING   an input was written (testdata diff) or reported.
+#   FINDING   an input was written (testdata diff), reported, or was being
+#             minimised as a crasher (`fuzz: minimizing ...`: the engine prints
+#             that only for a failing input, and the deadline race can leave
+#             it with no other trace in the text).
 #   SEED-FAIL a committed seed input failed before fuzzing started.
 #   NOT-RUN   the engine never started fuzzing: no match (rc 0!), more than one
 #             match, a build failure.
@@ -232,7 +245,8 @@ classify() {
   local rc="$1" log="$2" newinputs="$3" name="$4" fuzzsecs="$5"
   if [ "$rc" = 124 ]; then echo HANG; tail -n 5 "$log"; return 0; fi
   if [ "$rc" = 137 ]; then echo KILLED; tail -n 5 "$log"; return 0; fi
-  if [ "$newinputs" -gt 0 ] || grep -qE '^[[:space:]]*Failing input written to ' "$log"; then
+  if [ "$newinputs" -gt 0 ] || grep -qE '^[[:space:]]*Failing input written to ' "$log" ||
+    grep -qE '^fuzz: (minimizing [0-9]+-byte failing input file|elapsed: [0-9hms]+, minimizing)$' "$log"; then
     echo FINDING; sed -n '/^--- FAIL/,$p' "$log" | head -n 20; return 0
   fi
   if grep -qE '^failure while testing seed corpus entry: ' "$log"; then
@@ -267,6 +281,10 @@ list_inputs() {
 # ---------------------------------------------------------------------------
 # run_one <root> <log-dir> <pkg-dir> <FuzzName>: fuzz one target, classify it,
 # append a line to <log-dir>/summary.txt. Returns 0 iff PASS or TOLERATED.
+#
+# The log and any copied input sit under the PACKAGE's path in <log-dir>
+# (<pkg-dir>/<Name>.log, inputs/<pkg-dir>/<Name>/): a fuzz name is unique only
+# within its package, and two packages' FuzzParse must not share one log.
 # ---------------------------------------------------------------------------
 run_one() {
   local root="$1" logdir="$2" pkg="$3" name="$4"
@@ -284,7 +302,8 @@ run_one() {
   rel="./${rel#"$mod"}"
   rel="${rel/#.\/\//.\/}"
   [ "$rel" = "./" ] && rel="."
-  log="$logdir/$name.log"
+  mkdir -p "$logdir/$pkg" || return 1
+  log="$logdir/$pkg/$name.log"
   tddir="$root/$pkg/testdata/fuzz/$name"
   before="$(list_inputs "$tddir")"
 
@@ -309,10 +328,10 @@ run_one() {
 
   after="$(list_inputs "$tddir")"
   if [ "$before" != "$after" ]; then
-    mkdir -p "$logdir/inputs/$name"
+    mkdir -p "$logdir/inputs/$pkg/$name"
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      cp -- "$tddir/$f" "$logdir/inputs/$name/" && new=$((new + 1))
+      cp -- "$tddir/$f" "$logdir/inputs/$pkg/$name/" && new=$((new + 1))
     done < <(LC_ALL=C comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
     # A listing that changed but yielded nothing to copy is still a change
     # nobody can explain; never let it read as "no new input".
@@ -330,7 +349,7 @@ run_one() {
     TOLERATED)
       printf '%s\n' "$result" | tail -n +2 | sed 's/^/    /'
       if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-        echo "::warning title=fuzz::$name: tolerated Go fuzz-coordinator deadline race (golang/go#75804): $(printf '%s' "$result" | sed -n 2p | sed 's/^ *//')"
+        echo "::warning title=fuzz::$name: tolerated Go fuzz-coordinator deadline race (golang/go#72104): $(printf '%s' "$result" | sed -n 2p | sed 's/^ *//')"
       fi
       return 0
       ;;
@@ -379,6 +398,11 @@ self_test() {
   T="$(mktemp -d)"
   SELF_TEST_TMP="$T"
   trap 'rm -rf "$SELF_TEST_TMP"' EXIT
+  # The cases below drive the REAL run_all, which writes a verdict table into
+  # $GITHUB_STEP_SUMMARY and ::error annotations under Actions. Their fixture
+  # verdicts (a FINDING, a HANG ...) must never reach the summary of the job
+  # the self-test runs in, where they would read as real results.
+  unset GITHUB_STEP_SUMMARY GITHUB_ACTIONS
 
   expect() { # <case> <expected> <actual>
     cases=$((cases + 1))
@@ -491,6 +515,11 @@ fuzz: elapsed: 1s, gathering baseline coverage: 1257/1257 completed, now fuzzing
 FAIL
 EOF
 
+  # A crasher was being minimised when the deadline race fired: the text is the
+  # tolerated shape except for the engine's minimising lines.
+  sed 's/^--- FAIL: FuzzOperationType /fuzz: minimizing 57-byte failing input file\n&/' "$L/deadline" >"$L/deadline-minimizing"
+  sed 's/^--- FAIL: FuzzOperationType /fuzz: elapsed: 1m0s, minimizing\n&/' "$L/deadline" >"$L/deadline-minimizing-tick"
+
   verdict_of() { classify "$1" "$L/$2" "$3" "${4:-FuzzRootFieldLimit}" "${5:-60}" | head -n 1; }
   expect "1 real passing run"                        PASS      "$(verdict_of 0 pass 0)"
   expect "2 no-match exits 0 (the trap)"             NOT-RUN   "$(verdict_of 0 nomatch 0)"
@@ -518,6 +547,8 @@ EOF
   expect "t9 the race line but an input was written" FINDING   "$(verdict_of 1 deadline 1 FuzzOperationType 60)"
   expect "t10 the race line under rc 2"              FAILED    "$(verdict_of 2 deadline 0 FuzzOperationType 60)"
   expect "t11 the race line under rc 124"            HANG      "$(verdict_of 124 deadline 0 FuzzOperationType 60)"
+  expect "t9b the race line while a crasher was minimised" FINDING "$(verdict_of 1 deadline-minimizing 0 FuzzOperationType 60)"
+  expect "t9c ...seen only in the minimising stats tick"  FINDING "$(verdict_of 1 deadline-minimizing-tick 0 FuzzOperationType 60)"
   expect "t12 go_seconds 1m0s" 60 "$(go_seconds 1m0s)"
   expect "t13 go_seconds 1h2m3s" 3723 "$(go_seconds 1h2m3s)"
   expect "t14 go_seconds 59s" 59 "$(go_seconds 59s)"
@@ -542,7 +573,7 @@ EOF
   printf 'package pkg\nfunc FuzzScratch(f *testing.F) {}\n' >"$R/modA/pkg/scratch_test.go"
 
   # The fake go. `list -m` prints the module dirs; `test` records what it was
-  # run with, then plays back $F/<Name>.{log,rc,write,sleep}. A -fuzz argument
+  # run with, then plays back $F/<Name>.{log,rc,write,delete,sleep}. A -fuzz argument
   # that is not exactly ^<Name>$ for a known fixture behaves like real go test
   # does on a pattern that matches nothing: a warning and exit 0.
   cat >"$F/go" <<EOF
@@ -557,6 +588,7 @@ if [ "\$name" != "^\$n\\\$" ] || [ ! -f "\$F/\$n.log" ]; then
 fi
 { echo "cwd=\$PWD"; echo "tmpdir=\$TMPDIR"; [ -d "\$TMPDIR" ] && echo "tmpdir-exists"; echo "argv=\$*"; } >"\$F/\$n.argv"
 [ -f "\$F/\$n.sleep" ] && exec sleep "\$(cat "\$F/\$n.sleep")"
+[ -f "\$F/\$n.delete" ] && rm -f -- "\$(cat "\$F/\$n.delete")"
 [ -f "\$F/\$n.write" ] && { mkdir -p "\$(cat "\$F/\$n.write")"; echo corpus >"\$(cat "\$F/\$n.write")/deadbeef"; }
 cat "\$F/\$n.log"
 exit "\$(cat "\$F/\$n.rc")"
@@ -582,7 +614,7 @@ EOF
   play FuzzY pass 0
   FUZZTIME=60s FUZZ_PARALLEL=2 run_all "$R" "$D1" $'modA/pkg FuzzX\nmodA/pkg FuzzY' >/dev/null 2>&1
   expect "18 loop: FINDING then PASS fails" 1 "$?"
-  expect "19 the failing input is copied out" corpus "$(cat "$D1/inputs/FuzzX/deadbeef" 2>/dev/null)"
+  expect "19 the failing input is copied out" corpus "$(cat "$D1/inputs/modA/pkg/FuzzX/deadbeef" 2>/dev/null)"
   expect "20 summary records both verdicts" "FuzzX FINDING|FuzzY PASS" \
     "$(cut -d' ' -f1,2 "$D1/summary.txt" | paste -sd'|')"
   rm -rf "$R/modA/pkg/testdata/fuzz" "$F/FuzzX.write"
@@ -611,6 +643,37 @@ EOF
   FUZZTIME=300s run_all "$R" "$D2d" $'modA/pkg FuzzX\nmodA/pkg FuzzY' >/dev/null 2>&1
   expect "21d loop: the race line under a longer FUZZTIME fails" 1 "$?"
 
+  # The deadline race can also hide a crash: the coordinator's deferred write
+  # saves the input being minimised and keeps the bare deadline error, so the
+  # log is exactly the tolerated shape and only the testdata diff tells.
+  local D2e="$T/out2e"
+  mkdir -p "$D2e"
+  echo "$R/modA/pkg/testdata/fuzz/FuzzY" >"$F/FuzzY.write"
+  FUZZTIME=60s run_all "$R" "$D2e" 'modA/pkg FuzzY' >/dev/null 2>&1
+  expect "21e the race line over an input written while minimising is a FINDING" "1 FuzzY FINDING" \
+    "$? $(cut -d' ' -f1,2 "$D2e/summary.txt")"
+  rm -rf "$R/modA/pkg/testdata/fuzz" "$F/FuzzY.write"
+
+  # A corpus listing that changed but left nothing new to copy (an input
+  # removed or renamed) is a change nobody can explain, never "no new input".
+  local D2f="$T/out2f"
+  mkdir -p "$D2f" "$R/modA/pkg/testdata/fuzz/FuzzX"
+  echo old >"$R/modA/pkg/testdata/fuzz/FuzzX/cafe"
+  play FuzzX pass 0; echo "$R/modA/pkg/testdata/fuzz/FuzzX/cafe" >"$F/FuzzX.delete"
+  FUZZTIME=60s run_all "$R" "$D2f" 'modA/pkg FuzzX' >/dev/null 2>&1
+  expect "21f an input vanishing from the corpus is not a PASS" "1 FuzzX FINDING" \
+    "$? $(cut -d' ' -f1,2 "$D2f/summary.txt")"
+  rm -rf "$R/modA/pkg/testdata/fuzz" "$F/FuzzX.delete"
+
+  # Two packages may define the same fuzz name; each keeps its own log.
+  local D2g="$T/out2g"
+  mkdir -p "$D2g"
+  play FuzzX pass 0
+  FUZZTIME=60s run_all "$R" "$D2g" $'modA/pkg FuzzX\nmodB FuzzX' >/dev/null 2>&1
+  expect "21g same name in two packages: two logs, each its own" \
+    "$D2g/modA/pkg/FuzzX.log|$D2g/modB/FuzzX.log modA/pkg modB" \
+    "$(cut -d' ' -f5 "$D2g/summary.txt" | paste -sd'|') $(sed -n 's/^# hack\/fuzz.sh: FuzzX in \([^ ]*\) .*/\1/p' "$D2g/modA/pkg/FuzzX.log" "$D2g/modB/FuzzX.log" | paste -sd' ')"
+
   local D3="$T/out3"
   mkdir -p "$D3"
   play FuzzX pass 0; play FuzzY pass 0
@@ -628,7 +691,7 @@ EOF
   local private=no
   if [ -n "$ctmp" ] && [ "$ctmp" != "${TMPDIR:-/tmp}" ] && [[ "$ctmp" != "$D3"* ]] && [ ! -e "$ctmp" ]; then private=yes; fi
   expect "26 TMPDIR is private, outside the log dir, and removed afterwards" yes "$private"
-  expect "27 the log is the full output plus a header" 8 "$(grep -cv '^#' "$D3/FuzzX.log")"
+  expect "27 the log is the full output plus a header" 8 "$(grep -cv '^#' "$D3/modA/pkg/FuzzX.log")"
 
   # --- the module root is a package too ("." not "./").
   local D4="$T/out4"
@@ -656,6 +719,21 @@ EOF
   expect "31 FUZZTIME=100x is refused" 2 "$?"
   (FUZZ_MINIMIZE=5; validate_env 2>/dev/null)
   expect "32 FUZZ_MINIMIZE=5 is refused" 2 "$?"
+
+  # --- run_all's job-summary table, and the self-test's own isolation from it.
+  local D7="$T/out7"
+  mkdir -p "$D7"
+  echo before >"$T/sum"
+  GITHUB_STEP_SUMMARY="$T/sum" FUZZTIME=60s run_all "$R" "$D7" 'modB FuzzW' >/dev/null 2>&1
+  expect "33 run_all appends its table to GITHUB_STEP_SUMMARY" "0 before|### fuzz (1 targets)" \
+    "$? $(head -n 2 "$T/sum" | paste -sd'|')"
+  if [ -z "${FUZZ_SELF_TEST_NESTED:-}" ]; then
+    echo sentinel >"$T/job-summary"
+    FUZZ_SELF_TEST_NESTED=1 GITHUB_ACTIONS=true GITHUB_STEP_SUMMARY="$T/job-summary" \
+      bash "${BASH_SOURCE[0]}" --self-test >/dev/null 2>&1
+    expect "34 a self-test under Actions passes and leaves the job summary untouched" "0 sentinel" \
+      "$? $(cat "$T/job-summary")"
+  fi
 
   GO_BIN="$saved_go"
   if [ "$fails" -ne 0 ]; then

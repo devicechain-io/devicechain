@@ -27,7 +27,8 @@
 # READING A RED RUN
 #
 # The job summary names each target's verdict; the `fuzz-logs` artifact holds
-# every target's full log and, under inputs/<Name>/, any input that failed.
+# every target's full log under <pkg-dir>/<Name>.log and, under
+# inputs/<pkg-dir>/<Name>/, any input that failed.
 # Committing that input under the package's testdata/fuzz/<Name>/ turns it into
 # a plain `go test` regression that CI runs on every PR from then on. Exactly one
 # failure shape is tolerated, as a warning annotation rather than a red run: the
