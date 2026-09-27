@@ -470,14 +470,23 @@ func TestABlockedLoopSpendsNoDeliveries(t *testing.T) {
 	nmgr, reader := b.detectManager(t)
 	store, outage := outageStore(t)
 	seen := &handedOut{MessageReader: reader}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() {
+		outage.hung.Store(nil)
+		releaseOnce.Do(func() { close(release) })
+	}
 	rp := liveDetect(t, seen, nmgr, store)
 	t.Cleanup(func() { _ = rp.ExecuteStop(context.Background()) })
+	// Registered AFTER the stop, so it runs BEFORE it: a failed assertion below leaves the loop
+	// inside the hung checkpoint, and without this the stop would wait on it forever — the
+	// package would hit go test's timeout instead of reporting this one FAIL.
+	t.Cleanup(unblock)
 
 	b.publish(t, testBase.Add(time.Second))
 	waitForCheckpoint(t, store, 1, 10*time.Second)
 	b.waitForAck(t, 1)
 
-	release := make(chan struct{})
 	outage.hung.Store(&release)
 	for i := 2; i <= 4; i++ {
 		b.publish(t, testBase.Add(time.Duration(i)*time.Second))
@@ -488,8 +497,7 @@ func TestABlockedLoopSpendsNoDeliveries(t *testing.T) {
 	time.Sleep(stall)
 	require.Zero(t, exhausted.count(), "a delivery ran out while the loop was stalled")
 
-	outage.hung.Store(nil)
-	close(release)
+	unblock()
 	waitForCheckpoint(t, store, 4, 15*time.Second)
 	firstSightInOrder(t, seen.snapshot(), 4)
 }

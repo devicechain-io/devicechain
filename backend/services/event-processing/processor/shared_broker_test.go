@@ -29,7 +29,9 @@ import (
 //
 // The broker tests in this package used to start a server each. Under the race detector the
 // server is instrumented along with the test, so ten of them — each waiting out redelivery
-// timeouts one after another — were nearly the whole cost of race-checking the module. They
+// timeouts one after another — were one of the two fixture costs of race-checking the module.
+// The larger one was the ceiling fence-set and maximum-size roster fixtures (see
+// manifestFactFor and the t.Parallel calls on the fence and reconcile tests). The broker tests
 // now share one server and are kept apart the way a production broker keeps two instances
 // apart: every stream, durable, subject and max-delivery advisory is named from the instance
 // id (messaging.StreamName, DurableName, ScopedSubject, StreamSubjects), and each test gets

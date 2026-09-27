@@ -823,6 +823,21 @@ var sharedManifestFact struct {
 	raw  []byte
 }
 
+// manifestFactFor's promise that each caller gets its OWN copy is what makes sharing one minted
+// fact across parallel tests safe: a test that decoded or patched the bytes it was handed in
+// place would otherwise change the fact every later test reads.
+func TestManifestFactForHandsEachCallerItsOwnCopy(t *testing.T) {
+	t.Parallel()
+	first := manifestFactFor(t)
+	want := bytes.Clone(first)
+	for i := range first {
+		first[i] ^= 0xff
+	}
+	if got := manifestFactFor(t); !bytes.Equal(got, want) {
+		t.Fatal("a caller's edit reached the shared fact")
+	}
+}
+
 // A manifest fact whose resolve FAILS is acked, and installs nothing.
 //
 // Both of those are decisions. Acking rather than leaving it to redeliver, because redelivery
