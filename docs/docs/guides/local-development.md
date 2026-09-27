@@ -71,6 +71,7 @@ inside the module you are working on, as CI does:
 ```bash
 cd backend/core     # ...or whichever module you touched
 gofmt -l .          # must print nothing
+GOWORK=off go mod tidy -diff   # must print nothing
 go build ./...
 go vet ./...
 go test ./... -count=1
@@ -84,13 +85,14 @@ rc=0
 for m in $(go list -m -f '{{.Dir}}'); do
   ( cd "$m" || exit 1
     fmt="$(gofmt -l .)"; [ -z "$fmt" ] || { echo "not gofmt-clean:"; echo "$fmt"; exit 1; }
+    GOWORK=off go mod tidy -diff || { echo "not tidy, or tidiness could not be checked (see above)"; exit 1; }
     go build ./... && go vet ./... && go test ./... -count=1
   ) || { echo "FAILED: $m"; rc=1; }
 done
 echo "sweep exit status: $rc"
 ```
 
-Three details in that loop matter. Without each one, a check would pass without looking at
+Four details in that loop matter. Without each one, a check would pass without looking at
 anything:
 
 - **`gofmt -l` is captured, not only run.** It exits 0 *even when it names files*, so the loop tests
@@ -98,6 +100,13 @@ anything:
   fail.
 - **`-count=1` is not optional.** A few tests read files outside their own module. Go's test cache
   does not track those files, so a cached PASS can survive a change that ought to fail it.
+- **Each module is checked for tidiness on its own.** The workspace builds every module through
+  `go.work`, so a `go.mod` that is missing a requirement, or still lists one the code no longer
+  uses, builds and tests green. `GOWORK=off go mod tidy -diff` compares the module's own files with
+  what `go mod tidy` would leave and prints the difference. It also fails, printing the reason, when
+  it cannot resolve the module at all (offline, for example), which is why the loop's message names
+  both. CI runs the same check for every module. When it prints a diff, run
+  `GOWORK=off go mod tidy` in that module and commit the result.
 - **`rc` is recorded, not only printed.** With `… || echo "FAILED: $m"` alone, the loop's exit
   status would be that of the last `echo`. Every module could fail and the sweep would still look
   green.

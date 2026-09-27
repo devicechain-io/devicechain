@@ -15,9 +15,11 @@ version: 2
 
 project_name: dcctl
 
-# No `go mod tidy` before-hook: the cli module depends on sibling modules via
-# go.work + replace directives, and tidying outside the workspace rewrites
-# go.mod/go.sum incorrectly. The committed go.mod is already tidy.
+# No `go mod tidy` before-hook. A tidy that changed anything would dirty the tree,
+# and goreleaser aborts on a dirty tree; one that changed nothing is a no-op. CI's
+# `go.mod and go.sum are tidy` step (hack/check-go-mod-tidy.sh, which runs
+# `GOWORK=off go mod tidy -diff` in every workspace module) guarantees the committed
+# go.mod/go.sum are already what tidy would leave, so there is nothing for it to do.
 
 builds:
   - id: dcctl

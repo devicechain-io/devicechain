@@ -136,6 +136,7 @@ module, so the root-level forms do not do what they look like they do:
 ```bash
 cd backend/core     # ...or whichever module you touched
 gofmt -l .          # must print nothing
+GOWORK=off go mod tidy -diff   # must print nothing — the workspace hides an untidy go.mod
 go build ./...
 go vet ./...
 go test ./...
@@ -164,6 +165,13 @@ clothes:
   fails the job of every module whose build needs it (#1135 lost a CI cycle to exactly one). The
   check is `hack/check-go-work-sum.sh`, the same script that step runs. If it fails, commit
   `go.work.sum` — or `git add` it, which is how you tell the check you mean the edit.
+- it **checks every module is tidy on its own** (`hack/check-go-mod-tidy.sh`). Every other step
+  builds through `go.work`, where a module's own requirements are not what gets built, so a go.mod
+  left behind by a core bump, still listing a dependency the code dropped, or marking a direct
+  import `// indirect`, builds, vets and tests green. The check resolves each module with
+  `GOWORK=off`, as CI's `go.mod and go.sum are tidy` step does, and prints the command that fixes
+  what it finds. It exits 2, not 1, when it cannot decide: `go mod tidy -diff` itself exits 1 for
+  both drift and a module it could not resolve, so its status alone is not a verdict.
 
 ```bash
 rc=0
@@ -175,6 +183,7 @@ for m in $(go list -m -f '{{.Dir}}'); do
   ) || { echo "FAILED: $m"; rc=1; }
 done
 "$root/hack/check-go-work-sum.sh" || rc=1
+"$root/hack/check-go-mod-tidy.sh" || rc=1
 exit "$rc"
 ```
 

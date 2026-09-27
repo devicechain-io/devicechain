@@ -85,6 +85,7 @@ separately, and so should you:
 ```bash
 cd backend/core     # ...or whichever module you touched
 gofmt -l .          # must print nothing
+GOWORK=off go mod tidy -diff   # must print nothing
 go build ./...
 go vet ./...
 go test ./...
@@ -102,6 +103,7 @@ for m in $(go list -m -f '{{.Dir}}'); do
     go build ./... && go vet ./... && go test ./...
   ) || { echo "FAILED: $m"; rc=1; }
 done
+"$(git rev-parse --show-toplevel)/hack/check-go-mod-tidy.sh" || rc=1
 exit "$rc"
 ```
 
@@ -110,6 +112,10 @@ files, so its *output* is tested rather than its status; and the loop records `r
 rather than just printing, because `... || echo "FAILED: $m"` would make the loop's exit
 status that of the `echo` — always 0 — so every module could fail and the sweep would
 still look green.
+
+The last line checks that each module's `go.mod` and `go.sum` are what `go mod tidy`
+would leave them as with the module resolved on its own; builds in the workspace cannot
+see that difference. When it names a module, run the command it prints.
 
 Area-specific checks when you touch them:
 

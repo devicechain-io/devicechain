@@ -14,12 +14,14 @@
 #
 # GOMOD — a module Dependabot cannot see does not merely go stale, it BREAKS. Every
 # module outside core carries `replace github.com/devicechain-io/dc-microservice =>
-# ../../core`, and CI validates each module with GOWORK=off, so the module resolves
-# against the local core on disk. When Dependabot moves core's requirements without
-# moving a module that replaces it, that module's own go.mod/go.sum are stale
-# relative to the core they point at and the build fails with `go: updates to go.mod
-# needed`. The module that fails is never the one that was bumped; it is the one that
-# was invisible.
+# ../../core`, and CI checks each module is tidy with GOWORK=off
+# (hack/check-go-mod-tidy.sh, one step per module in the `go` job), so the module is
+# checked against the local core on disk. When Dependabot moves core's requirements
+# without moving a module that replaces it, that module's own go.mod/go.sum are stale
+# relative to that core and the tidy step fails for it, printing the command that
+# fixes it (a GOWORK=off build of it fails with `go: updates to go.mod needed`). The
+# module that fails is never the one that was bumped; it is the one that was
+# invisible.
 #
 # That is not hypothetical. The list omitted /backend/edge/*, /backend/sims/* and
 # /backend/tools/*, so every weekly gomod PR broke the same four modules — and those
@@ -469,8 +471,8 @@ if [ -n "$findings" ]; then
   echo "mere skip:"
   echo
   echo "  gomod — the module carries a local replace onto core, so the next core"
-  echo "          bump leaves its go.mod stale and CI fails there with"
-  echo "          'go: updates to go.mod needed'."
+  echo "          bump leaves its go.mod stale and CI's 'go.mod and go.sum are"
+  echo "          tidy' step fails there (hack/check-go-mod-tidy.sh)."
   echo "  npm   — the tree keeps receiving SECURITY updates (those come from the"
   echo "          dependency graph, not from this file) and silently stops"
   echo "          receiving version updates, so it ages with nothing to say so."
