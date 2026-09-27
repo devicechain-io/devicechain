@@ -335,8 +335,11 @@ func (s *HttpServer) Shutdown(ctx context.Context) error {
 	// otherwise return with the socket still bound; Serve would close it later, on its
 	// way out, and a restart on the same port in between fails with "address already
 	// in use". Closing it again after Serve did is harmless, and its error is ignored
-	// for that reason. It runs after http.Server.Shutdown so the serve loop sees a
-	// server shutting down, not an Accept error it would log as a failure.
+	// for that reason. It runs AFTER http.Server.Shutdown, and the order is load-bearing:
+	// Shutdown closes every listener Serve registered and returns the error of that close,
+	// so a listener already closed here would make a clean stop report "use of closed
+	// network connection". Closing it second also lets the serve loop see a server
+	// shutting down rather than an Accept error it would log as a failure.
 	_ = ln.Close()
 	return err
 }
