@@ -25,8 +25,12 @@ const (
 	TYPE_MQTT           = "mqtt"
 	DECODE_WORKER_COUNT = 5
 	// DECODE_CHANNEL_DEPTH bounds the in-flight decode queue. On the capture-stream
-	// source this is also the maximum number of messages that can be UNACKED and
-	// therefore redelivered after a crash — bounded loss became bounded REDELIVERY.
+	// source it is one of the stages a message taken from the stream can sit in UNACKED,
+	// and so be redelivered after a crash — bounded loss became bounded REDELIVERY. The
+	// whole bound there is the reader's fetch batch, plus this queue, plus one message per
+	// decode worker, plus the one the submitter is placing, plus CAPTURE_PUBLISH_WINDOW
+	// awaiting their PubAck, plus POISON_ROUTE_LIMIT being routed to failed-decode; the
+	// capture dedup id stores each redelivered one once.
 	DECODE_CHANNEL_DEPTH = 100
 	// subscribeTimeout bounds the wait for a SUBACK, on the first connection and on
 	// every reconnect. Generous, because the only thing that expires it is a broker that
@@ -449,7 +453,7 @@ func (es *MqttEventSource) initializeDecodeWorkers() {
 	es.messages = make(chan rawMessage, DECODE_CHANNEL_DEPTH)
 	es.workers = make([]*DecodeWorker, 0)
 	for w := 1; w <= DECODE_WORKER_COUNT; w++ {
-		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.decoded, es.failed)
+		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, Inline(es.decoded), es.failed)
 		es.workers = append(es.workers, worker)
 		go worker.Process()
 	}

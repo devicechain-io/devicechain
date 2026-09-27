@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ import (
 // This test runs the entire path end to end against a real embedded gateway: a
 // device's QoS-1 MQTT publish is PUBACKed by the broker, captured, and pulled off
 // the durable capture stream by a real GatewayJetStreamSource — its read loop, its
-// handle, its settler, its decode workers — until the decoded callback fires. Then
+// handle, its settler, its decode workers — until the build callback fires. Then
 // it asserts the property the capture stream exists for: a source that stops and is
 // replaced delivers everything published while it was down.
 //
@@ -101,19 +102,21 @@ type decodedEvent struct {
 
 // startCaptureSource wires a real GatewayJetStreamSource to the given reader and
 // starts its lifecycle, returning a channel that receives one decodedEvent per
-// message that survives the full path to the decode callback. allow is nil, so
-// metering is disabled and the test isolates the durability hop.
+// message that survives the full path to the build callback. Its inbound-events
+// writer settles every publish nil without sending it, so the test isolates the
+// capture hop; TestPipelinedCaptureReachesInboundEventsOnceEndToEnd runs the real
+// writer. allow is nil, so metering is disabled.
 func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader) (*GatewayJetStreamSource, <-chan decodedEvent) {
 	t.Helper()
 
 	out := make(chan decodedEvent, 32)
 	src := NewGatewayJetStreamSource(nil, id, NewJsonDecoder(map[string]string{}, 0),
 		func(string, []byte) {},
-		// The decoded callback is (sourceId, tenant, event, payload, captureSeq); the
+		// The build callback is (sourceId, tenant, event, payload, captureSeq); the
 		// device token the payload claims is on the event, not a positional argument.
-		func(_ string, _ string, event *model.UnresolvedEvent, _ interface{}, seq uint64) error {
+		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, seq uint64) (context.Context, messaging.Message, bool) {
 			out <- decodedEvent{device: event.Device, seq: seq}
-			return nil
+			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
 		func(_ string, _ string, _ []byte, decodeErr error) error {
 			// A failed decode on a payload the test controls is a test bug, not a
@@ -126,11 +129,12 @@ func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader)
 	ctx := context.Background()
 	require.NoError(t, src.Initialize(ctx))
 	src.SetReader(reader)
+	src.SetWriter(settleAtOnce{settled: new(atomic.Int64)})
 	require.NoError(t, src.Start(ctx))
 	// Registered here, not left to the caller: if an assertion between Start and the
-	// caller's own Stop fails, the read loop and DECODE_WORKER_COUNT decode workers
-	// would otherwise leak — and a worker blocked forever on the unclosed channel
-	// could run the failed-decode t.Errorf after the test returns, panicking the
+	// caller's own Stop fails, the read loop, the DECODE_WORKER_COUNT decode workers and
+	// the submitter would otherwise leak — and a worker blocked forever on the unclosed
+	// channel could run the failed-decode t.Errorf after the test returns, panicking the
 	// binary. A redundant second Stop just returns an already-stopped state error,
 	// which the caller discards.
 	t.Cleanup(func() { _ = src.Stop(context.Background()) })
@@ -162,7 +166,7 @@ func TestCaptureSurvivesASourceRestartEndToEnd(t *testing.T) {
 		case e := <-out:
 			return e
 		case <-time.After(20 * time.Second):
-			t.Fatalf("%s: no event reached the decode callback; the full MQTT→capture→"+
+			t.Fatalf("%s: no event reached the build callback; the full MQTT→capture→"+
 				"consumer chain is broken", who)
 			return decodedEvent{}
 		}
@@ -174,13 +178,13 @@ func TestCaptureSurvivesASourceRestartEndToEnd(t *testing.T) {
 	src, out := startCaptureSource(t, "gw-fullhop", reader)
 
 	// A device publish, PUBACKed by the broker, must traverse the entire chain and
-	// reach the decode callback.
+	// reach the build callback.
 	publishAsDevice(t, mqttPort, "fullhop-before", topic, event(1))
 	before := recv(t, out, "first source")
 	require.Equal(t, device, before.device,
 		"the device recovered at the end of the chain is not the one that published")
 	require.NotZero(t, before.seq,
-		"the capture sequence must reach the decode callback — it is the dedup id, and a "+
+		"the capture sequence must reach the build callback — it is the dedup id, and a "+
 			"zero one silently disables ingest idempotency")
 
 	// The source goes down: the rollout / crash / outage window.

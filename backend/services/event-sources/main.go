@@ -429,11 +429,12 @@ func buildEventSources() error {
 				gatewaySourceBuilt = true
 				GatewaySourceId = source.Id
 				gateway := processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
-					onMessageReceived, onEventDecoded, onEventDecodeFailed,
+					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate)
-				// Held so createNatsComponents can hand it the capture reader once that
-				// reader exists. Sources are built in the INITIALIZE phase and readers are
-				// created in START, so there is nothing to wire here yet.
+				// Held so createNatsComponents can hand it the capture reader and its
+				// inbound-events writer once they exist. Sources are built in the
+				// INITIALIZE phase and readers and writers are created in START, so there
+				// is nothing to wire here yet.
 				GatewaySource = gateway
 				created = append(created, gateway)
 				continue
@@ -528,21 +529,21 @@ func shedClassOf(tenant string) string {
 	return governance.ShedClassOf(prio).String()
 }
 
-// Called by event sources when an event is successfully decoded. The tenant is
-// derived by the source from its own addressing (MQTT topic / HTTP path) before
-// the event reaches here; an empty tenant cannot be published to a tenant-scoped
-// subject, so the event is dropped (fail-closed) rather than published unscoped.
-// It returns whether the event was DURABLY published. A source consuming a
-// durable capture stream acknowledges its broker on this answer (ADR-030
-// amendment), so a swallowed error here would ack a message that was never
-// forwarded — reintroducing exactly the silent loss the capture stream exists to
-// remove. Sources with nothing to acknowledge ignore the result.
+// inboundEventMessage builds the inbound-events message for an event a source decoded:
+// the metric, the source stamp, the AuthenticatedTransport clamp, the tenant drop, the
+// marshal and the capture dedup id. It is the ONE definition both publish paths use —
+// onEventDecoded's synchronous one, and the gateway source's pipelined one.
 //
-// A nil error means "do not send this again", so the two fail-closed drops below
-// return nil: they are terminal decisions, and reporting them as failures would
-// ask the broker to redeliver a message that will be dropped identically forever.
-func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64) error {
+// The tenant is derived by the source from its own addressing (MQTT topic / HTTP path)
+// before the event reaches here; an empty tenant cannot be published to a tenant-scoped
+// subject, so the event is dropped (fail-closed) rather than published unscoped.
+//
+// ok=false is such a drop, and it means "do not send this again": the two fail-closed
+// drops below are terminal decisions, so the source settles the message nil, and
+// reporting them as failures would ask the broker to redeliver a message that will be
+// dropped identically forever.
+func inboundEventMessage(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	captureSeq uint64) (context.Context, messaging.Message, bool) {
 	// Increment counter for metrics.
 	DecodedCounter.WithLabelValues(source).Inc()
 
@@ -558,7 +559,7 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 
 	if tenant == "" {
 		log.Warn().Msg(fmt.Sprintf("Dropping decoded event from source %q with no tenant", source))
-		return nil
+		return nil, messaging.Message{}, false
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
 
@@ -566,21 +567,37 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to marshal event to protobuf")
-		return nil
+		return nil, messaging.Message{}, false
 	}
 
-	// Create and deliver message (writer derives the scoped subject from ctx).
+	// Create the message (the writer derives the scoped subject from ctx).
 	//
 	// DedupID makes the publish idempotent within the stream's duplicate window, so
 	// a capture message redelivered after a crash between publish and ack is stored
 	// once rather than twice. It is empty for a transport with no capture sequence
 	// (HTTP, external MQTT), which publishes no dedup header at all.
-	msg := messaging.Message{
+	return ctx, messaging.Message{
 		Key:     []byte(event.Device),
 		Value:   bytes,
 		DedupID: processor.DedupID(tenant, captureSeq),
+	}, true
+}
+
+// onEventDecoded publishes a decoded event synchronously, for the sources that publish
+// on the goroutine that decoded it: HTTP and an external MQTT broker. The gateway source
+// pipelines the same message through its own ordered writer instead.
+//
+// It returns whether the event was DURABLY published, nil for a deliberate drop (see
+// inboundEventMessage). A source that acknowledges its broker does so on this answer, so
+// a swallowed error here would ack a message that was never forwarded; sources with
+// nothing to acknowledge ignore the result.
+func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	captureSeq uint64) error {
+	ctx, msg, ok := inboundEventMessage(source, tenant, event, payload, captureSeq)
+	if !ok {
+		return nil
 	}
-	err = InboundEventsWriter.WriteMessages(ctx, msg)
+	err := InboundEventsWriter.WriteMessages(ctx, msg)
 	InboundEventsWriter.HandleResponse(err)
 	return err
 }
@@ -654,8 +671,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// consumers do the same in (command-delivery, event-processing), and it is the
 	// earliest point at which the reader exists at all — buildEventSources ran back
 	// in INITIALIZE, when there was nothing to give it.
+	//
+	// The gateway source also gets its OWN ordered writer to inbound-events, which keeps
+	// processor.CAPTURE_PUBLISH_WINDOW publishes in flight instead of one per decode
+	// worker. The source owns it from here and settles and closes it in its own stop,
+	// which runs before the manager drains the connection. InboundEventsWriter above
+	// stays for the sources and the presence tap that publish synchronously; the two do
+	// not share a JetStream context, since the ordered writer builds its own.
 	if GatewaySource != nil {
 		GatewaySource.SetReader(capture)
+		pipeline, err := nmgr.NewOrderedWriter(streams.InboundEvents, processor.CAPTURE_PUBLISH_WINDOW)
+		if err != nil {
+			return err
+		}
+		GatewaySource.SetWriter(pipeline)
 	}
 
 	failed, err := nmgr.NewWriter(streams.FailedDecode)
