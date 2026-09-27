@@ -632,7 +632,8 @@ In both cases the database's own wording is replaced, so these two sentences nam
 or constraint and repeat none of the values you sent. Neither code is `CONFLICT`, so code that
 treats `CONFLICT` as "the record already exists" does not treat them as success. A refusal that
 involves both a value that must be unique and one of these carries `REFERENCE_VIOLATION` or
-`INVALID_VALUE`, never `CONFLICT`.
+`INVALID_VALUE`, never `CONFLICT`, and its message uses that code's sentence in place of the one for
+a value already in use.
 
 ## Request limits {#request-limits}
 

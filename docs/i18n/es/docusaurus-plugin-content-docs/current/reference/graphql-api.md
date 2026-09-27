@@ -669,7 +669,8 @@ En ambos casos se sustituye el texto propio de la base de datos, así que estas 
 nombran ninguna tabla, columna ni restricción, ni repiten ninguno de los valores que enviaste.
 Ninguno de los dos códigos es `CONFLICT`, así que el código que trata `CONFLICT` como "el registro
 ya existe" no los trata como un éxito. Un rechazo en el que intervienen a la vez un valor que debe
-ser único y uno de estos lleva `REFERENCE_VIOLATION` o `INVALID_VALUE`, nunca `CONFLICT`.
+ser único y uno de estos lleva `REFERENCE_VIOLATION` o `INVALID_VALUE`, nunca `CONFLICT`, y su
+mensaje usa la frase de ese código en lugar de la de un valor que ya está en uso.
 
 ## Límites de las solicitudes {#request-limits}
 

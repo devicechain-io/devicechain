@@ -220,7 +220,9 @@ func All(err error) []Violation {
 func Refused(err error) (Class, bool) {
 	var found Class
 	walk(err, func(e error) bool {
-		if r, ok := e.(*Refusal); ok && r != nil {
+		// A zero Refusal (not made by NewRefusal) has no class: it is skipped, so it
+		// cannot stop the walk before a refusal that does have one.
+		if r, ok := e.(*Refusal); ok && r != nil && r.class != 0 {
 			found = r.class
 			return true
 		}

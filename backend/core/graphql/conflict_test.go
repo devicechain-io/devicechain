@@ -50,6 +50,8 @@ const conflictSDL = `
 		rejectedPrintingFK: Boolean!
 		fkJoinedWithConflict: Boolean!
 		conflictJoinedWithFK: Boolean!
+		uniqueFragmentJoinedWithFK: Boolean!
+		conflictJoinedWithCheck: Boolean!
 		serialization: Boolean!
 		fkProse: Boolean!
 	}
@@ -135,6 +137,19 @@ func (r *conflictRoot) FkJoinedWithConflict() (bool, error) {
 
 func (r *conflictRoot) ConflictJoinedWithFK() (bool, error) {
 	return false, fmt.Errorf("%w; %w", pgUniqueViolation(), pgForeignKeyViolation())
+}
+
+// UniqueFragmentJoinedWithFK prints a fragment of the unique violation over a chain that
+// also holds a foreign-key violation: the code served is REFERENCE_VIOLATION, so the whole
+// message is replaced by THAT code's sentence, not the unique violation's own.
+func (r *conflictRoot) UniqueFragmentJoinedWithFK() (bool, error) {
+	unique := pgUniqueViolation()
+	return false, &wrapped{msg: "save failed: " + unique.Message, cause: errors.Join(unique, pgForeignKeyViolation())}
+}
+
+func (r *conflictRoot) ConflictJoinedWithCheck() (bool, error) {
+	_, err := r.CheckViolation()
+	return false, fmt.Errorf("%w; %w", pgUniqueViolation(), err)
 }
 
 func (r *conflictRoot) Serialization() (bool, error) {
@@ -368,19 +383,34 @@ func TestExecKeepsACodeATypedErrorAlreadyChoseOverAForeignKeyViolation(t *testin
 	assert.Equal(t, "rejected: "+neutralReference, msg)
 }
 
-// A chain holding a unique violation AND a foreign-key violation is not "already exists,
+// A chain holding a unique violation AND a foreign-key (or check) violation is not "already exists,
 // carry on": re-running it cannot succeed, so it is never answered CONFLICT, whichever
-// comes first in the chain. Both driver texts are removed, each by its own sentence.
+// comes first in the chain. Both driver texts are removed, and neither is replaced by
+// the unique sentence: it says "unique", which a client from before CONFLICT existed
+// reads as "already exists", so it is never served under REFERENCE_VIOLATION.
 func TestAChainHoldingAForeignKeyViolationIsNeverAConflict(t *testing.T) {
 	s := newConflictSchema(t)
 
 	code, msg := execOne(t, s, `mutation { fkJoinedWithConflict }`)
 	assert.Equal(t, wireReference, code)
-	assert.Equal(t, neutralReference+"; "+neutralMessage, msg)
+	assert.Equal(t, neutralReference+"; "+neutralReference, msg)
 
 	code, msg = execOne(t, s, `mutation { conflictJoinedWithFK }`)
 	assert.Equal(t, wireReference, code)
-	assert.Equal(t, neutralMessage+"; "+neutralReference, msg)
+	assert.Equal(t, neutralReference+"; "+neutralReference, msg)
+
+	code, msg = execOne(t, s, `mutation { conflictJoinedWithCheck }`)
+	assert.Equal(t, wireInvalid, code)
+	assert.Equal(t, neutralInvalid+"; create widget: "+neutralInvalid, msg)
+}
+
+// A message replaced WHOLE takes the sentence of the code actually served, not of the
+// violation whose fragment triggered it: a unique fragment over a chain served
+// REFERENCE_VIOLATION must not read "a value that must be unique is already in use".
+func TestAWholeReplacementTakesTheSentenceOfTheCodeServed(t *testing.T) {
+	code, msg := execOne(t, newConflictSchema(t), `mutation { uniqueFragmentJoinedWithFK }`)
+	assert.Equal(t, wireReference, code)
+	assert.Equal(t, neutralReference, msg)
 }
 
 // The subscription pump answers a foreign-key violation the way Exec does.
@@ -419,28 +449,48 @@ func TestTheSubscriptionPumpAnswersAForeignKeyViolation(t *testing.T) {
 // routine, is logged at DEBUG.
 func TestAnIntegrityViolationIsLoggedAtItsLevelWithoutItsDetail(t *testing.T) {
 	s := newConflictSchema(t)
+	type want struct{ level, class, constraint, table string }
+	var (
+		reference = want{"warn", "reference", "fk_widgets_tier", "widgets"}
+		invalid   = want{"warn", "invalid", "ck_widgets_qty", "widgets"}
+		unique    = want{"debug", "unique", "uix_widgets_tenant_token", ""}
+	)
 	for _, tc := range []struct {
-		query, level, class, constraint, table, leak string
+		name, query string
+		want        []want
+		leaks       []string
 	}{
-		{`mutation { foreignKey }`, "warn", "reference", "fk_widgets_tier", "widgets", "tier_id"},
-		{`mutation { checkViolation }`, "warn", "invalid", "ck_widgets_qty", "widgets", "Failing row"},
-		{`mutation { pgDuplicate }`, "debug", "unique", "uix_widgets_tenant_token", "", "duplicate key"},
+		{"reference", `mutation { foreignKey }`, []want{reference}, []string{"tier_id"}},
+		{"invalid", `mutation { checkViolation }`, []want{invalid}, []string{"Failing row"}},
+		{"unique", `mutation { pgDuplicate }`, []want{unique}, []string{"duplicate key"}},
+		// A typed error that chose its own code does not hide the violation beneath it.
+		{"under a typed code", `mutation { rejectedPrintingFK }`, []want{reference}, []string{"tier_id"}},
+		// Every violation in a chain is logged, not only the first.
+		{"joined chain", `mutation { conflictJoinedWithFK }`, []want{unique, reference}, []string{"tier_id", "duplicate key"}},
 	} {
-		t.Run(tc.class, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			logs := logSink.Capture(t)
 			execOne(t, s, tc.query)
-			var line map[string]any
+			lines := map[string]map[string]any{}
 			for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
 				var m map[string]any
-				if json.Unmarshal([]byte(raw), &m) == nil && m["class"] == tc.class {
-					line = m
+				if json.Unmarshal([]byte(raw), &m) == nil {
+					if class, ok := m["class"].(string); ok {
+						lines[class] = m
+					}
 				}
 			}
-			require.NotNil(t, line, "no log line for the %s violation; captured: %s", tc.class, logs.String())
-			assert.Equal(t, tc.level, line["level"])
-			assert.Equal(t, tc.constraint, line["constraint"])
-			assert.Equal(t, tc.table, line["table"])
-			assert.NotContains(t, logs.String(), tc.leak)
+			assert.Len(t, lines, len(tc.want), "captured: %s", logs.String())
+			for _, w := range tc.want {
+				line := lines[w.class]
+				require.NotNil(t, line, "no log line for the %s violation; captured: %s", w.class, logs.String())
+				assert.Equal(t, w.level, line["level"])
+				assert.Equal(t, w.constraint, line["constraint"])
+				assert.Equal(t, w.table, line["table"])
+			}
+			for _, leak := range tc.leaks {
+				assert.NotContains(t, logs.String(), leak)
+			}
 		})
 	}
 }

@@ -43,7 +43,9 @@ import (
 //
 // The redaction applies regardless of which code was chosen, and to EVERY driver
 // violation in the chain, so a service error joined with a driver error cannot shield
-// the driver's text.
+// the driver's text. Under REFERENCE_VIOLATION or INVALID_VALUE no unique violation's
+// text is replaced by conflict.Message: the message never says "unique" over a code that
+// is not CONFLICT. Every violation is logged, whichever code was served.
 func answerIntegrity(errs []*gqlerrors.QueryError) {
 	for _, qe := range errs {
 		if qe == nil || qe.ResolverError == nil {
@@ -73,7 +75,7 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 			logViolation(v)
 		}
 		for _, v := range violations {
-			redacted, whole := integrity.Redact(qe.Message, v, sentence(v.Class))
+			redacted, whole := integrity.Redact(qe.Message, v, replacement(served, v.Class))
 			if whole {
 				// A fragment survived: the whole message goes, replaced by the sentence
 				// of the code actually served, so the message never contradicts it.
@@ -91,6 +93,19 @@ func sentence(c integrity.Class) string {
 		return msg
 	}
 	return conflict.Message
+}
+
+// replacement is the sentence that stands in for a violation's full text. It is the
+// violation's own sentence, except that a unique violation in a chain served
+// REFERENCE_VIOLATION or INVALID_VALUE takes the served code's sentence: conflict.Message
+// deliberately says "unique", which a client from before CONFLICT existed reads as
+// "already exists, carry on", and that must not be said over a refusal re-running
+// cannot fix.
+func replacement(served string, c integrity.Class) string {
+	if c == integrity.ClassUnique && (served == integrity.CodeReference || served == integrity.CodeInvalid) {
+		return sentenceForCode(served, c)
+	}
+	return sentence(c)
 }
 
 // sentenceForCode is the neutral sentence of the code served, or of the violation's own

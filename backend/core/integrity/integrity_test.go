@@ -94,6 +94,17 @@ func TestRefusedAnswersTheFirstNonUniqueRefusal(t *testing.T) {
 	assert.Equal(t, integrity.ClassReference, class)
 }
 
+// A zero Refusal, not made by NewRefusal, has no class. It must not stop the walk: a
+// refusal after it in the chain is still answered.
+func TestRefusedSkipsAZeroRefusal(t *testing.T) {
+	class, ok := integrity.Refused(errors.Join(&integrity.Refusal{}, pg("23503")))
+	require.True(t, ok)
+	assert.Equal(t, integrity.ClassReference, class)
+
+	_, ok = integrity.Refused(&integrity.Refusal{})
+	assert.False(t, ok)
+}
+
 func TestRedact(t *testing.T) {
 	fk := &pgconn.PgError{
 		Severity:       "ERROR",
