@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -15,44 +14,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/kv"
 	dctest "github.com/devicechain-io/dc-microservice/test"
-	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
-
-// freePorts reserves n DISTINCT ephemeral ports and releases them, so the cluster
-// route URLs can be written before the servers that will listen on them start.
-//
-// Distinct is not a nicety. Reserving them one at a time and releasing each
-// immediately lets the kernel hand the same port out twice, and a triple
-// containing a duplicate guarantees one server cannot bind its cluster port —
-// measured at 13 collisions in 3000 triples, which is a meaningful slice of an
-// 18%-per-run failure rate. Holding all n listeners open until every port has been
-// chosen makes a duplicate impossible.
-//
-// The release-to-bind race remains and cannot be designed away here, which is why
-// newTestCluster RETRIES the whole construction rather than failing on the first
-// server that does not come up.
-func freePorts(t *testing.T, n int) []int {
-	t.Helper()
-	listeners := make([]net.Listener, 0, n)
-	ports := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			for _, open := range listeners {
-				open.Close()
-			}
-			t.Fatalf("reserving a port: %v", err)
-		}
-		listeners = append(listeners, l)
-		ports = append(ports, l.Addr().(*net.TCPAddr).Port)
-	}
-	for _, l := range listeners {
-		l.Close()
-	}
-	return ports
-}
 
 // newTestCluster starts a 3-node JetStream cluster in-process and returns a
 // NatsManager connected to it, plus cleanup.
@@ -62,114 +26,26 @@ func freePorts(t *testing.T, n int) []int {
 // correctly whether or not the reconcile works, so only an EXISTING single-replica
 // cluster being raised in place proves anything — and a check that can only run in
 // a manual drill is a check that runs once.
+//
+// The cluster is the shared fixture's, so it is formed by the one definition of
+// formed (see dctest.StartJetStreamCluster), which also retries a construction that
+// lost the race for an ephemeral port.
 func newTestCluster(t *testing.T) (*NatsManager, func()) {
 	t.Helper()
-	// Retry the whole construction. A server that never becomes ready is almost
-	// always the release-to-bind race on an ephemeral port, not a product fault,
-	// and failing on the first attempt made the package red roughly one run in six
-	// — with a message ("clustered nats server 1 not ready") that reads like a
-	// broken cluster, which is the worst kind of flake because it trains everyone
-	// to re-run instead of investigate.
-	const attempts = 3
-	for attempt := 1; ; attempt++ {
-		nmgr, cleanup, err := tryNewTestCluster(t)
-		if err == nil {
-			return nmgr, cleanup
-		}
-		if attempt == attempts {
-			t.Fatalf("could not start a 3-node JetStream cluster in %d attempts: %v", attempts, err)
-		}
-		t.Logf("cluster attempt %d/%d failed (%v); retrying on fresh ports", attempt, attempts, err)
-	}
-}
-
-// tryNewTestCluster is one attempt, returning an error rather than failing the
-// test so newTestCluster can retry.
-func tryNewTestCluster(t *testing.T) (*NatsManager, func(), error) {
-	t.Helper()
-	const size = 3
-	clusterPorts := freePorts(t, size)
-	routes := ""
-	for _, p := range clusterPorts {
-		routes += fmt.Sprintf("nats-route://127.0.0.1:%d,", p)
-	}
-	routes = routes[:len(routes)-1]
-
-	servers := make([]*natsserver.Server, 0, size)
+	servers := dctest.StartJetStreamCluster(t, 3)
 	shutdown := func() {
 		for _, s := range servers {
 			s.Shutdown()
 		}
 	}
-	for i := 0; i < size; i++ {
-		opts := &natsserver.Options{
-			Host:       "127.0.0.1",
-			Port:       -1,
-			ServerName: fmt.Sprintf("n%d", i+1),
-			JetStream:  true,
-			StoreDir:   dctest.JetStreamStoreDir(t),
-			Cluster: natsserver.ClusterOpts{
-				Name: "dctest",
-				Host: "127.0.0.1",
-				Port: clusterPorts[i],
-			},
-			Routes: natsserver.RoutesFromStr(routes),
-		}
-		srv, err := natsserver.NewServer(opts)
-		if err != nil {
-			shutdown()
-			return nil, nil, fmt.Errorf("new clustered nats server %d: %w", i, err)
-		}
-		go srv.Start()
-		servers = append(servers, srv)
-	}
-	for i, srv := range servers {
-		if !srv.ReadyForConnections(15 * time.Second) {
-			shutdown()
-			return nil, nil, fmt.Errorf("clustered nats server %d not ready", i)
-		}
-	}
-	// Wait for all three servers to have JOINED the JetStream meta group — not
-	// merely for a leader to exist.
-	//
-	// The difference is the whole reason this helper is not a one-liner. A meta
-	// leader is elected as soon as a quorum forms, and in the window before the
-	// third peer joins, JetStream will happily place an R1 stream but rejects R3
-	// with "no suitable peers for placement". A leader-only gate therefore lets the
-	// tests start against a cluster that cannot yet do the one thing they exist to
-	// assert, and the resulting failure reads as "an existing cluster was NOT
-	// lifted" — indistinguishable from the product bug, which is the worst possible
-	// flake because it trains everyone to re-run instead of investigate. Measured at
-	// roughly one run in ten before this gate.
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		ready := false
-		for _, srv := range servers {
-			if len(srv.JetStreamClusterPeers()) == size {
-				ready = true
-				break
-			}
-		}
-		if ready {
-			break
-		}
-		if time.Now().After(deadline) {
-			shutdown()
-			return nil, nil, fmt.Errorf("JetStream meta group never reached %d peers", size)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
 	nc, err := nats.Connect(servers[0].ClientURL())
 	if err != nil {
-		shutdown()
-		return nil, nil, fmt.Errorf("connect: %w", err)
+		t.Fatalf("connect: %v", err)
 	}
 	js, err := nc.JetStream()
 	if err != nil {
 		nc.Close()
-		shutdown()
-		return nil, nil, fmt.Errorf("jetstream: %w", err)
+		t.Fatalf("jetstream: %v", err)
 	}
 	nmgr := &NatsManager{
 		Microservice: &core.Microservice{InstanceId: "test", FunctionalArea: "area"},
@@ -182,23 +58,23 @@ func tryNewTestCluster(t *testing.T) (*NatsManager, func(), error) {
 	// it from production code passed the whole package.
 	if !nmgr.brokerIsClustered() {
 		nc.Close()
-		shutdown()
 		t.Fatal("brokerIsClustered() is false against a real 3-node cluster; every replica factor " +
 			"would be clamped to 1 and the whole workstream would be inert")
 	}
 	return nmgr, func() {
 		nc.Close()
 		shutdown()
-	}, nil
+	}
 }
 
 // jsGroupNotServingYet reports whether err is one of the transients a JetStream
 // group returns in the window between "this stream exists" and "this stream is
 // serving requests".
 //
-// 🔑 THAT WINDOW IS THE ONE THING newTestCluster's READINESS GATE CANNOT COVER.
-// The gate waits for the META group to reach three peers, which is necessary — an
-// R3 stream cannot even be placed before it — but every stream and every KV bucket
+// 🔑 THAT WINDOW IS THE ONE THING THE FIXTURE'S READINESS GATE CANNOT COVER.
+// The gate (the cluster fixture's awaitJetStreamClusterFormed) waits until a stream
+// can be placed on every server, which is necessary — an R3 stream cannot even be
+// placed before it — but every stream and every KV bucket
 // then forms its OWN RAFT group, elects its OWN leader, and has to have its subject
 // interest propagated over the routes to whichever server the client happens to be
 // attached to. Operations issued into that window fail in two distinct ways, and
