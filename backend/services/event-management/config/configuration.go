@@ -35,12 +35,6 @@ const (
 	// (about 1400 events a second either way with a synchronous standby), for twice the
 	// transaction length.
 	DefaultPersistenceMaxBatch = 32
-	// MaxPersistenceMaxBatch caps the batch. Past the knee a bigger batch buys little and
-	// costs a longer writing transaction — which is how long the erasure fence's answer
-	// is remembered for, and how much a batch that cannot commit has to replay.
-	MaxPersistenceMaxBatch = 64
-	// MaxPersistenceLingerMillis caps how long a writer may wait for a batch to fill.
-	MaxPersistenceLingerMillis = 1000
 )
 
 type EventManagementConfiguration struct {
@@ -75,13 +69,13 @@ type PersistenceConfiguration struct {
 	// sweep share.
 	Writers int
 
-	// MaxBatch is the most events one transaction commits, 1 to MaxPersistenceMaxBatch.
+	// MaxBatch is the most events one transaction commits, 1 to rdb.MaxWriterBatch.
 	// Unset (0) defaults to DefaultPersistenceMaxBatch; 1 turns batching off, so every
 	// event gets a transaction of its own.
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more
-	// events before committing it, 0 to MaxPersistenceLingerMillis. 0 (the default) takes
+	// events before committing it, 0 to rdb.MaxWriterLingerMillis. 0 (the default) takes
 	// only what is already waiting, which adds no latency: under light load a writer finds
 	// one event and commits it alone, and batches grow by themselves once events arrive
 	// faster than single commits keep up with.
@@ -101,20 +95,13 @@ func (p *PersistenceConfiguration) ApplyDefaults() {
 }
 
 // Validate refuses a value no reading makes sense of. pool is the event store's datastore
-// configuration, whose connection pool the writers draw from; rdb.CheckWriterCount is the
-// bound, shared with every other service that sizes its writers.
+// configuration, whose connection pool the writers draw from. rdb.CheckWriterCount and
+// rdb.CheckWriterBatch are the bounds, shared with every other service whose writers batch.
 func (p PersistenceConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration) error {
 	if err := rdb.CheckWriterCount("persistence.writers", p.Writers, pool); err != nil {
 		return err
 	}
-	if p.MaxBatch < 1 || p.MaxBatch > MaxPersistenceMaxBatch {
-		return fmt.Errorf("persistence.maxBatch must be between 1 and %d, got %d", MaxPersistenceMaxBatch, p.MaxBatch)
-	}
-	if p.LingerMillis < 0 || p.LingerMillis > MaxPersistenceLingerMillis {
-		return fmt.Errorf("persistence.lingerMillis must be between 0 and %d, got %d",
-			MaxPersistenceLingerMillis, p.LingerMillis)
-	}
-	return nil
+	return rdb.CheckWriterBatch("persistence", p.MaxBatch, p.LingerMillis)
 }
 
 // Linger is LingerMillis as a duration.
