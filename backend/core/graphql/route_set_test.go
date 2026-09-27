@@ -121,42 +121,65 @@ func TestRouteSetWithDevToolsEnabled(t *testing.T) {
 //
 // Registration now lives in ExecuteInitialize. This asserts that ExecuteStart registers
 // nothing by running it twice.
+//
+// 🔴 THE REBUILD IS NAMED BY IDENTITY AND PROVED BY /healthz, NEVER BY ADDRESS — see
+// TestSubscriptionsWorkAgainAfterASecondStart for why a "different address" check failed
+// correct rebuilds and forbade the production restart. The same-port row is that
+// production shape, and the only row a stop that leaks its listener cannot pass.
 func TestRestartDoesNotPanic(t *testing.T) {
-	gql, _ := managerOnItsOwnMux(t, "restart-probe")
+	for _, tc := range []struct {
+		name     string
+		samePort bool
+	}{
+		{"on a fresh ephemeral port", false},
+		{"on the port the first start bound, as a production restart does", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gql, _ := managerOnItsOwnMux(t, "restart-probe")
 
-	// 🔴 ExecuteStart ITSELF, NOT A SERVER THIS TEST BUILDS. An earlier draft
-	// constructed the HttpServer here and called Start on it, which exercised the
-	// test's own wiring — so a registration moved back into ExecuteStart went entirely
-	// undetected, because ExecuteStart never ran. Port 0 is what makes driving the real
-	// one possible without racing whatever holds 8080.
-	gql.Port = ephemeralPort
-	if err := gql.ExecuteStart(context.Background()); err != nil {
-		t.Fatalf("first start: %v", err)
-	}
-	first := gql.Server.Addr()
-	if err := gql.ExecuteStop(context.Background()); err != nil {
-		t.Fatalf("stop: %v", err)
-	}
+			// 🔴 ExecuteStart ITSELF, NOT A SERVER THIS TEST BUILDS. An earlier draft
+			// constructed the HttpServer here and called Start on it, which exercised the
+			// test's own wiring — so a registration moved back into ExecuteStart went
+			// entirely undetected, because ExecuteStart never ran. Port 0 is what makes
+			// driving the real one possible without racing whatever holds 8080.
+			gql.Port = ephemeralPort
+			if err := gql.ExecuteStart(context.Background()); err != nil {
+				t.Fatalf("first start: %v", err)
+			}
+			firstServer := gql.Server
+			firstAddr := gql.Server.Addr()
+			if err := gql.ExecuteStop(context.Background()); err != nil {
+				t.Fatalf("stop: %v", err)
+			}
 
-	// Reaching this line at all is half the assertion: a registration moved back into
-	// the start path panics here, and a panic fails the binary rather than this test.
-	if err := gql.ExecuteStart(context.Background()); err != nil {
-		t.Fatalf("restart refused: %v", err)
-	}
-	t.Cleanup(func() { _ = gql.ExecuteStop(context.Background()) })
+			if tc.samePort {
+				gql.Port = portOf(t, firstAddr)
+			}
+			// Reaching this line at all is half the assertion: a registration moved back
+			// into the start path panics here, and a panic fails the binary rather than
+			// this test.
+			if err := gql.ExecuteStart(context.Background()); err != nil {
+				t.Fatalf("restart refused: %v", err)
+			}
+			t.Cleanup(func() { _ = gql.ExecuteStop(context.Background()) })
 
-	if gql.Server.Addr() == first {
-		t.Error("the restarted server reports the first server's address; it was reused rather than rebuilt")
-	}
-	// And over the wire, because a restart that binds but serves nothing is exactly what
-	// a reused http.Server produces and a nil error cannot see.
-	resp, err := http.Get("http://" + gql.Server.Addr() + "/healthz")
-	if err != nil {
-		t.Fatalf("GET /healthz after restart: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET /healthz after restart = %d, want 200", resp.StatusCode)
+			if gql.Server == firstServer {
+				t.Error("ExecuteStart kept the stopped server instead of building a new one")
+			}
+			if tc.samePort && gql.Server.Addr() != firstAddr {
+				t.Errorf("restarted on %s, want %s: the fixed port was not honoured", gql.Server.Addr(), firstAddr)
+			}
+			// And over the wire, because a restart that binds but serves nothing is exactly
+			// what a reused http.Server produces and a nil error cannot see.
+			resp, err := http.Get("http://" + gql.Server.Addr() + "/healthz")
+			if err != nil {
+				t.Fatalf("GET /healthz after restart: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("GET /healthz after restart = %d, want 200", resp.StatusCode)
+			}
+		})
 	}
 }
 

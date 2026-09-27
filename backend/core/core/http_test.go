@@ -250,6 +250,39 @@ func TestHttpServerLifecycleOverARealListener(t *testing.T) {
 	}
 }
 
+// Shutdown must release the port before it returns, even when it follows Start so closely
+// that the serve goroutine has not begun.
+//
+// http.Server.Shutdown closes only the listeners Serve has already registered. Start binds
+// synchronously but hands the listener to Serve in a goroutine, so a Shutdown that wins
+// that race used to leave the socket bound: Serve later saw the server shutting down and
+// closed it on its way out, after Shutdown had already reported a clean stop. A restart on
+// the same port, which is what a production restart does, then failed with "address
+// already in use". Each round here is start, immediate stop, and a rebind of the same
+// port. The window is a scheduling race, so this is a probabilistic check rather than a
+// deterministic one: before the fix it failed in some runs under -race with several
+// CPUs, not in every run.
+func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "immediate-stop"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+
+	for i := 0; i < 300; i++ {
+		srv := ms.NewHttpServer(0)
+		if err := srv.Start(); err != nil {
+			t.Fatalf("round %d: Start: %v", i, err)
+		}
+		addr := srv.Addr()
+		if err := srv.Shutdown(context.Background()); err != nil {
+			t.Fatalf("round %d: Shutdown: %v", i, err)
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatalf("round %d: rebinding %s after Shutdown returned: %v", i, addr, err)
+		}
+		ln.Close()
+	}
+}
+
 // A bind failure must be RETURNED, not logged from a goroutine nobody is reading.
 //
 // This is the case that made the change worth building. Started as

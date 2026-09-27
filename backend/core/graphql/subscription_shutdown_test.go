@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -112,6 +114,22 @@ func dialSubscribed(t *testing.T, addr string) *websocket.Conn {
 		t.Fatalf("expected %s, got %s", msgNext, got.Type)
 	}
 	return conn
+}
+
+// portOf returns the numeric port of a bound "host:port" address, as the int32 the
+// manager's Port field takes. A test that pins a restart to the first start's port
+// needs it, and a malformed address is a fixture failure, not a result.
+func portOf(t *testing.T, addr string) int32 {
+	t.Helper()
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("split %q: %v", addr, err)
+	}
+	n, err := strconv.ParseInt(p, 10, 32)
+	if err != nil || n <= 0 {
+		t.Fatalf("port of %q = %q, want a positive port", addr, p)
+	}
+	return int32(n)
 }
 
 // eventuallyLive waits for the resolver's live-stream count to reach want.
@@ -237,31 +255,67 @@ func TestClientDisconnectReleasesItsSubscriptions(t *testing.T) {
 // built ONCE, in ExecuteInitialize, and is therefore the same object across that second
 // entry: if Shutdown recorded it as closed, subscriptions would come back dead while
 // every probe reported healthy.
+//
+// 🔴 THE REBUILD IS NAMED BY IDENTITY AND PROVED BY TRAFFIC — NEVER BY ADDRESS. An
+// earlier version required the restarted server to report a different address from the
+// first. That did catch a manager that kept its stopped server, but as a side effect:
+// HttpServer.Shutdown never clears the listener, so a spent server always reports its
+// old address. What depended on the port was the FAILURE of a correct rebuild: two
+// correct ephemeral binds may land on the same port once the first listener is closed,
+// and a production restart ALWAYS lands on the same one, because it binds GRAPHQL_PORT
+// again. So it failed correct rebuilds whenever the kernel reused the port, and forbade
+// the only restart a pod performs. What proves the rebuild is the subscription that
+// streams over it; the identity check below only names the property.
+//
+// The "same port" row is the production shape, and it is also the only row that pins
+// that ExecuteStop RELEASES the port: a stop that leaves the listener open fails its
+// rebind with "address already in use", where an ephemeral restart simply lands
+// elsewhere. That error is not proof of such a leak on its own, though — the freed port
+// is inside the kernel's ephemeral range, so a socket from any concurrently running test
+// can take it in the moment between the stop and the rebind. No retry is added, because
+// a retry would hide exactly the leak this row exists to catch.
 func TestSubscriptionsWorkAgainAfterASecondStart(t *testing.T) {
-	gql, res, addr := startDrainServer(t, 0)
+	for _, tc := range []struct {
+		name     string
+		samePort bool
+	}{
+		{"on a fresh ephemeral port", false},
+		{"on the port the first start bound, as a production restart does", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gql, res, addr := startDrainServer(t, 0)
+			first := gql.Server
 
-	conn := dialSubscribed(t, addr)
-	if err := gql.ExecuteStop(context.Background()); err != nil {
-		t.Fatalf("ExecuteStop: %v", err)
-	}
-	_ = readUntilError(conn)
-	eventuallyLive(t, res, 0, "the first stop ended it")
+			conn := dialSubscribed(t, addr)
+			if err := gql.ExecuteStop(context.Background()); err != nil {
+				t.Fatalf("ExecuteStop: %v", err)
+			}
+			_ = readUntilError(conn)
+			eventuallyLive(t, res, 0, "the first stop ended it")
 
-	if err := gql.ExecuteStart(context.Background()); err != nil {
-		t.Fatalf("restart refused: %v", err)
-	}
-	restarted := gql.Server.Addr()
-	if restarted == addr {
-		t.Fatal("the restarted server reports the first server's address; it was reused rather than rebuilt")
-	}
+			if tc.samePort {
+				gql.Port = portOf(t, addr)
+			}
+			if err := gql.ExecuteStart(context.Background()); err != nil {
+				t.Fatalf("restart refused: %v", err)
+			}
+			if gql.Server == first {
+				t.Fatal("ExecuteStart kept the stopped server instead of building a new one")
+			}
+			restarted := gql.Server.Addr()
+			if tc.samePort && restarted != addr {
+				t.Fatalf("restarted on %s, want %s: the fixed port was not honoured", restarted, addr)
+			}
 
-	// The whole point: a subscription over the restarted server still streams.
-	dialSubscribed(t, restarted)
-	if got := gql.subscriptions.liveConnections(); got != 1 {
-		t.Errorf("liveConnections() = %d after a restart, want 1 — the handler refused to serve again", got)
-	}
-	if got := res.live.Load(); got != 1 {
-		t.Errorf("%d subscription streams are live after a restart, want 1", got)
+			// The whole point: a subscription over the restarted server still streams.
+			dialSubscribed(t, restarted)
+			if got := gql.subscriptions.liveConnections(); got != 1 {
+				t.Errorf("liveConnections() = %d after a restart, want 1 — the handler refused to serve again", got)
+			}
+			if got := res.live.Load(); got != 1 {
+				t.Errorf("%d subscription streams are live after a restart, want 1", got)
+			}
+		})
 	}
 }
 

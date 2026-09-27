@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -227,12 +228,14 @@ func TestNewHttpEventSource_Port(t *testing.T) {
 }
 
 // postCanonicalEvent posts the canonical measurement body to a listening source over a
-// REAL TCP connection, which is what makes the two tests below able to tell "serving"
-// from "reported that it is serving". It returns the status code, or the transport error
-// when nothing answered.
+// REAL TCP connection, which is what lets a test tell "serving" from "reported that it
+// is serving". It returns the status code, or the transport error when nothing answered.
 //
 // The address comes from the bound listener rather than from the configured port,
-// because these tests bind port 0 and let the operating system choose.
+// because the tests that use it bind port 0 and let the operating system choose.
+//
+// Its client keeps the connection alive, so a test that stops a source and posts to the
+// same address again wants postCanonicalEventWithoutKeepAlive instead.
 func postCanonicalEvent(addr string) (int, error) {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -299,37 +302,80 @@ func TestHttpEventSource_StartFailsWhenPortIsAlreadyBound(t *testing.T) {
 // silent failure needs. Driving the Execute methods is what that retry looks like from
 // the component's side; its sibling in core/graphql (TestRestartDoesNotPanic) is written
 // the same way for the same reason.
+//
+// 🔴 THE REBUILD IS NAMED BY IDENTITY AND PROVED BY AN ACCEPTED EVENT, NEVER BY ADDRESS.
+// An earlier version required the rebuilt source to report a different address from the
+// first. Two correct ephemeral binds may land on the same port once the first listener
+// is closed, and a production restart always does, because it binds its configured port
+// again — so that check failed correct rebuilds and forbade the only restart a pod
+// performs. The same-port row is that production shape, and the only row a stop that
+// leaves its listener open cannot pass: its rebind fails with "address already in use",
+// where an ephemeral restart simply lands elsewhere. (The freed port is inside the
+// kernel's ephemeral range, so a concurrently running test can also take it in the
+// moment between stop and rebind; that fails loudly, and no retry is added because a
+// retry would hide the leak.)
+//
+// 🔴 BOTH POSTS GO WITHOUT KEEP-ALIVE. A pooled connection to 127.0.0.1:P from the first
+// POST is keyed by the same host:port the same-port row posts to again, and a POST
+// written onto that connection before the client has seen the stop's close is not
+// retried — it fails as EOF against a source that is serving correctly.
 func TestHttpEventSource_SecondStartRebuildsTheServerAndServes(t *testing.T) {
-	es, dec, _ := newTestHttpSource(t, nil)
-	es.Port = 0 // let the OS choose, so the test needs no fixed port
+	for _, tc := range []struct {
+		name     string
+		samePort bool
+	}{
+		{"on a fresh ephemeral port", false},
+		{"on the port the first start bound, as a production restart does", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			es, dec, _ := newTestHttpSource(t, nil)
+			es.Port = 0 // let the OS choose, so the test needs no fixed port
 
-	ctx := context.Background()
-	require.NoError(t, es.Initialize(ctx))
+			ctx := context.Background()
+			require.NoError(t, es.Initialize(ctx))
+			// Stops whichever server is current when the subtest ends, so a require that
+			// fails between a start and its stop does not leave a bound listener open for
+			// the rest of the package run. ExecuteStop on a stopped source is a no-op.
+			t.Cleanup(func() { _ = es.ExecuteStop(ctx) })
 
-	require.NoError(t, es.ExecuteStart(ctx))
-	require.NotNil(t, es.server)
-	code, err := postCanonicalEvent(es.server.Addr())
-	require.NoError(t, err)
-	require.Equal(t, http.StatusAccepted, code)
-	require.True(t, dec.called)
+			require.NoError(t, es.ExecuteStart(ctx))
+			require.NotNil(t, es.server)
+			code, err := postCanonicalEventWithoutKeepAlive(es.server.Addr())
+			require.NoError(t, err)
+			require.Equal(t, http.StatusAccepted, code)
+			require.True(t, dec.called)
 
-	first := es.server.Addr()
-	require.NoError(t, es.ExecuteStop(ctx))
-	dec.called = false
+			// Captured before the stop, which drops the reference.
+			firstServer := es.server
+			first := es.server.Addr()
+			require.NoError(t, es.ExecuteStop(ctx))
+			dec.called = false
 
-	require.NoError(t, es.ExecuteStart(ctx), "a second entry into the start phase must succeed")
-	require.NotNil(t, es.server, "the second entry must build a server")
-	addr := es.server.Addr()
-	assert.NotEmpty(t, addr, "the rebuilt source must be bound to something")
-	assert.NotEqual(t, first, addr,
-		"the source reports the first server's address; it was reused rather than rebuilt")
+			if tc.samePort {
+				_, p, err := net.SplitHostPort(first)
+				require.NoError(t, err)
+				es.Port, err = strconv.Atoi(p)
+				require.NoError(t, err)
+				require.Positive(t, es.Port, "the first start must have bound a real port")
+			}
+			require.NoError(t, es.ExecuteStart(ctx), "a second entry into the start phase must succeed")
+			require.NotNil(t, es.server, "the second entry must build a server")
+			addr := es.server.Addr()
+			assert.NotEmpty(t, addr, "the rebuilt source must be bound to something")
+			assert.NotSame(t, firstServer, es.server,
+				"ExecuteStart kept the stopped server instead of building a new one")
+			if tc.samePort {
+				assert.Equal(t, first, addr, "the rebuilt source must bind the port it was given")
+			}
 
-	code, err = postCanonicalEvent(addr)
-	assert.NoError(t, err, "the rebuilt source must answer on the address it reports")
-	assert.Equal(t, http.StatusAccepted, code, "the rebuilt source must still accept events")
-	assert.True(t, dec.called, "the rebuilt source must hand the event to the pipeline")
+			code, err = postCanonicalEventWithoutKeepAlive(addr)
+			assert.NoError(t, err, "the rebuilt source must answer on the address it reports")
+			assert.Equal(t, http.StatusAccepted, code, "the rebuilt source must still accept events")
+			assert.True(t, dec.called, "the rebuilt source must hand the event to the pipeline")
 
-	require.NoError(t, es.ExecuteStop(ctx))
+			require.NoError(t, es.ExecuteStop(ctx))
+		})
+	}
 }
 
 // A stop that arrives on a source which was initialized but never started is a no-op.
