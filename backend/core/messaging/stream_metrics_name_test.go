@@ -35,6 +35,8 @@ func TestExportedMetricNamesMatchTheAlertSelectors(t *testing.T) {
 		"jetstream_replicas_actual":  regexp.MustCompile(`^devicechain_.+_jetstream_replicas_actual$`),
 		"jetstream_peers_current":    regexp.MustCompile(`^devicechain_.+_jetstream_peers_current$`),
 		"jetstream_broker_clustered": regexp.MustCompile(`^devicechain_.+_jetstream_broker_clustered$`),
+		// ...and as it appears in prometheusrule-jetstream-delivery.yaml (JetStreamDurableFallingBehind).
+		"jetstream_consumer_pending_messages": regexp.MustCompile(`^devicechain_[a-z0-9]+_jetstream_consumer_pending_messages$`),
 	}
 
 	// Every area name the platform ships, including the ones whose names compose
@@ -57,6 +59,7 @@ func TestExportedMetricNamesMatchTheAlertSelectors(t *testing.T) {
 		m.replicasDesired.WithLabelValues("s").Set(1)
 		m.replicasActual.WithLabelValues("s").Set(1)
 		m.peersCurrent.WithLabelValues("s").Set(1)
+		m.consumerPending.WithLabelValues("s", "d").Set(1)
 
 		families, err := reg.Gather()
 		if err != nil {

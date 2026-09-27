@@ -30,6 +30,12 @@
 #     rather than omitting them: an alert silent because its series is missing and one
 #     silent because nothing was lost look identical, and only one is a working alert.
 #   - devicechain_<area>_jetstream_stream_used_bytes / _limit_bytes{stream} — gauges.
+#   - devicechain_<area>_jetstream_consumer_pending_messages{stream,durable} — a GaugeVec
+#     that, unlike the two above, is NOT created at 0: it appears at a pod's first sample
+#     (30 s after the pod starts) and is withdrawn while the durable cannot be read. So a
+#     series BORN above the threshold is the ordinary case -- every restart onto a backlog
+#     -- and JetStreamDurableFallingBehind has a scenario for exactly that. Every replica
+#     reports the same durable, so the rule takes the max.
 #
 # ReaderHeldMessagePastAckWait watches a counter that should read 0 for the whole
 # life of a healthy instance, so the quiet cases carry as much weight as the firing
@@ -434,4 +440,132 @@ tests:
         exp_alerts: []
       - eval_time: 59m
         alertname: ReplayCoveredDeliveriesExhausted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # JetStreamDurableFallingBehind. device-state's durable stays 20000 behind
+  # on both replicas: one alert per durable, after the 15m `for`, carrying the
+  # current backlog.
+  # ------------------------------------------------------------------
+  - name: a durable that stays behind its stream warns after 15m
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events", pod="dc-device-state-7c9f-aaaaa"}'
+        values: '20000x40'
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events", pod="dc-device-state-7c9f-bbbbb"}'
+        values: '20000x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_device-state_resolved-events
+            exp_annotations:
+              summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
+              description: "Durable devicechain_device-state_resolved-events on stream devicechain_resolved-events has had more than 10000 messages waiting for it for the last 15 minutes (20000 now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, JetStreamStreamNearFull fires, and messages the consumer has not reached will be lost."
+
+  # ------------------------------------------------------------------
+  # Two replicas of one service read one durable and sample it a moment apart:
+  # ONE alert, carrying the larger reading -- max, not sum, which would report
+  # 27000 for a backlog of at most 15000.
+  # ------------------------------------------------------------------
+  - name: a falling-behind durable is one alert, not one per pod
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events", pod="dc-device-state-7c9f-aaaaa"}'
+        values: '15000x30'
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events", pod="dc-device-state-7c9f-bbbbb"}'
+        values: '12000x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_device-state_resolved-events
+            exp_annotations:
+              summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
+              description: "Durable devicechain_device-state_resolved-events on stream devicechain_resolved-events has had more than 10000 messages waiting for it for the last 15 minutes (15000 now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, JetStreamStreamNearFull fires, and messages the consumer has not reached will be lost."
+
+  # ------------------------------------------------------------------
+  # 🔴 A SERIES BORN ABOVE THE THRESHOLD. The gauge does not exist until a
+  # pod's first sample, so a pod that restarts onto a backlog starts its
+  # series high. Pod A reads 0 and is replaced at minute 20; pod B's first
+  # sample, at minute 21, is already 20000. "For 15 minutes" means from
+  # minute 21: quiet at 25m and 35m, firing at 36m. An expression that
+  # judged the window with min_over_time() would fire at minute 21, over
+  # one sample -- this scenario is what fails it.
+  # ------------------------------------------------------------------
+  - name: a series born above the threshold waits the full 15m
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events", pod="dc-device-state-7c9f-aaaaa"}'
+        values: '0x20 stale'
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events", pod="dc-device-state-7c9f-ccccc"}'
+        values: '_x21 20000x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts: []
+      - eval_time: 36m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_resolved-events
+              durable: devicechain_device-state_resolved-events
+            exp_annotations:
+              summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
+              description: "Durable devicechain_device-state_resolved-events on stream devicechain_resolved-events has had more than 10000 messages waiting for it for the last 15 minutes (20000 now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, JetStreamStreamNearFull fires, and messages the consumer has not reached will be lost."
+
+  # ------------------------------------------------------------------
+  # 🔴 Quiet cases, each carrying its series so that silence is the rule's
+  # answer and not a missing input:
+  #   - a burst worked off inside the window: over the threshold for 14
+  #     minutes, then back to 0 -- quiet at every point, including the last
+  #     minute over it;
+  #   - a backlog AT the threshold (the comparison is strict);
+  #   - a caught-up durable at 0;
+  #   - event-processing's resolved-events durable, 60000 behind for 30
+  #     minutes: DETECT's own alert watches it, and a takeover replays it by
+  #     design;
+  #   - another instance's namespace.
+  # ------------------------------------------------------------------
+  - name: a worked-off burst, the threshold, a caught-up durable, DETECT's replay and another instance are quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events", pod="dc-device-state-7c9f-aaaaa"}'
+        values: '0x5 20000x13 0x30'
+      - series: 'devicechain_eventmanagement_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/event-management", stream="devicechain_resolved-events", durable="devicechain_event-management_resolved-events", pod="dc-event-management-7c9f-aaaaa"}'
+        values: '10000x50'
+      - series: 'devicechain_commanddelivery_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/command-delivery", stream="devicechain_command-responses", durable="devicechain_command-delivery_command-responses", pod="dc-command-delivery-7c9f-aaaaa"}'
+        values: '0x50'
+      - series: 'devicechain_eventprocessing_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/event-processing", stream="devicechain_resolved-events", durable="devicechain_event-processing_resolved-events", pod="dc-event-processing-5c4b-aaaaa"}'
+        values: '60000x50'
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-other", job="other/device-state", stream="other_resolved-events", durable="other_device-state_resolved-events", pod="dc-device-state-7c9f-zzzzz"}'
+        values: '60000x50'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts: []
+      - eval_time: 19m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: JetStreamDurableFallingBehind
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: JetStreamDurableFallingBehind
         exp_alerts: []

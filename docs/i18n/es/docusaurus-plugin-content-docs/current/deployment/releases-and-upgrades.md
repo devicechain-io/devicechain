@@ -1692,6 +1692,10 @@ Si hay dispositivos que envían alertas con un `level` mayor que 2147483647, o l
 mediciones, el estado o las alertas de un dispositivo a través de la API GraphQL, lea «Los niveles
 de alerta mayores que 2147483647 se rechazan, y cuatro números más ya no se desbordan».
 
+Si vigila las métricas de `device-state` o fija sus ajustes `projection`, o enruta o silencia
+alertas por nombre, lea «El estado en vivo se fusiona por lotes, y un consumidor que se queda atrás
+genera un aviso»: se añade un aviso, `JetStreamDurableFallingBehind`.
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -3027,11 +3031,8 @@ defecto `5`). Consulte [Persistencia de eventos](./observability.md#event-persis
   fije el número de escritores por debajo del pool, o aumente el pool como máximo hasta su valor por
   defecto de 20: los límites de conexiones a la base de datos de la plataforma están dimensionados
   para ese valor.
-- **`device-state` no usa lotes.** Su proyección del estado en vivo sigue fusionando un evento por
-  transacción, así que en una base de datos replicada todavía puede quedarse atrás ante un ritmo de
-  eventos alto y sostenido, y el estado en vivo de un dispositivo puede ir por detrás de sus eventos
-  almacenados. Aumentar `projection.writers` es la forma de darle más capacidad, dentro de su pool
-  de conexiones.
+- **`device-state` también fusiona por lotes.** Consulte «El estado en vivo se fusiona por lotes,
+  y un consumidor que se queda atrás genera un aviso» más abajo.
 - **Si representa las métricas de persistencia:** `persist_inflight` puede superar ahora el número
   de escritores, porque cuenta los eventos que esperan a que su lote se confirme, y
   `persist_duration_seconds` incluye ahora esa espera. Hay dos métricas nuevas,
@@ -3179,6 +3180,40 @@ No hay que hacer nada en la actualización.
 - **`devicechain_eventsources_jetstream_publish_duration_seconds` añade una serie
   `mode="pipelined"` para `suffix="inbound-events"`.** [Observabilidad](./observability.md)
   describe los modos.
+
+#### El estado en vivo se fusiona por lotes, y un consumidor que se queda atrás genera un aviso
+
+`device-state` fusionaba cada evento en el estado en vivo de un dispositivo (conectividad,
+actividad, últimas lecturas y última posición) en dos transacciones propias. En una base de datos
+replicada cada confirmación espera a la réplica, así que el estado en vivo se quedaba atrás siempre
+que los eventos llegaban más rápido de lo que podía confirmarlos de uno en uno, y tras un ritmo alto
+y sostenido podía ir más de una hora por detrás de los eventos almacenados sin que nada lo
+indicara. Ahora fusiona en una sola transacción los eventos que esperan a un escritor, igual que
+`event-management` los persiste. Medido dentro del proceso contra TimescaleDB con una réplica
+síncrona, cinco escritores fusionaron unos 3500 eventos por segundo, frente a unos 85 antes.
+
+- **Lo que acaba guardando el estado en vivo de un dispositivo no cambia,** con una excepción. Una
+  lectura o una posición sustituye a la almacenada solo si es estrictamente más reciente, y las
+  horas se comparan ahora tal como las guarda la base de datos, al microsegundo. Antes, una lectura
+  que llegaba dentro del mismo microsegundo que la almacenada podía sustituirla aunque fuera más
+  antigua. Ahora se conserva la que se almacenó primero.
+- **Un evento se sigue reconociendo solo después de haberse almacenado.** Si se rechaza la parte
+  de un lote que corresponde a un inquilino, los eventos de ese inquilino se vuelven a fusionar de
+  uno en uno, así que solo un evento que es rechazado por sí mismo se reintenta o se descarta como
+  antes, y los eventos de los demás inquilinos se confirman juntos.
+- **Hay dos ajustes nuevos, ambos opcionales:** `projection.maxBatch` (por defecto `32`; `1` vuelve
+  a un evento cada vez) y `projection.lingerMillis` (por defecto `0`), con los mismos rangos que los
+  de `event-management`. Consulte [Estado en vivo de los dispositivos](./observability.md#live-state-projection).
+- **Si representa las métricas de `device-state`:** `state_inflight` puede superar ahora el número
+  de escritores, porque cuenta los eventos que esperan a que su lote se confirme, y
+  `state_duration_seconds` incluye ahora esa espera. Hay dos métricas nuevas, `state_batch_size` y
+  `state_batch_fallbacks_total`.
+- **Cada servicio informa ahora de cuántos mensajes esperan a cada consumidor que lee,** como
+  `jetstream_consumer_pending_messages` y `jetstream_consumer_ack_pending_messages`. Un aviso nuevo,
+  `JetStreamDurableFallingBehind`, salta cuando un consumidor ha tenido más de 10000 mensajes
+  esperándole durante 15 minutos. El consumidor de detección de `event-processing` queda a cargo de
+  `DetectConsumerBacklogHigh`, que no cambia. Consulte
+  [Un consumidor que se queda atrás](./observability.md#consumer-backlog).
 
 ### La transición única a la ingesta duradera
 

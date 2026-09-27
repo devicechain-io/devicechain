@@ -1584,6 +1584,10 @@ If devices send alerts with a `level` above 2147483647, or you read a device's l
 measurements, its state or its alerts through the GraphQL API, read "Alert levels above 2147483647
 are refused, and four more numbers are no longer wrapped".
 
+If you watch `device-state`'s metrics or set its `projection` settings, or route or silence alerts by
+name, read "Live device state is merged in batches, and a consumer that stays behind raises a
+warning": one warning, `JetStreamDurableFallingBehind`, is added.
+
 #### Every user is signed out once, and a password reset now ends sessions
 
 Each user now has a **session value**, and every token that can be exchanged for a new one carries
@@ -2826,10 +2830,8 @@ See [Event persistence](./observability.md#event-persistence).
   `rdbConfiguration.maxOpenConnections` for `device-state`, to 5 or fewer. Before upgrading, set
   the writer count below the pool, or raise the pool no further than its default of 20: the
   platform's database connection limits are sized for that default.
-- **`device-state` does not batch.** Its live-state projection still merges one event per
-  transaction, so on a replicated database it can still fall behind a sustained high event rate,
-  and a device's live state can lag its stored events. Raising `projection.writers` is the way to
-  give it more capacity, within its connection pool.
+- **`device-state` merges in batches too.** See "Live device state is merged in batches, and a
+  consumer that stays behind raises a warning" below.
 - **If you chart the persistence metrics:** `persist_inflight` can now exceed the number of
   writers, because it counts events waiting for their batch to commit, and
   `persist_duration_seconds` now includes that wait. Two metrics are new, `persist_batch_size` and
@@ -2964,6 +2966,36 @@ Nothing needs doing at the upgrade.
   decoders work through the captured messages at once, and every replica publishes.
 - **`devicechain_eventsources_jetstream_publish_duration_seconds` gains a `mode="pipelined"`
   series for `suffix="inbound-events"`.** [Observability](./observability.md) describes the modes.
+
+#### Live device state is merged in batches, and a consumer that stays behind raises a warning
+
+`device-state` merged every event into a device's live state (connectivity, activity, latest
+readings and last position) in two transactions of its own. On a replicated database each commit
+waits for the standby, so the live state fell behind whenever events arrived faster than it could
+commit them one at a time, and after a sustained high rate it could lag the stored events by more
+than an hour while nothing reported it. It now merges the events waiting for a writer in one
+transaction, the way `event-management` persists them. Measured in-process against TimescaleDB with
+a synchronous standby, five writers merged about 3500 events a second, against about 85 before.
+
+- **What a device's live state ends up holding does not change,** with one exception. A reading or
+  a position replaces the stored one only when it is strictly newer, and times are now compared as
+  the database stores them, to the microsecond. Before, a reading arriving in the same microsecond
+  as the stored one could replace it even when it was older. Now the one stored first stays.
+- **An event is still acknowledged only after it has been stored.** If one tenant's part of a batch
+  is refused, that tenant's events are merged again one at a time, so only an event that is itself
+  refused is retried or dropped as before, and the other tenants' events are committed together.
+- **Two settings are new, both optional:** `projection.maxBatch` (default `32`; `1` restores one
+  event at a time) and `projection.lingerMillis` (default `0`), with the same ranges as
+  `event-management`'s. See [Live device state](./observability.md#live-state-projection).
+- **If you chart `device-state`'s metrics:** `state_inflight` can now exceed the number of writers,
+  because it counts events waiting for their batch to commit, and `state_duration_seconds` now
+  includes that wait. Two metrics are new, `state_batch_size` and `state_batch_fallbacks_total`.
+- **Every service now reports how many messages are waiting for each consumer it reads,** as
+  `jetstream_consumer_pending_messages` and `jetstream_consumer_ack_pending_messages`. A new
+  warning, `JetStreamDurableFallingBehind`, fires when a consumer has had more than 10000 messages
+  waiting for it for 15 minutes. `event-processing`'s detection consumer is left to
+  `DetectConsumerBacklogHigh`, which is unchanged. See
+  [A consumer that stays behind](./observability.md#consumer-backlog).
 
 ### The one-time durable-ingest cutover
 

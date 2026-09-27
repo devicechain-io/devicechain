@@ -193,6 +193,11 @@ type Runtime struct {
 	// Stats accumulates emit accounting across the process lifetime.
 	Stats Stats
 
+	// Accepted, when set, records the latest occurredTime of every event the ingress
+	// accepted, per device. Only a load test that asserts on the live-state projection sets
+	// it; the persistent sim leaves it nil and pays nothing.
+	Accepted *AcceptedLedger
+
 	// MqttBroker/MqttTLSInsecure address the NATS MQTT gateway a scenario's
 	// CommandFarEnd dials, threaded from the handshake. Empty broker is legal for
 	// every scenario that declares no far end; for one that does, Bootstrap
