@@ -576,12 +576,15 @@ jobs:
       #
       # COST, measured rather than assumed: tidy loads every OS and build tag, so it
       # needs modules the build never fetched (locally, about 0.6 GB for core and 0.3 GB
-      # for k8s on top of the build's, ~15 s). The per-module cache key above is
-      # write-once and does not change here, so those are fetched again on each run
-      # rather than cached. Re-keying to save them was rejected: the repository's
-      # Actions cache was already at its quota when this step was added, so growing
-      # every entry would evict warm build caches instead. A proxy outage fails this step as
-      # a refusal (exit 2), never as "tidy".
+      # for k8s on top of the build's, ~15 s). The per-module cache key above hashes the
+      # module's go.mod and go.sum and is write-once, so a cache entry saved before this
+      # step existed lacks them and they are fetched again on each run — but only until
+      # that module's key next changes (any go.mod/go.sum edit, e.g. every Dependabot
+      # bump). setup-go saves the module cache on a key miss after the job succeeds, i.e.
+      # after this step, so the next entry includes them. Entries therefore grow as keys
+      # roll over; against a cache already at its quota that growth is ACCEPTED (it can
+      # evict older warm entries), not avoided. A proxy outage fails this step as a
+      # refusal (exit 2), never as "tidy".
       - name: go.mod and go.sum are tidy
         if: ${{ !cancelled() }}
         run: hack/check-go-mod-tidy.sh --module "${{ matrix.module }}"

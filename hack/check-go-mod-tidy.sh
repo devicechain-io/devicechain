@@ -46,7 +46,8 @@
 #
 # GOWORK=off states the intent: the module's own files are the subject. As measured on
 # the current toolchain `go mod tidy` ignores go.work anyway, so it is not load-bearing
-# today; it holds if a future Go makes tidy workspace-aware.
+# today; it holds if a future Go makes tidy workspace-aware. The self-test pins that it
+# is passed, with a stand-in `go` that refuses to answer without it.
 #
 # There is deliberately no --fix mode: a check that rewrites the files it checks is a
 # way for CI to repair its own copy and pass. The failure prints the command to run.
@@ -277,7 +278,28 @@ self_test() (
   rm -rf "$repo/stray"
   mv "$repo/svc/go.mod" "$tmp/svc.go.mod"
   expect 2 "a listed module without a go.mod is refused" --module svc
+  # For the missing go.mod itself, not for whatever tidy says about a directory without one.
+  mentions "'svc/go.mod' does not exist" || bad "a listed module without a go.mod is not refused for the missing go.mod"
   mv "$tmp/svc.go.mod" "$repo/svc/go.mod"
+
+  # 13. Shapes no current Go release produces, pinned with a stand-in `go` first on PATH.
+  # It answers only for `GOWORK=off go mod tidy -diff`, so a check that dropped
+  # GOWORK=off or ran another command is refused rather than passing.
+  mkdir -p "$tmp/shim"
+  printf '#!/usr/bin/env bash\nif [ "${GOWORK-}" != off ] || [ "$*" != "mod tidy -diff" ]; then echo "shim: unexpected GOWORK=${GOWORK-<unset>} args=$*" >&2; exit 3; fi\ncase "$SHIM_MODE" in\n  clean) exit 0 ;;\n  noise) echo "something that is not a diff"; exit 0 ;;\nesac\nexit 3\n' >"$tmp/shim/go"
+  chmod +x "$tmp/shim/go"
+  saved_path="$PATH"
+  export PATH="$tmp/shim:$saved_path"
+  SHIM_MODE=clean
+  export SHIM_MODE
+  expect 0 "premise: the stand-in go answers a GOWORK=off tidy -diff as tidy" --module svc
+  mentions "tidy: svc" || bad "premise: the stand-in go was not reported as tidy"
+  # Exit 0 WITH output is not "tidy": only exit 0 with nothing printed is.
+  SHIM_MODE=noise
+  expect 2 "tidy -diff exiting 0 with output is refused, not reported as tidy" --module svc
+  mentions "something that is not a diff" || bad "the unexpected output is not shown with the refusal"
+  export PATH="$saved_path"
+  unset SHIM_MODE
 
   # 11. An empty workspace is a refusal, not a vacuous pass.
   cp "$repo/go.work" "$tmp/go.work"
@@ -294,7 +316,7 @@ self_test() (
     echo "check-go-mod-tidy self-test: $fails failure(s)" >&2
     exit 1
   fi
-  echo "check-go-mod-tidy self-test passed: the script, run by path, passes a tidy module that builds on its own and a tidy workspace; fails, with the diff and the command that fixes it and without rewriting either file, a direct import missing from go.mod, an unused requirement, a module left behind by a core bump (which really does break a GOWORK=off build), a direct import marked indirect and a stale go.sum line; refuses a module that cannot be resolved rather than calling it drift; reports the worst verdict across the workspace, wherever the drifted module sits; and refuses unlisted modules, a missing go.mod, an empty workspace and bad arguments."
+  echo "check-go-mod-tidy self-test passed: the script, run by path, passes a tidy module that builds on its own and a tidy workspace; fails, with the diff and the command that fixes it and without rewriting either file, a direct import missing from go.mod, an unused requirement, a module left behind by a core bump (which really does break a GOWORK=off build), a direct import marked indirect and a stale go.sum line; refuses a module that cannot be resolved, and a tidy -diff that exits 0 with output, rather than calling either one tidy or drift; runs tidy with GOWORK=off; reports the worst verdict across the workspace, wherever the drifted module sits; and refuses unlisted modules, a missing go.mod, an empty workspace and bad arguments."
 )
 
 case "${1:-}" in

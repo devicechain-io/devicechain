@@ -157,7 +157,7 @@ clothes:
   obvious way to write it — makes the loop's status that of the last `echo`, i.e. always 0. Every
   module could fail and the sweep would still exit green, which is precisely the gate-that-cannot-
   fail it exists to be.
-- it **ends by checking that `go.work.sum` matches what is staged.** A `go` command in workspace
+- it **checks that `go.work.sum` matches what is staged.** A `go` command in workspace
   mode does not fail on a missing hash — it quietly APPENDS it — so an incomplete `go.work.sum`
   builds, vets and tests green and shows up only as an uncommitted line. That line is never noise,
   whenever it was appended (by this sweep, an earlier build, your editor's language server): it is
