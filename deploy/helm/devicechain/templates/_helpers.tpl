@@ -610,6 +610,92 @@ an unrecognised unit is an error rather than a default.
 {{- end -}}
 
 {{/*
+devicechain.areaResources renders one area's container resources: the top-level
+`resources` map with the area's own `functionalAreas.<area>.resources` merged over
+it KEY BY KEY.
+
+It is a merge and not a replacement because the top-level map is written by more
+than one hand. `dcctl install --compact` lowers the top-level REQUESTS; the chart
+raises some areas' CPU LIMITS (device-management and event-management, values.yaml).
+Under replacement, an area with a block of its own lost whichever half it did not
+restate: raising one limit rendered that area with no requests at all, which took
+it out of the compact preset, and the only repair was for dcctl to know which areas
+the chart overrides.
+
+Both call sites read this one helper (the pod's resources in deployment.yaml and
+the memory limit GOMEMLIMIT is derived from, below). A second expression for "this
+area's resources" is how the two would come to describe different pods. The
+console (frontend.yaml) is not a functional area and keeps its own block.
+
+deepCopy on BOTH sides is load-bearing: mergeOverwrite writes into its first
+argument, and without the copy the first area with a block of its own would be
+merged INTO .Values.resources, handing its limits to every area rendered after it.
+
+An area cannot REMOVE a key the top-level map sets (Helm deletes a null before any
+template sees it, so it arrives here as "not set" and the default fills it). To
+run an area without a limit, remove it from the top-level map and set it on the
+areas that want one.
+
+A request above its limit is refused here, naming the area. The API server would
+refuse the pod anyway, but only when the ReplicaSet creates it, where `helm
+upgrade` merely times out; and the merge makes it reachable from a values file
+that used to be valid (an area that set only requests.memory above the top-level
+limit used to get no limits at all).
+
+Parameters: area (the name, for messages), areaCfg, root.
+*/}}
+{{- define "devicechain.areaResources" -}}
+{{- $base := deepCopy (.root.Values.resources | default dict) -}}
+{{- $own := deepCopy (get .areaCfg "resources" | default dict) -}}
+{{- $res := mergeOverwrite $base $own -}}
+{{- range $dim := list "cpu" "memory" -}}
+{{- $req := dig "requests" $dim "" $res | toString -}}
+{{- $lim := dig "limits" $dim "" $res | toString -}}
+{{- if and $req $lim -}}
+{{- $r := include "devicechain.quantityScalar" (dict "dim" $dim "q" $req "area" $.area) | float64 -}}
+{{- $l := include "devicechain.quantityScalar" (dict "dim" $dim "q" $lim "area" $.area) | float64 -}}
+{{- if gt $r $l -}}
+  {{- fail (printf "functionalAreas.%s.resources: the %s request %s is above the %s limit, and Kubernetes refuses such a pod. A service's resources are merged over the top-level resources key by key, so a request raised for one service also needs its limit raised there." $.area $dim $req $lim) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $res -}}
+{{- end -}}
+
+{{/*
+devicechain.quantityScalar converts a Kubernetes quantity to a comparable number:
+millicores for dim "cpu", bytes for dim "memory". It exists only so
+devicechain.areaResources can compare a request with its limit across units
+(1Gi against 256Mi, 1 against 750m).
+
+A form it does not recognise is an error, not a zero: a zero would make every
+request look below its limit, which is the one answer the comparison exists to
+withhold.
+*/}}
+{{- define "devicechain.quantityScalar" -}}
+{{- $q := .q | toString -}}
+{{- if eq .dim "cpu" -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?m?$" $q) -}}
+  {{- fail (printf "functionalAreas.%s.resources: cpu quantity %q is not a number of cores (\"2\", \"1.5\") or of millicores (\"500m\")" .area $q) -}}
+{{- end -}}
+{{- if hasSuffix "m" $q -}}
+{{- trimSuffix "m" $q | float64 -}}
+{{- else -}}
+{{- mulf (float64 $q) 1000 -}}
+{{- end -}}
+{{- else -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$" $q) -}}
+  {{- fail (printf "functionalAreas.%s.resources: memory quantity %q is not a number of bytes with an optional unit (Ki, Mi, Gi, Ti, k, M, G, T)" .area $q) -}}
+{{- end -}}
+{{- $num := regexFind "^[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?" $q -}}
+{{- $mag := float64 $num -}}
+{{- $unit := trimPrefix $num $q -}}
+{{- $scale := get (dict "" 1.0 "k" 1e3 "M" 1e6 "G" 1e9 "T" 1e12 "P" 1e15 "E" 1e18 "Ki" 1024.0 "Mi" 1048576.0 "Gi" 1073741824.0 "Ti" 1099511627776.0 "Pi" 1125899906842624.0 "Ei" 1152921504606846976.0) $unit -}}
+{{- mulf $mag $scale -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 devicechain.goMemLimit resolves the GOMEMLIMIT for one functional area, or "" to
 leave it unset.
 
@@ -653,7 +739,7 @@ turns out to want an unbounded heap more than a small one.
 {{- $explicit -}}
 {{- else -}}
 {{- $pct := $root.Values.goMemLimitPercent | default 0 | int -}}
-{{- $res := get $areaCfg "resources" | default $root.Values.resources -}}
+{{- $res := include "devicechain.areaResources" (dict "area" .area "areaCfg" $areaCfg "root" $root) | fromYaml -}}
 {{- $limit := dig "limits" "memory" "" $res -}}
 {{- if and (gt $pct 0) $limit -}}
 {{- $mib := include "devicechain.memoryQuantityMiB" $limit | int64 -}}

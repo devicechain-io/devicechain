@@ -43,6 +43,18 @@ type renderedContainer struct {
 func renderContainers(t *testing.T, vals map[string]interface{}) []renderedContainer {
 	t.Helper()
 
+	manifest, err := renderChart(t, vals)
+	if err != nil {
+		t.Fatalf("rendering chart: %v", err)
+	}
+	return containersOf(t, manifest)
+}
+
+// renderChart renders the embedded chart the way the tests here need it and
+// returns the manifest, or the render error for a test that expects a refusal.
+func renderChart(t *testing.T, vals map[string]interface{}) (string, error) {
+	t.Helper()
+
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)
@@ -74,11 +86,23 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 
 	rel, err := inst.RunWithContext(t.Context(), ch, vals)
 	if err != nil {
-		t.Fatalf("rendering chart: %v", err)
+		return "", err
 	}
+	return rel.Manifest, nil
+}
+
+// containersOf decodes one entry per container in every Deployment of a manifest.
+func containersOf(t *testing.T, manifest string) []renderedContainer {
+	t.Helper()
 
 	var out []renderedContainer
-	for _, doc := range releaseutil.SplitManifests(rel.Manifest) {
+	for _, doc := range releaseutil.SplitManifests(manifest) {
+		var kind struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &kind); err != nil || kind.Kind != "Deployment" {
+			continue
+		}
 		var obj struct {
 			Kind string `json:"kind"`
 			Spec struct {
@@ -99,8 +123,11 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 				} `json:"template"`
 			} `json:"spec"`
 		}
-		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil || obj.Kind != "Deployment" {
-			continue
+		// A Deployment this decoder cannot read is a failure, not a skip. Skipping it
+		// drops that area from every test that ranges over the rendered areas, and
+		// those tests then pass for the one they never saw.
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("decoding a rendered Deployment: %v\n%s", err, doc)
 		}
 		for _, c := range obj.Spec.Template.Spec.Containers {
 			rc := renderedContainer{

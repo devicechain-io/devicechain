@@ -538,7 +538,8 @@ already exist rather than adding a tuning axis of its own:
   JetStream, 2Gi relational Postgres, 4Gi TimescaleDB);
 - lower scheduling **requests** (25m / 64Mi), so pods fit a small node. Limits are untouched:
   lowering the memory limit converts pressure into OOMKills and lowering the CPU limit
-  throttles, and neither shrinks anything;
+  throttles, and neither shrinks anything. `device-management` and `event-management` keep
+  their higher CPU limits; see [Service sizing](#service-sizing);
 - no monitoring stack, the single largest consumer;
 - no cert-manager, since with TLS off nothing needs a certificate issued (keep TLS and
   cert-manager stays — see below), and consequently no database backup plugin.
@@ -766,6 +767,48 @@ happens:
 
 Plan a node's return the way you plan its loss, and do not take a second node down until
 `dcctl ha verify` passes again.
+
+### Service sizing {#service-sizing}
+
+Every backend service requests 100m of CPU and 128Mi of memory (25m and 64Mi under
+[`--compact`](#--compact)) and is limited to 500m and 256Mi, with two exceptions:
+`device-management` and `event-management` may each use up to 2 CPU cores. Those two do the
+per-event work of resolving and storing every event, and they are sized for live device traffic
+at a tenant's default ingest ceiling of 1000 messages per second, one reading per message. The
+console is sized separately.
+
+- **Limits do not reserve anything.** Kubernetes schedules a pod by its requests, so the higher
+  limits need no extra room on a node. They only let the two services use CPU the node has spare
+  while they are busy. `--compact` lowers their requests, as it does for every backend service,
+  and leaves the limits alone.
+- **Lowering a CPU limit caps throughput; it does not save capacity.** At 500m, on a four-node
+  `--ha` kind cluster, `device-management` resolved at most about 720 events per second, held
+  back by its limit in almost every scheduling period, and every event above that waited in the
+  inbound stream. Measured without a limit in the way, it used up to 0.96 millicores of CPU per
+  event and `event-management` up to 0.53 per stored event, so the default ceiling needs about
+  one core and half a core; each limit is twice that, because a CPU limit is enforced over short
+  periods and a busy service reaches it in bursts well before its average does.
+- **More traffic needs more.** Several tenants each sending at their ceiling, messages that carry
+  many readings, or a tenant that is [admitted above its
+  ceiling](../concepts/governance.md#ingest-above-ceiling) while it catches up all need more
+  than this. Add `replicas` to `device-management`, which scales horizontally (more replicas
+  reorder one device's events slightly more; see `watermarkLatenessSeconds` in [the detection
+  engine's configuration](./detection-engine.md#configuration)), or raise one service's limit:
+
+  ```yaml
+  functionalAreas:
+    device-management:
+      resources:
+        limits:
+          cpu: "4"
+  ```
+
+  A service's `functionalAreas.<service>.resources` is merged over the top-level `resources` key
+  by key, so set only what differs. To guarantee the CPU when the node is contended, raise the
+  request as well. A request above its service's limit is refused when the chart renders.
+
+The metric that shows a service held back by its limit is
+`container_cpu_cfs_throttled_periods_total` for its container.
 
 ## After bootstrap {#after-bootstrap}
 

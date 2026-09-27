@@ -573,7 +573,8 @@ que ya existen en lugar de añadir un eje de ajuste propio:
 - **solicitudes** (requests) de programación más bajas (25m / 64Mi), para que los pods quepan
   en un nodo pequeño. Los límites quedan intactos: bajar el límite de memoria convierte la
   presión en OOMKills y bajar el límite de CPU produce throttling, y ninguna de las dos cosas
-  reduce nada;
+  reduce nada. `device-management` y `event-management` conservan sus límites de CPU más altos;
+  consulta [Dimensionamiento de los servicios](#service-sizing);
 - sin la pila de monitorización, el mayor consumidor individual;
 - sin cert-manager, ya que con TLS desactivado nada necesita que se emita un certificado
   (mantener TLS conserva también cert-manager; consulta más abajo), y en consecuencia sin el
@@ -822,6 +823,51 @@ real.
 
 Planifica la vuelta de un nodo como planificas su pérdida, y no retires un segundo nodo hasta
 que `dcctl ha verify` vuelva a pasar.
+
+### Dimensionamiento de los servicios {#service-sizing}
+
+Cada servicio de backend solicita 100m de CPU y 128Mi de memoria (25m y 64Mi con
+[`--compact`](#--compact)) y tiene un límite de 500m y 256Mi, con dos excepciones:
+`device-management` y `event-management` pueden usar cada uno hasta 2 núcleos de CPU. Esos dos
+hacen el trabajo por evento de resolver y almacenar cada evento, y están dimensionados para el
+tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
+mensajes por segundo, con una lectura por mensaje. La consola se dimensiona por separado.
+
+- **Los límites no reservan nada.** Kubernetes planifica un pod según sus solicitudes, así que
+  los límites más altos no necesitan espacio adicional en un nodo. Solo permiten que los dos
+  servicios usen la CPU que el nodo tiene libre mientras están ocupados. `--compact` reduce sus
+  solicitudes, como en todos los servicios de backend, y no toca los límites.
+- **Bajar un límite de CPU recorta el rendimiento; no ahorra capacidad.** Con 500m, en un clúster
+  kind `--ha` de cuatro nodos, `device-management` resolvía como máximo unos 720 eventos por
+  segundo, frenado por su límite en casi todos los periodos de planificación, y cada evento por
+  encima de eso esperaba en el stream de entrada. Medido sin un límite que lo frenara, usaba hasta
+  0,96 milinúcleos de CPU por evento y `event-management` hasta 0,53 por evento almacenado, así que
+  el techo predeterminado necesita alrededor de un núcleo y de medio núcleo; cada límite es el
+  doble, porque un límite de CPU se aplica en periodos cortos y un servicio ocupado lo alcanza en
+  ráfagas mucho antes que su media.
+- **Más tráfico necesita más.** Varios inquilinos enviando cada uno a su techo, mensajes con
+  muchas lecturas, o un inquilino [admitido por encima de su
+  techo](../concepts/governance.md#ingest-above-ceiling) mientras se pone al día necesitan más
+  que esto. Añade `replicas` a `device-management`, que escala horizontalmente (más réplicas
+  reordenan un poco más los eventos de un mismo dispositivo; consulta `watermarkLatenessSeconds`
+  en [la configuración del motor de detección](./detection-engine.md#configuration)), o aumenta
+  el límite de un servicio:
+
+  ```yaml
+  functionalAreas:
+    device-management:
+      resources:
+        limits:
+          cpu: "4"
+  ```
+
+  El bloque `functionalAreas.<servicio>.resources` de un servicio se combina clave a clave sobre
+  los `resources` de nivel superior, así que indica solo lo que cambia. Para garantizar la CPU
+  cuando el nodo está saturado, aumenta también la solicitud. Una solicitud por encima del límite
+  de su servicio se rechaza al generar el chart.
+
+La métrica que muestra un servicio frenado por su límite es
+`container_cpu_cfs_throttled_periods_total` de su contenedor.
 
 ## Después del arranque inicial {#after-bootstrap}
 
