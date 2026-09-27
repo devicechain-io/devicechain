@@ -1696,6 +1696,10 @@ Si vigila las métricas de `device-state` o fija sus ajustes `projection`, o enr
 alertas por nombre, lea «El estado en vivo se fusiona por lotes, y un consumidor que se queda atrás
 genera un aviso»: se añade un aviso, `JetStreamDurableFallingBehind`.
 
+Si sus valores fijan `rdbConfiguration.maxOpenConnections` para `device-management`, o vigila sus
+conexiones a la base de datos, lea «device-management resuelve más eventos a la vez»: ahora ocupa
+hasta 10 conexiones mientras resuelve eventos, y un pool de 10 o menos le impide arrancar.
+
 #### Todos los usuarios cierran sesión una vez, y restablecer una contraseña ahora termina sesiones
 
 Cada usuario tiene ahora un **valor de sesión**, y todo token que se puede canjear por otro nuevo lo
@@ -3214,6 +3218,39 @@ síncrona, cinco escritores fusionaron unos 3500 eventos por segundo, frente a u
   esperándole durante 15 minutos. El consumidor de detección de `event-processing` queda a cargo de
   `DetectConsumerBacklogHigh`, que no cambia. Consulte
   [Un consumidor que se queda atrás](./observability.md#consumer-backlog).
+
+#### device-management resuelve más eventos a la vez
+
+`device-management` resolvía los eventos entrantes con cinco resolvedores, un número fijado en el
+código. Resolver un evento es sobre todo esperar: a que la base de datos autentique su credencial y
+después a que el almacén clave-valor del bróker de mensajes devuelva su perfil y sus relaciones, una
+consulta tras otra. Así que cinco resolvedores limitaban cuántos eventos por segundo podía resolver
+un pod mientras la mayor parte de su CPU seguía libre. En un clúster de pruebas el pod resolvía unos
+1600 eventos por segundo con 1,5 de sus 4 núcleos, y los eventos por encima de ese ritmo esperaban
+en el pod, unos 140 a la vez, y después en el flujo, con la detección quedándose atrás con ellos.
+Ahora ejecuta 10 por defecto, y el número es configurable. Medido dentro del proceso contra un
+bróker de tres servidores, con cada consulta tardando 750 µs, 5 resolvedores resolvieron unos 1500
+eventos por segundo y 10 unos 2900. Consulte [Resolución de eventos](./observability.md#event-resolution).
+
+- **El ajuste nuevo es `resolution.workers`** (por defecto `10`). Debe ser menor que el pool de
+  conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica). Un valor
+  fuera de rango impide que el servicio arranque, y el error nombra el ajuste. El valor por defecto
+  solo se rechaza si fija `maxOpenConnections` para `device-management` en 10 o menos: fije
+  `resolution.workers` por debajo antes de actualizar.
+- **device-management ocupa más conexiones a la base de datos mientras resuelve eventos.** Cada
+  resolvedor ocupa una mientras autentica la credencial de un evento, lo que con la autenticación de
+  dispositivos `required` por defecto ocurre con cada evento. Con todos los resolvedores ocupados son
+  ahora hasta 10 conexiones en lugar de 5, del pool que también usan la API GraphQL y las
+  comprobaciones de conexión MQTT. Si fija `maxOpenConnections` por debajo de 20, compruebe que lo
+  que queda les basta. Se permite más de la mitad del pool, y se registra al arrancar.
+- **Un pod en su límite de CPU no gana nada con más resolvedores.** Esto solo sube el ritmo donde al
+  pod le sobra CPU.
+- **Una métrica nueva, `resolve_workers`,** indica cuántos resolvedores ejecuta el pod, y
+  `resolve_inflight` puede llegar ahora a 10. `resolve_inflight` mantenido en `resolve_workers`
+  significa que los eventos llegan más rápido de lo que el pod los resuelve.
+- **Para volver a una versión anterior:** un `device-management` anterior rechaza una configuración
+  que fija `resolution.workers`, como rechaza cualquier ajuste que no conoce. Quite el ajuste antes
+  de volver atrás.
 
 ### La transición única a la ingesta duradera
 

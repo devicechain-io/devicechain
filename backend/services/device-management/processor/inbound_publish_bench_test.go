@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
@@ -22,6 +23,7 @@ import (
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 	"gorm.io/gorm"
 )
@@ -83,7 +85,71 @@ func BenchmarkResolvedPublishThroughput(b *testing.B) {
 func runResolvePipeline(b *testing.B, srv *natsserver.Server, instance string, replicas, resolvers, window, events int) float64 {
 	b.Helper()
 	b.StopTimer()
-	u, err := url.Parse(srv.ClientURL())
+	p := startResolvePipeline(b, pipelineSpec{
+		srv: srv, instance: instance, replicas: replicas, resolvers: resolvers, window: window,
+		events: events, api: instantApi{}, authMode: config.AuthModeOptional,
+		event: func(i int) *esmodel.UnresolvedEvent { return benchMeasurement(i % 1000) },
+	})
+	b.StartTimer()
+	start := time.Now()
+	if err := p.iproc.Start(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		info, err := p.js.StreamInfo(p.resolvedStream)
+		if err == nil && info.State.Msgs >= uint64(events) {
+			break
+		}
+		if time.Now().After(deadline) {
+			b.Fatalf("resolved-events did not reach %d messages", events)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	elapsed := time.Since(start)
+	b.StopTimer()
+	_ = p.iproc.Stop(context.Background())
+	info, err := p.js.StreamInfo(p.resolvedStream)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if info.State.Msgs != uint64(events) {
+		b.Fatalf("resolved-events holds %d, want %d", info.State.Msgs, events)
+	}
+	return float64(events) / elapsed.Seconds()
+}
+
+// pipelineSpec is one arm of a pipeline benchmark: where it runs, how wide, and what it
+// resolves. The wrap hooks let a benchmark put its own instruments around the reader and the
+// resolved writer the processor is built over; nil leaves them as main.go builds them.
+type pipelineSpec struct {
+	srv                         *natsserver.Server
+	instance                    string
+	replicas, resolvers, window int
+	events                      int
+	api                         dmodel.DeviceManagementApi
+	authMode                    string
+	event                       func(i int) *esmodel.UnresolvedEvent
+	registry                    *prometheus.Registry
+	wrapReader                  func(messaging.MessageReader) messaging.MessageReader
+	wrapResolved                func(messaging.OrderedWriter) messaging.OrderedWriter
+}
+
+// resolvePipeline is a pipeline started by startResolvePipeline: its inbound events
+// published and its processor initialized, but not yet started.
+type resolvePipeline struct {
+	iproc                         *InboundEventsProcessor
+	js                            nats.JetStreamContext
+	inboundStream, resolvedStream string
+}
+
+// startResolvePipeline builds the real durable reader and writers on spec.srv, pre-publishes
+// spec.events inbound events (event i is spec.event(i), stored at stream sequence i+1), and
+// returns the processor initialized, ready for Start. What it opens is closed by the
+// benchmark's cleanup.
+func startResolvePipeline(b *testing.B, spec pipelineSpec) *resolvePipeline {
+	b.Helper()
+	u, err := url.Parse(spec.srv.ClientURL())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -91,9 +157,12 @@ func runResolvePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 	if err != nil {
 		b.Fatal(err)
 	}
-	ms := &core.Microservice{InstanceId: instance, FunctionalArea: "device-management", Readiness: core.NewReadinessGate()}
+	ms := &core.Microservice{InstanceId: spec.instance, FunctionalArea: "device-management", Readiness: core.NewReadinessGate()}
+	if spec.registry != nil {
+		ms.UseMetricsRegistry(spec.registry)
+	}
 	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{
-		Hostname: u.Hostname(), Port: uint32(port), StreamReplicas: uint32(replicas)}
+		Hostname: u.Hostname(), Port: uint32(port), StreamReplicas: uint32(spec.replicas)}
 	ms.Readiness.MarkReadyWithoutAuthSurface()
 	var reader messaging.MessageReader
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *messaging.NatsManager) error {
@@ -112,28 +181,40 @@ func runResolvePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 	if err := nmgr.Start(context.Background()); err != nil {
 		b.Fatal(err)
 	}
-	defer func() { _ = nmgr.Stop(context.Background()) }()
+	b.Cleanup(func() { _ = nmgr.Stop(context.Background()) })
 
-	nc, err := nats.Connect(srv.ClientURL())
+	nc, err := nats.Connect(spec.srv.ClientURL())
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer nc.Close()
+	b.Cleanup(nc.Close)
 	js, err := nc.JetStream(nats.PublishAsyncMaxPending(1024))
 	if err != nil {
 		b.Fatal(err)
 	}
-	iproc := newBenchProcessor(b, nmgr, reader, instantApi{}, window, resolvers)
-	resolvedStream := messaging.StreamName(instance, streams.ResolvedEvents)
-	if replicas > 1 {
-		for _, s := range []string{resolvedStream, messaging.StreamName(instance, streams.InboundEvents)} {
+	if spec.wrapReader != nil {
+		reader = spec.wrapReader(reader)
+	}
+	iproc := newBenchProcessor(b, nmgr, reader, spec.api, spec.window, spec.resolvers)
+	iproc.AuthMode = spec.authMode
+	if spec.wrapResolved != nil {
+		iproc.ResolvedEventsWriter = spec.wrapResolved(iproc.ResolvedEventsWriter)
+	}
+	p := &resolvePipeline{
+		iproc:          iproc,
+		js:             js,
+		inboundStream:  messaging.StreamName(spec.instance, streams.InboundEvents),
+		resolvedStream: messaging.StreamName(spec.instance, streams.ResolvedEvents),
+	}
+	if spec.replicas > 1 {
+		for _, s := range []string{p.resolvedStream, p.inboundStream} {
 			benchSettled(b, js, s)
 		}
 	}
 
-	subject := messaging.ScopedSubject(instance, "acme", streams.InboundEvents)
-	for i := 0; i < events; i++ {
-		body, err := esproto.MarshalUnresolvedEvent(benchMeasurement(i % 1000))
+	subject := messaging.ScopedSubject(spec.instance, "acme", streams.InboundEvents)
+	for i := 0; i < spec.events; i++ {
+		body, err := esproto.MarshalUnresolvedEvent(spec.event(i))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -150,33 +231,7 @@ func runResolvePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 	if err := iproc.Initialize(context.Background()); err != nil {
 		b.Fatal(err)
 	}
-	b.StartTimer()
-	start := time.Now()
-	if err := iproc.Start(context.Background()); err != nil {
-		b.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Minute)
-	for {
-		info, err := js.StreamInfo(resolvedStream)
-		if err == nil && info.State.Msgs >= uint64(events) {
-			break
-		}
-		if time.Now().After(deadline) {
-			b.Fatalf("resolved-events did not reach %d messages", events)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	elapsed := time.Since(start)
-	b.StopTimer()
-	_ = iproc.Stop(context.Background())
-	info, err := js.StreamInfo(resolvedStream)
-	if err != nil {
-		b.Fatal(err)
-	}
-	if info.State.Msgs != uint64(events) {
-		b.Fatalf("resolved-events holds %d, want %d", info.State.Msgs, events)
-	}
-	return float64(events) / elapsed.Seconds()
+	return p
 }
 
 func benchMeasurement(device int) *esmodel.UnresolvedEvent {
@@ -248,12 +303,9 @@ func (instantApi) DevicesByToken(_ context.Context, tokens []string) ([]*dmodel.
 
 func (instantApi) AnyScopedGroups(context.Context) (bool, error) { return false, nil }
 
-func (instantApi) ProfileScopeByDeviceType(context.Context, uint) (*dmodel.ProfileScope, error) {
-	return &dmodel.ProfileScope{}, nil
-}
-
-func (instantApi) MetricDefinitionsByDeviceType(context.Context, uint) ([]*dmodel.MetricDefinition, error) {
-	return nil, nil
+// ProfileResolutionByDeviceType answers an unscoped profile that declares no metrics.
+func (instantApi) ProfileResolutionByDeviceType(context.Context, uint) (*dmodel.ProfileResolution, error) {
+	return dmodel.NewProfileResolution(dmodel.ProfileScope{}, nil), nil
 }
 
 func (instantApi) TrackedRelationshipsForDevice(context.Context, uint) (*dmodel.EntityRelationshipSearchResults, error) {

@@ -72,7 +72,7 @@ func newPostgresGeoFenceApi(t *testing.T) *Api {
 // NOTHING. Split out of newPostgresGeoFenceApi for the backfill tests, which have to seed rows
 // and then run the chain OVER them — the one thing a helper that empties the tables first
 // cannot be used for.
-func newPostgresRdbManager(t *testing.T) *rdb.RdbManager {
+func newPostgresRdbManager(t testing.TB) *rdb.RdbManager {
 	t.Helper()
 	port, err := strconv.Atoi(itEnv("DC_IT_PGPORT", "5432"))
 	if err != nil {

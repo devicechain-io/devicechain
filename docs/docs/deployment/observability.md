@@ -339,6 +339,40 @@ alerted on. Its other failure outcomes are one tenant's own configuration, such 
 fails or a destination the platform refuses to reach. Those dispatches are already dead-lettered
 and listed by `dcctl dead-letters`, and they do not page the operator.
 
+## Event resolution {#event-resolution}
+
+`device-management` resolves every inbound event before anything stores or evaluates it. A
+resolver authenticates the event's credential, which is one read from the relational database,
+then looks up the device's profile and relationships in the message broker's key-value store,
+and hands the resolved event on to be published. The lookups run one after another, so a
+resolver spends most of each event waiting for replies rather than using CPU. Several resolvers
+work at once. Events that arrive while all of them are busy wait in front of them, in order: up
+to 100 in the pod's hand-off queue and up to 64 more in the batch last fetched from the stream.
+The rest wait in the stream.
+
+| Metric | What it tells you |
+| --- | --- |
+| `devicechain_devicemanagement_resolve_workers` | How many resolvers the pod runs. |
+| `devicechain_devicemanagement_resolve_inflight` | How many of them are busy. When it stays at `resolve_workers`, events are arriving faster than the pod resolves them, and they queue in front of it. The `device-management` inbound consumer's pending count then grows (see [A consumer that stays behind](#consumer-backlog)). |
+| `devicechain_devicemanagement_resolve_messages_total` | Events resolved, by result. While the resolvers are all busy, its rate is how many events the pod can resolve per second. |
+
+`resolve_duration_seconds` includes the time a resolver waits to hand its result on. Its lowest
+bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
+
+### Tuning it
+
+| Setting (`device-management` config) | Default | What it does |
+| --- | --- | --- |
+| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it authenticates an event's credential, which it does for every event that carries one (every event, under the default `required` device authentication). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API and the MQTT connect checks. More than half the pool is allowed, and logged at startup. |
+
+Raise it when `resolve_inflight` stays at `resolve_workers` while the pod has CPU to spare. If the
+pod is at its CPU limit instead, more resolvers do not help: give it more CPU. Measured in-process
+against a three-server broker, with every lookup taking 750 µs, 5 resolvers resolved about 1,500
+events a second and 10 about 2,900. Resolvers finish events out of arrival order, by a fraction of a
+second; detection applies them in the order they reach the resolved stream. An out-of-range value
+stops the service from starting, and the error names the setting. The service logs the value it is
+using when it starts.
+
 ## Event persistence {#event-persistence}
 
 `event-management` writes events in batches. Each writer takes the events already waiting for it,

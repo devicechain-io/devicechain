@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // Device authentication policy applied to inbound events (transport security,
@@ -47,6 +48,26 @@ const (
 // what instant a reading happened at — the resolved event then travels with an already-
 // bounded time, so no consumer configures or re-applies this (see core/eventtime).
 const DefaultMaxEventFutureSkewSeconds = 300
+
+// DefaultResolutionWorkers is how many inbound events are resolved at once when
+// resolution.workers is not set.
+//
+// A warm event makes its lookups one after another — the credential (one database read,
+// for every event that carries one) and then the profile, the tracked relationships and
+// whether any scoped group exists (key-value reads from the message broker) — so a
+// resolver spends most of each event waiting for replies, not using CPU. On a kind cluster
+// five resolvers topped out at about 1600 events a second on 1.5 of the pod's 4 cores,
+// with the events above that rate queued in front of them.
+//
+// Measured in-process (BenchmarkInboundStageOccupancy: a three-server broker, credentialed
+// events, each lookup answering after 750µs, which puts five resolvers near the kind
+// ceiling): 5 resolvers resolved about 1500 events a second, 8 about 2300, 10 about 2900
+// and 16 about 4600, the resolvers busy throughout in every arm. The count is capped at 10
+// rather than taken from the widest arm because each resolver holds a pooled connection
+// while it authenticates an event, and 10 is half of the default pool of 20, the most
+// rdb.CheckWriterCount accepts without a warning. On a real PostgreSQL the credential read
+// did not wait for a connection at 10 (BenchmarkAuthenticateDeviceConcurrency).
+const DefaultResolutionWorkers = 10
 
 const (
 	DefaultDeviceCacheTtlSeconds       = 60
@@ -98,6 +119,39 @@ type DeviceManagementConfiguration struct {
 	// Pre-GA an instance is recreated rather than upgraded in place, which is why this is
 	// recorded rather than mitigated with a transitional bound.
 	MaxEventFutureSkewSeconds int
+
+	// Resolution sizes the pool that resolves inbound events.
+	Resolution ResolutionConfiguration
+}
+
+// ResolutionConfiguration sizes inbound-event resolution.
+type ResolutionConfiguration struct {
+	// Workers is how many inbound events are resolved at once. Unset (0) defaults to
+	// DefaultResolutionWorkers.
+	//
+	// Every event that carries a credential — every event, under the default "required"
+	// device-auth mode — is authenticated with one database read, which holds a pooled
+	// connection while it runs (the credential lookup is deliberately never cached, so a
+	// revocation takes effect on the next event). A resolver makes its lookups one after
+	// another, so it holds at most one connection at a time, and with every resolver busy
+	// the pool gives up to this many connections to resolution. So the count is bounded below
+	// the relational pool it shares with GraphQL and the MQTT connect checks, by the same
+	// check the other services' writer counts use.
+	Workers int
+}
+
+// ApplyDefaults fills the worker count when it is unset. It is the ONE definition of that
+// default: the configuration load calls it, and so does the processor for a pool built in
+// code.
+func (r *ResolutionConfiguration) ApplyDefaults() {
+	if r.Workers == 0 {
+		r.Workers = DefaultResolutionWorkers
+	}
+}
+
+// Validate bounds the worker count against the pool the resolvers draw from.
+func (r ResolutionConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration) error {
+	return rdb.CheckWriterCount("resolution.workers", r.Workers, pool)
 }
 
 // Creates the default device management configuration
@@ -132,6 +186,7 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 	if c.MaxEventFutureSkewSeconds == 0 {
 		c.MaxEventFutureSkewSeconds = DefaultMaxEventFutureSkewSeconds
 	}
+	c.Resolution.ApplyDefaults()
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -172,6 +227,9 @@ func (c *DeviceManagementConfiguration) Validate() error {
 		return fmt.Errorf("maxEventFutureSkewSeconds must not be negative (got %d): a negative "+
 			"value disables the clock-skew bound, which lets one far-future timestamp freeze a "+
 			"device's presence permanently", c.MaxEventFutureSkewSeconds)
+	}
+	if err := c.Resolution.Validate(c.RdbConfiguration); err != nil {
+		return err
 	}
 	return nil
 }

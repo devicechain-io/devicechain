@@ -350,6 +350,42 @@ genera un aviso. Sus otros resultados de fallo son la configuración de un solo 
 webhook que falla o un destino al que la plataforma se niega a conectarse. Esos envíos ya se
 registran como mensajes no entregados y aparecen en `dcctl dead-letters`, y no avisan al operador.
 
+## Resolución de eventos {#event-resolution}
+
+`device-management` resuelve cada evento entrante antes de que nada lo almacene o lo evalúe. Un
+resolvedor (cada uno de los trabajadores que resuelven eventos) autentica la credencial del evento,
+lo que supone una lectura de la base de datos relacional, después consulta el perfil y las
+relaciones del dispositivo en el almacén clave-valor del bróker de mensajes, y entrega el evento
+resuelto para que se publique. Las consultas se hacen una tras otra, así que un resolvedor pasa la
+mayor parte de cada evento esperando respuestas, no usando CPU. Varios resolvedores trabajan a la
+vez. Los eventos que llegan mientras todos están ocupados esperan delante de ellos, en orden: hasta
+100 en la cola de entrega del pod y hasta 64 más en el último lote leído del flujo. El resto espera
+en el flujo.
+
+| Métrica | Qué indica |
+| --- | --- |
+| `devicechain_devicemanagement_resolve_workers` | Cuántos resolvedores ejecuta el pod. |
+| `devicechain_devicemanagement_resolve_inflight` | Cuántos de ellos están ocupados. Cuando se mantiene en `resolve_workers`, los eventos llegan más rápido de lo que el pod los resuelve y se acumulan delante de él. El recuento de pendientes del consumidor de entrada de `device-management` crece entonces (consulte [Un consumidor que se queda atrás](#consumer-backlog)). |
+| `devicechain_devicemanagement_resolve_messages_total` | Eventos resueltos, por resultado. Mientras todos los resolvedores están ocupados, su ritmo es cuántos eventos por segundo puede resolver el pod. |
+
+`resolve_duration_seconds` incluye el tiempo que un resolvedor espera para entregar su resultado.
+Su intervalo más bajo es de 5 ms, así que un cuantil por debajo de eso es una estimación, no una
+medida.
+
+### Ajustarlo
+
+| Ajuste (configuración de `device-management`) | Valor por defecto | Qué hace |
+| --- | --- | --- |
+| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras autentica la credencial de un evento, lo que hace con cada evento que lleva una (todos los eventos, con la autenticación de dispositivos `required` por defecto). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL y las comprobaciones de conexión MQTT. Se permite más de la mitad del pool, y se registra al arrancar. |
+
+Súbalo cuando `resolve_inflight` se mantenga en `resolve_workers` mientras al pod le sobra CPU. Si
+el pod está en su límite de CPU, más resolvedores no ayudan: dele más CPU. Medido dentro del
+proceso contra un bróker de tres servidores, con cada consulta tardando 750 µs, 5 resolvedores
+resolvieron unos 1500 eventos por segundo y 10 unos 2900. Los resolvedores terminan los eventos
+fuera del orden de llegada, por una fracción de segundo; la detección los aplica en el orden en que
+llegan al flujo de eventos resueltos. Un valor fuera de rango impide que el servicio arranque, y el
+error nombra el ajuste. El servicio registra el valor que usa al arrancar.
+
 ## Persistencia de eventos {#event-persistence}
 
 `event-management` escribe los eventos por lotes. Cada escritor toma los eventos que ya lo esperan,
