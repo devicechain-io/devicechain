@@ -5,391 +5,198 @@
   </picture>
 </p>
 
-**A modern, cloud-native IoT Application Enablement Platform built in Go and React.**
+**An open-source, self-hosted IoT platform for collecting device telemetry, detecting conditions in it and sending commands back, on Kubernetes.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/devicechain-io/devicechain)](https://github.com/devicechain-io/devicechain/releases/latest)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/devicechain)](https://artifacthub.io/packages/search?repo=devicechain)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/devicechain-io/devicechain/badge)](https://scorecard.dev/viewer/?uri=github.com/devicechain-io/devicechain)
 
-DeviceChain™ connects, manages, and processes data from large, heterogeneous device
-fleets — covering device lifecycle, telemetry ingestion, command & control,
-organizational modeling, and multi-tenancy — and exposes everything through a
-GraphQL API.
+DeviceChain has not reached 1.0. A release can change APIs and schemas, and each one lists its
+breaking changes first ([Status](#status)).
 
-It is a ground-up rebuild of the [SiteWhere](https://github.com/sitewhere/sitewhere) IoT platform
-that keeps the proven domain model while replacing the heavy Java/Spring stack with
-efficient, operationally simple microservices that run on any Kubernetes cluster.
-The goal is a self-hosted, full-featured platform that is operationally simple,
-architecturally complete, and **unmetered all the way to production scale**.
+DeviceChain™ takes in telemetry from device fleets, keeps a record of each device and the assets,
+areas and customers it belongs to, detects conditions in the data as it arrives, and sends
+commands back. One installation serves many tenants. It is meant for teams that build an IoT
+product or run a fleet and want to run the platform in a Kubernetes cluster they control, with
+their data kept there. All of it is Apache 2.0 and in this repository, including high
+availability, multi-tenancy and command delivery; there is no paid edition.
 
-> **Project status:** DeviceChain is pre-release and under active development. The
-> documentation marks each capability as **available**, **planned**, or **in
-> design**, and this repository is the source of truth for what currently builds
-> and runs.
+## What it does
 
-## Why DeviceChain
+### Ingest
 
-- **Go-native microservices** — sub-second startup, a small memory footprint, and
-  single-binary services per functional area.
-- **Operator + CRDs, not shell scripts** — a Kubernetes operator reconciles a
-  declarative `Instance` custom resource, so an instance's deployment shape is
-  version-controllable and GitOps-friendly.
-- **GraphQL-first API** — introspectable and self-documenting; no generated client
-  stubs and no REST surface to maintain.
-- **A lean, fully open-source stack** — NATS JetStream is the entire messaging /
-  MQTT / KV backbone, native JWT handles auth, TimescaleDB is the single data
-  store, and OpenTofu provisions infrastructure. **Two dependencies to run
-  locally: NATS + TimescaleDB.** No Java, Keycloak, Kafka, ZooKeeper, Redis, or
-  Mosquitto.
-- **A uniform relationship model** — device context is a typed relationship graph
-  rather than rigid assignments, so new entity types compose without schema churn.
-- **Self-hosted and unmetered** — Apache-2.0 with no open-core split and no
-  per-device pricing. Device inventory, twin state, command delivery,
-  multi-tenancy, high availability, and SSO are part of the open platform, not a
-  paid tier. Run it inside your own environment with full data ownership.
+Devices send data over these transports:
 
-## Open source, all the way down
+- MQTT, through the broker built into NATS (port 1883)
+- HTTP, as a `POST` of a JSON event (the same body a device publishes over MQTT)
+- [Eclipse Sparkplug B](https://docs.devicechain.io/concepts/sparkplug), with DeviceChain joining
+  your existing Sparkplug broker as a Host Application
+- [OMA LwM2M](https://docs.devicechain.io/concepts/lwm2m) over CoAP/UDP with DTLS
 
-DeviceChain ships under **Apache License 2.0 with no open-core split**. There is no
-proprietary "Enterprise" edition that gates production-critical capability —
-clustering / high availability, multi-tenant isolation, persistent command
-delivery, and SSO are all part of the open stack, as are roadmapped capabilities
-like OTA updates when they land. Nothing production-critical is reserved for a
-paid tier.
+The transports differ in what they support. HTTP is ingest only, Sparkplug devices cannot be
+commanded, and LwM2M telemetry is decoded from SenML-JSON only. Sparkplug and LwM2M are not in
+the default install; add them at bootstrap with `--enable-area sparkplug-ingest` or
+`--enable-area lwm2m-ingest`. The
+[transport matrix](https://docs.devicechain.io/reference/transport-matrix) lists what each one
+does and what it lacks.
 
-Every runtime dependency is **OSI-approved** open source (Apache 2.0, MIT, BSD, MPL
-2.0), and nothing in the stack is encumbered by a source-available or
-business-source license. Because the platform runs entirely inside your own
-environment, the data — and the compliance boundary around it — stays with you:
-no third-party processor to vet and full source auditability.
+### Device model
 
-## Standards and interoperability
+You describe a kind of device once, in a versioned device profile that lists its metrics,
+commands and detection rules. Publishing a new profile version changes the behaviour of every
+device of that type in one step, and rollback undoes it. Devices can be linked to assets, areas
+and customers. The links you mark as tracked are written onto each event when it arrives, so a
+query for everything in one building finds its readings without walking the relationship graph,
+and history stays where it was when a device is moved. See the
+[domain model](https://docs.devicechain.io/concepts/domain-model).
 
-DeviceChain favors open, widely-implemented standards over bespoke protocols, so
-existing tools and off-the-shelf device clients work without a special SDK:
+### Detection and alarms
 
-- **Device transport** — devices connect over standard **MQTT** (the built-in NATS
-  MQTT server on port 1883) or **CoAP/UDP secured with DTLS** (see LwM2M below);
-  HTTP and WebSocket transports are planned. Any conformant MQTT client works
-  unchanged.
-- **Edge ingestion** — a dedicated adapter ingests **[Eclipse Sparkplug B](https://sparkplug.eclipse.org/)**
-  by joining your existing Sparkplug MQTT environment as a Host Application, so
-  brownfield edge fleets stream in without changing anything on the device side. It
-  also drives **authoritative device presence** — online/offline taken from the
-  Sparkplug birth/death handshake rather than inferred from an activity timeout.
-- **Constrained and cellular fleets** — DeviceChain terminates **[OMA LwM2M](https://lwm2m.openmobilealliance.org/)**
-  directly. Devices connect in over CoAP/UDP with DTLS and are authenticated at the
-  handshake by a pre-shared-key identity, which resolves to a tenant and a device
-  before any application traffic flows; roaming clients keep their session across an
-  IP change via DTLS Connection ID. Like Sparkplug, it is **presence-asserting** —
-  online/offline comes from the LwM2M registration lifecycle. Observed IPSO sensor
-  objects decode into ordinary measurements. *Telemetry decoding currently covers
-  SenML-JSON only, so an LwM2M 1.0-only client registers, drives presence, and
-  accepts commands but reports no measurements; TLV decoding is planned.*
-- **API** — **GraphQL** for all external APIs (one introspectable schema per
-  service). Internal service-to-service communication is asynchronous over NATS.
-- **Authentication** — native **RS256 JSON Web Tokens** (RFC 7519) with a
-  standard **JWKS** endpoint and RFC 7638 key thumbprints for rotation. Device
-  credentials are pluggable, including **X.509** certificates and access tokens.
-  user-management also runs a standards-based **OAuth 2.1** authorization server
-  (PKCE, RFC 8414 metadata, RFC 8707 audience-bound tokens) that secures MCP
-  access.
-- **Enterprise SSO (optional)** — an optional [Dex](https://dexidp.io) sidecar
-  adds **OIDC / SAML / LDAP** without a heavyweight identity provider per tenant.
-- **Observability** — **Prometheus** metrics, and Kubernetes-standard `/healthz`
-  (liveness) and `/readyz` (readiness) probes on every service.
-- **Orchestration & IaC** — runs on any **CNCF-conformant** Kubernetes cluster
-  (EKS, GKE, AKS, K3s, kind), packaged with **Helm**, with infrastructure
-  provisioned by **OpenTofu** (a Terraform-compatible, Linux Foundation project).
-- **Data** — **PostgreSQL** + **TimescaleDB**: a single SQL engine for both
-  relational entity data and time-series events.
+Detection rules run in the event-processing service as events arrive. Condition types include
+thresholds, conditions held for a duration, repeated occurrences, rate of change, silence,
+connectivity, windowed aggregates and conditions met by several devices in one area. A rule can
+raise an alarm, send a command to a device, call a webhook, or publish to MQTT, Kafka, AWS SNS or
+AWS SQS. The webhook and publish actions need the `outbound-connectors` area, which is off by
+default. Rules are written as forms, on a visual canvas that can replay history against a draft,
+or from a plain-language description when the optional AI service is enabled. Alarms reach people
+by email or webhook, with escalation. See
+[event processing and alarms](https://docs.devicechain.io/concepts/event-processing).
 
-## Architecture
+### Commands and dashboards
 
-DeviceChain is a set of stateless Go microservices over a shared core library,
-coordinated by a Kubernetes operator and connected by NATS JetStream. A **single
-instance serves all tenants** (a shared-microservice model); tenant isolation is
-enforced at the messaging and storage layers rather than by running separate pods
-per tenant.
+Commands are validated against the device's profile, then tracked until the device reports the
+result or the command's time-to-live runs out
+([commands](https://docs.devicechain.io/concepts/commands)). Dashboards are versioned per tenant
+and render with React widget packages published to npm, which you can embed in your own
+application ([dashboards](https://docs.devicechain.io/concepts/dashboards)).
 
-### Core services
+### APIs and data access
 
-| Service | Responsibility |
-|---|---|
-| **event-sources** | Inbound device transports. Decodes raw messages and publishes them onto the pipeline. |
-| **sparkplug-ingest** | An opt-in, stateful [Eclipse Sparkplug B](https://sparkplug.eclipse.org/) Host Application: connects out to per-tenant customer brokers, runs the Sparkplug session machine, maps `{group}/{node}[/{device}]` identities to devices, and feeds the same pipeline — the first transport to assert authoritative device presence. Leader-elected so exactly one replica connects. |
-| **lwm2m-ingest** | An opt-in [OMA LwM2M](https://lwm2m.openmobilealliance.org/) server: terminates CoAP/UDP over DTLS, authenticates each device by its pre-shared-key identity before any application traffic flows, drives presence from the registration lifecycle, and decodes observed IPSO sensor objects into the same measurement envelope every other transport uses. |
-| **device-management** | Devices, device types + versioned device profiles, the typed relationship graph, alarm objects (level-state integration), and event resolution. |
-| **event-management** | Persists resolved events to TimescaleDB and serves time-series queries over GraphQL. |
-| **user-management** | Identities, per-tenant memberships, roles, and two-tier JWT issuance / validation (JWKS). |
-| **device-state** | Live last-known-state projection per device (presence, latest location and measurements). |
-| **command-delivery** | Persistent, two-way command dispatch to devices. |
-| **dashboard-management** | Stores tenant dashboard definitions; the embeddable widget packages render live telemetry over them. |
-| **notification-management** | Routes triggered alarms to humans — per-tenant policy over email (SMTP) and webhook, with per-severity escalation. |
-| **event-processing** | The DETECT + REACT pipeline and the sole alarm engine: taps the resolved-events stream, detects conditions over a keyed-streaming CEL core, and dispatches actions (raise-alarm, send-command, and outbound connectors). Rules are authored on the profile as forms or on a visual automation canvas. |
-| **outbound-connectors** | Delivers REACT's outbound actions to external systems — an HTTP/webhook `httpCall` and a `publish` to MQTT, Kafka, AWS SNS, and AWS SQS — over a tenant-scoped, versioned connector whose credentials live in the secret store. Isolated from the detection engine in its own process. |
-| **ai-inference** | An opt-in service that drafts a detection rule from a natural-language description and hands it to the same compiler humans use — the AI proposes, the compiler disposes, and it never sits in the replay-correct path. Providers are operator-registered with write-only API-key handles; external-model use is per-tenant opt-in and fail-closed, and the model a tenant runs is a tiered entitlement. |
-| **mcp** | An opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state, telemetry, alarms, commands) to AI agents over the Model Context Protocol, fronting the per-area GraphQL under the caller's own token. |
-| **operator** | A controller-runtime operator reconciling the `Instance` custom resource (an instance's deployment shape). |
+The management and query APIs are GraphQL, and their schemas are published in the docs
+([schema index](https://docs.devicechain.io/schema/index.json)). Introspection is off in a running
+instance. Client libraries are the `@devicechain/client` TypeScript package on npm and the
+`DeviceChain.Sdk` .NET package on NuGet, which also targets Unity. Telemetry lives in TimescaleDB,
+so BI tools and `psql` can read it through a read-only analytics schema
+([SQL and BI access](https://docs.devicechain.io/guides/sql-and-bi-access)). An optional
+[MCP server](https://docs.devicechain.io/concepts/mcp) gives AI assistants read-only access to a
+tenant, under the signed-in user's own token.
 
-### The backbone
+## How it runs
 
-- **NATS JetStream** is the single backbone for asynchronous messaging, the MQTT
-  ingress, and key-value caching / locking — no separate Kafka, Redis, or MQTT
-  broker.
-- **TimescaleDB** (PostgreSQL + the TimescaleDB extension) is the single data
-  store for both relational entity data and time-series events. Events live in
-  hypertables with compression and continuous aggregates.
+DeviceChain is a set of Go services on Kubernetes, with a React console. NATS JetStream carries
+messaging, device MQTT connections and key-value state. PostgreSQL holds entity data, and a
+second PostgreSQL database with the TimescaleDB extension holds events. Each tenant's data is
+separated by a tenant column that every query is scoped to, and by per-tenant messaging subjects.
+All tenants share one set of services
+([multi-tenancy](https://docs.devicechain.io/concepts/multi-tenancy)).
 
-### The event pipeline
+A default install is sized for one tenant sending at the default ingest limit of 1,000 messages a
+second, one reading per message. At that rate `device-management` uses about one CPU core and
+`event-management` about half of one. More tenants at their limits, or messages that carry many
+readings, need more ([service sizing](https://docs.devicechain.io/deployment/bootstrap#service-sizing)).
 
-```
-device → MQTT/NATS → event-sources → (decoded event)
-       → device-management → (resolved event: device + relationship context attached)
-       → event-management → TimescaleDB
-```
+The `--ha` flag on `dcctl install` runs the message broker as a three-node cluster with every
+stream replicated, and both databases as three-instance clusters. It needs three schedulable
+nodes (on kind, three workers). An `--ha` install keeps running when any one node is lost; a
+second node lost at the same time stops writes. `dcctl ha verify` checks that the broker holds
+the replication the install declares ([high availability](https://docs.devicechain.io/deployment/bootstrap#ha)).
 
-During resolution, device-management looks up the device's **tracked**
-relationships and denormalizes them onto each event as index dimensions, so
-downstream queries like "every reading for Building 7" resolve without joins.
+The [disaster recovery](https://docs.devicechain.io/deployment/disaster-recovery) page covers
+backups and restore. A restore covers the two databases; JetStream stream state and object
+storage have not been through a restore drill.
 
-### Deployment model
+DeviceChain started as a rebuild of the [SiteWhere](https://github.com/sitewhere/sitewhere) IoT
+platform. It begins from SiteWhere's domain (devices, device types, assets, areas and customers)
+and replaces the Java and Spring stack with Go services. There is no tool to import data from a
+SiteWhere installation.
 
-Infrastructure (NATS, TimescaleDB, ingress, TLS) is provisioned by **OpenTofu** at
-cluster-creation time. The **operator** assumes that infrastructure exists and is
-responsible only for materializing DeviceChain workloads and maintaining their
-configuration — keeping cluster bootstrapping out of application code.
+## Status
 
-Each service loads its configuration into a typed schema and **fails closed**: an
-unknown key, a wrong type, or an invalid value is rejected at startup rather than
-silently ignored. Secrets a service must hold (channel credentials, connector
-auth) are kept in a pluggable **secret store** — envelope-encrypted in Postgres
-under an instance root key by default, with external managers (Vault, cloud KMS)
-as drop-in backends — and are referenced by handle rather than stored in the clear.
+DeviceChain has not reached 1.0, and until it does any release may change APIs, schemas or
+behaviour without a compatibility period. Each release lists its breaking changes first, in the
+[release notes](https://github.com/devicechain-io/devicechain/releases) and the
+[upgrade guide](https://docs.devicechain.io/deployment/releases-and-upgrades). Read them before
+you upgrade.
 
-That root key lives in the instance's Kubernetes Secret, which means it lives in
-**etcd**, and no database backup contains etcd. So `dcctl bootstrap` writes an
-encrypted **escrow artifact** for it by default, sealed under a passphrase you
-choose, and `dcctl secrets escrow verify` checks it still matches the running key
-without needing that passphrase. Without it, a database backup restored into a new
-cluster rehydrates secrets that nothing can decrypt — with no error at restore
-time. See [Disaster Recovery](docs/docs/deployment/disaster-recovery.md).
+`dcctl install local` and `dcctl bootstrap local` are tested end to end on kind. To use another
+cluster, pass `--kube-context <ctx>` to both commands; that path is not part of the end-to-end
+tests.
 
-**High availability, stated precisely.** The `--ha` flag on `dcctl install`
-replicates both tiers from one flag, for every instance on the cluster. The message broker runs as a 3-node RAFT cluster with every
-JetStream stream and KV bucket replicated across it — and `dcctl ha verify`
-asserts that from **live broker state** rather than from the rendered
-configuration, because a three-node cluster whose every stream is single-replica
-costs three times the compute, reports three healthy peers, and survives nothing.
-Both databases run as replicated PostgreSQL clusters managed by an operator: the
-relational store holds each write until a standby confirms it, while the event
-store falls back to asynchronous replication instead, because unpersisted events
-are still held durably in the messaging layer and can be replayed. Note that
-`--ha` therefore also triples database disk, since volumes are sized per instance.
+## Install
 
-**What is proven, and what is not.** A 3-node instance survives **one** node loss,
-and both databases restore into a freshly built cluster. Both are drilled against a
-real multi-node cluster, and the two claims that can carry a **negative control**
-do: the replication check is also run against a deliberately non-HA instance and
-required to fail, and the restore drill is repeated with the escrowed key withheld
-and required to fail *at the decrypt* — because a check nobody has watched fail is
-not yet evidence. Not proven: MQTT session continuity across a broker failover, and
-graceful-drain behavior. And the restore story covers the **two databases** —
-JetStream stream state and object storage have not been through a restore drill. Restoring
-the relational database is not currently available through `dcctl`: that database is now
-shared by every instance on a cluster, so its restore is a cluster-level operation that has
-not shipped yet.
+`dcctl` is the command-line tool that installs and runs DeviceChain. Download it for Linux, macOS
+or Windows from the [releases page](https://github.com/devicechain-io/devicechain/releases). It
+carries the Helm chart, the operator manifests and the OpenTofu configuration inside it, so the
+binary is all you need from this repository. It drives these tools, which must be on your `PATH`:
 
-## Running locally
+- `docker`
+- `kubectl`
+- `helm`
+- OpenTofu (`tofu`) or `terraform`
+- `kind`, for the local provider
 
-`dcctl` — the platform CLI — prepares a cluster with one command and bootstraps a complete
-instance on it with another. It
-is self-contained: the operator manifests, Helm chart, and OpenTofu config are
-embedded in the binary, so no source checkout, `kubectl`, `helm`, or `kustomize`
-is required. The single host prerequisites are **Docker**, **kind**, and
-**OpenTofu** (the CLI's preflight checks guide you through any that are missing).
+The cluster must run Kubernetes 1.29 or newer. `dcctl preflight local` checks the tools, and the
+Kubernetes version once a cluster exists, without changing anything. For a small machine,
+[`--compact`](https://docs.devicechain.io/deployment/bootstrap#--compact) on `dcctl install`
+lowers resource requests and leaves out the monitoring stack.
+
+`dcctl install` prepares a Kubernetes cluster once. `dcctl bootstrap` then creates an instance:
+one DeviceChain deployment with its own console, message broker and databases. Tenants are
+created inside an instance.
 
 ```bash
-# Prepare a local kind cluster (named "devicechain", created if it does not exist) once:
-# the DeviceChain operator and its CRDs, the relational database, CloudNativePG,
-# cert-manager, monitoring and ingress. Re-run it to move the cluster to a new release.
+# Prepare the cluster. This creates a kind cluster named "devicechain" if there is none, and
+# installs the DeviceChain operator, a shared PostgreSQL server and its backup store, the
+# CloudNativePG operator, cert-manager, Prometheus and Grafana, and ingress-nginx.
 dcctl install local
 
-# Stand up a full instance on it at http://localhost/.
-# Both positional arguments are required: the provider, then a name for the instance.
+# Create an instance served at http://localhost/.
 dcctl bootstrap local devicechain --host localhost --no-tls
-
-# …then open the printed console URL and log in with the seeded credentials.
-
-# See what is on this machine, and which cluster each instance lives in
-dcctl instances list
-
-# Remove the instance — same two arguments (or --all with no arguments to destroy every
-# instance on this machine): its release (and with it its namespace, NATS and TimescaleDB),
-# its infrastructure state, its database and login, then its local state. Safe to re-run if
-# interrupted. The cluster and what install put on it stay.
-dcctl destroy local devicechain
-
-# Delete the local cluster too (there is no uninstall command yet)
-kind delete cluster --name devicechain
 ```
 
-The bootstrap pipeline declares the instance → renders config → `tofu apply` (the instance's
-NATS + TimescaleDB, and its login and database on the shared relational database) →
-`helm install`s the instance (whose superuser is seeded with a password generated for
-this instance, printed once) → waits for readiness → reports the access URL — and is idempotent on
-re-run: it reads back every credential the instance is already running (root key,
-broker auth, service auth) and reuses it rather than minting a replacement, and
-stops rather than guessing if it cannot tell whether the instance exists.
-A released `dcctl` defaults to the images published alongside it; pass `--build`
-for the from-source (ko → local registry) developer path. Building `dcctl`
-itself: `cd backend/cli && make build`.
+Bootstrap prints the console URL and a generated password for `superuser@devicechain.local`.
+[Your first device](https://docs.devicechain.io/quickstart/first-device) continues from here. It
+walks you through creating a tenant, sending a reading with `curl` and seeing it in the console.
 
-> A `dcctl` you built yourself has **no default image version**, because a working
-> tree corresponds to no published tag. It will refuse the published path and ask
-> you to choose: `--build` to build from source, or `--version vX.Y.Z` to deploy a
-> release.
+To remove the instance, run `dcctl destroy local devicechain`. The cluster and what
+`dcctl install` put on it stay; `kind delete cluster --name devicechain` removes them. Destroy
+keeps the instance's root-key escrow file. Move it aside before you bootstrap again under the
+same name.
 
-## Domain model
-
-DeviceChain models the physical world with a small set of composable concepts. The
-defining choice is that device *context* is expressed as a **typed relationship
-graph** rather than a fixed assignment record:
-
-- **Device** — the thing that connects and reports; an instance of a device type.
-- **Device Type** — the taxonomy/identity layer: name, appearance (icon/colors),
-  and classification. A type references at most one device profile.
-- **Device Profile** — a distinct, **versioned** (draft / publish / rollback)
-  capability aggregate that owns a device class's **metric**, **command**, and
-  **alarm-rule** definitions. Many types can share one profile, and a device
-  resolves its capabilities through `device → type → profile`.
-- **Asset** — the real-world thing a device monitors (Device / Person / Hardware).
-- **Area** — a spatial/organizational location, optionally with polygon boundaries
-  and zones; areas nest into hierarchies.
-- **Customer** — an organizational owner; customers also nest into hierarchies.
-- **Groups** — one uniform **entity group** collects any of the above with either
-  **static** membership (an explicit list) or **dynamic** membership — a CEL
-  selector over the members' attributes (e.g. `attr["climate"] == "arid"`),
-  resolved on read as an indexed query, so the group stays current as attributes
-  change.
-
-Entities are addressed uniformly by **entity type + id**, and connected by
-**typed, directed relationships**. A relationship type carries a `Tracked` flag
-that selects which relationships are denormalized onto events for indexing — so a
-device can relate to many customers, areas, assets, or even other devices at once,
-and context can evolve without schema migrations.
-
-DeviceChain also distinguishes **current state** from **history**: append-only
-**events** in TimescaleDB hypertables, versus key-value **attributes** in three
-scopes — `CLIENT` (device-reported), `SERVER` (platform-only), and `SHARED`
-(platform-set, device-readable; the channel for remote config and OTA). Attributes
-double as **classification facets**: a per-tenant registry declares which attribute
-keys are browse/filter axes, and those same attributes are what a dynamic group's
-selector matches on — one primitive, no separate tag store.
-
-## Multi-tenancy
-
-A single shared set of microservices serves all tenants. Isolation is enforced
-where it matters:
-
-- **Storage** — every tenant-owned row carries a `tenant_id`, and a central,
-  **fail-closed** database scope applies a `WHERE tenant_id = …` predicate to every
-  read and stamps it on every write. A tenant-scoped query with no tenant in
-  context is rejected.
-- **Messaging** — subjects are scoped per tenant (`{instance}.{tenant}.{suffix}`).
-- **Auth** — a person is a global, email-keyed **identity** that holds one
-  **membership** per tenant. Logging in yields an **identity token** (admin API);
-  selecting a tenant exchanges it for a single-tenant **tenant token** that drives
-  the data plane. The per-request tenant comes from that verified tenant token's
-  claim; the per-message tenant is derived from the messaging subject.
-
-Adding a tenant is a control-plane operation — the superuser creates it through the
-admin API / console (an `iam_tenants` record), not a Kubernetes resource. Tenants
-do **not** get their own pods.
-
-An operator packages what a tenant gets through a first-class **tenant tier** — an
-operator-defined, sold-not-tuned entity (gold / silver / bronze, or whatever an
-operator names) that subsystems *read* but never redefine: it supplies the per-tenant
-governance ceilings a tenant inherits and the AI models a tenant may use. A shed dial
-is tuned; a tier is sold. Tiers, priority, and limits are never client-settable and
-never a token claim.
-
-## Tech stack
-
-| Area | Choice |
-|---|---|
-| **Backend** | Go 1.26+ (Go Workspaces), `net/http` + graph-gophers/graphql-go, GORM |
-| **Frontend** | TypeScript, React 19 (hooks), Vite, TailwindCSS, shadcn/ui, GraphQL Code Generator (client-preset) |
-| **Messaging / KV / MQTT** | NATS JetStream |
-| **Data** | PostgreSQL 17+ with TimescaleDB Community Edition |
-| **Auth** | Native RS256 JWT + JWKS; optional Dex for OIDC/SAML/LDAP |
-| **Orchestration** | Kubernetes (controller-runtime operator), Helm |
-| **Infrastructure as Code** | OpenTofu |
-| **Observability** | Prometheus, zerolog |
-
-Minimum to run locally: a NATS server (a single ~10MB binary) and TimescaleDB
-(via Docker). No Java, Keycloak, Kafka, ZooKeeper, Redis, or Mosquitto.
-
-## Repository layout
-
-```
-backend/    Go monorepo (Go Workspaces)
-  core/       shared library — entity, auth, messaging, config, rdb, graphql
-  services/   microservices — device-management, user-management, event-management,
-              event-sources, device-state, command-delivery, dashboard-management,
-              notification-management, event-processing, outbound-connectors,
-              ai-inference, mcp
-  k8s/        Kubernetes operator (controller-runtime)
-  cli/        dcctl — instance bootstrap / destroy and admin tooling
-  tools/      maintainer-only Go tools (schema differ, disaster-recovery drill)
-frontend/   npm workspace — apps/console (React + TypeScript management console)
-            + packages (client SDK, dashboard runtime, embeddable widgets)
-deploy/     Helm chart + OpenTofu modules
-docs/       Docusaurus documentation site
-```
+To build `dcctl` from source, run `make build` in `backend/cli`. A binary you build yourself has
+no default image version, so pass `--build` to both commands to build the images from source
+(this needs `ko`), or `--version vX.Y.Z` to deploy a published release.
 
 ## Documentation
 
-The [`docs/`](docs/) directory is a Docusaurus site covering concepts
-(architecture, domain model, multi-tenancy), deployment, and guides. See
-[`docs/docs/intro.md`](docs/docs/intro.md) to start, or read it published at
-[docs.devicechain.io](https://docs.devicechain.io).
+The documentation is at [docs.devicechain.io](https://docs.devicechain.io). Its source is in
+[`docs/`](docs/). Good places to start:
 
-**Reading the API without deploying anything.** Every external API is GraphQL, and
-introspection is off by default, so a running instance will not describe itself. The
-schemas are published as plain text instead, generated on every docs build from the
-files the services parse at startup:
+- [Your first device](https://docs.devicechain.io/quickstart/first-device)
+- [Connecting a device](https://docs.devicechain.io/guides/connecting-a-device)
+- [GraphQL API](https://docs.devicechain.io/reference/graphql-api)
+- [Releases and upgrades](https://docs.devicechain.io/deployment/releases-and-upgrades)
+- [Local development](https://docs.devicechain.io/guides/local-development), for working on the
+  source
+- [`llms.txt`](https://docs.devicechain.io/llms.txt), an index of the docs for AI assistants
 
-- [**Schema index**](https://docs.devicechain.io/schema/index.json) — every
-  functional area, which auth plane it sits on, the token that authorizes it, its
-  endpoint, and a link to its schema.
-- [`llms.txt`](https://docs.devicechain.io/llms.txt) — the same starting points,
-  laid out for an agent or an LLM-backed tool.
+## Getting help and contributing
 
-## Getting help
+Ask questions and propose ideas in
+[Discussions](https://github.com/devicechain-io/devicechain/discussions). Report bugs through
+[issues](https://github.com/devicechain-io/devicechain/issues/new/choose), which have short forms
+for install failures, missing telemetry and docs problems. A rough report of where you got stuck
+is still useful. Report security vulnerabilities privately to
+[admin@devicechain.io](mailto:admin@devicechain.io) (see [SECURITY.md](SECURITY.md)).
 
-- **A question, or something that confused you** —
-  [Discussions](https://github.com/devicechain-io/devicechain/discussions). If a page or
-  a workflow did not make sense, that is worth posting; confusion is a defect we can fix.
-- **An idea or feature request** —
-  [Discussions → Ideas](https://github.com/devicechain-io/devicechain/discussions/categories/ideas),
-  so the design conversation happens in the open.
-- **Something is broken** —
-  [open an issue](https://github.com/devicechain-io/devicechain/issues/new/choose). There
-  are short forms for install failures, missing telemetry, docs problems, and everything
-  else.
-- **A security vulnerability** — do not file publicly. Email **admin@devicechain.io**.
-
-DeviceChain is pre-1.0. Interfaces can still change in response to what people run into,
-which they cannot once 1.0 freezes them — so early, rough reports are worth more to us
-than polished ones later. "I got stuck here and gave up" is a perfectly good issue.
+To contribute code, read [CONTRIBUTING.md](CONTRIBUTING.md). Contributors sign a CLA before a
+change can be merged.
 
 ## License
 
-DeviceChain is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE)
-and [NOTICE](NOTICE). Copyright is held by **The DeviceChain Authors**.
+DeviceChain is licensed under the [Apache License 2.0](LICENSE) (see also [NOTICE](NOTICE)).
+Copyright is held by The DeviceChain Authors.
 
-"DeviceChain" and the DeviceChain logo are trademarks of **IoT Innovations, LLC**
-(U.S. application pending, USPTO Serial No. 99910096). The Apache 2.0 license
-covers the code, not the Marks — see [TRADEMARK.md](TRADEMARK.md) for the
-trademark policy.
+"DeviceChain" and the DeviceChain logo are trademarks of IoT Innovations, LLC. The Apache 2.0
+license covers the code, not the marks. See [TRADEMARK.md](TRADEMARK.md) for the trademark policy.
