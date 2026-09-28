@@ -25,7 +25,9 @@ sirve las dos sondas estándar de Kubernetes:
 
 - **`/healthz`** — vitalidad (liveness): ¿puede el proceso seguir haciendo su trabajo, o necesita un
   reinicio? Falla una vez que la conexión del servicio con el broker de mensajería se ha cerrado de
-  forma definitiva, de modo que Kubernetes reinicia el pod.
+  forma definitiva, de modo que Kubernetes reinicia el pod. Un bucle que lee mensajes de un flujo y
+  no puede leer durante dos minutos seguidos también termina el proceso, que Kubernetes reinicia
+  después; antes de eso reintenta con una pausa creciente de hasta cinco segundos.
 - **`/readyz`** — disponibilidad (readiness): ¿está listo para recibir tráfico? Un servicio que no está
   listo se mantiene fuera de rotación por su Service de Kubernetes (consulte
   [Despliegue y operador](./kubernetes-operator.md)).
@@ -302,6 +304,11 @@ La alerta siguiente informa de los casos que aun así se producen.
 | --- | --- | --- | --- |
 | `ReaderHeldMessagePastAckWait` | warning | Un manejador retuvo un mensaje más allá de su ventana de confirmación, así que se volvió a entregar. `stage=worker`: un envío tardó demasiado, así que el mensaje pudo enviarse dos veces. `stage=buffer`: un mensaje se descartó antes de entregarse, y se procesó su nueva entrega en su lugar. | Para `stage=worker`, busque un destino lento o que no responde detrás del servicio que indica la etiqueta `durable`. Para `stage=buffer`, el servicio no está al día con su stream. |
 
+El aviso lee `devicechain_<area>_reader_held_past_ack_wait_total{durable, stage}`. El contador
+existe con valor 0 desde que se crea el lector, así que `increase()` ve la primera vez que ocurre en
+un pod. Cada pod cuenta solo los mensajes que retuvo él, así que combine los pods con `sum`, no con
+`max`.
+
 ## Mensajes que agotaron sus intentos de entrega {#max-delivery-records}
 
 Tras cinco entregas sin confirmar, el broker deja de entregar un mensaje. Publica un aviso la
@@ -344,6 +351,19 @@ explica ambos casos.
 | `ReactShedLettersOverBudget` | warning | Durante 10 minutos, el motor de detección ha descartado acciones de salida más rápido de lo que las registra una a una, así que el exceso se resume en un mensaje no entregado por inquilino y minuto. Un inquilino supera con creces su techo de salida. | Busque el inquilino en `dcctl dead-letters` (motivo `shed`) y revise sus reglas, o suba su techo de salida si el tráfico es legítimo. Consulte [la gobernanza de salida](../concepts/outbound-connectors.md#governance). |
 | `RateMeteringClockFallback` | warning | Durante una hora, el servicio indicado por la etiqueta `job` ha medido acciones de salida según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día tras un reinicio puede volver a descartarse como una inundación. Una hora de desencadenamiento posterior a la hora del bróker del mensaje que la lleva también se mide según esa hora del bróker, pero se cuenta con el origen `capped` y no dispara este aviso: indica que los relojes del pod y del bróker no coinciden, no que falte la hora. | Compruebe que event-processing y outbound-connectors ejecutan la misma versión. |
 | `ConnectorDispatchRateLimited` | warning | Durante 15 minutos, outbound-connectors ha descartado envíos por superar la tasa de salida de su inquilino. El motor de detección mide el mismo techo sobre la misma línea de tiempo y descarta las acciones que lo superan antes de enviarlas, así que estas se admitieron en un extremo y se rechazaron en el otro. Un inquilino por encima de su techo no dispara este aviso; dispara `ReactConnectorEgressShedding` en el motor de detección. | Compruebe que la tasa de salida por defecto de la plataforma (`outboundMessagesPerSecond` y `outboundBurst`) es la misma para event-processing y outbound-connectors, y si `TenantsMeteredAtPlatformDefault` está activo para alguno de los dos. Los envíos que fallan y se reintentan también se vuelven a medir en el extremo de los conectores, así que busque también un destino que falle. Eso también significa que un solo inquilino cuyo destino falla repetidamente mientras envía cerca de su cuota puede activar este aviso por sí solo, y por eso es un aviso de tipo warning y no critical. Los envíos descartados son mensajes no entregados con el motivo `rate_limited`. |
+
+Las series detrás de estos avisos:
+
+- `TenantsMeteredAtPlatformDefault` lee
+  `devicechain_<area>_governance_unresolved_admissions_total{dimension, cause}` con
+  `cause="unreachable"`.
+- `RateLimiterOverflowInUse` lee `devicechain_eventsources_ratelimit_overflow_admissions_total`.
+- `ReactShedLettersOverBudget` lee
+  `devicechain_eventprocessing_react_connector_shed_unlettered_total{action}`.
+- `RateMeteringClockFallback` lee `devicechain_<area>_rate_clock_fallback_total{source}`, donde
+  `source` es `append`, `capped` o `now`. El aviso ignora `capped`.
+- `ConnectorDispatchRateLimited` lee el resultado `rate_limited` de
+  `devicechain_outboundconnectors_connector_dispatch_total`.
 
 Solo el resultado `rate_limited` de `devicechain_outboundconnectors_connector_dispatch_total`
 genera un aviso. Sus otros resultados de fallo son la configuración de un solo inquilino, como un
@@ -561,6 +581,49 @@ que caduque, que es el tiempo de vida configurado de la caché.
 Por otra parte, resolver un evento que tarda más de cinco segundos, por la razón que sea, se
 registra como advertencia (`Event resolution is slow`): la primera vez de inmediato y después como
 máximo una línea cada 30 segundos, con cuántas hubo y la más lenta.
+
+## Pasadas de mantenimiento {#maintenance-passes}
+
+Varios servicios ejecutan una tarea de mantenimiento con un temporizador: un barrido, un
+reconciliador o un planificador. Cada una exporta tres series con el nombre de su propio servicio,
+`devicechain_<area>_<task>_…`:
+
+- **`<task>_passes_total{outcome}`**: pasadas realizadas, por resultado.
+- **`<task>_pass_duration_seconds`**: cuánto tardó una pasada. Una pasada `skipped` no se cronometra.
+- **`<task>_last_success_timestamp_seconds`**: la hora Unix de la última pasada que hizo su trabajo
+  (`complete` o `partial`). Vale NaN hasta la primera pasada así, de modo que una regla como
+  `time() - X > umbral` no se dispara en un pod que acaba de arrancar.
+
+| Servicio | Tareas |
+| --- | --- |
+| user-management | `dead_letter_sweep`, `tenant_purge` |
+| notification-management | `retention_sweep`, `escalation_scheduler` |
+| event-management | `anchor_sweep` |
+| device-state | `inactivity_sweep` |
+| event-sources | `presence_demote` |
+| command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
+
+Por ejemplo, el coordinador de eliminación de inquilinos de user-management exporta
+`devicechain_usermanagement_tenant_purge_passes_total`.
+
+| Resultado | Significado |
+| --- | --- |
+| `complete` | La pasada se ejecutó y terminó su trabajo. |
+| `partial` | La pasada se ejecutó e hizo parte de su trabajo, por ejemplo algunos inquilinos pero no otros. |
+| `failed` | La pasada no pudo hacer su trabajo. |
+| `skipped` | Otra réplica tiene el bloqueo de la tarea, así que esta no se ejecutó, como corresponde. No es un fallo, y no mueve la hora del último éxito. |
+| `cancelled` | La pasada se interrumpió porque el servicio se estaba deteniendo. No es un fallo. |
+
+Genere avisos sobre `failed` y sobre una hora de último éxito que ha dejado de avanzar, no sobre
+`skipped` ni `cancelled`: un servicio con más de una réplica omite la pasada en todas las réplicas
+menos una, y cada despliegue puede cancelar una pasada. Los barridos de user-management,
+notification-management y event-management empiezan cada pasada en un momento aleatorio dentro de
+un 10 % a cada lado de su intervalo, para que las réplicas que arrancaron juntas no lleguen a la
+base de datos todas a la vez.
+
+Una tarea puede completar sus pasadas sin fallos mientras el trabajo para el que existe está
+atascado. La eliminación de inquilinos es el caso para el que el chart tiene avisos propios; vea
+[Eliminación de inquilinos](./tenant-deletion.md#stalled-alert).
 
 ## Relacionado
 

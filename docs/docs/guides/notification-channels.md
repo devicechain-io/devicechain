@@ -46,6 +46,11 @@ mutation {
 }
 ```
 
+An SMTP channel that sets `username` must have a secret. A delivery to one that has none is refused
+on its first attempt, before the platform connects to the mail server, and is not retried; it is
+counted with `reason="credential"` (see below). This is checked at delivery, not when you save the
+channel.
+
 ### Create a webhook channel
 
 A webhook channel POSTs the rendered notification to a URL. Create it the same way, with `channelType: "webhook"` and a config carrying the `url`, an `auth` mode, and optionally `method` and extra `headers`. The only accepted `method` is `POST`, which is also the default; any other method is refused when you save the channel.
@@ -62,7 +67,7 @@ A webhook channel POSTs the rendered notification to a URL. Create it the same w
 
 A channel whose `auth` and `secret` disagree is refused when you save it, not when an alarm fires. That covers a missing `auth`, `bearer` or `header` with no secret, and `none` with a secret. To make a `bearer` channel anonymous, send `auth` `none` and `secret: null` in the same update. An update that only renames, describes or disables a channel is not checked, so you can always switch a misconfigured channel off; enabling one is checked.
 
-A channel that reaches delivery in that state anyway, for example one saved before `auth` existed, is not sent. The delivery is refused on its first attempt and not retried, and the notification service logs the tenant, the channel's token and the reason. The refusal is counted on `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`, which you can alert on.
+A channel that reaches delivery in that state anyway, for example one saved before `auth` existed, is not sent. The delivery is refused on its first attempt and not retried, and the notification service logs the tenant, the channel's token and the reason. The refusal is counted on `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`, which you can alert on. The same counter carries `reason="egress"` for a webhook or SMTP channel whose destination is on an address outbound traffic may not reach, such as a private, loopback or cloud-metadata address. Both reasons are terminal: the delivery is not retried.
 
 ```graphql
 mutation {

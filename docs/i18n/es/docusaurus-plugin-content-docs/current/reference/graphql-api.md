@@ -83,6 +83,30 @@ llamador. Algunas autoridades no coinciden con la intuición:
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
 
+### Suscripciones por WebSocket {#subscriptions-over-websocket}
+
+Un servicio que ofrece suscripciones de GraphQL también acepta un WebSocket en su endpoint de
+GraphQL. El cliente debe negociar el subprotocolo `graphql-transport-ws` y enviar su token de acceso
+en la carga de `connection_init`, como `{"Authorization": "Bearer <token>"}` o
+`{"token": "<token>"}`. El token se comprueba una sola vez, al abrir la conexión.
+
+- **El WebSocket ejecuta suscripciones y nada más.** Una consulta o una mutación enviada por él se
+  rechaza con el error `only subscription operations are accepted over a WebSocket; send queries and
+  mutations over HTTP`, y no se ejecuta nada. Envía las consultas y las mutaciones como peticiones
+  HTTP.
+- **La conexión se cierra con el código `4401` cuando caduca su token de acceso.** Para mantener un
+  flujo, abre una conexión nueva con un token nuevo y vuelve a suscribirte. `@devicechain/client` lo
+  hace una vez por su cuenta: cuando una conexión que había establecido se cierra con `4401`, se
+  reconecta con un token recién resuelto, vuelve a suscribirse e informa de la reconexión a tu
+  receptor como `connected(true)`. El SDK de .NET lanza el cierre desde `SubscribeAsync` como una
+  excepción que nombra el código; vuelve a suscribirte para continuar.
+- **Un servicio sin suscripciones rechaza la actualización a WebSocket** con HTTP 400 (`this service
+  offers no GraphQL subscriptions`).
+
+Una suscripción que el servidor no puede leer recibe un error de sintaxis, y un documento que nombra
+una operación que no contiene recibe su propio error. Ambos se aplican solo a esa operación, y la
+conexión sigue abierta.
+
 ## Consultar eventos {#querying-events}
 
 event-management expone consultas de lectura sobre el historial de eventos persistido. Cada una toma
@@ -444,7 +468,8 @@ Su única particularidad es `definition`: el campo es anulable para poder *omiti
 renombra un panel sin reenviar su documento entero, pero un `null` explícito sobre él se rechaza,
 porque un panel sin definición no es nada. Conserva su precondición opcional `expectedUpdatedAt`. Una
 actualización que no nombra ningún campo no escribe nada (ni siquiera `updatedAt`), aunque una
-precondición obsoleta sobre ella sigue siendo un conflicto.
+precondición obsoleta sobre ella se sigue rechazando como escritura obsoleta (sin
+`extensions.code`).
 
 **user-management.** Toda `update*` toma también una petición propia:
 
@@ -746,7 +771,8 @@ lo siguiente se rechaza con un error de sintaxis, y no se ejecuta nada:
   cadena de bloque.
 
 La misma regla se aplica por WebSocket, donde una suscripción que el servidor no puede leer recibe el
-error de sintaxis en lugar del mensaje de que solo se aceptan suscripciones.
+error de sintaxis en lugar del [mensaje de que solo se aceptan
+suscripciones](#subscriptions-over-websocket).
 
 ### Comprobaciones de credenciales por petición {#credential-checks-per-request}
 

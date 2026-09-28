@@ -151,13 +151,25 @@ semana convergen todos en la siguiente pasada.
 
 Una eliminación estancada no hace que nada más parezca averiado, y por eso necesita su propia
 alerta. El coordinador visita al inquilino en cada pasada, no encuentra nada que pueda notificar
-como error y la pasada termina bien. Por eso las métricas de tareas programadas que te dirían que el
-coordinador se ha parado siguen sanas todo el tiempo; responden a otra pregunta.
+como error y la pasada termina bien. Por eso las [métricas de tareas
+programadas](./observability.md#maintenance-passes) que te dirían que el coordinador se ha parado
+siguen sanas todo el tiempo; responden a otra pregunta.
 
 `TenantPurgeStalled` responde a esta. Se dispara cuando la eliminación abierta más antigua lleva
 abierta más del doble de la retención de identificador configurada, bastante más allá del punto en
 que ya han transcurrido todas las esperas obligatorias. La consulta `tenantDeletions` de la API de
 administración indica entonces qué inquilino y qué sistema de almacenamiento siguen pendientes.
+Está paginada como las demás listas de la API de administración; para leer las eliminaciones
+abiertas:
+
+```graphql
+query {
+  tenantDeletions(criteria: {pageNumber: 1, pageSize: 50, completed: false}) {
+    results { token epoch awaiting blockedBy stores { store complete retaining } }
+    pagination { totalRecords }
+  }
+}
+```
 
 Su contrapeso, `TenantPurgeVisibilityLost`, se dispara cuando esas cifras dejan de recogerse por
 completo. Sin él, un servicio user-management que no se estuviera consultando se vería exactamente
@@ -219,9 +231,10 @@ cesado. El rechazo se levanta únicamente cuando la eliminación se completa, qu
 libera el identificador, de modo que un inquilino nuevo creado con ese identificador escribe con
 normalidad desde su primera petición.
 
-El rechazo se comprueba en el momento de la escritura, así que una escritura que ya estaba dentro de
-una transacción cuando empezó la eliminación todavía puede confirmarse. La eliminación la recoge
-siempre que se confirme antes de que termine el periodo de calma. Las bases de datos lo garantizan
+El rechazo se comprueba en la primera escritura de una transacción para un inquilino, así que una
+transacción que ya había escrito para el inquilino cuando empezó la eliminación todavía puede
+confirmarse, incluidas las escrituras que haga después. La eliminación las recoge siempre que la
+transacción se confirme antes de que termine el periodo de calma. Las bases de datos lo garantizan
 para una transacción cuyo servicio deja de comunicarse con ellas, por ejemplo porque su pod se ha
 congelado o ha perdido la red: una transacción inactiva durante 60 segundos se termina y se revierte,
 muy por debajo del periodo de calma más corto permitido. La base de datos registra

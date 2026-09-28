@@ -658,6 +658,7 @@ Prefix: `devicechain_lwm2mingest_`.
 | `commands_stale_dispatch_total` | Deliveries discarded because the platform had already re-armed or re-sent the command. **Not a fault**: each one is a duplicate actuation that did not happen. Expect it to rise after an outage or a failover. |
 | `commands_overflow_parked_total{reason}` | Commands set aside in command-delivery instead of being sent straight away, and delivered in order moments later. `full`: the device's queue was full, so the device is slow to answer. `offline`: it had no live connection. `bind`: it had just connected and its waiting commands had not been delivered yet; **expect a spike after a failover**, when every device reconnects at once. `unconfirmed`: a command ahead of it could not be confirmed. |
 | `command_overflow_blocked_total` | Times the adapter had to wait because it could not set commands aside fast enough. It rises only while command-delivery is slow or unreachable, and then every LwM2M command waits. |
+| `command_drain_turns_total` | Drain turns run, each delivering at most 4 of one device's set-aside commands. A rising rate while `commands_overflow_parked_total` stays flat means backlogs are being worked off. |
 
 ### Edge agent metrics {#edge-agent-metrics}
 

@@ -20,8 +20,15 @@ obligation is being met. These two gauges are; this file is what watches them.
   alert would be tuned by silencing it. Reading the same value the coordinator reads
   means the two cannot disagree. The default mirrors the service's own
   defaultTenantPurgeTokenHoldSeconds, which is the NATS credential lifetime.
+
+  🔴 AND IT READS 0 THE WAY THE SERVICE DOES. The service treats an explicit
+  tokenHoldSeconds: 0 as "use the default", and so do the docs. `dig` returns an explicit
+  0 as it is, so without the trailing `default` a values file carrying 0 rendered a
+  threshold of 0 -- an alert that fired 15 minutes after every deletion opened, inside
+  its legitimate hold. Sprig's `default` treats 0 as empty, which is the reading wanted.
+  hack/check-prometheus-rules.sh renders both an explicit 0 and a set value.
 */}}
-{{- $hold := dig "user-management" "config" "tenantPurge" "tokenHoldSeconds" 43200 .Values.functionalAreas }}
+{{- $hold := dig "user-management" "config" "tenantPurge" "tokenHoldSeconds" 43200 .Values.functionalAreas | default 43200 }}
 {{- $stalled := mul $hold 2 }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule

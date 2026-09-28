@@ -703,6 +703,7 @@ Prefijo: `devicechain_lwm2mingest_`.
 | `commands_stale_dispatch_total` | Entregas descartadas porque la plataforma ya había rearmado o reenviado el comando. **No es un fallo**: cada una es una actuación duplicada que no ocurrió. Es de esperar que suba tras una caída o un relevo. |
 | `commands_overflow_parked_total{reason}` | Comandos apartados en command-delivery en lugar de enviarse de inmediato, y entregados en orden momentos después. `full`: la cola del dispositivo estaba llena, así que el dispositivo tarda en responder. `offline`: no tenía conexión activa. `bind`: acababa de conectarse y sus comandos pendientes aún no se habían entregado; **es de esperar un pico tras un relevo**, cuando todos los dispositivos se reconectan a la vez. `unconfirmed`: no se pudo confirmar un comando anterior a él. |
 | `command_overflow_blocked_total` | Veces que el adaptador tuvo que esperar porque no podía apartar los comandos lo bastante rápido. Solo sube mientras command-delivery está lento o inalcanzable, y entonces todos los comandos LwM2M esperan. |
+| `command_drain_turns_total` | Turnos de vaciado ejecutados, cada uno de los cuales entrega como máximo 4 de los comandos apartados de un dispositivo. Una tasa que sube mientras `commands_overflow_parked_total` se mantiene plana significa que las colas pendientes se están vaciando. |
 
 ### Métricas del agente de borde {#edge-agent-metrics}
 
