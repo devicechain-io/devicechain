@@ -42,7 +42,7 @@ check() {
   shared="$(comm -12 <(printf '%s\n' "$neg") <(printf '%s\n' "$pos"))"
   if [ -n "$shared" ]; then
     echo "check-loadtest-l3-tenants: the L3 negative control and positive test share tenants in $wf:" >&2
-    printf '  %s\n' $shared >&2
+    printf '%s\n' "$shared" | sed 's/^/  /' >&2
     echo "  The positive run's clean-tenant precheck would count the negative run's tail. Give it its own pair." >&2
     return 1
   fi
