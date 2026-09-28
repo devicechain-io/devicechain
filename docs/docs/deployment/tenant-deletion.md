@@ -137,13 +137,22 @@ next pass.
 
 A stalled deletion makes nothing else look broken, which is why it needs its own alert. The
 coordinator visits the tenant on every pass, finds nothing it can report as an error, and the pass
-succeeds. The scheduled-task metrics that would tell you the coordinator had stopped therefore stay
-healthy throughout; they answer a different question.
+succeeds. The [scheduled-task metrics](./observability.md#maintenance-passes) that would tell you
+the coordinator had stopped therefore stay healthy throughout; they answer a different question.
 
 `TenantPurgeStalled` answers this one. It fires when the oldest open deletion has been open for more
 than twice the configured token hold, well past the point where every mandatory wait has elapsed.
 The admin API's `tenantDeletions` query then names the tenant and the storage system still
-outstanding.
+outstanding. It is paged like the admin API's other lists; to read the open deletions:
+
+```graphql
+query {
+  tenantDeletions(criteria: {pageNumber: 1, pageSize: 50, completed: false}) {
+    results { token epoch awaiting blockedBy stores { store complete retaining } }
+    pagination { totalRecords }
+  }
+}
+```
 
 Its counterweight, `TenantPurgeVisibilityLost`, fires when those figures stop being collected at all.
 Without it, a user-management service that was not being scraped would look exactly like one with no
@@ -199,8 +208,9 @@ again, and the deletion does not complete until the writes have stopped. The ref
 when the deletion completes, which is also when the token is released, so a new tenant created at
 that token writes normally from its first request.
 
-The refusal is checked when a write is made, so a write that was already in a transaction when the
-deletion began can still commit. The deletion catches such a write, provided it commits before the
+The refusal is checked at a transaction's first write for a tenant, so a transaction that had
+already written for the tenant when the deletion began can still commit, including writes it makes
+afterwards. The deletion catches such writes, provided the transaction commits before the
 settle window ends. The databases guarantee that for a transaction whose service stops talking to
 them, for example because its pod froze or lost the network: a transaction left idle for 60 seconds
 is ended and rolled back, well inside the shortest settle window allowed. The database logs

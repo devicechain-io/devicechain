@@ -46,6 +46,11 @@ mutation {
 }
 ```
 
+Un canal SMTP que define `username` debe tener un secreto. Una entrega a uno que no lo tiene se
+rechaza en su primer intento, antes de que la plataforma se conecte al servidor de correo, y no se
+reintenta; se cuenta con `reason="credential"` (ver más abajo). Esto se comprueba en la entrega, no
+al guardar el canal.
+
 ### Crear un canal webhook
 
 Un canal webhook realiza un POST de la notificación renderizada a una URL. Créalo de la misma manera, con `channelType: "webhook"` y una configuración que lleve la `url`, un modo `auth` y, opcionalmente, `method` y encabezados adicionales en `headers`. El único `method` aceptado es `POST`, que también es el predeterminado; cualquier otro método se rechaza al guardar el canal.
@@ -62,7 +67,7 @@ Un canal webhook realiza un POST de la notificación renderizada a una URL. Cré
 
 Un canal cuyo `auth` y `secret` no concuerdan se rechaza al guardarlo, no cuando se dispara una alarma. Eso incluye que falte `auth`, `bearer` o `header` sin secreto, y `none` con secreto. Para convertir un canal `bearer` en anónimo, envía `auth` `none` y `secret: null` en la misma actualización. Una actualización que solo renombra, describe o desactiva un canal no se comprueba, así que siempre puedes desactivar un canal mal configurado; activarlo sí se comprueba.
 
-Si un canal llega a la entrega en ese estado de todos modos, por ejemplo uno guardado antes de que existiera `auth`, no se envía. La entrega se rechaza en su primer intento y no se reintenta, y el servicio de notificaciones registra el inquilino, el token del canal y el motivo. El rechazo se cuenta en `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`, sobre el que puedes crear una alerta.
+Si un canal llega a la entrega en ese estado de todos modos, por ejemplo uno guardado antes de que existiera `auth`, no se envía. La entrega se rechaza en su primer intento y no se reintenta, y el servicio de notificaciones registra el inquilino, el token del canal y el motivo. El rechazo se cuenta en `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`, sobre el que puedes crear una alerta. El mismo contador lleva `reason="egress"` para un canal webhook o SMTP cuyo destino está en una dirección a la que el tráfico saliente no puede llegar, como una dirección privada, de loopback o de metadatos de la nube. Los dos motivos son definitivos: la entrega no se reintenta.
 
 ```graphql
 mutation {

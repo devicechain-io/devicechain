@@ -64,7 +64,10 @@ These states mean the command is not finished yet:
   platform still holds it. This is the state for a sleeping device, and the command is delivered
   on the device's next wake. Like `HELD`, it counts as in flight: you can still cancel it, and a
   TTL that lapses on it records `EXPIRED` rather than `TIMEOUT`, because the command never
-  reached a device. See [Registered is not the same as reachable](#parked-commands).
+  reached a device. See [Registered is not the same as reachable](#parked-commands). On
+  [LwM2M](./lwm2m.md), a command can also be `PARKED` while its device is connected: when the
+  device's queue is full, when it has just reconnected, or when a command ahead of it could not be
+  confirmed. Such a command is delivered in order moments later, without waiting for a wake.
 
 These states are terminal. Nothing moves out of a terminal state.
 
@@ -152,6 +155,12 @@ platform's to deliver on the device's next wake. Because the platform still hold
   still holding them.
 - **It counts against the tenant's undelivered-command ceiling**, exactly like `QUEUED` and
   `HELD`. It is work the platform is still carrying.
+
+`PARKED` does not always mean the device is asleep. The LwM2M adapter also hands a command back
+while the device is still connected, when that device's queue is full, when the device has just
+reconnected and its waiting commands go first, or when a command ahead of it could not be confirmed
+with command-delivery. Those commands record `PARKED` too, and are delivered to the connected device
+in order a few at a time, moments later, not on its next wake.
 
 ### When the platform loses track of a command {#stranded-commands}
 

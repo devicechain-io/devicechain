@@ -1492,415 +1492,222 @@ exercised against a real cluster on every release.
 Once you are on a release that records a declaration, ordinary in-place upgrades resume.
 `dcctl instances list` shows what is declared, and in which cluster.
 
-### Next release {#next-upgrade}
-
-The upgrade signs every user out once, from then on a password reset, disabling a user or deleting
-one ends that user's sessions, and the instance root key becomes required in every profile. Those
-are the first three sections below. The three after them matter only if you watch the dead-letter
-metrics yourself, rely on command responses that could not be recorded, or open GraphQL WebSocket
-connections from your own code. One more thing needs doing on every instance built before this
-release: check the superuser's password (see "The superuser no longer has a default password"
-below). The sign-in section matters if you call the GraphQL API from your own code or scripts, or size
-the JetStream volume yourself: sign-in is now rate-limited, and a GraphQL request is limited in how
-many root fields and password checks it can carry. If you route or silence alerts by name, read
-"A consumer that falls behind a full stream now raises an alert": `EventProcessingStreamNearFull` is
-renamed. If your outbound-connectors values set `dispatchBacklog`, delete it before upgrading: the
-service now refuses to start with it (see "The connectors service no longer accepts dispatchBacklog"
-below). If you filter dead letters by kind or reason, or alert on the dead-letter stream, read
-"Messages abandoned on their last attempt are now dead-lettered" below: it adds three kinds, a
-reason, a stream and two alerts. If you run a warm standby for `event-processing`, read "With a
-warm standby, only the replica running detection dispatches actions". If you route or silence
-alerts by name, two new warnings are added: `RateLimiterOverflowInUse` and
-`TenantsMeteredAtPlatformDefault`. If you filter dead letters by reason, or route alerts by name,
-read "Outbound actions are no longer dropped when the detection engine catches up". If a tenant connector publishes to a broker or endpoint on a
-private address, including MSK, Amazon MQ or an SNS/SQS interface endpoint, read "Connectors can
-no longer reach private addresses, and the connectors service has new clients" before upgrading.
-If your values set `checkpointIntervalSeconds` for `event-processing` above 30, lower it before
-upgrading (see "`checkpointIntervalSeconds` is capped at 30, and some silent failures now warn").
-If devices connect over MQTT with a password, or the instance was installed with `--compact`, read
-"Repeated failed MQTT password connects are slowed down": the compact preset's JetStream volume
-grows, and an existing compact instance has to move it before the upgrade can continue.
-
-If you write GraphQL documents by hand, read "GraphQL documents must use GraphQL's own comments and
-strings": Go-style comments, backquoted strings and single-quoted characters are now refused.
-
-If you accept device traffic over HTTP, or size tier ingest ceilings for billing, read "HTTP
-ingest has its own allowance". If you read an event's `processedTime`, or rely on windowed detection rules after an
-`event-sources` outage, read "`processedTime` now means when the platform received an event". If you watch pod restart counts, read "A lost presence connection now restarts `event-sources`".
-
-If you route or silence alerts by name, two more warnings are added, `JetStreamReplicationUnobserved`
-and `ConnectorDispatchRateLimited` (see "Two new warnings: an unreadable stream, and connector sheds
-the detection engine admitted").
-
-If you run Sparkplug sources, or alert on a Sparkplug host's online state, read "A Sparkplug source
-with a refused group stays offline, and a refresh survives a brief outage".
-
-If you size the JetStream volume yourself, read "device-management keeps one cache bucket per
-device type instead of two": the upgrade adds one cache bucket's reservation, and the total drops
-below its previous level only once you delete the two buckets it no longer uses.
-
-If you write threshold or duration rules in CEL that read device attributes, read "A threshold or
-duration condition that is true for every device without an attribute is now refused".
-
-If you use duration rules, especially on devices that upload buffered readings, or watch
-`detect_late_samples_total` or the per-tenant live keys, read "Duration rules place late readings
-by their own time".
-
-If you query alarms through the GraphQL API, the MCP alarm tools, `@devicechain/dashboards` or
-`@devicechain/widgets`, or parse notification webhooks, read "The alarm `message` field is removed".
-
-If you edit detection rules on the automation canvas, read "The automation canvas authors
-Connectivity rules, and will not save over a rule it cannot show in full".
-
-If your code or scripts recognise a duplicate by reading a GraphQL error message, read "A duplicate
-now answers with the code `CONFLICT`".
-
-If a device's MQTT password begins or ends with a space or a newline, or your own code reads a
-tier's `color` from the admin API, read "Credential values are stored exactly as sent".
-
-If you route or silence alerts by name, three more warnings are added, and a lost rule, device or
-attribute notification no longer needs a republish: read "Lost rule, device and attribute changes
-are repaired automatically".
-
-If you search or alert on database messages in service logs, or turn on `sqlDebug`, read "Database
-messages are structured log lines, and a query that finds nothing is no longer logged as a
-failure".
-
-If you use the default in-cluster backup store, read "The in-cluster backup store pulls from a
-maintained image": a fresh install failed without it, your nodes now pull that image from
-`cgr.dev`, and an existing cluster restarts that pod once.
-
-If you watch `event-management`'s persistence metrics, or set a service's connection pool to 5 or
-fewer, read "Events are persisted in batches".
-
-If you watch `device-management`'s logs or metrics, or run NATS as a cluster, read
-"device-management keeps resolving events when a NATS server drops off the network".
-
-If you run `dcctl` where the OpenTofu provider registry cannot be reached, or apply the OpenTofu
-configuration yourself, read "A failed `dcctl install` can be run again": every run now contacts
-the registry, and a plain `tofu init` refuses an existing lock file.
-
-If devices send alerts with a `level` above 2147483647, or you read a device's latest
-measurements, its state or its alerts through the GraphQL API, read "Alert levels above 2147483647
-are refused, and four more numbers are no longer wrapped".
-
-If you watch `device-state`'s metrics or set its `projection` settings, or route or silence alerts by
-name, read "Live device state is merged in batches, and a consumer that stays behind raises a
-warning": one warning, `JetStreamDurableFallingBehind`, is added.
-
-If your values set `rdbConfiguration.maxOpenConnections` for `device-management`, or you watch its
-database connections, read "device-management resolves more events at once": it now holds up to 10
-connections while it resolves events, and a pool of 10 or fewer stops it from starting.
-
-#### Every user is signed out once, and a password reset now ends sessions
-
-Each user now has a **session value**, and every token that can be exchanged for a new one carries
-it: refresh tokens, the sign-in token the console holds before a tenant is chosen, and OAuth
-authorization codes. Resetting a user's password, disabling the user, or deleting the user changes
-that value, and a token carrying the old one is refused. Before this release a password reset left
-every refresh token already issued working, so a stolen one kept renewing itself for as long as it
-was used.
-
-What you will see at the upgrade:
-
-- **Every console, dashboard and SDK session is signed out once.** Tokens issued before the upgrade
-  carry no session value, so they cannot be refreshed. A session ends at its next refresh, within
-  15 minutes of the upgrade unless you have changed the access-token lifetime, and the user signs in
-  again. A console that is sitting on the tenant picker or the admin pages when that happens can
-  report an error when a tenant is chosen, rather than returning to the sign-in page. Signing out
-  and back in clears it.
-- **OAuth clients, including AI assistants connected through MCP, must authorize again.** Their
-  refresh tokens are refused with `invalid_grant`.
-- A user created by a service that had not yet been replaced while the upgrade rolled out has no
-  session value and cannot sign in. The sign-in fails as a wrong password would, and the
-  user-management log names the user and the cause. An administrator resetting that user's password
-  fixes it.
-
-What changes from then on:
-
-- **A password reset, disabling a user, or deleting a user ends every session that user holds.**
-  Their refresh tokens stop working at the next use, and a sign-in token or authorization code
-  issued before the change can no longer be exchanged for a new session. Re-enabling a disabled
-  user does not bring the old sessions back.
-- **Tokens already issued for direct use are not revoked.** An access token, and the sign-in token
-  on the admin API, keep working until they expire: 15 minutes, unless you have changed the
-  access-token lifetime. That includes an administrator's sign-in token.
-- **Deleting a user and creating one with the same email starts clean.** The new user does not
-  pick up any session the old one still held.
-- Changing a user's roles or memberships does not sign them out. It takes effect at their next
-  refresh, as before.
-
-#### Everyone signs in again once
-
-The key that signs every access and refresh token used to be stored unencrypted in
-user-management's database. Anyone who could read that database, a backup of it or its
-write-ahead-log archive could sign tokens every service accepts. It is now sealed under the
-instance root key, like every other stored credential, and only the key currently in use has a
-private half at all. When a key is rotated out, its private half is deleted and only its public
-half is kept, so tokens it signed keep verifying until they expire.
-
-The upgrade **deletes every signing key the instance had**, rather than sealing them, because
-each one has already sat unencrypted in every backup taken so far. user-management generates a
-new key when it starts. As a result:
-
-- **Every user signs in again.** Access and refresh tokens issued before the upgrade stop
-  validating.
-- **OAuth clients, including MCP clients, have to authorize again.** Their refresh tokens stop
-  working too.
-- **Sessions in an embedded dashboard app end**, and its users sign in again.
-
-This takes effect once the rollout completes, not the moment the upgrade starts. Until the last
-old user-management pod has stopped, it keeps signing tokens with the old key and publishing
-that key for other services to verify against. `helm upgrade` and `dcctl upgrade` replace every
-pod, so the old key stops being trusted when they finish. While that old pod is stopping, a
-request made in the first seconds of the rollout can be refused with
-`401 invalid or expired token`, and a sign-in with `invalid or expired token`, even for a token
-issued moments earlier; once the old user-management pod has stopped, signing in again and
-retrying succeeds.
-
-Backups and archived write-ahead log taken **before** the upgrade still contain the old keys.
-Those keys are no longer trusted anywhere once the rollout completes, but the files are still
-worth protecting as the credentials they were.
-
-#### The instance root key is now required in every profile
-
-The root key used to be needed only by profiles that store integration credentials. The chart
-therefore let the `telemetry` and `ingest-only` profiles render without one. Every instance now
-seals its signing key under the root key, so the chart **fails the render** for any profile when
-no key is set. An instance built with `dcctl bootstrap` already has one and needs nothing. A
-chart-only `telemetry` or `ingest-only` install needs a key before it can be upgraded. Generate
-one with `openssl rand -base64 32`, pass it as `instance.config.infrastructure.secrets.rootKey`,
-and keep it: the same value has to be passed on every later upgrade.
-
-The root key now also decides whether anyone can sign in. With a wrong or lost key,
-user-management refuses to start, and so does every service that stores integration
-credentials. Every other service then stays not-ready, because it cannot get the keys it needs
-to validate a token. The whole API is down, not just the integrations. See
-[Disaster recovery](./disaster-recovery.md#root-key) for what to do about it.
-
-Deleting a stored credential now also removes it from the database completely. Before, the
-sealed row stayed in the table, marked deleted. Credentials that were deleted **before** this
-release stay that way: they cannot be used, but their sealed rows are still in the table and in
-backups.
-
-#### The dead-letter loss counters are one metric per service
-
-A service that gives up on a message and then cannot record it as a dead letter now counts that
-loss on **`dead_letter_lost_total`** under its own subsystem, the same name in every service. These
-five series are gone:
-
-- `devicechain_eventprocessing_react_events_dead_letter_lost_total`
-- `devicechain_notificationmanagement_notifications_dead_letter_lost_total`
-- `devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total`
-- `devicechain_devicemanagement_raise_alarm_dead_letter_lost_total`
-- `devicechain_devicemanagement_alarm_event_dead_letter_lost_total`
-
-These five replace them:
-
-- `devicechain_eventprocessing_dead_letter_lost_total`
-- `devicechain_notificationmanagement_dead_letter_lost_total`
-- `devicechain_commanddelivery_dead_letter_lost_total`
-- `devicechain_devicemanagement_dead_letter_lost_total`, one counter for both of device-management's
-  paths
-- `devicechain_outboundconnectors_dead_letter_lost_total`, which is **new**. An outbound connector
-  dispatch whose dead-letter copy could not be written on its final delivery used to be counted
-  only as `connector_dispatch_total{outcome="dead_write_failed"}`, which no alert read. It is still
-  counted there, and is now counted here as well.
-
-The `DeadLetterWriteLost` alert selects these by name rather than listing them, so it now covers
-outbound connectors too. If your own dashboards or rules name the old series, change them. The
-selector `{__name__=~"devicechain_[a-z0-9]+_dead_letter_lost_total"}` covers every service. Use
-`[a-z0-9]+` and not `.+`: while the upgrade rolls, pods that have not been replaced yet still
-export device-management's two old names, and `.+` matches both of them.
-
-The counter also counts a letter the service **refused** as malformed, which is a defect in that
-service rather than a broker problem. The pod's `LOST` error log line says which of the two
-happened.
-
-#### Command responses that could not be recorded are dead-lettered again
-
-In `v0.16.0` and `v0.17.0`, command-delivery could not write a single dead letter. Every one it
-tried was refused before it was written, counted as lost, and the device's answer was gone. That
-meant `DeadLetterWriteLost` could fire while the broker was healthy. That case is fixed, and it
-changes what happens to the commands involved:
-
-- A response that could not be recorded after every attempt is listed as a dead letter, and its
-  command now moves to `FAILED`, with an error saying the device answered and the answer was lost.
-  Before, such a command stayed in flight until something else settled it.
-- A response that named no dispatch, or a dispatch its command had already moved off, is listed as
-  a dead letter and settles nothing. The command is left as it was.
-
-#### GraphQL WebSockets carry subscriptions only, and close when their token expires
-
-The WebSocket a service accepts on its GraphQL endpoint changes in three ways:
-
-- **It runs subscriptions and nothing else.** A query or mutation sent over it is refused with an
-  error telling you to use HTTP, and nothing runs. Before, both were executed, using the token the
-  connection had presented when it opened. Send queries and mutations as HTTP requests.
-- **It closes with code `4401` when the access token it authenticated with expires.** Before, a
-  connection stayed open, and its subscriptions kept streaming, for as long as the client answered
-  pings. To keep a feed running, open a new connection with a fresh token and subscribe again.
-  - `@devicechain/client` does this for you. When a connection it had established is closed with
-    `4401`, it reconnects once with a newly resolved token, subscribes again, and reports the
-    reconnect to your sink as `connected(true)`.
-  - The .NET SDK raises the close from `SubscribeAsync` as an exception that names the code.
-    Subscribe again to continue; the new connection takes a fresh token from the session.
-  - The standalone dashboard viewer does not refresh its token, so its live widgets stop when the
-    token expires. Sign in again.
-- **A service with no subscriptions no longer accepts a WebSocket at all.** The upgrade request is
-  refused with HTTP 400. Before, the connection opened and every operation sent on it failed.
-
-#### The superuser no longer has a default password
-
-Earlier releases created every instance's superuser, `superuser@devicechain.local`, with the same
-published password, `devicechain`. A new instance now gets a password generated for it: `dcctl
-bootstrap` prints it once and keeps it in the Secret `dci-<instance>-superuser` in the instance's
-namespace. There is no default any more. If user-management starts with an empty identity table and
-no password in that Secret, it refuses to create the superuser.
-
-**The upgrade does not change an existing superuser's password.** The upgrade cannot know whether
-you changed it, so it leaves it alone, and it prints a warning at the end for any instance that has
-no generated password. If you never changed the password on such an instance, it is still
-`devicechain`. Sign in and change it, or recreate the instance to have one generated.
-
-`dcctl sim` and the drill tools no longer assume the old password either. `dcctl sim` reads the
-generated one from the instance's Secret, and takes `--admin-password` or `$DC_ADMIN_PASSWORD` for an
-instance that has none.
-
-#### Sign-in is rate-limited, and GraphQL requests carry fewer fields
-
-Nothing needs doing at the upgrade unless your own code or scripts do one of the things below. The
-console, the dashboard app, the SDKs and `dcctl` already stay within every limit.
-
-- **An operation may select at most 5 top-level fields in a mutation and 20 in a query.** Aliases
-  count, and so do fields reached through fragments. A request over the limit runs nothing and gets
-  one error with the code `TOO_MANY_ROOT_FIELDS`. Split such a request, or raise
-  `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` / `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` for that service.
-- **One request can have one password checked.** A further `login` in the same request is not
-  evaluated and gets the code `TOO_MANY_CREDENTIAL_CHECKS`. Sign in once per request.
-- **Repeated failed sign-ins on one email address are slowed down.** After five failures in a row,
-  the next attempt on that address waits 1 second, doubling up to 5 minutes. An attempt made during
-  the wait gets the code `THROTTLED` with `retryAfterSeconds`, not "invalid credentials". A sign-in
-  that the server cannot count gets `UNAVAILABLE`. If your code signs in, handle both as their own
-  errors rather than as a wrong password. OAuth client secrets are not slowed down.
-- **The JetStream reservation grows by 128 MiB** (16 MiB on the compact preset), for the bucket that
-  holds the sign-in counts. On the compact preset the cache buckets shrink from 8 to 4 MiB each to
-  make room. If you sized the JetStream volume yourself close to the reservation, check that it has
-  the room.
-- **A new alert, `CredentialAttemptStoreFull`,** fires if that bucket fills up. Sign-in keeps
-  working when it is full, but repeated failures are no longer slowed down. [Sign-in
-  backoff](../reference/graphql-api.md#sign-in-backoff) explains what to do.
-
-[Request limits](../reference/graphql-api.md#request-limits) and [sign-in
-backoff](../reference/graphql-api.md#sign-in-backoff) have the details.
-
-#### A consumer that falls behind a full stream now raises an alert
-
-A full JetStream stream discards its oldest messages. Before this release, a consumer that had not
-read those messages yet lost them without any metric or alert saying so. Every service now measures
-this for each durable consumer it reads and exports two new series:
-
-- `devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`: messages the
-  consumer moved past without reading them.
-- `devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`: messages discarded
-  ahead of a consumer that has stopped reading (one that was handed no messages since the previous
-  sample; a consumer that is reading but behind reads 0 here).
-
-Two new critical alerts read them: `JetStreamDurableLostUnread` and
-`JetStreamDurableStalledBehindStream`. Deleting a tenant can fire the first one: the deletion removes
-that tenant's messages, including any a consumer had not reached yet. See
-[Messages a consumer never read](./observability.md#unread-loss) for what each alert means and what
-to do.
-
-The near-full warning is **renamed** from `EventProcessingStreamNearFull` to
-**`JetStreamStreamNearFull`**, and it now covers the streams of every service, not only
-event-processing's. The threshold (80% of the byte ceiling for 10 minutes) is unchanged. If an
-Alertmanager route or silence names the old alert, change it to the new name.
-
-#### The connectors service no longer accepts dispatchBacklog
-
-If your values set `dispatchBacklog` under `functionalAreas.outbound-connectors.config`, delete it
-**before** upgrading. The service refuses to start with it, and the error names the key.
-
-The setting sized a buffer between the service's reader and its send workers, and that buffer is
-gone. The reader now fetches only as many dispatches as there are workers free to start them
-(`maxConcurrentSends`), so a dispatch no longer waits in the process while the broker's
-acknowledgement window runs. The notification service reads alarms the same way, one per
-dispatcher.
-
-This fixes a duplicate. Before, a burst of alarms or connector dispatches queued behind a slow
-channel could sit in the service longer than that window. The broker then handed the same messages
-out again while the first copies were still waiting, and both copies were sent: a second page for
-one alarm, or a second call to the same webhook. Each send is now also cut off with time to spare
-before the window closes.
-
-A new alert, `ReaderHeldMessagePastAckWait`, fires if either service still holds a message past the
-window. [Messages held past their acknowledgement
-window](./observability.md#held-past-ack-wait) explains what each case means.
-
-#### Messages abandoned on their last attempt are now dead-lettered
-
-A message a service gave up on after handling it used to be the only kind that reached the
-dead-letter list. A message whose five delivery attempts all ran out with **no** outcome — a pod
-stopped mid-handling, or a handler that ran past its acknowledgement window — left no record
-anywhere, because nothing reached the code that writes the letter. The broker does notice, and
-now every service records those too, from the broker's own notice.
-
-What changes for you:
-
-- **Three new kinds**, `event`, `command` and `control-fact`, for messages on the device-event,
-  command and control-plane streams. The kind of a letter is now fixed by the stream the message
-  arrived on. `dcctl dead-letters list --kind` offers all of them.
-- **A new reason, `no-outcome`.** It never settles a command: the last attempt may have done its
-  work and lost only its acknowledgement. For high-volume streams (device events, commands and
-  detection actions) the letter carries no copy of the message; its detail names where the
-  original is until the stream ages it out. The same holds for a message too large to copy, and a
-  connector request's letter points at the connectors service's own dead-letter stream, which
-  holds the full request.
-- **A new stream, `max-deliveries`,** created by every service that reads a stream. It reserves
-  8 MiB at default sizing and fits the existing JetStream volume; nothing needs resizing. It is
-  empty in steady state, and a new alert, `MaxDeliveryRecordsWaiting`, fires if notices wait on it
-  unrecorded ([Messages that ran out of delivery
-  attempts](./observability.md#max-delivery-records)).
-- **The detection engine's give-ups are counted, not dead-lettered.** `event-processing` reads
-  `resolved-events` from its own saved checkpoint and reads the stream again after a restart, so
-  an event whose attempts ran out there has not been lost. When the engine cannot save its
-  checkpoint for longer than the broker keeps redelivering (usually a database outage), every
-  event in that window runs out of attempts, and a letter for each would report losses that did
-  not happen. They are counted with `outcome="replay-covered"` instead, and a new warning alert,
-  `ReplayCoveredDeliveriesExhausted`, reports them. The other services that read
-  `resolved-events` still dead-letter theirs.
-- **The dead-letter stream gains a 30-minute duplicate window,** applied in place on upgrade, and
-  so does the connectors service's own dead-letter stream. It is what makes a give-up recorded both
-  by a service and by the broker's notice land once.
-- **`DeadLetterWriteLost` has a third cause:** a dead letter that the dead-letter store or the
-  command writeback ran out of attempts on, which may now age out of the stream without having
-  been stored (its last attempt may have stored it and lost only the acknowledgement).
-
-During the rolling upgrade a give-up can be lettered twice, once by a pod of the old release and
-once from the broker's notice. The two are the same failure; nothing was lost.
-
-#### With a warm standby, only the replica running detection dispatches actions
-
-On an `event-processing` deployment with a warm standby, the standby used to take a share of
-detection actions (commands, alarms and connector calls) and charge the connector calls against
-its own copy of each tenant's outbound ceiling, so a tenant could reach up to twice that ceiling.
-Actions are now dispatched only by the replica that holds the detection partition. When the
-partition moves, both replicas can dispatch for up to about five seconds, and a connector call
-made twice in that window reaches its destination twice.
-
-With one replica (the default) nothing changes, except after the pod stops without a graceful
-shutdown (a crash or an out-of-memory kill). The actions waiting to be dispatched then resume when
-the replacement takes the partition, up to about 35 seconds later, rather than as soon as the
-replacement starts. Detection resumes after a further handover wait and the replay, as it did
-before this release.
-
-Rate ceilings in `event-sources`, `outbound-connectors` and `ai-inference` are enforced by each
-replica separately. This is now documented under
-[Governance](../concepts/governance.md#per-replica), and matters if you run more than one replica
-of those services.
-
-#### Invented tenant names on HTTP ingest no longer grow memory, and two new alerts
+### v0.18.0 — what failed silently now says so, and ingest keeps up with its ceiling {#v0180-upgrade}
+
+`v0.18.0` is an in-place upgrade from `v0.17.0`: `dcctl install` for the cluster, then `dcctl
+upgrade` for each instance on it, as described [for v0.17.0](#v0170-upgrade). An instance built
+by `v0.16.0` or earlier still has to be [destroyed and built again](#pre-declaration-recreate).
+
+Much of what changed makes a failure visible that used to pass unnoticed: a lost message is now
+counted or dead-lettered, a service that cannot do its work restarts instead of staying ready,
+and a setting the platform cannot honour stops the service at startup. Events are also persisted
+and merged into live state in batches, and resolved several at a time, so a default install keeps
+up with the 1000 messages per second each tenant is allowed.
+
+**Who has to do something:**
+
+- **Everyone:** every user signs in again once, and OAuth clients, including AI assistants
+  connected through MCP, authorize again. Nothing needs preparing for it.
+- **Every instance built before this release:** check the superuser's password after the upgrade.
+  The upgrade does not change it, and it may still be the old published default.
+- **Anyone with webhook notification channels:** each one needs an `auth` key before the upgrade,
+  or it stops delivering.
+- **Anyone whose values set a key this release refuses**, set `resources` for a single service,
+  installed with `--compact`, restricts which registries nodes can pull from, or lets tenant
+  connectors reach private addresses: see [Before you upgrade](#v0180-before).
+- **Anyone who calls the GraphQL API from their own code or scripts:** read [API and
+  errors](#v0180-api). The alarm `message` field is gone, several refusals now carry a code, and
+  some requests the server used to accept are refused.
+- **Anyone who watches pod restart counts or searches service logs:** a service whose broker
+  connection closes for good, or whose message reads keep failing for two minutes, now restarts
+  instead of staying ready ([Messaging](#v0180-messaging)), and services now log at `info`, so
+  debug lines you may search for are gone ([details](#v0180-log-level)).
+- **Anyone who routes or silences alerts by name:** one alert is renamed and several are added;
+  see [Alerts added and renamed](#v0180-alerts).
+
+Everything else is under [What changed](#v0180-what-changed), by area. Each item says whether it
+needs anything from you; most do not.
+
+#### Before you upgrade {#v0180-before}
+
+Do these in order. Each links to the item that has the details.
+
+1. **Give every webhook notification channel an `auth` key.** A channel saved without one stops
+   delivering at the upgrade, including one that works today. The current release accepts the key
+   and ignores it, so adding it first leaves no gap. In each tenant, find the webhook channels
+   whose `config` has no `auth`:
+
+   ```graphql
+   query {
+     notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) {
+       results { token config hasSecret enabled }
+       pagination { totalRecords }
+     }
+   }
+   ```
+
+   If `totalRecords` is more than 100, read the next `pageNumber` too. Which value to use is in
+   [Webhook notification channels must say how they authenticate](#v0180-webhook-auth).
+2. **Remove or change configuration the new services refuse.** Each of these stops a service from
+   starting, and the error names the setting.
+   - `dispatchBacklog` under `functionalAreas.outbound-connectors.config`: delete it
+     ([details](#v0180-dispatch-backlog)).
+   - `auth.superuserPassword` under `functionalAreas.user-management.config`: delete it
+     ([details](#v0180-superuser)).
+   - `checkpointIntervalSeconds` above 30 for `event-processing`: lower it
+     ([details](#v0180-checkpoint-interval)).
+   - A connection pool set at or below a new worker count. `event-management` refuses a
+     `tsdbConfiguration.maxOpenConnections` of 5 or fewer, and `device-state` an
+     `rdbConfiguration.maxOpenConnections` of 5 or fewer, unless you also set their writer count
+     below it ([details](#v0180-batched-persistence)). `device-management` refuses an
+     `rdbConfiguration.maxOpenConnections` of 10 or fewer unless you set `resolution.workers` below
+     it ([details](#v0180-resolution-workers)).
+3. **A chart-only `telemetry` or `ingest-only` install: set an instance root key.** The chart now
+   refuses to render any profile without one. An instance built with `dcctl bootstrap` already has
+   one ([details](#v0180-root-key)).
+4. **If your values set `resources` for a single service, check the rendered pods.** A service's
+   `resources` is now merged over the top-level `resources` key by key, instead of replacing it,
+   and `device-management` and `event-management` get a 2-core CPU limit of their own. A top-level
+   CPU limit above 2 cores therefore lowers those two services to 2 cores, and a namespace
+   `ResourceQuota` or `LimitRange` you added can refuse them ([details](#v0180-cpu-limits)).
+5. **An instance installed with `--compact`: move its JetStream volume from 2Gi to 3Gi.** The
+   compact preset's volume grows to make room for the new bucket that counts failed MQTT connects.
+   The volume of a running NATS cannot be resized in place, so `dcctl
+   bootstrap` stops at its infrastructure step, before it touches NATS, and prints the steps that
+   keep the JetStream data: delete the StatefulSet without its volumes
+   (`kubectl -n dci-<instance> delete statefulset dc-nats --cascade=orphan`), patch each of its
+   PVCs to 3Gi if your StorageClass allows expansion (otherwise delete them and start with empty
+   JetStream state), and run the command again ([details](#v0180-mqtt-connect-backoff)).
+6. **Make sure your nodes can pull from `cgr.dev`.** The in-cluster backup store now runs
+   `cgr.dev/chainguard/minio`, pinned by digest; allow it through any egress rules, or mirror it at
+   that digest ([details](#v0180-backup-store-image)). If you run `dcctl` where the OpenTofu
+   provider registry cannot be reached, make it or a provider mirror reachable: every `dcctl` run
+   now asks it for the pinned provider versions ([details](#v0180-dcctl-install-rerun)).
+7. **If a tenant connector publishes to a private address, allow it.** MQTT, Kafka, SNS and SQS
+   connectors can no longer reach loopback, private, carrier-grade NAT, link-local or
+   cloud-metadata addresses, including Amazon MSK brokers, Amazon MQ and SNS or SQS through an
+   interface endpoint with private DNS. Allow each address as its own `/32` under
+   `instance.config.infrastructure.egress.allowedDestinations`. Check MQTT URL schemes and Kafka
+   ACLs by client id at the same time ([details](#v0180-connector-egress)).
+8. **Set `outboundMessagesPerSecond` and `outboundBurst` the same for `event-processing` and
+   `outbound-connectors`.** Otherwise the new `ConnectorDispatchRateLimited` warning fires whenever
+   a tenant metered at the platform default sends faster than the lower of the two
+   ([details](#v0180-new-warnings)).
+9. **Update GraphQL clients of your own.** Remove `message` from alarm selections and upgrade
+   `@devicechain/dashboards` and `@devicechain/widgets` together with the platform
+   ([details](#v0180-alarm-message)). Call `tenantDeletions` with its new criteria argument
+   ([details](#v0180-tenant-deletions)). The other API changes, listed under [API and
+   errors](#v0180-api), need attention only if your code relies on the old behaviour.
+10. **Fix CEL conditions that are true for every device without an attribute.** A threshold or
+    duration condition such as `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` stops
+    running at the upgrade. The corrected form is valid on the current release too
+    ([details](#v0180-cel-attribute-conditions)).
+11. **Check your broker's ACLs if you run an MQTT source on your own broker or a Sparkplug
+    source.** A subscription the broker refuses now stops the whole `event-sources` service for an
+    external MQTT source ([details](#v0180-external-mqtt-resubscribe)), and keeps a Sparkplug
+    source offline ([details](#v0180-sparkplug-refused-group)).
+12. **Update alert routes, silences and dashboards that name what changed.**
+    `EventProcessingStreamNearFull` is renamed `JetStreamStreamNearFull`
+    ([details](#v0180-unread-loss)). `JetStreamLeaseBucketNotReplicated` has a new summary
+    ([details](#v0180-new-warnings)). The three dead-letter alerts moved to their own rule group
+    ([details](#v0180-dead-letter-rule-group)). Five dead-letter loss series were replaced by one
+    name per service ([details](#v0180-dead-letter-lost)).
+
+#### During the upgrade {#v0180-during}
+
+- **Everyone is signed out once.** Console, dashboard and SDK sessions end at their next refresh,
+  within 15 minutes unless you have changed the access-token lifetime, and every access and refresh
+  token issued before the upgrade stops working once the rollout completes. OAuth clients, MCP
+  clients included, have to authorize again ([details](#v0180-sessions)).
+- **For a few seconds, requests can be refused with `401 invalid or expired token`**, and a
+  sign-in with `invalid or expired token`, even for a token issued moments earlier. This lasts
+  until the last user-management pod of the previous release has stopped. Signing in again and
+  retrying then succeeds ([details](#v0180-sessions)).
+- **Several things restart once.** `device-management` and `event-management` restart one pod at a
+  time for their new CPU limits ([details](#v0180-cpu-limits)). `dcctl install` restarts the
+  relational store's instances, with a brief write outage under `--ha` and a longer one on a
+  single instance ([details](#database-primary-failover-in-seconds)), and restarts the backup
+  object store onto its new image, which pauses archiving while it pulls
+  ([details](#v0180-backup-store-image)).
+- **Alarms can be delayed or lost if the rollout stalls.** A `device-management` pod of the
+  previous release cannot store a new alarm; the alarm is retried about once a minute and is
+  normally stored by an upgraded pod. Keep the rollout short. A console tab opened before the
+  upgrade gets an error on alarm lists until it is reloaded ([details](#v0180-alarm-message)).
+- **LwM2M commands issued mid-rollout can be delayed by several minutes**, while `lwm2m-ingest`
+  and `command-delivery` are on different releases ([details](#v0180-lwm2m-confirm)).
+- **A profile publish, a rollback or a geofence edit can take up to one cache TTL to reach every
+  `device-management` replica** while both releases are running
+  ([details](#v0180-profile-cache-bucket)).
+- **Some things can be recorded twice.** A give-up can be dead-lettered once by a pod of the
+  previous release and once from the broker's notice ([details](#v0180-no-outcome-dead-letters)).
+  An event with no `occurredTime` that was still unacknowledged can be stored twice
+  ([details](#v0180-processed-time)).
+- **A dead-letter alert that was pending or firing starts over** once its rule moves to the new
+  group ([details](#v0180-dead-letter-rule-group)).
+
+#### After the upgrade {#v0180-after}
+
+None of these is required for the platform to run. Each cleans up something the upgrade leaves
+behind.
+
+- **Check the superuser's password.** On an instance with no generated password, the upgrade
+  prints a warning at the end. If you never changed that superuser's password, it is still
+  `devicechain`: sign in and change it ([details](#v0180-superuser)).
+- **Delete the two cache buckets `device-management` no longer uses.** Each keeps its reservation
+  until you delete it. With the `nats` CLI and a login that can manage JetStream in the platform's
+  account:
+
+  ```bash
+  nats stream rm KV_<instance>_device-management_metric-defs-by-type
+  nats stream rm KV_<instance>_device-management_profile-scope-by-type
+  ```
+
+  ([details](#v0180-profile-cache-bucket))
+- **Give an older event store the new shutdown settings.** `dcctl upgrade` does not re-apply an
+  instance's databases, so an instance bootstrapped before this release keeps the old ones on its
+  event store until you patch it ([details](#database-primary-failover-in-seconds)).
+- **Clear alarms raised by a CEL condition that is now refused.** The rule no longer runs, so
+  nothing resolves them ([details](#v0180-cel-attribute-conditions)).
+- **Look for alarms that were not raised during the rollout** with
+  `dcctl dead-letters list --kind detection-action --source device-management`
+  ([details](#v0180-alarm-message)).
+- **Send again any device password that should begin or end with a space.** Values saved before
+  this release were stored trimmed ([details](#v0180-credential-values)).
+- **Give a provisioning profile stored with an empty secret a real one** with
+  `updateProvisioningProfile` ([details](#v0180-provisioning-secret)).
+- **Look for stored alert levels above 2147483647**, which now make the alert listing that
+  includes them an error ([details](#v0180-int-range)).
+- **Keep protecting backups taken before the upgrade.** They hold the token-signing keys this
+  upgrade retires ([details](#v0180-sessions)).
+
+#### What changed {#v0180-what-changed}
+
+The rest of this section describes the changes an operator or an API caller can notice, grouped
+by area.
+
+#### Ingest and resolution {#v0180-ingest}
+
+##### HTTP ingest has its own allowance {#v0180-http-allowance}
+
+HTTP ingest requests are now metered against a per-tenant allowance of their own. Before this
+release they spent the same allowance as the tenant's MQTT, NATS and broker presence traffic. HTTP
+takes the tenant from the request path and checks the device credential only after the request is
+admitted, so anyone who could reach port 8081 and knew a tenant's name could use that allowance up
+and cause the tenant's MQTT telemetry to be dropped, including messages the broker had already
+acknowledged to the device. Now such a caller can use up only the tenant's HTTP allowance.
+
+This changes what a tier's ingest ceiling means. On each `event-sources` replica the ceiling
+already applied separately to live device traffic and to a backlog drained after an outage, and
+HTTP is now a third allowance beside them. A tenant can therefore be admitted at up to three times its ceiling per replica
+in the worst case ([When ingest can admit a tenant above its
+ceiling](../concepts/governance.md#ingest-above-ceiling)). If you size tier ceilings for billing or
+capacity, allow for it.
+
+Expose port 8081 only behind network controls, such as a NetworkPolicy or an ingress that
+authenticates callers. The chart does not route it through its ingress, but by default any pod in
+the cluster can reach it.
+
+##### Invented tenant names on HTTP ingest no longer grow memory, and two new alerts {#v0180-unconfirmed-tenants}
 
 The HTTP ingest endpoint used to create a separate rate allowance for every tenant name in a
 request path, confirmed or not, so a stream of invented names could grow `event-sources`' memory
@@ -1927,165 +1734,7 @@ or when a tenant's ceiling changed mid-drain; such messages are now charged
 at the latest time the allowance has already seen, which can shed a little more but never admits
 more.
 
-#### Outbound actions are no longer dropped when the detection engine catches up
-
-After a restart, rollout or failover, the detection engine works through the telemetry that arrived
-while it was down. Outbound webhook and connector actions from that backlog used to be counted
-against the tenant's outbound rate as if they had all happened at once, so most of them were dropped
-with only a metric as a record. They are now metered, both where they are triggered and in the
-connectors service, on the time the telemetry reached the platform. A tenant within its limit loses
-nothing to a catch-up and is not slowed by it.
-
-An action that is still over the limit is recorded as a dead letter with reason `shed` and kind
-`detection-action`, up to about one letter a second per tenant (60 at once) and ten a second in
-total. Beyond that the actions are counted and summarised in one letter per tenant per minute. Four
-settings on `event-processing` tune the budget: `shedLetterPerSecond`, `shedLetterBurst`,
-`shedLetterGlobalPerSecond` and `shedLetterGlobalBurst`. Two warnings are added:
-`ReactShedLettersOverBudget` and `RateMeteringClockFallback`.
-
-Detections the engine re-publishes after a restart are now recognised by the message bus and stored
-once within a 30-minute window, so subscribers to the derived-events feed see fewer duplicates. Each
-derived event now carries a `triggeredAt` field. If you filter dead letters by reason, expect `shed`
-letters of kind `detection-action`. Nothing needs doing at the upgrade.
-
-#### Connectors can no longer reach private addresses, and the connectors service has new clients
-
-MQTT, Kafka, SNS and SQS connectors now get the same connect-time check that webhooks and mail
-relays already had. A destination that resolves to a loopback, private, carrier-grade NAT,
-link-local or cloud-metadata address is refused. The refusal is **final**: the dispatch is
-dead-lettered as `blocked` and not retried. For Kafka this covers every broker the cluster
-advertises, not only the addresses you configured. The check runs in the service itself, so it no
-longer depends on `networkPolicy.enabled` or on your cluster enforcing it.
-
-What to check before upgrading:
-
-- **Destinations on private addresses stop receiving.** This includes:
-  - an in-cluster or peered broker;
-  - **Amazon MSK brokers**, which are private by default;
-  - **Amazon MQ** used for MQTT;
-  - **SNS and SQS reached through an interface VPC endpoint with private DNS enabled**. With
-    private DNS, even the default `sns.<region>.amazonaws.com` / `sqs.<region>.amazonaws.com`
-    names resolve to private addresses, so connectors with no endpoint override are affected too.
-
-  Allow each address as its own `/32` under
-  `instance.config.infrastructure.egress.allowedDestinations`. An interface endpoint has one
-  address per availability zone, and each needs its own entry. An allowance applies to every
-  tenant and every connector and webhook path, not only the one you have in mind.
-- **MQTT URLs must use `tcp://`, `mqtt://`, `ssl://`, `tls://`, `mqtts://`, `ws://` or `wss://`**,
-  with an explicit port and one broker per entry. `tcps://`, `mqtt+ssl://` and `unix://` are no
-  longer accepted. They are refused when a connector is saved, and a stored connector that uses
-  one is dead-lettered as `invalid` when it fires. Kafka addresses must be `host:port`.
-- **Proxy environment variables** (`HTTPS_PROXY`, `ALL_PROXY`) are no longer used by connectors,
-  and neither are `AWS_*` variables or AWS config files on the pod.
-- **The Kafka client changed.**
-  - The default client id is now `devicechain` (it was `bento`). Set `clientId` on the connector
-    if your brokers apply ACLs or quotas by client id.
-  - Records without a key are now spread with sticky partitioning.
-  - The protocol version is negotiated with the broker rather than fixed.
-  - Delivery is unchanged: leader acknowledgement, no idempotent producer.
-- **SQS messages are sent one at a time** (`SendMessage`), not in batches. The IAM permission is
-  the same `sqs:SendMessage`.
-
-Two things improve as a side effect. A Kafka broker that is briefly unreachable is now retried
-rather than dead-lettered as `invalid`. And the connectors service's binary, which is most of its
-image, is about a third of its previous size.
-
-#### `checkpointIntervalSeconds` is capped at 30, and some silent failures now warn
-
-`event-processing` now refuses to start when `checkpointIntervalSeconds` is above 30. The
-detection engine acknowledges its input only when it checkpoints, so an interval near or past the
-broker's 60-second acknowledgement window held messages on a quiet stream until the broker
-delivered them again, and after five windows counted them as exhausted deliveries, which raises
-`ReplayCoveredDeliveriesExhausted` on a healthy engine. 30 leaves room for the checkpoint itself. The limit is a startup refusal rather than
-a chart check, so `helm upgrade` with a larger value succeeds and the pod then fails to start. If
-your values set it higher, lower it before upgrading. The default (10) is unaffected.
-
-Some failures that were silent at the default log level now log a warning:
-
-- a failed sample of a stream's or KV bucket's size and replication, or of a consumer's unread
-  loss;
-- a failed sample of the detection engine's consumer lag;
-- device authentication at the broker that failed for a reason other than the device's own
-  credential: the credential store failing, or a stored credential that has no secret and so can
-  never authenticate.
-
-A device presenting a wrong, unknown, expired or revoked credential is still logged only at debug.
-During a broker outage the sampling warnings repeat on every sampling pass, about every 30 seconds
-per stream; a sample interrupted by shutdown stays at debug. During a credential-store (database)
-outage the authentication warning repeats once per device connect attempt, so a fleet reconnecting
-through the outage logs one warning per attempt.
-
-#### A provisioning profile can no longer be created with a blank secret
-
-`createProvisioningProfile` now refuses an empty or whitespace-only `provisionKey` or
-`provisionSecret`. A profile with an empty secret would match a device that also sent an empty
-secret. No instance was exposed to that, because the path a device would use to present a
-provisioning secret has not shipped yet; the check closes the gap before it does.
-`updateProvisioningProfile` already refused a blank value. A profile
-already stored with an empty secret now matches no presented secret at all, empty or not: give it a
-real one with `updateProvisioningProfile`.
-
-#### The dead-letter alerts move to their own rule group
-
-The three dead-letter alerts, `ReactPoisonDropping`, `DeadLetterStoreLosing` and
-`DeadLetterWriteLost`, now ship in their own `dead-letter` PrometheusRule (group
-`devicechain.dead-letter`) instead of `event-processing`. Their names, labels, severities,
-thresholds and descriptions are unchanged, so routes and silences that match on the alert name or
-its labels keep working.
-
-- **One that is pending or firing during the upgrade starts over.** Prometheus sees a new rule, so
-  the alert resolves and comes back once its `for` wait (5 or 10 minutes) has passed, if the
-  condition still holds.
-- **If you select PrometheusRule objects by name**, or look up rule groups in the Prometheus UI,
-  add `dead-letter`.
-- **`DeadLetterStoreLosing` and `DeadLetterWriteLost` no longer end in `or vector(0)`.** An
-  expression that returns nothing and one that returns a false comparison leave an alert in the
-  same state, so the clause changed nothing. Both alerts fire and resolve exactly as before.
-
-#### GraphQL documents must use GraphQL's own comments and strings
-
-Nothing needs doing at the upgrade unless your own code or scripts write GraphQL documents by hand.
-The console, the dashboard app, the SDKs, `dcctl` and the MCP server never send any of the
-following.
-
-- **A document written with `//` or `/* */` comments, backquoted strings, or single-quoted
-  characters is now refused** with a syntax error, and nothing in it runs. Earlier releases accepted
-  these, although they are not GraphQL. Use `#` for comments and `"` for strings.
-- **A block string whose closing `"""` directly follows a backslash is refused as well**, as in
-  `\"""`. That escape is valid GraphQL, but earlier releases never read it as the specification
-  defines it: they closed the string at those three quotes and read the rest of the document from
-  there. Send such text in a variable.
-- **A string directly followed by a quote, such as `"x""y"`, is refused.** GraphQL reads that as two
-  adjacent strings, which is never a valid value; earlier releases read it as the start of a block
-  string instead. Only `"""` opens a block string, and an empty string `""` is unaffected.
-- **Over a GraphQL WebSocket, a subscription the server cannot read now gets the syntax error**, not
-  the message saying that only subscriptions are accepted. A document that names an operation it
-  does not hold gets its own error too. Both are errors for that operation only; the connection
-  stays open.
-
-[Request limits](../reference/graphql-api.md#request-limits) has the details.
-
-#### HTTP ingest has its own allowance
-
-HTTP ingest requests are now metered against a per-tenant allowance of their own. Before this
-release they spent the same allowance as the tenant's MQTT, NATS and broker presence traffic. HTTP
-takes the tenant from the request path and checks the device credential only after the request is
-admitted, so anyone who could reach port 8081 and knew a tenant's name could use that allowance up
-and cause the tenant's MQTT telemetry to be dropped, including messages the broker had already
-acknowledged to the device. Now such a caller can use up only the tenant's HTTP allowance.
-
-This changes what a tier's ingest ceiling means. On each `event-sources` replica the ceiling
-already applied separately to live device traffic and to a backlog drained after an outage, and
-HTTP is now a third allowance beside them. A tenant can therefore be admitted at up to three times its ceiling per replica
-in the worst case ([When ingest can admit a tenant above its
-ceiling](../concepts/governance.md#ingest-above-ceiling)). If you size tier ceilings for billing or
-capacity, allow for it.
-
-Expose port 8081 only behind network controls, such as a NetworkPolicy or an ingress that
-authenticates callers. The chart does not route it through its ingress, but by default any pod in
-the cluster can reach it.
-
-#### `processedTime` now means when the platform received an event
+##### `processedTime` now means when the platform received an event {#v0180-processed-time}
 
 An event's `processedTime` (in GraphQL, and the `processed_time` column of the analytics `events`
 view) is now the time the platform **received** the event. For MQTT on the platform's broker, that
@@ -2119,112 +1768,52 @@ processed. What follows from that:
   outage has already moved its outbound meter to the present, so its backlog is still charged
   together, as it was before.
 
-#### A lost presence connection now restarts `event-sources`
-
-`event-sources` reads MQTT connection events from the broker over a connection of its own, signed in
-with the system-account credential. If the broker closed that connection for good, for example
-because it stopped accepting the credential, the pod carried on as live and ready with broker
-presence silently frozen: nothing was asserted or released, and nothing restarted it.
-
-Now the pod fails its liveness check and Kubernetes restarts it. A refused credential reaches every
-replica at once, so **every `event-sources` pod restarts**, and HTTP ingest is unavailable while
-they do; MQTT telemetry is stored by the broker and processed when they return. If the restarted
-pods still cannot sign in, broker presence turns off with reason `broker_unreachable` and asserted
-devices return to inferred presence, as when the broker cannot be reached at startup ([Device
-presence](../concepts/device-presence.md)).
-
-If the system-account credential changes, for example during a credential rotation, a pod whose
-connection the broker drops before the pod itself is replaced restarts once. Expect that to show as
-a restart count.
-
-#### LwM2M commands are confirmed immediately before they reach the device
-
-A command delivered to an LwM2M device is now confirmed with command-delivery immediately before
-the adapter carries it out. A delivery the platform has already re-armed or re-sent is discarded
-instead of reaching the device a second time. Such a delivery can turn up late after an outage or a
-failover, and before this release it could actuate a device that a later delivery had already
-actuated. If command-delivery cannot be reached, LwM2M commands wait and are retried. They are never
-sent unconfirmed.
-
-What changes that you can see:
-
-- **Cancelling a batch now also stops LwM2M commands that were published but had not yet reached
-  their device.** They record `CANCELLED`. The cancel result still counts them as already sent,
-  because that is what they were when the cancel ran.
-- **For an LwM2M command, `sentTime` now records when the device was actually sent it.** That can be
-  later than when the command was first published.
-- **`lwm2m-ingest` refuses to start without `infrastructure.commandDelivery`** whenever it has device
-  identities to serve. The chart always sets it, so only a hand-built configuration is affected.
-- **Metrics.** `lwm2m-ingest` adds `devicechain_lwm2mingest_commands_stale_dispatch_total` (deliveries discarded because the
-  platform had already moved on: a duplicate actuation avoided, not a fault) and
-  `devicechain_lwm2mingest_command_live_claim_errors_total` (commands not carried out because command-delivery could not
-  confirm them). `devicechain_lwm2mingest_command_drain_dedup_total` is removed.
-- **During the upgrade itself,** a new `lwm2m-ingest` cannot confirm commands with a command-delivery
-  that is still on the previous version. An LwM2M command issued in that window can be delayed by
-  several minutes. If it runs out of retries before both services are upgraded, it is re-armed and
-  delivered on the device's next wake.
+##### Device events sent over MQTT are forwarded several at a time {#v0180-mqtt-forwarding}
 
 Nothing needs doing at the upgrade.
 
-#### A slow LwM2M device no longer holds up other devices' commands
+- **`event-sources` keeps up to 128 publishes to inbound-events waiting for the broker at once**
+  for the events devices send over MQTT to the platform broker, instead of at most five. A
+  device's message is still acknowledged only after the event it carried has been stored, and one
+  whose publish fails is still left for redelivery. Events sent over HTTP, and through an external
+  MQTT broker you configured, are published as before.
+- **When publishing to inbound-events keeps failing, `event-sources` slows down** the same way
+  `device-management` does: after a failed publish it waits half a second, doubling up to two
+  seconds, and until a publish succeeds it sends one at a time.
+- **More device messages can be redelivered after `event-sources` stops abruptly:** up to the 128
+  that were waiting for the broker, on top of those it held before. Each carries the same
+  duplicate-detection id as before, so an event that was already stored is not stored twice.
+- **A device message that failed on every delivery is still routed to failed-decode, at most four
+  at a time.** One that arrives while four are being routed is left for the broker to end, and is
+  recorded as a dead letter instead of on failed-decode.
+- **A device's events can reach inbound-events slightly out of order, as they could before:** five
+  decoders work through the captured messages at once, and every replica publishes.
+- **`devicechain_eventsources_jetstream_publish_duration_seconds` gains a `mode="pipelined"`
+  series for `suffix="inbound-events"`.** [Observability](./observability.md) describes the modes.
 
-When an LwM2M device is slow to answer and its commands pile up, further commands for it are now
-set aside in command-delivery and delivered in order moments later. Before this release they
-stalled the whole adapter: every other LwM2M device's commands waited behind the slow one.
-Commands for a device that has no connection are set aside the same way, without taking up room
-that connected devices need.
+##### An MQTT source on your own broker subscribes again after a reconnect {#v0180-external-mqtt-resubscribe}
 
-What changes that you can see:
+An MQTT event source that reads from a broker you run subscribed once, when it started. The client
+reconnects on its own with a clean session, so after a broker restart or a network drop the broker
+held no subscription for it: the source stayed connected, reported nothing wrong, and ingested
+nothing until the pod restarted. It now subscribes again on every connection. The default
+install's own gateway source reads from the platform's stream and was not affected.
 
-- **A connected device receives the rest of a long backlog without reconnecting.** Its waiting
-  commands used to be delivered 32 per wake, and the rest waited for the device to wake again,
-  which a device that stays connected never does. They are now delivered a few at a time, taking
-  turns with other devices' commands, until the backlog is empty.
-- **One device's commands still arrive in the order they were sent.** This now also holds when a
-  command could not be confirmed with command-delivery and is retried: the commands after it wait
-  for it. Two cases can still deliver a command after the ones sent behind it, and both need
-  command-delivery to be failing. One is an outage that outlasts the command's retries. The other
-  is a confirmation that command-delivery recorded but whose answer never reached `lwm2m-ingest`,
-  for example because the request timed out. In both cases the command stays sent but not carried
-  out until the platform finds it stranded, and it is then delivered on the device's next
-  connection, after the later commands, or expires.
-- **After a failover, commands sent while devices reconnect are delivered a moment later.** Each
-  device's waiting commands are delivered before any new one, so for that short window new
-  commands are set aside too. Expect a brief rise in command-delivery traffic after a failover.
-- **Metrics.** `lwm2m-ingest` adds `devicechain_lwm2mingest_commands_overflow_parked_total`, with a
-  `reason` label (`full`, `offline`, `bind`, `unconfirmed`),
-  `devicechain_lwm2mingest_command_overflow_blocked_total` (the adapter waited because
-  command-delivery was slow) and `devicechain_lwm2mingest_command_drain_turns_total`.
-  `devicechain_lwm2mingest_command_drain_dropped_total` is removed: a device's request for its
-  waiting commands is no longer dropped when the adapter is busy.
+- **A broker that refuses the subscription after a reconnect now stops the whole `event-sources`
+  service**, and so does one that never acknowledges it. Kubernetes restarts the pod, and a broker
+  that still refuses at start stops it again, as it already did. An ACL change on your broker
+  therefore shows as a crash loop, and HTTP and platform-broker ingest go down with it. Check
+  before upgrading that the source's credential may still subscribe to its topics. See [Transport
+  matrix](../reference/transport-matrix.md).
+- A connection that drops while the subscription is being sent is left to the client's reconnect.
+- **When broker presence cannot recover, `event-sources` now stops cleanly.** It used to exit at
+  once, skipping its readiness drain, every source's stop, the GraphQL server and the broker
+  drain. It now runs all of them before it exits, and the pod restarts as before ([Device
+  presence](../concepts/device-presence.md)).
 
-Nothing needs doing at the upgrade.
+##### A Sparkplug source with a refused group stays offline {#v0180-sparkplug-refused-group}
 
-#### Two new warnings: an unreadable stream, and connector sheds the detection engine admitted
-
-- **`JetStreamReplicationUnobserved`** (warning, `jetstream-replication` group) fires when a
-  running pod has been unable for 15 minutes to read the replication state of a stream it could
-  read earlier. Until now a service that could not read a stream stopped reporting it, and the
-  other replication alerts went quiet for that stream rather than saying so. It also fires for
-  every stream on every pod during a broker outage, which is deliberate: nothing else in the chart
-  reports one. It resolves six hours after the stream was last read, whether or not it can be read
-  again. See [Replication](./observability.md#replication).
-- **`ConnectorDispatchRateLimited`** (warning, `governance` group) fires when outbound-connectors
-  has shed dispatches as over their tenant's outbound rate for 15 minutes. The detection engine
-  already sheds over-quota actions before dispatching them, so this means the two services
-  disagree about the ceiling (most often their platform defaults differ) or failing sends are
-  being retried and metered again. Before upgrading, check that `outboundMessagesPerSecond` and
-  `outboundBurst` are set the same for event-processing and outbound-connectors. Otherwise it
-  fires whenever a tenant metered at the platform default sends faster than the lower of the two.
-  See
-  [Tenants metered at the platform default](./observability.md#tenant-ceilings).
-- **`JetStreamLeaseBucketNotReplicated` has a new summary**, "The partition-lease bucket is not
-  replicated". Its name, labels and severity are unchanged. Update any route or silence that
-  matches on the old summary text.
-
-#### A Sparkplug source with a refused group stays offline, and a refresh survives a brief outage
-
-**Sparkplug.** If the broker accepts a Sparkplug source's connection but refuses its subscription to
+If the broker accepts a Sparkplug source's connection but refuses its subscription to
 any one of the source's groups (most often because the source's credential may not read that
 group), the source no longer announces itself online. It ingests none of its groups, disconnects,
 and retries with a growing wait of up to 30 seconds until every group is granted. One refused group
@@ -2240,83 +1829,7 @@ increase. The log line names the refused group. If you watch the Sparkplug host 
 a refused group now shows as offline rather than online. [Edge services](./edge-services.md) has
 the details.
 
-**Session refresh.** Refreshing a session used to use up the refresh token before re-checking the
-session. A database or broker error during that check then ended the session: the refresh failed
-as "invalid or expired token", and the token could not be used again. The check now runs first. A
-store error leaves the token valid and returns an error you can retry ("the session could not be
-refreshed right now; try again"), and the OAuth token endpoint returns `server_error` without the
-underlying error text. A refresh that is refused because the session ended, the membership was
-removed or disabled, or the tenant refuses access still uses the token up.
-
-Only a client that retries with the same refresh token benefits. An OAuth client, such as an AI
-agent connecting over MCP, now gets `server_error` rather than `invalid_grant` during such an outage,
-so it can retry instead of asking the user to authorize it again. The Go client library the
-simulator, the load tests and `dcctl` use no longer loses its refresh token to the outage, but it
-still falls back to a password sign-in whenever a refresh fails, as it did before. The console still
-signs the user out on any refresh failure. Nothing needs doing at the upgrade.
-
-#### Repeated failed MQTT password connects are slowed down
-
-Nothing needs doing unless a device connects with a wrong MQTT password in a loop, or the instance
-was installed with `--compact`. [Repeated failed connects are slowed
-down](../guides/device-credentials.md#connect-backoff) has the details.
-
-- **After 10 failed connects in a row for one MQTT username, the next attempt waits 1 second,**
-  doubling up to 30 seconds. A connect made during the wait is refused like a wrong password, even
-  if the password is right. A successful connect resets the count. Access-token connects and
-  credentials in event bodies are not affected.
-- **Someone who knows a device's MQTT username can keep that device from reconnecting** for as long
-  as they keep sending wrong passwords for it. Devices that are already connected are not affected
-  until they reconnect.
-- **Password connects now need JetStream.** If the store that holds the counts cannot be reached,
-  password connects are refused, including briefly while that store's JetStream leader changes, for
-  example while a NATS node restarts.
-- During a database outage, a device whose password connects keep failing is slowed down the same
-  way, so after its first 10 attempts its refused connects are logged at debug rather than as a
-  warning each. An unreachable count store is logged as one warning a minute.
-- **The JetStream reservation grows by 128 MiB** (16 MiB on the compact preset) for the new bucket
-  that holds the counts.
-- **The compact preset's JetStream volume grows from 2Gi to 3Gi** to make room: the store the
-  volume gives JetStream grows from 1 GiB to 2 GiB. On an instance installed with `--compact`
-  before this release, `dcctl bootstrap` stops at its infrastructure step, before it touches
-  NATS, because the volume of a running NATS cannot be resized in place. It prints the steps to
-  move the volume to 3Gi and keep the JetStream data; follow them and run it again.
-- **A new alert, `DeviceCredentialAttemptStoreFull`** (warning), fires when that bucket fills.
-  Connects keep working, but without the slow-down. A very large reconnect wave can fill it as well
-  as an attack can.
-
-#### device-management keeps one cache bucket per device type instead of two
-
-The cached metric definitions and rule scope of a device type are now one key-value bucket,
-`<instance>_device-management_profile-resolution-by-type`, so each measurement event reads its
-device type's published profile once instead of three times, and one event can no longer be
-validated against one profile version and labelled with another. Nothing needs doing unless you
-size the JetStream volume yourself or manage buckets by hand.
-
-- **The upgrade adds one cache bucket to the JetStream reservation** (64 MiB by default, 4 MiB on
-  the compact preset). device-management creates the new bucket when it starts, and the two it
-  replaces keep their reservation until you delete them (see the next item). If the JetStream
-  volume has less free room than one cache bucket, creating the new bucket fails for lack of
-  storage and device-management does not start. Once the two old buckets are deleted, the
-  reservation is one cache bucket lower than before the upgrade, which is also what a fresh
-  install reserves.
-- **An upgraded instance keeps the two buckets this one replaces**:
-  `<instance>_device-management_metric-defs-by-type` and
-  `<instance>_device-management_profile-scope-by-type`. Nothing writes to them after the upgrade,
-  and their entries expire within the cache TTL the buckets were created with (60 seconds unless
-  `metricDefCacheTtlSeconds` was changed before this upgrade), but each keeps reserving its
-  ceiling until you delete it. Deleting them needs the `nats` CLI with a login that can manage
-  JetStream in the platform's account; `dcctl` has no command for it:
-  `nats stream rm KV_<instance>_device-management_metric-defs-by-type` and
-  `nats stream rm KV_<instance>_device-management_profile-scope-by-type`. Leaving them costs only
-  that reservation. A tenant deletion still clears them for one more release.
-- **While the upgrade is rolling**, a profile published or rolled back, or a geofence edit, can take
-  up to one cache TTL to reach every device-management replica: a replica of the previous release
-  clears only the old buckets, and a replica of this one only the new bucket. A geofence edit
-  missed this way means location events are stamped with the previous fence set for up to that
-  TTL.
-
-#### Resolved events are published several at a time
+##### Resolved events are published several at a time {#v0180-resolved-publish}
 
 Nothing needs doing at the upgrade.
 
@@ -2347,7 +1860,91 @@ Nothing needs doing at the upgrade.
 - **A new histogram, `devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`,**
   measures every JetStream publish. [Observability](./observability.md) describes it.
 
-#### A threshold or duration condition that is true for every device without an attribute is now refused
+##### device-management resolves more events at once {#v0180-resolution-workers}
+
+`device-management` resolved inbound events with five resolvers, a number fixed in code. Resolving
+an event is mostly waiting: for the database to authenticate its credential, then for the message
+broker's key-value store to return its profile and relationships, one after another. So five
+resolvers limited how many events a pod could resolve a second while most of its CPU sat idle. On a
+test cluster the pod resolved about 1600 events a second on 1.5 of its 4 cores, and the events above
+that rate waited in the pod, about 140 at a time, then in the stream, with detection falling behind
+them. It now runs 10 by default, and the number is configurable. Measured in-process against a
+three-server broker, with every lookup taking 750 µs, 5 resolvers resolved about 1500 events a
+second and 10 about 2900. See [Event resolution](./observability.md#event-resolution).
+
+- **The new setting is `resolution.workers`** (default `10`). It must be below the service's
+  connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set). A value out of range stops
+  the service from starting, and the error names the setting. The default is refused only if you set
+  `maxOpenConnections` for `device-management` to 10 or fewer: set `resolution.workers` below it
+  before upgrading.
+- **device-management holds more database connections while it resolves events.** Each resolver
+  holds one while it authenticates an event's credential, which under the default `required` device
+  authentication is every event. With every resolver busy that is now up to 10 connections instead
+  of 5, from the pool the GraphQL API, the MQTT connect checks and the consumer that applies alarm
+  raises and resolves also use. If you set
+  `maxOpenConnections` below 20, check that what is left is enough for them. More than half the pool
+  is allowed, and logged at startup.
+- **A pod at its CPU limit gains nothing from more resolvers.** This raises the rate only where the
+  pod has CPU to spare.
+- **A new metric, `resolve_workers`,** reports how many resolvers the pod runs, and
+  `resolve_inflight` can now reach 10. `resolve_inflight` held at `resolve_workers` means events are
+  arriving faster than the pod resolves them.
+- **Rolling back:** an earlier `device-management` refuses a configuration that sets
+  `resolution.workers`, as it refuses any setting it does not know. Remove the setting before
+  rolling back.
+
+##### device-management keeps one cache bucket per device type instead of two {#v0180-profile-cache-bucket}
+
+The cached metric definitions and rule scope of a device type are now one key-value bucket,
+`<instance>_device-management_profile-resolution-by-type`, so each measurement event reads its
+device type's published profile once instead of three times, and one event can no longer be
+validated against one profile version and labelled with another. Nothing needs doing unless you
+size the JetStream volume yourself or manage buckets by hand.
+
+- **The upgrade adds one cache bucket to the JetStream reservation** (64 MiB by default, 4 MiB on
+  the compact preset). device-management creates the new bucket when it starts, and the two it
+  replaces keep their reservation until you delete them (see the next item). If the JetStream
+  volume has less free room than one cache bucket, creating the new bucket fails for lack of
+  storage and device-management does not start. Once the two old buckets are deleted, the
+  reservation is one cache bucket lower than before the upgrade, which is also what a fresh
+  install reserves.
+- **An upgraded instance keeps the two buckets this one replaces**:
+  `<instance>_device-management_metric-defs-by-type` and
+  `<instance>_device-management_profile-scope-by-type`. Nothing writes to them after the upgrade,
+  and their entries expire within the cache TTL the buckets were created with (60 seconds unless
+  `metricDefCacheTtlSeconds` was changed before this upgrade), but each keeps reserving its
+  ceiling until you delete it. Deleting them needs the `nats` CLI with a login that can manage
+  JetStream in the platform's account; `dcctl` has no command for it:
+  `nats stream rm KV_<instance>_device-management_metric-defs-by-type` and
+  `nats stream rm KV_<instance>_device-management_profile-scope-by-type`. Leaving them costs only
+  that reservation. A tenant deletion still clears them for one more release.
+- **While the upgrade is rolling**, a profile published or rolled back, or a geofence edit, can take
+  up to one cache TTL to reach every device-management replica: a replica of the previous release
+  clears only the old buckets, and a replica of this one only the new bucket. A geofence edit
+  missed this way means location events are stamped with the previous fence set for up to that
+  TTL.
+
+##### device-management keeps resolving events when a NATS server drops off the network {#v0180-nats-server-drop}
+
+Nothing needs doing at the upgrade.
+
+- **A lookup in one of `device-management`'s key-value caches waits at most half a second,**
+  instead of the five seconds a NATS request is allowed. When a NATS server dropped off the
+  network without closing its connections, some of these lookups were sent to it and each waited
+  the full five seconds, so event resolution slowed to a few events a second for about a minute,
+  and nothing was logged.
+- **A cache that times out, or that no server answers for, is skipped for five seconds,** and its
+  lookups go to the database. `device-management` logs a warning when that starts and a line when
+  the cache answers again. See [Caches that stop answering](./observability.md#kv-caches) for the
+  four new metrics.
+- **Removing a cache entry after a change is never skipped,** and a removal that fails is now
+  logged (`A key-value cache eviction failed`); before, a failure was silent.
+- **Resolving an event that takes longer than five seconds is now logged as a warning**
+  (`Event resolution is slow`), at most once every 30 seconds.
+
+#### Detection {#v0180-detection}
+
+##### A threshold or duration condition that is true for every device without an attribute is now refused {#v0180-cel-attribute-conditions}
 
 **Detection rules.** A threshold or duration condition written in CEL that would be true on every
 event from every device that lacks the attributes it reads, whatever the event carries, is now
@@ -2382,7 +1979,7 @@ publish the profile again. See
 The preview documentation is corrected too. Preview resolves no device attributes, so a CEL fallback
 previews its fallback on every device; it does not preview as never firing.
 
-#### Duration rules place late readings by their own time
+##### Duration rules place late readings by their own time {#v0180-duration-late-readings}
 
 A duration rule ("temperature above 80 for 10 minutes") now places each reading by the time it was
 taken rather than the order it arrived in, and discards a reading that meets its condition but is
@@ -2444,41 +2041,7 @@ the time. Rolling back to the previous release afterwards does not turn the new 
 alarms: it reads only the open runs from the checkpoint and ignores the rest. Nothing needs doing
 at the upgrade.
 
-#### The alarm `message` field is removed
-
-Alarms had a `message` field that nothing ever filled in: it was always null. It is removed
-everywhere it appeared:
-
-- **GraphQL:** `Alarm.message` and `AlarmEvent.message` (the `alarmStream` subscription) are gone.
-  A query or subscription that still selects `message` is now refused with
-  `Cannot query field "message"`. Remove it from your own documents before upgrading.
-- **`@devicechain/dashboards` and `@devicechain/widgets`:** `AlarmRow` no longer has `message`, so
-  code that reads `AlarmRow.message` no longer compiles. The alarm table widget no longer shows a
-  tooltip on the alarm key, and the dashboard editor's preview no longer shows made-up alarm
-  messages. Versions of these packages from before this release still select `message`, so the
-  upgraded server refuses their alarm list and alarm widgets stop loading: upgrade the packages
-  together with the platform.
-- **Notifications:** alarm emails no longer have a `Message` line and webhook payloads no longer have
-  a `message` key. Neither ever appeared, because the value was always empty.
-- **MCP:** `list_alarms` and `get_alarm` no longer return `message`.
-- **Database:** the empty `message` column is dropped from the alarms table when device-management
-  starts.
-
-While the upgrade rolls out:
-
-- A console tab opened before the upgrade, and a console, dashboard or MCP pod still on the previous
-  release, get an error on alarm lists until the tab is reloaded or the pod is replaced.
-- A `device-management` pod still on the previous release cannot store a new alarm. The alarm is
-  retried about once a minute and is normally stored by an upgraded pod. If pods of the previous
-  release keep running for more than about five minutes, for example because a new pod never
-  becomes ready, the alarm is given up and recorded as a dead letter, and it is raised only when
-  its condition clears and occurs again. Keep the rollout short, and afterwards check
-  `dcctl dead-letters list --kind detection-action --source device-management` for alarms that
-  were not raised.
-- Alarm lists, acknowledge and clear served by a `device-management` pod still on the previous
-  release can fail once per database connection. Repeating the request succeeds.
-
-#### A failing action no longer stops a rule's other actions
+##### A failing action no longer stops a rule's other actions {#v0180-failing-action}
 
 Nothing needs doing at the upgrade. Read this if any rule lists more than one action.
 
@@ -2512,142 +2075,73 @@ action is now attempted on every delivery, whatever happens to the others.
   gets its share of that time, so commands to a service that does not answer cannot use it all up
   before an alarm listed after them is raised.
 
-#### The automation canvas authors Connectivity rules, and will not save over a rule it cannot show in full
+##### Outbound actions are no longer dropped when the detection engine catches up {#v0180-catch-up-metering}
 
-Nothing needs doing at the upgrade.
+After a restart, rollout or failover, the detection engine works through the telemetry that arrived
+while it was down. Outbound webhook and connector actions from that backlog used to be counted
+against the tenant's outbound rate as if they had all happened at once, so most of them were dropped
+with only a metric as a record. They are now metered, both where they are triggered and in the
+connectors service, on the time the telemetry reached the platform. A tenant within its limit loses
+nothing to a catch-up and is not slowed by it.
 
-- **The canvas has a Connectivity node,** so a "device went offline" rule can be built there as well
-  as in the form builder.
-- **When the canvas opens an existing rule, it checks that saving would keep the whole rule.**
-  Before, a rule of a type the canvas could not show opened as an empty canvas with no explanation,
-  and a rule with a field or action type the canvas does not model opened without it. A save from
-  the canvas then replaced the stored rule with the reduced one. Now the canvas explains what it
-  cannot show and turns saving off for that rule; edit it through the API instead.
-- **A canvas-built rule whose definition was changed through the API is laid out again from that
-  definition** when the canvas opens it, rather than from its older saved layout, so a canvas save
-  no longer undoes the change. The canvas says when it has done this. The exception is a saved
-  canvas that no longer compiles, which cannot be compared with the rule: it opens as it was, and
-  its note warns that saving it undoes any such change.
-- **The canvas keeps an alarm-key template** set through the API. It shows the template read-only
-  and saves it unchanged.
-- **A canvas save no longer clears a rule's name or description** when the rule's definition does
-  not carry them. They are sent only when you edit them on the canvas.
+An action that is still over the limit is recorded as a dead letter with reason `shed` and kind
+`detection-action`, up to about one letter a second per tenant (60 at once) and ten a second in
+total. Beyond that the actions are counted and summarised in one letter per tenant per minute. Four
+settings on `event-processing` tune the budget: `shedLetterPerSecond`, `shedLetterBurst`,
+`shedLetterGlobalPerSecond` and `shedLetterGlobalBurst`. Two warnings are added:
+`ReactShedLettersOverBudget` and `RateMeteringClockFallback`.
 
-#### A duplicate now answers with the code `CONFLICT`
+Detections the engine re-publishes after a restart are now recognised by the message bus and stored
+once within a 30-minute window, so subscribers to the derived-events feed see fewer duplicates. Each
+derived event now carries a `triggeredAt` field. If you filter dead letters by reason, expect `shed`
+letters of kind `detection-action`. Nothing needs doing at the upgrade.
 
-Nothing needs doing unless your own code or scripts recognise a duplicate by reading the error
-message. [A value that must be unique](../reference/graphql-api.md#unique-values) has the details.
+##### With a warm standby, only the replica running detection dispatches actions {#v0180-warm-standby}
 
-- **A create, update or rename that repeats a value that must be unique** now carries
-  `extensions.code` set to `CONFLICT`. Branch on the code. It means the write collided with a
-  unique value, which is not always one you sent: two publishes of the same record racing for the
-  next version number collide too, and a retry then succeeds.
-- **The database's own wording is replaced.** Where a message used to end in
-  `duplicate key value violates unique constraint "…" (SQLSTATE 23505)` or `UNIQUE constraint
-  failed: …`, it now ends in `the request conflicts with an existing record: a value that must be
-  unique is already in use`, which names no database index or column.
-- **Refusals that already had their own wording keep it and gain the code:** renaming onto a token
-  already in use, adding a second membership in the same tenant, and declaring a command key the
-  profile already has.
-- **`dcctl sim create` recognises an existing tenant, identity or membership by the code,** so
-  re-running it with the same name completes. Before, a re-run stopped at the membership step. Use a
-  `dcctl` from this release with an instance of this release: an older instance does not send the
-  code, and this `dcctl` then reports the duplicate as an error.
-- **These are not duplicates and do not carry `CONFLICT`:** creating a tenant at a deleted tenant's
-  reserved token, and a save refused because the record changed since it was read.
+On an `event-processing` deployment with a warm standby, the standby used to take a share of
+detection actions (commands, alarms and connector calls) and charge the connector calls against
+its own copy of each tenant's outbound ceiling, so a tenant could reach up to twice that ceiling.
+Actions are now dispatched only by the replica that holds the detection partition. When the
+partition moves, both replicas can dispatch for up to about five seconds, and a connector call
+made twice in that window reaches its destination twice.
 
-#### Webhook notification channels must say how they authenticate
+With one replica (the default) nothing changes, except after the pod stops without a graceful
+shutdown (a crash or an out-of-memory kill). The actions waiting to be dispatched then resume when
+the replacement takes the partition, up to about 35 seconds later, rather than as soon as the
+replacement starts. Detection resumes after a further handover wait and the replay, as it did
+before this release.
 
-A webhook channel's config now needs an `auth` key: `none`, `bearer` or `header`. Before, the
-channel sent `Authorization: Bearer <secret>` when a secret was stored and **no credential at all**
-when none was, so a channel whose secret was missing or had been cleared kept posting
-unauthenticated, and nothing reported it. [Configuring notification
-channels](../guides/notification-channels.md) has the details.
+Rate ceilings in `event-sources`, `outbound-connectors` and `ai-inference` are enforced by each
+replica separately. This is now documented under
+[Governance](../concepts/governance.md#per-replica), and matters if you run more than one replica
+of those services.
 
-- **A webhook channel saved before this release has no `auth`, and it stops delivering at the
-  upgrade**, including one that works today. Each delivery to it is refused on the first attempt
-  and not retried, for every alarm and every escalation that routes to it, and the alarm is not
-  redelivered for that channel. The notification service logs the tenant, the channel's token and
-  the reason, and counts it on
-  `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`.
-- **Find the channels to fix before you upgrade.** In each tenant, run
-  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } pagination { totalRecords } }`
-  and look for a `config` with no `auth`. If `totalRecords` is more than 100, repeat with the next
-  `pageNumber` until you have read them all.
-- **Add `auth` before you upgrade.** The current release accepts the key and ignores it, so there
-  is no gap. Use `bearer` for a channel that has a secret (`hasSecret: true`) and `none` for one
-  that has none and should not, such as a Slack incoming webhook. A channel that set `authHeader`
-  needs `header`. One that set only `authScheme` (for example `Token`) needs
-  `"auth":"header","authHeader":"Authorization"`. With `bearer` or `none`, remove `authHeader` and
-  `authScheme`: this release refuses them there rather than ignoring them. With `none`, send
-  `secret: null` in the same update if the channel has a secret.
-- **A channel whose `auth` and secret disagree is refused when it is saved.** This covers
-  `bearer` or `header` with no secret, `none` with a secret, and clearing the secret of a `bearer`
-  or `header` channel. Rotating the secret of a channel that has no `auth` yet is refused too, until
-  `auth` is added in the same request. An update that only renames, describes or disables a channel
-  is not checked, so you can disable a broken channel without fixing it first; enabling one is
-  checked.
-- **An SMTP channel with a username and no secret** is now refused before the platform connects to
-  the mail server, and it is not retried. Before, it connected, then gave up without
-  authenticating, and retried every attempt.
-- **An `httpCall` action whose secret handle names no stored secret** is dead-lettered once with
-  the outcome `invalid` and not retried. Before, it was retried until the redelivery limit and
-  dead-lettered as exhausted, so a secret stored during that window could still let the call
-  through. Nothing replays a dead letter, so that firing's call is not made; correct the action's
-  secret handle so later firings authenticate. The call is never sent without its credential.
+##### `checkpointIntervalSeconds` is capped at 30, and some silent failures now warn {#v0180-checkpoint-interval}
 
-#### Credential values are stored exactly as sent
+`event-processing` now refuses to start when `checkpointIntervalSeconds` is above 30. The
+detection engine acknowledges its input only when it checkpoints, so an interval near or past the
+broker's 60-second acknowledgement window held messages on a quiet stream until the broker
+delivered them again, and after five windows counted them as exhausted deliveries, which raises
+`ReplayCoveredDeliveriesExhausted` on a healthy engine. 30 leaves room for the checkpoint itself. The limit is a startup refusal rather than
+a chart check, so `helm upgrade` with a larger value succeeds and the pod then fails to start. If
+your values set it higher, lower it before upgrading. The default (10) is unaffected.
 
-- **A device credential's `credentialValue` is no longer trimmed.** Earlier releases removed
-  leading and trailing whitespace when the value was saved, but compared the password a device
-  presented without trimming it, so an MQTT password that began or ended with a space could never
-  authenticate. The value is now stored exactly as sent. Only an empty value, or an explicit
-  `null` on update, stores no password.
-- **The other direction changes too.** A value pasted with a trailing newline or space used to be
-  saved without it, so a device presenting the password without it was accepted. It is now saved
-  with it, and such a device is refused until the value is sent again without the newline.
-- **Values saved before this release are not changed by the upgrade.** They were stored trimmed,
-  and the whitespace cannot be recovered. If a device's configured password has surrounding
-  spaces, send the value again with `updateDeviceCredential`.
-- **A tier with no color now reads `color: null`** on the admin API, where it used to read `""`.
-  Sending `""` or `null` still clears it, and the upgrade converts every stored empty color to
-  null. Surrounding spaces are now trimmed before the color is checked, so `" amber "` is accepted
-  as `amber` where it used to be refused. The console needs nothing; code of your own that
-  compares `color` with `""` should test for null.
-- **`firstName` and `lastName` are trimmed like other display text**, on `createIdentity` and on
-  `updateProfile`, and a cleared name is stored as null. Reads already returned `null` for an
-  empty name, and still do: the upgrade converts every stored empty name to null. It does the same
-  for an AI provider's empty `endpoint`, which likewise already read as `null`. A name an earlier
-  release saved with surrounding spaces keeps them until an update names that field, which then
-  trims it.
-- **A stored number too large for a GraphQL `Int` is now an error rather than a wrong number.**
-  A notification policy's `throttleSeconds`, `escalateAfterSeconds` and `maxEscalations`, and a
-  tenant's burst, shed-priority, held-command and geofence overrides on the admin API, used to wrap
-  such a value into a negative one. Values written through the API always fit, so this affects
-  only a value written to the database some other way. A notification-policy update that does not
-  name one of those three fields also no longer rewrites it.
+Some failures that were silent at the default log level now log a warning:
 
-#### A new signing key is trusted within about a second
+- a failed sample of a stream's or KV bucket's size and replication, or of a consumer's unread
+  loss;
+- a failed sample of the detection engine's consumer lag;
+- device authentication at the broker that failed for a reason other than the device's own
+  credential: the credential store failing, or a stored credential that has no secret and so can
+  never authenticate.
 
-When user-management starts signing tokens with a new key, as it does at this upgrade, every
-other service learns that key the first time it sees a token signed with it, by fetching the key
-set user-management publishes. Earlier releases allowed each service pod that fetch at most once
-every 30 seconds. If the fetch was answered by a user-management pod still publishing the previous
-key set, as the old pod does while a rolling upgrade is under way, that service refused every
-token signed with the new key as `invalid or expired token` until the 30 seconds had passed. A
-sign-in straight after an upgrade could fail this way.
+A device presenting a wrong, unknown, expired or revoked credential is still logged only at debug.
+During a broker outage the sampling warnings repeat on every sampling pass, about every 30 seconds
+per stream; a sample interrupted by shutdown stays at debug. During a credential-store (database)
+outage the authentication warning repeats once per device connect attempt, so a fleet reconnecting
+through the outage logs one warning per attempt.
 
-- **A service now fetches again as soon as one second after its previous fetch finished.**
-  Requests that arrive while a fetch is under way wait for it instead of being refused.
-- **Tokens naming a key user-management never published** still cost it at most one fetch per
-  second from each service pod.
-- **A fetch that does not find the key is now logged.** The service logs `JWKS refetched on an
-  unknown kid, and the fetched set does not hold it.` with the key id, which tells a token refused
-  during a key change apart from a token that is simply not valid.
-
-Nothing needs configuring.
-
-#### Lost rule, device and attribute changes are repaired automatically
+##### Lost rule, device and attribute changes are repaired automatically {#v0180-fact-repair}
 
 Publishing or rolling back a device profile, creating or re-typing a device, re-pointing a device
 type at another profile, and setting a threshold attribute each notify the detection engine once.
@@ -2687,66 +2181,285 @@ What you will see:
   service secret or either address is not configured, the comparison is off and the service logs a
   warning at startup, as geofence evaluation does.
 
-#### Database messages are structured log lines, and a query that finds nothing is no longer logged as a failure
+##### The automation canvas authors Connectivity rules, and will not save over a rule it cannot show in full {#v0180-canvas}
 
-Earlier releases printed database messages in a format of their own: coloured, multi-line text
-written outside the service's JSON log, with no `instance` or `area` field, whatever
-`infrastructure.logging.level` was set to. Every service that writes tenant data printed one such
-block, reading `record not found`, for each database transaction that wrote it; in
-`event-management` that was one for every event stored. The block was the ordinary answer to a
-check made before each write, not an error, and at a high event rate it made up most of the log
-and hid real failures.
+Nothing needs doing at the upgrade.
 
-- **Database messages are now JSON log lines**, at `error` when a statement failed
-  (`database statement failed`) and at `warn` when one took longer than 200 ms
-  (`slow database statement`), with the fields `sql`, `rows`, `elapsed_ms` and `caller`. A query
-  that finds no rows is no longer logged as a failure. That includes the check before each write.
-- **The `sql` field no longer shows the values a statement was sent with.** It shows the
-  statement's placeholders (`$1`, `$2`, …). Earlier releases filled the values in, including in
-  the line for a failed write. The database's own error message is still logged as it is, and some
-  of those quote the value they rejected.
-- **`sqlDebug` now follows the log level.** Its per-statement lines are written at `info`, so an
-  instance whose level is `warn` or `error` no longer shows them.
-- **A service that cannot reach its own database at startup logs each failed attempt at
-  `error`**, as `failed to initialize database, got error …`. Earlier releases printed it as text
-  outside the JSON log.
+- **The canvas has a Connectivity node,** so a "device went offline" rule can be built there as well
+  as in the form builder.
+- **When the canvas opens an existing rule, it checks that saving would keep the whole rule.**
+  Before, a rule of a type the canvas could not show opened as an empty canvas with no explanation,
+  and a rule with a field or action type the canvas does not model opened without it. A save from
+  the canvas then replaced the stored rule with the reduced one. Now the canvas explains what it
+  cannot show and turns saving off for that rule; edit it through the API instead.
+- **A canvas-built rule whose definition was changed through the API is laid out again from that
+  definition** when the canvas opens it, rather than from its older saved layout, so a canvas save
+  no longer undoes the change. The canvas says when it has done this. The exception is a saved
+  canvas that no longer compiles, which cannot be compared with the rule: it opens as it was, and
+  its note warns that saving it undoes any such change.
+- **The canvas keeps an alarm-key template** set through the API. It shows the template read-only
+  and saves it unchanged.
+- **A canvas save no longer clears a rule's name or description** when the rule's definition does
+  not carry them. They are sent only when you edit them on the canvas.
 
-If you matched the old text (for example `record not found` or `SLOW SQL`), match the `message`
-field instead. Nothing needs configuring.
+#### Commands {#v0180-commands}
 
-#### The in-cluster backup store pulls from a maintained image
+##### Command responses that could not be recorded are dead-lettered again {#v0180-command-responses}
 
-The object store that `dcctl install` runs in `dc-system` to hold database backups pulled its
-MinIO image from `quay.io/minio/minio`. Those images are no longer published: the registry refuses
-an anonymous pull, so on a machine that had not already cached the image, `dcctl install` stopped
-with the object store in `ImagePullBackOff`. Clusters that already had the image cached kept
-running, but only while the object-store pod stayed on a node that had it: a pod moved to another
-node — by a drain, an eviction or a replaced node — could not start, and archiving stopped until it
-could. Upgrading removes that exposure.
+In `v0.16.0` and `v0.17.0`, command-delivery could not write a single dead letter. Every one it
+tried was refused before it was written, counted as lost, and the device's answer was gone. That
+meant `DeadLetterWriteLost` could fire while the broker was healthy. That case is fixed, and it
+changes what happens to the commands involved:
 
-This release pulls `cgr.dev/chainguard/minio`, pinned by digest: a build of a maintained fork of
-the same MinIO server, still licensed AGPL-3.0. It reads the data the previous server wrote as it
-is.
+- A response that could not be recorded after every attempt is listed as a dead letter, and its
+  command now moves to `FAILED`, with an error saying the device answered and the answer was lost.
+  Before, such a command stayed in flight until something else settled it.
+- A response that named no dispatch, or a dispatch its command had already moved off, is listed as
+  a dead letter and settles nothing. The command is left as it was.
 
-- **Before upgrading, make sure your nodes can pull from `cgr.dev`** — allow it through any egress
-  rules, or mirror `cgr.dev/chainguard/minio` at the digest this release pins. If the pull fails,
-  the object store stays down and the databases keep their write-ahead log locally until it
-  returns.
-- **A fresh install works again** with the default backup destination.
-- **On an existing cluster, `dcctl install` restarts the object-store pod once** onto the new
-  image. Stored backups and write-ahead log are kept. While the pod restarts, archiving pauses and
-  the databases hold write-ahead log locally, for as long as the new image takes to pull and start.
-- **This cannot be undone by installing an earlier release.** An earlier release's `dcctl install`
-  would stop the object store and then fail to pull the image it names, and archiving would stop
-  until this release's `dcctl install` runs again.
-- **If `dcctl install` failed on an earlier release because of this**, run this release's
-  `dcctl install` again: it replaces the object store that attempt left behind (see "A failed
-  `dcctl install` can be run again").
+##### LwM2M commands are confirmed immediately before they reach the device {#v0180-lwm2m-confirm}
 
-Nothing needs configuring. If you point backups at your own object store with
-`--backup-credentials-file`, nothing changes for you.
+A command delivered to an LwM2M device is now confirmed with command-delivery immediately before
+the adapter carries it out. A delivery the platform has already re-armed or re-sent is discarded
+instead of reaching the device a second time. Such a delivery can turn up late after an outage or a
+failover, and before this release it could actuate a device that a later delivery had already
+actuated. If command-delivery cannot be reached, LwM2M commands wait and are retried. They are never
+sent unconfirmed.
 
-#### A database primary fails over in seconds {#database-primary-failover-in-seconds}
+What changes that you can see:
+
+- **Cancelling a batch now also stops LwM2M commands that were published but had not yet reached
+  their device.** They record `CANCELLED`. The cancel result still counts them as already sent,
+  because that is what they were when the cancel ran.
+- **For an LwM2M command, `sentTime` now records when the device was actually sent it.** That can be
+  later than when the command was first published.
+- **`lwm2m-ingest` refuses to start without `infrastructure.commandDelivery`** whenever it has device
+  identities to serve. The chart always sets it, so only a hand-built configuration is affected.
+- **Metrics.** `lwm2m-ingest` adds `devicechain_lwm2mingest_commands_stale_dispatch_total` (deliveries discarded because the
+  platform had already moved on: a duplicate actuation avoided, not a fault) and
+  `devicechain_lwm2mingest_command_live_claim_errors_total` (commands not carried out because command-delivery could not
+  confirm them). `devicechain_lwm2mingest_command_drain_dedup_total` is removed.
+- **During the upgrade itself,** a new `lwm2m-ingest` cannot confirm commands with a command-delivery
+  that is still on the previous version. An LwM2M command issued in that window can be delayed by
+  several minutes. If it runs out of retries before both services are upgraded, it is re-armed and
+  delivered on the device's next wake.
+
+Nothing needs doing at the upgrade.
+
+##### A slow LwM2M device no longer holds up other devices' commands {#v0180-lwm2m-slow-device}
+
+When an LwM2M device is slow to answer and its commands pile up, further commands for it are now
+set aside in command-delivery and delivered in order moments later. Before this release they
+stalled the whole adapter: every other LwM2M device's commands waited behind the slow one.
+Commands for a device that has no connection are set aside the same way, without taking up room
+that connected devices need.
+
+What changes that you can see:
+
+- **A connected device receives the rest of a long backlog without reconnecting.** Its waiting
+  commands used to be delivered 32 per wake, and the rest waited for the device to wake again,
+  which a device that stays connected never does. They are now delivered a few at a time, taking
+  turns with other devices' commands, until the backlog is empty.
+- **One device's commands still arrive in the order they were sent.** This now also holds when a
+  command could not be confirmed with command-delivery and is retried: the commands after it wait
+  for it. Two cases can still deliver a command after the ones sent behind it, and both need
+  command-delivery to be failing. One is an outage that outlasts the command's retries. The other
+  is a confirmation that command-delivery recorded but whose answer never reached `lwm2m-ingest`,
+  for example because the request timed out. In both cases the command stays sent but not carried
+  out until the platform finds it stranded, and it is then delivered on the device's next
+  connection, after the later commands, or expires.
+- **After a failover, commands sent while devices reconnect are delivered a moment later.** Each
+  device's waiting commands are delivered before any new one, so for that short window new
+  commands are set aside too. Expect a brief rise in command-delivery traffic after a failover.
+- **A command set aside this way shows the status `PARKED`,** even though its device is connected.
+  Before this release `PARKED` meant only that the device had no live connection. See
+  [Commands](../concepts/commands.md).
+- **Metrics.** `lwm2m-ingest` adds `devicechain_lwm2mingest_commands_overflow_parked_total`, with a
+  `reason` label (`full`, `offline`, `bind`, `unconfirmed`),
+  `devicechain_lwm2mingest_command_overflow_blocked_total` (the adapter waited because
+  command-delivery was slow) and `devicechain_lwm2mingest_command_drain_turns_total`.
+  `devicechain_lwm2mingest_command_drain_dropped_total` is removed: a device's request for its
+  waiting commands is no longer dropped when the adapter is busy.
+
+Nothing needs doing at the upgrade.
+
+#### Connectors and notifications {#v0180-connectors}
+
+##### Connectors can no longer reach private addresses, and the connectors service has new clients {#v0180-connector-egress}
+
+MQTT, Kafka, SNS and SQS connectors now get the same connect-time check that webhooks and mail
+relays already had. A destination that resolves to a loopback, private, carrier-grade NAT,
+link-local or cloud-metadata address is refused. The refusal is **final**: the dispatch is
+dead-lettered as `blocked` and not retried. For Kafka this covers every broker the cluster
+advertises, not only the addresses you configured. The check runs in the service itself, so it no
+longer depends on `networkPolicy.enabled` or on your cluster enforcing it.
+
+What to check before upgrading:
+
+- **Destinations on private addresses stop receiving.** This includes:
+  - an in-cluster or peered broker;
+  - **Amazon MSK brokers**, which are private by default;
+  - **Amazon MQ** used for MQTT;
+  - **SNS and SQS reached through an interface VPC endpoint with private DNS enabled**. With
+    private DNS, even the default `sns.<region>.amazonaws.com` / `sqs.<region>.amazonaws.com`
+    names resolve to private addresses, so connectors with no endpoint override are affected too.
+
+  Allow each address as its own `/32` under
+  `instance.config.infrastructure.egress.allowedDestinations`. An interface endpoint has one
+  address per availability zone, and each needs its own entry. An allowance applies to every
+  tenant and every connector and webhook path, not only the one you have in mind.
+- **MQTT URLs must use `tcp://`, `mqtt://`, `ssl://`, `tls://`, `mqtts://`, `ws://` or `wss://`**,
+  with an explicit port and one broker per entry. `tcps://`, `mqtt+ssl://` and `unix://` are no
+  longer accepted. They are refused when a connector is saved, and a stored connector that uses
+  one is dead-lettered as `invalid` when it fires. Kafka addresses must be `host:port`.
+- **Proxy environment variables** (`HTTPS_PROXY`, `ALL_PROXY`) are no longer used by connectors,
+  and neither are `AWS_*` variables or AWS config files on the pod.
+- **The Kafka client changed.**
+  - The default client id is now `devicechain` (it was `bento`). Set `clientId` on the connector
+    if your brokers apply ACLs or quotas by client id.
+  - Records without a key are now spread with sticky partitioning.
+  - The protocol version is negotiated with the broker rather than fixed.
+  - Delivery is unchanged: leader acknowledgement, no idempotent producer.
+- **SQS messages are sent one at a time** (`SendMessage`), not in batches. The IAM permission is
+  the same `sqs:SendMessage`.
+
+Two things improve as a side effect. A Kafka broker that is briefly unreachable is now retried
+rather than dead-lettered as `invalid`. And the connectors service's binary, which is most of its
+image, is about a third of its previous size.
+
+##### The connectors service no longer accepts dispatchBacklog {#v0180-dispatch-backlog}
+
+If your values set `dispatchBacklog` under `functionalAreas.outbound-connectors.config`, delete it
+**before** upgrading. The service refuses to start with it, and the error names the key.
+
+The setting sized a buffer between the service's reader and its send workers, and that buffer is
+gone. The reader now fetches only as many dispatches as there are workers free to start them
+(`maxConcurrentSends`), so a dispatch no longer waits in the process while the broker's
+acknowledgement window runs. The notification service reads alarms the same way, one per
+dispatcher.
+
+This fixes a duplicate. Before, a burst of alarms or connector dispatches queued behind a slow
+channel could sit in the service longer than that window. The broker then handed the same messages
+out again while the first copies were still waiting, and both copies were sent: a second page for
+one alarm, or a second call to the same webhook. Each send is now also cut off with time to spare
+before the window closes.
+
+A new alert, `ReaderHeldMessagePastAckWait`, fires if either service still holds a message past the
+window. [Messages held past their acknowledgement
+window](./observability.md#held-past-ack-wait) explains what each case means.
+
+##### Webhook notification channels must say how they authenticate {#v0180-webhook-auth}
+
+A webhook channel's config now needs an `auth` key: `none`, `bearer` or `header`. Before, the
+channel sent `Authorization: Bearer <secret>` when a secret was stored and **no credential at all**
+when none was, so a channel whose secret was missing or had been cleared kept posting
+unauthenticated, and nothing reported it. [Configuring notification
+channels](../guides/notification-channels.md) has the details.
+
+- **A webhook channel saved before this release has no `auth`, and it stops delivering at the
+  upgrade**, including one that works today. Each delivery to it is refused on the first attempt
+  and not retried, for every alarm and every escalation that routes to it, and the alarm is not
+  redelivered for that channel. The notification service logs the tenant, the channel's token and
+  the reason, and counts it on
+  `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`.
+- **Find the channels to fix before you upgrade.** In each tenant, run
+  `notificationChannels(criteria: {pageNumber: 1, pageSize: 100, channelType: "webhook"}) { results { token config hasSecret enabled } pagination { totalRecords } }`
+  and look for a `config` with no `auth`. If `totalRecords` is more than 100, repeat with the next
+  `pageNumber` until you have read them all.
+- **Add `auth` before you upgrade.** The current release accepts the key and ignores it, so there
+  is no gap. Use `bearer` for a channel that has a secret (`hasSecret: true`) and `none` for one
+  that has none and should not, such as a Slack incoming webhook. A channel that set `authHeader`
+  needs `header`. One that set only `authScheme` (for example `Token`) needs
+  `"auth":"header","authHeader":"Authorization"`. With `bearer` or `none`, remove `authHeader` and
+  `authScheme`: this release refuses them there rather than ignoring them. With `none`, send
+  `secret: null` in the same update if the channel has a secret.
+- **A channel whose `auth` and secret disagree is refused when it is saved.** This covers
+  `bearer` or `header` with no secret, `none` with a secret, and clearing the secret of a `bearer`
+  or `header` channel. Rotating the secret of a channel that has no `auth` yet is refused too, until
+  `auth` is added in the same request. An update that only renames, describes or disables a channel
+  is not checked, so you can disable a broken channel without fixing it first; enabling one is
+  checked.
+- **An SMTP channel with a username and no secret** is now refused before the platform connects to
+  the mail server, and it is not retried. Before, it connected, then gave up without
+  authenticating, and retried every attempt.
+- **An `httpCall` action whose secret handle names no stored secret** is dead-lettered once with
+  the outcome `invalid` and not retried. Before, it was retried until the redelivery limit and
+  dead-lettered as exhausted, so a secret stored during that window could still let the call
+  through. Nothing replays a dead letter, so that firing's call is not made; correct the action's
+  secret handle so later firings authenticate. The call is never sent without its credential.
+
+##### A notification policy save made from a stale copy can be refused {#v0180-policy-precondition}
+
+`updateNotificationPolicy` takes an optional `expectedUpdatedAt`. Send the `updatedAt` you last
+read, or the one the previous update returned, and a save made from a stale copy is refused, with
+nothing written, if anyone has changed the policy since, its rules included. The refusal reads
+`notification policy was modified by another writer; reload and try again` and carries no
+`extensions.code`. The update's response now reads `updatedAt` back from the database, so it can
+be sent as the next precondition. Leave the argument out and the last write wins, as before. The
+console does not send it yet. See [Which mutations are partial
+updates](../reference/graphql-api.md#which-mutations-are-partial-updates).
+
+#### Persistence and state {#v0180-persistence}
+
+##### Events are persisted in batches {#v0180-batched-persistence}
+
+`event-management` now commits the events waiting for a writer together, in one transaction, instead
+of one transaction per event. On a replicated event store each commit waits for a standby, and that
+wait, not the database's work, was what limited how fast events could be stored. A batch pays it
+once. Which events are stored does not change, and an event is still acknowledged only after it has
+been stored. An event that is refused is written again on its own, so it is retried or reported
+exactly as before, and the rest of its batch is committed without it.
+
+Three settings are new, all optional: `persistence.writers` (default `5`, the number that was fixed
+before), `persistence.maxBatch` (default `32`; `1` restores one transaction per event) and
+`persistence.lingerMillis` (default `0`). `device-state` gains `projection.writers` (default `5`).
+See [Event persistence](./observability.md#event-persistence).
+
+- **A writer count must be below the service's connection pool.** A value out of range stops the
+  service from starting, and the error names the setting. The default of 5 is refused only if you
+  set `tsdbConfiguration.maxOpenConnections` for `event-management`, or
+  `rdbConfiguration.maxOpenConnections` for `device-state`, to 5 or fewer. Before upgrading, set
+  the writer count below the pool, or raise the pool no further than its default of 20: the
+  platform's database connection limits are sized for that default.
+- **`device-state` merges in batches too.** See [Live device state is merged in batches](#v0180-live-state-batches).
+- **If you chart the persistence metrics:** `persist_inflight` can now exceed the number of
+  writers, because it counts events waiting for their batch to commit, and
+  `persist_duration_seconds` now includes that wait. Two metrics are new, `persist_batch_size` and
+  `persist_batch_fallbacks_total`.
+
+##### Live device state is merged in batches, and a consumer that stays behind raises a warning {#v0180-live-state-batches}
+
+`device-state` merged every event into a device's live state (connectivity, activity, latest
+readings and last position) in two transactions of its own. On a replicated database each commit
+waits for the standby, so the live state fell behind whenever events arrived faster than it could
+commit them one at a time, and after a sustained high rate it could lag the stored events by more
+than an hour while nothing reported it. It now merges the events waiting for a writer in one
+transaction, the way `event-management` persists them. Measured in-process against TimescaleDB with
+a synchronous standby, five writers merged about 3500 events a second, against about 85 before.
+
+- **What a device's live state ends up holding does not change,** with one exception. A reading or
+  a position replaces the stored one only when it is strictly newer, and times are now compared as
+  the database stores them, to the microsecond. Before, a reading arriving in the same microsecond
+  as the stored one could replace it even when it was older. Now the one stored first stays.
+- **An event is still acknowledged only after it has been stored.** If one tenant's part of a batch
+  is refused, that tenant's events are merged again one at a time, so only an event that is itself
+  refused is retried or dropped as before, and the other tenants' events are committed together.
+- **Two settings are new, both optional:** `projection.maxBatch` (default `32`; `1` restores one
+  event at a time) and `projection.lingerMillis` (default `0`), with the same ranges as
+  `event-management`'s. See [Live device state](./observability.md#live-state-projection).
+- **If you chart `device-state`'s metrics:** `state_inflight` can now exceed the number of writers,
+  because it counts events waiting for their batch to commit, and `state_duration_seconds` now
+  includes that wait. Two metrics are new, `state_batch_size` and `state_batch_fallbacks_total`.
+- **Every service now reports how many messages are waiting for each consumer it reads,** as
+  `jetstream_consumer_pending_messages` and `jetstream_consumer_ack_pending_messages`. A new
+  warning, `JetStreamDurableFallingBehind`, fires when a consumer has had more than 10000 messages
+  waiting for it for 15 minutes. `event-processing`'s detection consumer is left to
+  `DetectConsumerBacklogHigh`, which is unchanged. See
+  [A consumer that stays behind](./observability.md#consumer-backlog).
+
+#### Databases and failover {#v0180-databases}
+
+##### A database primary fails over in seconds {#database-primary-failover-in-seconds}
 
 Deleting a database primary's pod, draining its node, or rolling out a change to it used to hold
 the failover for three minutes: the primary waited for every client to disconnect, and the
@@ -2814,34 +2527,20 @@ Only do this when the pod's node is `Ready` and you have read that line in its l
 running, and it must not be force-deleted. See [losing a node](./bootstrap.md#ha-node-loss).
 :::
 
-#### Events are persisted in batches
+##### A database transaction left idle for a minute is ended {#v0180-idle-transactions}
 
-`event-management` now commits the events waiting for a writer together, in one transaction, instead
-of one transaction per event. On a replicated event store each commit waits for a standby, and that
-wait, not the database's work, was what limited how fast events could be stored. A batch pays it
-once. Which events are stored does not change, and an event is still acknowledged only after it has
-been stored. An event that is refused is written again on its own, so it is retried or reported
-exactly as before, and the rest of its batch is committed without it.
+Nothing needs doing at the upgrade.
 
-Three settings are new, all optional: `persistence.writers` (default `5`, the number that was fixed
-before), `persistence.maxBatch` (default `32`; `1` restores one transaction per event) and
-`persistence.lingerMillis` (default `0`). `device-state` gains `projection.writers` (default `5`).
-See [Event persistence](./observability.md#event-persistence).
+Every service now asks the database to end any of its transactions that sits idle for 60 seconds.
+This covers a pod that freezes, or loses the network, in the middle of a transaction. Before, such a
+transaction stayed open, holding its locks, until the connection was noticed to be dead, which with
+default operating-system settings can take hours, and it could still commit when the network came
+back. That could write data for a tenant whose deletion had already been reported complete. When
+the limit is hit, the database logs `terminating connection due to idle-in-transaction timeout` and
+rolls the transaction back. The request it belonged to fails with an error, and work a service takes
+from a stream is delivered to it again. See [Database write refusal](./tenant-deletion.md#database-writes).
 
-- **A writer count must be below the service's connection pool.** A value out of range stops the
-  service from starting, and the error names the setting. The default of 5 is refused only if you
-  set `tsdbConfiguration.maxOpenConnections` for `event-management`, or
-  `rdbConfiguration.maxOpenConnections` for `device-state`, to 5 or fewer. Before upgrading, set
-  the writer count below the pool, or raise the pool no further than its default of 20: the
-  platform's database connection limits are sized for that default.
-- **`device-state` merges in batches too.** See "Live device state is merged in batches, and a
-  consumer that stays behind raises a warning" below.
-- **If you chart the persistence metrics:** `persist_inflight` can now exceed the number of
-  writers, because it counts events waiting for their batch to commit, and
-  `persist_duration_seconds` now includes that wait. Two metrics are new, `persist_batch_size` and
-  `persist_batch_fallbacks_total`.
-
-#### What losing a node, and getting it back, looks like is documented
+##### What losing a node, and getting it back, looks like is documented {#v0180-node-loss}
 
 Nothing changes in behaviour. Under `--ha`, [losing a node](./bootstrap.md#ha-node-loss) now
 describes, in order, what an operator sees: how quickly the broker, the services and the
@@ -2856,60 +2555,533 @@ the way you plan its loss.
 The 30-second node-loss eviction on the services' pods is unchanged and deliberate, and is now
 checked on every pod the chart renders, the console included.
 
-#### device-management keeps resolving events when a NATS server drops off the network
+#### Messaging {#v0180-messaging}
 
-Nothing needs doing at the upgrade.
+##### A service whose broker connection closes for good now restarts {#v0180-broker-connection-closed}
 
-- **A lookup in one of `device-management`'s key-value caches waits at most half a second,**
-  instead of the five seconds a NATS request is allowed. When a NATS server dropped off the
-  network without closing its connections, some of these lookups were sent to it and each waited
-  the full five seconds, so event resolution slowed to a few events a second for about a minute,
-  and nothing was logged.
-- **A cache that times out, or that no server answers for, is skipped for five seconds,** and its
-  lookups go to the database. `device-management` logs a warning when that starts and a line when
-  the cache answers again. See [Caches that stop answering](./observability.md#kv-caches) for the
-  four new metrics.
-- **Removing a cache entry after a change is never skipped,** and a removal that fails is now
-  logged (`A key-value cache eviction failed`); before, a failure was silent.
-- **Resolving an event that takes longer than five seconds is now logged as a warning**
-  (`Event resolution is slow`), at most once every 30 seconds.
+Every service's pod now fails its liveness check (`/healthz`), and with it its readiness check,
+when its connection to the message broker is closed for good without the service asking for it:
+for example when the broker stops accepting a credential that was revoked or rotated under the
+running pod, or sends an error the client cannot parse. Kubernetes restarts the pod, and the new
+pod reads its credential again. Before this release the pod stayed live and ready, logged one
+error line and did nothing more. A close the service asked for, as at an orderly stop, never
+triggers it.
 
-#### A failed `dcctl install` can be run again
+- **A credential change can show as restarts.** If the broker drops a pod's connection before the
+  pod itself is replaced, for example during a credential rotation, that pod restarts once.
+- **An orderly stop now waits for the broker connection to drain**, within the pod's termination
+  budget, so messages already received are handled before the pod exits. A stop can take longer
+  than before, up to that budget.
 
-If `dcctl install` failed while the backup object store was starting, for example because its
-image could not be pulled, or was interrupted at that point, every later run failed too, before
-changing anything, with `Unexpected Identity Change` naming `kubernetes_deployment_v1`. This
-happened with Terraform 1.12 or later, and the only way out was to delete the cluster and its
-directory under `~/.devicechain/clusters/`. A re-run now deletes the half-created object store,
-creates it again and waits for it to become ready. A cluster already stuck this way recovers the
-same way, with no manual step, once the cause is fixed: run the same `dcctl install` again. If the
-cause is still there, the re-run fails the same way rather than reporting the cluster installed.
+`event-sources` also has a connection of its own for broker presence, and the same now holds for
+it. It reads MQTT connection events from the broker over that connection, signed in with the
+system-account credential. If the broker closed it for good, the pod carried on as live and ready
+with broker presence silently frozen: nothing was asserted or released, and nothing restarted it.
 
-- **`dcctl install` now checks that the backup object store has rolled out** before it reports the
-  cluster installed. A change to the store that timed out, such as a new image that could not be
-  pulled, used to be accepted by the next run, because the failed change had already been
-  recorded. That run now waits up to five minutes for the store and then fails, naming it.
-- **The Kubernetes provider moves from 2.38.0 to 3.2.1.** The fix is in that release. The first
-  dcctl command that applies or destroys infrastructure on each cluster downloads it. Nothing on
-  the cluster changes.
-- **The infrastructure providers are now pinned to exact versions** (Kubernetes 3.2.1, Helm
-  2.17.0), and dcctl moves each root's `.terraform.lock.hcl` onto them on every run. Before this, a
-  cluster kept whichever versions its first install happened to resolve. Every run, `dcctl
-  destroy` included, now asks the provider registry for these versions, so the registry, or a
-  provider mirror you have configured, must be reachable. The unused TLS provider is no longer
-  declared.
-- **An earlier dcctl cannot operate a cluster this release has run against.** Its `init` refuses
-  the lock file, which now names provider versions its configuration does not allow.
-- **If you run the OpenTofu configuration directly** rather than through dcctl, run
-  `tofu init -upgrade` once in each root: a plain `init` refuses a lock file on the old versions.
 
-#### Alert levels above 2147483647 are refused, and four more numbers are no longer wrapped
+Now the pod fails its liveness check and Kubernetes restarts it. A refused credential reaches every
+replica at once, so **every `event-sources` pod restarts**, and HTTP ingest is unavailable while
+they do; MQTT telemetry is stored by the broker and processed when they return. If the restarted
+pods still cannot sign in, broker presence turns off with reason `broker_unreachable` and asserted
+devices return to inferred presence, as when the broker cannot be reached at startup ([Device
+presence](../concepts/device-presence.md)).
+
+
+##### Read loops that keep failing now restart their service {#v0180-read-loops}
+
+A loop that reads messages from a stream used to retry a failing read once a second for as long as
+it kept failing, while its pod reported ready and consumed nothing. Every such loop now retries
+with a growing pause, up to 5 seconds, and once reads have failed without a break for two minutes
+it ends the process with a non-zero exit, so Kubernetes restarts the pod. One successful read
+starts the two minutes again, which is long enough to ride out a broker failover or restart. The
+restart connects to the broker again, re-creates the consumer and reads the mounted credential
+again.
+
+The loops that gain this in this release are:
+
+- `outbound-connectors`' connector dispatch;
+- `user-management`'s dead-letter store;
+- `command-delivery`'s dead-letter write-back;
+- seven in `event-processing`: resolved events, rule and attribute updates, the device roster and
+  device deletions, geofence sets, and the action dispatcher;
+- `lwm2m-ingest`'s command dispatcher.
+
+What you will see is a restart count where there used to be a ready pod that consumed nothing.
+
+##### A consumer that falls behind a full stream now raises an alert {#v0180-unread-loss}
+
+A full JetStream stream discards its oldest messages. Before this release, a consumer that had not
+read those messages yet lost them without any metric or alert saying so. Every service now measures
+this for each durable consumer it reads and exports two new series:
+
+- `devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`: messages the
+  consumer moved past without reading them.
+- `devicechain_<area>_jetstream_consumer_unread_gap_messages{stream, durable}`: messages discarded
+  ahead of a consumer that has stopped reading (one that was handed no messages since the previous
+  sample; a consumer that is reading but behind reads 0 here).
+
+Two new critical alerts read them: `JetStreamDurableLostUnread` and
+`JetStreamDurableStalledBehindStream`. Deleting a tenant can fire the first one: the deletion removes
+that tenant's messages, including any a consumer had not reached yet. See
+[Messages a consumer never read](./observability.md#unread-loss) for what each alert means and what
+to do.
+
+The near-full warning is **renamed** from `EventProcessingStreamNearFull` to
+**`JetStreamStreamNearFull`**, and it now covers the streams of every service, not only
+event-processing's. The threshold (80% of the byte ceiling for 10 minutes) is unchanged. If an
+Alertmanager route or silence names the old alert, change it to the new name.
+
+##### Messages abandoned on their last attempt are now dead-lettered {#v0180-no-outcome-dead-letters}
+
+A message a service gave up on after handling it used to be the only kind that reached the
+dead-letter list. A message whose five delivery attempts all ran out with **no** outcome — a pod
+stopped mid-handling, or a handler that ran past its acknowledgement window — left no record
+anywhere, because nothing reached the code that writes the letter. The broker does notice, and
+now every service records those too, from the broker's own notice.
+
+What changes for you:
+
+- **Three new kinds**, `event`, `command` and `control-fact`, for messages on the device-event,
+  command and control-plane streams. The kind of a letter is now fixed by the stream the message
+  arrived on. `dcctl dead-letters list --kind` offers all of them.
+- **A new reason, `no-outcome`.** It never settles a command: the last attempt may have done its
+  work and lost only its acknowledgement. For high-volume streams (device events, commands and
+  detection actions) the letter carries no copy of the message; its detail names where the
+  original is until the stream ages it out. The same holds for a message too large to copy, and a
+  connector request's letter points at the connectors service's own dead-letter stream, which
+  holds the full request.
+- **A new stream, `max-deliveries`,** created by every service that reads a stream. It reserves
+  8 MiB at default sizing and fits the existing JetStream volume; nothing needs resizing. It is
+  empty in steady state, and a new alert, `MaxDeliveryRecordsWaiting`, fires if notices wait on it
+  unrecorded ([Messages that ran out of delivery
+  attempts](./observability.md#max-delivery-records)).
+- **The detection engine's give-ups are counted, not dead-lettered.** `event-processing` reads
+  `resolved-events` from its own saved checkpoint and reads the stream again after a restart, so
+  an event whose attempts ran out there has not been lost. When the engine cannot save its
+  checkpoint for longer than the broker keeps redelivering (usually a database outage), every
+  event in that window runs out of attempts, and a letter for each would report losses that did
+  not happen. They are counted with `outcome="replay-covered"` instead, and a new warning alert,
+  `ReplayCoveredDeliveriesExhausted`, reports them. The other services that read
+  `resolved-events` still dead-letter theirs.
+- **The dead-letter stream gains a 30-minute duplicate window,** applied in place on upgrade, and
+  so does the connectors service's own dead-letter stream. It is what makes a give-up recorded both
+  by a service and by the broker's notice land once.
+- **`DeadLetterWriteLost` has a third cause:** a dead letter that the dead-letter store or the
+  command writeback ran out of attempts on, which may now age out of the stream without having
+  been stored (its last attempt may have stored it and lost only the acknowledgement).
+
+During the rolling upgrade a give-up can be lettered twice, once by a pod of the old release and
+once from the broker's notice. The two are the same failure; nothing was lost.
+
+##### The dead-letter loss counters are one metric per service {#v0180-dead-letter-lost}
+
+A service that gives up on a message and then cannot record it as a dead letter now counts that
+loss on **`dead_letter_lost_total`** under its own subsystem, the same name in every service. These
+five series are gone:
+
+- `devicechain_eventprocessing_react_events_dead_letter_lost_total`
+- `devicechain_notificationmanagement_notifications_dead_letter_lost_total`
+- `devicechain_commanddelivery_command_delivery_responses_dead_letter_lost_total`
+- `devicechain_devicemanagement_raise_alarm_dead_letter_lost_total`
+- `devicechain_devicemanagement_alarm_event_dead_letter_lost_total`
+
+These five replace them:
+
+- `devicechain_eventprocessing_dead_letter_lost_total`
+- `devicechain_notificationmanagement_dead_letter_lost_total`
+- `devicechain_commanddelivery_dead_letter_lost_total`
+- `devicechain_devicemanagement_dead_letter_lost_total`, one counter for both of device-management's
+  paths
+- `devicechain_outboundconnectors_dead_letter_lost_total`, which is **new**. An outbound connector
+  dispatch whose dead-letter copy could not be written on its final delivery used to be counted
+  only as `connector_dispatch_total{outcome="dead_write_failed"}`, which no alert read. It is still
+  counted there, and is now counted here as well.
+
+The `DeadLetterWriteLost` alert selects these by name rather than listing them, so it now covers
+outbound connectors too. If your own dashboards or rules name the old series, change them. The
+selector `{__name__=~"devicechain_[a-z0-9]+_dead_letter_lost_total"}` covers every service. Use
+`[a-z0-9]+` and not `.+`: while the upgrade rolls, pods that have not been replaced yet still
+export device-management's two old names, and `.+` matches both of them.
+
+The counter also counts a letter the service **refused** as malformed, which is a defect in that
+service rather than a broker problem. The pod's `LOST` error log line says which of the two
+happened.
+
+#### Security and sign-in {#v0180-security}
+
+##### Sessions end on a password reset, and everyone signs in again once {#v0180-sessions}
+
+Two changes end every session at the upgrade.
+
+**Each user now has a session value**, and every token that can be exchanged for a new one carries
+it: refresh tokens, the sign-in token the console holds before a tenant is chosen, and OAuth
+authorization codes. Resetting a user's password, disabling the user, or deleting the user changes
+that value, and a token carrying the old one is refused. Before this release a password reset left
+every refresh token already issued working, so a stolen one kept renewing itself for as long as it
+was used.
+
+**The key that signs every access and refresh token is now sealed under the instance root key.**
+It used to be stored unencrypted in user-management's database, so anyone who could read that
+database, a backup of it or its write-ahead-log archive could sign tokens every service accepts.
+Now it is sealed like every other stored credential, and only the key currently in use has a
+private half at all. When a key is rotated out, its private half is deleted and only its public
+half is kept, so tokens it signed keep verifying until they expire. The upgrade **deletes every
+signing key the instance had**, rather than sealing them, because each one has already sat
+unencrypted in every backup taken so far. user-management generates a new key when it starts.
+
+What you will see at the upgrade:
+
+- **Every user signs in again.** Tokens issued before the upgrade carry no session value, so they
+  cannot be refreshed, and once the rollout completes they no longer validate either. Console,
+  dashboard and SDK sessions end at their next refresh, within 15 minutes of the upgrade unless you
+  have changed the access-token lifetime. Sessions in an embedded dashboard app end too. A console
+  that is sitting on the tenant picker or the admin pages when that happens can report an error
+  when a tenant is chosen, rather than returning to the sign-in page. Signing out and back in
+  clears it.
+- **OAuth clients, including AI assistants connected through MCP, must authorize again.** Their
+  refresh tokens are refused with `invalid_grant`.
+- **The old key is trusted until the rollout completes.** Until the last old user-management pod
+  has stopped, it keeps signing tokens with the old key and publishing that key for other services
+  to verify against. `helm upgrade` and `dcctl upgrade` replace every pod, so the old key stops
+  being trusted when they finish. While that old pod is stopping, a request made in the first
+  seconds of the rollout can be refused with `401 invalid or expired token`, and a sign-in with
+  `invalid or expired token`, even for a token issued moments earlier; once the old
+  user-management pod has stopped, signing in again and retrying succeeds.
+- A user created by a service that had not yet been replaced while the upgrade rolled out has no
+  session value and cannot sign in. The sign-in fails as a wrong password would, and the
+  user-management log names the user and the cause. An administrator resetting that user's password
+  fixes it.
+
+What changes from then on:
+
+- **A password reset, disabling a user, or deleting a user ends every session that user holds.**
+  Their refresh tokens stop working at the next use, and a sign-in token or authorization code
+  issued before the change can no longer be exchanged for a new session. Re-enabling a disabled
+  user does not bring the old sessions back.
+- **Tokens already issued for direct use are not revoked.** An access token, and the sign-in token
+  on the admin API, keep working until they expire: 15 minutes, unless you have changed the
+  access-token lifetime. That includes an administrator's sign-in token.
+- **Deleting a user and creating one with the same email starts clean.** The new user does not
+  pick up any session the old one still held.
+- Changing a user's roles or memberships does not sign them out. It takes effect at their next
+  refresh, as before.
+
+Backups and archived write-ahead log taken **before** the upgrade still contain the old keys.
+Those keys are no longer trusted anywhere once the rollout completes, but the files are still
+worth protecting as the credentials they were.
+
+##### A new signing key is trusted within about a second {#v0180-signing-key-trust}
+
+When user-management starts signing tokens with a new key, as it does at this upgrade, every
+other service learns that key the first time it sees a token signed with it, by fetching the key
+set user-management publishes. Earlier releases allowed each service pod that fetch at most once
+every 30 seconds. If the fetch was answered by a user-management pod still publishing the previous
+key set, as the old pod does while a rolling upgrade is under way, that service refused every
+token signed with the new key as `invalid or expired token` until the 30 seconds had passed. A
+sign-in straight after an upgrade could fail this way.
+
+- **A service now fetches again as soon as one second after its previous fetch finished.**
+  Requests that arrive while a fetch is under way wait for it instead of being refused.
+- **Tokens naming a key user-management never published** still cost it at most one fetch per
+  second from each service pod.
+- **A fetch that does not find the key is now logged.** The service logs `JWKS refetched on an
+  unknown kid, and the fetched set does not hold it.` with the key id, which tells a token refused
+  during a key change apart from a token that is simply not valid.
+
+Nothing needs configuring.
+
+##### The instance root key is now required in every profile {#v0180-root-key}
+
+The root key used to be needed only by profiles that store integration credentials. The chart
+therefore let the `telemetry` and `ingest-only` profiles render without one. Every instance now
+seals its signing key under the root key, so the chart **fails the render** for any profile when
+no key is set. An instance built with `dcctl bootstrap` already has one and needs nothing. A
+chart-only `telemetry` or `ingest-only` install needs a key before it can be upgraded. Generate
+one with `openssl rand -base64 32`, pass it as `instance.config.infrastructure.secrets.rootKey`,
+and keep it: the same value has to be passed on every later upgrade.
+
+The root key now also decides whether anyone can sign in. With a wrong or lost key,
+user-management refuses to start, and so does every service that stores integration
+credentials. Every other service then stays not-ready, because it cannot get the keys it needs
+to validate a token. The whole API is down, not just the integrations. See
+[Disaster recovery](./disaster-recovery.md#root-key) for what to do about it.
+
+Deleting a stored credential now also removes it from the database completely. Before, the
+sealed row stayed in the table, marked deleted. Credentials that were deleted **before** this
+release stay that way: they cannot be used, but their sealed rows are still in the table and in
+backups.
+
+##### The superuser no longer has a default password {#v0180-superuser}
+
+Earlier releases created every instance's superuser, `superuser@devicechain.local`, with the same
+published password, `devicechain`. A new instance now gets a password generated for it: `dcctl
+bootstrap` prints it once and keeps it in the Secret `dci-<instance>-superuser` in the instance's
+namespace. There is no default any more. If user-management starts with an empty identity table and
+no password in that Secret, it refuses to create the superuser.
+
+**The upgrade does not change an existing superuser's password.** The upgrade cannot know whether
+you changed it, so it leaves it alone, and it prints a warning at the end for any instance that has
+no generated password. If you never changed the password on such an instance, it is still
+`devicechain`. Sign in and change it, or recreate the instance to have one generated.
+
+`dcctl sim` and the drill tools no longer assume the old password either. `dcctl sim` reads the
+generated one from the instance's Secret, and takes `--admin-password` or `$DC_ADMIN_PASSWORD` for an
+instance that has none.
+
+If your values set `auth.superuserPassword` for user-management
+(`functionalAreas.user-management.config.auth.superuserPassword`), delete it before upgrading.
+user-management now refuses to start with it, and the error names the key. The seed password comes
+only from the Secret `dci-<instance>-superuser`, or the one named by `instance.superuserSecret`.
+
+##### Sign-in is rate-limited, and GraphQL requests carry fewer fields {#v0180-sign-in-limits}
+
+Nothing needs doing at the upgrade unless your own code or scripts do one of the things below. The
+console, the dashboard app, the SDKs and `dcctl` already stay within every limit.
+
+- **An operation may select at most 5 top-level fields in a mutation and 20 in a query.** Aliases
+  count, and so do fields reached through fragments. A request over the limit runs nothing and gets
+  one error with the code `TOO_MANY_ROOT_FIELDS`. Split such a request, or raise
+  `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` / `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` for that service.
+- **One request can have one password checked.** A further `login` in the same request is not
+  evaluated and gets the code `TOO_MANY_CREDENTIAL_CHECKS`. Sign in once per request.
+- **Repeated failed sign-ins on one email address are slowed down.** After five failures in a row,
+  the next attempt on that address waits 1 second, doubling up to 5 minutes. An attempt made during
+  the wait gets the code `THROTTLED` with `retryAfterSeconds`, not "invalid credentials". A sign-in
+  that the server cannot count gets `UNAVAILABLE`. If your code signs in, handle both as their own
+  errors rather than as a wrong password. OAuth client secrets are not slowed down.
+- **The JetStream reservation grows by 128 MiB** (16 MiB on the compact preset), for the bucket that
+  holds the sign-in counts. On the compact preset the cache buckets shrink from 8 to 4 MiB each to
+  make room. If you sized the JetStream volume yourself close to the reservation, check that it has
+  the room.
+- **A new alert, `CredentialAttemptStoreFull`,** fires if that bucket fills up. Sign-in keeps
+  working when it is full, but repeated failures are no longer slowed down. [Sign-in
+  backoff](../reference/graphql-api.md#sign-in-backoff) explains what to do.
+
+[Request limits](../reference/graphql-api.md#request-limits) and [sign-in
+backoff](../reference/graphql-api.md#sign-in-backoff) have the details.
+
+##### A session refresh survives a brief outage {#v0180-session-refresh}
+
+Refreshing a session used to use up the refresh token before re-checking the
+session. A database or broker error during that check then ended the session: the refresh failed
+as "invalid or expired token", and the token could not be used again. The check now runs first. A
+store error leaves the token valid and returns an error you can retry ("the session could not be
+refreshed right now; try again"), and the OAuth token endpoint returns `server_error` without the
+underlying error text. A refresh that is refused because the session ended, the membership was
+removed or disabled, or the tenant refuses access still uses the token up.
+
+Only a client that retries with the same refresh token benefits. An OAuth client, such as an AI
+agent connecting over MCP, now gets `server_error` rather than `invalid_grant` during such an outage,
+so it can retry instead of asking the user to authorize it again. The Go client library the
+simulator, the load tests and `dcctl` use no longer loses its refresh token to the outage, but it
+still falls back to a password sign-in whenever a refresh fails, as it did before. The console still
+signs the user out on any refresh failure. Nothing needs doing at the upgrade.
+
+##### Repeated failed MQTT password connects are slowed down {#v0180-mqtt-connect-backoff}
+
+Nothing needs doing unless a device connects with a wrong MQTT password in a loop, or the instance
+was installed with `--compact`. [Repeated failed connects are slowed
+down](../guides/device-credentials.md#connect-backoff) has the details.
+
+- **After 10 failed connects in a row for one MQTT username, the next attempt waits 1 second,**
+  doubling up to 30 seconds. A connect made during the wait is refused like a wrong password, even
+  if the password is right. A successful connect resets the count. Access-token connects and
+  credentials in event bodies are not affected.
+- **Someone who knows a device's MQTT username can keep that device from reconnecting** for as long
+  as they keep sending wrong passwords for it. Devices that are already connected are not affected
+  until they reconnect.
+- **Password connects now need JetStream.** If the store that holds the counts cannot be reached,
+  password connects are refused, including briefly while that store's JetStream leader changes, for
+  example while a NATS node restarts.
+- During a database outage, a device whose password connects keep failing is slowed down the same
+  way, so after its first 10 attempts its refused connects are logged at debug rather than as a
+  warning each. An unreachable count store is logged as one warning a minute.
+- **The JetStream reservation grows by 128 MiB** (16 MiB on the compact preset) for the new bucket
+  that holds the counts.
+- **The compact preset's JetStream volume grows from 2Gi to 3Gi** to make room: the store the
+  volume gives JetStream grows from 1 GiB to 2 GiB. On an instance installed with `--compact`
+  before this release, `dcctl bootstrap` stops at its infrastructure step, before it touches
+  NATS, because the volume of a running NATS cannot be resized in place. It prints the steps to
+  move the volume to 3Gi and keep the JetStream data; follow them and run it again.
+- **A new alert, `DeviceCredentialAttemptStoreFull`** (warning), fires when that bucket fills.
+  Connects keep working, but without the slow-down. A very large reconnect wave can fill it as well
+  as an attack can.
+
+##### Credential values are stored exactly as sent {#v0180-credential-values}
+
+- **A device credential's `credentialValue` is no longer trimmed.** Earlier releases removed
+  leading and trailing whitespace when the value was saved, but compared the password a device
+  presented without trimming it, so an MQTT password that began or ended with a space could never
+  authenticate. The value is now stored exactly as sent. Only an empty value, or an explicit
+  `null` on update, stores no password.
+- **The other direction changes too.** A value pasted with a trailing newline or space used to be
+  saved without it, so a device presenting the password without it was accepted. It is now saved
+  with it, and such a device is refused until the value is sent again without the newline.
+- **Values saved before this release are not changed by the upgrade.** They were stored trimmed,
+  and the whitespace cannot be recovered. If a device's configured password has surrounding
+  spaces, send the value again with `updateDeviceCredential`.
+- **A tier with no color now reads `color: null`** on the admin API, where it used to read `""`.
+  Sending `""` or `null` still clears it, and the upgrade converts every stored empty color to
+  null. Surrounding spaces are now trimmed before the color is checked, so `" amber "` is accepted
+  as `amber` where it used to be refused. The console needs nothing; code of your own that
+  compares `color` with `""` should test for null.
+- **`firstName` and `lastName` are trimmed like other display text**, on `createIdentity` and on
+  `updateProfile`, and a cleared name is stored as null. Reads already returned `null` for an
+  empty name, and still do: the upgrade converts every stored empty name to null. It does the same
+  for an AI provider's empty `endpoint`, which likewise already read as `null`. A name an earlier
+  release saved with surrounding spaces keeps them until an update names that field, which then
+  trims it.
+- **A stored number too large for a GraphQL `Int` is now an error rather than a wrong number.**
+  A notification policy's `throttleSeconds`, `escalateAfterSeconds` and `maxEscalations`, and a
+  tenant's burst, shed-priority, held-command and geofence overrides on the admin API, used to wrap
+  such a value into a negative one. Values written through the API always fit, so this affects
+  only a value written to the database some other way. A notification-policy update that does not
+  name one of those three fields also no longer rewrites it.
+
+##### A provisioning profile can no longer be created with a blank secret {#v0180-provisioning-secret}
+
+`createProvisioningProfile` now refuses an empty or whitespace-only `provisionKey` or
+`provisionSecret`. A profile with an empty secret would match a device that also sent an empty
+secret. No instance was exposed to that, because the path a device would use to present a
+provisioning secret has not shipped yet; the check closes the gap before it does.
+`updateProvisioningProfile` already refused a blank value. A profile
+already stored with an empty secret now matches no presented secret at all, empty or not: give it a
+real one with `updateProvisioningProfile`.
+
+#### API and errors {#v0180-api}
+
+##### GraphQL WebSockets carry subscriptions only, and close when their token expires {#v0180-websocket}
+
+The WebSocket a service accepts on its GraphQL endpoint changes in three ways:
+
+- **It runs subscriptions and nothing else.** A query or mutation sent over it is refused with an
+  error telling you to use HTTP, and nothing runs. Before, both were executed, using the token the
+  connection had presented when it opened. Send queries and mutations as HTTP requests.
+- **It closes with code `4401` when the access token it authenticated with expires.** Before, a
+  connection stayed open, and its subscriptions kept streaming, for as long as the client answered
+  pings. To keep a feed running, open a new connection with a fresh token and subscribe again.
+  - `@devicechain/client` does this for you. When a connection it had established is closed with
+    `4401`, it reconnects once with a newly resolved token, subscribes again, and reports the
+    reconnect to your sink as `connected(true)`.
+  - The .NET SDK raises the close from `SubscribeAsync` as an exception that names the code.
+    Subscribe again to continue; the new connection takes a fresh token from the session.
+  - The standalone dashboard viewer does not refresh its token, so its live widgets stop when the
+    token expires. Sign in again.
+- **A service with no subscriptions no longer accepts a WebSocket at all.** The upgrade request is
+  refused with HTTP 400. Before, the connection opened and every operation sent on it failed.
+
+##### GraphQL documents must use GraphQL's own comments and strings {#v0180-graphql-syntax}
+
+Nothing needs doing at the upgrade unless your own code or scripts write GraphQL documents by hand.
+The console, the dashboard app, the SDKs, `dcctl` and the MCP server never send any of the
+following.
+
+- **A document written with `//` or `/* */` comments, backquoted strings, or single-quoted
+  characters is now refused** with a syntax error, and nothing in it runs. Earlier releases accepted
+  these, although they are not GraphQL. Use `#` for comments and `"` for strings.
+- **A block string whose closing `"""` directly follows a backslash is refused as well**, as in
+  `\"""`. That escape is valid GraphQL, but earlier releases never read it as the specification
+  defines it: they closed the string at those three quotes and read the rest of the document from
+  there. Send such text in a variable.
+- **A string directly followed by a quote, such as `"x""y"`, is refused.** GraphQL reads that as two
+  adjacent strings, which is never a valid value; earlier releases read it as the start of a block
+  string instead. Only `"""` opens a block string, and an empty string `""` is unaffected.
+- **Over a GraphQL WebSocket, a subscription the server cannot read now gets the syntax error**, not
+  the message saying that only subscriptions are accepted. A document that names an operation it
+  does not hold gets its own error too. Both are errors for that operation only; the connection
+  stays open.
+
+[Request limits](../reference/graphql-api.md#request-limits) has the details.
+
+##### The alarm `message` field is removed {#v0180-alarm-message}
+
+Alarms had a `message` field that nothing ever filled in: it was always null. It is removed
+everywhere it appeared:
+
+- **GraphQL:** `Alarm.message` and `AlarmEvent.message` (the `alarmStream` subscription) are gone.
+  A query or subscription that still selects `message` is now refused with
+  `Cannot query field "message"`. Remove it from your own documents before upgrading.
+- **`@devicechain/dashboards` and `@devicechain/widgets`:** `AlarmRow` no longer has `message`, so
+  code that reads `AlarmRow.message` no longer compiles. The alarm table widget no longer shows a
+  tooltip on the alarm key, and the dashboard editor's preview no longer shows made-up alarm
+  messages. Versions of these packages from before this release still select `message`, so the
+  upgraded server refuses their alarm list and alarm widgets stop loading: upgrade the packages
+  together with the platform.
+- **Notifications:** alarm emails no longer have a `Message` line and webhook payloads no longer have
+  a `message` key. Neither ever appeared, because the value was always empty.
+- **MCP:** `list_alarms` and `get_alarm` no longer return `message`.
+- **Database:** the empty `message` column is dropped from the alarms table when device-management
+  starts.
+
+While the upgrade rolls out:
+
+- A console tab opened before the upgrade, and a console, dashboard or MCP pod still on the previous
+  release, get an error on alarm lists until the tab is reloaded or the pod is replaced.
+- A `device-management` pod still on the previous release cannot store a new alarm. The alarm is
+  retried about once a minute and is normally stored by an upgraded pod. If pods of the previous
+  release keep running for more than about five minutes, for example because a new pod never
+  becomes ready, the alarm is given up and recorded as a dead letter, and it is raised only when
+  its condition clears and occurs again. Keep the rollout short, and afterwards check
+  `dcctl dead-letters list --kind detection-action --source device-management` for alarms that
+  were not raised.
+- Alarm lists, acknowledge and clear served by a `device-management` pod still on the previous
+  release can fail once per database connection. Repeating the request succeeds.
+
+##### A duplicate now answers with the code `CONFLICT` {#v0180-conflict}
+
+Nothing needs doing unless your own code or scripts recognise a duplicate by reading the error
+message. [A value that must be unique](../reference/graphql-api.md#unique-values) has the details.
+
+- **A create, update or rename that repeats a value that must be unique** now carries
+  `extensions.code` set to `CONFLICT`. Branch on the code. It means the write collided with a
+  unique value, which is not always one you sent: two publishes of the same record racing for the
+  next version number collide too, and a retry then succeeds.
+- **The database's own wording is replaced.** Where a message used to end in
+  `duplicate key value violates unique constraint "…" (SQLSTATE 23505)` or `UNIQUE constraint
+  failed: …`, it now ends in `the request conflicts with an existing record: a value that must be
+  unique is already in use`, which names no database index or column.
+- **Refusals that already had their own wording keep it and gain the code:** renaming onto a token
+  already in use, adding a second membership in the same tenant, and declaring a command key the
+  profile already has.
+- **`dcctl sim create` recognises an existing tenant, identity or membership by the code,** so
+  re-running it with the same name completes. Before, a re-run stopped at the membership step. Use a
+  `dcctl` from this release with an instance of this release: an older instance does not send the
+  code, and this `dcctl` then reports the duplicate as an error.
+- **These are not duplicates and do not carry `CONFLICT`:** creating a tenant at a deleted tenant's
+  reserved token, and a save refused because the record changed since it was read.
+
+##### Refused references and refused values answer with a code {#v0180-reference-codes}
+
+Nothing needs doing unless your own code or scripts recognise these refusals by reading the error
+message. [A reference or a value that is refused](../reference/graphql-api.md#reference-and-invalid-values)
+has the details.
+
+- **A delete refused because other records still refer to the record** now carries
+  `extensions.code` set to `REFERENCE_VIOLATION`: a device profile, device type or other type still
+  in use, an entity group a detection rule still scopes to, a tenant tier that tenants are still
+  at, a tenant that still has memberships, an AI provider that is still granted, and a
+  notification channel a policy rule still names. The message is unchanged.
+- **The database's own wording is replaced.** Where a message used to end in `violates foreign key
+  constraint "…" (SQLSTATE 23503)`, it now ends in `the request refers to a record that does not
+  exist, or removes one that other records still refer to` and carries `REFERENCE_VIOLATION`. A
+  value the database refuses for any other integrity reason, such as a missing required value, is
+  answered the same way with `the request contains a value this record does not allow` and
+  `INVALID_VALUE`. Neither sentence names a table, column or constraint, or repeats a value you
+  sent.
+- **Neither is `CONFLICT`,** so `dcctl` and any code that treats `CONFLICT` as "already exists" do
+  not carry on over them. A refusal that involves both a duplicate and one of these now carries the
+  new code rather than `CONFLICT`.
+- **The server logs each of these database refusals as a warning** naming the constraint, table
+  and column, since the service's own check normally answers first. The detail, which can repeat
+  the values sent, is not logged.
+
+##### Alert levels above 2147483647 are refused, and four more numbers are no longer wrapped {#v0180-int-range}
 
 An alert's `level` was accepted up to 4294967295 but is served as a GraphQL `Int`, which stops at
 2147483647, so a larger level read back as a negative number. Four fields had the same fault: the
 stored number was cut down to 32 bits on the way out, so a value past 2147483647 became a
-plausible negative one. Each is now an error instead, like the fields listed under "Credential
-values are stored exactly as sent".
+plausible negative one. Each is now an error instead, like the fields listed under [Credential values are stored exactly as
+sent](#v0180-credential-values).
 
 - **An alert with a `level` above 2147483647 is now refused when it arrives.** The device's
   message is refused as bad data, as an alert with no `type` is: HTTP answers `400` and an MQTT
@@ -2935,131 +3107,188 @@ values are stored exactly as sent".
   the API, sending the title and colors as well: that mutation replaces them together, so one
   left out is cleared.
 
-#### A database transaction left idle for a minute is ended
+##### `tenantDeletions` on the admin API is paged {#v0180-tenant-deletions}
 
-Nothing needs doing at the upgrade.
+`tenantDeletions` on `/api/user-management/admin/graphql` now takes a criteria argument and
+returns one page, like the admin API's `auditEvents` and `deadLetters`. A call in the old shape is
+refused.
 
-Every service now asks the database to end any of its transactions that sits idle for 60 seconds.
-This covers a pod that freezes, or loses the network, in the middle of a transaction. Before, such a
-transaction stayed open, holding its locks, until the connection was noticed to be dead, which with
-default operating-system settings can take hours, and it could still commit when the network came
-back. That could write data for a tenant whose deletion had already been reported complete. When
-the limit is hit, the database logs `terminating connection due to idle-in-transaction timeout` and
-rolls the transaction back. The request it belonged to fails with an error, and work a service takes
-from a stream is delivered to it again. See [Database write refusal](./tenant-deletion.md#database-writes).
+```graphql
+# before
+tenantDeletions(completed: false, limit: 50, offset: 0) { token epoch completedAt }
 
-#### Device events sent over MQTT are forwarded several at a time
+# now
+tenantDeletions(criteria: {pageNumber: 1, pageSize: 50, completed: false}) {
+  results { token epoch completedAt }
+  pagination { totalRecords }
+}
+```
 
-Nothing needs doing at the upgrade.
+`pageNumber` and `pageSize` are required. A page size below 1 reads 100 records and one above 1000
+reads 1000, as for the platform's other lists. Before, leaving `limit` out read the whole deletion
+history. `completed` is optional, as before. See [Tenant deletion](./tenant-deletion.md#stalled-alert).
 
-- **`event-sources` keeps up to 128 publishes to inbound-events waiting for the broker at once**
-  for the events devices send over MQTT to the platform broker, instead of at most five. A
-  device's message is still acknowledged only after the event it carried has been stored, and one
-  whose publish fails is still left for redelivery. Events sent over HTTP, and through an external
-  MQTT broker you configured, are published as before.
-- **When publishing to inbound-events keeps failing, `event-sources` slows down** the same way
-  `device-management` does: after a failed publish it waits half a second, doubling up to two
-  seconds, and until a publish succeeds it sends one at a time.
-- **More device messages can be redelivered after `event-sources` stops abruptly:** up to the 128
-  that were waiting for the broker, on top of those it held before. Each carries the same
-  duplicate-detection id as before, so an event that was already stored is not stored twice.
-- **A device message that failed on every delivery is still routed to failed-decode, at most four
-  at a time.** One that arrives while four are being routed is left for the broker to end, and is
-  recorded as a dead letter instead of on failed-decode.
-- **A device's events can reach inbound-events slightly out of order, as they could before:** five
-  decoders work through the captured messages at once, and every replica publishes.
-- **`devicechain_eventsources_jetstream_publish_duration_seconds` gains a `mode="pipelined"`
-  series for `suffix="inbound-events"`.** [Observability](./observability.md) describes the modes.
+##### Audit entries name the row they changed {#v0180-audit-rows}
 
-#### Live device state is merged in batches, and a consumer that stays behind raises a warning
+Twenty audited mutations wrote audit-journal entries with an empty row key and label: version
+changes to profiles, groups and asset types, device claims, dashboards, connectors, inference
+providers, and command state changes. They now record the affected row's primary key, and eleven
+of them its label as well; the command state changes record the key only. Entries written before
+the upgrade stay as they were. Nothing needs doing.
 
-`device-state` merged every event into a device's live state (connectivity, activity, latest
-readings and last position) in two transactions of its own. On a replicated database each commit
-waits for the standby, so the live state fell behind whenever events arrived faster than it could
-commit them one at a time, and after a sustained high rate it could lag the stored events by more
-than an hour while nothing reported it. It now merges the events waiting for a writer in one
-transaction, the way `event-management` persists them. Measured in-process against TimescaleDB with
-a synchronous standby, five writers merged about 3500 events a second, against about 85 before.
+#### Observability {#v0180-observability}
 
-- **What a device's live state ends up holding does not change,** with one exception. A reading or
-  a position replaces the stored one only when it is strictly newer, and times are now compared as
-  the database stores them, to the microsecond. Before, a reading arriving in the same microsecond
-  as the stored one could replace it even when it was older. Now the one stored first stays.
-- **An event is still acknowledged only after it has been stored.** If one tenant's part of a batch
-  is refused, that tenant's events are merged again one at a time, so only an event that is itself
-  refused is retried or dropped as before, and the other tenants' events are committed together.
-- **Two settings are new, both optional:** `projection.maxBatch` (default `32`; `1` restores one
-  event at a time) and `projection.lingerMillis` (default `0`), with the same ranges as
-  `event-management`'s. See [Live device state](./observability.md#live-state-projection).
-- **If you chart `device-state`'s metrics:** `state_inflight` can now exceed the number of writers,
-  because it counts events waiting for their batch to commit, and `state_duration_seconds` now
-  includes that wait. Two metrics are new, `state_batch_size` and `state_batch_fallbacks_total`.
-- **Every service now reports how many messages are waiting for each consumer it reads,** as
-  `jetstream_consumer_pending_messages` and `jetstream_consumer_ack_pending_messages`. A new
-  warning, `JetStreamDurableFallingBehind`, fires when a consumer has had more than 10000 messages
-  waiting for it for 15 minutes. `event-processing`'s detection consumer is left to
-  `DetectConsumerBacklogHigh`, which is unchanged. See
-  [A consumer that stays behind](./observability.md#consumer-backlog).
+##### Alerts added and renamed {#v0180-alerts}
 
-#### device-management resolves more events at once
+If you route or silence alerts by name, these are the chart's new alerts, and the one that was
+renamed. Each links to the item that explains it.
 
-`device-management` resolved inbound events with five resolvers, a number fixed in code. Resolving
-an event is mostly waiting: for the database to authenticate its credential, then for the message
-broker's key-value store to return its profile and relationships, one after another. So five
-resolvers limited how many events a pod could resolve a second while most of its CPU sat idle. On a
-test cluster the pod resolved about 1600 events a second on 1.5 of its 4 cores, and the events above
-that rate waited in the pod, about 140 at a time, then in the stream, with detection falling behind
-them. It now runs 10 by default, and the number is configurable. Measured in-process against a
-three-server broker, with every lookup taking 750 µs, 5 resolvers resolved about 1500 events a
-second and 10 about 2900. See [Event resolution](./observability.md#event-resolution).
+| Alert | Severity | What it reports | Details |
+| --- | --- | --- | --- |
+| `JetStreamStreamNearFull` | warning | Renamed from `EventProcessingStreamNearFull`; now covers every service's streams | [details](#v0180-unread-loss) |
+| `JetStreamDurableLostUnread` | critical | A consumer lost messages it had not read | [details](#v0180-unread-loss) |
+| `JetStreamDurableStalledBehindStream` | critical | A stopped consumer is losing messages ahead of it | [details](#v0180-unread-loss) |
+| `JetStreamDurableFallingBehind` | warning | A consumer has had more than 10000 messages waiting for 15 minutes | [details](#v0180-live-state-batches) |
+| `JetStreamReplicationUnobserved` | warning | A pod cannot read a stream's replication state | [details](#v0180-new-warnings) |
+| `ReaderHeldMessagePastAckWait` | warning | A message was held past its acknowledgement window and redelivered | [details](#v0180-dispatch-backlog) |
+| `MaxDeliveryRecordsWaiting` | warning | Notices of messages that ran out of attempts are not being recorded | [details](#v0180-no-outcome-dead-letters) |
+| `ReplayCoveredDeliveriesExhausted` | warning | The detection engine's checkpoint has not been saved for too long | [details](#v0180-no-outcome-dead-letters) |
+| `RateLimiterOverflowInUse` | warning | HTTP ingest is sharing one allowance across unconfirmed tenant names | [details](#v0180-unconfirmed-tenants) |
+| `TenantsMeteredAtPlatformDefault` | warning | A service cannot read tenants' ceilings and meters them at the default | [details](#v0180-unconfirmed-tenants) |
+| `ReactShedLettersOverBudget` | warning | Shed actions are being summarised rather than recorded one by one | [details](#v0180-catch-up-metering) |
+| `RateMeteringClockFallback` | warning | Outbound actions are metered without their trigger time | [details](#v0180-catch-up-metering) |
+| `ConnectorDispatchRateLimited` | warning | The connectors service is shedding dispatches the detection engine admitted | [details](#v0180-new-warnings) |
+| `CredentialAttemptStoreFull` | critical | The bucket that counts failed sign-ins is full | [details](#v0180-sign-in-limits) |
+| `DeviceCredentialAttemptStoreFull` | warning | The bucket that counts failed MQTT password connects is full | [details](#v0180-mqtt-connect-backoff) |
+| `DeviceFactPublishFailing` | warning | Rule, device and attribute notifications are failing to send | [details](#v0180-fact-repair) |
+| `DetectFactsRepaired` | warning | The detection engine corrected a change it had not been told about | [details](#v0180-fact-repair) |
+| `DetectFactReconcileFailing` | warning | The detection engine's comparison with device-management is failing | [details](#v0180-fact-repair) |
+| `TenantPurgeStalled` | warning | A tenant deletion is not progressing | [details](#v0180-tenant-purge-alerts) |
+| `TenantPurgeVisibilityLost` | warning | Nothing reports whether tenant deletions are progressing | [details](#v0180-tenant-purge-alerts) |
 
-- **The new setting is `resolution.workers`** (default `10`). It must be below the service's
-  connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set). A value out of range stops
-  the service from starting, and the error names the setting. The default is refused only if you set
-  `maxOpenConnections` for `device-management` to 10 or fewer: set `resolution.workers` below it
-  before upgrading.
-- **device-management holds more database connections while it resolves events.** Each resolver
-  holds one while it authenticates an event's credential, which under the default `required` device
-  authentication is every event. With every resolver busy that is now up to 10 connections instead
-  of 5, from the pool the GraphQL API, the MQTT connect checks and the consumer that applies alarm
-  raises and resolves also use. If you set
-  `maxOpenConnections` below 20, check that what is left is enough for them. More than half the pool
-  is allowed, and logged at startup.
-- **A pod at its CPU limit gains nothing from more resolvers.** This raises the rate only where the
-  pod has CPU to spare.
-- **A new metric, `resolve_workers`,** reports how many resolvers the pod runs, and
-  `resolve_inflight` can now reach 10. `resolve_inflight` held at `resolve_workers` means events are
-  arriving faster than the pod resolves them.
-- **Rolling back:** an earlier `device-management` refuses a configuration that sets
-  `resolution.workers`, as it refuses any setting it does not know. Remove the setting before
-  rolling back.
+`ReactPoisonDropping`, `DeadLetterStoreLosing` and `DeadLetterWriteLost` keep their names and move
+to their own rule group ([details](#v0180-dead-letter-rule-group)).
 
-#### Refused references and refused values answer with a code
+##### Services log at `info` by default, and the level can be set {#v0180-log-level}
 
-Nothing needs doing unless your own code or scripts recognise these refusals by reading the error
-message. [A reference or a value that is refused](../reference/graphql-api.md#reference-and-invalid-values)
-has the details.
+Every service used to log at `debug`, whatever you wanted. Services now log at `info` by default,
+and a new key in the instance configuration, `infrastructure.logging.level`, sets the level for
+the whole instance. See [The log level](./observability.md#logs).
 
-- **A delete refused because other records still refer to the record** now carries
-  `extensions.code` set to `REFERENCE_VIOLATION`: a device profile, device type or other type still
-  in use, an entity group a detection rule still scopes to, a tenant tier that tenants are still
-  at, a tenant that still has memberships, an AI provider that is still granted, and a
-  notification channel a policy rule still names. The message is unchanged.
-- **The database's own wording is replaced.** Where a message used to end in `violates foreign key
-  constraint "…" (SQLSTATE 23503)`, it now ends in `the request refers to a record that does not
-  exist, or removes one that other records still refer to` and carries `REFERENCE_VIOLATION`. A
-  value the database refuses for any other integrity reason, such as a missing required value, is
-  answered the same way with `the request contains a value this record does not allow` and
-  `INVALID_VALUE`. Neither sentence names a table, column or constraint, or repeats a value you
-  sent.
-- **Neither is `CONFLICT`,** so `dcctl` and any code that treats `CONFLICT` as "already exists" do
-  not carry on over them. A refusal that involves both a duplicate and one of these now carries the
-  new code rather than `CONFLICT`.
-- **The server logs each of these database refusals as a warning** naming the constraint, table
-  and column, since the service's own check normally answers first. The detail, which can repeat
-  the values sent, is not logged.
+- **It accepts exactly `trace`, `debug`, `info`, `warn` or `error`, in lowercase.** Any other
+  value, including `INFO` or a number, stops the services from starting, and the log names the key
+  and the accepted values.
+- **Lines you may have searched for are gone at the default level**: the per-message lines on the
+  ingest path, the broker read and write confirmations, and similar diagnostics. Set `debug` to see
+  them again. `debug` and `trace` write a line for every device message, so they are for
+  diagnosing a problem, not for running.
+- **A service's configuration document is no longer written to the log** at startup. The service
+  logs `config_sha256`, the first 16 hexadecimal characters of the document's SHA-256, instead.
+- **An instance installed with `dcctl bootstrap` runs at `info`**, and `dcctl` has no option to
+  change the level yet. A chart install sets it with your other values, for example
+  `--set instance.config.infrastructure.logging.level=debug`. With `instance.existingSecret`, add
+  it to the document you supply and update `instance.existingSecretChecksum`.
 
-#### device-management and event-management may use more CPU
+##### Database messages are structured log lines, and a query that finds nothing is no longer logged as a failure {#v0180-database-log-lines}
+
+Earlier releases printed database messages in a format of their own: coloured, multi-line text
+written outside the service's JSON log, with no `instance` or `area` field, whatever
+`infrastructure.logging.level` was set to. Every service that writes tenant data printed one such
+block, reading `record not found`, for each database transaction that wrote it; in
+`event-management` that was one for every event stored. The block was the ordinary answer to a
+check made before each write, not an error, and at a high event rate it made up most of the log
+and hid real failures.
+
+- **Database messages are now JSON log lines**, at `error` when a statement failed
+  (`database statement failed`) and at `warn` when one took longer than 200 ms
+  (`slow database statement`), with the fields `sql`, `rows`, `elapsed_ms` and `caller`. A query
+  that finds no rows is no longer logged as a failure. That includes the check before each write.
+- **The `sql` field no longer shows the values a statement was sent with.** It shows the
+  statement's placeholders (`$1`, `$2`, …). Earlier releases filled the values in, including in
+  the line for a failed write. The database's own error message is still logged as it is, and some
+  of those quote the value they rejected.
+- **`sqlDebug` now follows the log level.** Its per-statement lines are written at `info`, so an
+  instance whose level is `warn` or `error` no longer shows them.
+- **A service that cannot reach its own database at startup logs each failed attempt at
+  `error`**, as `failed to initialize database, got error …`. Earlier releases printed it as text
+  outside the JSON log.
+
+If you matched the old text (for example `record not found` or `SLOW SQL`), match the `message`
+field instead. Nothing needs configuring.
+
+##### Two new warnings: an unreadable stream, and connector sheds the detection engine admitted {#v0180-new-warnings}
+
+- **`JetStreamReplicationUnobserved`** (warning, `jetstream-replication` group) fires when a
+  running pod has been unable for 15 minutes to read the replication state of a stream it could
+  read earlier. Until now a service that could not read a stream stopped reporting it, and the
+  other replication alerts went quiet for that stream rather than saying so. It also fires for
+  every stream on every pod during a broker outage, which is deliberate: nothing else in the chart
+  reports one. It resolves six hours after the stream was last read, whether or not it can be read
+  again. See [Replication](./observability.md#replication).
+- **`ConnectorDispatchRateLimited`** (warning, `governance` group) fires when outbound-connectors
+  has shed dispatches as over their tenant's outbound rate for 15 minutes. The detection engine
+  already sheds over-quota actions before dispatching them, so this means the two services
+  disagree about the ceiling (most often their platform defaults differ) or failing sends are
+  being retried and metered again. Before upgrading, check that `outboundMessagesPerSecond` and
+  `outboundBurst` are set the same for event-processing and outbound-connectors. Otherwise it
+  fires whenever a tenant metered at the platform default sends faster than the lower of the two.
+  See
+  [Tenants metered at the platform default](./observability.md#tenant-ceilings).
+- **`JetStreamLeaseBucketNotReplicated` has a new summary**, "The partition-lease bucket is not
+  replicated". Its name, labels and severity are unchanged. Update any route or silence that
+  matches on the old summary text.
+
+##### The dead-letter alerts move to their own rule group {#v0180-dead-letter-rule-group}
+
+The three dead-letter alerts, `ReactPoisonDropping`, `DeadLetterStoreLosing` and
+`DeadLetterWriteLost`, now ship in their own `dead-letter` PrometheusRule (group
+`devicechain.dead-letter`) instead of `event-processing`. Their names, labels, severities,
+thresholds and descriptions are unchanged, so routes and silences that match on the alert name or
+its labels keep working.
+
+- **One that is pending or firing during the upgrade starts over.** Prometheus sees a new rule, so
+  the alert resolves and comes back once its `for` wait (5 or 10 minutes) has passed, if the
+  condition still holds.
+- **If you select PrometheusRule objects by name**, or look up rule groups in the Prometheus UI,
+  add `dead-letter`.
+- **`DeadLetterStoreLosing` and `DeadLetterWriteLost` no longer end in `or vector(0)`.** An
+  expression that returns nothing and one that returns a false comparison leave an alert in the
+  same state, so the clause changed nothing. Both alerts fire and resolve exactly as before.
+
+##### Two warnings for a tenant deletion that is not progressing {#v0180-tenant-purge-alerts}
+
+A tenant deletion that cannot finish leaves the coordinator's own pass metrics healthy, so the
+chart now alerts on it directly, in a new rule group, `devicechain.tenant-purge` (PrometheusRule
+`tenant-purge`):
+
+- **`TenantPurgeStalled`** (warning) fires when the oldest open deletion has been open for more
+  than twice the configured token hold (24 hours at the default hold) for 15 minutes.
+- **`TenantPurgeVisibilityLost`** (warning) fires when user-management's deletion gauges have not
+  been collected for 15 minutes, so the first alert could not fire.
+
+user-management exports the two gauges they read,
+`devicechain_usermanagement_tenant_purge_in_flight` and
+`devicechain_usermanagement_tenant_purge_oldest_age_seconds`. A `tokenHoldSeconds` of `0` is read
+as the default, as the service reads it. See [How you are told](./tenant-deletion.md#stalled-alert).
+
+##### Maintenance tasks report every pass, and sweeps no longer run on an exact interval {#v0180-maintenance-passes}
+
+Ten maintenance tasks, the sweeps, reconcilers and schedulers that run on a timer, now export three
+series each: `devicechain_<area>_<task>_passes_total{outcome}`,
+`…_pass_duration_seconds` and `…_last_success_timestamp_seconds`. The outcome is `complete`,
+`partial`, `failed`, `skipped` or `cancelled`. `skipped` (another replica holds the task's lock)
+and `cancelled` (the service was stopping) are not faults, and a skipped pass does not move the
+last-success time. [Maintenance passes](./observability.md#maintenance-passes) lists the tasks.
+
+Five of them, user-management's dead-letter sweep and tenant-deletion coordinator,
+notification-management's retention sweep and escalation scheduler, and event-management's anchor
+sweep, now start each pass at a random point within 10% either side of their interval, rather than
+exactly on it, so replicas that started together no longer reach the database in the same
+instant. Nothing needs configuring.
+
+#### Deployment and sizing {#v0180-deployment}
+
+##### device-management and event-management may use more CPU {#v0180-cpu-limits}
 
 `device-management` and `event-management` may now each use up to 2 CPU cores; every other backend
 service keeps the 500m limit. At 500m, `device-management` resolved at most about 720 events per
@@ -3102,6 +3331,82 @@ needs more room on a node, and `--compact` instances keep their lower requests.
 - **To keep the previous limits,** set `functionalAreas.device-management.resources.limits.cpu`
   and `functionalAreas.event-management.resources.limits.cpu` to `500m`. That restores the old
   ceiling of about 720 events per second.
+
+##### The in-cluster backup store pulls from a maintained image {#v0180-backup-store-image}
+
+The object store that `dcctl install` runs in `dc-system` to hold database backups pulled its
+MinIO image from `quay.io/minio/minio`. Those images are no longer published: the registry refuses
+an anonymous pull, so on a machine that had not already cached the image, `dcctl install` stopped
+with the object store in `ImagePullBackOff`. Clusters that already had the image cached kept
+running, but only while the object-store pod stayed on a node that had it: a pod moved to another
+node — by a drain, an eviction or a replaced node — could not start, and archiving stopped until it
+could. Upgrading removes that exposure.
+
+This release pulls `cgr.dev/chainguard/minio`, pinned by digest: a build of a maintained fork of
+the same MinIO server, still licensed AGPL-3.0. It reads the data the previous server wrote as it
+is.
+
+- **Before upgrading, make sure your nodes can pull from `cgr.dev`** — allow it through any egress
+  rules, or mirror `cgr.dev/chainguard/minio` at the digest this release pins. If the pull fails,
+  the object store stays down and the databases keep their write-ahead log locally until it
+  returns.
+- **A fresh install works again** with the default backup destination.
+- **On an existing cluster, `dcctl install` restarts the object-store pod once** onto the new
+  image. Stored backups and write-ahead log are kept. While the pod restarts, archiving pauses and
+  the databases hold write-ahead log locally, for as long as the new image takes to pull and start.
+- **This cannot be undone by installing an earlier release.** An earlier release's `dcctl install`
+  would stop the object store and then fail to pull the image it names, and archiving would stop
+  until this release's `dcctl install` runs again.
+- **If `dcctl install` failed on an earlier release because of this**, run this release's
+  `dcctl install` again: it replaces the object store that attempt left behind (see [A failed `dcctl install` can be run
+  again](#v0180-dcctl-install-rerun)).
+
+Nothing needs configuring. If you point backups at your own object store with
+`--backup-credentials-file`, nothing changes for you.
+
+##### A failed `dcctl install` can be run again {#v0180-dcctl-install-rerun}
+
+If `dcctl install` failed while the backup object store was starting, for example because its
+image could not be pulled, or was interrupted at that point, every later run failed too, before
+changing anything, with `Unexpected Identity Change` naming `kubernetes_deployment_v1`. This
+happened with Terraform 1.12 or later, and the only way out was to delete the cluster and its
+directory under `~/.devicechain/clusters/`. A re-run now deletes the half-created object store,
+creates it again and waits for it to become ready. A cluster already stuck this way recovers the
+same way, with no manual step, once the cause is fixed: run the same `dcctl install` again. If the
+cause is still there, the re-run fails the same way rather than reporting the cluster installed.
+
+- **`dcctl install` now checks that the backup object store has rolled out** before it reports the
+  cluster installed. A change to the store that timed out, such as a new image that could not be
+  pulled, used to be accepted by the next run, because the failed change had already been
+  recorded. That run now waits up to five minutes for the store and then fails, naming it.
+- **The Kubernetes provider moves from 2.38.0 to 3.2.1.** The fix is in that release. The first
+  dcctl command that applies or destroys infrastructure on each cluster downloads it. Nothing on
+  the cluster changes.
+- **The infrastructure providers are now pinned to exact versions** (Kubernetes 3.2.1, Helm
+  2.17.0), and dcctl moves each root's `.terraform.lock.hcl` onto them on every run. Before this, a
+  cluster kept whichever versions its first install happened to resolve. Every run, `dcctl
+  destroy` included, now asks the provider registry for these versions, so the registry, or a
+  provider mirror you have configured, must be reachable. The unused TLS provider is no longer
+  declared.
+- **An earlier dcctl cannot operate a cluster this release has run against.** Its `init` refuses
+  the lock file, which now names provider versions its configuration does not allow.
+- **If you run the OpenTofu configuration directly** rather than through dcctl, run
+  `tofu init -upgrade` once in each root: a plain `init` refuses a lock file on the old versions.
+
+##### Release archives carry signed build provenance {#v0180-provenance}
+
+From `v0.18.0`, each release publishes `devicechain_<version>_provenance.sigstore.json` beside the
+`dcctl` and `dc-edge-agent` archives: a signed record of the workflow run that built them. To check
+an archive you downloaded:
+
+```bash
+gh attestation verify <archive> --repo devicechain-io/devicechain
+# or offline, against the bundle from the release
+gh attestation verify <archive> --repo devicechain-io/devicechain \
+  --bundle devicechain_<version>_provenance.sigstore.json
+```
+
+Nothing needs doing.
 
 ### The one-time durable-ingest cutover
 

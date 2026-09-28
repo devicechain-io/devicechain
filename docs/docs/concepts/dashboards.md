@@ -92,6 +92,11 @@ How live values arrive depends on the channel:
 
 Alarm and control widgets each hold their own stream and timer. Only the telemetry channel is multiplexed.
 
+A subscription's connection closes when the access token it opened with expires (see [Subscriptions
+over WebSocket](../reference/graphql-api.md#subscriptions-over-websocket)). The standalone `/dash`
+viewer does not refresh its token, so its live widgets stop at that point until the user signs in
+again.
+
 ## Authoring, versioning, and preview
 
 You author dashboards in the **console**:

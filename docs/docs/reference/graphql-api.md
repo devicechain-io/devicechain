@@ -78,6 +78,29 @@ authorities do not line up with intuition:
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
 reaches it over the device-plane transports, not this API.
 
+### Subscriptions over WebSocket {#subscriptions-over-websocket}
+
+A service that offers GraphQL subscriptions also accepts a WebSocket on its GraphQL endpoint. The
+client must negotiate the `graphql-transport-ws` subprotocol and send its access token in the
+`connection_init` payload, as `{"Authorization": "Bearer <token>"}` or `{"token": "<token>"}`. The
+token is checked once, when the connection opens.
+
+- **The WebSocket runs subscriptions and nothing else.** A query or mutation sent over it is refused
+  with the error `only subscription operations are accepted over a WebSocket; send queries and
+  mutations over HTTP`, and nothing runs. Send queries and mutations as HTTP requests.
+- **The connection closes with code `4401` when its access token expires.** To keep a feed running,
+  open a new connection with a fresh token and subscribe again. `@devicechain/client` does this once
+  on its own: when a connection it had established is closed with `4401`, it reconnects with a newly
+  resolved token, subscribes again, and reports the reconnect to your sink as `connected(true)`. The
+  .NET SDK raises the close from `SubscribeAsync` as an exception that names the code; subscribe
+  again to continue.
+- **A service with no subscriptions refuses the upgrade** with HTTP 400 (`this service offers no
+  GraphQL subscriptions`).
+
+A subscription the server cannot read gets a syntax error, and a document that names an operation
+it does not hold gets its own error. Both apply to that operation only, and the connection stays
+open.
+
 ## Querying events {#querying-events}
 
 event-management exposes read queries over the persisted event history. Each takes a search
@@ -422,7 +445,8 @@ all. Its one wrinkle is `definition`: the field is nullable so it can be *omitte
 rename a dashboard without resending its whole document, but an explicit `null` on it is
 refused, because a dashboard with no definition is not a thing. It keeps its optional
 `expectedUpdatedAt` precondition. An update that names no field at all writes nothing (not even
-`updatedAt`), while a stale precondition on it is still a conflict.
+`updatedAt`), while a stale precondition on it is still refused as a stale write (with no
+`extensions.code`).
 
 **user-management.** Every `update*` takes a dedicated request too:
 
@@ -702,7 +726,7 @@ with a syntax error, and nothing runs:
   and the server used to read it as the start of a block string. Only `"""` opens a block string.
 
 The same rule applies over WebSocket, where a subscription the server cannot read gets the syntax
-error rather than the subscriptions-only message.
+error rather than the [subscriptions-only message](#subscriptions-over-websocket).
 
 ### Credential checks per request {#credential-checks-per-request}
 

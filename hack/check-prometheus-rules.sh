@@ -1286,3 +1286,27 @@ expression. A failure here means a rule fires when it should not, or -- far wors
 
   note "the $group rules fire on the states they claim to"
 done
+
+# ---------------------------------------------------------------------------
+# A VALUE THE UNIT TESTS CANNOT REACH. They run against the DEFAULT render, and
+# TenantPurgeStalled's threshold is derived from a value (twice the tenant-purge
+# token hold) whose "0 means use the default" reading lives in the service. An
+# explicit 0 once rendered the threshold as 0, which fires 15 minutes after every
+# deletion opens. So both directions are rendered here: 0 must give the default
+# threshold, and a set value must still be honoured -- the counterweight that keeps
+# a `default` from swallowing every real value.
+# ---------------------------------------------------------------------------
+say "rendering TenantPurgeStalled with an explicit 0 and a set token hold"
+purge_threshold() { # <tokenHoldSeconds> -> the rendered threshold, or nothing
+  helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=$root_key" \
+    --set "functionalAreas.user-management.config.tenantPurge.tokenHoldSeconds=$1" \
+    -s templates/prometheusrule-tenant-purge.yaml |
+    sed -n 's/.*tenant_purge_oldest_age_seconds{[^}]*}) > \([0-9][0-9]*\)$/\1/p'
+}
+got="$(purge_threshold 0)"
+[ "$got" = "86400" ] ||
+  fail "tokenHoldSeconds: 0 rendered TenantPurgeStalled's threshold as '${got}', not 86400 (twice the 12h default)"
+got="$(purge_threshold 3600)"
+[ "$got" = "7200" ] ||
+  fail "tokenHoldSeconds: 3600 rendered TenantPurgeStalled's threshold as '${got}', not 7200"
+note "an explicit 0 renders the default threshold, and a set hold is still doubled"

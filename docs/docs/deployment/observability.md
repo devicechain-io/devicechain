@@ -25,7 +25,10 @@ serves the two standard Kubernetes probes:
 
 - **`/healthz`** — liveness: can the process still do its job, or does it need a
   restart? It fails once the service's message-broker connection has closed for
-  good, so Kubernetes restarts the pod.
+  good, so Kubernetes restarts the pod. A loop that reads messages from a stream
+  and cannot read for two minutes without a break also ends the process, which
+  Kubernetes then restarts; before that it retries with a growing pause of up to
+  five seconds.
 - **`/readyz`** — readiness: is it ready to take traffic? A service that isn't
   ready is held out of rotation by its Kubernetes Service (see
   [Deployment & Operator](./kubernetes-operator.md)).
@@ -294,6 +297,10 @@ get through.
 | --- | --- | --- | --- |
 | `ReaderHeldMessagePastAckWait` | warning | A handler held a message past its acknowledgement window, so it was redelivered. `stage=worker`: a send ran long, so the message may have been sent twice. `stage=buffer`: a message was dropped before it was handed out, and its redelivery was handled instead. | For `stage=worker`, look for a slow or unresponsive destination behind the service named by the `durable` label. For `stage=buffer`, the service is not keeping up with its stream. |
 
+The alert reads `devicechain_<area>_reader_held_past_ack_wait_total{durable, stage}`. The counter
+exists at 0 from the moment the reader is created, so `increase()` sees a pod's first occurrence.
+Each pod counts only the messages it held, so combine pods with `sum`, not `max`.
+
 ## Messages that ran out of delivery attempts {#max-delivery-records}
 
 After five unacknowledged deliveries the broker stops handing a message out. It publishes a
@@ -333,6 +340,18 @@ HTTP ingest endpoint gives tenant names it cannot confirm a bounded set of allow
 | `ReactShedLettersOverBudget` | warning | For 10 minutes, the detection engine has shed outbound actions faster than it records them one by one, so the excess is summarised in one dead letter per tenant per minute. A tenant is well over its outbound ceiling. | Find the tenant in `dcctl dead-letters` (reason `shed`) and check its rules, or raise its outbound ceiling if the traffic is legitimate. See [outbound governance](../concepts/outbound-connectors.md#governance). |
 | `RateMeteringClockFallback` | warning | For an hour, the service named by the `job` label has metered outbound actions on broker or arrival time because they carried no trigger time, so a catch-up after a restart can be shed as a flood again. A trigger time later than the broker time of the message carrying it is also metered on that broker time, but it is counted as source `capped` and does not fire this alert: it means the pod and broker clocks disagree, not that the time is missing. | Check that event-processing and outbound-connectors run the same release. |
 | `ConnectorDispatchRateLimited` | warning | For 15 minutes, outbound-connectors has shed dispatches for being over their tenant's outbound rate. The detection engine meters the same ceiling on the same timeline and sheds over-quota actions before dispatching them, so these were admitted at one end and refused at the other. A tenant over its ceiling does not fire this; it fires `ReactConnectorEgressShedding` in the detection engine. | Check that the platform default outbound rate (`outboundMessagesPerSecond` and `outboundBurst`) is the same for event-processing and outbound-connectors, and whether `TenantsMeteredAtPlatformDefault` is firing for either. Sends that fail and are retried are also metered again at the connectors end, so look for a failing destination too. That also means a single tenant whose destination keeps failing while it sends near its quota can raise this alert on its own, which is why it is a warning and not critical. The shed dispatches are dead letters with reason `rate_limited`. |
+
+The series behind these alerts:
+
+- `TenantsMeteredAtPlatformDefault` reads `devicechain_<area>_governance_unresolved_admissions_total{dimension, cause}`
+  with `cause="unreachable"`.
+- `RateLimiterOverflowInUse` reads `devicechain_eventsources_ratelimit_overflow_admissions_total`.
+- `ReactShedLettersOverBudget` reads
+  `devicechain_eventprocessing_react_connector_shed_unlettered_total{action}`.
+- `RateMeteringClockFallback` reads `devicechain_<area>_rate_clock_fallback_total{source}`, where
+  `source` is `append`, `capped` or `now`. The alert ignores `capped`.
+- `ConnectorDispatchRateLimited` reads the `rate_limited` outcome of
+  `devicechain_outboundconnectors_connector_dispatch_total`.
 
 Only the `rate_limited` outcome of `devicechain_outboundconnectors_connector_dispatch_total` is
 alerted on. Its other failure outcomes are one tenant's own configuration, such as a webhook that
@@ -534,6 +553,46 @@ expires, which is the cache's configured time to live.
 Separately, resolving an event that takes longer than five seconds for any reason is logged as a
 warning (`Event resolution is slow`): the first one at once, then at most one line every 30
 seconds, with how many there were and the slowest.
+
+## Maintenance passes {#maintenance-passes}
+
+Several services run a maintenance task on a timer: a sweep, a reconciler or a scheduler. Each
+exports three series under its own service's name, `devicechain_<area>_<task>_…`:
+
+- **`<task>_passes_total{outcome}`**: passes made, by outcome.
+- **`<task>_pass_duration_seconds`**: how long a pass took. A `skipped` pass is not timed.
+- **`<task>_last_success_timestamp_seconds`**: the Unix time of the last pass that did its work
+  (`complete` or `partial`). It reads NaN until the first such pass, so a rule such as
+  `time() - X > threshold` stays quiet on a pod that has just started.
+
+| Service | Tasks |
+| --- | --- |
+| user-management | `dead_letter_sweep`, `tenant_purge` |
+| notification-management | `retention_sweep`, `escalation_scheduler` |
+| event-management | `anchor_sweep` |
+| device-state | `inactivity_sweep` |
+| event-sources | `presence_demote` |
+| command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
+
+For example, user-management's tenant-deletion coordinator exports
+`devicechain_usermanagement_tenant_purge_passes_total`.
+
+| Outcome | Meaning |
+| --- | --- |
+| `complete` | The pass ran and finished its work. |
+| `partial` | The pass ran and did some of its work, for example some tenants but not others. |
+| `failed` | The pass could not do its work. |
+| `skipped` | Another replica holds the task's lock, so this one correctly did not run. Not a fault, and it does not move the last-success time. |
+| `cancelled` | The pass was cut short because the service was stopping. Not a fault. |
+
+Alert on `failed` and on a last-success time that has stopped moving, not on `skipped` or
+`cancelled`: a service with more than one replica skips on every replica but one, and every
+deploy can cancel a pass. The sweeps in user-management, notification-management and
+event-management start each pass at a random point within 10% either side of their interval,
+so replicas that started together do not all reach the database at once.
+
+A task can pass cleanly while the work it exists for is stuck. Tenant deletion is the case the
+chart alerts on separately; see [Tenant deletion](./tenant-deletion.md#stalled-alert).
 
 ## Related
 

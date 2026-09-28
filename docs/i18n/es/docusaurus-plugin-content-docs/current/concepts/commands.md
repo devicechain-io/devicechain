@@ -68,7 +68,11 @@ Estos estados significan que el comando aún no ha terminado:
   se entrega en el próximo despertar del dispositivo. Igual que `HELD`, cuenta como en tránsito:
   todavía puedes cancelarlo, y un TTL que vence sobre él registra `EXPIRED` y no `TIMEOUT`, porque
   el comando nunca llegó a un dispositivo. Consulta
-  [Estar registrado no es lo mismo que ser alcanzable](#parked-commands).
+  [Estar registrado no es lo mismo que ser alcanzable](#parked-commands). En
+  [LwM2M](./lwm2m.md), un comando también puede quedar `PARKED` mientras su dispositivo está
+  conectado: cuando la cola del dispositivo está llena, cuando acaba de reconectarse o cuando no se
+  pudo confirmar un comando anterior. Un comando así se entrega en orden momentos después, sin
+  esperar a un despertar.
 
 Estos estados son terminales. Nada sale de un estado terminal.
 
@@ -162,6 +166,13 @@ teniéndolo:
   en su poder.
 - **Cuenta contra el techo de comandos no entregados del inquilino**, exactamente igual que
   `QUEUED` y `HELD`. Es trabajo que la plataforma sigue cargando.
+
+`PARKED` no siempre significa que el dispositivo esté dormido. El adaptador LwM2M también devuelve
+un comando mientras el dispositivo sigue conectado: cuando la cola de ese dispositivo está llena,
+cuando el dispositivo acaba de reconectarse y sus comandos en espera van primero, o cuando un
+comando anterior no se pudo confirmar con command-delivery. Esos comandos también registran
+`PARKED`, y se entregan al dispositivo conectado en orden, unos pocos a la vez, momentos después, no
+en su próximo despertar.
 
 ### Cuando la plataforma pierde el rastro de un comando {#stranded-commands}
 

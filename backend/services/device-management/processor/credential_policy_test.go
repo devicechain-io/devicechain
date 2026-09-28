@@ -26,7 +26,7 @@ import (
 // from DeviceCredentialPolicy, so a changed number passes all of them. The places that
 // quote these values and go stale with them:
 //   - docs/docs/guides/device-credentials.md and its docs/i18n/es twin (10 free, 1 s, 30 s);
-//   - the release note under {#next-upgrade} in releases-and-upgrades.md, both locales;
+//   - the release note under {#v0180-upgrade} in releases-and-upgrades.md, both locales;
 //   - the tip in docs/docs/guides/connecting-a-device.md, both locales;
 //   - the DeviceCredentialAttemptStoreFull description in
 //     deploy/helm/devicechain/templates/prometheusrule-sign-in.yaml ("at most 30 seconds").
