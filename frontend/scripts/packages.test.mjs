@@ -29,7 +29,13 @@ import {
   stampManifest,
   verifyManifest,
 } from './set-package-versions.mjs';
-import { authTokenLines, compareTriple, configuredRegistry, parseVersions } from './publish-packages.mjs';
+import {
+  authTokenLines,
+  compareTriple,
+  configuredRegistry,
+  isAlreadyPublishedRefusal,
+  parseVersions,
+} from './publish-packages.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const realPackages = defaultPackagesDir();
@@ -277,5 +283,29 @@ describe('the scripts stay wired to the workflow that calls them', () => {
     for (const script of ['scripts/set-package-versions.mjs', 'scripts/publish-packages.mjs']) {
       assert.ok(workflow.includes(script), `release.yml no longer calls ${script}`);
     }
+  });
+});
+
+describe('isAlreadyPublishedRefusal', () => {
+  const refusal = (versions) =>
+    'npm error code E403\n' +
+    `npm error 403 403 Forbidden - PUT https://registry.npmjs.org/@devicechain%2fclient - You cannot publish over the previously published versions: ${versions}.\n` +
+    'npm error 403 In most cases, you or one of your dependencies are requesting a package version that is forbidden';
+
+  it('recognises the refusal for exactly the version being released', () => {
+    assert.equal(isAlreadyPublishedRefusal(refusal('0.18.0-rc.1'), '0.18.0-rc.1'), true);
+  });
+  it('does not treat a refusal naming another version as this one', () => {
+    assert.equal(isAlreadyPublishedRefusal(refusal('0.18.0-rc.10'), '0.18.0-rc.1'), false);
+    assert.equal(isAlreadyPublishedRefusal(refusal('0.18.0'), '0.18.0-rc.1'), false);
+  });
+  it('finds the version in a list', () => {
+    assert.equal(isAlreadyPublishedRefusal(refusal('0.17.0, 0.18.0-rc.1'), '0.18.0-rc.1'), true);
+  });
+  it('does not treat any other failure as already published', () => {
+    assert.equal(isAlreadyPublishedRefusal('npm error code E403\nnpm error 403 Forbidden - PUT ... - You do not have permission', '0.18.0-rc.1'), false);
+    assert.equal(isAlreadyPublishedRefusal('npm error code E404', '0.18.0-rc.1'), false);
+    assert.equal(isAlreadyPublishedRefusal('', '0.18.0-rc.1'), false);
+    assert.equal(isAlreadyPublishedRefusal(undefined, '0.18.0-rc.1'), false);
   });
 });

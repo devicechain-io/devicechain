@@ -177,6 +177,24 @@ function distTags(name) {
   return JSON.parse(result.stdout);
 }
 
+// npm refuses a second publish of a version it already holds with E403 "You cannot
+// publish over the previously published versions: <list>." Its WRITE side knows about
+// a publish minutes before its READ side (the CDN that `npm view` asks) shows it, so a
+// re-run after a slow propagation sees the version as absent, publishes, and gets this
+// refusal. For exactly the version being released that refusal is proof the earlier
+// publish went through, so it is treated as "already published" and the registry
+// assertion below still has to pass. Any other version in the list, or any other
+// error, is still a failure.
+export function isAlreadyPublishedRefusal(stderr, version) {
+  const m = /cannot publish over the previously published versions?:\s*([^\n]+)/i.exec(stderr ?? '');
+  if (!m) return false;
+  const listed = m[1]
+    .split(',')
+    .map((v) => v.trim().replace(/\.$/, ''))
+    .filter(Boolean);
+  return listed.includes(version);
+}
+
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -241,7 +259,16 @@ function main(argv) {
       console.log('    (--dry-run: not published)');
       continue;
     }
-    const result = spawnSync('npm', ['publish', '--tag', tag], { stdio: 'inherit', cwd: dir });
+    const result = spawnSync('npm', ['publish', '--tag', tag], {
+      stdio: ['inherit', 'inherit', 'pipe'],
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.status !== 0 && isAlreadyPublishedRefusal(result.stderr, version)) {
+      console.log(`  ${name}@${version} was already published (the registry's read side had not caught up) — continuing`);
+      continue;
+    }
     if (result.status !== 0) {
       fail(
         `publishing ${name} failed (exit ${result.status}).\n` +
@@ -283,8 +310,12 @@ function main(argv) {
   // registry that is telling us it needs them is the cheaper side of that trade by a
   // wide margin, and a genuinely failed publish is still caught, just later.
   // ---------------------------------------------------------------------------
-  // 30 x 10s = five minutes.
-  const registryAttempts = 30;
+  // 🔴 AND FIVE MINUTES WAS STILL TOO SHORT. On v0.18.0-rc.1 three packages appeared
+  // within three to nine minutes, and @devicechain/client was still absent from the read
+  // side after eight and a half minutes although its publish had gone through (a re-run
+  // was refused with "cannot publish over 0.18.0-rc.1", and it showed up soon after).
+  // 90 x 10s = fifteen minutes.
+  const registryAttempts = 90;
   const registryPollMs = 10000;
 
   const failures = [];
