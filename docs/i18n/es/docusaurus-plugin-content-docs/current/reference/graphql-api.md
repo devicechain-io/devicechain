@@ -92,14 +92,14 @@ en la carga de `connection_init`, como `{"Authorization": "Bearer <token>"}` o
 
 - **El WebSocket ejecuta suscripciones y nada más.** Una consulta o una mutación enviada por él se
   rechaza con el error `only subscription operations are accepted over a WebSocket; send queries and
-  mutations over HTTP`, y no se ejecuta nada. Envíe las consultas y las mutaciones como peticiones
+  mutations over HTTP`, y no se ejecuta nada. Envía las consultas y las mutaciones como peticiones
   HTTP.
 - **La conexión se cierra con el código `4401` cuando caduca su token de acceso.** Para mantener un
-  flujo, abra una conexión nueva con un token nuevo y vuelva a suscribirse. `@devicechain/client` lo
+  flujo, abre una conexión nueva con un token nuevo y vuelve a suscribirte. `@devicechain/client` lo
   hace una vez por su cuenta: cuando una conexión que había establecido se cierra con `4401`, se
-  reconecta con un token recién resuelto, vuelve a suscribirse e informa de la reconexión a su
+  reconecta con un token recién resuelto, vuelve a suscribirse e informa de la reconexión a tu
   receptor como `connected(true)`. El SDK de .NET lanza el cierre desde `SubscribeAsync` como una
-  excepción que nombra el código; vuelva a suscribirse para continuar.
+  excepción que nombra el código; vuelve a suscribirte para continuar.
 - **Un servicio sin suscripciones rechaza la actualización a WebSocket** con HTTP 400 (`this service
   offers no GraphQL subscriptions`).
 

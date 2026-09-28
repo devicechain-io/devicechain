@@ -1513,8 +1513,8 @@ up with the 1000 messages per second each tenant is allowed.
 - **Anyone with webhook notification channels:** each one needs an `auth` key before the upgrade,
   or it stops delivering.
 - **Anyone whose values set a key this release refuses**, set `resources` for a single service,
-  installed with `--compact`, restricts which registries nodes can pull from, or lets tenant
-  connectors reach private addresses: see [Before you upgrade](#v0180-before).
+  sized the JetStream volume themselves, restricts which registries nodes can pull from, or lets
+  tenant connectors reach private addresses: see [Before you upgrade](#v0180-before).
 - **Anyone who calls the GraphQL API from their own code or scripts:** read [API and
   errors](#v0180-api). The alarm `message` field is gone, several refusals now carry a code, and
   some requests the server used to accept are refused.
@@ -1558,8 +1558,9 @@ Do these in order. Each links to the item that has the details.
      ([details](#v0180-checkpoint-interval)).
    - A connection pool set at or below a new worker count. `event-management` refuses a
      `tsdbConfiguration.maxOpenConnections` of 5 or fewer, and `device-state` an
-     `rdbConfiguration.maxOpenConnections` of 5 or fewer, unless you also set their writer count
-     below it ([details](#v0180-batched-persistence)). `device-management` refuses an
+     `rdbConfiguration.maxOpenConnections` of 5 or fewer, unless you also set `persistence.writers`
+     (event-management) or `projection.writers` (device-state) below it
+     ([details](#v0180-batched-persistence)). `device-management` refuses an
      `rdbConfiguration.maxOpenConnections` of 10 or fewer unless you set `resolution.workers` below
      it ([details](#v0180-resolution-workers)).
 3. **A chart-only `telemetry` or `ingest-only` install: set an instance root key.** The chart now
@@ -1570,19 +1571,22 @@ Do these in order. Each links to the item that has the details.
    and `device-management` and `event-management` get a 2-core CPU limit of their own. A top-level
    CPU limit above 2 cores therefore lowers those two services to 2 cores, and a namespace
    `ResourceQuota` or `LimitRange` you added can refuse them ([details](#v0180-cpu-limits)).
-5. **An instance installed with `--compact`: move its JetStream volume from 2Gi to 3Gi.** The
-   compact preset's volume grows to make room for the new bucket that counts failed MQTT connects.
-   The volume of a running NATS cannot be resized in place, so `dcctl
-   bootstrap` stops at its infrastructure step, before it touches NATS, and prints the steps that
-   keep the JetStream data: delete the StatefulSet without its volumes
-   (`kubectl -n dci-<instance> delete statefulset dc-nats --cascade=orphan`), patch each of its
-   PVCs to 3Gi if your StorageClass allows expansion (otherwise delete them and start with empty
-   JetStream state), and run the command again ([details](#v0180-mqtt-connect-backoff)).
+5. **If you sized the JetStream volume yourself, check its free room.** The reservation grows by
+   128 MiB for sign-in counts, 128 MiB for MQTT connect counts, and 64 MiB for device-management's
+   new cache bucket until you delete the two it replaces (16, 16 and 4 MiB on the compact preset).
+   If there is not enough room, device-management does not start
+   ([details](#v0180-profile-cache-bucket)). An instance installed with `--compact` keeps its 2Gi
+   JetStream volume: `dcctl upgrade` does not re-apply an instance's infrastructure, so the volume
+   is not resized, and the new buckets still fit in it. Only an instance built by this release's
+   `dcctl bootstrap` gets the compact preset's new 3Gi volume. Do not delete the `dc-nats`
+   StatefulSet to resize it: no dcctl command recreates it on an existing instance
+   ([details](#v0180-mqtt-connect-backoff)).
 6. **Make sure your nodes can pull from `cgr.dev`.** The in-cluster backup store now runs
    `cgr.dev/chainguard/minio`, pinned by digest; allow it through any egress rules, or mirror it at
    that digest ([details](#v0180-backup-store-image)). If you run `dcctl` where the OpenTofu
-   provider registry cannot be reached, make it or a provider mirror reachable: every `dcctl` run
-   now asks it for the pinned provider versions ([details](#v0180-dcctl-install-rerun)).
+   provider registry cannot be reached, make it or a provider mirror reachable: every
+   `dcctl install`, `dcctl bootstrap` and `dcctl destroy` now asks it for the pinned provider
+   versions ([details](#v0180-dcctl-install-rerun)).
 7. **If a tenant connector publishes to a private address, allow it.** MQTT, Kafka, SNS and SQS
    connectors can no longer reach loopback, private, carrier-grade NAT, link-local or
    cloud-metadata addresses, including Amazon MSK brokers, Amazon MQ and SNS or SQS through an
@@ -2396,8 +2400,8 @@ nothing written, if anyone has changed the policy since, its rules included. The
 `notification policy was modified by another writer; reload and try again` and carries no
 `extensions.code`. The update's response now reads `updatedAt` back from the database, so it can
 be sent as the next precondition. Leave the argument out and the last write wins, as before. The
-console does not send it yet. See [Which mutations are partial
-updates](../reference/graphql-api.md#which-mutations-are-partial-updates).
+console has no notification-policy editor; only API callers can send it. See [Which mutations
+are partial updates](../reference/graphql-api.md#which-mutations-are-partial-updates).
 
 #### Persistence and state {#v0180-persistence}
 
@@ -2577,7 +2581,6 @@ triggers it.
 it. It reads MQTT connection events from the broker over that connection, signed in with the
 system-account credential. If the broker closed it for good, the pod carried on as live and ready
 with broker presence silently frozen: nothing was asserted or released, and nothing restarted it.
-
 
 Now the pod fails its liveness check and Kubernetes restarts it. A refused credential reaches every
 replica at once, so **every `event-sources` pod restarts**, and HTTP ingest is unavailable while
@@ -2879,8 +2882,8 @@ signs the user out on any refresh failure. Nothing needs doing at the upgrade.
 
 ##### Repeated failed MQTT password connects are slowed down {#v0180-mqtt-connect-backoff}
 
-Nothing needs doing unless a device connects with a wrong MQTT password in a loop, or the instance
-was installed with `--compact`. [Repeated failed connects are slowed
+Nothing needs doing unless a device connects with a wrong MQTT password in a loop, or you sized
+the JetStream volume yourself. [Repeated failed connects are slowed
 down](../guides/device-credentials.md#connect-backoff) has the details.
 
 - **After 10 failed connects in a row for one MQTT username, the next attempt waits 1 second,**
@@ -2898,11 +2901,10 @@ down](../guides/device-credentials.md#connect-backoff) has the details.
   warning each. An unreachable count store is logged as one warning a minute.
 - **The JetStream reservation grows by 128 MiB** (16 MiB on the compact preset) for the new bucket
   that holds the counts.
-- **The compact preset's JetStream volume grows from 2Gi to 3Gi** to make room: the store the
-  volume gives JetStream grows from 1 GiB to 2 GiB. On an instance installed with `--compact`
-  before this release, `dcctl bootstrap` stops at its infrastructure step, before it touches
-  NATS, because the volume of a running NATS cannot be resized in place. It prints the steps to
-  move the volume to 3Gi and keep the JetStream data; follow them and run it again.
+- **The compact preset's JetStream volume grows from 2Gi to 3Gi for instances built by this
+  release:** the store grows from 1 GiB to 2 GiB. An existing compact instance keeps its 2Gi
+  volume, because `dcctl upgrade` does not re-apply infrastructure, and the new bucket still fits
+  in it.
 - **A new alert, `DeviceCredentialAttemptStoreFull`** (warning), fires when that bucket fills.
   Connects keep working, but without the slow-down. A very large reconnect wave can fill it as well
   as an attack can.
@@ -3384,8 +3386,8 @@ cause is still there, the re-run fails the same way rather than reporting the cl
   the cluster changes.
 - **The infrastructure providers are now pinned to exact versions** (Kubernetes 3.2.1, Helm
   2.17.0), and dcctl moves each root's `.terraform.lock.hcl` onto them on every run. Before this, a
-  cluster kept whichever versions its first install happened to resolve. Every run, `dcctl
-  destroy` included, now asks the provider registry for these versions, so the registry, or a
+  cluster kept whichever versions its first install happened to resolve. Every run that applies
+  or destroys infrastructure, `dcctl destroy` included, now asks the provider registry for these versions, so the registry, or a
   provider mirror you have configured, must be reachable. The unused TLS provider is no longer
   declared.
 - **An earlier dcctl cannot operate a cluster this release has run against.** Its `init` refuses
@@ -3395,15 +3397,16 @@ cause is still there, the re-run fails the same way rather than reporting the cl
 
 ##### Release archives carry signed build provenance {#v0180-provenance}
 
-From `v0.18.0`, each release publishes `devicechain_<version>_provenance.sigstore.json` beside the
-`dcctl` and `dc-edge-agent` archives: a signed record of the workflow run that built them. To check
+From `v0.18.0`, each release publishes `devicechain_<version>_provenance.sigstore.json` (the
+version without its `v`, e.g. `devicechain_0.18.0_provenance.sigstore.json`) beside the `dcctl`
+and `dc-edge-agent` archives: a signed record of the workflow run that built them. To check
 an archive you downloaded:
 
 ```bash
 gh attestation verify <archive> --repo devicechain-io/devicechain
 # or offline, against the bundle from the release
 gh attestation verify <archive> --repo devicechain-io/devicechain \
-  --bundle devicechain_<version>_provenance.sigstore.json
+  --bundle devicechain_0.18.0_provenance.sigstore.json
 ```
 
 Nothing needs doing.

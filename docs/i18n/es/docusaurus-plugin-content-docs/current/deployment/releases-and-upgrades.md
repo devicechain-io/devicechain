@@ -1609,9 +1609,9 @@ se permiten a cada inquilino.
 - **Quien tenga canales de notificación webhook:** cada uno necesita una clave `auth` antes de la
   actualización, o deja de entregar.
 - **Quien fije en sus valores una clave que esta versión rechaza**, fije `resources` para un solo
-  servicio, haya instalado con `--compact`, restrinja de qué registros pueden descargar los nodos
-  o permita que los conectores de los inquilinos lleguen a direcciones privadas: vea [Antes de
-  actualizar](#v0180-before).
+  servicio, haya dimensionado por su cuenta el volumen de JetStream, restrinja de qué registros
+  pueden descargar los nodos o permita que los conectores de los inquilinos lleguen a direcciones
+  privadas: vea [Antes de actualizar](#v0180-before).
 - **Quien llame a la API de GraphQL desde su propio código o scripts:** lea [API y
   errores](#v0180-api). El campo `message` de las alarmas desaparece, varios rechazos llevan ahora
   un código, y el servidor rechaza algunas peticiones que antes aceptaba.
@@ -1656,8 +1656,9 @@ Hágalo en este orden. Cada punto enlaza con el apartado que tiene los detalles.
      ([detalles](#v0180-checkpoint-interval)).
    - Un pool de conexiones igual o menor que un nuevo número de trabajadores. `event-management`
      rechaza un `tsdbConfiguration.maxOpenConnections` de 5 o menos, y `device-state` un
-     `rdbConfiguration.maxOpenConnections` de 5 o menos, salvo que también fije su número de
-     escritores por debajo ([detalles](#v0180-batched-persistence)). `device-management` rechaza un
+     `rdbConfiguration.maxOpenConnections` de 5 o menos, salvo que también fije
+     `persistence.writers` (event-management) o `projection.writers` (device-state) por debajo
+     ([detalles](#v0180-batched-persistence)). `device-management` rechaza un
      `rdbConfiguration.maxOpenConnections` de 10 o menos salvo que fije `resolution.workers` por
      debajo ([detalles](#v0180-resolution-workers)).
 3. **Una instalación solo con el chart de los perfiles `telemetry` o `ingest-only`: fije una clave
@@ -1669,20 +1670,23 @@ Hágalo en este orden. Cada punto enlaza con el apartado que tiene los detalles.
    de CPU propio de 2 núcleos. Por tanto, un límite de CPU de nivel superior por encima de 2 núcleos
    baja esos dos servicios a 2 núcleos, y un `ResourceQuota` o un `LimitRange` de namespace que
    haya añadido puede rechazarlos ([detalles](#v0180-cpu-limits)).
-5. **Una instancia instalada con `--compact`: pase su volumen de JetStream de 2Gi a 3Gi.** El
-   volumen del preajuste compacto crece para hacer sitio al nuevo bucket que cuenta las conexiones
-   MQTT fallidas. El volumen de un NATS en ejecución no se puede redimensionar en el sitio, así que
-   `dcctl bootstrap` se detiene en su paso de infraestructura, antes de tocar NATS, e imprime los
-   pasos que conservan los datos de JetStream: borrar el StatefulSet sin sus volúmenes
-   (`kubectl -n dci-<instance> delete statefulset dc-nats --cascade=orphan`), ampliar cada uno de
-   sus PVC a 3Gi si su StorageClass lo permite (si no, borrarlos y empezar con JetStream vacío) y
-   volver a ejecutar el comando ([detalles](#v0180-mqtt-connect-backoff)).
+5. **Si dimensionó por su cuenta el volumen de JetStream, compruebe su espacio libre.** La reserva
+   crece 128 MiB por los recuentos de inicio de sesión, 128 MiB por los recuentos de conexiones
+   MQTT y 64 MiB por el nuevo bucket de caché de device-management hasta que borre los dos que
+   sustituye (16, 16 y 4 MiB en el preajuste compacto). Si no hay espacio suficiente,
+   device-management no arranca ([detalles](#v0180-profile-cache-bucket)). Una instancia instalada
+   con `--compact` conserva su volumen de JetStream de 2Gi: `dcctl upgrade` no vuelve a aplicar la
+   infraestructura de una instancia, así que el volumen no se redimensiona, y los buckets nuevos
+   siguen cabiendo en él. Solo una instancia creada por el `dcctl bootstrap` de esta versión recibe
+   el nuevo volumen de 3Gi del preajuste compacto. No borre el StatefulSet `dc-nats` para
+   redimensionarlo: ningún comando de dcctl lo vuelve a crear en una instancia existente
+   ([detalles](#v0180-mqtt-connect-backoff)).
 6. **Asegúrese de que sus nodos pueden descargar de `cgr.dev`.** El almacén de respaldos dentro del
    clúster usa ahora `cgr.dev/chainguard/minio`, fijado por digest; permítalo en sus reglas de
    salida o replíquelo con ese digest ([detalles](#v0180-backup-store-image)). Si ejecuta `dcctl`
    donde no se puede alcanzar el registro de proveedores de OpenTofu, haga que él o un espejo de
-   proveedores sea alcanzable: cada ejecución de `dcctl` le pide ahora las versiones fijadas de los
-   proveedores ([detalles](#v0180-dcctl-install-rerun)).
+   proveedores sea alcanzable: cada `dcctl install`, `dcctl bootstrap` y `dcctl destroy` le pide
+   ahora las versiones fijadas de los proveedores ([detalles](#v0180-dcctl-install-rerun)).
 7. **Si un conector de un inquilino publica en una dirección privada, permítala.** Los conectores
    MQTT, Kafka, SNS y SQS ya no pueden llegar a direcciones de loopback, privadas, de NAT de
    operador, de enlace local o de metadatos de la nube, incluidos los brokers de Amazon MSK, Amazon
@@ -1858,9 +1862,10 @@ la hora en que se procesaron. De ahí se sigue:
 
 - **Las reglas de detección con ventana pueden perder esas lecturas tras una caída.** Las lecturas
   que llegan por LwM2M o Sparkplug mantienen la frontera del motor de detección en la hora actual
-  mientras `event-sources` está caído. Cuando `event-sources` se pone al día, las lecturas que fecha
-  una caída atrás llegan tarde a las reglas de repetición, de agregado deslizante y de correlación:
-  se almacenan y se grafican, pero no cuentan en esas ventanas, y `detect_late_samples_total` sube.
+  mientras `event-sources` está caído. Cuando `event-sources` se pone al día, las lecturas a las que
+  asigna una hora de antes de la caída llegan tarde a las reglas de repetición, de agregado
+  deslizante y de correlación: se almacenan y se grafican, pero no cuentan en esas ventanas, y
+  `detect_late_samples_total` sube.
   Las lecturas que llevan su propio `occurredTime` siempre se han comportado así. Vea [qué
   significa «cuándo» para el motor de detección](./detection-engine.md#timing-what-when-means).
 - **Los eventos decodificados a ambos lados de la actualización pueden guardarse dos veces.** El id
@@ -1873,8 +1878,8 @@ la hora en que se procesaron. De ahí se sigue:
   agregados se refrescan 30 días hacia atrás, así que nada de una caída más corta queda fuera.
 - Las acciones de salida se miden según cuándo su telemetría llegó a la plataforma. Para la
   telemetría que esperó durante una caída de `event-sources`, eso es ahora cuándo llegó y no cuándo
-  se decodificó. Para un tenant cuyo único tráfico esperó en el broker, la puesta al día ya no se
-  cobra como una sola ráfaga. Un tenant que además envió telemetría por LwM2M o Sparkplug durante
+  se decodificó. Para un inquilino cuyo único tráfico esperó en el broker, la puesta al día ya no se
+  cobra como una sola ráfaga. Un inquilino que además envió telemetría por LwM2M o Sparkplug durante
   la caída ya llevó su medidor de salida al presente, así que su atraso se sigue cobrando junto,
   como antes.
 
@@ -1897,7 +1902,7 @@ No hay que hacer nada en la actualización.
   se guarda dos veces.
 - **Un mensaje de dispositivo que falló en todas sus entregas se sigue enviando a failed-decode,
   como mucho cuatro a la vez.** Uno que llega mientras se envían cuatro se deja para que el bróker
-  lo termine, y se registra como mensaje fallido (dead letter) en lugar de en
+  lo termine, y se registra como mensaje no entregado en lugar de en
   failed-decode.
 - **Los eventos de un dispositivo pueden llegar a inbound-events ligeramente desordenados, como
   ya podían:** cinco decodificadores procesan a la vez los mensajes capturados, y cada réplica
@@ -1964,7 +1969,7 @@ No hay que hacer nada en la actualización.
 - **Un evento fallido se confirma solo después de que su registro se almacene en el flujo
   failed-events.** Antes, el evento de entrada se confirmaba cuando su registro se entregaba para
   publicarlo, así que un registro que no se llegaba a publicar se perdía. Ahora el evento de entrada
-  se reentrega o, en su última entrega, se registra como mensaje fallido (dead letter). El registro
+  se reentrega o, en su última entrega, se registra como mensaje no entregado. El registro
   lleva el mismo tipo de identificador de detección de duplicados, así que una reentrega no registra
   el fallo dos veces.
 - **Cuando publicar en resolved-events sigue fallando, `device-management` va más despacio** en
@@ -2024,7 +2029,7 @@ otra. No hay nada que hacer salvo que dimensione usted mismo el volumen de JetSt
 buckets a mano.
 
 - **La actualización añade un bucket de caché a la reserva de JetStream** (64 MiB por defecto,
-  4 MiB en el preset compacto). device-management crea el bucket nuevo al arrancar, y los dos que
+  4 MiB en el preajuste compacto). device-management crea el bucket nuevo al arrancar, y los dos que
   reemplaza conservan su reserva hasta que los borre (vea el punto siguiente). Si el volumen de
   JetStream tiene menos espacio libre que un bucket de caché, la creación del bucket nuevo falla
   por falta de almacenamiento y device-management no arranca. Una vez borrados los dos buckets
@@ -2305,7 +2310,7 @@ Lo que verá:
   despliegue. Un perfil cuya versión activa se eligió antes de la actualización se trata como
   activo desde que se publicó esa versión o, si se revirtió a ella, desde justo después de publicarse
   la versión más reciente.
-- **Tres avisos nuevos**: `DeviceFactPublishFailing` (los avisos no se están enviando),
+- **Tres avisos nuevos**: `DeviceFactPublishFailing` (las notificaciones no se están enviando),
   `DetectFactsRepaired` (el motor corrigió algo de lo que no se le había avisado) y
   `DetectFactReconcileFailing` (la propia comparación está fallando). `DetectFactsRepaired` cuenta
   solo una pérdida real —un cambio cuyo aviso simplemente sigue en camino se deja para la siguiente
@@ -2324,7 +2329,7 @@ Lo que verá:
   configurado, la comparación queda desactivada y el servicio registra un aviso al arrancar, como
   ocurre con la evaluación de geocercas.
 
-##### El lienzo de automatización autora reglas de Conectividad y no guarda sobre una regla que no puede mostrar por completo {#v0180-canvas}
+##### El lienzo de automatización permite crear reglas de Conectividad y no guarda sobre una regla que no puede mostrar por completo {#v0180-canvas}
 
 No hace falta hacer nada en la actualización.
 
@@ -2349,7 +2354,7 @@ No hace falta hacer nada en la actualización.
 
 #### Comandos {#v0180-commands}
 
-##### Las respuestas a comandos que no se pudieron registrar vuelven a guardarse {#v0180-command-responses}
+##### Las respuestas a comandos que no se pudieron registrar vuelven a registrarse como mensajes no entregados {#v0180-command-responses}
 
 En `v0.16.0` y `v0.17.0`, command-delivery no podía escribir ni un solo mensaje no entregado. Cada
 uno que intentaba se rechazaba antes de escribirse, se contaba como perdido, y la respuesta del
@@ -2371,7 +2376,7 @@ tras una caída o una conmutación por error, y antes de esta versión podía ac
 dispositivo al que una entrega posterior ya había hecho actuar. Si no se puede contactar con
 command-delivery, los comandos LwM2M esperan y se reintentan. Nunca se envían sin confirmar.
 
-Lo que cambia y puedes ver:
+Lo que cambia y puede ver:
 
 - **Cancelar un lote ahora también detiene los comandos LwM2M que se publicaron pero aún no habían
   llegado a su dispositivo.** Registran `CANCELLED`. El resultado de la cancelación todavía los
@@ -2400,7 +2405,7 @@ versión detenían todo el adaptador: los comandos de todos los demás dispositi
 detrás del lento. Los comandos para un dispositivo sin conexión se apartan de la misma manera, sin
 ocupar el espacio que necesitan los dispositivos conectados.
 
-Lo que cambia y puedes ver:
+Lo que cambia y puede ver:
 
 - **Un dispositivo conectado recibe el resto de una acumulación larga sin reconectarse.** Sus
   comandos pendientes se entregaban de 32 en 32 por despertar, y el resto esperaba a que el
@@ -2416,10 +2421,11 @@ Lo que cambia y puedes ver:
   petición agotó su tiempo de espera. En ambos casos el comando queda enviado pero sin ejecutar
   hasta que la plataforma lo detecta como varado, y entonces se entrega en la siguiente conexión
   del dispositivo, después de los comandos posteriores, o caduca.
-- **Tras un relevo, los comandos enviados mientras los dispositivos se reconectan se entregan un
+- **Tras una conmutación por error, los comandos enviados mientras los dispositivos se reconectan
+  se entregan un
   momento después.** Los comandos pendientes de cada dispositivo se entregan antes que cualquiera
   nuevo, así que durante ese breve intervalo los nuevos también se apartan. Es de esperar un breve
-  aumento del tráfico hacia command-delivery tras un relevo.
+  aumento del tráfico hacia command-delivery tras una conmutación por error.
 - **Un comando apartado de esta forma muestra el estado `PARKED`,** aunque su dispositivo esté
   conectado. Antes de esta versión `PARKED` solo significaba que el dispositivo no tenía conexión
   activa. Vea [Comandos](../concepts/commands.md).
@@ -2551,7 +2557,8 @@ obsoleta se rechaza, sin escribir nada, si alguien ha cambiado la política desd
 reglas incluidas. El rechazo dice `notification policy was modified by another writer; reload and
 try again` y no lleva `extensions.code`. La respuesta de la actualización vuelve a leer ahora
 `updatedAt` de la base de datos, para que pueda enviarse como la siguiente precondición. Si omite el
-argumento, gana la última escritura, como antes. La consola todavía no lo envía. Vea [Qué
+argumento, gana la última escritura, como antes. La consola no tiene editor de políticas de
+notificación; solo quien llame a la API puede enviarlo. Vea [Qué
 mutaciones son actualizaciones parciales](../reference/graphql-api.md#which-mutations-are-partial-updates).
 
 #### Persistencia y estado {#v0180-persistence}
@@ -2714,7 +2721,8 @@ entregar. Vea [Rechazo de escrituras en la base de datos](./tenant-deletion.md#d
 
 El comportamiento no cambia. Con `--ha`, [perder un nodo](./bootstrap.md#ha-node-loss) describe
 ahora, en orden, lo que ve un operador: con qué rapidez se recuperan el broker, los servicios y
-las bases de datos, que el procesamiento de eventos puede detenerse durante un minuto, por qué
+las bases de datos, que el procesamiento de eventos puede detenerse durante aproximadamente un
+minuto, por qué
 los pods desalojados del nodo perdido se quedan en `Terminating` y no deben
 eliminarse a la fuerza mientras el nodo sea inaccesible, y que la **vuelta** de un nodo es en sí
 misma una interrupción breve. Un servidor del broker que quedó aislado vuelve tras haber
@@ -2750,7 +2758,6 @@ mismo con ella. Por esa conexión lee del broker los eventos de conexión MQTT, 
 credencial de la cuenta de sistema. Si el broker la cerraba definitivamente, el pod seguía activo y
 listo con la presencia del broker congelada en silencio: no se afirmaba ni se liberaba nada, y nada
 lo reiniciaba.
-
 
 Ahora el pod falla su comprobación de actividad (liveness) y Kubernetes lo reinicia. Una credencial
 rechazada llega a todas las réplicas a la vez, así que **se reinician todos los pods de
@@ -2796,8 +2803,10 @@ nuevas:
   muestra anterior; un consumidor que lee pero va atrasado vale 0 aquí).
 
 Dos alertas críticas nuevas las leen: `JetStreamDurableLostUnread` y
-`JetStreamDurableStalledBehindStream`. Eliminar un tenant puede disparar la primera: la eliminación
-borra los mensajes de ese tenant, incluidos los que un consumidor aún no había alcanzado. Consulte
+`JetStreamDurableStalledBehindStream`. Eliminar un inquilino puede disparar la primera: la
+eliminación
+borra los mensajes de ese inquilino, incluidos los que un consumidor aún no había alcanzado.
+Consulte
 [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss) para saber qué significa cada
 alerta y qué hacer.
 
@@ -2845,14 +2854,15 @@ Qué cambia para usted:
   servicio de conectores. Es lo que hace que un abandono registrado a la vez por un servicio y por el
   aviso del broker quede una sola vez.
 - **`DeadLetterWriteLost` tiene una tercera causa:** un mensaje de esa cola en el que el almacén de
-  mensajes no entregados o la reconciliación de comandos agotó sus intentos, y que ahora puede caducar en
+  mensajes no entregados o la reescritura de comandos agotó sus intentos, y que ahora puede caducar
+  en
   el stream sin haberse almacenado (su último intento pudo almacenarlo y perder solo el acuse de
   recibo).
 
 Durante la actualización escalonada, un abandono puede registrarse dos veces: una por un pod de la
 versión anterior y otra a partir del aviso del broker. Es el mismo fallo; no se perdió nada.
 
-##### Los contadores de pérdidas son una métrica por servicio {#v0180-dead-letter-lost}
+##### Los contadores de pérdidas de mensajes no entregados son una métrica por servicio {#v0180-dead-letter-lost}
 
 Un servicio que abandona un mensaje y luego no puede registrarlo como mensaje no entregado cuenta
 ahora esa pérdida en **`dead_letter_lost_total`** bajo su propio subsistema, con el mismo nombre en
@@ -2883,8 +2893,8 @@ cubre todos los servicios. Use `[a-z0-9]+` y no `.+`: mientras avanza la actuali
 que aún no se han reemplazado siguen exportando los dos nombres antiguos de device-management, y
 `.+` coincide con ambos.
 
-El contador cuenta también una carta que el servicio **rechazó** por estar mal formada, lo que es
-un defecto de ese servicio y no un problema del bróker. La línea de error `LOST` del pod indica cuál
+El contador cuenta también un mensaje no entregado que el servicio **rechazó** por estar mal
+formado, lo que es un defecto de ese servicio y no un problema del bróker. La línea de error `LOST` del pod indica cuál
 de los dos casos ocurrió.
 
 #### Seguridad e inicio de sesión {#v0180-security}
@@ -3043,8 +3053,9 @@ límites.
   no «credenciales no válidas». Un inicio de sesión que el servidor no puede contar recibe
   `UNAVAILABLE`. Si su código inicia sesión, trate ambos como errores propios y no como una
   contraseña incorrecta. Los secretos de cliente OAuth no se ralentizan.
-- **La reserva de JetStream crece en 128 MiB** (16 MiB en el preset compacto), por el bucket que
-  guarda las cuentas de inicio de sesión. En el preset compacto los buckets de caché bajan de 8 a 4
+- **La reserva de JetStream crece en 128 MiB** (16 MiB en el preajuste compacto), por el bucket que
+  guarda los recuentos de inicio de sesión. En el preajuste compacto los buckets de caché bajan de
+  8 a 4
   MiB cada uno para hacer sitio. Si dimensionó usted mismo el volumen de JetStream cerca de la reserva,
   compruebe que tiene espacio.
 - **Una alerta nueva, `CredentialAttemptStoreFull`,** se dispara si ese bucket se llena. El inicio de
@@ -3056,7 +3067,7 @@ inicio de sesión](../reference/graphql-api.md#sign-in-backoff) tienen los detal
 
 ##### Una renovación de sesión sobrevive a una caída breve {#v0180-session-refresh}
 
-Renovar una sesión gastaba antes el token de renovación antes de volver a
+Renovar una sesión gastaba antes el token de actualización antes de volver a
 comprobar la sesión. Un error de la base de datos o del broker durante esa comprobación terminaba
 entonces la sesión: la renovación fallaba como «invalid or expired token» y el token ya no se
 podía usar. Ahora la comprobación va primero. Un error del almacén deja el token válido y devuelve
@@ -3065,7 +3076,8 @@ endpoint de tokens de OAuth devuelve `server_error` sin el texto del error subya
 rechazada porque la sesión terminó, la membresía se eliminó o se desactivó, o el inquilino niega el
 acceso sigue gastando el token.
 
-Solo se beneficia un cliente que reintenta con el mismo token de renovación. Un cliente OAuth, como
+Solo se beneficia un cliente que reintenta con el mismo token de actualización. Un cliente OAuth,
+como
 un agente de IA que se conecta por MCP, recibe ahora `server_error` en lugar de `invalid_grant`
 durante esa caída, así que puede reintentar en lugar de pedir al usuario que lo autorice de nuevo. La
 biblioteca cliente de Go que usan el simulador, las pruebas de carga y `dcctl` ya no pierde su token
@@ -3076,7 +3088,7 @@ renovación. No hay que hacer nada en la actualización.
 ##### Las conexiones MQTT fallidas repetidas con contraseña se ralentizan {#v0180-mqtt-connect-backoff}
 
 No hay que hacer nada salvo que un dispositivo se conecte en bucle con una contraseña MQTT
-incorrecta, o que la instancia se haya instalado con `--compact`. [Las conexiones fallidas
+incorrecta, o que haya dimensionado por su cuenta el volumen de JetStream. [Las conexiones fallidas
 repetidas se ralentizan](../guides/device-credentials.md#connect-backoff) tiene los detalles.
 
 - **Tras 10 conexiones fallidas seguidas para un mismo usuario MQTT, el siguiente intento espera 1
@@ -3088,20 +3100,18 @@ repetidas se ralentizan](../guides/device-credentials.md#connect-backoff) tiene 
   reconecte** mientras siga enviando contraseñas incorrectas para él. Los dispositivos que ya están
   conectados no se ven afectados hasta que se reconectan.
 - **Las conexiones con contraseña necesitan ahora JetStream.** Si no se puede acceder al almacén
-  que guarda las cuentas, las conexiones con contraseña se rechazan, también brevemente mientras
+  que guarda los recuentos, las conexiones con contraseña se rechazan, también brevemente mientras
   cambia el líder de JetStream de ese almacén, por ejemplo mientras se reinicia un nodo de NATS.
 - Durante una caída de la base de datos, un dispositivo cuyas conexiones con contraseña siguen
   fallando se ralentiza del mismo modo, así que tras sus primeros 10 intentos sus conexiones
-  rechazadas se registran en depuración en lugar de como un aviso cada una. Un almacén de cuentas
+  rechazadas se registran en depuración en lugar de como un aviso cada una. Un almacén de recuentos
   inaccesible se registra como un aviso por minuto.
-- **La reserva de JetStream crece 128 MiB** (16 MiB en el preset compacto) para el bucket nuevo
-  que guarda las cuentas.
-- **El volumen de JetStream del preset compacto crece de 2Gi a 3Gi** para hacerle sitio: el
-  almacén que el volumen da a JetStream crece de 1 GiB a 2 GiB. En una instancia instalada con
-  `--compact` antes de esta versión, `dcctl bootstrap` se detiene en su paso de infraestructura,
-  antes de tocar NATS, porque el volumen de un NATS en ejecución no se puede redimensionar en
-  caliente. Muestra los pasos para mover el volumen a 3Gi conservando los datos de JetStream;
-  sígalos y vuelva a ejecutarlo.
+- **La reserva de JetStream crece 128 MiB** (16 MiB en el preajuste compacto) para el bucket nuevo
+  que guarda los recuentos.
+- **El volumen de JetStream del preajuste compacto crece de 2Gi a 3Gi para las instancias creadas
+  por esta versión:** el almacén crece de 1 GiB a 2 GiB. Una instancia compacta existente conserva
+  su volumen de 2Gi, porque `dcctl upgrade` no vuelve a aplicar la infraestructura, y el bucket
+  nuevo sigue cabiendo en él.
 - **Una alerta nueva, `DeviceCredentialAttemptStoreFull`** (aviso), se dispara cuando ese bucket
   se llena. Las conexiones siguen funcionando, pero sin la ralentización. Una ola de reconexiones
   muy grande puede llenarlo igual que un ataque.
@@ -3227,7 +3237,7 @@ Mientras se despliega la actualización:
   La alarma se reintenta aproximadamente una vez por minuto y normalmente la guarda un pod ya
   actualizado. Si los pods de la versión anterior siguen en marcha más de unos cinco minutos, por
   ejemplo porque un pod nuevo nunca llega a estar listo, la alarma se abandona y se registra como
-  carta muerta, y solo se genera cuando su condición desaparece y vuelve a darse.
+  mensaje no entregado, y solo se genera cuando su condición desaparece y vuelve a darse.
   Mantenga corto el despliegue y, después, revise
   `dcctl dead-letters list --kind detection-action --source device-management` para ver las
   alarmas que no se generaron.
@@ -3297,7 +3307,7 @@ envían](#v0180-credential-values).
 
 - **Una alerta con un `level` mayor que 2147483647 se rechaza ahora al llegar.** El mensaje del
   dispositivo se rechaza como datos erróneos, igual que una alerta sin `type`: HTTP responde `400`
-  y una publicación MQTT va a la cola de mensajes fallidos. No hay nada que cambiar salvo que un
+  y una publicación MQTT se registra como mensaje no entregado. No hay nada que cambiar salvo que un
   dispositivo envíe esos niveles.
 - **Una alerta ya guardada con un nivel así convierte en error el listado de alertas que la
   incluye.** `level` no puede ser nulo, así que toda la respuesta de `alertEvents` es nula con el
@@ -3376,7 +3386,7 @@ de nombre. Cada una enlaza con el apartado que la explica.
 | `ConnectorDispatchRateLimited` | warning | El servicio de conectores descarta envíos que el motor de detección admitió | [detalles](#v0180-new-warnings) |
 | `CredentialAttemptStoreFull` | critical | El bucket que cuenta los inicios de sesión fallidos está lleno | [detalles](#v0180-sign-in-limits) |
 | `DeviceCredentialAttemptStoreFull` | warning | El bucket que cuenta las conexiones MQTT fallidas con contraseña está lleno | [detalles](#v0180-mqtt-connect-backoff) |
-| `DeviceFactPublishFailing` | warning | Fallan los avisos de cambios de reglas, dispositivos y atributos | [detalles](#v0180-fact-repair) |
+| `DeviceFactPublishFailing` | warning | Fallan las notificaciones de cambios de reglas, dispositivos y atributos | [detalles](#v0180-fact-repair) |
 | `DetectFactsRepaired` | warning | El motor de detección corrigió un cambio del que no se le había avisado | [detalles](#v0180-fact-repair) |
 | `DetectFactReconcileFailing` | warning | Falla la comparación del motor de detección con device-management | [detalles](#v0180-fact-repair) |
 | `TenantPurgeStalled` | warning | Una eliminación de inquilino no avanza | [detalles](#v0180-tenant-purge-alerts) |
@@ -3581,12 +3591,13 @@ datos que escribió el servidor anterior.
 
 - **Antes de actualizar, asegúrese de que sus nodos pueden descargar de `cgr.dev`**: permítalo en
   sus reglas de salida, o replique `cgr.dev/chainguard/minio` con el digest que fija esta versión.
-  Si la descarga falla, el almacén sigue caído y las bases de datos conservan localmente su log de
-  escritura anticipada hasta que vuelva.
+  Si la descarga falla, el almacén sigue caído y las bases de datos conservan localmente su registro
+  de escritura anticipada hasta que vuelva.
 - **Una instalación nueva vuelve a funcionar** con el destino de respaldo predeterminado.
 - **En un clúster existente, `dcctl install` reinicia una vez el pod del almacén** con la nueva
-  imagen. Los respaldos y el log de escritura anticipada guardados se conservan. Mientras el pod se
-  reinicia, el archivado se detiene y las bases de datos retienen el log localmente, durante el
+  imagen. Los respaldos y el registro de escritura anticipada guardados se conservan. Mientras el
+  pod se
+  reinicia, el archivado se detiene y las bases de datos retienen el registro localmente, durante el
   tiempo que la nueva imagen tarde en descargarse y arrancar.
 - **Esto no se deshace instalando una versión anterior.** El `dcctl install` de una versión
   anterior detendría el almacén y después no podría descargar la imagen que indica, y el archivado
@@ -3621,7 +3632,8 @@ dar el clúster por instalado.
 - **Los proveedores de infraestructura quedan fijados a versiones exactas** (Kubernetes 3.2.1,
   Helm 2.17.0), y dcctl lleva el `.terraform.lock.hcl` de cada raíz a ellas en cada ejecución.
   Antes, cada clúster conservaba las versiones que resolvió su primera instalación. Cada
-  ejecución, incluida `dcctl destroy`, consulta ahora esas versiones al registro de proveedores,
+  ejecución que aplica o destruye infraestructura, incluida `dcctl destroy`, consulta ahora esas
+  versiones al registro de proveedores,
   así que el registro, o un espejo de proveedores que haya configurado, debe ser accesible. El
   proveedor TLS, que no se usaba, ya no se declara.
 - **Un dcctl anterior no puede operar un clúster sobre el que se ha ejecutado esta versión.** Su
@@ -3633,7 +3645,8 @@ dar el clúster por instalado.
 
 ##### Los archivos de la versión llevan una procedencia de compilación firmada {#v0180-provenance}
 
-Desde `v0.18.0`, cada versión publica `devicechain_<version>_provenance.sigstore.json` junto a los
+Desde `v0.18.0`, cada versión publica `devicechain_<version>_provenance.sigstore.json` (la versión
+sin su `v`, p. ej. `devicechain_0.18.0_provenance.sigstore.json`) junto a los
 archivos de `dcctl` y `dc-edge-agent`: un registro firmado de la ejecución del flujo de trabajo que
 los compiló. Para comprobar un archivo que ha descargado:
 
@@ -3641,7 +3654,7 @@ los compiló. Para comprobar un archivo que ha descargado:
 gh attestation verify <archive> --repo devicechain-io/devicechain
 # o sin conexión, contra el paquete de la versión
 gh attestation verify <archive> --repo devicechain-io/devicechain \
-  --bundle devicechain_<version>_provenance.sigstore.json
+  --bundle devicechain_0.18.0_provenance.sigstore.json
 ```
 
 No hay que hacer nada.

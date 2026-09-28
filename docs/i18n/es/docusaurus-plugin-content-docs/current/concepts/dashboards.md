@@ -92,7 +92,7 @@ Cómo llegan los valores en vivo depende del canal:
 
 Los widgets de alarma y de control mantienen cada uno su propio flujo y temporizador. Solo el canal de telemetría está multiplexado.
 
-La conexión de una suscripción se cierra cuando caduca el token de acceso con el que se abrió (vea
+La conexión de una suscripción se cierra cuando caduca el token de acceso con el que se abrió (consulta
 [Suscripciones por WebSocket](../reference/graphql-api.md#subscriptions-over-websocket)). El visor
 independiente `/dash` no renueva su token, así que en ese momento sus widgets en vivo se detienen
 hasta que el usuario vuelve a iniciar sesión.
