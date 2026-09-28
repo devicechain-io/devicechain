@@ -1050,6 +1050,14 @@ jobs:
       - name: Every action is pinned to a commit SHA
         run: hack/check-action-pins.sh
 
+      # The loadtest gate's L3 negative control and positive test must drive
+      # different tenants: the positive run's clean-tenant precheck would otherwise
+      # count the negative run's tail. The self-test proves the check can fail.
+      - name: loadtest L3 tenant guard self-test
+        run: hack/check-loadtest-l3-tenants.sh --self-test
+      - name: The L3 contention runs use separate tenants
+        run: hack/check-loadtest-l3-tenants.sh
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.work

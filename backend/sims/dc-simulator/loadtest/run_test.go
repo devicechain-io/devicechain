@@ -143,3 +143,40 @@ func TestDriveAbortReturnsErrorNotVerdict(t *testing.T) {
 		t.Fatal("expected an error on a cancelled drive")
 	}
 }
+
+type fixedCounter struct {
+	n   int64
+	got Window
+}
+
+func (f *fixedCounter) Count(_ context.Context, w Window) (int64, error) {
+	f.got = w
+	return f.n, nil
+}
+
+// The precheck refuses any tenant with a recent event, and looks back a full
+// cleanTenantLookback. A later change that shrinks the window, or lets a small
+// count through, would let a run start on a tenant another run is still using.
+func TestRequireCleanTenantRefusesAnyRecentEvent(t *testing.T) {
+	for _, n := range []int64{1, 200, 6500} {
+		c := &fixedCounter{n: n}
+		if err := requireCleanTenant(context.Background(), c); err == nil {
+			t.Fatalf("a tenant with %d recent events was accepted", n)
+		}
+	}
+	c := &fixedCounter{n: 0}
+	before := time.Now()
+	if err := requireCleanTenant(context.Background(), c); err != nil {
+		t.Fatalf("a clean tenant was refused: %v", err)
+	}
+	after := time.Now()
+	if cleanTenantLookback != 30*time.Second {
+		t.Fatalf("cleanTenantLookback = %s, want 30s", cleanTenantLookback)
+	}
+	if c.got.Start.Before(before.Add(-cleanTenantLookback)) || c.got.Start.After(after.Add(-cleanTenantLookback)) {
+		t.Fatalf("window starts at %s, want now-%s", c.got.Start, cleanTenantLookback)
+	}
+	if c.got.End.Before(before.Add(5*time.Second)) || c.got.End.After(after.Add(5*time.Second)) {
+		t.Fatalf("window ends at %s, want now+5s", c.got.End)
+	}
+}
