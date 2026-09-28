@@ -948,6 +948,13 @@ jobs:
           # best-effort 1-19 band.
           "$RUNNER_TEMP/dcctl" sim create l3gold -s localhost --shed-priority 90
           "$RUNNER_TEMP/dcctl" sim create l3shed -s localhost --shed-priority 10
+          # The positive run gets its OWN pair, provisioned identically. Its
+          # clean-tenant precheck refuses a tenant with events from the last 30s, and
+          # the negative control's tail is persisted fast enough to land inside that
+          # window. Reusing one pair made the gate depend on persistence being slow.
+          # hack/check-loadtest-l3-tenants.sh fails if the two runs share a tenant.
+          "$RUNNER_TEMP/dcctl" sim create l3posgold -s localhost --shed-priority 90
+          "$RUNNER_TEMP/dcctl" sim create l3posshed -s localhost --shed-priority 10
 
       - name: L3 negative control -- floor 0, neither may shed (the gate)
         run: |
@@ -1091,8 +1098,8 @@ jobs:
           # (0.25 x 1000 = 250/s, so it sheds) yet below gold's untouched base (so gold
           # never hits its own ADR-023 limit). Non-zero exit IS the gate.
           "$RUNNER_TEMP/bin/dc-loadtest-contention" \
-            --gold-handshake "$HOME/.devicechain/sims/l3gold.json" \
-            --shed-handshake "$HOME/.devicechain/sims/l3shed.json" \
+            --gold-handshake "$HOME/.devicechain/sims/l3posgold.json" \
+            --shed-handshake "$HOME/.devicechain/sims/l3posshed.json" \
             --expect-floor 1 \
             --report "$RUNNER_TEMP/l3-pos-report.json"
 
