@@ -74,8 +74,12 @@ func RowsPerInsert(db *gorm.DB, rows any) (int, error) {
 
 // bindsExpression reports whether a column of type t hands gorm an expression to bind
 // rather than one value.
+//
+// Only t itself is asked, not *t: gorm reads a column's value by value and asks THAT whether
+// it is a gorm.Valuer, so a type whose GormValue has a pointer receiver binds an expression
+// only in a column declared as the pointer — which is t here, and is caught.
 func bindsExpression(t reflect.Type) bool {
-	return t.Implements(gormValuerType) || reflect.PointerTo(t).Implements(gormValuerType)
+	return t.Implements(gormValuerType)
 }
 
 // onConflictVars is how many parameters db's ON CONFLICT clause binds, counted by building it
@@ -130,3 +134,19 @@ func IsStatementTooLarge(err error) bool {
 }
 
 const statementTooLargeText = "extended protocol limited to"
+
+// IsEncodeRefusal reports whether err is the driver refusing to encode an argument for the
+// column type the server described — a uint64 above the int64 range bound to a bigint, say.
+// pgx refuses it before anything is sent, so it is no *pgconn.PgError and it aborts nothing,
+// and the same value is refused every time, so a caller deciding whether to retry must treat
+// it as permanent.
+//
+// Like IsStatementTooLarge, the message is the only signal: pgx wraps every argument it cannot
+// encode in one fmt.Errorf, prefixed with the argument's position.
+// statement_limit_integration_test.go provokes it on the real driver, so a pgx upgrade that
+// rewords the prefix fails there.
+func IsEncodeRefusal(err error) bool {
+	return err != nil && strings.Contains(err.Error(), encodeRefusalText)
+}
+
+const encodeRefusalText = "failed to encode args["

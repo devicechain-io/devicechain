@@ -3783,7 +3783,9 @@ failure rather than as a problem with the event. Such an event could come from a
 message with thousands of metrics, or from a JSON transport whose `maxReadingsPerMessage` had
 been raised above its default of 1000. The event store now writes a large event in as many
 statements as it needs, inside the same transaction, so it is stored whole or not at all like
-any other, and a redelivery of it adds nothing. Nothing needs doing.
+any other, and a redelivery of it adds nothing. The same retry-then-downstream-failure path
+was taken by a state-change event whose session id is too large for the database's signed
+64-bit column; that event is now recorded as invalid on its first delivery. Nothing needs doing.
 
 ### The one-time durable-ingest cutover
 

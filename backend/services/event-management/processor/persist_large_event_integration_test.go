@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -279,10 +280,44 @@ func TestALargeEventRefusedInItsLastStatementIsStoredNowhere(t *testing.T) {
 	assert.Len(t, r.acks.snapshot(), 3)
 }
 
+// A value the driver cannot encode for its column is refused before anything is sent, so it
+// is no database error, and the same value is refused on every delivery: a state-change
+// event's uint64 session id above the int64 range, stored in a bigint. It is reported as
+// invalid on the first delivery, not retried until it is filed as a downstream failure, and
+// its batch-mates are stored.
+func TestAnUnencodableValueIsInvalidOnTheFirstDelivery(t *testing.T) {
+	r := newPgBatchRig(t, "emlargetest", 8)
+	tenant := fmt.Sprintf("le%d", time.Now().UnixNano())
+	base := time.Now().UTC().Truncate(time.Hour)
+	bad := largeEvent(base, func(ev *dmodel.ResolvedEvent) {
+		ev.EventType = esmodel.StateChange
+		ev.Payload = &dmodel.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "lifetime-lapse",
+			SessionId: math.MaxInt64 + 1}
+	})
+
+	r.run([]messaging.Message{
+		consumed(t, r.acks, 0, tenant, 1, bad),
+		consumed(t, r.acks, 1, tenant, 1, batchEvent(1, true, base)),
+		consumed(t, r.acks, 2, tenant, 1, batchEvent(2, true, base)),
+	})
+
+	assert.Zero(t, r.count(t, tenant, "big"), "the refused message's parent event was committed")
+	assert.EqualValues(t, 2, r.count(t, tenant, ""), "its batch-mates must be stored")
+	if assert.Len(t, r.failures, 1) {
+		assert.Equal(t, "big", r.failures[0].device)
+		assert.Equal(t, uint(dmproto.FailureReason_Invalid), r.failures[0].reason)
+	}
+	assert.Len(t, r.acks.snapshot(), 3)
+}
+
 // The erasure fence refuses a purged tenant's split insert when its FIRST statement is
-// already one of the split ones, and the refusal rolls back to the split's savepoint, not
-// the transaction: the transaction goes on working. Lifting the fence is the negative
-// control, and stores every row.
+// already one of the split ones, stores none of its rows, and leaves the caller's transaction
+// usable. Lifting the fence is the negative control, and stores every row.
+//
+// That the transaction goes on working says nothing about the split's savepoint: the fence
+// refuses on the client side, before any SQL is sent, so there is nothing to abort and this
+// passes with or without one. The savepoint is pinned where a refusal can tell — by the
+// server, in a split's second statement — in core/rdb's insert_chunk_integration_test.go.
 //
 // What this does not show is a fresh fence read per statement: the fence's answer is
 // remembered for the transaction, so later statements are admitted on it. The per-statement
@@ -320,7 +355,7 @@ func TestCreateChunkedRefusesAPurgedTenant(t *testing.T) {
 				require.ErrorIs(t, err, rdb.ErrTenantPurged)
 				var one int
 				require.NoError(t, tx.Raw("SELECT 1").Scan(&one).Error,
-					"the refusal aborted the transaction instead of rolling back to the savepoint")
+					"the fence's refusal left the transaction unusable")
 				assert.Equal(t, 1, one)
 				return nil
 			}))

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,11 +22,12 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// insertStatement is one INSERT the write path built: its table, how many rows it carried
-// and how many parameters it bound.
+// insertStatement is one INSERT the write path built: its table, how many rows it carried,
+// how many parameters it bound, and whether it carried an ON CONFLICT arbiter.
 type insertStatement struct {
 	table      string
 	rows, vars int
+	arbiter    bool
 }
 
 // newDryRunApi is an Api whose inserts are BUILT, through the production callback chain and
@@ -45,7 +47,8 @@ func newDryRunApi(t *testing.T) (*Api, func() []insertStatement) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		seen = append(seen, insertStatement{table: tx.Statement.Table, rows: rows, vars: len(tx.Statement.Vars)})
+		seen = append(seen, insertStatement{table: tx.Statement.Table, rows: rows, vars: len(tx.Statement.Vars),
+			arbiter: strings.Contains(tx.Statement.SQL.String(), "ON CONFLICT")})
 	}))
 	return NewApi(&rdb.RdbManager{Database: db}), func() []insertStatement {
 		mu.Lock()
@@ -66,7 +69,8 @@ func rowsPerInsert(t *testing.T, api *Api, ctx context.Context, model any) int {
 // either. What is measured is what gorm actually built — the site's own ON CONFLICT
 // clause, the tenant stamp, every bound column — not the column count the bound was
 // derived from; and the first statement carrying a full chunk shows the bound is not
-// looser than it needs to be.
+// looser than it needs to be. Every statement, the second of a split included, must carry
+// its site's arbiter: without it a redelivery writes the rows twice.
 func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
@@ -165,6 +169,8 @@ func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 			for _, s := range inserts() {
 				assert.LessOrEqualf(t, s.vars, rdb.MaxBindParameters,
 					"an INSERT into %s of %d rows binds %d parameters", s.table, s.rows, s.vars)
+				assert.Truef(t, s.arbiter, "an INSERT into %s of %d rows carries no ON CONFLICT arbiter",
+					s.table, s.rows)
 				switch s.table {
 				case tc.table:
 					target = append(target, s)

@@ -4061,7 +4061,10 @@ así podía venir de un mensaje Sparkplug con miles de métricas, o de un transp
 `maxReadingsPerMessage` se hubiera subido por encima de su valor predeterminado de 1000. Ahora el
 almacén de eventos escribe un evento grande en tantas sentencias como necesite, dentro de la misma
 transacción, así que se almacena entero o no se almacena, como cualquier otro, y una reentrega
-suya no añade nada. No hay que hacer nada.
+suya no añade nada. El mismo camino de reintentos y fallo posterior lo seguía un evento de cambio
+de estado cuyo identificador de sesión es demasiado grande para la columna de 64 bits con signo de
+la base de datos; ese evento se registra ahora como inválido en su primera entrega. No hay que
+hacer nada.
 
 ### La transición única a la ingesta duradera
 

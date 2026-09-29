@@ -118,13 +118,15 @@ var ErrDeterministic = errors.New("deterministic persistence failure")
 // deterministic discards data rather than merely delaying it. When in doubt this
 // stays on the retry path, because that error is recoverable and the other is not.
 //
-// The one refusal it reclassifies that is not a PgError is the driver's own for a
-// statement binding more parameters than the protocol allows (rdb.IsStatementTooLarge),
-// which pgx raises before anything is sent. The driver's other client-side refusals —
-// an argument it cannot encode, or a count that does not match the statement — cannot
-// arise from these inserts: every bound column is a string, bytes, an integer, a time,
-// or a pointer or sql.Null wrapper of one, and a value the column cannot hold (an
-// infinity into a numeric, say) is refused by the server as class 22, covered above.
+// Two refusals it reclassifies are not PgErrors, because pgx raises them before anything
+// is sent: a statement binding more parameters than the protocol allows
+// (rdb.IsStatementTooLarge), and an argument it cannot encode for its column
+// (rdb.IsEncodeRefusal). The second is reachable from this path: a state-change event's
+// SessionId is a uint64 stored in a bigint, and one above the int64 range is refused by the
+// driver, not the server. Both depend only on the message, so both recur on every delivery.
+// The driver's remaining client-side refusal — an argument count that does not match the
+// statement — is a fault in the statement gorm built, not in the data, and is left on the
+// retry path with every other unrecognized error.
 func classifyPersistFailure(err error) error {
 	if err == nil || errors.Is(err, ErrDeterministic) {
 		return err
@@ -143,6 +145,12 @@ func classifyPersistFailure(err error) error {
 	// retried until it is filed as a downstream failure.
 	if rdb.IsStatementTooLarge(err) {
 		return fmt.Errorf("%w: statement exceeds the database driver's parameter limit: %w", ErrDeterministic, err)
+	}
+	// A value the driver cannot encode for its column — a uint64 above a bigint's range — is
+	// refused before it is sent, so it is no PgError, and the same value is refused on every
+	// delivery.
+	if rdb.IsEncodeRefusal(err) {
+		return fmt.Errorf("%w: database driver cannot encode a value for its column: %w", ErrDeterministic, err)
 	}
 	var pgerr *pgconn.PgError
 	if errors.As(err, &pgerr) && strings.HasPrefix(pgerr.Code, "22") {

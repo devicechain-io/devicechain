@@ -58,6 +58,25 @@ type chunkJSON struct {
 	Doc datatypes.JSON
 }
 
+// ptrValued has a GormValue with a POINTER receiver, and its expression binds two parameters.
+// gorm reads a column's value by value, so a ptrValued column is not a gorm.Valuer to it and
+// binds one plain value; a *ptrValued column is, and binds the expression.
+type ptrValued string
+
+func (p *ptrValued) GormValue(context.Context, *gorm.DB) clause.Expr {
+	return clause.Expr{SQL: "? || ?", Vars: []any{string(*p), "x"}}
+}
+
+type chunkValueOfPtrValuer struct {
+	A string
+	P ptrValued
+}
+
+type chunkPtrToPtrValuer struct {
+	A string
+	P *ptrValued
+}
+
 func chunkDB(t *testing.T, cfg *gorm.Config) *gorm.DB {
 	t.Helper()
 	if cfg.Logger == nil {
@@ -100,6 +119,31 @@ func TestRowsPerInsert(t *testing.T) {
 		_, err := RowsPerInsert(db, []chunkJSON{})
 		assert.ErrorIs(t, err, ErrRowWidthUnknown)
 	})
+	t.Run("a pointer column whose type binds an expression", func(t *testing.T) {
+		_, err := RowsPerInsert(db, []chunkPtrToPtrValuer{})
+		assert.ErrorIs(t, err, ErrRowWidthUnknown)
+	})
+	// Only a column gorm itself treats as a gorm.Valuer is refused. A value column whose type
+	// has GormValue on its pointer is not one, so it is counted like any other.
+	t.Run("a value column whose pointer binds an expression", func(t *testing.T) {
+		n, err := RowsPerInsert(db, []chunkValueOfPtrValuer{})
+		require.NoError(t, err)
+		assert.Equal(t, 32767, n)
+	})
+}
+
+// What gorm actually binds for the two ptrValued columns, which is what the RowsPerInsert
+// cases above rest on: one parameter a row for the value column, the expression's two for the
+// pointer column.
+func TestGormBindsAPointerReceiverValuerOnlyThroughAPointer(t *testing.T) {
+	db := chunkDB(t, &gorm.Config{DryRun: true})
+	p := ptrValued("p")
+
+	stmt := db.Create(&[]chunkValueOfPtrValuer{{A: "a", P: p}, {A: "b", P: p}}).Statement
+	assert.Len(t, stmt.Vars, 4, "a value column must bind one parameter a row: %s", stmt.SQL.String())
+
+	stmt = db.Create(&[]chunkPtrToPtrValuer{{A: "a", P: &p}, {A: "b", P: &p}}).Statement
+	assert.Len(t, stmt.Vars, 6, "a pointer column must bind its expression: %s", stmt.SQL.String())
 }
 
 // An ON CONFLICT clause is bound once per statement. A DO NOTHING arbiter, or a DO UPDATE
@@ -211,6 +255,26 @@ func TestIsStatementTooLarge(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, IsStatementTooLarge(tc.err))
+		})
+	}
+}
+
+func TestIsEncodeRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"a cancelled context", context.Canceled, false},
+		{"a value the server refused", &pgconn.PgError{Code: "22003", Message: "numeric field overflow"}, false},
+		{"the size refusal", errors.New("extended protocol limited to 65535 parameters"), false},
+		{"some other error", errors.New("connection reset by peer"), false},
+		{"the driver's refusal, wrapped", fmt.Errorf("insert: %w", errors.New(
+			"failed to encode args[2]: unable to encode 0xffffffffffffffff into binary format for int8 (OID 20)")), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsEncodeRefusal(tc.err))
 		})
 	}
 }

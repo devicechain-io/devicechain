@@ -3,17 +3,18 @@
 
 //go:build integration
 
-// The statement-size limit, asked of the real driver and a real server.
+// The driver's client-side refusals, asked of the real driver and a real server.
 //
-// MaxBindParameters and IsStatementTooLarge are both claims about pgx that no unit test can
-// check: the first that a statement binding exactly that many parameters is accepted and one
-// more is refused, the second that the refusal still reads the way it is matched. pgx gives
-// the refusal no type, so a release that rewords it would turn IsStatementTooLarge false with
-// nothing else noticing; this is where that fails instead.
+// MaxBindParameters, IsStatementTooLarge and IsEncodeRefusal are claims about pgx that no unit
+// test can check: the first that a statement binding exactly that many parameters is accepted
+// and one more is refused, the others that each refusal still reads the way it is matched. pgx
+// gives neither refusal a type, so a release that rewords one would turn its matcher false
+// with nothing else noticing; this is where that fails instead.
 package rdb
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,4 +58,28 @@ func TestIsStatementTooLargeAtTheDriverBoundary(t *testing.T) {
 	err = sqldb.QueryRowContext(ctx, q, args...).Scan(&got)
 	require.Error(t, err, "a statement binding one parameter more must be refused")
 	assert.True(t, IsStatementTooLarge(err), "the driver's refusal no longer reads as matched: %v", err)
+}
+
+// encodeItRow puts a uint64 in a bigint: gorm binds it as it is, and pgx cannot encode a value
+// above the int64 range for the column the server described.
+type encodeItRow struct {
+	ID int64 `gorm:"primaryKey;autoIncrement:false"`
+	V  int
+	S  uint64
+}
+
+func (encodeItRow) TableName() string { return "encode_it_rows" }
+
+func TestIsEncodeRefusalAtTheDriver(t *testing.T) {
+	db := staleItDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE IF NOT EXISTS encode_it_rows (
+		id bigint PRIMARY KEY, v integer NOT NULL, s bigint NOT NULL)`).Error)
+	require.NoError(t, db.Exec("TRUNCATE TABLE encode_it_rows").Error)
+
+	require.NoError(t, db.Create(&[]encodeItRow{{ID: 1, V: 1, S: math.MaxInt64}}).Error,
+		"a value at the top of the int64 range must be accepted")
+	err := db.Create(&[]encodeItRow{{ID: 2, V: 1, S: math.MaxInt64 + 1}}).Error
+	require.Error(t, err, "a value one above the int64 range must be refused")
+	assert.True(t, IsEncodeRefusal(err), "the driver's refusal no longer reads as matched: %v", err)
+	assert.False(t, IsStatementTooLarge(err))
 }
