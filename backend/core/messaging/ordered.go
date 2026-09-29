@@ -102,6 +102,14 @@ type orderedPending struct {
 // per-device suffix, a device-events or advisory capture) — at construction, where the
 // mistake is a startup error, rather than on every publish.
 //
+// 🔴 IT NEVER REFUSES FOR BACKPRESSURE, even on a stream that applies it. Its callers are
+// forwarding hops (capture to inbound, inbound to resolved) whose source message is already
+// fetched: a refusal here would leave that message unacked to spend another of its
+// MaxDeliver deliveries, and a message that spends them all is routed away as poison. Those
+// hops stop FETCHING instead — NewReader parks a reader whose area forwards into a gated
+// stream (streams.Stream.Forwards) — so what reaches this writer was fetched while the gate
+// was open, and at most a fetch batch lands in the margin the gate keeps below the ceiling.
+//
 // The writer lives as long as the connection it was built on; Close settles what it has in
 // flight. It does not call the context's CleanupPublisher: that closes a channel nats.go's
 // status fan-out may be sending on, and the reply subscription and reconnect goroutine it

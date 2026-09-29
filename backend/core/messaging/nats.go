@@ -256,6 +256,11 @@ type NatsManager struct {
 	recorder       *natsReader
 	recorderCancel context.CancelFunc
 	recorderWg     sync.WaitGroup
+
+	// bp is this manager's backpressure gates (backpressure.go), built on first use by
+	// backpressure() under bpOnce, so a manager assembled as a struct literal gates too.
+	bpOnce sync.Once
+	bp     *backpressureGates
 }
 
 // SetAckWaitForTesting sets the AckWait this manager configures on the durables it
@@ -338,6 +343,7 @@ func NewNatsManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 		writers:      make([]*natsWriter, 0),
 		metrics:      newStreamMetrics(ms),
 	}
+	nmgr.metrics.engaged.bind(nmgr)
 	name := fmt.Sprintf("%s-%s", ms.FunctionalArea, "nats")
 	nmgr.lifecycle = core.NewLifecycleManager(name, nmgr, callbacks)
 	return nmgr
@@ -992,6 +998,14 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 	}
 	w := &natsWriter{nmgr: nmgr, suffix: suffix}
 	nmgr.metrics.initPublish(suffix, publishModeSync)
+	// A writer to a stream that applies backpressure is refused while a gating reader is far
+	// behind (backpressure.go); registering measures the stream once now, so the writer is
+	// not born refusing. Its refused counter exists at 0 from here, for the reason
+	// initDurable gives.
+	if streams.AppliesBackpressure(suffix) {
+		nmgr.registerBackpressure(suffix)
+		nmgr.metrics.initRefused(StreamName(nmgr.Microservice.InstanceId, suffix))
+	}
 	nmgr.writers = append(nmgr.writers, w)
 	log.Info().Str("suffix", suffix).Msg("Added new NATS writer")
 	return w, nil
@@ -1117,6 +1131,13 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 	if err != nil {
 		return err
 	}
+	// After the tenant check, so a publish with no tenant still fails as the tenant error it
+	// is, not as a retryable refusal. The whole call is refused or none of it is: a batch the
+	// gate cut in half would leave the caller unable to say which part landed.
+	if err := w.nmgr.Backpressure(w.suffix); err != nil && !bypassesBackpressure(msgs) {
+		w.nmgr.countRefused(StreamName(w.nmgr.Microservice.InstanceId, w.suffix), len(msgs))
+		return err
+	}
 	for i := range msgs {
 		nm := natsMsg(subject, msgs[i])
 		// A fresh ceiling for each message: a batch is not one publish, and the
@@ -1173,7 +1194,14 @@ func publishContext(ctx context.Context) (pctx context.Context, callerBound bool
 }
 
 // HandleResponse logs the result of a write operation.
+//
+// A backpressure refusal is not logged: the gate logs its own close and open, and
+// jetstream_publish_refused_total counts every refused message, so a line per refused event
+// would only bury the transition that explains them.
 func (w *natsWriter) HandleResponse(err error) {
+	if errors.Is(err, ErrStreamBackpressure) {
+		return
+	}
 	if err != nil {
 		log.Error().Err(err).Str("suffix", w.suffix).Msg("nats write operation failed")
 	} else if log.Debug().Enabled() {
@@ -1257,6 +1285,12 @@ type natsReader struct {
 	// BindTerm clears it, so a process-scoped reader (one that never unbinds) is
 	// unaffected.
 	unbound bool
+
+	// downstream is the stream this reader's area forwards what it reads into, when that
+	// stream applies backpressure (streams.Stream.Forwards); "" otherwise. While its gate is
+	// closed the reader parks before fetching. Set by NewReader from the declaration, never
+	// by the caller, so a forwarding hop cannot be built without it.
+	downstream string
 
 	// slots is what ReaderWithCapacity asked for; 0 means a plain reader. capacity is the
 	// pool NewReader builds from it (nil for a plain reader, which is how every capacity
@@ -1621,9 +1655,15 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		subject: StreamSubject(nmgr.Microservice.InstanceId, suffix),
 		durable: DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
 		gate:    nmgr.Microservice.Readiness,
+		// A hop that forwards into a stream applying backpressure parks while that stream
+		// refuses, rather than fetching messages it could only fail to publish.
+		downstream: streams.ForwardsInto(suffix, nmgr.Microservice.FunctionalArea),
 	}
 	for _, opt := range opts {
 		opt(r)
+	}
+	if r.downstream != "" {
+		nmgr.registerBackpressure(r.downstream)
 	}
 	if r.slots > 0 {
 		r.capacity = newCapacity(r.slots, nmgr.ackWait(), nmgr.metrics.heldPastAckWaitFor(r.durable))
@@ -1955,6 +1995,20 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				// UnbindTerm has run and BindTerm has not yet: we are between terms.
 				// The gate above normally covers this, but the two are set by different
 				// goroutines, so park here too rather than dereferencing nil.
+				select {
+				case <-ctx.Done():
+					return Message{}, io.EOF
+				case <-time.After(termGatePoll):
+				}
+				continue
+			}
+			// Park while the stream this reader forwards into is refusing (backpressure.go).
+			// BEFORE the fetch, and before a capacity slot is taken, because a fetched
+			// message has already spent one of its MaxDeliver deliveries: fetching it only
+			// to fail its onward publish would leave it unacked to spend another, and one
+			// that spends them all is given up on as poison. Parked here, the backlog waits
+			// in this stream, undelivered, and a parked reader holds no slot.
+			if r.downstream != "" && r.nmgr.Backpressure(r.downstream) != nil {
 				select {
 				case <-ctx.Done():
 					return Message{}, io.EOF

@@ -1450,7 +1450,7 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 	// stops the background load, sinks the accepted count below the floor, and would
 	// otherwise print "presence defect" for a tunnel.
 	if snap.Shed > 0 {
-		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the per-tenant ingest ceiling, and presence "+
+		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the ingress (the per-tenant ingest ceiling, or backpressure), and presence "+
 			"transitions pass through that same ceiling — so a transition this run did not see may have been refused rather "+
 			"than lost. Lower the background load (--bg-devices / --bg-interval) or raise the tenant's ingest ceiling, and re-run", snap.Shed)
 	}

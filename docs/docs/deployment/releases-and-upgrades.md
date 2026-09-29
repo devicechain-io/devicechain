@@ -1517,6 +1517,35 @@ as much as the data, so the default in-cluster store fills in hours rather than 
 your ingest rate, or send backups to an object store you run. See
 [Backups that stop shipping](./observability.md#backup-archiving).
 
+#### A full ingest stream refuses new events instead of discarding unread ones
+
+When a consumer fell so far behind that its unread backlog filled `inbound-events` or
+`resolved-events`, the stream discarded its oldest events to make room, and those were events
+nobody had processed yet. The device had already been told they were accepted.
+
+Now, when `device-management`'s unread backlog on `inbound-events`, or `event-management`'s on
+`resolved-events`, reaches 90% of what the stream can hold, the platform stops accepting new
+events until the backlog drops below 80%. The two streams keep their week of already-processed
+events, and that history does not count towards the limit. Only unread events do.
+
+- **HTTP** ingest answers `503` with `Retry-After: 10` while it refuses. Retry on `503`. A `503`
+  without a `Retry-After` still means the publish itself failed.
+- **MQTT** devices were already acknowledged by the broker. Their messages wait in the capture
+  stream until ingest resumes.
+- **Sparkplug and LwM2M** readings, and messages from an external MQTT broker, are dropped and
+  counted, because those protocols give the platform no way to make the device retry. Connect and
+  disconnect transitions are still accepted, and nothing limits how many: a fleet that reconnects
+  in a loop can still push the stream to its ceiling, where it discards its oldest events as before.
+- The refusal applies to **every tenant**, because the streams are shared. A slow `device-state`
+  or `event-processing` does not cause it.
+- Two alerts are added: `JetStreamUnreadBacklogNearFull` (warning) and
+  `JetStreamIngestBackpressureEngaged` (critical). See
+  [Backpressure on the ingest path](./observability.md#ingest-backpressure).
+- The simulator and load harness count a `503` with a `Retry-After` as shed, not failed.
+
+Nothing to do at upgrade. No stream is reconfigured, and a service still on the previous release
+keeps its previous behaviour until it is upgraded.
+
 ### v0.18.0 — what failed silently now says so, and ingest keeps up with its ceiling {#v0180-upgrade}
 
 `v0.18.0` is an in-place upgrade from `v0.17.0`: `dcctl install` for the cluster, then `dcctl

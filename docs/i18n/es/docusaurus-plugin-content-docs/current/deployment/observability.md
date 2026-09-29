@@ -232,12 +232,16 @@ está haciendo?" se puede responder de un vistazo.
 
 Cada flujo (stream) de JetStream tiene un límite. Cuando un flujo está lleno descarta sus mensajes
 **más antiguos** para hacer sitio, de modo que la ingesta sigue funcionando. Un consumidor que aún no
-había leído un mensaje cuando se descartó no lo leerá nunca. El broker no lo informa, así que cada
-servicio lo mide para cada consumidor duradero que lee, y tres alertas vigilan el resultado:
+había leído un mensaje cuando se descartó no lo leerá nunca. Los dos flujos de ingesta cuya pérdida
+serían datos de dispositivos rechazan eventos nuevos antes de que eso le ocurra al consumidor que no
+puede perderlos (consulte [Contrapresión en la ruta de ingesta](#ingest-backpressure)). Todos los
+demás flujos, y todos los demás consumidores, se cubren aquí. El broker no informa de esta pérdida,
+así que cada servicio la mide para cada consumidor duradero que lee, y tres alertas vigilan el
+resultado:
 
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
-| `JetStreamStreamNearFull` | warning | Un flujo lleva 10 minutos por encima del 80% de su límite de bytes. Todavía no se ha perdido nada. Cubre los flujos de todos los servicios. | Busque un consumidor que se esté quedando atrás. Si el tráfico simplemente ha superado el flujo, aumente su límite. |
+| `JetStreamStreamNearFull` | warning | Un flujo lleva 10 minutos por encima del 80% de su límite de bytes. Todavía no se ha perdido nada. Cubre los flujos de todos los servicios. En `inbound-events` y `resolved-events` es normal en una instancia con carga, porque conservan una semana de eventos ya procesados. | Busque un consumidor que se esté quedando atrás. Si el tráfico simplemente ha superado el flujo, aumente su límite. En los dos flujos de ingesta, vigile `JetStreamUnreadBacklogNearFull` en su lugar. |
 | `JetStreamDurableLostUnread` | critical | Un consumidor pasó por encima de mensajes que se eliminaron antes de que los leyera. Nunca se procesaron. | Si en ese momento se estaba eliminando un tenant, es lo esperado: la eliminación borró mensajes a los que el consumidor aún no había llegado. Si no, el flujo estaba lleno mientras este consumidor iba atrasado. O bien el límite es demasiado pequeño para el tráfico, o bien el consumidor es más lento que su productor. |
 | `JetStreamDurableStalledBehindStream` | critical | Un consumidor lleva al menos dos minutos sin recibir ningún mensaje, y el flujo ya ha descartado mensajes por delante de él. Un consumidor que está leyendo, aunque sea despacio, no dispara esta alerta; sus pérdidas disparan `JetStreamDurableLostUnread`. | El servicio está en marcha, ya que es él quien lo informa, pero su consumidor no lee. Busque un procesamiento de mensajes bloqueado en una dependencia, como la base de datos, o pods esperando a estar listos. Si no se puede arreglar rápido, aumente el límite del flujo para que deje de descartar. |
 
@@ -287,7 +291,72 @@ dispararla nunca: vigile también su número de reinicios.
 
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
-| `JetStreamDurableFallingBehind` | warning | Un consumidor ha tenido más de 10000 mensajes esperándole durante 15 minutos. Todo lo que ese servicio deriva del flujo va así de atrasado: en `device-state`, el estado en vivo de un dispositivo va por detrás de sus eventos almacenados. No cubre el consumidor de detección de `event-processing`, porque lo vigila `DetectConsumerBacklogHigh` y una toma de control lo vuelve a leer por diseño. | Compare el ritmo del consumidor con el del flujo. Si mantiene el paso pero no recupera, dele capacidad (en `device-state`, consulte [sus ajustes](#live-state-projection) y su base de datos). Si se ha detenido, `JetStreamDurableStalledBehindStream` y los registros del servicio indican por qué. Si el flujo se llena antes de que se ponga al día, se descartarán los mensajes a los que aún no ha llegado. |
+| `JetStreamDurableFallingBehind` | warning | Un consumidor ha tenido más de 10000 mensajes esperándole durante 15 minutos. Todo lo que ese servicio deriva del flujo va así de atrasado: en `device-state`, el estado en vivo de un dispositivo va por detrás de sus eventos almacenados. No cubre el consumidor de detección de `event-processing`, porque lo vigila `DetectConsumerBacklogHigh` y una toma de control lo vuelve a leer por diseño. | Compare el ritmo del consumidor con el del flujo. Si mantiene el paso pero no recupera, dele capacidad (en `device-state`, consulte [sus ajustes](#live-state-projection) y su base de datos). Si se ha detenido, `JetStreamDurableStalledBehindStream` y los registros del servicio indican por qué. Si el flujo se llena antes de que se ponga al día, se descartarán los mensajes a los que aún no ha llegado, salvo para los dos consumidores que frenan la ingesta (consulte [Contrapresión en la ruta de ingesta](#ingest-backpressure)), donde antes se rechazan los eventos nuevos. |
+
+## Contrapresión en la ruta de ingesta {#ingest-backpressure}
+
+Dos flujos llevan eventos que la plataforma no puede perder antes de procesarlos:
+`inbound-events` (eventos pendientes de resolver) y `resolved-events` (eventos pendientes de
+almacenar). Cada uno tiene un consumidor cuyos eventos sin leer se perderían si el flujo los
+descartara: el de `device-management` en `inbound-events` y el de `event-management` en
+`resolved-events`. En estos dos flujos la plataforma rechaza eventos nuevos en lugar de descartar
+los que ese consumidor aún no ha leído.
+
+- Cuando la cola **sin leer** de ese consumidor alcanza el **90%** de lo que cabe en el flujo, los
+  servicios que escriben en él empiezan a rechazar eventos nuevos. Vuelven a aceptarlos cuando la
+  cola baja del **80%**. Solo cuenta la cola sin leer. Los eventos ya procesados que el flujo
+  conserva durante una semana no cuentan, así que un flujo lleno cuyo consumidor va al día no
+  rechaza nada.
+- Un servicio que no puede medir la cola durante 30 segundos trata el flujo como lleno y también
+  rechaza.
+- `device-management` deja de leer `inbound-events` mientras `resolved-events` rechaza, y
+  `event-sources` deja de leer el flujo de captura MQTT mientras `inbound-events` rechaza. La cola
+  espera en el flujo anterior, y ningún mensaje gasta sus intentos de entrega.
+- El rechazo afecta a **todos los inquilinos**, porque los flujos son compartidos. Un solo
+  inquilino que envíe más de lo que la canalización puede procesar puede frenar a los demás. El
+  límite de ingesta por inquilino (consulte
+  [Inquilinos medidos con el valor por defecto de la plataforma](#tenant-ceilings)) es el control
+  que lo impide.
+- El broker sigue descartando el mensaje más antiguo cuando un flujo está lleno. Ahora eso solo
+  ocurre si los eventos llegan más rápido de lo que la compuerta puede actuar, y las alertas de
+  [Mensajes que un consumidor nunca leyó](#unread-loss) lo siguen informando.
+
+Qué hace cada transporte mientras el flujo rechaza:
+
+| Transporte | Qué ve el dispositivo |
+| --- | --- |
+| HTTP | `503` con `Retry-After: 10`, antes de leer el cuerpo. El evento no se almacenó. Reinténtelo. |
+| MQTT (el broker de la plataforma) | Nada. El broker confirmó el mensaje antes de que la plataforma pudiera rechazarlo. El mensaje espera en el flujo de captura, que descarta sus mensajes más antiguos cuando se llena (`JetStreamDurableLostUnread`). |
+| Broker MQTT externo | Nada. El mensaje ya estaba confirmado. Se descarta y se cuenta en `devicechain_eventsources_total_msg_backpressured{source}`. |
+| Sparkplug | Las lecturas se descartan sin reintentar y se cuentan en `devicechain_sparkplugingest_ingest_failures_total`. |
+| LwM2M | Las notificaciones se descartan y se cuentan en `devicechain_lwm2mingest_notify_ingest_dropped_total`. La siguiente notificación sustituye a la perdida. |
+
+Las transiciones de conexión y desconexión (del broker, los nacimientos y muertes de Sparkplug, los
+registros de LwM2M) se siguen aceptando mientras el flujo rechaza, porque nada volvería a enviar una
+transición rechazada. Ocupan el 10% del flujo que queda por encima del umbral de rechazo. Nada
+limita cuántas se admiten: los dispositivos deciden con qué frecuencia se conectan y desconectan,
+así que una flota que se reconecta en bucle puede llenar ese margen, y entonces el broker descarta
+los eventos más antiguos, incluidos los no leídos, como hacía antes de esta versión. Solo estos dos consumidores frenan
+la ingesta. Un `device-state` o un `event-processing` lentos no lo hacen. Sus pérdidas sin leer las
+siguen informando las alertas anteriores. La posición real de `event-processing` es su propio punto
+de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila.
+
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo empieza a rechazar eventos. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
+| `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80%. |
+
+Los servicios que escriben en los dos flujos exportan estas series:
+
+- **`devicechain_<area>_jetstream_backpressure_unread_ratio{stream, durable}`**: la cola sin leer
+  del consumidor (pendientes más sin confirmar) dividida entre lo que cabe en el flujo, en mensajes
+  o en bytes, según qué límite sea más estricto. No aparece mientras no se puede medir. Combine los
+  pods con `max`.
+- **`devicechain_<area>_jetstream_backpressure_engaged{stream}`**: 1 mientras el servicio rechaza,
+  también mientras no puede medir la cola. Se lee cuando Prometheus hace el scrape, así que no
+  puede mostrar 0 cuando el servicio de hecho está rechazando.
+- **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: mensajes que el servicio no
+  publicó porque el flujo estaba rechazando.
 
 ## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
 

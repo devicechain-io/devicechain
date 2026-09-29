@@ -223,7 +223,7 @@ func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
 			if was := l.rt.Stats.LastTickShed.Swap(shedNow); (was == 0) != (shedNow == 0) {
 				if shedNow > 0 {
 					log.Warn().Int64("shed", shedNow).
-						Msg("ingress is SHEDDING this tenant's events at its rate ceiling; " +
+						Msg("ingress is SHEDDING this tenant's events (its rate ceiling, or backpressure); " +
 							"devices whose widgets look silent are being refused, not quiet")
 				} else {
 					log.Info().Msg("ingress is no longer shedding this tenant's events")

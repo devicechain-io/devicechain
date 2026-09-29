@@ -261,6 +261,25 @@ type Message struct {
 	// prevented some other way — the HTTP ingest path has no broker redelivery at
 	// all, so it sets none.
 	DedupID string
+	// BypassBackpressure lets this message through a writer whose stream is applying
+	// backpressure (see ErrStreamBackpressure). A batch is admitted only if every message
+	// in it carries the flag.
+	//
+	// It is for a presence transition — a device connected, disconnected, its node died —
+	// published by a producer that has no durable retry: a refused one is simply gone, and
+	// the device reads as connected (or not) until something else repairs it. They are
+	// admitted into the margin the gate keeps below the stream's ceiling. That margin is also
+	// what DiscardOld backstops, so this is not a promise the message survives a stream that
+	// fills anyway; it is a promise the gate does not drop it.
+	//
+	// 🔴 NOTHING BOUNDS HOW MANY ARE ADMITTED. There is one per transition, not per reading,
+	// but devices decide how often they transition: a fleet reconnecting in a loop (MQTT
+	// connects, Sparkplug births and deaths, LwM2M registrations) can fill the margin, and then
+	// DiscardOld evicts unread messages as it did before the gate existed.
+	//
+	// 🔴 NEVER SET IT ON TELEMETRY. A reading admitted past a closed gate is exactly the
+	// message that would push an unread one out.
+	BypassBackpressure bool
 	// Headers carries transport metadata across the pipeline (E15). Today it holds
 	// the correlation id used to follow a message through event-sources ->
 	// device-management -> event-management/device-state. It is transmitted via

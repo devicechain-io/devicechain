@@ -68,6 +68,12 @@ await publisher.EmitLocationAsync("car-42", credentialId,
     });
 ```
 
+An HTTP emit the ingress does not accept throws `GraphQlRequestException` with the status. When the
+response carried a `Retry-After`, it is on `RetryAfter`: a `429` (the tenant is over its ingest rate
+limit) or a `503` meaning the platform is applying backpressure because a consumer is far behind.
+Both mean the event was not stored; wait `RetryAfter` and send it again. A `503` with no
+`RetryAfter` means the publish itself failed, and the event may have been stored.
+
 ## Custom transports (Unity WebGL)
 
 Under Unity WebGL/IL2CPP, `System.Net.Http.HttpClient` and `System.Net.WebSockets.ClientWebSocket`

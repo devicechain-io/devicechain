@@ -576,6 +576,14 @@ func (e *Emitter) emitStateChange(ctx context.Context, tenant, source, deviceTok
 		Key:     []byte(deviceToken),
 		Value:   encoded,
 		DedupID: stateChangeDedupID(e.dedupPrefix, tenant, deviceToken, sc),
+		// A presence transition is admitted while inbound-events refuses readings. Every
+		// producer of one here (the broker presence tap, Sparkplug births and deaths, LwM2M
+		// registration and disconnect) has no durable retry, so a refused transition would
+		// leave the device shown connected, or not, until a failover or reconciliation
+		// repaired it. It lands in the margin the gate keeps below the ceiling, and nothing
+		// bounds how many do: a device that reconnects in a loop sends one each time. See
+		// messaging.Message.BypassBackpressure.
+		BypassBackpressure: true,
 	})
 }
 

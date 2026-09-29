@@ -96,9 +96,10 @@ type pendingPublish struct {
 // nothing, and distinct client ids deliver every message to every replica — so
 // the MQTT-client design could never exceed one replica at all.
 //
-// Consuming a capture stream deletes the whole category. The broker persists the
-// device's publish before it PUBACKs, so the message is durable BEFORE our code
-// runs; there is no session, no client id, and no per-pod broker identity that
+// Consuming a capture stream deletes the whole category. The broker stores the
+// device's publish in the capture stream itself, so the message is in a stream BEFORE
+// our code runs (the PUBACK does not wait for that store; see
+// streams.DeviceEventsCapture); there is no session, no client id, and no per-pod broker identity that
 // scale-down could strand. It is the pattern command-delivery already runs in
 // production (NewReader(streams.CommandResponses)).
 //

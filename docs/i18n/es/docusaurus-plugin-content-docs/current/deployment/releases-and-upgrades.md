@@ -1613,6 +1613,38 @@ se llena en horas, no en días. Dimensiónalo según tu tasa de ingesta, o enví
 almacén de objetos que gestiones tú. Consulta
 [Respaldos que dejan de enviarse](./observability.md#backup-archiving).
 
+#### Un stream de ingesta lleno rechaza eventos nuevos en lugar de descartar los no leídos
+
+Cuando un consumidor se atrasaba tanto que su cola sin leer llenaba `inbound-events` o
+`resolved-events`, el stream descartaba sus eventos más antiguos para hacer sitio, y eran eventos
+que nadie había procesado todavía. Al dispositivo ya se le había dicho que se aceptaron.
+
+Ahora, cuando la cola sin leer de `device-management` en `inbound-events`, o la de
+`event-management` en `resolved-events`, alcanza el 90% de lo que cabe en el stream, la plataforma
+deja de aceptar eventos nuevos hasta que la cola baja del 80%. Los dos streams conservan su semana
+de eventos ya procesados, y ese historial no cuenta para el límite. Solo cuentan los eventos sin
+leer.
+
+- La ingesta **HTTP** responde `503` con `Retry-After: 10` mientras rechaza. Reintenta ante un
+  `503`. Un `503` sin `Retry-After` sigue significando que la publicación en sí falló.
+- Los dispositivos **MQTT** ya recibieron el acuse del bróker. Sus mensajes esperan en el stream de
+  captura hasta que se reanuda la ingesta.
+- Las lecturas de **Sparkplug y LwM2M**, y los mensajes de un bróker MQTT externo, se descartan y se
+  cuentan, porque esos protocolos no dan a la plataforma forma de hacer que el dispositivo
+  reintente. Las transiciones de conexión y desconexión se siguen aceptando, y nada limita
+  cuántas: una flota que se reconecta en bucle aún puede llevar el stream a su techo, donde descarta
+  sus eventos más antiguos como antes.
+- El rechazo afecta a **todos los inquilinos**, porque los streams son compartidos. Un
+  `device-state` o un `event-processing` lentos no lo provocan.
+- Se añaden dos alertas: `JetStreamUnreadBacklogNearFull` (warning) y
+  `JetStreamIngestBackpressureEngaged` (critical). Consulta
+  [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure).
+- El simulador y el arnés de carga cuentan un `503` con `Retry-After` como descartado (shed), no
+  como fallido.
+
+No hay nada que hacer al actualizar. Ningún stream se reconfigura, y un servicio que siga en la
+versión anterior conserva su comportamiento anterior hasta que se actualice.
+
 ### v0.18.0 — lo que fallaba en silencio ahora lo dice, y la ingesta sigue el ritmo de su techo {#v0180-upgrade}
 
 `v0.18.0` es una actualización en el sitio desde `v0.17.0`: `dcctl install` para el clúster y

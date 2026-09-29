@@ -150,10 +150,11 @@ type Metrics struct {
 	// source ingests none of its groups until every one is granted. A climbing counter is
 	// therefore an ingest outage for that source, not a presence nuance.
 	SubscribeFailures prometheus.Counter
-	// IngestFailures counts accepted messages whose samples were dropped after the
-	// in-handler retry budget was exhausted (device-management or NATS unreachable).
-	// A clean-session Host gets no broker redelivery, so this is real (bounded) loss —
-	// the signal that ingest, not just connectivity, is degraded.
+	// IngestFailures counts accepted messages whose samples were dropped: after the
+	// in-handler retry budget was exhausted (device-management or NATS unreachable), or at
+	// once when inbound-events refused them because a reader is far behind
+	// (backpressure, not retried). A clean-session Host gets no broker redelivery, so this
+	// is real (bounded) loss — the signal that ingest, not just connectivity, is degraded.
 	IngestFailures prometheus.Counter
 }
 
@@ -658,7 +659,14 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 			return c.ingester.Ingest(ctx, c.tenant, c.policy, externalId, samples)
 		},
 		func(reason string, err error) {
-			log.Warn().Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
+			// A backpressure drop is logged at debug: the refusal is counted
+			// (IngestFailures, and the writer's refused counter) and the gate logs its own
+			// close and open, so a warning per dropped message would only bury those.
+			ev := log.Warn()
+			if errors.Is(err, messaging.ErrStreamBackpressure) {
+				ev = log.Debug()
+			}
+			ev.Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
 				Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery).")
 		},
 	)
@@ -827,6 +835,14 @@ func (c *Client) ingestWithRetry(attempt func(ctx context.Context) error, onDrop
 		err := attempt(attemptCtx)
 		cancel()
 		if err == nil {
+			return
+		}
+		// Not retried: the stream is refusing because a reader is far behind, which lasts
+		// far longer than this loop's budget, and every retry would hold paho's ordered
+		// receive goroutine for nothing. Presence transitions are admitted past the gate
+		// (messaging.Message.BypassBackpressure), so what reaches here is samples.
+		if errors.Is(err, messaging.ErrStreamBackpressure) {
+			drop("ingest backpressure", err)
 			return
 		}
 		if ctx.Err() != nil {

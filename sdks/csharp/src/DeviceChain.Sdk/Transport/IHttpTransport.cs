@@ -48,4 +48,39 @@ public sealed class HttpTransportResponse
 
     /// <summary>The response body bytes (empty, never null).</summary>
     public byte[] Body { get; init; } = Array.Empty<byte>();
+
+    /// <summary>
+    /// How long the server asked the caller to wait before retrying (its <c>Retry-After</c>
+    /// header, as a delay), or null when it sent none. Device ingest sends one with a 429 (the
+    /// tenant is over its rate limit) and with a 503 that means the platform is applying
+    /// backpressure: the event was certainly not stored, and can be sent again after the delay.
+    /// A 503 WITHOUT one means the publish failed and the event may or may not have been stored.
+    /// </summary>
+    public TimeSpan? RetryAfter { get; init; }
+}
+
+/// <summary>Reads an HTTP <c>Retry-After</c> header value, shared by every transport.</summary>
+public static class HttpRetryAfter
+{
+    /// <summary>
+    /// Parses <paramref name="value"/> — delay-seconds, or an HTTP date — into a delay from
+    /// <paramref name="now"/>. Returns null for a missing or unreadable value; a date in the past
+    /// is a zero delay.
+    /// </summary>
+    public static TimeSpan? Parse(string? value, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        string v = value!.Trim();
+        if (int.TryParse(v, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int seconds))
+        {
+            return TimeSpan.FromSeconds(seconds);
+        }
+        if (DateTimeOffset.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out DateTimeOffset at))
+        {
+            TimeSpan delay = at - now;
+            return delay < TimeSpan.Zero ? TimeSpan.Zero : delay;
+        }
+        return null;
+    }
 }

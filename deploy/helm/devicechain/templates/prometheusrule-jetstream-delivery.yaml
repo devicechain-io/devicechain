@@ -43,6 +43,18 @@ the end watch that record: notices waiting unrecorded on the capture stream, and
 exhaustions the recorder deliberately did NOT letter because the consumer re-reads the
 stream from its own checkpoint -- which lose nothing, but mean that checkpoint is failing.
 
+BACKPRESSURE is the exception to "discards its oldest". On the two ingest streams whose
+unread loss is device data (inbound-events, gated on device-management's consumer, and
+resolved-events, gated on event-management's), the services that write the stream refuse
+new events while that consumer's UNREAD backlog is at 90% of the ceiling, until it is
+below 80% (core/messaging/backpressure.go; the declaration is core/streams'
+BackpressureReaders). The broker still discards old as the backstop, so the loss rules
+above still apply there if the gate is ever outrun. The two rules after
+JetStreamStreamNearFull watch it: a gating consumer's backlog nearing the gate, and the
+gate engaged. Both are exported by the WRITERS of the stream, not its readers, and the
+engaged gauge is evaluated at scrape time, so a gate that cannot measure (and so refuses)
+reads 1 rather than a stale 0.
+
 Same operator assumption and gating as the event-processing rules.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
@@ -116,7 +128,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
-            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} has had more than 10000 messages waiting for it for the last 15 minutes ({{ "{{ $value }}" }} now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, JetStreamStreamNearFull fires, and messages the consumer has not reached will be lost."
+            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} has had more than 10000 messages waiting for it for the last 15 minutes ({{ "{{ $value }}" }} now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, messages the consumer has not reached will be lost, except where the stream applies backpressure (inbound-events for device-management, resolved-events for event-management): there new events are refused instead (JetStreamIngestBackpressureEngaged)."
         # Renamed and widened from EventProcessingStreamNearFull, which selected one
         # service's streams only. Every service exports the fill gauges for the streams
         # it ensures, and a stream's owner is not knowable here, so this selects all of
@@ -133,7 +145,33 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "A JetStream stream is near its ceiling"
-            description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread)."
+            description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread). On inbound-events and resolved-events this is normal on a busy instance, because they keep a week of events their consumers have already read; what matters there is the unread backlog, which JetStreamUnreadBacklogNearFull watches."
+        # A gating consumer's UNREAD backlog is over 80% of what its stream can hold. At
+        # 90% the stream's writers refuse new events (JetStreamIngestBackpressureEngaged).
+        # Exported by every service that WRITES the stream, for the consumers that gate it
+        # (device-management's on inbound-events, event-management's on resolved-events).
+        # `max by`: every writer pod measures the same consumer.
+        - alert: JetStreamUnreadBacklogNearFull
+          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"}) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A consumer's unread backlog is near its stream's ceiling"
+            description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. At 90% the platform stops accepting new events on that stream, for every tenant, rather than discard events this consumer has not read. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
+        # The gate is closed: the stream's writers are refusing new events. Evaluated at
+        # scrape time, so it also reads 1 while a writer cannot measure the backlog (a gate
+        # that cannot measure refuses). `max by`: any writer pod refusing is an outage.
+        - alert: JetStreamIngestBackpressureEngaged
+          expr: max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_engaged", namespace="{{ $ns }}"}) > 0
+          for: 1m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The platform is refusing new events so as not to lose unread ones"
+            description: "Stream {{ "{{ $labels.stream }}" }} is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; the refusal lifts once its backlog is below 80%."
         # A capacity-bounded reader held a message past its AckWait. Selected by name
         # like the rules above: core builds the counter for every capacity reader, under
         # the adopting service's own subsystem.
