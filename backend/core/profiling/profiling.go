@@ -69,6 +69,14 @@ var notCollected = map[string]string{
 		"so it would be empty and would read as no contention",
 }
 
+// writeMargin is how long a profile's response may take to reach the client once the
+// profile itself has ended. It bounds a client that stops reading part-way: an execution
+// trace keeps the process's tracer switched on until every write of it has returned, so
+// a write with no deadline to a stalled client would hold the tracer — and the memory
+// its buffers use — for as long as the client stays stalled. A variable only so the
+// tests need not wait it out; production never changes it.
+var writeMargin = 10 * time.Second
+
 // cpuProfileStarted runs once a CPU profile has actually started. It exists for the
 // tests alone, which need to know a profile is in progress without racing a second
 // request for the one profiler the process has; production leaves it a no-op.
@@ -77,10 +85,20 @@ var cpuProfileStarted = func() {}
 // Handler is the profiling endpoint, on a mux of its own.
 //
 // stop is the owner's shutdown signal. A profile in progress when it closes is
-// abandoned at once rather than run to its end, so a service's shutdown never waits
-// out someone's 30-second CPU profile: a CPU profile answers 503, and a trace — whose
+// abandoned rather than run to its end, so a service's shutdown does not wait out
+// someone's 30-second CPU profile: a CPU profile answers 503, and a trace — whose
 // status line has already been sent — has its connection cut, so the client sees an
 // error rather than a truncated trace that looks complete.
+//
+// Abandoning a profile also has to survive a client that has STOPPED READING (a stalled
+// kubectl port-forward, a suspended curl). A write to such a client blocks, and
+// trace.Stop does not return until every write of the trace has, so an unbounded write
+// would hold the handler, keep the tracer on and hold up the owner's shutdown. Two
+// bounds cover it: every profile's response carries an overall write deadline
+// (oneShotResponse), and a stop moves an abandoned trace's deadline to now. What neither
+// reaches — a response that has finished its profile and is still being written when
+// stop closes — is the owner's to end by closing the connection, which is why
+// core.Microservice follows a short graceful shutdown of this listener with a close.
 func Handler(stop <-chan struct{}) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+Prefix+"{$}", index)
@@ -181,6 +199,8 @@ func cpuProfile(stop <-chan struct{}) http.HandlerFunc {
 			fail(w, http.StatusBadRequest, "%s", err)
 			return
 		}
+		// The whole response, profile and all, has until d+writeMargin to reach the client.
+		oneShotResponse(w, http.NewResponseController(w), d+writeMargin)
 		var buf bytes.Buffer
 		if err := pprof.StartCPUProfile(&buf); err != nil {
 			fail(w, http.StatusConflict, "a CPU profile is already being taken in this process; try again when it ends")
@@ -213,6 +233,13 @@ func cpuProfile(stop <-chan struct{}) http.HandlerFunc {
 // become a 503. It aborts the connection instead (http.ErrAbortHandler, which net/http
 // recovers without logging), so the client reads an unexpected EOF rather than a
 // clean end to a trace that stopped part-way.
+//
+// 🔴 trace.Stop RETURNS ONLY AFTER EVERY WRITE OF THE TRACE HAS, so a write to a client
+// that stopped reading must not be able to block for long before it: the response
+// carries an overall deadline of d+writeMargin, and a stop moves it to now before
+// calling trace.Stop. The runtime's trace writer ignores write errors and keeps
+// draining, so once writes fail it finishes at once. A client that went away needs
+// neither: its writes fail on their own.
 func executionTrace(stop <-chan struct{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		d, err := seconds(r, DefaultTraceSeconds)
@@ -220,6 +247,8 @@ func executionTrace(stop <-chan struct{}) http.HandlerFunc {
 			fail(w, http.StatusBadRequest, "%s", err)
 			return
 		}
+		rc := http.NewResponseController(w)
+		oneShotResponse(w, rc, d+writeMargin)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", `attachment; filename="trace"`)
@@ -236,8 +265,21 @@ func executionTrace(stop <-chan struct{}) http.HandlerFunc {
 		case <-r.Context().Done():
 			trace.Stop()
 		case <-stop:
+			_ = rc.SetWriteDeadline(time.Now())
 			trace.Stop()
 			panic(http.ErrAbortHandler)
 		}
 	}
+}
+
+// oneShotResponse puts an overall write deadline on a profile's response and marks its
+// connection to close after it.
+//
+// The close is what makes the deadline safe to set: net/http does not reset a
+// connection's write deadline between requests unless the server has a WriteTimeout,
+// and these servers have none, so a kept-alive connection would carry this deadline
+// into the next request on it and fail that request's writes.
+func oneShotResponse(w http.ResponseWriter, rc *http.ResponseController, within time.Duration) {
+	w.Header().Set("Connection", "close")
+	_ = rc.SetWriteDeadline(time.Now().Add(within))
 }

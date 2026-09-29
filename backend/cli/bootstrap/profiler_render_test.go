@@ -227,7 +227,7 @@ func TestProfilerSettingsThatCannotWorkAreRefused(t *testing.T) {
 			"uses port 8080, which the device-management pod already serves"},
 		{"an extra port", profilerOn("event-sources",
 			map[string]interface{}{"enabled": true, "address": "0.0.0.0:8081"}),
-			"uses port 8081, which the event-sources pod already serves"},
+			"uses port 8081, which the event-sources pod already serves over TCP"},
 		{"a misspelled key", profilerOn("device-management",
 			map[string]interface{}{"enabeld": true}),
 			"enabeld"},
@@ -241,6 +241,30 @@ func TestProfilerSettingsThatCannotWorkAreRefused(t *testing.T) {
 				t.Errorf("refused, but not for this reason:\n  got:  %v\n  want: %s", err, tc.want)
 			}
 		})
+	}
+}
+
+// A UDP port is not the profiler's: the listener is TCP, so a profiler on the number of
+// a UDP extraPort (lwm2m-ingest's CoAPS is one) binds without conflict and is rendered.
+// A collision check that compared numbers alone refused it, saying the pod already
+// served that port.
+func TestAProfilerMayShareANumberWithAUDPPort(t *testing.T) {
+	vals := map[string]interface{}{
+		"functionalAreas": map[string]interface{}{
+			"event-sources": map[string]interface{}{
+				"extraPorts": []interface{}{
+					map[string]interface{}{"name": "udp-in", "port": 9999, "protocol": "UDP"},
+				},
+				"profiler": map[string]interface{}{"enabled": true, "address": "127.0.0.1:9999"},
+			},
+		},
+	}
+	manifest, err := renderChart(t, vals)
+	if err != nil {
+		t.Fatalf("a profiler on a UDP port's number was refused: %v", err)
+	}
+	if got := podsOf(t, manifest)["event-sources"].env[profilerEnvName]; got != "127.0.0.1:9999" {
+		t.Errorf("event-sources %s = %q, want 127.0.0.1:9999", profilerEnvName, got)
 	}
 }
 

@@ -916,6 +916,13 @@ réplica, reenvía al pod que quieres por su nombre (`kubectl port-forward pod/<
 - **Un perfil en curso cuando el servicio se apaga se abandona**, para que el apagado no lo espere.
   Un perfil de CPU responde 503. A una traza se le corta la conexión, así que tu herramienta
   informa de un error en lugar de guardar una traza que parece completa.
+- **Una descarga que deja de leerse se corta.** Un perfil debe llegarte en los 10 segundos
+  siguientes al tiempo que pediste (`?seconds=` más 10). A un cliente que se detiene más tiempo,
+  como un `kubectl port-forward` atascado o un `curl` suspendido, se le cierra la conexión, así
+  que no puede mantener la traza en marcha. Al apagarse, se cierra cualquier conexión que siga
+  abierta un segundo después de que el listener empiece a detenerse.
+- **Cada perfil se sirve en una conexión propia.** La respuesta cierra su conexión, así que una
+  herramienta que reutiliza conexiones abre una nueva para la siguiente petición.
 
 ### Otra dirección
 

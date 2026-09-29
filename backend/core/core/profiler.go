@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/profiling"
 	"github.com/rs/zerolog/log"
@@ -102,11 +103,27 @@ func (ms *Microservice) startProfiler() error {
 	return nil
 }
 
+// profilerDrain is how long stopProfiler lets the profiling listener's connections
+// finish before it cuts them. Nothing it would wait for is worth more: a profile in
+// progress is abandoned the moment stop closes, so what is left is a short 503 or the
+// tail of a response to a client that may have stopped reading.
+const profilerDrain = time.Second
+
 // stopProfiler closes the profiling listener, if one is running.
 //
 // It closes the stop channel BEFORE the graceful shutdown, which is what keeps a
 // profile in progress from holding the shutdown for up to a minute: the profile is
-// abandoned (503, or a cut connection for a trace) and the handler returns at once.
+// abandoned (a 503, or a cut connection for a trace).
+//
+// 🔴 THE GRACEFUL SHUTDOWN IS BOUNDED BY profilerDrain AND THEN THE CONNECTIONS ARE
+// CUT, because a graceful shutdown waits for every response to finish being written,
+// and a client that has stopped reading (a stalled port-forward, a suspended curl) never
+// lets one finish. The profiling handler bounds the writes it can see — an abandoned
+// trace's writes fail at once — but not a profile that had already ended and was still
+// being written when stop closed, nor the last bytes net/http writes after a handler
+// returns. Left to the graceful shutdown, those held it for the whole teardown budget,
+// with an execution trace keeping the process's tracer on throughout. Closing the
+// connections fails the blocked writes, which ends them.
 //
 // ⚠️ It does not run on every exit path. transition returns before ExecuteStop when a
 // service's own Stopper.Preprocess fails, and then this is never reached; the process
@@ -117,8 +134,15 @@ func (ms *Microservice) stopProfiler(ctx context.Context) error {
 		return nil
 	}
 	close(l.stop)
-	if err := l.srv.Shutdown(ctx); err != nil {
+	drain, cancel := context.WithTimeout(ctx, profilerDrain)
+	defer cancel()
+	if err := l.srv.Shutdown(drain); err == nil {
+		return nil
+	}
+	if err := l.srv.Close(); err != nil {
 		return fmt.Errorf("stopping the profiling listener: %w", err)
 	}
+	log.Info().Dur("after", profilerDrain).Msg("Profiling listener closed its remaining connections, " +
+		"which had not finished within the drain; a client had most likely stopped reading.")
 	return nil
 }

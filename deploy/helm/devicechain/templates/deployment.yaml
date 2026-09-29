@@ -15,7 +15,7 @@ ADR-022 review hardening:
 */}}
 {{- $root := . -}}
 {{- include "devicechain.validateProfilerAreas" . }}
-{{- $blob :=include "devicechain.blobBackendConfig" . | fromJson }}
+{{- $blob := include "devicechain.blobBackendConfig" . | fromJson }}
 {{- $blobBackend := $blob.backend | default "filesystem" }}
 {{- $blobPersist := ($root.Values.blobStorage | default dict).persistence | default dict }}
 {{- $blobPath := ternary ($blobPersist.mountPath | default "") ($blob.directory | default "") (ne ($blobPersist.mountPath | default "") "") }}

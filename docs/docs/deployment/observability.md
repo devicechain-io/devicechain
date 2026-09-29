@@ -875,6 +875,13 @@ one replica, forward to the pod you mean by name (`kubectl port-forward pod/<nam
 - **A profile in progress when the service shuts down is abandoned** so that shutdown does not
   wait for it. A CPU profile answers 503. A trace has its connection cut, so your tool reports
   an error instead of saving a trace that looks complete.
+- **A download that stops being read is cut.** A profile must reach you within 10 seconds of
+  the time you asked for (`?seconds=` plus 10). A client that stalls longer than that, such as
+  a stuck `kubectl port-forward` or a suspended `curl`, has its connection closed, so it cannot
+  keep the trace running. At shutdown, a connection still open a second after the listener
+  starts to stop is closed.
+- **Each profile is served on a connection of its own.** The response closes its connection, so
+  a tool that reuses connections opens a new one for the next request.
 
 ### Another address
 

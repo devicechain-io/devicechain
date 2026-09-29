@@ -849,11 +849,13 @@ The default is the pod's loopback address, reachable only through kubectl
 port-forward. The listener is never a container port or a Service port; nothing here
 renders one.
 
-A port the area's own pod already serves is refused HERE, because the service would
-otherwise bind the profiler first and then fail its own listener with an error that
-names the wrong one. The service refuses its own HTTP port too; this also covers the
-area's extraPorts, which only the chart knows. The address's syntax is judged by the
-service, which is the one reader that has to be right about it.
+A TCP port the area's own pod already serves is refused HERE, because the service
+would otherwise bind the profiler first and then fail its own listener with an error
+that names the wrong one. The service refuses its own HTTP port too; this also covers
+the area's TCP extraPorts, which only the chart knows. A UDP extraPort (lwm2m-ingest's
+CoAPS) is a different port space and does not collide with the TCP profiler, so it is
+not refused. The address's syntax is judged by the service, which is the one reader
+that has to be right about it.
 */}}
 {{- define "devicechain.profilerAddress" -}}
 {{- $root := .root -}}
@@ -863,10 +865,12 @@ service, which is the one reader that has to be right about it.
 {{- $port := regexFind "[0-9]+$" $addr -}}
 {{- $taken := list (toString $root.Values.service.port) -}}
 {{- range $x := get .areaCfg "extraPorts" | default list -}}
+{{- if eq (upper ($x.protocol | default "TCP")) "TCP" -}}
 {{- $taken = append $taken (toString $x.port) -}}
 {{- end -}}
+{{- end -}}
 {{- if and $port (has $port $taken) -}}
-{{- fail (printf "functionalAreas.%s.profiler.address %q uses port %s, which the %s pod already serves (its ports: %s). Choose another port for the profiling listener." .area $addr $port .area (join ", " $taken)) -}}
+{{- fail (printf "functionalAreas.%s.profiler.address %q uses port %s, which the %s pod already serves over TCP (its TCP ports: %s). Choose another port for the profiling listener." .area $addr $port .area (join ", " $taken)) -}}
 {{- end -}}
 {{- $addr -}}
 {{- end -}}

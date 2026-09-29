@@ -5,12 +5,16 @@ package profiling
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime/pprof"
 	"runtime/trace"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -209,4 +213,123 @@ func TestStopAbandonsATraceWithACutConnection(t *testing.T) {
 		t.Fatal("the trace was not abandoned")
 	}
 	assert.False(t, trace.IsEnabled())
+}
+
+// churn keeps the scheduler busy until the test ends, so an execution trace produces
+// data fast enough to fill a stalled client's socket buffers.
+func churn(t *testing.T) {
+	t.Helper()
+	quit := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-quit:
+					return
+				default:
+				}
+				ch := make(chan struct{})
+				go func() { close(ch) }()
+				<-ch
+			}
+		}()
+	}
+	t.Cleanup(func() { close(quit); wg.Wait() })
+}
+
+// stalledClient requests a profile over a raw connection and never reads the reply, as
+// a suspended curl or a stalled port-forward does. The connection is closed when the
+// test ends, which is the only thing that would unblock a writer with no deadline.
+func stalledClient(t *testing.T, addr, path string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.(*net.TCPConn).SetReadBuffer(1)) // the kernel rounds it up to its minimum
+	_, err = fmt.Fprintf(conn, "GET %s%s HTTP/1.1\r\nHost: x\r\n\r\n", Prefix, path)
+	require.NoError(t, err)
+}
+
+func stalledTraceClient(t *testing.T, addr string, secs int) {
+	t.Helper()
+	stalledClient(t, addr, fmt.Sprintf("trace?seconds=%d", secs))
+}
+
+// stoppableServer serves Handler(stop) on a real http.Server, so a test can time a
+// graceful Shutdown the way the owner of the listener runs one.
+func stoppableServer(t *testing.T) (*http.Server, string, chan struct{}) {
+	t.Helper()
+	stop := make(chan struct{})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := &http.Server{Handler: Handler(stop), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return srv, ln.Addr().String(), stop
+}
+
+// shutdownPromptly closes stop and asserts a graceful shutdown then completes well
+// inside its budget.
+func shutdownPromptly(t *testing.T, srv *http.Server, stop chan struct{}) {
+	t.Helper()
+	close(stop)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	began := time.Now()
+	err := srv.Shutdown(ctx)
+	took := time.Since(began)
+	require.NoError(t, err, "the shutdown waited out its budget (%s) for a client that stopped reading", took)
+	assert.Less(t, took, 3*time.Second)
+}
+
+// A client that stops reading must not keep the tracer on past the trace's duration:
+// the response's overall write deadline fails the blocked write, and the runtime's
+// trace writer then drains and stops. Before the deadline existed the tracer stayed on
+// for as long as the client stayed stalled.
+func TestAStalledClientCannotHoldTheTracerPastItsDuration(t *testing.T) {
+	prev := writeMargin
+	writeMargin = 500 * time.Millisecond
+	t.Cleanup(func() { writeMargin = prev })
+	churn(t)
+	srv, _ := serve(t)
+
+	stalledTraceClient(t, srv.Listener.Addr().String(), 1)
+	require.Eventually(t, trace.IsEnabled, 5*time.Second, 5*time.Millisecond, "the trace never started")
+	// 1 s of trace plus the 0.5 s margin; the rest is slack for a loaded CI runner.
+	assert.Eventually(t, func() bool { return !trace.IsEnabled() }, 6*time.Second, 20*time.Millisecond,
+		"a client that stopped reading held the tracer on past the trace's duration and its write margin")
+}
+
+// A stop reaches a trace whose client has stopped reading: the handler returns and a
+// graceful shutdown completes promptly, with the tracer off. Before the stop moved the
+// write deadline, trace.Stop blocked on the stalled write and the shutdown waited out
+// its whole budget. (A stop that arrives after the trace's duration has ended, while the
+// response is still being written, is not the handler's to end; core's test of the
+// listener's stop covers it.)
+func TestStopAbandonsATraceWhoseClientStoppedReading(t *testing.T) {
+	churn(t)
+	srv, addr, stop := stoppableServer(t)
+	stalledTraceClient(t, addr, 30)
+	require.Eventually(t, trace.IsEnabled, 5*time.Second, 5*time.Millisecond, "the trace never started")
+	time.Sleep(3 * time.Second) // long enough for the stalled client's buffers to fill
+
+	shutdownPromptly(t, srv, stop)
+	assert.False(t, trace.IsEnabled(), "the tracer was left on")
+}
+
+// A profile some dependency registers with pprof.NewProfile is not served: pprof.Lookup
+// finds it, and only the Served allow-list keeps it off this endpoint — where it would
+// appear with whatever it records, and without anyone here having decided to serve it.
+func TestAProfileADependencyRegistersIsNotServed(t *testing.T) {
+	const name = "devicechain.test.registered"
+	if pprof.Lookup(name) == nil {
+		pprof.NewProfile(name)
+	}
+	srv, _ := serve(t)
+	status, _, body := fetch(t, http.MethodGet, srv.URL+Prefix+name)
+	assert.Equal(t, http.StatusNotFound, status, "%s", body)
+	assert.Contains(t, string(body), "unknown profile")
 }
