@@ -166,7 +166,7 @@ func TestLiveObjectStoreRolloutCheck(t *testing.T) {
 	kubeconfig := os.Getenv("DCCTL_RIG_KUBECONFIG")
 	if kubeconfig == "" {
 		t.Fatal("DCCTL_RIG_KUBE_CONTEXT is set but DCCTL_RIG_KUBECONFIG is not: this package's tests " +
-			"run against an empty kubeconfig, so the rig must name the one its cluster is in")
+			"run against an empty kubeconfig, so the rig must name the kubeconfig its cluster is in")
 	}
 	t.Setenv("KUBECONFIG", kubeconfig)
 	ref, err := json.Marshal(map[string]any{

@@ -26,6 +26,10 @@ import (
 // also reads the environment (KUBERNETES_SERVICE_HOST), but k8s.io/client-go/rest is in
 // nearly every client's closure, so it cannot mark a package. Nothing in backend/cli
 // calls it today.
+//
+// KUBERNETES_MASTER is read by clientcmd itself (into clientcmd.ClusterDefaults, the
+// cluster Helm's cli.New() falls back to), so it marks the same packages clientcmd does
+// and needs no entry of its own.
 var ambientReaders = []string{
 	"k8s.io/client-go/tools/clientcmd",
 	"helm.sh/helm/v3/pkg/cli",
@@ -98,17 +102,25 @@ func TestEveryPackageThatCanReachAClusterIsIsolated(t *testing.T) {
 			"found to reach a cluster (demanded: %v)", modulePath, demandedNames)
 	}
 
-	var missing []string
-	for _, p := range demandedNames {
-		if !isolatesInTestMain(t, demanded[p], p == modulePath+"/internal/kubeisolation") {
-			missing = append(missing, p)
-		}
-	}
-	if len(missing) > 0 {
+	if missing := notIsolated(t, demanded); len(missing) > 0 {
 		t.Fatalf("these packages' tests can reach a real cluster and do not start from kubeisolation.Run:\n  %s\n"+
 			"add to each a main_test.go with\n\tfunc TestMain(m *testing.M) { os.Exit(kubeisolation.Run(m)) }",
 			strings.Join(missing, "\n  "))
 	}
+}
+
+// notIsolated returns, sorted, the packages in demanded (import path -> dir) whose tests
+// do not start from kubeisolation.Run.
+func notIsolated(t *testing.T, demanded map[string]string) []string {
+	t.Helper()
+	var missing []string
+	for p, dir := range demanded {
+		if !isolatesInTestMain(t, dir, p == modulePath+"/internal/kubeisolation") {
+			missing = append(missing, p)
+		}
+	}
+	slices.Sort(missing)
+	return missing
 }
 
 // isolatesInTestMain reports whether a _test.go file in dir declares TestMain(*testing.M)
@@ -212,5 +224,50 @@ func walkModule(t *testing.T, root string) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The guard's own verdict, shown on fixtures: a TestMain that CALLS kubeisolation.Run
+// isolates (under any import name); one that does not, or merely names Run without
+// calling it, or calls it from a function that is not TestMain, does not; and exactly
+// the packages that do not are reported.
+func TestTheGuardReportsAPackageWithoutTheTestMain(t *testing.T) {
+	const imp = `"` + modulePath + `/internal/kubeisolation"`
+	fixtures := map[string]string{
+		"calls": `package p
+import ("os"; "testing"; ` + imp + `)
+func TestMain(m *testing.M) { os.Exit(kubeisolation.Run(m)) }`,
+		"aliased": `package p
+import ("os"; "testing"; ki ` + imp + `)
+func TestMain(m *testing.M) { os.Exit(ki.Run(m)) }`,
+		"plain": `package p
+import ("os"; "testing")
+func TestMain(m *testing.M) { os.Exit(m.Run()) }`,
+		"reference": `package p
+import ("os"; "testing"; ` + imp + `)
+func TestMain(m *testing.M) { run := kubeisolation.Run; os.Exit(run(m)) }`,
+		"elsewhere": `package p
+import ("testing"; ` + imp + `)
+func setup(m *testing.M) int { return kubeisolation.Run(m) }
+func TestMain(m *testing.M) {}`,
+		"none": `package p
+import "testing"
+func TestX(t *testing.T) {}`,
+	}
+	demanded := map[string]string{}
+	for name, src := range fixtures {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "main_test.go"), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		demanded[name] = dir
+	}
+	got := notIsolated(t, demanded)
+	want := []string{"elsewhere", "none", "plain", "reference"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the guard reported %v, want %v", got, want)
 	}
 }

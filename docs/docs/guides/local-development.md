@@ -127,11 +127,12 @@ binary runs.
 whatever your current context is. Every package whose tests could pick up a cluster from the
 kubeconfig, from Helm or from OpenTofu has a `TestMain` that runs before any test. It points
 `KUBECONFIG` and the OpenTofu roots' kubeconfig path at an empty file, and it clears the in-cluster,
-`KUBE_*` and `HELM_KUBE*` variables. A run on your machine then behaves as it does in CI, and no test
-can act on the cluster you are connected to. A test that needs a cluster sets its own `KUBECONFIG`.
-A new package in `backend/cli` whose tests can reach a cluster needs the same `TestMain`. A test in
-`backend/cli/internal/kubeisolation` finds such packages from the import graph and fails until each
-has one.
+`KUBE_*` and `HELM_KUBE*` variables. It also removes the default server Helm falls back to over an
+empty kubeconfig, `http://localhost:8080` or whatever `KUBERNETES_MASTER` names. A run on your
+machine then behaves as it does in CI, and no test can act on the cluster you are connected to. A
+test that needs a cluster sets its own `KUBECONFIG`. A new package in `backend/cli` whose tests can
+reach a cluster needs the same `TestMain`. A test in `backend/cli/internal/kubeisolation` finds such
+packages from the import graph and fails until each has one.
 
 ### Fuzzing
 

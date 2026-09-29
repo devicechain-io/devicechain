@@ -247,9 +247,9 @@ var readLiveArchiveState = func(ctx context.Context, kubeContext, instance strin
 // stub readLiveArchiveState or run against the empty kubeconfig this package's
 // TestMain sets, where the read fails before any lookup — so the lookup below is
 // the one part of the restore path no test in this package could otherwise reach —
-// and reading the wrong Cluster is invisible in exactly the way that costs the most: the instance is
-// handed another store's archive path, and an ordinary re-run retargets its archiver
-// at a prefix holding no base backup of it.
+// and reading the wrong Cluster is invisible in exactly the way that costs the
+// most: the instance is handed another store's archive path, and an ordinary re-run
+// retargets its archiver at a prefix holding no base backup of it.
 func readArchiveState(ctx context.Context, dyn dynamic.Interface, instance string) (clusterArchiveState, error) {
 	// The event store is the instance's, in the instance's namespace.
 	return clusterArchivePath(ctx, dyn, InstanceNamespace(instance), TsdbClusterName)

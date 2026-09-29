@@ -22,7 +22,9 @@
 // same reads failed there and the tests passed for a different reason. Pointing HOME at a
 // temp dir does not help either: client-go fixes the home kubeconfig path
 // (clientcmd.RecommendedHomeFile) when the package is initialised, before any test can
-// change HOME. So the environment is changed, once, before the first test.
+// change HOME. The same holds for the cluster Helm falls back to over an empty kubeconfig
+// (clientcmd.ClusterDefaults, read from KUBERNETES_MASTER at init). So the environment and
+// those two values are changed, once, before the first test.
 //
 // What this cannot fence, by construction: a tool a test EXECS reads its own defaults.
 // kubectl with an empty kubeconfig tries localhost:8080; kind, ko and docker act on the
@@ -39,14 +41,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"helm.sh/helm/v3/pkg/cli"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // Run isolates this test process from every cluster its environment could name, then runs
@@ -97,6 +103,12 @@ func apply() (string, error) {
 	// the home path client-go computed at init now names the same empty file.
 	clientcmd.RecommendedHomeFile = cfg
 	clientcmd.RecommendedConfigDir = dir
+	// Helm's cli.New() hands clientcmd.ClusterDefaults to the loader as overrides, and
+	// client-go computed it at init as {Server: $KUBERNETES_MASTER}, or
+	// http://localhost:8080 when that is unset. Over an empty kubeconfig that default
+	// IS the cluster Helm targets, and unsetting the variable now is too late to change
+	// it. Emptied, the empty kubeconfig stays the "no configuration" error CI gets.
+	clientcmd.ClusterDefaults = clientcmdapi.Cluster{}
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		if clearedVar(name) {
@@ -119,6 +131,9 @@ func verify(cfg string) error {
 	if clientcmd.RecommendedHomeFile != cfg {
 		return fmt.Errorf("client-go's home kubeconfig is %q after isolation, want %q", clientcmd.RecommendedHomeFile, cfg)
 	}
+	if !reflect.DeepEqual(clientcmd.ClusterDefaults, clientcmdapi.Cluster{}) {
+		return fmt.Errorf("client-go's cluster defaults still name %q after isolation", clientcmd.ClusterDefaults.Server)
+	}
 	fi, err := os.Stat(cfg)
 	if err != nil {
 		return err
@@ -138,6 +153,8 @@ func verify(cfg string) error {
 // on its own, without a kubeconfig:
 //   - KUBERNETES_SERVICE_HOST/PORT: client-go's in-cluster fallback, taken when the loaded
 //     kubeconfig is empty — a test run inside a pod would otherwise reach THAT cluster;
+//   - KUBERNETES_MASTER: already read into clientcmd.ClusterDefaults at init, which apply
+//     empties; it is cleared as well so nothing started from this process inherits it;
 //   - KUBE_*: the OpenTofu kubernetes/helm providers' environment (KUBE_CONFIG_PATH,
 //     KUBE_HOST, KUBE_TOKEN, KUBE_CTX, ...);
 //   - HELM_KUBE*: Helm's API server, token and context overrides, which bypass the
@@ -145,7 +162,7 @@ func verify(cfg string) error {
 //   - TF_VAR_kubeconfig_context: the roots' context variable (the path is SET, see apply).
 func clearedVar(name string) bool {
 	switch name {
-	case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT", "TF_VAR_kubeconfig_context":
+	case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT", "KUBERNETES_MASTER", "TF_VAR_kubeconfig_context":
 		return true
 	}
 	return strings.HasPrefix(name, "KUBE_") || strings.HasPrefix(name, "HELM_KUBE")
@@ -155,6 +172,14 @@ func clearedVar(name string) bool {
 // and answers each with a 404 NotFound Status, writes a kubeconfig whose current-context
 // targets it, and returns that kubeconfig's path, the request count so far, and a reset.
 func CountingKubeconfig(t *testing.T) (path string, requests func() int64, reset func()) {
+	t.Helper()
+	path, _, requests, reset = countingServer(t)
+	return path, requests, reset
+}
+
+// countingServer is CountingKubeconfig that also returns the server's URL, for the doors
+// that name a server directly rather than through a kubeconfig.
+func countingServer(t *testing.T) (path, url string, requests func() int64, reset func()) {
 	t.Helper()
 	var n atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +211,7 @@ current-context: counting
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path, n.Load, func() { n.Store(0) }
+	return path, srv.URL, n.Load, func() { n.Store(0) }
 }
 
 // childEnv marks the re-executed test binary: inside it, RequireIsolated only probes.
@@ -195,55 +220,89 @@ const childEnv = "DCCTL_KUBEISOLATION_CHILD"
 // childTimeout bounds a child run; a child that hits it has HUNG, which is not a verdict.
 const childTimeout = 90 * time.Second
 
+// probes are the ways dcctl builds a cluster client, each of which RequireIsolated shows
+// reaches a live server before a zero from the child means anything.
+var probes = []probe{
+	{"client-go's default loading rules", probeClientGo},
+	{"Helm's environment settings", probeHelm},
+}
+
+type probe struct {
+	name string
+	run  func(t *testing.T)
+}
+
 // RequireIsolated proves, by value, that this package's TestMain isolates its tests: it
-// re-runs this test binary with KUBECONFIG naming a request-counting API server — what a
-// developer's live current-context looks like to the process — runs the probe below and
-// the named entry points in it, and requires that the server saw NO request.
+// re-runs this test binary with KUBECONFIG and KUBERNETES_MASTER both naming a
+// request-counting API server — what a developer's live current-context looks like to the
+// process — runs the probes and the named entry points in it, and requires that the server
+// saw NO request.
 //
 // The entry points are the tests KNOWN to read a cluster from the environment. They are
 // the positive instances, not an inventory: what covers every other test in the package is
-// that isolation is applied to the whole process before any of them runs, which the probe
-// shows for the process as a whole.
+// that isolation is applied to the whole process before any of them runs, which the probes
+// show for the process as a whole.
 //
 // It must be called from a top-level test.
 func RequireIsolated(t *testing.T, entryPoints ...string) {
 	t.Helper()
 	if os.Getenv(childEnv) == "1" {
-		probe(t)
+		for _, p := range probes {
+			p.run(t)
+		}
 		return
 	}
 	if strings.Contains(t.Name(), "/") {
 		t.Fatalf("RequireIsolated must be called from a top-level test, not the subtest %s", t.Name())
 	}
-	path, requests, reset := CountingKubeconfig(t)
+	if err := checkIsolated(t, probes, append([]string{t.Name()}, entryPoints...)); err != nil {
+		t.Fatal(err)
+	}
+}
 
-	// Positive control: the probe DOES reach a cluster the environment names, so a zero
+// checkIsolated is RequireIsolated's parent half. It returns, rather than reports, the
+// verdict, so that the harness's own tests can show each way it must refuse.
+func checkIsolated(t *testing.T, probes []probe, names []string) error {
+	t.Helper()
+	path, url, requests, reset := countingServer(t)
+
+	// Positive control: each probe DOES reach a cluster the environment names, so a zero
 	// from the child means the child was isolated, not that the instrument was blind.
 	t.Setenv("KUBECONFIG", path)
-	probe(t)
-	if requests() < 1 {
-		t.Fatal("the probe sent no request to a kubeconfig that names a live server: the instrument is blind")
+	for _, p := range probes {
+		reset()
+		p.run(t)
+		if requests() < 1 {
+			return fmt.Errorf("the probe through %s sent no request to a kubeconfig that names a live server: "+
+				"the instrument is blind", p.name)
+		}
 	}
 	reset()
 
-	names := append([]string{t.Name()}, entryPoints...)
 	quoted := make([]string, len(names))
 	for i, n := range names {
 		quoted[i] = regexp.QuoteMeta(n)
 	}
-	out, exitErr := runChild(t, "^("+strings.Join(quoted, "|")+")$", path)
+	out, exitErr := runChild(t, "^("+strings.Join(quoted, "|")+")$", path, "KUBERNETES_MASTER="+url)
+	return verdict(out, exitErr, names, requests())
+}
+
+// verdict reads a child run: it is a pass only if every named test ran, the counting
+// server saw no request, and the child itself passed.
+func verdict(out string, exitErr error, names []string, requests int64) error {
 	for _, n := range names {
 		if !ranTest(out, n) {
-			t.Fatalf("the child never ran %s, so its request count is not a verdict:\n%s", n, out)
+			return fmt.Errorf("the child never ran %s, so its request count is not a verdict:\n%s", n, out)
 		}
 	}
-	if got := requests(); got != 0 {
-		t.Fatalf("with KUBECONFIG naming a live API server, this package's tests sent it %d request(s): "+
-			"its TestMain does not isolate it (want os.Exit(kubeisolation.Run(m))):\n%s", got, out)
+	if requests != 0 {
+		return fmt.Errorf("with KUBECONFIG naming a live API server, this package's tests sent it %d request(s): "+
+			"its TestMain does not isolate it (want os.Exit(kubeisolation.Run(m))):\n%s", requests, out)
 	}
 	if exitErr != nil {
-		t.Fatalf("the child failed (%v):\n%s", exitErr, out)
+		return fmt.Errorf("the child failed (%v):\n%s", exitErr, out)
 	}
+	return nil
 }
 
 // runChild re-executes this test binary with -test.run=run, KUBECONFIG=kubeconfig and the
@@ -278,23 +337,36 @@ func ranTest(out, name string) bool {
 	return regexp.MustCompile(`(?m)^=== RUN\s+` + regexp.QuoteMeta(name) + `$`).MatchString(out)
 }
 
-// probe builds a client exactly as dcctl's bootstrap.RestConfig does — the default loading
-// rules, no overrides — and, if that succeeds, asks the server for its version. An error
-// is the isolated outcome, so it is only logged.
-func probe(t *testing.T) {
+// probeClientGo builds a client exactly as dcctl's bootstrap.RestConfig does — the default
+// loading rules, no overrides — and, if that succeeds, asks the server for its version. An
+// error is the isolated outcome, so it is only logged.
+func probeClientGo(t *testing.T) {
 	t.Helper()
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	askVersion(t, "client-go", cfg, err)
+}
+
+// probeHelm builds a client exactly as dcctl's Helm calls do — cli.New() and its REST
+// client getter, which passes clientcmd.ClusterDefaults as overrides — and asks the same.
+func probeHelm(t *testing.T) {
+	t.Helper()
+	cfg, err := cli.New().RESTClientGetter().ToRESTConfig()
+	askVersion(t, "helm", cfg, err)
+}
+
+func askVersion(t *testing.T, via string, cfg *rest.Config, err error) {
+	t.Helper()
 	if err != nil {
-		t.Logf("probe: no cluster config: %v", err)
+		t.Logf("probe (%s): no cluster config: %v", via, err)
 		return
 	}
 	cfg.Timeout = 5 * time.Second
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
-		t.Logf("probe: %v", err)
+		t.Logf("probe (%s): %v", via, err)
 		return
 	}
 	_, err = dc.ServerVersion()
-	t.Logf("probe: asked %s for its version: %v", cfg.Host, err)
+	t.Logf("probe (%s): asked %s for its version: %v", via, cfg.Host, err)
 }
