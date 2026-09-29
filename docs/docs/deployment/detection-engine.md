@@ -308,7 +308,8 @@ Three more causes worth checking:
   the next event re-activates the same alarm. Clearing is an acknowledgement that you have seen it,
   not a suppression.
 - **A device that leaves a rule's scope and then goes silent** keeps its raised alarm. Scope changes
-  take effect on the device's next event, and a silent device has no next event.
+  take effect on the device's next event (within about five seconds when `device-management` runs
+  more than one replica), and a silent device has no next event.
 - **The rule that raised it no longer runs.** A rule that is skipped at load — the profile's
   **Rule Health** tab shows it as a compile error — is not evaluated, so nothing resolves the alarm
   it raised before. Clear the alarm by hand once you have fixed or retired the rule.
@@ -326,7 +327,8 @@ In order of how often it is the answer:
    appears is valid and compiles cleanly; it just never becomes true. Check the device's recent
    events for the exact key.
 4. **The rule is scoped to a group the device is not currently in.** Membership is recorded on each
-   event as it is resolved, so a device that has just been added joins on its next event.
+   event as it is resolved, so a device that has just been added joins on its next event (within about five seconds when
+   `device-management` runs more than one replica).
 5. **A dynamic threshold has no attribute set on that device.** A threshold built on the form reads
    the device's own attribute, and a device with no numeric `SERVER` or `SHARED` value for it does
    not fire. A value that is not a number, or one set with `CLIENT` scope, counts as not set. A CEL

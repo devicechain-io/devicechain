@@ -182,6 +182,16 @@ type streamMetrics struct {
 	unreadRatio    *prometheus.GaugeVec
 	publishRefused *prometheus.CounterVec
 	engaged        *engagedCollector
+
+	// The in-process tier in front of each cache (cache_local.go), by the same cache name.
+	// They exist only for a cache whose in-process tier is on: an absent series means the
+	// tier is off, not that nothing was counted. cacheLocalLookups says how many reads never
+	// reached the bucket (hit) and how many went on to it (miss), which is what
+	// cacheLatency{op="get"} now counts: only the reads memory could not answer.
+	cacheLocalLookups   *prometheus.CounterVec
+	cacheLocalEvictions *prometheus.CounterVec
+	cacheLocalEntries   *prometheus.GaugeVec
+	cacheLocalBytes     *prometheus.GaugeVec
 }
 
 // cacheBuckets spans a loopback KV answer to the Get/Set budget. Nothing lands above it
@@ -274,7 +284,8 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"at the 5 s ceiling.",
 			[]string{"suffix", "mode"}, publishBuckets),
 		cacheLatency: ms.NewHistogramVec("kv_cache_request_duration_seconds",
-			"Time a key-value cache operation took. A get or set is cut off at 0.5 s; a delete at 5 s.",
+			"Time a key-value cache operation took at the bucket. A get or set is cut off at 0.5 s; a delete at "+
+				"5 s. A get answered from process memory never reaches the bucket and is not counted here.",
 			[]string{"cache", "op"}, cacheBuckets),
 		cacheFailures: ms.NewCounterVec("kv_cache_failures_total",
 			"Key-value cache operations that timed out (reason=timeout) or failed (reason=error). A timeout, "+
@@ -294,7 +305,22 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		publishRefused: ms.NewCounterVec("jetstream_publish_refused_total",
 			"Messages this service did not publish because the stream was applying backpressure.",
 			[]string{"stream"}),
-		engaged:  newEngagedCollector(ms),
+		engaged: newEngagedCollector(ms),
+		cacheLocalLookups: ms.NewCounterVec("kv_cache_local_lookups_total",
+			"Key-value cache reads answered from process memory (result=hit) or passed on to the bucket "+
+				"(result=miss). A value is kept in memory for up to 5 s, never longer than the cache's TTL.",
+			[]string{"cache", "result"}),
+		cacheLocalEvictions: ms.NewCounterVec("kv_cache_local_evictions_total",
+			"Entries removed from a key-value cache's in-process copy: reason=expired (found past its "+
+				"time in memory), capacity (the copy was full), deleted (the entry was evicted on a change).",
+			[]string{"cache", "reason"}),
+		cacheLocalEntries: ms.NewGaugeVec("kv_cache_local_entries",
+			"Entries held in a key-value cache's in-process copy, including expired ones not yet removed.",
+			[]string{"cache"}),
+		cacheLocalBytes: ms.NewGaugeVec("kv_cache_local_bytes",
+			"Approximate bytes held in a key-value cache's in-process copy (keys, values and a fixed "+
+				"per-entry overhead), including expired entries not yet removed.",
+			[]string{"cache"}),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
@@ -353,6 +379,12 @@ func (m *streamMetrics) countRefused(stream string, n int) {
 type cacheObserver struct {
 	m     *streamMetrics
 	cache string
+
+	// The in-process tier's per-lookup counters, resolved once by initLocal rather than by
+	// label on every read: a hit is meant to cost well under a microsecond, and a label
+	// lookup is a good share of that. Nil until initLocal, so a cache whose tier is off
+	// records nothing.
+	localHit, localMiss prometheus.Counter
 }
 
 // cacheObserver returns the recorder for the named cache, or nil when there are no metrics.
@@ -380,6 +412,48 @@ func (o *cacheObserver) init() {
 		o.m.cacheBypassed.WithLabelValues(o.cache, op).Add(0)
 	}
 	o.m.cacheUnavailable.WithLabelValues(o.cache).Set(0)
+}
+
+// initLocal creates the in-process tier's series at 0, for the reason init gives. Called
+// only for a cache whose in-process tier is on.
+func (o *cacheObserver) initLocal() {
+	if o == nil || o.m.cacheLocalLookups == nil {
+		return
+	}
+	o.localHit = o.m.cacheLocalLookups.WithLabelValues(o.cache, "hit")
+	o.localMiss = o.m.cacheLocalLookups.WithLabelValues(o.cache, "miss")
+	o.localHit.Add(0)
+	o.localMiss.Add(0)
+	for _, reason := range []string{"expired", "capacity", "deleted"} {
+		o.m.cacheLocalEvictions.WithLabelValues(o.cache, reason).Add(0)
+	}
+	o.localSize(0, 0)
+}
+
+func (o *cacheObserver) localLookup(hit bool) {
+	if o == nil || o.localHit == nil {
+		return
+	}
+	if hit {
+		o.localHit.Inc()
+	} else {
+		o.localMiss.Inc()
+	}
+}
+
+func (o *cacheObserver) localEvicted(reason string) {
+	if o == nil || o.localHit == nil {
+		return
+	}
+	o.m.cacheLocalEvictions.WithLabelValues(o.cache, reason).Inc()
+}
+
+func (o *cacheObserver) localSize(entries, bytes int) {
+	if o == nil || o.localHit == nil {
+		return
+	}
+	o.m.cacheLocalEntries.WithLabelValues(o.cache).Set(float64(entries))
+	o.m.cacheLocalBytes.WithLabelValues(o.cache).Set(float64(bytes))
 }
 
 func (o *cacheObserver) observe(op string, d time.Duration) {

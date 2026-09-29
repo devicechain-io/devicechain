@@ -626,6 +626,19 @@ is answering again`), con cuánto tiempo pasó y cuántas búsquedas y escritura
 datos mientras tanto. Un error con el que responde el bucket, como un bucket lleno que rechaza una
 escritura, se cuenta pero no hace que se omita.
 
+Cada réplica de `device-management` también guarda en memoria lo que leyó de un bucket, o escribió
+en él, durante hasta cinco segundos (menos si el tiempo de vida de la caché es menor), y responde
+desde ahí sin preguntar a NATS, incluso mientras el bucket se está omitiendo. Los cinco segundos
+cuentan desde que se leyó el valor, no desde la última vez que se usó, y cada caché guarda como
+máximo 4096 entradas o unos 4 MiB, descartando primero las usadas hace más tiempo. Una búsqueda que
+NATS informó como ausente nunca se guarda. Un cambio llega a los eventos que resuelven las demás
+réplicas hasta cinco segundos más tarde de lo que llegaría solo a través del bucket. Hasta
+entonces otra réplica puede, por ejemplo, seguir resolviendo un dispositivo borrado, o vuelto a
+crear con el mismo token, a través de su registro anterior, o evaluar una regla cuyo alcance de
+grupo acaba de cambiar con el alcance anterior. Los eventos que presentan una credencial de
+dispositivo no se ven afectados por un dispositivo borrado: las credenciales se comprueban contra
+la base de datos en cada evento.
+
 La causa habitual es un servidor NATS que se ha caído de la red sin cerrar sus conexiones. Todas
 las réplicas de un bucket responden lecturas, así que hasta que los demás servidores notan el
 silencio, lo que tarda entre un minuto y un minuto y medio, parte de las lecturas se envía al
@@ -635,7 +648,8 @@ lecturas de la base de datos.
 Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
 Espera hasta cinco segundos, porque solo el líder del bucket puede aceptarlo. Si aun así falla, el
 servicio registra `A key-value cache eviction failed`, y la entrada antigua puede servirse hasta
-que caduque, que es el tiempo de vida configurado de la caché.
+que caduque, que es el tiempo de vida configurado de la caché, más hasta cinco segundos en las
+réplicas que ya la tenían en memoria.
 
 - **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 mientras el bucket se está
   omitiendo.
@@ -644,8 +658,22 @@ que caduque, que es el tiempo de vida configurado de la caché.
 - **`devicechain_devicemanagement_kv_cache_bypassed_total{cache, op}`**: búsquedas y escrituras que
   fueron a la base de datos en su lugar.
 - **`devicechain_devicemanagement_kv_cache_request_duration_seconds{cache, op}`**: cuánto tardó
-  cada operación. Una búsqueda o una escritura se corta a medio segundo, una eliminación a cinco
-  segundos.
+  cada operación en el bucket. Una búsqueda o una escritura se corta a medio segundo, una
+  eliminación a cinco segundos. Una búsqueda respondida desde memoria nunca llega al bucket, así
+  que `op="get"` cuenta solo las búsquedas que la memoria no pudo responder.
+- **`devicechain_devicemanagement_kv_cache_local_lookups_total{cache, result}`**: búsquedas
+  respondidas desde memoria (`result="hit"`) o pasadas al bucket (`result="miss"`).
+- **`devicechain_devicemanagement_kv_cache_local_evictions_total{cache, reason}`**: entradas
+  descartadas de la memoria porque tenían cinco segundos (`reason="expired"`), porque la caché
+  estaba llena (`reason="capacity"`) o porque la entrada se eliminó tras un cambio
+  (`reason="deleted"`).
+- **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** y
+  **`devicechain_devicemanagement_kv_cache_local_bytes{cache}`**: cuántas entradas, y
+  aproximadamente cuántos bytes, guarda una réplica en memoria para la caché. Las entradas
+  caducadas cuentan hasta que una búsqueda las encuentra o la caché necesita el espacio.
+
+Una caché creada sin la copia en memoria no tiene ninguna de las cuatro series `kv_cache_local_`.
+Hoy todas las cachés de `device-management` la tienen.
 
 Por otra parte, resolver un evento que tarda más de cinco segundos, por la razón que sea, se
 registra como advertencia (`Event resolution is slow`): la primera vez de inmediato y después como

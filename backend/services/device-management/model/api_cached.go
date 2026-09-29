@@ -175,9 +175,12 @@ func (capi *CachedApi) AnyScopedGroups(ctx context.Context) (bool, error) {
 // Like the sibling read-through cache here (ProfileResolutionByType), this is
 // cache-aside: a mutation evicts post-commit, but a read that missed and is repopulating
 // across that commit can re-store the pre-commit value, so worst-case staleness is TTL-
-// bounded, not the eviction instant. That is the accepted posture for these caches. ADR-062's
-// arming invariant must therefore not depend on sub-TTL visibility of a just-registered
-// group@v — S4's rule arming owns that guarantee (e.g. arming a safety margin after Register).
+// bounded, not the eviction instant. On top of that, another replica keeps what it read in
+// process memory for up to 5 s after the eviction (see InitializeCaches). That is the
+// accepted posture for these caches. ADR-062's arming invariant must therefore not depend
+// on sub-TTL visibility of a just-registered group@v. Nothing in the tree provides a
+// margin for it today: a rule scoped to a new group can miss that group's members for up
+// to the TTL on the events of a replica still holding the old membership.
 func (capi *CachedApi) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error) {
 	tenant, hasTenant := core.TenantFromContext(ctx)
 	if !hasTenant {

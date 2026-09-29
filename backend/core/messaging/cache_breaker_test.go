@@ -106,8 +106,12 @@ func (c *fakeClock) advance(d time.Duration) {
 }
 
 // breakerCache is a Cache over store with a 20 ms budget and a clock the test moves.
+//
+// The in-process tier is off: the breaker belongs to the bucket tier, and these tests
+// drive reads into it. With the tier on, a repeat read of the same key would be answered
+// from memory and never reach the store the breaker is watching.
 func breakerCache(store cacheStore) (*Cache, *fakeClock) {
-	c := NewCacheOver(store)
+	c := NewCacheOver(store, WithoutLocalCache())
 	clock := &fakeClock{t: time.Unix(1_700_000_000, 0)}
 	c.now = clock.now
 	c.timeout = 20 * time.Millisecond

@@ -22,7 +22,7 @@ Una regla plantea una **condición** sobre la telemetría del perfil, declara su
 
 Por defecto, una regla se aplica a **todos los dispositivos** que resuelven a su perfil. En su lugar, puedes **delimitar una regla a un [grupo dinámico](./domain-model.md#facets-and-dynamic-groups)**, para que se dispare solo para los dispositivos que son miembros en ese momento. Por ejemplo, puedes ejecutar una regla de calor más estricta únicamente en *dispositivos en zonas áridas*. La delimitación es opcional y se define por regla. Las reglas de ausencia y de correlación de área no se pueden delimitar, y publicar una delimitada se rechaza.
 
-La membresía del grupo se registra en cada evento **en el momento en que se resuelve**. Por eso el motor ve exactamente qué reglas aplicaban en ese instante, incluso cuando reproduce historial para previsualizar o volver a derivar disparos. Cuando un dispositivo entra o sale del grupo, queda inscrito o excluido en su siguiente evento, sin editar ninguna regla ni reescanear nada.
+La membresía del grupo se registra en cada evento **en el momento en que se resuelve**. Por eso el motor ve exactamente qué reglas aplicaban en ese instante, incluso cuando reproduce historial para previsualizar o volver a derivar disparos. Cuando un dispositivo entra o sale del grupo, queda inscrito o excluido en su siguiente evento (en unos cinco segundos cuando `device-management` tiene más de una réplica), sin editar ninguna regla ni reescanear nada.
 
 ## Tipos de condición {#condition-types}
 

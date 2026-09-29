@@ -1587,6 +1587,8 @@ corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en q
 
 ### Próxima versión {#next-upgrade}
 
+Lo que cambia la versión posterior a `v0.18.0`, reunido a medida que llega.
+
 #### `dcctl destroy` elimina los respaldos internos de una instancia, y nuevas alertas avisan antes de que el archivado detenga una base de datos
 
 **`dcctl destroy` ahora elimina los respaldos de una instancia del almacén de objetos propio del
@@ -1644,6 +1646,27 @@ leer.
 
 No hay nada que hacer al actualizar. Ningún stream se reconfigura, y un servicio que siga en la
 versión anterior conserva su comportamiento anterior hasta que se actualice.
+
+#### device-management responde las búsquedas repetidas desde memoria {#next-local-cache}
+
+No hay que hacer nada en la actualización.
+
+- **Cada réplica de `device-management` guarda en memoria lo que leyó de sus cachés de
+  clave-valor durante hasta cinco segundos** y responde desde ahí las búsquedas repetidas del
+  mismo dispositivo, tipo de dispositivo o tenant, en lugar de preguntar a NATS. Vuelve a
+  preguntar a NATS cuando lo que guarda tiene cinco segundos, o antes si la copia en memoria está
+  llena. Un tiempo de vida de caché menor de cinco segundos también acorta la copia en memoria.
+- **Un cambio puede tardar hasta cinco segundos más en llegar a los eventos que resuelven las
+  demás réplicas**, además de lo que ya permitía el tiempo de vida de la caché. Un dispositivo
+  borrado, o vuelto a crear con el mismo token, puede seguir resolviéndose a través de su registro
+  anterior en otra réplica durante esos segundos, y una regla cuyo alcance de grupo acaba de
+  cambiar puede evaluarse allí con el alcance anterior. Los eventos que presentan una credencial
+  de dispositivo se comprueban contra la base de datos cada vez, como antes, y un flanco de alarma
+  para un dispositivo recién borrado se sigue descartando de inmediato en todas las réplicas.
+- **Cuatro métricas nuevas** cuentan las búsquedas respondidas desde memoria, las entradas
+  descartadas de ella y su tamaño. `kv_cache_request_duration_seconds{op="get"}` ahora cuenta solo
+  las búsquedas que la memoria no pudo responder. Consulte [Cachés que dejan de
+  responder](./observability.md#kv-caches).
 
 ### v0.18.0 — lo que fallaba en silencio ahora lo dice, y la ingesta sigue el ritmo de su techo {#v0180-upgrade}
 

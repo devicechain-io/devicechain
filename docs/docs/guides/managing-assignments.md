@@ -16,7 +16,7 @@ Available. Manage assignments from the **Assignment** tab on the device detail p
 A device authenticates with a credential. Assignment only organizes its data, and the two are independent:
 
 - A registered, credentialed device reports telemetry immediately, even with no assignment. Its events resolve with an empty anchor set: they still persist and still update the device's live state, but they are not yet attributed to a customer, area or asset.
-- Assigning the device later gives its subsequent events an anchor, so queries such as "every reading for Building 7" find them.
+- Assigning the device later gives its subsequent events an anchor (within about five seconds when `device-management` runs more than one replica), so queries such as "every reading for Building 7" find them.
 
 Unassigned devices are therefore never silently dropped. This is a change from earlier behavior.
 

@@ -1494,6 +1494,8 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 ### Next release {#next-upgrade}
 
+What the release after `v0.18.0` changes, collected as it lands.
+
 #### `dcctl destroy` removes an instance's in-cluster backups, and new alerts warn before archiving stops a database
 
 **`dcctl destroy` now removes an instance's backups from the cluster's own object store.** Once
@@ -1545,6 +1547,26 @@ events, and that history does not count towards the limit. Only unread events do
 
 Nothing to do at upgrade. No stream is reconfigured, and a service still on the previous release
 keeps its previous behaviour until it is upgraded.
+
+#### device-management answers repeated lookups from memory {#next-local-cache}
+
+Nothing needs doing at the upgrade.
+
+- **Each `device-management` replica keeps what it read from its key-value caches in memory for
+  up to five seconds**, and answers repeated lookups for the same device, device type or tenant
+  from there instead of asking NATS. It asks NATS again once what it holds is five seconds old,
+  or sooner if the in-memory copy is full. A cache time to live below five seconds also shortens
+  the in-memory copy.
+- **A change can take up to five seconds longer to reach the events that other replicas
+  resolve**, on top of what the cache's time to live already allowed. A device deleted, or
+  re-created under the same token, can still resolve through its old record on another replica
+  for those seconds, and a rule whose group scope was just changed can be evaluated there against
+  the previous scope. Events that present a device credential are checked against the database
+  every time, as before, and an alarm edge for a device that was just deleted is still dropped at
+  once on every replica.
+- **Four new metrics** count lookups answered from memory, entries dropped from it, and its size.
+  `kv_cache_request_duration_seconds{op="get"}` now counts only the lookups memory could not
+  answer. See [Caches that stop answering](./observability.md#kv-caches).
 
 ### v0.18.0 — what failed silently now says so, and ingest keeps up with its ceiling {#v0180-upgrade}
 
