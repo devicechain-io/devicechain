@@ -26,13 +26,15 @@ var Rules = []Rule{
 			{Pkg: CorePkg, Recv: "Microservice", Name: "NewHttpServer"},
 			{Pkg: CorePkg, Name: "NewHttpServerForHandler"},
 			{Pkg: CorePkg, Name: "NewHttpServerForHandlerWithOptions"},
+			{Pkg: CorePkg, Name: "NewHttpServerAt"},
 		},
 		Forbidden: Initialize,
 		Expect:    Start,
-		// 🔴 A FLOOR WITH ROOM UNDER IT, NOT TODAY'S COUNT. Three servers are built on
-		// the start path: the GraphQL manager's, core/service's probes-only server and
-		// event-sources' device-ingest listener — two in core and one in event-sources —
-		// all reached through a component's ExecuteStart. Two leaves room for merging a listener or retiring
+		// 🔴 A FLOOR WITH ROOM UNDER IT, NOT TODAY'S COUNT. Four servers are built on
+		// the start path: the GraphQL manager's, core/service's probes-only server, the
+		// opt-in profiling listener (core.Microservice's own ExecuteStart, through
+		// NewHttpServerAt) and event-sources' device-ingest listener — three in core and
+		// one in event-sources — all reached through a component's ExecuteStart. Two leaves room for merging a listener or retiring
 		// the ingest transport without a failure that says nothing about the rule — and
 		// a floor people edit to make green is a floor that stops meaning anything.
 		//

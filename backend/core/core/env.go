@@ -16,6 +16,13 @@ const (
 	// the Helm chart runs) emits structured JSON for log aggregation (E16).
 	ENV_LOG_CONSOLE = "DC_LOG_CONSOLE"
 
+	// ENV_PROFILER_ADDRESS turns on the opt-in profiling listener and says where it
+	// binds: an IP literal and a port, for example 127.0.0.1:6060. Unset (the default)
+	// means no listener at all. The chart writes it into ONE area's Deployment, from
+	// functionalAreas.<area>.profiler, so turning it on restarts that service alone.
+	// A value that is set but malformed refuses startup; see profilerAddress.
+	ENV_PROFILER_ADDRESS = "DC_PROFILER_ADDRESS"
+
 	// ENV_REMOVED_SHUTDOWN_DRAIN_SECONDS is a variable this process REFUSES TO START
 	// ON, not one it reads. The shutdown drain window is instance configuration —
 	// infrastructure.shutdown.drainSeconds, written by the chart from its

@@ -218,12 +218,20 @@ type HttpServerOptions struct {
 // NewHttpServerForHandler for everything else about the server it returns, including
 // why WriteTimeout and IdleTimeout are not offered here at all.
 func NewHttpServerForHandlerWithOptions(port int32, handler http.Handler, opts HttpServerOptions) *HttpServer {
+	return NewHttpServerAt(fmt.Sprintf(":%d", port), handler, opts)
+}
+
+// NewHttpServerAt is NewHttpServerForHandlerWithOptions on an explicit listen ADDRESS,
+// host and port, rather than a port on every interface. It exists for the profiling
+// listener, whose default is the pod's loopback address alone. Everything else about the
+// server it returns is as NewHttpServerForHandler describes.
+func NewHttpServerAt(addr string, handler http.Handler, opts HttpServerOptions) *HttpServer {
 	readHeaderTimeout := opts.ReadHeaderTimeout
 	if readHeaderTimeout <= 0 {
 		readHeaderTimeout = httpReadHeaderTimeout
 	}
 	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", port),
+		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ConnState:         opts.ConnState,

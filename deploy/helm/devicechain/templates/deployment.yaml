@@ -14,7 +14,8 @@ ADR-022 review hardening:
   E8 — checksum annotations roll the pods when config (Secret/ConfigMap) changes.
 */}}
 {{- $root := . -}}
-{{- $blob := include "devicechain.blobBackendConfig" . | fromJson }}
+{{- include "devicechain.validateProfilerAreas" . }}
+{{- $blob :=include "devicechain.blobBackendConfig" . | fromJson }}
 {{- $blobBackend := $blob.backend | default "filesystem" }}
 {{- $blobPersist := ($root.Values.blobStorage | default dict).persistence | default dict }}
 {{- $blobPath := ternary ($blobPersist.mountPath | default "") ($blob.directory | default "") (ne ($blobPersist.mountPath | default "") "") }}
@@ -224,6 +225,13 @@ spec:
             limit to derive from, rather than guessed. */}}
             {{- with include "devicechain.goMemLimit" (dict "area" $area "areaCfg" $areaCfg "root" $root) }}
             - name: GOMEMLIMIT
+              value: {{ . | quote }}
+            {{- end }}
+            {{/* The opt-in profiling listener, for this area only; see
+            devicechain.profilerAddress. Absent unless
+            functionalAreas.<area>.profiler.enabled, and never a port below. */}}
+            {{- with include "devicechain.profilerAddress" (dict "area" $area "areaCfg" $areaCfg "root" $root) }}
+            - name: DC_PROFILER_ADDRESS
               value: {{ . | quote }}
             {{- end }}
             {{- /* user-management's superuser SEED password, from the instance's own

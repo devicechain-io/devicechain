@@ -366,6 +366,15 @@
           "avoidEventStorePrimary": {
             "type": "boolean",
             "description": "Prefer (never require) a node that is not running this instance's event-store primary."
+          },
+          "profiler": {
+            "type": "object",
+            "description": "Opt-in profiling listener for this area: Go runtime profiles (CPU, heap, goroutines, execution trace) on a port of its own, never on the Service or the ingress. Off by default. Turning it on restarts this area's pods only.",
+            "properties": {
+              "enabled": { "type": "boolean", "description": "Serve profiles from this area's pods. Default false." },
+              "address": { "type": "string", "minLength": 1, "description": "IP address and port the listener binds. Default 127.0.0.1:6060, the pod's loopback address, reachable only with kubectl port-forward. Any other address is reachable by anything that can reach the pod, without authentication." }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
