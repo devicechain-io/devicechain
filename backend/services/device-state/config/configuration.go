@@ -54,7 +54,7 @@ type ProjectionConfiguration struct {
 	// connection from a pool the platform's connection budget sizes at 20.
 	Writers int
 
-	// MaxBatch is the most events one transaction merges, 1 to rdb.MaxWriterBatch. Unset (0)
+	// MaxBatch is the most events one transaction merges, 1 to writerbatch.MaxSize. Unset (0)
 	// defaults to DefaultProjectionMaxBatch; 1 turns batching off, so every event is merged
 	// in transactions of its own.
 	//
@@ -69,7 +69,7 @@ type ProjectionConfiguration struct {
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more
-	// events before merging it, 0 to rdb.MaxWriterLingerMillis. 0 (the default) takes only
+	// events before merging it, 0 to writerbatch.MaxLingerMillis. 0 (the default) takes only
 	// what is already waiting, which adds no latency: under light load a writer finds one
 	// event and merges it alone, and batches grow by themselves once events arrive faster
 	// than single merges keep up with.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/writerbatch"
 	pgx "github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -362,41 +363,16 @@ func CheckWriterCount(key string, writers int, cfg config.MicroserviceDatastoreC
 	return nil
 }
 
-// MaxWriterBatch caps the messages one batching writer commits in one transaction.
-//
-// It is NOT a statement-size bound, and PostgreSQL's 65535-parameter limit is not what caps
-// it. event-management runs each message's own statements one after another inside the
-// batch's transaction, so a statement's parameters are bounded by one message; device-state
-// merges a batch into multi-row upserts chunked at a fixed row count, so its statements are
-// bounded by that chunk (and its lock by the batch's distinct devices, at most this cap).
-// Neither comes near the limit at any batch size this cap allows.
-//
-// What it bounds is how long a writing transaction can be, and that has two costs:
-//   - the erasure fence's first answer is remembered for the whole transaction
-//     (tenant_fence.go), so a longer one widens the window its argument accounts for;
-//   - a batch that does not commit is written again: the rest of the batch re-runs once
-//     for each message refused inside it, and a failure no message caused writes every one
-//     of them again on its own.
-//
-// And nothing measured has shown a larger cap would help. On a three-node cloud cluster,
-// event-management at 10 writers stopped rising near 6,000 events a second with batches
-// averaging about 21 at 6,000 and 28 to 30 above it, under this cap. device-state's batches did reach it (60 to 63, with a
-// 25 ms linger) in the same run; a larger cap is a change to make from a measurement of
-// that, not ahead of one.
-const MaxWriterBatch = 64
-
-// MaxWriterLingerMillis caps how long a batching writer may wait for its batch to fill.
-const MaxWriterLingerMillis = 1000
-
 // CheckWriterBatch is the ONE bound on a batching writer's batch size and linger, shared by
 // every service whose writers batch. prefix is the settings' parent key ("persistence",
-// "projection"), so the error names the setting as the operator wrote it.
+// "projection"), so the error names the setting as the operator wrote it. The bounds
+// themselves are writerbatch.MaxSize and writerbatch.MaxLingerMillis.
 func CheckWriterBatch(prefix string, maxBatch, lingerMillis int) error {
-	if maxBatch < 1 || maxBatch > MaxWriterBatch {
-		return fmt.Errorf("%s.maxBatch must be between 1 and %d, got %d", prefix, MaxWriterBatch, maxBatch)
+	if maxBatch < 1 || maxBatch > writerbatch.MaxSize {
+		return fmt.Errorf("%s.maxBatch must be between 1 and %d, got %d", prefix, writerbatch.MaxSize, maxBatch)
 	}
-	if lingerMillis < 0 || lingerMillis > MaxWriterLingerMillis {
-		return fmt.Errorf("%s.lingerMillis must be between 0 and %d, got %d", prefix, MaxWriterLingerMillis, lingerMillis)
+	if lingerMillis < 0 || lingerMillis > writerbatch.MaxLingerMillis {
+		return fmt.Errorf("%s.lingerMillis must be between 0 and %d, got %d", prefix, writerbatch.MaxLingerMillis, lingerMillis)
 	}
 	return nil
 }

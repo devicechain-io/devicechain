@@ -43,7 +43,7 @@ const (
 	// writers did.
 	DefaultPersistenceWriters = 10
 	// DefaultPersistenceMaxBatch is the most events one writer commits in one transaction.
-	// It is rdb.MaxWriterBatch, the largest accepted.
+	// It is writerbatch.MaxSize, the largest accepted.
 	//
 	// The cloud measurement above changed it together with the writer count, and batches
 	// there averaged below 32, so it does not show 64 helping over 32. Measured in-process
@@ -87,13 +87,13 @@ type PersistenceConfiguration struct {
 	// sweep share.
 	Writers int
 
-	// MaxBatch is the most events one transaction commits, 1 to rdb.MaxWriterBatch.
+	// MaxBatch is the most events one transaction commits, 1 to writerbatch.MaxSize.
 	// Unset (0) defaults to DefaultPersistenceMaxBatch; 1 turns batching off, so every
 	// event gets a transaction of its own.
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more
-	// events before committing it, 0 to rdb.MaxWriterLingerMillis. 0 (the default) takes
+	// events before committing it, 0 to writerbatch.MaxLingerMillis. 0 (the default) takes
 	// only what is already waiting, which adds no latency: under light load a writer finds
 	// one event and commits it alone, and batches grow by themselves once events arrive
 	// faster than single commits keep up with.

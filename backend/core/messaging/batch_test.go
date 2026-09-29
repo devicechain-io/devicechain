@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/writerbatch"
 )
 
 // numbered is a message CollectBatch can tell apart: its Subject is its index.
@@ -49,7 +49,7 @@ func TestCollectBatchTakesWhatIsWaitingUpToMax(t *testing.T) {
 // commits twice as few transactions as one silently held to half of it, and nothing else
 // about the batches it writes would show the difference.
 func TestCollectBatchTakesAWholeBatchAtTheWriterCap(t *testing.T) {
-	max := rdb.MaxWriterBatch
+	max := writerbatch.MaxSize
 	ch := filled(2*max+1, true)
 	for i := 0; i < 2; i++ {
 		batch, open := CollectBatch(ch, max, 0, admitAll)

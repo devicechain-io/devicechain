@@ -48,7 +48,7 @@ func TestPersistenceSettingsAreBounded(t *testing.T) {
 			"persistence.writers is 10, but the connection pool holds 8"},
 		{"negative maxBatch", `{"persistence":{"maxBatch":-1}}`, "persistence.maxBatch must be between 1 and 64, got -1"},
 		{"maxBatch above the cap", `{"persistence":{"maxBatch":65}}`, "persistence.maxBatch must be between 1 and 64, got 65"},
-		// The cap is not a statement-size bound, and was kept at 64 on purpose: see rdb.MaxWriterBatch.
+		// The cap is not a statement-size bound, and was kept at 64 on purpose: see writerbatch.MaxSize.
 		{"maxBatch of 128", `{"persistence":{"maxBatch":128}}`, "persistence.maxBatch must be between 1 and 64, got 128"},
 		{"maxBatch at the cap", `{"persistence":{"maxBatch":64}}`, ""},
 		{"maxBatch of one", `{"persistence":{"maxBatch":1}}`, ""},
