@@ -485,6 +485,11 @@ func TestArchivePathFailsOnAnUnreadableArchiverSpec(t *testing.T) {
 // developer's context happened to point at.
 //
 // So withDeployedInstance stubs both, and this is the check that it still does.
+//
+// Since TestMain runs the package against an empty kubeconfig, an unstubbed read can no
+// longer reach the developer's cluster; it fails on a config error instead. The stubs, and
+// this check, still decide WHAT a test driving stepRenderConfig is answered: without them
+// it would be exercising the read-failure branch rather than the one it names.
 func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 	archiveBefore := reflect.ValueOf(readLiveArchiveState).Pointer()
 	hashesBefore := reflect.ValueOf(lookupDeployedBrokerHashes).Pointer()
@@ -494,19 +499,19 @@ func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 	withDeployedInstance(t, nil, nil)
 	if reflect.ValueOf(readLiveArchiveState).Pointer() == archiveBefore {
 		t.Fatal("withDeployedInstance no longer stubs readLiveArchiveState, so every test that " +
-			"drives stepRenderConfig through it now reads the database archive state from a " +
-			"REAL cluster — the developer's own, if they have one. Restore the withArchiveState " +
+			"drives stepRenderConfig through it now reads the database archive state from the " +
+			"environment's cluster instead of the answer it asked for. Restore the withArchiveState " +
 			"call in withDeployedInstance.")
 	}
 	// The third one, added with the broker-hash reuse. Same failure mode as the
 	// above and the same reason it is worth a standing check rather than a comment:
-	// unstubbed it reads a ConfigMap from whatever cluster the developer's kubeconfig
-	// points at, and because it answers "nothing" for every error it would do so
-	// SILENTLY — green on a desk with no cluster, green on a desk with the wrong one,
-	// and quietly reading a real instance's broker config on a desk with the right one.
+	// unstubbed it reads a ConfigMap from whatever cluster the environment names, and
+	// because it answers "nothing" for every error it would do so SILENTLY — under
+	// TestMain's empty kubeconfig every such test would pass on a config error rather
+	// than on the broker hashes it was about.
 	if reflect.ValueOf(lookupDeployedBrokerHashes).Pointer() == hashesBefore {
 		t.Fatal("withDeployedInstance no longer stubs lookupDeployedBrokerHashes, so every test " +
-			"driving stepRenderConfig now reads the broker's ConfigMap from a REAL cluster. " +
+			"driving stepRenderConfig now reads the broker's ConfigMap from the environment's cluster. " +
 			"Restore the withDeployedBrokerHashes call in withDeployedInstance.")
 	}
 	// 🔴 THE FOURTH AND FIFTH ARE A FILE, WHICH IS WHY THE TEST'S NAME NO LONGER SAYS

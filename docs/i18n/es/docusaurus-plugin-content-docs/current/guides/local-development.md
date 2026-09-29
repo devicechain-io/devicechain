@@ -126,6 +126,18 @@ detector ralentiza las pruebas varias veces, así que una prueba que afirma un p
 de reloj puede fallar con él sin que haya ninguna condición de carrera. Corrige esa prueba para que
 su presupuesto no dependa de lo rápido que se ejecute el binario.
 
+**Las pruebas de dcctl nunca llegan a tu clúster.** Las pruebas de `backend/cli` parten de un
+kubeconfig vacío, sea cual sea tu contexto actual. Todo paquete cuyas pruebas podrían tomar un
+clúster del kubeconfig, de Helm o de OpenTofu tiene un `TestMain` que se ejecuta antes que cualquier
+prueba. Apunta `KUBECONFIG` y la ruta de kubeconfig de las raíces de OpenTofu a un archivo vacío, y
+borra las variables de ejecución dentro del clúster, `KUBE_*` y `HELM_KUBE*`. También elimina el
+servidor por defecto al que Helm recurre con un kubeconfig vacío, `http://localhost:8080` o el que
+indique `KUBERNETES_MASTER`. Así, una ejecución en tu máquina se comporta como en CI, y ninguna
+prueba puede actuar sobre el clúster al que estás conectado. Una prueba que necesita un clúster
+establece su propio `KUBECONFIG`. Un paquete nuevo en `backend/cli` cuyas pruebas puedan llegar a un
+clúster necesita el mismo `TestMain`. Una prueba en `backend/cli/internal/kubeisolation` encuentra
+esos paquetes a partir del grafo de importaciones y falla hasta que cada uno lo tenga.
+
 ### Fuzzing
 
 `go test` sin más solo ejecuta las entradas semilla de cada prueba de fuzzing. Para hacer fuzzing,
