@@ -4050,6 +4050,23 @@ cambia el firmware de esos dispositivos para que envíen como máximo 256 lectur
   los eventos que admite, y el resto se cuenta en `ingest_samples_shed_total`. Se elimina la
   métrica `notify_samples_truncated_total`. Quítala de cualquier panel o alerta.
 
+#### Se almacena un evento que lleva miles de lecturas {#next-large-events}
+
+Un evento con más lecturas de las que caben en una sola sentencia de la base de datos (más de
+unas 5.950 mediciones, 5.450 ubicaciones o 6.550 alertas, o 9.350 anclajes de relación) no se
+podía almacenar nunca. El controlador de la base de datos rechazaba la sentencia,
+`event-management` reintentaba el evento hasta agotar sus entregas y después lo registraba en el
+stream `failed-events` como un fallo posterior, no como un problema del propio evento. Antes del
+límite de 256 lecturas descrito arriba, un evento así podía venir de un mensaje Sparkplug con
+miles de métricas, o de un transporte JSON cuyo `maxReadingsPerMessage` se hubiera subido por
+encima de su valor predeterminado de 1000. Ahora el
+almacén de eventos escribe un evento grande en tantas sentencias como necesite, dentro de la misma
+transacción, así que se almacena entero o no se almacena, como cualquier otro, y una reentrega
+suya no añade nada. El mismo camino de reintentos y fallo posterior lo seguía un evento de cambio
+de estado cuyo identificador de sesión es demasiado grande para la columna de 64 bits con signo de
+la base de datos; ese evento se registra ahora como inválido en su primera entrega. No hay que
+hacer nada.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

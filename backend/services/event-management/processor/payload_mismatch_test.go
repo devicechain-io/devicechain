@@ -207,4 +207,24 @@ func TestDatabaseValueRejectionIsDeterministic(t *testing.T) {
 	if errors.Is(classifyPersistFailure(plain), ErrDeterministic) {
 		t.Fatal("an unrecognized error must NOT be classified deterministic")
 	}
+
+	// The driver's refusal of a statement over its parameter limit is no PgError — pgx
+	// raises it before sending anything — and the same message builds the same statement
+	// on every delivery. Its wording is pinned against the real driver in core/rdb's
+	// statement_limit_integration_test.go.
+	tooLarge := fmt.Errorf("insert: %w", errors.New("extended protocol limited to 65535 parameters"))
+	if !errors.Is(classifyPersistFailure(tooLarge), ErrDeterministic) {
+		t.Fatal("a statement refused for its size must be classified deterministic")
+	}
+
+	// The driver's refusal of a value it cannot encode for its column is no PgError either:
+	// a state-change event's uint64 SessionId above the int64 range, bound to a bigint. The
+	// same value is refused on every delivery. Its wording is pinned against the real driver
+	// in the same core/rdb test.
+	unencodable := fmt.Errorf("insert: %w", errors.New("failed to encode args[9]: unable to encode "+
+		"0xffffffffffffffff into binary format for int8 (OID 20): 18446744073709551615 is greater "+
+		"than maximum value for int64"))
+	if !errors.Is(classifyPersistFailure(unencodable), ErrDeterministic) {
+		t.Fatal("a value the driver cannot encode must be classified deterministic")
+	}
 }

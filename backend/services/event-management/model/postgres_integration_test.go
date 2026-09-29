@@ -42,6 +42,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // newPostgresApi runs the REAL migration chain through the REAL core/rdb path against a
@@ -302,4 +303,62 @@ func TestIntegrationCompressionEnablesWithTheIdentityKey(t *testing.T) {
 	require.NoError(t, api.RDB.DB(ctx).Find(&events).Error)
 	require.Len(t, events, 1, "the row must still be readable through the compressed chunk")
 	assert.Equal(t, ev.EventId, events[0].EventId)
+}
+
+// TestIntegrationManyParentsAndStateChangesInOneCall writes, in one call, more distinct
+// events than one INSERT can carry parent rows for (8 parameters a row), through the two
+// sites that take one row per call from today's worker but a slice by signature: the
+// parent upsert and the state-change insert. A statement binding more than the driver's
+// 65535 parameters is refused before it is sent, so this is where a site that stopped
+// splitting fails — by the rows that are not there.
+func TestIntegrationManyParentsAndStateChangesInOneCall(t *testing.T) {
+	api := newPostgresApi(t, "itmanyrows")
+	ctx := core.WithTenant(context.Background(), "acme")
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	const n = 9000
+	require.Greater(t, n*8, rdb.MaxBindParameters, "precondition: one statement cannot carry them")
+
+	measurements := make([]*MeasurementEventCreateRequest, n)
+	for i := range measurements {
+		ev := Event{DeviceToken: "device-1", EventType: esmodel.Measurement,
+			OccurredTime: base.Add(time.Duration(i) * time.Millisecond), Source: "sparkplug"}
+		ev.EventId = DeriveEventId("acme", &ev, []byte(fmt.Sprintf("m=%d", i)))
+		measurements[i] = &MeasurementEventCreateRequest{Event: ev, EntryOccurredTime: ev.OccurredTime,
+			Name: "m", Value: f64(float64(i))}
+	}
+	count := func(model any) int64 {
+		var c int64
+		require.NoError(t, api.RDB.DB(ctx).Model(model).Count(&c).Error)
+		return c
+	}
+	// Twice: the second is a redelivery, and every statement of it must keep its arbiter.
+	for delivery := 1; delivery <= 2; delivery++ {
+		require.NoErrorf(t, api.PersistInTx(ctx, func(tx *gorm.DB) error {
+			_, err := api.CreateMeasurementEvents(ctx, tx, measurements)
+			return err
+		}), "measurements, delivery %d", delivery)
+		assert.EqualValuesf(t, n, count(&Event{}), "parent rows after delivery %d", delivery)
+		assert.EqualValuesf(t, n, count(&MeasurementEvent{}), "measurement rows after delivery %d", delivery)
+	}
+
+	changes := make([]*StateChangeEventCreateRequest, n)
+	for i := range changes {
+		ev := Event{DeviceToken: "device-2", EventType: esmodel.StateChange,
+			OccurredTime: base.Add(time.Duration(i) * time.Millisecond), Source: "lwm2m"}
+		ev.EventId = DeriveEventId("acme", &ev, []byte(fmt.Sprintf("s=%d", i)))
+		changes[i] = &StateChangeEventCreateRequest{Event: ev, State: "connected", SessionId: uint64(i + 1)}
+	}
+	for delivery, want := range []int64{n, 0} {
+		var affected int64
+		require.NoErrorf(t, api.PersistInTx(ctx, func(tx *gorm.DB) error {
+			var err error
+			_, affected, err = api.CreateStateChangeEvents(ctx, tx, changes)
+			return err
+		}), "state changes, delivery %d", delivery+1)
+		// Summed over the statements: a redelivery that inserted nothing anywhere is 0,
+		// which is how the caller knows to skip the anchors.
+		assert.Equalf(t, want, affected, "rows affected on delivery %d", delivery+1)
+		assert.EqualValuesf(t, n, count(&StateChangeEvent{}), "state-change rows after delivery %d", delivery+1)
+	}
+	assert.EqualValues(t, 2*n, count(&Event{}), "every state change has its own parent")
 }
