@@ -6,8 +6,11 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +35,17 @@ import (
 // and initialised, not started. Its gates' sampling loop runs every few seconds in the
 // background, reading the same broker state; the tests measure explicitly, after each
 // publish, so what they assert does not depend on when the loop ticks.
+//
+// 🔴 An explicit measurement (sample) first waits for the broker to COUNT what it
+// acknowledged. A PubAck is sent before the stream signals its consumers, and NumPending is
+// counted from that signal, so a measurement taken the moment a publish returns can read one
+// message low: the gate then reads 17 of 20 unread at the 18th publish and stays open one
+// publish too long. Measurements outside that hook are not settled: registration's first
+// sample (NewWriter, NewReader) and the background loop's. The only test that asserts on one
+// right after a publish, the forwarding reader's gate in TestAForwardingReaderParks…, is
+// safe because the settled fill before it has already waited on the same stream's count;
+// TestTheSamplingLoop… polls across several ticks. A new test that asserts straight after
+// NewWriter or NewReader must measure through sample first.
 type bpService struct {
 	nmgr *NatsManager
 	reg  *prometheus.Registry
@@ -80,7 +94,17 @@ func (s *bpService) reader(t *testing.T, suffix string) *natsReader {
 	return r.(*natsReader)
 }
 
-func (s *bpService) sample(suffix string) {
+// sample measures suffix's gate once the broker has counted every publish that returned:
+// what a test asserts after a publish.
+func (s *bpService) sample(t *testing.T, suffix string) {
+	t.Helper()
+	s.nmgr.MeasureBackpressureForTesting(t, suffix)
+}
+
+// sampleUnsettled measures without waiting, for a test that has broken the broker (or the
+// ConsumerInfo seam) on purpose and is asserting what a FAILED measurement does: the wait
+// would fail the test on the very failure being asserted.
+func (s *bpService) sampleUnsettled(suffix string) {
 	s.nmgr.sampleBackpressure(context.Background(), suffix)
 }
 
@@ -128,7 +152,7 @@ func fill(t *testing.T, svc *bpService, w MessageWriter, suffix string, attempts
 				first = err
 			}
 		}
-		svc.sample(suffix)
+		svc.sample(t, suffix)
 	}
 	return refused, first
 }
@@ -265,7 +289,7 @@ func TestOnlyTheDeclaredReaderGatesResolvedEvents(t *testing.T) {
 
 	em := newBPService(t, srv, "event-management", bounds)
 	em.reader(t, streams.ResolvedEvents) // DeliverAll: all 19 are unread to it
-	dm.sample(streams.ResolvedEvents)
+	dm.sample(t, streams.ResolvedEvents)
 	err := w.WriteMessages(tenantCtx(), Message{Value: []byte("m")})
 	var bpe *BackpressureError
 	if !errors.As(err, &bpe) || bpe.Durable != DurableName("test", "event-management", streams.ResolvedEvents) {
@@ -298,7 +322,7 @@ func TestADurableOfAnAreaNotDeployedDoesNotGate(t *testing.T) {
 		"not this pod's mount": func() ([]string, error) { return []string{"user-management"}, nil },
 	} {
 		g.enabledAreas = areas
-		dm.sample(streams.ResolvedEvents)
+		dm.sample(t, streams.ResolvedEvents)
 		if err := w.WriteMessages(tenantCtx(), Message{Value: []byte("m")}); !errors.Is(err, ErrStreamBackpressure) {
 			t.Fatalf("%s: with event-management 19 of 20 behind the publish answered %v; want a refusal", name, err)
 		}
@@ -403,7 +427,7 @@ func TestAForwardingReaderParksWithoutSpendingDeliveries(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for dm.nmgr.Backpressure(streams.ResolvedEvents) != nil && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
-		dm.sample(streams.ResolvedEvents)
+		dm.sample(t, streams.ResolvedEvents)
 	}
 	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	m, err := in.ReadMessage(ctx)
@@ -479,7 +503,7 @@ func TestAGateThatCannotMeasureStaysClosedAndSaysSo(t *testing.T) {
 	}
 
 	srv.Shutdown()
-	es.sample(streams.InboundEvents)
+	es.sampleUnsettled(streams.InboundEvents)
 	err := es.nmgr.Backpressure(streams.InboundEvents)
 	var bpe *BackpressureError
 	if !errors.As(err, &bpe) || bpe.Stale || bpe.Durable == "" {
@@ -490,7 +514,7 @@ func TestAGateThatCannotMeasureStaysClosedAndSaysSo(t *testing.T) {
 			"must be withdrawn, not exported as a current one", v)
 	}
 	clk.advance(31 * time.Second)
-	es.sample(streams.InboundEvents)
+	es.sampleUnsettled(streams.InboundEvents)
 	if err := es.nmgr.Backpressure(streams.InboundEvents); !errors.As(err, &bpe) || !bpe.Stale {
 		t.Fatalf("31 s without a successful sample the gate answered %v; want stale", err)
 	}
@@ -535,7 +559,7 @@ func TestAGateWhoseConsumerCannotBeMeasuredStaysClosed(t *testing.T) {
 	if _, err := es.nmgr.js.StreamInfo(stream); err != nil {
 		t.Fatalf("precondition: StreamInfo must still answer, so only ConsumerInfo fails: %v", err)
 	}
-	es.sample(streams.InboundEvents)
+	es.sampleUnsettled(streams.InboundEvents)
 	err := es.nmgr.Backpressure(streams.InboundEvents)
 	if !errors.As(err, &bpe) || bpe.Stale || bpe.Durable != DurableName("test", "device-management", streams.InboundEvents) {
 		t.Fatalf("a ConsumerInfo that failed changed a closed gate's answer to %v; want it still closed on "+
@@ -546,7 +570,7 @@ func TestAGateWhoseConsumerCannotBeMeasuredStaysClosed(t *testing.T) {
 			"durable must fail, and withdraw the series", v)
 	}
 	clk.advance(31 * time.Second)
-	es.sample(streams.InboundEvents)
+	es.sampleUnsettled(streams.InboundEvents)
 	if err := es.nmgr.Backpressure(streams.InboundEvents); !errors.As(err, &bpe) || !bpe.Stale {
 		t.Fatalf("31 s of failed ConsumerInfo the gate answered %v; want stale", err)
 	}
@@ -630,5 +654,164 @@ func TestEveryDeclaredStreamIsStillCreatedDiscardOld(t *testing.T) {
 		if info.Config.Discard != nats.DiscardOld {
 			t.Errorf("stream %s is created %v; every stream discards old, and backpressure is the platform's", s.Suffix, info.Config.Discard)
 		}
+	}
+}
+
+// consumerInfoFunc is the gates' consumerInfo seam.
+type consumerInfoFunc func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error)
+
+// lagOnce wraps a consumerInfo so that the first read after a durable's NumPending rises
+// reports it one low, as the broker does between a PubAck and its signal loop, and every read
+// after that the true value.
+type lagOnce struct {
+	mu    sync.Mutex
+	inner consumerInfoFunc
+	seen  map[string]uint64
+}
+
+func (l *lagOnce) info(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+	ci, err := l.inner(ctx, stream, durable)
+	if err != nil {
+		return ci, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	prev := l.seen[durable]
+	l.seen[durable] = ci.NumPending
+	if ci.NumPending > prev {
+		lagged := *ci
+		lagged.NumPending--
+		return &lagged, nil
+	}
+	return ci, nil
+}
+
+// withoutSamplingLoop keeps s's gates from ever starting their background loop, so the only
+// measurements are the ones the test makes (and registration's). It must run before the
+// first writer or reader is built.
+func withoutSamplingLoop(s *bpService) {
+	s.nmgr.backpressure().loop.Do(func() {})
+}
+
+// A publish is acknowledged before the broker counts it against its consumers. Every read of
+// this seam after a publish reports one message fewer than the stream holds, once: measured
+// straight away, the gate reads 17 of 20 at the 18th publish, stays open, and admits a 19th.
+// Measured once the broker has counted the publish, it closes at exactly 18, as it does when
+// the broker is quick.
+func TestTheGateIsMeasuredOnlyOnceTheBrokerHasCountedThePublish(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	bounds := bpBounds{maxMsgs: 20}
+	dm := newBPService(t, srv, "device-management", bounds)
+	dm.reader(t, streams.InboundEvents) // the gating durable; never reads
+	es := newBPService(t, srv, "event-sources", bounds)
+	withoutSamplingLoop(es)
+	g := es.nmgr.backpressure()
+	l := &lagOnce{inner: g.consumerInfo, seen: map[string]uint64{}}
+	g.consumerInfo = l.info // before the writer: nothing reads the seam yet
+	w := es.writer(t, streams.InboundEvents)
+
+	const attempts = 40
+	refused, _ := fill(t, es, w, streams.InboundEvents, attempts, []byte("m"))
+
+	st := streamState(t, es.nmgr, streams.InboundEvents)
+	if st.LastSeq != 18 || refused != attempts-18 {
+		t.Fatalf("the stream's last sequence is %d with %d of %d publishes refused; want 18 and %d: a "+
+			"measurement that read the broker before it had counted the last publish kept the gate open "+
+			"past 90%% of the ceiling", st.LastSeq, refused, attempts, attempts-18)
+	}
+	if !seqOneRetained(t, es.nmgr, streams.InboundEvents) {
+		t.Fatalf("seq 1 was evicted (stream first=%d last=%d)", st.FirstSeq, st.LastSeq)
+	}
+}
+
+// fatalRecorder is a test's T whose Fatalf records instead of ending the goroutine, so a test
+// can see what the measuring hook does after declaring a measurement untrustworthy.
+type fatalRecorder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (f *fatalRecorder) Helper() {}
+
+func (f *fatalRecorder) Fatalf(format string, args ...any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fmt.Sprintf(format, args...))
+}
+
+// NEGATIVE CONTROL for the wait: a broker that never counts the last publish must FAIL the
+// test that measures it, naming the durable and both counts, and must not be measured at all.
+// A wait that gave up silently and measured anyway would make every test above pass or fail
+// exactly as it did before the wait existed.
+//
+// Each read of the seam takes 20 ms, so the deadline lands inside a read as often as not: the
+// failure must still report what the broker last SAID, not the deadline that cut a read short.
+func TestMeasuringFailsTheTestWhenTheBrokerNeverCountsThePublish(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	clk := newTestClock()
+	bounds := bpBounds{maxMsgs: 20}
+	dm := newBPService(t, srv, "device-management", bounds)
+	dm.reader(t, streams.InboundEvents)
+	es := newBPService(t, srv, "event-sources", bounds)
+	withoutSamplingLoop(es)
+	g := es.nmgr.backpressure()
+	g.now = clk.now
+	answer := g.consumerInfo
+	var reads atomic.Int64
+	g.consumerInfo = func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+		reads.Add(1)
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		ci, err := answer(ctx, stream, durable)
+		if err != nil || ci.NumPending == 0 {
+			return ci, err
+		}
+		low := *ci
+		low.NumPending--
+		return &low, nil
+	}
+	w := es.writer(t, streams.InboundEvents)
+	for i := 0; i < 5; i++ {
+		if err := w.WriteMessages(tenantCtx(), Message{Value: []byte("m")}); err != nil {
+			t.Fatalf("publish %d: %v", i+1, err)
+		}
+	}
+	g.mu.Lock()
+	registered := g.gates[streams.InboundEvents].sampledAt
+	g.mu.Unlock()
+	clk.advance(time.Second) // a measurement from here on moves sampledAt
+
+	rec := &fatalRecorder{}
+	begun := time.Now()
+	es.nmgr.MeasureBackpressureForTesting(rec, streams.InboundEvents)
+	took := time.Since(begun)
+
+	rec.mu.Lock()
+	calls := slices.Clone(rec.calls)
+	rec.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("the hook called Fatalf %d times (%q) against a broker that never counted the last publish; want once", len(calls), calls)
+	}
+	durable := DurableName("test", "device-management", streams.InboundEvents)
+	for _, want := range []string{durable, "pending 4", "want 5"} {
+		if !strings.Contains(calls[0], want) {
+			t.Fatalf("the failure %q does not contain %q", calls[0], want)
+		}
+	}
+	if took > backpressureSampleTimeout+2*time.Second {
+		t.Fatalf("the hook took %s to give up; want it bounded by about %s", took, backpressureSampleTimeout)
+	}
+	if reads.Load() < 2 {
+		t.Fatalf("the seam was read %d times; the wait should have polled it", reads.Load())
+	}
+	g.mu.Lock()
+	sampled := g.gates[streams.InboundEvents].sampledAt
+	g.mu.Unlock()
+	if !sampled.Equal(registered) {
+		t.Fatalf("the gate was measured (sampledAt %v, registration's %v) after the hook declared the broker's "+
+			"count untrustworthy", sampled, registered)
 	}
 }
