@@ -82,8 +82,8 @@ var ErrCacheUnavailable = errors.New("messaging: cache unavailable; bypassed aft
 // breaker would let one slow client switch the cache off for everyone.
 //
 // 🔑 TWO TIERS: PROCESS MEMORY IN FRONT OF THE BUCKET. A hit in the bucket is still a
-// network round trip, and the device-management resolver makes several of them, one after
-// another, for every event. So a Cache also keeps each value it reads from or writes to
+// network round trip, and the device-management resolver makes several of them for every
+// event. So a Cache also keeps each value it reads from or writes to
 // the bucket in process memory for DefaultLocalCacheTTL (5 s, capped at the bucket's TTL),
 // and a Get it can answer from there never asks the bucket at all. What that costs:
 //
@@ -101,8 +101,9 @@ var ErrCacheUnavailable = errors.New("messaging: cache unavailable; bypassed aft
 //     never touched the bucket the breaker protects. A memory miss while the breaker is
 //     open returns ErrCacheUnavailable, as before.
 //   - Memory holds encoded bytes and decodes them for each Get, so callers never share an
-//     object. It is bounded per Cache by entry count and bytes, evicting least recently
-//     used first.
+//     object. It is bounded per Cache by entry count and bytes (4,096 entries and 4 MiB
+//     unless built WithLocalBounds), evicting least recently used first, and entries past
+//     their time are dropped from the least recently used end as new ones are stored.
 type Cache struct {
 	kv      cacheStore
 	name    string        // the bucket's entry in the kv inventory, for logs and metrics
@@ -171,7 +172,7 @@ func newCache(name string, store cacheStore, m *streamMetrics, bucketTTL time.Du
 	c.obs.init()
 	c.local = newLocalCache(o, c.obs)
 	if c.local != nil {
-		c.obs.initLocal()
+		c.obs.initLocal(o.maxEntries, o.maxBytes)
 	}
 	return c
 }
@@ -280,6 +281,25 @@ func (c *Cache) Get(ctx context.Context, key string, dest interface{}) (bool, er
 	// A copy: the entry's buffer belongs to the client library, and memory must hold
 	// bytes nothing else can write to.
 	c.local.fill(key, bytes.Clone(value), c.now(), gen)
+	return true, nil
+}
+
+// GetFromMemory is Get answered from process memory alone: it never asks the bucket and
+// never waits. found reports a value held in memory and not expired, decoded into dest.
+// When it is false, the caller asks Get, and Get counts the lookup: a miss here is not
+// counted, so a key read through GetFromMemory and then Get counts one lookup, as a Get
+// alone would. A value that does not decode is returned as Get returns it, as an error.
+//
+// It is for a caller about to read several keys from different caches: the keys memory
+// holds cost no goroutine, and only the rest are worth asking the bucket for at once.
+func (c *Cache) GetFromMemory(key string, dest interface{}) (bool, error) {
+	data, ok := c.local.peek(key, c.now())
+	if !ok {
+		return false, nil
+	}
+	if err := json.Unmarshal(data, dest); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 

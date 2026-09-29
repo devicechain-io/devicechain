@@ -441,9 +441,11 @@ and listed by `dcctl dead-letters`, and they do not page the operator.
 
 `device-management` resolves every inbound event before anything stores or evaluates it. A
 resolver authenticates the event's credential, which is one read from the relational database,
-then looks up the device's profile and relationships in the message broker's key-value store,
-and hands the resolved event on to be published. The lookups run one after another, so a
-resolver spends most of each event waiting for replies rather than using CPU. Several resolvers
+then looks up the device's profile, its relationships and its group scope in the message
+broker's key-value store, and hands the resolved event on to be published. Those three lookups
+are made at the same time. Whatever the key-value store cannot answer is read from the database
+one lookup at a time, so a resolver still holds at most one database connection. A resolver
+spends most of each event waiting for replies rather than using CPU. Several resolvers
 work at once. Events that arrive while all of them are busy wait in front of them, in order: up
 to 100 in the pod's hand-off queue and up to 64 more in the batch last fetched from the stream.
 The rest wait in the stream.
@@ -461,13 +463,15 @@ bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 
 | Setting (`device-management` config) | Default | What it does |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it authenticates an event's credential, which it does for every event that carries one (every event, under the default `required` device authentication). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. |
+| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it authenticates an event's credential, which it does for every event that carries one (every event, under the default `required` device authentication). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. A resolver's lookups in the key-value store run at the same time, but its database reads still run one at a time, so it never holds more than one connection. |
+| `inMemoryCache.perDeviceCacheEntries` | `131072` | The most entries each replica keeps in memory of each of the three caches kept per device: a device by its token, its tracked relationships, its group memberships. See [Caches that stop answering](#kv-caches). |
+| `inMemoryCache.perDeviceCacheMiB` | `24` | The most memory, in MiB, each of those three caches takes in each replica. Raise the service's memory limit with it. See [Caches that stop answering](#kv-caches). |
 
 Raise it when `resolve_inflight` stays at `resolve_workers` while the pod has CPU to spare. If the
 pod is at its CPU limit instead, more resolvers do not help: give it more CPU (see
 [Service sizing](./bootstrap.md#service-sizing)). Measured in-process
-against a three-server broker, with every lookup taking 750 µs, 5 resolvers resolved about 1,500
-events a second and 10 about 2,900. Resolvers finish events out of arrival order, by a fraction of a
+against a three-server broker, with every lookup taking 750 µs and made one after another, 5
+resolvers resolved about 1,500 events a second and 10 about 2,900. Resolvers finish events out of arrival order, by a fraction of a
 second; detection applies them in the order they reach the resolved stream. An out-of-range value
 stops the service from starting, and the error names the setting. The service logs the value it is
 using when it starts.
@@ -626,14 +630,35 @@ server that is gone. Events keep being resolved in that time, at the cost of mor
 Each `device-management` replica also keeps what it read from, or wrote to, a bucket in memory
 for up to five seconds (less if the cache's time to live is shorter), and answers from there
 without asking NATS, including while the bucket is being skipped. The five seconds count from
-when the value was read, not from when it was last used, and each cache holds at most 4,096
-entries or about 4 MiB, dropping the least recently used first. A lookup NATS reported as absent
-is never kept. A change reaches the events that other replicas resolve up to five seconds later
+when the value was read, not from when it was last used. The three caches kept per device (a
+device by its token, its tracked relationships, its group memberships) each hold up to 131,072
+entries or 24 MiB per replica, set by `inMemoryCache.perDeviceCacheEntries` and
+`inMemoryCache.perDeviceCacheMiB`. That is about 87,000 devices with no tracked relationship, or
+about 26,000 with one. The profile and group-scope caches, kept per device type and per tenant,
+hold 4,096 entries or 4 MiB. Each drops the least recently used entry when it is full. As it
+stores a new entry it also drops expired ones from its least recently used end, stopping at the
+first that has not expired. A lookup NATS reported as absent is
+never kept. A change reaches the events that other replicas resolve up to five seconds later
 than it would through the bucket alone. Until then another replica can, for example, still
 resolve a device deleted or re-created under the same token through its old record, or evaluate
 a rule whose group scope was just changed against the previous scope. Events that present a
 device credential are not affected by a deleted device: credentials are checked against the
 database on every event.
+
+**Fleets that report less often than every five seconds.** A value is kept in memory for five
+seconds from when it was read, however large the cache. So a device that reports less often than
+that is never answered from memory, and each of its events costs one read from the key-value
+bucket. On a three-node GKE cluster that read took about 1.5 ms. With the 10 default resolvers,
+each spending that long on each such event, a fleet of this shape resolves more slowly than one
+whose devices report every few seconds. To resolve it faster, add resolvers
+(`resolution.workers`, within the connection pool) or `device-management` replicas. The sign is
+`kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` close to the event
+rate, while `kv_cache_local_entries` for that cache stays well below `kv_cache_local_max_entries`.
+A fleet too large for the cache instead shows `kv_cache_local_evictions_total{reason="capacity"}`
+rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
+or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`. Then raise the bound, and the memory
+limit with it: at the defaults the five caches hold at most 80 MiB, and with no `GOMEMLIMIT` set
+the heap can grow to about twice what it holds before it is collected.
 
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
 waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the
@@ -644,7 +669,9 @@ already had it in memory.
 - **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 while the bucket is being
   skipped.
 - **`devicechain_devicemanagement_kv_cache_failures_total{cache, op, reason}`**: operations that
-  timed out (`reason="timeout"`) or failed (`reason="error"`).
+  timed out (`reason="timeout"`) or failed (`reason="error"`). An event's lookups are made at the
+  same time, so when a bucket stops answering, several lookups can time out together before it
+  is skipped, and each counts here.
 - **`devicechain_devicemanagement_kv_cache_bypassed_total{cache, op}`**: lookups and writes that
   went to the database instead.
 - **`devicechain_devicemanagement_kv_cache_request_duration_seconds{cache, op}`**: how long each
@@ -660,9 +687,13 @@ already had it in memory.
 - **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** and
   **`devicechain_devicemanagement_kv_cache_local_bytes{cache}`**: how many entries, and roughly
   how many bytes, a replica holds in memory for the cache. Expired entries count until a lookup
-  finds them or the cache needs the room.
+  finds them, the cache drops them from its least recently used end as it stores a new entry, or
+  the cache needs the room.
+- **`devicechain_devicemanagement_kv_cache_local_max_entries{cache}`** and
+  **`devicechain_devicemanagement_kv_cache_local_max_bytes{cache}`**: the most entries, and
+  bytes, the cache holds in memory before it drops the least recently used.
 
-A cache built without the in-memory copy has none of the four `kv_cache_local_` series. Today
+A cache built without the in-memory copy has none of the six `kv_cache_local_` series. Today
 every `device-management` cache has it.
 
 Separately, resolving an event that takes longer than five seconds for any reason is logged as a

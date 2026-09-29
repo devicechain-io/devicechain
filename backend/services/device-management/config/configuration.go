@@ -33,12 +33,13 @@ const (
 // Defaults for the hot-path resolution caches (ADR-022 review B2). A short TTL
 // bounds staleness for entries that change rarely.
 //
-// The caches are NATS JetStream KV buckets (ADR-007), so their SIZE is a
-// server-side platform concern rather than a per-service one: each bucket carries
-// a byte ceiling from the instance config's cache tier (kv.All / ADR-023), which
-// is why there is no size to configure here. The TTL still matters to the budget
-// even so — it is what bounds the working set, since a bucket only ever holds
-// entries that have not yet expired.
+// The caches are NATS JetStream KV buckets (ADR-007), so the size of the BUCKETS is a
+// server-side platform concern rather than a per-service one: each bucket carries a
+// byte ceiling from the instance config's cache tier (kv.All / ADR-023), which is why no
+// bucket size is configured here. The TTL still matters to that budget even so — it is
+// what bounds the working set, since a bucket only ever holds entries that have not yet
+// expired. What each replica keeps of them in its OWN memory is sized separately, by
+// InMemoryCacheConfiguration.
 // DefaultMaxEventFutureSkewSeconds bounds how far a device-reported occurred time may
 // lead the server-stamped processed time before resolution replaces it with the ceiling.
 // Generous enough for legitimate device/server clock drift, and small enough that a
@@ -52,12 +53,13 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // DefaultResolutionWorkers is how many inbound events are resolved at once when
 // resolution.workers is not set.
 //
-// A warm event makes its lookups one after another — the credential (one database read,
-// for every event that carries one) and then the profile, the tracked relationships and
-// whether any scoped group exists (key-value reads from the message broker) — so a
-// resolver spends most of each event waiting for replies, not using CPU. On a kind cluster
-// five resolvers topped out at about 1600 events a second on 1.5 of the pod's 4 cores,
-// with the events above that rate queued in front of them.
+// A warm event makes its lookups in two steps — the credential (one database read, for
+// every event that carries one), then the profile, the tracked relationships and whether
+// any scoped group exists, read from the message broker's key-value store at the same
+// time — so a resolver spends most of each event waiting for replies, not using CPU. The
+// measurements below were taken when those three reads were still made one after another.
+// On a kind cluster five resolvers topped out at about 1600 events a second on 1.5 of the
+// pod's 4 cores, with the events above that rate queued in front of them.
 //
 // Measured in-process (BenchmarkInboundStageOccupancy: a three-server broker, credentialed
 // events, each lookup answering after 750µs, which puts five resolvers near the kind
@@ -68,6 +70,49 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // rdb.CheckWriterCount accepts without a warning. On a real PostgreSQL the credential read
 // did not wait for a connection at 10 (BenchmarkAuthenticateDeviceConcurrency).
 const DefaultResolutionWorkers = 10
+
+// DefaultPerDeviceCacheEntries and DefaultPerDeviceCacheMiB bound what one replica keeps
+// in memory of EACH of the three caches keyed by device: a device by its token, a device's
+// tracked relationships, and an entity's group memberships (keyed by device, and by each
+// area or asset a device is tracked to). The two caches keyed by device type and by tenant
+// keep messaging's 4,096 entries and 4 MiB; there are few of those keys.
+//
+// What an entry costs, as the cache counts it (key, the value's allocation, and 192 B for
+// the list element, entry and map slot, which the messaging package measured and holds
+// with a test): a device with no tracked relationship is about 290 B in the relationships
+// cache (a 72-byte value), and one with a single tracked relationship about 950 B (a value
+// of about 650 to 700 bytes). So 24 MiB holds about 87,000 unassigned devices or 26,000
+// singly assigned ones, and the entry bound is set above either so that memory, not the
+// count, is what binds.
+//
+// 🔑 A CACHE ENTRY LIVES 5 S, SO THE FLEET SIZE IS NOT WHAT TO SIZE FOR. An entry expires
+// 5 s after it was stored, whether or not it was read, so on one replica only a device read
+// again within 5 s can be answered from memory: the working set is 5 s × that replica's
+// event rate, about 35,000 at the highest rate one replica has been measured resolving
+// (just under 7,000 events a second). A fleet larger than that, or reporting less often
+// than every 5 s, gets nothing more from a larger bound. Below it, a cache that is full
+// holds the devices that reported in the last (bound ÷ rate) seconds.
+//
+// 🔴 THE MEMORY BUDGET, STATED AGAINST THE LIMIT IT RUNS UNDER. At these defaults the five
+// caches hold at most 3 × 24 + 2 × 4 = 80 MiB, counted as above. With no GOMEMLIMIT set
+// (the chart's default), the heap can grow to about twice what is live before a
+// collection: about 160 MiB for full caches, plus the rest of the service (a replica
+// resolving several thousand events a second on a three-node GKE cluster used 32 MiB in
+// all, its then 4-MiB caches included), about 190 MiB against device-management's 256 MiB
+// memory limit. Full caches need a busy replica: three full 24-MiB caches at once take
+// device-by-token being read (devices authenticated at the transport, or device auth set to
+// optional or disabled) and a tenant with rule-scoped groups. Raising either setting needs
+// the memory limit raised with it; MaxPerDeviceCacheMiB is well past what 256 MiB can hold.
+//
+// That budget is why the default is 24 MiB and not the ~33 MiB that 35,000 singly assigned
+// devices would need: 32 MiB per cache would put full caches at about 240 MiB under the
+// same arithmetic, too close to the limit for a default.
+const (
+	DefaultPerDeviceCacheEntries = 131072
+	DefaultPerDeviceCacheMiB     = 24
+	MaxPerDeviceCacheEntries     = 4 << 20
+	MaxPerDeviceCacheMiB         = 256
+)
 
 const (
 	DefaultDeviceCacheTtlSeconds       = 60
@@ -124,6 +169,45 @@ type DeviceManagementConfiguration struct {
 
 	// Resolution sizes the pool that resolves inbound events.
 	Resolution ResolutionConfiguration
+
+	// InMemoryCache sizes what each replica keeps in its own memory of the caches keyed by
+	// device (see DefaultPerDeviceCacheMiB for what that costs).
+	InMemoryCache InMemoryCacheConfiguration
+}
+
+// InMemoryCacheConfiguration sizes what one replica keeps in memory of each cache keyed by
+// device. Each setting applies to each of those three caches separately, per replica.
+type InMemoryCacheConfiguration struct {
+	// PerDeviceCacheEntries bounds each such cache's entry count. Unset (0) defaults to
+	// DefaultPerDeviceCacheEntries.
+	PerDeviceCacheEntries int
+	// PerDeviceCacheMiB bounds each such cache's memory, in MiB. Unset (0) defaults to
+	// DefaultPerDeviceCacheMiB.
+	PerDeviceCacheMiB int
+}
+
+// ApplyDefaults fills each bound that is unset.
+func (c *InMemoryCacheConfiguration) ApplyDefaults() {
+	if c.PerDeviceCacheEntries == 0 {
+		c.PerDeviceCacheEntries = DefaultPerDeviceCacheEntries
+	}
+	if c.PerDeviceCacheMiB == 0 {
+		c.PerDeviceCacheMiB = DefaultPerDeviceCacheMiB
+	}
+}
+
+// Validate refuses a bound outside its range. A negative value is refused, not read as
+// unset: only 0 means that, and ApplyDefaults has replaced it by now.
+func (c InMemoryCacheConfiguration) Validate() error {
+	if c.PerDeviceCacheEntries < 1 || c.PerDeviceCacheEntries > MaxPerDeviceCacheEntries {
+		return fmt.Errorf("inMemoryCache.perDeviceCacheEntries must be between 1 and %d (got %d)",
+			MaxPerDeviceCacheEntries, c.PerDeviceCacheEntries)
+	}
+	if c.PerDeviceCacheMiB < 1 || c.PerDeviceCacheMiB > MaxPerDeviceCacheMiB {
+		return fmt.Errorf("inMemoryCache.perDeviceCacheMiB must be between 1 and %d (got %d)",
+			MaxPerDeviceCacheMiB, c.PerDeviceCacheMiB)
+	}
+	return nil
 }
 
 // ResolutionConfiguration sizes inbound-event resolution.
@@ -134,8 +218,10 @@ type ResolutionConfiguration struct {
 	// Every event that carries a credential — every event, under the default "required"
 	// device-auth mode — is authenticated with one database read, which holds a pooled
 	// connection while it runs (the credential lookup is deliberately never cached, so a
-	// revocation takes effect on the next event). A resolver makes its lookups one after
-	// another, so it holds at most one connection at a time, and with every resolver busy
+	// revocation takes effect on the next event). A resolver reads the key-value caches for
+	// one event at the same time, but reads the database for whatever they could not answer
+	// one lookup after another, so it still holds at most one connection at a time, and with
+	// every resolver busy
 	// the pool gives up to this many connections to resolution. So the count is bounded below
 	// the relational pool it shares with GraphQL, the MQTT connect checks and the raise-alarm
 	// consumer (which applies every alarm raise and resolve edge), by the same check the
@@ -190,6 +276,7 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 		c.MaxEventFutureSkewSeconds = DefaultMaxEventFutureSkewSeconds
 	}
 	c.Resolution.ApplyDefaults()
+	c.InMemoryCache.ApplyDefaults()
 }
 
 // Validate enforces semantic constraints after decoding and defaulting, failing
@@ -232,6 +319,9 @@ func (c *DeviceManagementConfiguration) Validate() error {
 			"device's presence permanently", c.MaxEventFutureSkewSeconds)
 	}
 	if err := c.Resolution.Validate(c.RdbConfiguration); err != nil {
+		return err
+	}
+	if err := c.InMemoryCache.Validate(); err != nil {
 		return err
 	}
 	return nil

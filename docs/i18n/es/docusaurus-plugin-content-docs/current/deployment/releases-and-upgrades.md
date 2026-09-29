@@ -3866,6 +3866,33 @@ carga se disparaba sin que nada estuviera en riesgo.
 No hay nada que hacer en la actualización. Consulte
 [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
 
+#### device-management guarda en memoria las búsquedas de más dispositivos, y hace a la vez las búsquedas de un evento {#next-per-device-cache}
+
+No hay que hacer nada en la actualización.
+
+- **La copia en memoria descrita [más arriba](#next-local-cache) guarda hasta 131.072 entradas, o
+  24 MiB, por réplica para cada una de las tres cachés de búsqueda que se guardan por
+  dispositivo** (un dispositivo por su token, sus relaciones seguidas y sus pertenencias a
+  grupos), así que una réplica que ve una flota grande en cinco segundos puede responder sus
+  búsquedas desde memoria. Las cachés que se guardan por tipo de dispositivo y por inquilino
+  guardan 4096 entradas o 4 MiB. Configure `inMemoryCache.perDeviceCacheEntries`
+  e `inMemoryCache.perDeviceCacheMiB` en la configuración de `device-management` para cambiar el
+  límite, y suba con él el límite de memoria del servicio. Una versión anterior a esta no arranca
+  con ninguno de los dos ajustes, así que quítelos antes de volver a una.
+- **Un dispositivo que informa con menos frecuencia que cada cinco segundos sigue sin responderse
+  desde memoria**, por grande que sea la caché: un valor se guarda cinco segundos desde que se
+  leyó, y cada evento de ese dispositivo sigue leyendo el bucket de clave-valor una vez. Consulte
+  [Cachés que dejan de responder](./observability.md#kv-caches) para ver cuánto cuesta y qué
+  subir.
+- **Las búsquedas de perfil, relaciones y alcance de grupos de un evento se hacen a la vez**, y
+  también sus búsquedas de pertenencia a grupos, en lugar de una tras otra. Un evento que no
+  encuentra en memoria ninguna de las tres espera una sola ida y vuelta a NATS en lugar de tres.
+  La base de datos se sigue leyendo una consulta tras otra, para lo que las cachés no pudieron
+  responder, así que `resolution.workers` sigue contando las conexiones como antes, y una medida
+  que no pasa la validación sigue sin leer sus relaciones de la base de datos.
+- Dos métricas más, `kv_cache_local_max_entries` y `kv_cache_local_max_bytes`, dan el límite de
+  cada caché. `kv_cache_local_bytes` cuenta el tamaño completo en memoria de cada entrada.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

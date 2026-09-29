@@ -25,6 +25,12 @@ import (
 func newBenchResolveRig(b *testing.B, extraMetrics int,
 	wrap func(field string, kv *msgtest.MemoryKV) *messaging.Cache) *resolveRig {
 	b.Helper()
+	return buildResolveRig(b, benchResolveDB(b), false, extraMetrics, wrap)
+}
+
+// benchResolveDB is a private in-memory SQLite database holding the rig's tables.
+func benchResolveDB(b *testing.B) *gorm.DB {
+	b.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		b.Fatalf("open sqlite: %v", err)
@@ -42,7 +48,7 @@ func newBenchResolveRig(b *testing.B, extraMetrics int,
 	if err := db.AutoMigrate(resolveRigTables...); err != nil {
 		b.Fatalf("migrate: %v", err)
 	}
-	return buildResolveRig(b, db, false, extraMetrics, wrap)
+	return db
 }
 
 // BenchmarkWarmResolve is the in-process cost of resolving one event whose every lookup is
