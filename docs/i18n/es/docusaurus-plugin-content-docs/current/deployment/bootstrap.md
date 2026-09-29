@@ -74,7 +74,9 @@ En qué clúster instala:
 ### Volver a ejecutar install {#re-running-install}
 
 Volver a ejecutar `install` contra el mismo clúster lo hace converger: lo que ya está en su
-sitio se deja como está, y lo que falta se añade.
+sitio se deja como está, y lo que falta se añade. Eso incluye el volumen del almacén de objetos de
+respaldo, que conserva el tamaño que tiene; consulta
+[Tamaño del almacén de objetos de respaldo](#backup-store-size).
 
 **Cambiar sus ajustes** —`--ha`, `--compact`, la monitorización, los respaldos— se rechaza
 mientras exista alguna instancia en el clúster. Cada instancia se construyó con los ajustes
@@ -444,23 +446,56 @@ comparte su dominio de fallo, así que no puede constituir recuperación ante de
 Consulta [Recuperación ante desastres](./disaster-recovery.md) y el `backup_destination` de la
 configuración de OpenTofu.
 
-El almacén predeterminado está dimensionado para una instancia tranquila, no para una ingesta
-sostenida. Guarda un respaldo base completo de cada base de datos por cada día de la ventana de
-recuperación de siete días, más el log de escritura anticipada archivado entre ellos. Mientras una
-instancia está tranquila, ese log no cuesta casi nada. Con ingesta sostenida crece al ritmo de las
-escrituras, y cuesta aproximadamente lo mismo que los datos que registra: en una prueba de
-rendimiento de v0.18.0, el archivo creció aproximadamente 1 KB por evento ingerido, respaldos base
-incluidos. A unos pocos miles de eventos por segundo, los 20 GiB predeterminados se llenan en
-horas. Cuando está lleno, el archivado se detiene para todas las instancias del clúster, y cada
-base de datos conserva el log sin enviar en su propio volumen hasta que también se llena y la base
-de datos se detiene.
+#### Tamaño del almacén de objetos de respaldo {#backup-store-size}
 
-Así que, para una instancia con ingesta continua, haz una de estas cosas:
+El almacén predeterminado tiene 160 GiB, dimensionado a partir del almacén de eventos
+predeterminado para que, con una ingesta sostenida, se llene primero el volumen del almacén de
+eventos. Mientras una instancia está tranquila, el log de escritura anticipada que archiva no
+cuesta casi nada. Con ingesta sostenida, el log crece al ritmo de las escrituras: medido en Google
+Kubernetes Engine, hasta unos 1,9 KB por evento ingerido para las dos bases de datos juntas,
+frente a aproximadamente 1 KB por evento de datos almacenados. (Esta página daba antes
+aproximadamente 1 KB por evento para el archivo; esa cifra era baja). 160 GiB guardan el archivo
+de un almacén de eventos de 32 GiB lleno, más un respaldo base completo de cada base de datos, con
+más de un tercio del almacén todavía libre. Así, las alertas del propio almacén de respaldos no
+se disparan, y las alertas del almacén de eventos nombran la causa.
 
-- envía los respaldos a un almacén de objetos que gestiones tú (`--backup-credentials-file`), que
-  es de todos modos la configuración de producción recomendada;
-- o amplía el almacén interno (`backup_object_store_storage`) según tu tasa de ingesta
-  multiplicada por la ventana de recuperación.
+Eso se cumple para una instancia cuyo almacén de eventos se llena en aproximadamente un día. No se
+cumple:
+
+- **con varias instancias que ingieren de forma continua.** El almacén pertenece al clúster, y
+  cada instancia añade su propio archivo. Añade unos 160 GiB por cada una de esas instancias, o
+  envía los respaldos a un almacén de objetos que gestiones tú (`--backup-credentials-file`), que
+  es de todos modos la configuración de producción recomendada.
+- **cuando el almacén de eventos tarda más de aproximadamente un día en llenarse, o no se llena
+  nunca.** El almacén guarda un respaldo base completo de cada base de datos por cada día de la
+  ventana de recuperación de siete días, más el log archivado entre ellos: con siete días, nueve
+  copias comprimidas de las dos bases de datos tienen que caber junto al log. Una instancia cuyos
+  datos almacenados limita una ventana de retención (`retentionDays`) sigue enviando aquí una
+  semana de log. Con el coste medido, unos 150 eventos por segundo sostenidos durante una semana
+  llenan el almacén predeterminado antes de contar ningún respaldo base.
+- **cuando amplías el almacén de eventos.** Cada GiB que añades al volumen del almacén de eventos
+  necesita unos cuatro GiB y medio más aquí.
+
+En esos casos, el aviso son las alertas descritas en
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving):
+`BackupDestinationAlmostFull` al 85 % de ocupación y `BackupDestinationFillingFast` con un ritmo
+pronunciado, y `PostgresWALArchivingFailing` cuando el archivado ya se ha detenido. Un respaldo
+base llega de golpe, así que un almacén que ya pasa del 85 % puede llenarse con el siguiente
+respaldo nocturno: actúa con la primera alerta. Cuando el almacén está lleno, el archivado se
+detiene para todas las instancias del clúster, y cada base de datos conserva el log sin enviar en
+su propio volumen hasta que también se llena y la base de datos se detiene.
+
+El tamaño del almacén se fija cuando `dcctl install` lo crea por primera vez. Volver a ejecutar
+install, también como primer paso de una actualización, conserva el tamaño que tiene el almacén, y
+lo mismo hace un `tofu apply` directo de la configuración de OpenTofu. Para ampliarlo, con una
+StorageClass que permita la expansión de volúmenes:
+
+```bash
+kubectl -n dc-system patch pvc dc-object-store-data \
+  -p '{"spec":{"resources":{"requests":{"storage":"320Gi"}}}}'
+```
+
+En kind, el volumen no está limitado a su tamaño: usa lo que tenga el disco del host.
 
 Acortar la ventana de recuperación (`backup_retention`) no resuelve la ingesta: guarda menos
 historial pero sigue guardando un día completo de log, y renuncia a alcance de recuperación para
@@ -593,7 +628,8 @@ arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
 que ya existen en lugar de añadir un eje de ajuste propio:
 
 - techos por stream más bajos de JetStream y KV, y los volúmenes más pequeños que eso permite
-  (3Gi JetStream, 2Gi Postgres relacional, 4Gi TimescaleDB);
+  (3Gi JetStream, 2Gi Postgres relacional, 4Gi TimescaleDB, y un almacén de objetos de respaldo
+  de 20Gi cuando se mantiene TLS);
 - **solicitudes** (requests) de programación más bajas (25m / 64Mi), para que los pods quepan
   en un nodo pequeño. Los límites quedan intactos: bajar el límite de memoria convierte la
   presión en OOMKills y bajar el límite de CPU produce throttling, y ninguna de las dos cosas
@@ -989,14 +1025,13 @@ escritura anticipada de la base de datos ocupa alrededor de 1,1 GB más mientras
 seguridad le siguen el ritmo, así que 32Gi contienen unos 27 millones de eventos: unas siete
 horas de un inquilino que envía a su techo predeterminado completo.
 
-El volumen no es lo primero que se llena con una ingesta sostenida. Con el
-[destino de respaldo predeterminado](#default-backup-destination), el registro de escritura
-anticipada archivado ocupa por evento más o menos lo mismo que los datos, y se conserva durante la
-ventana de recuperación de las copias de seguridad, así que ese almacén se llena primero. Cuando
-está lleno, el archivado se detiene, y el registro que la base de datos no puede enviar se
-acumula en este volumen hasta que se llena y la base de datos se detiene. El volumen más grande
-da tiempo entre las [alertas](./observability.md#backup-archiving) y esa parada; lo que hay que
-dimensionar para el ritmo de ingesta es el destino de respaldo. Una ventana de retención
+Con el [almacén de respaldos predeterminado](#backup-store-size) y una sola instancia, este
+volumen es lo primero que se llena con una ingesta sostenida, y `DatabaseVolumeFillingFast` avisa
+antes. Si se llena primero el almacén de respaldos (varias instancias en él, un almacén más
+pequeño o un almacén de eventos ampliado por encima de su tamaño predeterminado), el archivado se
+detiene, y el registro que la base de datos no puede enviar se acumula en este volumen hasta que
+se llena y la base de datos se detiene; las [alertas](./observability.md#backup-archiving) avisan
+antes de ambas cosas. Una ventana de retención
 (`retentionDays` en la configuración `lifecycle` de event-management) limita los datos
 almacenados en una instancia que deba funcionar indefinidamente, pero no el archivo.
 
@@ -1007,6 +1042,10 @@ existente. Para ampliarlo, con una StorageClass que permita la expansión de vol
 kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
   -p '{"spec":{"storage":{"size":"64Gi"}}}'
 ```
+
+Ampliar este volumen mueve el punto en que el almacén de respaldos se llena primero. Amplía el
+almacén de respaldos unas cuatro veces y media lo que añadas aquí; consulta
+[Tamaño del almacén de objetos de respaldo](#backup-store-size).
 
 ## Después del arranque inicial {#after-bootstrap}
 

@@ -72,7 +72,8 @@ Which cluster it installs into:
 ### Re-running install {#re-running-install}
 
 Re-running `install` against the same cluster converges it: what is already in place is left
-as it is, and what is missing is added.
+as it is, and what is missing is added. That includes the backup store's volume, which keeps the
+size it has; see [Backup store size](#backup-store-size).
 
 **Changing its settings** — `--ha`, `--compact`, monitoring, backups — is refused while any
 instance exists on the cluster. Every instance was built to the settings in place when it was
@@ -412,21 +413,50 @@ domain, so it cannot be disaster recovery. Pass `--backup-credentials-file` to `
 to name an object store you already own. See [Disaster Recovery](./disaster-recovery.md) and
 the OpenTofu configuration's `backup_destination`.
 
-The default store is sized for a quiet instance, not for sustained ingest. It holds a full base
-backup of each database for every day of the seven-day recovery window, plus the write-ahead log
-archived between them. While an instance is quiet, that log costs almost nothing. Under sustained
-ingest it grows with the write rate, and costs about as much as the data it records: in a
-benchmark of v0.18.0, the archive grew by roughly 1 KB per ingested event, base backups
-included. At a few thousand events per second, the 20 GiB default fills in hours. When it is
-full, archiving stops for every instance on the cluster, and each database keeps its unshipped
+#### Backup store size {#backup-store-size}
+
+The default store is 160 GiB, sized from the default event store so that, under sustained
+ingest, the event store's volume fills first. While an instance is quiet, the write-ahead log it
+archives costs almost nothing. Under sustained ingest the log grows with the write rate: measured
+on Google Kubernetes Engine, up to about 1.9 KB per ingested event for both databases together,
+against about 1 KB per event of stored data. (This page used to give about 1 KB per event for
+the archive; that figure was low.) 160 GiB holds the archive of a full 32 GiB event store, plus
+one full base backup of each database, with more than a third of the store still free. So the
+backup store's own alerts stay quiet, and the event store's alerts name the cause.
+
+That holds for one instance whose event store fills within about a day. It does not hold:
+
+- **for several instances that ingest continuously.** The store belongs to the cluster, and each
+  instance adds its own archive. Add about 160 GiB for each such instance, or send backups to an
+  object store you run (`--backup-credentials-file`), which is the recommended production setup
+  anyway.
+- **when the event store takes more than about a day to fill, or never fills.** The store keeps a
+  full base backup of each database for every day of the seven-day recovery window, plus the log
+  archived between them: at seven days, nine compressed copies of both databases must fit beside
+  the log. An instance whose stored data is bounded by a retention window (`retentionDays`) still
+  sends a week of log here. At the measured cost, about 150 events per second sustained for a week
+  fills the default store before any base backup is counted.
+- **when you grow the event store.** Each GiB added to the event-store volume needs about four
+  and a half GiB more here.
+
+In those cases, the alerts described under
+[Backups that stop shipping](./observability.md#backup-archiving) are the warning:
+`BackupDestinationAlmostFull` at 85% full and `BackupDestinationFillingFast` on a steep rate, with
+`PostgresWALArchivingFailing` once archiving has stopped. A base backup lands all at once, so a
+store already past 85% can fill at the next nightly backup: act on the first alert. When the store
+is full, archiving stops for every instance on the cluster, and each database keeps its unshipped
 log on its own volume until that fills too and the database stops.
 
-So for an instance that ingests continuously, do one of these:
+The store's size is set when `dcctl install` first creates it. Re-running install, including as
+the first step of an upgrade, keeps the size the store has, and so does a direct `tofu apply` of
+the OpenTofu configuration. To grow it, on a StorageClass that allows volume expansion:
 
-- send backups to an object store you run (`--backup-credentials-file`), which is the
-  recommended production setup anyway;
-- or grow the in-cluster store (`backup_object_store_storage`) to fit your ingest rate times the
-  recovery window.
+```bash
+kubectl -n dc-system patch pvc dc-object-store-data \
+  -p '{"spec":{"resources":{"requests":{"storage":"320Gi"}}}}'
+```
+
+On kind, the volume is not limited to its size: it uses what the host disk has.
 
 Shortening the recovery window (`backup_retention`) is not a fix for ingest: it keeps less
 history but still a full day of log, and it gives up recovery range to buy space. The alerts
@@ -556,7 +586,8 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 already exist rather than adding a tuning axis of its own:
 
 - lower JetStream and KV per-stream ceilings, and the smaller volumes those permit (3Gi
-  JetStream, 2Gi relational Postgres, 4Gi TimescaleDB);
+  JetStream, 2Gi relational Postgres, 4Gi TimescaleDB, and a 20Gi backup store when TLS is
+  kept);
 - lower scheduling **requests** (25m / 64Mi), so pods fit a small node. Limits are untouched:
   lowering the memory limit converts pressure into OOMKills and lowering the CPU limit
   throttles, and neither shrinks anything. `device-management`, `event-management`,
@@ -919,13 +950,12 @@ Each event-store instance has a 32Gi volume, so three of them under `--ha` (4Gi 
 about 1.1 GB more while backups keep up with it, so 32Gi holds about 27 million events: about
 seven hours of one tenant sending at its full default ceiling.
 
-The volume is not what fills first under sustained ingest. With the
-[default backup destination](#default-backup-destination), the archived write-ahead log costs about
-as much per event as the data, and it is kept for the backup recovery window, so that store fills
-first. When it is full, archiving stops, and the write-ahead log the database cannot ship piles up
-on this volume until it fills and the database stops. The larger volume buys time between the
-[alerts](./observability.md#backup-archiving) and that stop; the backup destination is what has to
-be sized for the ingest rate. A retention window (`retentionDays` in event-management's
+With the [default backup store](#backup-store-size) and one instance, this volume is what fills
+first under sustained ingest, and `DatabaseVolumeFillingFast` warns before it does. If the backup
+store fills first (several instances on it, a smaller store, or an event store grown past its
+default), archiving stops, and the write-ahead log the database cannot ship piles up on this
+volume until it fills and the database stops; the
+[alerts](./observability.md#backup-archiving) warn before either. A retention window (`retentionDays` in event-management's
 `lifecycle` settings) bounds the stored data on an instance meant to run indefinitely, but not
 the archive.
 
@@ -936,6 +966,9 @@ instance's volume. To grow one, on a StorageClass that allows volume expansion:
 kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
   -p '{"spec":{"storage":{"size":"64Gi"}}}'
 ```
+
+Growing this volume moves the point where the backup store fills first. Grow the backup store by
+about four and a half times what you add here; see [Backup store size](#backup-store-size).
 
 ## After bootstrap {#after-bootstrap}
 

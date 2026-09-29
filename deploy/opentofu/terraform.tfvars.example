@@ -91,11 +91,9 @@
 # backup_destination                = "in-cluster"
 # backup_bucket_rdb                 = "devicechain-rdb"
 # backup_bucket_tsdb                = "devicechain-tsdb"
-# backup_access_key                 = "devicechain"
-# backup_secret_key                 = "CHANGE-ME"
 # backup_schedule                   = "0 0 3 * * *"
-# backup_retention                  = "30d"
-# backup_object_store_storage       = "20Gi"
+# backup_retention                  = "7d"
+# backup_object_store_storage       = "160Gi"
 # backup_object_store_storage_class = ""
 #
 # For an external destination, set the endpoint too — it is REQUIRED there and REFUSED

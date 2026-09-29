@@ -768,10 +768,12 @@ which waits 15 minutes, would have fired only after it.
 
 The object store is shared by every instance on the cluster, and so is the relational database.
 Each instance's chart carries these alerts, so an alert about a shared volume or the shared
-database is raised once per instance.
+database is raised once per instance. The default store is sized for one instance ingesting
+continuously: with more, it can fill before any event store does, and these alerts are the
+warning.
 
 For how large the in-cluster store needs to be, see
-[The default backup destination](./bootstrap.md#default-backup-destination).
+[Backup store size](./bootstrap.md#backup-store-size).
 
 ## Related
 

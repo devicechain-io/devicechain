@@ -2003,6 +2003,14 @@ jobs:
         run: hack/check-tofu-validations.sh
         working-directory: .
 
+      # What a module promises about its PLAN -- the object store's volume keeps
+      # the size it was created at, whatever a later apply asks for -- is visible
+      # to neither step above. The modules' `tofu test` suites run it against a
+      # mocked provider, from a copy of the tree (the script says why).
+      - name: module test suites
+        run: hack/check-tofu-module-tests.sh
+        working-directory: .
+
       # nats-server refuses to hot-reload the auth_callout block (and JetStream's
       # memory/store ceilings), and the refusal is wholesale — so without the pod
       # template's config checksum, a change is applied, reported successful by every

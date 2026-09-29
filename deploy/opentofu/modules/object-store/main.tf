@@ -189,9 +189,17 @@ variable "storage" {
     fails does not stall commits, it accumulates WAL on the database's own volume
     until THAT fills and Postgres stops. So a too-small bucket takes the database
     down by a route that points nowhere near the bucket.
+
+    The default is the cluster root's (backup_object_store_storage), whose
+    description carries the derivation; it is repeated here only so that a
+    direct consumer of this module does not get a smaller one.
+
+    🔴 Read when the volume is CREATED, and never again: the claim ignores later
+    changes to its request (see the lifecycle block on it). Grow a live store with
+    `kubectl patch` on a StorageClass that allows volume expansion.
   EOT
   type        = string
-  default     = "20Gi"
+  default     = "160Gi"
 }
 
 variable "storage_class" {
@@ -285,6 +293,25 @@ resource "kubernetes_persistent_volume_claim_v1" "data" {
   # because the consumer is created afterwards. Measured: a fresh apply hangs
   # here forever with the PVC Pending and the pod never created.
   wait_until_bound = false
+
+  # 🔴 THE SIZE IS SETTLED WHEN THE VOLUME IS CREATED. Without this, every apply
+  # re-plans the live claim to var.storage, and every `dcctl install` re-run --
+  # the first step of every upgrade -- is such an apply. Two ways that fails
+  # mid-apply, and both are ordinary:
+  #   - a default that GROWS (20Gi -> 160Gi was one) asks a StorageClass without
+  #     allowVolumeExpansion -- kind's local-path among them -- to expand, and
+  #     the API server refuses;
+  #   - a store an operator grew by hand (`kubectl patch`, which the docs tell
+  #     them to do) is asked to SHRINK back to the default, which every
+  #     provisioner refuses -- and so does `install --compact` re-run over a
+  #     store created at the full size.
+  # Ignoring the request after creation makes the claim's size whatever the
+  # cluster says it is, for dcctl and for a direct `tofu apply` alike: the live
+  # size is the one reader. Growing is a `kubectl patch` of this claim.
+  # tests/keeps_live_size.tftest.hcl holds this to its behaviour.
+  lifecycle {
+    ignore_changes = [spec[0].resources[0].requests]
+  }
 }
 
 resource "kubernetes_deployment_v1" "this" {

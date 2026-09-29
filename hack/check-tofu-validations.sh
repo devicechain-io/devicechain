@@ -730,7 +730,7 @@ run_assertions() {
   # 🔴 BACKUPS REQUIRE THE OPERATOR, and the conjunction is the thing being pinned.
   # `--no-cnpg` already sets enable_database_backups=false at the dcctl layer, so
   # dropping `&& var.enable_cnpg` from the derivation looks harmless and passes
-  # every dcctl-side test. What it produces is an object store, a 20Gi volume and
+  # every dcctl-side test. What it produces is an object store, its data volume and
   # two ObjectStore resources standing ready for a plugin that was never installed
   # — no error anywhere, and no backups.
   evaluates true 'local.backups_on'

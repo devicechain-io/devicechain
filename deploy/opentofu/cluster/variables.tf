@@ -500,36 +500,40 @@ variable "backup_retention" {
     switch record and gzips to tens of KiB, so an idle pair of stores costs well
     under a GiB per month. Under sustained ingest the archived WAL grows with the
     write rate instead, and costs about as much as the data it records. Measured
-    on a v0.18.0 benchmark cluster: the archive one ~15M-event run left behind
-    was about 14 GB, base backups included — roughly 1 KB per ingested event,
-    the same order as the ~1 KB per event the event store's own data costs. At
-    that rate the shipped 20Gi destination holds HOURS of sustained ingest, not
-    days, and the WAL term dominates:
+    on GKE benchmark clusters (v0.18.x): up to about 1.9 KB of archive per
+    ingested event, for both databases together, against about 1 KB per event
+    of the event store's own data. (An earlier measurement published here as
+    "about 1 KB per event, base backups included" was low.) Under sustained
+    ingest the WAL term dominates:
 
         destination ≈ (retention_days + 1) × compressed(rdb + tsdb)
                       + retention_days × daily_events × archived WAL per event
 
-    That term grows with retention, but at sustained ingest no reasonable
-    window keeps it inside 20Gi, and shortening the window is the wrong
+    That term grows with retention, and shortening the window is the wrong
     lever for it: it still keeps a full day of WAL, and it buys space by
-    shrinking how far back the databases can be recovered. Size the destination
-    for the ingest rate, or send backups to an object store you run. Barman
+    shrinking how far back the databases can be recovered. The in-cluster
+    destination's default (backup_object_store_storage) is sized so that one
+    default event store fills before it does; its description gives the rule and
+    what it does not cover. Past that, size the destination for the ingest rate,
+    or send backups to an object store you run. Barman
     prunes only a LIVE Cluster's own archive path, so an archive left by a
     destroyed instance is pruned by nothing — which is why `dcctl destroy`
     removes the instance's archive from the in-cluster store.
 
-    At the shipped 20Gi destination that budget is roughly 2.5 GiB of combined
-    compressed base backup — comfortable for a small-to-moderate instance at 7
-    days, and NOT comfortable at 30. A 30-day window was the original default and
-    it fills the shipped destination in about three weeks on an instance of any
-    real size, monotonically, because pruning removes nothing until backups start
+    The base-backup term alone is (retention_days + 2) copies at the peak --
+    one more is uploading while the oldest still predates the window -- so at 7
+    days nine compressed copies of both databases must fit, beside the WAL. A
+    30-day window was the original default, and it fills a destination sized for
+    7 days monotonically, because pruning removes nothing until backups start
     ageing out of the window. What follows is the documented cascade: the
     destination fills, archiving fails, WAL accumulates on the DATABASES' volumes,
     and PostgreSQL stops.
 
-    So: raising this REQUIRES raising backup_object_store_storage with it. There
-    is no check that enforces it — the sizes depend on data nobody knows at plan
-    time — which is why it is stated here rather than assumed.
+    So: raising this REQUIRES raising backup_object_store_storage with it -- and
+    on an existing store that means growing its volume, because that variable is
+    read only when the store is created. There is no check that enforces it — the
+    sizes depend on data nobody knows at plan time — which is why it is stated
+    here rather than assumed.
   EOT
   type        = string
   default     = "7d"
@@ -539,20 +543,41 @@ variable "backup_object_store_storage" {
   description = <<-EOT
     Data volume for the in-cluster object store.
 
-    🔴 SIZE IT WITH backup_retention, NOT WITH THE DATABASE VOLUMES. Every
-    scheduled backup is a FULL base backup, so this holds roughly
-    `retention_days + 1` complete compressed copies of BOTH databases, plus the
-    WAL between them:
+    🔴 SIZED FROM THE EVENT STORE, so that under sustained ingest the EVENT STORE
+    fills first. Every scheduled backup is a FULL base backup of both databases,
+    and under ingest the archived WAL costs more per event than the data it
+    records (see backup_retention). The default holds, with 35% of it still free,
+    what has landed here by the time one default event store (the instance root's
+    timescale_storage, 32Gi) is FULL: up to about 1.9 KB of archived WAL per event
+    for both databases (measured on GKE, v0.18.x, against about 1 KB per event of
+    stored data), plus one full base backup of each database, bounded by its
+    volume. That is about 98 GiB; 35% free is BackupDestinationFillingFast's gate,
+    so neither backup-store alert fires before the event store's own alerts do.
+    backend/cli/bootstrap/backupsizing_test.go holds this default to that rule.
 
-        destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
+    What it does NOT cover:
+      - an event store that takes more than about a day to fill. Every 03:00 base
+        backup in the window is then kept, not one: the base-backup term alone is
+        (retention_days + 2) compressed copies of both databases, about nine at
+        7 days, so the default fits that only while the two databases together
+        compress to under about 17 GiB (160 GiB over nine), less the WAL.
+      - an event store that never fills, because event-management's retentionDays
+        bounds it. The store then holds seven days of WAL at whatever rate the
+        instance ingests: at the measured cost, about 150 events/s sustained for a
+        week fills this default before any base backup is counted.
+      - several instances ingesting into this one store: it is the CLUSTER's. Add
+        about this much again per instance that ingests continuously, or use an
+        external destination.
+      - an event store grown past its default: every GiB added there wants about
+        four and a half here.
+    In those cases the percentage alerts (BackupDestinationAlmostFull at 85%,
+    BackupDestinationFillingFast) are the warning, and PostgresWALArchivingFailing
+    and PostgresWALArchiveBacklog the backstop. A base backup lands as one step,
+    so a store already past 85% can fill at the next 03:00.
 
-    The default pairs 20Gi with a 7-day window, which budgets about 2.5 GiB of
-    combined compressed base backup. Raise BOTH together or neither: the
-    arithmetic is multiplicative in the retention window and no check can enforce
-    it, because the compressed size of a database is not knowable at plan time.
-    And the WAL term is NOT small under sustained ingest — see backup_retention:
-    measured, it is about as large as the data, so an instance ingesting
-    continuously outgrows the default in hours.
+    Raising backup_retention still REQUIRES raising this with it: the arithmetic
+    is multiplicative in the window and no check can enforce it, because the
+    compressed size of a database is not knowable at plan time.
 
     🔴 When it fills, archiving fails — and failed archiving does not stall
     commits, it accumulates WAL on the DATABASES' own volumes until those fill and
@@ -561,14 +586,20 @@ variable "backup_object_store_storage" {
     and BackupDestinationFillingFast on a rate that fills it within the hour, to
     give warning — which is the only reason the failure is survivable.
 
-    🔴 Growing this later may not work in place. It is a PVC, so expansion needs a
-    StorageClass with allowVolumeExpansion — kind's default local-path has none,
-    and every provisioner refuses a SHRINK. That last one bites a real path:
-    re-running `dcctl install --compact` over an existing install asks for a
-    smaller value than the default and the apply fails.
+    🔴 READ ONLY WHEN THE VOLUME IS CREATED. The claim ignores later changes to
+    its size (a lifecycle rule in modules/object-store), so an existing store
+    keeps the size it has through every re-run of `dcctl install` -- the first
+    step of every upgrade -- and through a direct `tofu apply` alike. Without
+    that, a new default re-plans the live claim: a StorageClass without
+    allowVolumeExpansion (kind's local-path) refuses the growth, and every
+    provisioner refuses a shrink, which is what a store grown by hand, or
+    `install --compact` over a full-size store, would be asked for. Changing this
+    variable on an existing store does nothing; grow it with `kubectl -n
+    <namespace> patch pvc dc-object-store-data` on a StorageClass that allows
+    expansion.
   EOT
   type        = string
-  default     = "20Gi"
+  default     = "160Gi"
 }
 
 variable "backup_object_store_storage_class" {
