@@ -60,6 +60,10 @@ func TestSettleRetryClassifiesTheSettlingTransients(t *testing.T) {
 		{"insufficient resources", errors.New("nats: insufficient resources")},
 		{"no suitable peers", errors.New("nats: no suitable peers for placement")},
 		{"arbitrary", errors.New("boom")},
+		// A bypassed Cache is the breaker's answer, not the group's. Retrying it would let
+		// a breaker that opens on a healthy cluster pass every clustered test.
+		{"bypassed cache", ErrCacheUnavailable},
+		{"wrapped bypassed cache", fmt.Errorf("put k0: %w", ErrCacheUnavailable)},
 	}
 	for _, tc := range notTransient {
 		t.Run("not/"+tc.name, func(t *testing.T) {
@@ -131,5 +135,43 @@ func TestSettleRetrySucceedsOnceTheGroupSettles(t *testing.T) {
 	}
 	if attempts != 3 {
 		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+// TestSettleRetryDoesNotRetryABypassedCache pins why a rig must not seed a bucket through
+// a Cache inside settleRetry (see seedSilentRig). The Cache's first settling timeout opens
+// its breaker, so the retry after it is answered by the breaker with ErrCacheUnavailable,
+// and that is returned at once rather than waited out. The fix for such a rig is a plain
+// handle, not a classifier that retries the breaker's answer.
+func TestSettleRetryDoesNotRetryABypassedCache(t *testing.T) {
+	calls := 0
+	store := &scriptedStore{put: func(context.Context, string) error {
+		calls++
+		if calls == 1 {
+			return context.DeadlineExceeded // one settling timeout
+		}
+		return nil // the group has settled
+	}}
+	c := NewCacheOver(store, WithoutLocalCache())
+
+	attempts := 0
+	// The deadline is well inside the breaker's 5 s bypass, so a classifier that retried
+	// ErrCacheUnavailable would spin against the open breaker until the deadline, and
+	// come back wrapped rather than bare.
+	err := settleRetry(func() error {
+		attempts++
+		return c.Set(context.Background(), "key", "v")
+	}, 200*time.Millisecond, time.Millisecond)
+
+	// Identity, not errors.Is: the bare sentinel is what Set returns, and the wrapped
+	// "never began serving" error a spinning retry would give up with also matches Is.
+	if err != ErrCacheUnavailable {
+		t.Fatalf("settleRetry over a Cache whose first put timed out = %v, want exactly ErrCacheUnavailable", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2: the timeout is retried once, and the bypass it caused is not", attempts)
+	}
+	if got := store.puts.Load(); got != 1 {
+		t.Fatalf("puts that reached the store = %d, want 1: the retry must be answered by the breaker", got)
 	}
 }
