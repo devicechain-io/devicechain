@@ -1585,89 +1585,6 @@ se comprueban contra un clúster real en cada versión.
 Una vez que esté en una versión que registra una declaración, las actualizaciones in situ
 corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en qué clúster.
 
-### Próxima versión {#next-upgrade}
-
-Lo que cambia la versión posterior a `v0.18.0`, reunido a medida que llega.
-
-#### `dcctl destroy` elimina los respaldos internos de una instancia, y nuevas alertas avisan antes de que el archivado detenga una base de datos
-
-**`dcctl destroy` ahora elimina los respaldos de una instancia del almacén de objetos propio del
-clúster.** Cuando el namespace de la instancia ya no existe, destroy borra todo lo que hay bajo la
-ruta a la que archivaba su almacén de eventos, y comprueba que la ruta ha quedado vacía. Lee esa
-ruta antes de cambiar nada, y la muestra. Los respaldos en un almacén de objetos que tú
-proporcionaste no se borran nunca: destroy indica dónde están. Pasa `--keep-backups` para
-conservar también los respaldos internos, y pásalo sin falta antes de reconstruir una instancia a
-partir de sus propios respaldos en el mismo clúster con `--restore-tsdb-from`, porque un destroy
-sin esa opción borra el archivo que lee esa restauración. Si no se puede acceder al almacén de
-objetos, destroy termina igualmente e indica qué dejó. Los archivos que dejaron destroys
-ejecutados con una versión anterior siguen donde están: después de eliminar los respaldos de la
-propia instancia, destroy enumera los que tienen el mismo nombre de instancia, y [Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups)
-explica cómo eliminarlos.
-
-**Nuevas alertas avisan antes de que el archivado detenga una base de datos.**
-`PostgresWALArchiveBacklog` se dispara cuando una base de datos retiene log de escritura
-anticipada sin enviar, también cuando el archivador es lento o está bloqueado en lugar de fallar.
-`BackupDestinationFillingFast` y `DatabaseVolumeFillingFast` se disparan según lo rápido que se
-llena el almacén de respaldos o un volumen del almacén de eventos, no solo por un umbral fijo.
-También se corrige la guía de dimensionamiento de respaldos: con ingesta sostenida, el log
-archivado cuesta aproximadamente lo mismo que los datos, así que el almacén interno predeterminado
-se llena en horas, no en días. Dimensiónalo según tu tasa de ingesta, o envía los respaldos a un
-almacén de objetos que gestiones tú. Consulta
-[Respaldos que dejan de enviarse](./observability.md#backup-archiving).
-
-#### Un stream de ingesta lleno rechaza eventos nuevos en lugar de descartar los no leídos
-
-Cuando un consumidor se atrasaba tanto que su cola sin leer llenaba `inbound-events` o
-`resolved-events`, el stream descartaba sus eventos más antiguos para hacer sitio, y eran eventos
-que nadie había procesado todavía. Al dispositivo ya se le había dicho que se aceptaron.
-
-Ahora, cuando la cola sin leer de `device-management` en `inbound-events`, o la de
-`event-management` en `resolved-events`, alcanza el 90% de lo que cabe en el stream, la plataforma
-deja de aceptar eventos nuevos hasta que la cola baja del 80%. Los dos streams conservan su semana
-de eventos ya procesados, y ese historial no cuenta para el límite. Solo cuentan los eventos sin
-leer.
-
-- La ingesta **HTTP** responde `503` con `Retry-After: 10` mientras rechaza. Reintenta ante un
-  `503`. Un `503` sin `Retry-After` sigue significando que la publicación en sí falló.
-- Los dispositivos **MQTT** ya recibieron el acuse del bróker. Sus mensajes esperan en el stream de
-  captura hasta que se reanuda la ingesta.
-- Las lecturas de **Sparkplug y LwM2M**, y los mensajes de un bróker MQTT externo, se descartan y se
-  cuentan, porque esos protocolos no dan a la plataforma forma de hacer que el dispositivo
-  reintente. Las transiciones de conexión y desconexión se siguen aceptando, y nada limita
-  cuántas: una flota que se reconecta en bucle aún puede llevar el stream a su techo, donde descarta
-  sus eventos más antiguos como antes.
-- El rechazo afecta a **todos los inquilinos**, porque los streams son compartidos. Un
-  `device-state` o un `event-processing` lentos no lo provocan.
-- Se añaden dos alertas: `JetStreamUnreadBacklogNearFull` (warning) y
-  `JetStreamIngestBackpressureEngaged` (critical). Consulta
-  [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure).
-- El simulador y el arnés de carga cuentan un `503` con `Retry-After` como descartado (shed), no
-  como fallido.
-
-No hay nada que hacer al actualizar. Ningún stream se reconfigura, y un servicio que siga en la
-versión anterior conserva su comportamiento anterior hasta que se actualice.
-
-#### device-management responde las búsquedas repetidas desde memoria {#next-local-cache}
-
-No hay que hacer nada en la actualización.
-
-- **Cada réplica de `device-management` guarda en memoria lo que leyó de sus cachés de
-  clave-valor durante hasta cinco segundos** y responde desde ahí las búsquedas repetidas del
-  mismo dispositivo, tipo de dispositivo o tenant, en lugar de preguntar a NATS. Vuelve a
-  preguntar a NATS cuando lo que guarda tiene cinco segundos, o antes si la copia en memoria está
-  llena. Un tiempo de vida de caché menor de cinco segundos también acorta la copia en memoria.
-- **Un cambio puede tardar hasta cinco segundos más en llegar a los eventos que resuelven las
-  demás réplicas**, además de lo que ya permitía el tiempo de vida de la caché. Un dispositivo
-  borrado, o vuelto a crear con el mismo token, puede seguir resolviéndose a través de su registro
-  anterior en otra réplica durante esos segundos, y una regla cuyo alcance de grupo acaba de
-  cambiar puede evaluarse allí con el alcance anterior. Los eventos que presentan una credencial
-  de dispositivo se comprueban contra la base de datos cada vez, como antes, y un flanco de alarma
-  para un dispositivo recién borrado se sigue descartando de inmediato en todas las réplicas.
-- **Cuatro métricas nuevas** cuentan las búsquedas respondidas desde memoria, las entradas
-  descartadas de ella y su tamaño. `kv_cache_request_duration_seconds{op="get"}` ahora cuenta solo
-  las búsquedas que la memoria no pudo responder. Consulte [Cachés que dejan de
-  responder](./observability.md#kv-caches).
-
 ### v0.18.0 — lo que fallaba en silencio ahora lo dice, y la ingesta sigue el ritmo de su techo {#v0180-upgrade}
 
 `v0.18.0` es una actualización en el sitio desde `v0.17.0`: `dcctl install` para el clúster y
@@ -3741,6 +3658,89 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 ```
 
 No hay que hacer nada.
+
+### Próxima versión {#next-upgrade}
+
+Lo que cambia la versión posterior a `v0.18.0`, reunido a medida que llega.
+
+#### `dcctl destroy` elimina los respaldos internos de una instancia, y nuevas alertas avisan antes de que el archivado detenga una base de datos
+
+**`dcctl destroy` ahora elimina los respaldos de una instancia del almacén de objetos propio del
+clúster.** Cuando el namespace de la instancia ya no existe, destroy borra todo lo que hay bajo la
+ruta a la que archivaba su almacén de eventos, y comprueba que la ruta ha quedado vacía. Lee esa
+ruta antes de cambiar nada, y la muestra. Los respaldos en un almacén de objetos que tú
+proporcionaste no se borran nunca: destroy indica dónde están. Pasa `--keep-backups` para
+conservar también los respaldos internos, y pásalo sin falta antes de reconstruir una instancia a
+partir de sus propios respaldos en el mismo clúster con `--restore-tsdb-from`, porque un destroy
+sin esa opción borra el archivo que lee esa restauración. Si no se puede acceder al almacén de
+objetos, destroy termina igualmente e indica qué dejó. Los archivos que dejaron destroys
+ejecutados con una versión anterior siguen donde están: después de eliminar los respaldos de la
+propia instancia, destroy enumera los que tienen el mismo nombre de instancia, y [Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups)
+explica cómo eliminarlos.
+
+**Nuevas alertas avisan antes de que el archivado detenga una base de datos.**
+`PostgresWALArchiveBacklog` se dispara cuando una base de datos retiene log de escritura
+anticipada sin enviar, también cuando el archivador es lento o está bloqueado en lugar de fallar.
+`BackupDestinationFillingFast` y `DatabaseVolumeFillingFast` se disparan según lo rápido que se
+llena el almacén de respaldos o un volumen del almacén de eventos, no solo por un umbral fijo.
+También se corrige la guía de dimensionamiento de respaldos: con ingesta sostenida, el log
+archivado cuesta aproximadamente lo mismo que los datos, así que el almacén interno predeterminado
+se llena en horas, no en días. Dimensiónalo según tu tasa de ingesta, o envía los respaldos a un
+almacén de objetos que gestiones tú. Consulta
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving).
+
+#### Un stream de ingesta lleno rechaza eventos nuevos en lugar de descartar los no leídos
+
+Cuando un consumidor se atrasaba tanto que su cola sin leer llenaba `inbound-events` o
+`resolved-events`, el stream descartaba sus eventos más antiguos para hacer sitio, y eran eventos
+que nadie había procesado todavía. Al dispositivo ya se le había dicho que se aceptaron.
+
+Ahora, cuando la cola sin leer de `device-management` en `inbound-events`, o la de
+`event-management` en `resolved-events`, alcanza el 90% de lo que cabe en el stream, la plataforma
+deja de aceptar eventos nuevos hasta que la cola baja del 80%. Los dos streams conservan su semana
+de eventos ya procesados, y ese historial no cuenta para el límite. Solo cuentan los eventos sin
+leer.
+
+- La ingesta **HTTP** responde `503` con `Retry-After: 10` mientras rechaza. Reintenta ante un
+  `503`. Un `503` sin `Retry-After` sigue significando que la publicación en sí falló.
+- Los dispositivos **MQTT** ya recibieron el acuse del bróker. Sus mensajes esperan en el stream de
+  captura hasta que se reanuda la ingesta.
+- Las lecturas de **Sparkplug y LwM2M**, y los mensajes de un bróker MQTT externo, se descartan y se
+  cuentan, porque esos protocolos no dan a la plataforma forma de hacer que el dispositivo
+  reintente. Las transiciones de conexión y desconexión se siguen aceptando, y nada limita
+  cuántas: una flota que se reconecta en bucle aún puede llevar el stream a su techo, donde descarta
+  sus eventos más antiguos como antes.
+- El rechazo afecta a **todos los inquilinos**, porque los streams son compartidos. Un
+  `device-state` o un `event-processing` lentos no lo provocan.
+- Se añaden dos alertas: `JetStreamUnreadBacklogNearFull` (warning) y
+  `JetStreamIngestBackpressureEngaged` (critical). Consulta
+  [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure).
+- El simulador y el arnés de carga cuentan un `503` con `Retry-After` como descartado (shed), no
+  como fallido.
+
+No hay nada que hacer al actualizar. Ningún stream se reconfigura, y un servicio que siga en la
+versión anterior conserva su comportamiento anterior hasta que se actualice.
+
+#### device-management responde las búsquedas repetidas desde memoria {#next-local-cache}
+
+No hay que hacer nada en la actualización.
+
+- **Cada réplica de `device-management` guarda en memoria lo que leyó de sus cachés de
+  clave-valor durante hasta cinco segundos** y responde desde ahí las búsquedas repetidas del
+  mismo dispositivo, tipo de dispositivo o tenant, en lugar de preguntar a NATS. Vuelve a
+  preguntar a NATS cuando lo que guarda tiene cinco segundos, o antes si la copia en memoria está
+  llena. Un tiempo de vida de caché menor de cinco segundos también acorta la copia en memoria.
+- **Un cambio puede tardar hasta cinco segundos más en llegar a los eventos que resuelven las
+  demás réplicas**, además de lo que ya permitía el tiempo de vida de la caché. Un dispositivo
+  borrado, o vuelto a crear con el mismo token, puede seguir resolviéndose a través de su registro
+  anterior en otra réplica durante esos segundos, y una regla cuyo alcance de grupo acaba de
+  cambiar puede evaluarse allí con el alcance anterior. Los eventos que presentan una credencial
+  de dispositivo se comprueban contra la base de datos cada vez, como antes, y un flanco de alarma
+  para un dispositivo recién borrado se sigue descartando de inmediato en todas las réplicas.
+- **Cuatro métricas nuevas** cuentan las búsquedas respondidas desde memoria, las entradas
+  descartadas de ella y su tamaño. `kv_cache_request_duration_seconds{op="get"}` ahora cuenta solo
+  las búsquedas que la memoria no pudo responder. Consulte [Cachés que dejan de
+  responder](./observability.md#kv-caches).
 
 ### La transición única a la ingesta duradera
 

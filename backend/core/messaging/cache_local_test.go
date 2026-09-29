@@ -272,6 +272,30 @@ func TestAWriteTheBucketRefusedIsNotKeptLocally(t *testing.T) {
 	}
 }
 
+// A Set whose Put failed drops what memory held for the key. A failed Put may still have
+// landed (a timeout the bucket applied anyway), so the value held from before it is no
+// longer known to be what the bucket would return, and the next Get asks the bucket.
+func TestAFailedWriteDropsWhatMemoryHeldForTheKey(t *testing.T) {
+	store := newCountingStore()
+	c, _ := localCacheOver(store)
+	mustSet(t, c, "acme|dev", "v1") // held in memory
+
+	store.putErr = errors.New("timeout")
+	if err := c.Set(context.Background(), "acme|dev", "v2"); err == nil {
+		t.Fatal("Set against a failing bucket returned nil")
+	}
+	store.seed("acme|dev", `"v2"`) // the write landed after all
+
+	before := store.gets.Load()
+	if v, found := mustGet(t, c, "acme|dev"); !found || v != "v2" {
+		t.Errorf("Get after a failed Set = (%q, %v), want (\"v2\", true) from the bucket; memory "+
+			"answered with the value from before the write", v, found)
+	}
+	if got := store.gets.Load() - before; got != 1 {
+		t.Errorf("the Get after a failed Set made %d bucket reads, want 1", got)
+	}
+}
+
 // Memory is keyed on the caller's whole key, which carries the tenant: a key held for one
 // tenant never answers another's.
 func TestNoLocalHitCrossesTenants(t *testing.T) {

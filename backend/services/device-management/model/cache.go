@@ -103,7 +103,9 @@ type Caches struct {
 // messaging.RetainedCacheWindow plus the purge timeout, far longer than 5 s.
 //
 // A new cache whose readers need another replica's write visible at once is built with
-// messaging.WithoutLocalCache(), with a comment here saying why.
+// messaging.WithoutLocalCache(), with a comment here saying why, and is taken out of
+// TestEveryDeviceManagementCacheKeepsItsInProcessTier, which otherwise fails on it: the
+// decision above is pinned there, through this function, over a real broker.
 func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementConfiguration) (*Caches, error) {
 	deviceByToken, err := nmgr.NewCache(CACHE_NAME_DEVICE_BY_TOKEN,
 		time.Duration(cfg.DeviceCacheTtlSeconds)*time.Second)

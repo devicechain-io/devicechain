@@ -207,7 +207,8 @@ func (nmgr *NatsManager) NewCache(name string, ttl time.Duration, opts ...CacheO
 // Set stores value under key, JSON-encoding it. The entry expires after the
 // bucket TTL configured at construction. While the cache is bypassed it returns
 // ErrCacheUnavailable without trying. Only a write the bucket accepted is also kept in
-// process memory, so memory never holds what the bucket would not return.
+// process memory, so memory never holds what the bucket would not return; a write that
+// failed drops what memory held for the key, since it may have landed anyway.
 func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -227,6 +228,10 @@ func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
 	if err == nil {
 		// data is this call's own encoding, which no caller can reach.
 		c.local.put(key, data, c.now())
+	} else {
+		// A failed Put may still have landed (a timeout the bucket applied anyway), so what
+		// memory held for the key is no longer known to match the bucket. Drop it.
+		c.local.invalidate(key)
 	}
 	return err
 }

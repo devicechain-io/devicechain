@@ -598,6 +598,11 @@ key-value cache is answering again`), with how long that took and how many looku
 went to the database meanwhile. An error the bucket answers with, such as a full bucket refusing
 a write, is counted but does not cause it to be skipped.
 
+The usual cause is a NATS server that has dropped off the network without closing its
+connections. Every replica of a bucket answers reads, so until the other servers notice the
+silence, which takes between one and one and a half minutes, some of the reads are sent to the
+server that is gone. Events keep being resolved in that time, at the cost of more database reads.
+
 Each `device-management` replica also keeps what it read from, or wrote to, a bucket in memory
 for up to five seconds (less if the cache's time to live is shorter), and answers from there
 without asking NATS, including while the bucket is being skipped. The five seconds count from
@@ -609,11 +614,6 @@ resolve a device deleted or re-created under the same token through its old reco
 a rule whose group scope was just changed against the previous scope. Events that present a
 device credential are not affected by a deleted device: credentials are checked against the
 database on every event.
-
-The usual cause is a NATS server that has dropped off the network without closing its
-connections. Every replica of a bucket answers reads, so until the other servers notice the
-silence, which takes between one and one and a half minutes, some of the reads are sent to the
-server that is gone. Events keep being resolved in that time, at the cost of more database reads.
 
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
 waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the

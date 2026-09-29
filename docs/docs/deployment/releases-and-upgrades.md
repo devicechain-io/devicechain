@@ -1492,82 +1492,6 @@ exercised against a real cluster on every release.
 Once you are on a release that records a declaration, ordinary in-place upgrades resume.
 `dcctl instances list` shows what is declared, and in which cluster.
 
-### Next release {#next-upgrade}
-
-What the release after `v0.18.0` changes, collected as it lands.
-
-#### `dcctl destroy` removes an instance's in-cluster backups, and new alerts warn before archiving stops a database
-
-**`dcctl destroy` now removes an instance's backups from the cluster's own object store.** Once
-the instance's namespace is gone, destroy deletes everything under the path its event store was
-archiving to, and checks that the path is empty. It reads that path before it changes anything,
-and prints it. Backups in an object store you supplied are never deleted: destroy prints where
-they are. Pass `--keep-backups` to keep the in-cluster backups as well — and do pass it before
-you rebuild an instance from its own backups in the same cluster with `--restore-tsdb-from`,
-because a destroy without it deletes the archive that restore reads. If the object store cannot
-be reached, destroy still finishes, and says what it left. Archives left behind by destroys run
-with an earlier release stay where they are: after removing the instance's own backups, destroy
-lists the ones under the same instance name, and [What happens to the instance's backups](./bootstrap.md#destroy-backups) shows how to remove
-them.
-
-**New alerts warn before archiving takes a database down.** `PostgresWALArchiveBacklog` fires
-when a database is holding write-ahead log it has not shipped, including when the archiver is slow
-or hung rather than failing. `BackupDestinationFillingFast` and `DatabaseVolumeFillingFast` fire
-on how fast the backup store or an event-store volume is filling, not only on a fixed threshold.
-The backup sizing guidance is corrected too: under sustained ingest, the archived log costs about
-as much as the data, so the default in-cluster store fills in hours rather than days. Size it for
-your ingest rate, or send backups to an object store you run. See
-[Backups that stop shipping](./observability.md#backup-archiving).
-
-#### A full ingest stream refuses new events instead of discarding unread ones
-
-When a consumer fell so far behind that its unread backlog filled `inbound-events` or
-`resolved-events`, the stream discarded its oldest events to make room, and those were events
-nobody had processed yet. The device had already been told they were accepted.
-
-Now, when `device-management`'s unread backlog on `inbound-events`, or `event-management`'s on
-`resolved-events`, reaches 90% of what the stream can hold, the platform stops accepting new
-events until the backlog drops below 80%. The two streams keep their week of already-processed
-events, and that history does not count towards the limit. Only unread events do.
-
-- **HTTP** ingest answers `503` with `Retry-After: 10` while it refuses. Retry on `503`. A `503`
-  without a `Retry-After` still means the publish itself failed.
-- **MQTT** devices were already acknowledged by the broker. Their messages wait in the capture
-  stream until ingest resumes.
-- **Sparkplug and LwM2M** readings, and messages from an external MQTT broker, are dropped and
-  counted, because those protocols give the platform no way to make the device retry. Connect and
-  disconnect transitions are still accepted, and nothing limits how many: a fleet that reconnects
-  in a loop can still push the stream to its ceiling, where it discards its oldest events as before.
-- The refusal applies to **every tenant**, because the streams are shared. A slow `device-state`
-  or `event-processing` does not cause it.
-- Two alerts are added: `JetStreamUnreadBacklogNearFull` (warning) and
-  `JetStreamIngestBackpressureEngaged` (critical). See
-  [Backpressure on the ingest path](./observability.md#ingest-backpressure).
-- The simulator and load harness count a `503` with a `Retry-After` as shed, not failed.
-
-Nothing to do at upgrade. No stream is reconfigured, and a service still on the previous release
-keeps its previous behaviour until it is upgraded.
-
-#### device-management answers repeated lookups from memory {#next-local-cache}
-
-Nothing needs doing at the upgrade.
-
-- **Each `device-management` replica keeps what it read from its key-value caches in memory for
-  up to five seconds**, and answers repeated lookups for the same device, device type or tenant
-  from there instead of asking NATS. It asks NATS again once what it holds is five seconds old,
-  or sooner if the in-memory copy is full. A cache time to live below five seconds also shortens
-  the in-memory copy.
-- **A change can take up to five seconds longer to reach the events that other replicas
-  resolve**, on top of what the cache's time to live already allowed. A device deleted, or
-  re-created under the same token, can still resolve through its old record on another replica
-  for those seconds, and a rule whose group scope was just changed can be evaluated there against
-  the previous scope. Events that present a device credential are checked against the database
-  every time, as before, and an alarm edge for a device that was just deleted is still dropped at
-  once on every replica.
-- **Four new metrics** count lookups answered from memory, entries dropped from it, and its size.
-  `kv_cache_request_duration_seconds{op="get"}` now counts only the lookups memory could not
-  answer. See [Caches that stop answering](./observability.md#kv-caches).
-
 ### v0.18.0 — what failed silently now says so, and ingest keeps up with its ceiling {#v0180-upgrade}
 
 `v0.18.0` is an in-place upgrade from `v0.17.0`: `dcctl install` for the cluster, then `dcctl
@@ -3486,6 +3410,82 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 ```
 
 Nothing needs doing.
+
+### Next release {#next-upgrade}
+
+What the release after `v0.18.0` changes, collected as it lands.
+
+#### `dcctl destroy` removes an instance's in-cluster backups, and new alerts warn before archiving stops a database
+
+**`dcctl destroy` now removes an instance's backups from the cluster's own object store.** Once
+the instance's namespace is gone, destroy deletes everything under the path its event store was
+archiving to, and checks that the path is empty. It reads that path before it changes anything,
+and prints it. Backups in an object store you supplied are never deleted: destroy prints where
+they are. Pass `--keep-backups` to keep the in-cluster backups as well — and do pass it before
+you rebuild an instance from its own backups in the same cluster with `--restore-tsdb-from`,
+because a destroy without it deletes the archive that restore reads. If the object store cannot
+be reached, destroy still finishes, and says what it left. Archives left behind by destroys run
+with an earlier release stay where they are: after removing the instance's own backups, destroy
+lists the ones under the same instance name, and [What happens to the instance's backups](./bootstrap.md#destroy-backups) shows how to remove
+them.
+
+**New alerts warn before archiving takes a database down.** `PostgresWALArchiveBacklog` fires
+when a database is holding write-ahead log it has not shipped, including when the archiver is slow
+or hung rather than failing. `BackupDestinationFillingFast` and `DatabaseVolumeFillingFast` fire
+on how fast the backup store or an event-store volume is filling, not only on a fixed threshold.
+The backup sizing guidance is corrected too: under sustained ingest, the archived log costs about
+as much as the data, so the default in-cluster store fills in hours rather than days. Size it for
+your ingest rate, or send backups to an object store you run. See
+[Backups that stop shipping](./observability.md#backup-archiving).
+
+#### A full ingest stream refuses new events instead of discarding unread ones
+
+When a consumer fell so far behind that its unread backlog filled `inbound-events` or
+`resolved-events`, the stream discarded its oldest events to make room, and those were events
+nobody had processed yet. The device had already been told they were accepted.
+
+Now, when `device-management`'s unread backlog on `inbound-events`, or `event-management`'s on
+`resolved-events`, reaches 90% of what the stream can hold, the platform stops accepting new
+events until the backlog drops below 80%. The two streams keep their week of already-processed
+events, and that history does not count towards the limit. Only unread events do.
+
+- **HTTP** ingest answers `503` with `Retry-After: 10` while it refuses. Retry on `503`. A `503`
+  without a `Retry-After` still means the publish itself failed.
+- **MQTT** devices were already acknowledged by the broker. Their messages wait in the capture
+  stream until ingest resumes.
+- **Sparkplug and LwM2M** readings, and messages from an external MQTT broker, are dropped and
+  counted, because those protocols give the platform no way to make the device retry. Connect and
+  disconnect transitions are still accepted, and nothing limits how many: a fleet that reconnects
+  in a loop can still push the stream to its ceiling, where it discards its oldest events as before.
+- The refusal applies to **every tenant**, because the streams are shared. A slow `device-state`
+  or `event-processing` does not cause it.
+- Two alerts are added: `JetStreamUnreadBacklogNearFull` (warning) and
+  `JetStreamIngestBackpressureEngaged` (critical). See
+  [Backpressure on the ingest path](./observability.md#ingest-backpressure).
+- The simulator and load harness count a `503` with a `Retry-After` as shed, not failed.
+
+Nothing to do at upgrade. No stream is reconfigured, and a service still on the previous release
+keeps its previous behaviour until it is upgraded.
+
+#### device-management answers repeated lookups from memory {#next-local-cache}
+
+Nothing needs doing at the upgrade.
+
+- **Each `device-management` replica keeps what it read from its key-value caches in memory for
+  up to five seconds**, and answers repeated lookups for the same device, device type or tenant
+  from there instead of asking NATS. It asks NATS again once what it holds is five seconds old,
+  or sooner if the in-memory copy is full. A cache time to live below five seconds also shortens
+  the in-memory copy.
+- **A change can take up to five seconds longer to reach the events that other replicas
+  resolve**, on top of what the cache's time to live already allowed. A device deleted, or
+  re-created under the same token, can still resolve through its old record on another replica
+  for those seconds, and a rule whose group scope was just changed can be evaluated there against
+  the previous scope. Events that present a device credential are checked against the database
+  every time, as before, and an alarm edge for a device that was just deleted is still dropped at
+  once on every replica.
+- **Four new metrics** count lookups answered from memory, entries dropped from it, and its size.
+  `kv_cache_request_duration_seconds{op="get"}` now counts only the lookups memory could not
+  answer. See [Caches that stop answering](./observability.md#kv-caches).
 
 ### The one-time durable-ingest cutover
 

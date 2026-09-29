@@ -86,6 +86,12 @@ type localCache struct {
 	// Set, a Delete). A Get records it before asking the bucket and fills only if it has
 	// not moved, so a read that was in flight across a change on this replica cannot put
 	// the value from before the change back.
+	//
+	// It is one counter for the whole cache, not one per key, and that is accepted: a write
+	// to any key (every cache-aside fill after a database read is a Set) drops the fills of
+	// reads in flight for OTHER keys too. Those reads still return their value; only the
+	// copy in memory is skipped, and the next Get of that key costs one bucket read. That is
+	// hit rate lost during a cold-start burst of misses, never a wrong answer.
 	gen   uint64
 	order *list.List // front = most recently used; elements hold *localEntry
 	byKey map[string]*list.Element

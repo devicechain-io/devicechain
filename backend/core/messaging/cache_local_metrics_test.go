@@ -58,6 +58,7 @@ func TestLocalLookupMetrics(t *testing.T) {
 	mustSet(t, c, "acme|a", "va") // held
 	mustGet(t, c, "acme|a")       // hit
 	mustGet(t, c, "acme|a")       // hit
+	mustGet(t, c, "acme|a")       // hit
 	mustGet(t, c, "acme|absent")  // miss (and the bucket's miss is not kept)
 	if err := c.Delete(ctx, "acme|a"); err != nil {
 		t.Fatal(err)
@@ -66,8 +67,10 @@ func TestLocalLookupMetrics(t *testing.T) {
 	clock.advance(DefaultLocalCacheTTL)
 	mustGet(t, c, "acme|b") // expired: a miss, then refilled from the bucket
 
-	if got := lookups("hit"); got != 2 {
-		t.Errorf("hits = %v, want 2", got)
+	// 3 hits against 2 misses, not 2 against 2: equal counts would read the same with the
+	// two labels swapped, and this is the series an operator reads the hit rate from.
+	if got := lookups("hit"); got != 3 {
+		t.Errorf("hits = %v, want 3", got)
 	}
 	if got := lookups("miss"); got != 2 {
 		t.Errorf("misses = %v, want 2", got)

@@ -626,6 +626,12 @@ is answering again`), con cuánto tiempo pasó y cuántas búsquedas y escritura
 datos mientras tanto. Un error con el que responde el bucket, como un bucket lleno que rechaza una
 escritura, se cuenta pero no hace que se omita.
 
+La causa habitual es un servidor NATS que se ha caído de la red sin cerrar sus conexiones. Todas
+las réplicas de un bucket responden lecturas, así que hasta que los demás servidores notan el
+silencio, lo que tarda entre un minuto y un minuto y medio, parte de las lecturas se envía al
+servidor que ya no está. Durante ese tiempo los eventos se siguen resolviendo, a costa de más
+lecturas de la base de datos.
+
 Cada réplica de `device-management` también guarda en memoria lo que leyó de un bucket, o escribió
 en él, durante hasta cinco segundos (menos si el tiempo de vida de la caché es menor), y responde
 desde ahí sin preguntar a NATS, incluso mientras el bucket se está omitiendo. Los cinco segundos
@@ -638,12 +644,6 @@ crear con el mismo token, a través de su registro anterior, o evaluar una regla
 grupo acaba de cambiar con el alcance anterior. Los eventos que presentan una credencial de
 dispositivo no se ven afectados por un dispositivo borrado: las credenciales se comprueban contra
 la base de datos en cada evento.
-
-La causa habitual es un servidor NATS que se ha caído de la red sin cerrar sus conexiones. Todas
-las réplicas de un bucket responden lecturas, así que hasta que los demás servidores notan el
-silencio, lo que tarda entre un minuto y un minuto y medio, parte de las lecturas se envía al
-servidor que ya no está. Durante ese tiempo los eventos se siguen resolviendo, a costa de más
-lecturas de la base de datos.
 
 Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
 Espera hasta cinco segundos, porque solo el líder del bucket puede aceptarlo. Si aun así falla, el
