@@ -160,6 +160,11 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 			"REMOVED once the instance is gone. Pass --keep-backups to keep them — for example to rebuild this "+
 			"instance from them with --restore-tsdb-from.", archive.location()))
 	}
+	if archive.Snapshots {
+		fmt.Println(color.YellowString("Its event store's volume-snapshot base backups are in namespace %s and are "+
+			"deleted with it, --keep-backups or not. No restore reads them: --restore-tsdb-from reads the backup "+
+			"store's archive, which --keep-backups keeps.", InstanceNamespace(opts.Instance)))
+	}
 
 	// 🔴 RETURNING ON AN OUTCOME IS WHAT KEEPS THE CLOSING LINE TRUE. An abort is not a
 	// completed uninstall: uninstallInstance once returned nil for both, so declining the

@@ -85,6 +85,10 @@ type archivePlan struct {
 	FromRecorded bool
 	// Reason is the sentence printed for Keep, External and Unknown.
 	Reason string
+	// Snapshots: the cluster's install record says base backups are volume snapshots.
+	// The event store's are in the instance's namespace, so the destroy deletes them
+	// whatever it does with the archive above -- and says so.
+	Snapshots bool
 }
 
 // location is the plan's archive as an operator would name it.
@@ -317,7 +321,9 @@ func readArchivePlan(ctx context.Context, dyn dynamic.Interface, typed kubernete
 	default:
 		f.Recorded, f.RecordedErr = readRecordedArchive(instance)
 	}
-	return planArchiveRemoval(instance, f)
+	plan := planArchiveRemoval(instance, f)
+	plan.Snapshots = f.Record != nil && f.Record.Settings.BackupSnapshotClass != ""
+	return plan
 }
 
 // readObjectStore reads which bucket, at which endpoint, an ObjectStore writes to.

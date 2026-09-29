@@ -6,6 +6,7 @@ package main
 import (
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -66,6 +67,19 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Instance")
+		os.Exit(1)
+	}
+	// Volume-snapshot base backups are pruned here because CloudNativePG does not
+	// prune them. A Runnable on a timer rather than a controller: see
+	// controllers/snapshotretention.go for why it must not start an informer.
+	if err := mgr.Add(&controllers.SnapshotRetention{
+		Reader:   mgr.GetAPIReader(),
+		Writer:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("snapshot-retention"),
+		Interval: 10 * time.Minute,
+		Now:      time.Now,
+	}); err != nil {
+		setupLog.Error(err, "unable to add the snapshot retention runnable")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

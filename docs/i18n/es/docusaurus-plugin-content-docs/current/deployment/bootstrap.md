@@ -78,8 +78,8 @@ sitio se deja como está, y lo que falta se añade. Eso incluye el volumen del a
 respaldo, que conserva el tamaño que tiene; consulta
 [Tamaño del almacén de objetos de respaldo](#backup-store-size).
 
-**Cambiar sus ajustes** —`--ha`, `--compact`, la monitorización, los respaldos— se rechaza
-mientras exista alguna instancia en el clúster. Cada instancia se construyó con los ajustes
+**Cambiar sus ajustes** —`--ha`, `--compact`, la monitorización, los respaldos,
+`--backup-snapshot-class`— se rechaza mientras exista alguna instancia en el clúster. Cada instancia se construyó con los ajustes
 vigentes cuando se arrancó, y ninguna se reconstruye cuando cambian. Eso incluye el archivo
 externo: un `--backup-credentials-file` que nombre otro endpoint u otro bucket del almacén de
 eventos también se rechaza, porque el almacén de eventos de cada instancia sigue archivando en
@@ -533,6 +533,50 @@ para ganar espacio. Las alertas descritas en
 [Respaldos que dejan de enviarse](./observability.md#backup-archiving) avisan antes de que se
 llene el almacén o un volumen de base de datos.
 
+#### Respaldos base como instantáneas de volumen {#snapshot-base-backups}
+
+En un clúster cuyo controlador de almacenamiento toma instantáneas de volumen CSI, `dcctl install
+--backup-snapshot-class <class>` toma el respaldo base diario de cada base de datos como una
+instantánea de volumen de sus discos, en lugar de una copia completa en el almacén de respaldos.
+Sin la opción no cambia nada.
+
+- **Lo que no cambia.** Cada base de datos sigue archivando su log de escritura anticipada en el
+  almacén de respaldos, de forma continua. Un respaldo base completo sigue yendo al almacén de
+  respaldos una vez por semana (el domingo a las 04:00): el almacén solo poda el log antiguo en
+  relación con los respaldos base que guarda, así que sin ninguno conservaría cada segmento hasta
+  llenarse, y toda restauración lee el almacén.
+- **La clase.** Tiene que existir, tener `deletionPolicy: Delete` y pertenecer al controlador de
+  almacenamiento que aprovisiona los volúmenes de las bases de datos (normalmente el de la
+  StorageClass predeterminada). `dcctl install` comprueba las tres cosas antes de cambiar nada, y
+  lo mismo hace cada `dcctl bootstrap`, así que una clase borrada después de la instalación se
+  detecta antes de construir una instancia. El clúster necesita un controlador de instantáneas
+  CSI: Google Kubernetes Engine y Azure AKS lo incluyen con sus controladores de disco; en Amazon
+  EKS, instala antes el complemento del controlador de instantáneas.
+- **Retención.** CloudNativePG no borra las instantáneas antiguas. Lo hace el operador de
+  DeviceChain, cada diez minutos: conserva todas las instantáneas dentro de la
+  [ventana de recuperación](#backup-retention) de la base de datos y la más reciente anterior a
+  ella, y borra el resto, lo que borra también la copia del proveedor.
+  `DatabaseSnapshotPruningStalled` se dispara cuando deja de hacerlo.
+- **Lo que no hace.** Ninguna restauración lee una instantánea. Una restauración
+  (`--restore-rdb-from`, `--restore-tsdb-from`) lee el almacén de respaldos: el respaldo base
+  semanal más reciente y el log desde entonces, así que puede reproducir hasta una semana de log.
+  Las instantáneas de una instancia se borran con su namespace cuando se destruye. Las
+  instantáneas tomadas en tu proveedor de nube sobreviven a un clúster que se borre sin destruir
+  antes sus instancias, y guardan el contenido de las bases de datos, incluidos los datos que ha
+  eliminado el borrado de un inquilino, hasta que las borres allí.
+- **Lo que hace con el almacén de respaldos.** El almacén guarda ahora hasta una semana más de log
+  de cada base de datos: el log hasta el respaldo base semanal más reciente anterior a cada
+  ventana. Guarda menos copias completas, pero donde el log es la mayor parte de lo que guarda, se
+  llena antes. Con las ventanas y el almacén predeterminados, y la proporción relacional medida
+  más arriba, las copias base como instantáneas de volumen llenan el almacén a unos 60 eventos por
+  segundo sostenidos, no a unos 100; y a unos 29 si todo fuera registro de la base de datos
+  relacional. Las alertas de arriba son el aviso, igual que sin instantáneas.
+- **Pertenece al clúster.** Todas las instancias lo siguen, y cambiarlo se rechaza mientras haya
+  instancias en el clúster, como los demás [ajustes de install](#re-running-install).
+
+Las alertas de las instantáneas se describen en
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving).
+
 ## Prerrequisitos {#prerequisites}
 
 - **Un clúster de Kubernetes, versión 1.29 o más reciente**, y un kube-context que apunte a él.
@@ -643,6 +687,7 @@ arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
 | `--no-monitoring` | Omite la pila de monitorización (Prometheus y Grafana). |
 | `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin este flag la instalación falla. |
 | `--backup-credentials-file <path>` | Envía los respaldos de base de datos a un almacén de objetos que ya tengas, descrito por un archivo JSON, en lugar del que hay dentro del clúster. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
+| `--backup-snapshot-class <class>` | Toma el respaldo base diario de cada base de datos como una instantánea de volumen CSI con esta VolumeSnapshotClass, en lugar de una copia completa en el almacén de respaldos; una copia completa sigue yendo al almacén cada semana, y las restauraciones siguen leyendo el almacén. La clase tiene que existir, usar `deletionPolicy: Delete` y pertenecer al controlador que aprovisiona los volúmenes de las bases de datos. Se rechaza con `--no-cnpg` o `--compact --no-tls`, que no dejan respaldos. Consulta [Respaldos base como instantáneas de volumen](#snapshot-base-backups). |
 | `--restore-rdb-from <archive>` | Recuperación ante desastres: recupera el almacén relacional compartido desde esta ruta de archivo dentro del bucket de respaldos (`dc-rdb` para un almacén que nunca se ha restaurado) en lugar de inicializar uno vacío. Solo surte efecto cuando el almacén se **crea** —contra un clúster cuyo almacén ya existe no mueve ningún dato—, así que es una palanca de reconstrucción, no de reparación. Necesita el plugin de respaldo, así que se rechaza en un clúster instalado con `--no-cnpg` o con `--compact --no-tls`. Consulta [Recuperar una instancia](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Detiene esa recuperación en un instante en lugar de reproducir todo el archivo, para datos destruidos *correctamente*, por una migración defectuosa o un borrado por error; elige un momento estrictamente anterior al daño. Necesita `--restore-rdb-from`, y una marca de tiempo RFC 3339 con desfase explícito (`2026-07-27T13:59:00Z`): sin él, PostgreSQL la interpreta en la zona horaria del propio servidor en recuperación y se detiene en un momento distinto del que nombraste. |
 | `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `600` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual); consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
@@ -1184,6 +1229,10 @@ el mismo nombre de instancia.
   reconstruir la instancia a partir de ellos con `dcctl bootstrap --restore-tsdb-from` en el
   mismo clúster: un destroy sin esa opción borra precisamente el archivo que lee esa
   restauración. `dcctl destroy --all` acepta `--keep-backups` y lo aplica a todas las instancias.
+- **Los respaldos base como instantáneas de volumen** (`dcctl install --backup-snapshot-class`)
+  del almacén de eventos de la instancia están en su namespace, y se borran con él, con
+  `--keep-backups` o sin él. Ninguna restauración los lee: `--restore-tsdb-from` lee el almacén de
+  respaldos, que `--keep-backups` conserva.
 - **Si no se puede acceder al almacén de objetos**, o destroy no puede saber qué ruta es la de la
   instancia, el destroy termina igualmente. Indica qué dejó, y su línea final no da la instancia
   por destruida del todo.

@@ -279,6 +279,30 @@ backup:
   # Empty disables pruning entirely.
   retentionPolicy: "30d"
 
+  # VOLUME-SNAPSHOT BASE BACKUPS. Empty (the default): every base backup is a
+  # full copy in the object store, taken on `schedule`. Set to a
+  # VolumeSnapshotClass: the base backup on `schedule` is a CSI volume snapshot
+  # of the database's volumes instead, and the object-store base backup moves to
+  # `objectStoreSchedule`. WAL archiving is the plugin's in both cases.
+  #
+  # 🔴 CloudNativePG DOES NOT PRUNE VOLUME SNAPSHOTS: `retentionPolicy` above
+  # reaches only what is in the object store. The DeviceChain operator prunes
+  # them to that same window, keyed on a label scheduledbackup.yaml puts on the
+  # snapshot ScheduledBackup. See that template.
+  snapshotClass: ""
+
+  # 🔴 SIX FIELDS, and only read when snapshotClass is set. The object-store base
+  # backup that stays, weekly by default (Sunday 04:00), for two reasons, either
+  # of which is enough: barman prunes archived WAL only against base backups IN
+  # THE OBJECT STORE, so with none there the archive is never pruned and grows
+  # until the store is full; and every restore path reads the object store, so
+  # with none there no restore finds a base backup.
+  #
+  # The cost, stated: the store keeps up to one interval of this schedule more
+  # WAL than it does in the default mode (the newest base before the window, and
+  # every segment since), and a restore replays up to that much more.
+  objectStoreSchedule: "0 0 4 * * 0"
+
   # 🔴 Forces a WAL switch every interval, and it is what bounds the RPO on a
   # QUIET instance. Postgres defaults to 0 (switch only when a segment fills), so
   # a low-traffic instance can carry hours of unshipped WAL while every backup

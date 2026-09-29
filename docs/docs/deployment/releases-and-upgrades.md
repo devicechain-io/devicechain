@@ -3700,6 +3700,47 @@ you reach them with `kubectl port-forward`. That listener is never a container p
 port or an ingress route. Nothing changes for an instance that does not set it, and nothing
 needs doing. See [Profiling a service](./observability.md#profiling).
 
+#### Database base backups can be volume snapshots {#next-snapshot-backups}
+
+On a cluster whose storage driver takes CSI volume snapshots, `dcctl install
+--backup-snapshot-class <class>` takes each database's daily base backup as a volume snapshot
+instead of a full copy in the backup store. Nothing changes unless you pass the flag. See
+[Volume-snapshot base backups](./bootstrap.md#snapshot-base-backups).
+
+- Log archiving does not change, and a full base backup still goes to the backup store once a
+  week, on Sunday at 04:00. The store prunes archived log only against the base backups it holds,
+  and every restore reads the store.
+- The class must exist, have `deletionPolicy: Delete`, and belong to the driver that provisions
+  the database volumes. `dcctl install` checks all three before it changes anything, and so does
+  each `dcctl bootstrap`. Google Kubernetes Engine and Azure AKS include a snapshot controller;
+  on Amazon EKS, install the snapshot controller add-on first.
+- CloudNativePG does not delete old snapshots. The DeviceChain operator now does, every ten
+  minutes: it keeps every snapshot inside the database's recovery window and the newest one
+  before it. To do that, the operator's ClusterRole gains, in every namespace: `get` on
+  namespaces; `get`, `list` and `delete` on CloudNativePG Backups; `get`, `list` and `patch` on
+  CloudNativePG ScheduledBackups, to record each pass; and `create` and `patch` on
+  `events.k8s.io` Events, to report what it pruned. It acts only in namespaces DeviceChain
+  created, on the ScheduledBackups its own configuration renders.
+- A restore (`--restore-rdb-from`, `--restore-tsdb-from`) still reads the backup store, not the
+  snapshots: the newest weekly base backup and the log since, so it can replay up to a week of
+  log. An instance's snapshots are deleted with it.
+- The backup store keeps up to a week more log for each database, so it fills sooner where log
+  is most of what it holds: with the default windows and store, at about 60 events per second of
+  sustained ingest rather than about 100.
+- `PostgresNoRecentSnapshotBackup`, `DatabaseSnapshotPruningStalled` and
+  `DatabaseSnapshotBackupsUnobserved` are new, and on such a cluster `PostgresNoRecentBaseBackup`
+  waits 8.5 days instead of 36 hours. The monitoring stack's kube-state-metrics now also reads
+  CloudNativePG Backups and ScheduledBackups, which those alerts need.
+- The setting belongs to the cluster: every instance follows it, and changing it is refused
+  while instances run on the cluster.
+
+**Re-run `dcctl install` with this release before any bootstrap, upgrade or destroy.** The
+install record has a new field, and this `dcctl` refuses a record written by an earlier one:
+`dcctl bootstrap` and `dcctl upgrade` stop and say so, and `dcctl destroy` still removes the
+instance but leaves its database and login in the shared relational database and its backups in
+the in-cluster store, and says it did.
+Re-running install is already the first step of every upgrade.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

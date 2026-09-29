@@ -778,6 +778,23 @@ warning.
 For how large the in-cluster store needs to be, see
 [Backup store size](./bootstrap.md#backup-store-size).
 
+### Volume-snapshot base backups {#snapshot-backup-alerts}
+
+On a cluster installed with
+[`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups), the daily base backup is a
+volume snapshot and the one in the backup store is weekly. `PostgresNoRecentBaseBackup`, which
+watches the backup store's base backups, then waits 8.5 days instead of 36 hours, and three more
+alerts are rendered:
+
+| Alert | Fires when | What to do |
+| --- | --- | --- |
+| `PostgresNoRecentSnapshotBackup` | A database has completed no snapshot in 36 hours, or its snapshot schedule has never completed one, for an hour. | Read the events on the `<cluster>-snapshot` ScheduledBackup and its latest Backups. A VolumeSnapshotClass that was deleted, or belongs to another storage driver than the database volumes, fails every snapshot. Point-in-time recovery still works from the weekly base backup meanwhile. |
+| `DatabaseSnapshotPruningStalled` | The DeviceChain operator has not finished pruning a snapshot schedule for over an hour, for 30 minutes. | Check the operator is running, at the release the cluster was installed with, and read the ScheduledBackup's events. Until it resumes, every snapshot is kept, each a full copy of the database. |
+| `DatabaseSnapshotBackupsUnobserved` | Snapshot backups are on, but no snapshot schedule is visible to monitoring, for an hour. | Check the snapshot ScheduledBackups exist, and that the monitoring stack's kube-state-metrics reads CloudNativePG Backups and ScheduledBackups. Until then, neither alert above can fire. |
+
+These read the Backup and ScheduledBackup objects through kube-state-metrics, not CloudNativePG's
+own backup gauge, which is set only on each database's primary.
+
 ## Profiling a service {#profiling}
 
 Metrics show how much work a service does and how long it takes. They do not show where the

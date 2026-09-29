@@ -109,6 +109,25 @@ func databaseBackupsEnabled(st *State) bool {
 	return DatabaseBackupsEnabled(st.NoCNPG, st.Compact, st.NoTLS)
 }
 
+// backupSnapshotClass is the VolumeSnapshotClass this run's databases take their base
+// backups with, or "" when those go to the object store -- including whenever backups
+// are off, so nothing can emit a class without the backups it belongs to.
+//
+// 🔑 ONE READING, like databaseBackupsEnabled. infraVars emits `backup_snapshot_class`
+// from it, the install record stores it, and the preflight checks the class it names.
+// A bootstrap follows the record: the setting is the cluster's, and an instance whose
+// event store took full copies while the relational store took snapshots would have
+// two backup regimes on one cluster, one of them never chosen.
+func backupSnapshotClass(st *State) string {
+	if !databaseBackupsEnabled(st) {
+		return ""
+	}
+	if st.Install != nil {
+		return st.Install.Settings.BackupSnapshotClass
+	}
+	return st.BackupSnapshotClass
+}
+
 // monitoringEnabled reports whether the observability stack is part of this run, and
 // therefore whether a dashboard credential is needed at all.
 func monitoringEnabled(st *State) bool {

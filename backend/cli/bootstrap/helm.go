@@ -456,10 +456,13 @@ func helmValues(st *State) map[string]interface{} {
 		// nothing. An install whose outputs could not be read should get the
 		// visible kind of gap.
 		"metrics": map[string]interface{}{
-			"enabled":           !st.NoMonitoring,
-			"databaseBackups":   st.Values[databaseBackupsKey] == "true",
-			"databaseNamespace": databaseNamespaceFor(st),
-			"cnpgNamespace":     st.Values[cnpgNamespaceKey],
+			"enabled":         !st.NoMonitoring,
+			"databaseBackups": st.Values[databaseBackupsKey] == "true",
+			// Volume-snapshot base backups: the snapshot alerts, and the weekly
+			// object-store base-backup threshold. Read back from the apply, as above.
+			"databaseBackupSnapshots": st.Values[databaseBackupSnapshotsKey] == "true",
+			"databaseNamespace":       databaseNamespaceFor(st),
+			"cnpgNamespace":           st.Values[cnpgNamespaceKey],
 		},
 	}
 

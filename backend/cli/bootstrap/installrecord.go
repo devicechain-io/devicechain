@@ -39,7 +39,11 @@ const (
 	installRecordName = "dc-install"
 	installRecordKey  = "install.json"
 	// 3: outputs.rdb.maxConnections, the budget every instance is admitted against.
-	installRecordSchema = 3
+	// 4: settings.backupSnapshotClass and outputs.backupSnapshotClass. A dcctl that
+	// cannot read them would build an instance whose event store took full copies on a
+	// cluster whose relational store takes snapshots -- and, re-installing, would drop
+	// the setting without seeing it change.
+	installRecordSchema = 4
 
 	installPhaseApplying  = "applying"
 	installPhaseInstalled = "installed"
@@ -95,6 +99,10 @@ type InstallSettings struct {
 	CertManager     bool `json:"certManager"`
 	DatabaseBackups bool `json:"databaseBackups"`
 	BackupsExternal bool `json:"backupsExternal"`
+	// BackupSnapshotClass is the VolumeSnapshotClass every database on the cluster
+	// takes its scheduled base backup with; empty when those go to the object store.
+	// Schema 4.
+	BackupSnapshotClass string `json:"backupSnapshotClass,omitempty"`
 }
 
 // InstallOutputs is what the cluster prerequisites BUILT, read back from the cluster
@@ -108,6 +116,9 @@ type InstallOutputs struct {
 	CNPGNamespace             string         `json:"cnpgNamespace,omitempty"`
 	GrafanaService            string         `json:"grafanaService,omitempty"`
 	GrafanaNamespace          string         `json:"grafanaNamespace,omitempty"`
+	// BackupSnapshotClass is the class the relational store's chart was handed, read
+	// back from the cluster apply; validate holds it equal to the setting. Schema 4.
+	BackupSnapshotClass string `json:"backupSnapshotClass,omitempty"`
 }
 
 // installSettingsFor is what this run applies the cluster root with. Every field comes
@@ -115,13 +126,14 @@ type InstallOutputs struct {
 // of the flags.
 func installSettingsFor(st *State) InstallSettings {
 	return InstallSettings{
-		HA:              st.HA,
-		Compact:         st.Compact,
-		Monitoring:      monitoringEnabled(st),
-		CNPG:            !st.NoCNPG,
-		CertManager:     certManagerEnabled(st),
-		DatabaseBackups: databaseBackupsEnabled(st),
-		BackupsExternal: databaseBackupsEnabled(st) && backupsAreExternal(st),
+		HA:                  st.HA,
+		Compact:             st.Compact,
+		Monitoring:          monitoringEnabled(st),
+		CNPG:                !st.NoCNPG,
+		CertManager:         certManagerEnabled(st),
+		DatabaseBackups:     databaseBackupsEnabled(st),
+		BackupsExternal:     databaseBackupsEnabled(st) && backupsAreExternal(st),
+		BackupSnapshotClass: backupSnapshotClass(st),
 	}
 }
 
@@ -255,6 +267,17 @@ func (r InstallRecord) validate(liveClusterUID string) error {
 		a.AccessKeyIDKey == "" || a.SecretAccessKey == "" || a.BucketTsdb == "") {
 		return fmt.Errorf("the install record says backups are on but its archive contract is "+
 			"incomplete (%+v); an instance built from it would archive nowhere", a)
+	}
+	// Snapshots are base backups, so they exist only with backups; and the class the
+	// apply handed the relational store is the one the record promises every instance.
+	if r.Settings.BackupSnapshotClass != "" && !r.Settings.DatabaseBackups {
+		return fmt.Errorf("the install record asks for volume-snapshot base backups (class %q) with "+
+			"backups off; there is nothing to take them of", r.Settings.BackupSnapshotClass)
+	}
+	if r.Settings.BackupSnapshotClass != r.Outputs.BackupSnapshotClass {
+		return fmt.Errorf("the install record asks for volume-snapshot base backups with class %q but "+
+			"the cluster apply reports %q; an instance built from it would back up differently from "+
+			"the relational store", r.Settings.BackupSnapshotClass, r.Outputs.BackupSnapshotClass)
 	}
 	if r.Settings.CNPG && r.Outputs.CNPGNamespace == "" {
 		return fmt.Errorf("the install record says the database operator is installed but does " +

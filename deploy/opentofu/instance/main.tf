@@ -126,6 +126,8 @@ locals {
     access_key_id_key     = var.backup_access_key_id_key
     secret_access_key_key = var.backup_secret_access_key_key
     schedule              = var.backup_schedule
+    snapshot_class        = var.backup_snapshot_class
+    object_store_schedule = var.backup_object_store_schedule
     retention_policy      = var.backup_retention_tsdb
     server_name           = var.backup_server_name_tsdb
 
@@ -485,4 +487,78 @@ module "cnpg_tsdb" {
   # The operator's presence is not left to hope — backup_prerequisite_guard checks
   # the plugin at plan time, and a Cluster created with no operator at all simply
   # never reconciles, which is loud rather than silent.
+}
+
+# 🔴 THE VOLUMESNAPSHOTCLASS, CHECKED AT PLAN TIME. A class that is not there, or
+# that keeps the provider's snapshot when its VolumeSnapshot is deleted, applies
+# cleanly: the Cluster and the ScheduledBackup are accepted, and then every snapshot
+# fails, or every snapshot is kept for ever while retention reads as working. dcctl
+# checks both, and the driver, before it changes anything; this is the same refusal
+# for whoever runs tofu directly.
+#
+# On a cluster that serves no snapshot.storage.k8s.io API at all the read below
+# errors on its own, which is loud enough.
+data "kubernetes_resources" "backup_snapshot_class" {
+  count = var.backup_snapshot_class != "" ? 1 : 0
+
+  api_version    = "snapshot.storage.k8s.io/v1"
+  kind           = "VolumeSnapshotClass"
+  field_selector = "metadata.name=${var.backup_snapshot_class}"
+}
+
+# The DeviceChain operator, by the CRD it installs with it. CloudNativePG does not
+# prune volume snapshots; the operator does, so a cluster without it would keep every
+# snapshot while retention read as configured. dcctl installs the operator before
+# either apply; this is for whoever applies these configurations without it.
+data "kubernetes_resources" "devicechain_operator_crd" {
+  count = var.backup_snapshot_class != "" ? 1 : 0
+
+  api_version    = "apiextensions.k8s.io/v1"
+  kind           = "CustomResourceDefinition"
+  field_selector = "metadata.name=instances.core.devicechain.io"
+}
+
+resource "terraform_data" "backup_snapshot_class_guard" {
+  count = var.backup_snapshot_class != "" ? 1 : 0
+
+  input = var.backup_snapshot_class
+
+  lifecycle {
+    precondition {
+      condition     = local.backups_on
+      error_message = <<-EOT
+        backup_snapshot_class is set while database backups are off. Snapshots are
+        base backups: without WAL archiving they restore to nothing but their own
+        moment. Turn backups on, or clear backup_snapshot_class.
+      EOT
+    }
+    precondition {
+      condition     = length(data.kubernetes_resources.backup_snapshot_class[0].objects) == 1
+      error_message = <<-EOT
+        VolumeSnapshotClass "${var.backup_snapshot_class}" does not exist on this
+        cluster, so every scheduled snapshot would fail. Create one for the driver
+        that provisions the database volumes (on GKE, pd.csi.storage.gke.io), or
+        clear backup_snapshot_class.
+      EOT
+    }
+    precondition {
+      condition     = try(data.kubernetes_resources.backup_snapshot_class[0].objects[0].deletionPolicy, "") == "Delete"
+      error_message = <<-EOT
+        VolumeSnapshotClass "${var.backup_snapshot_class}" does not have
+        deletionPolicy Delete. Old snapshots are removed by deleting them, and under
+        Retain the provider's snapshot outlives that, so the recovery window would
+        never be honoured. Use a class with deletionPolicy Delete.
+      EOT
+    }
+    precondition {
+      condition     = length(data.kubernetes_resources.devicechain_operator_crd[0].objects) == 1
+      error_message = <<-EOT
+        backup_snapshot_class is set, but the DeviceChain operator is not installed
+        on this cluster (no instances.core.devicechain.io CRD). CloudNativePG does
+        not delete old snapshots, and the operator is what does, so every snapshot
+        would be kept. Install the operator (dcctl install does), or clear
+        backup_snapshot_class.
+      EOT
+    }
+  }
 }

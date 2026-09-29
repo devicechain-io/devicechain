@@ -25,6 +25,7 @@ var (
 	installNoCNPG            bool
 	installAllowLegacyDb     bool
 	installBackupCredentials string
+	installBackupSnapClass   string
 	installMaxConnections    int
 	installRestoreRdbFrom    string
 	installRestoreRdbAt      string
@@ -155,9 +156,12 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		Compact:           installCompact,
 		HA:                installHA,
 		BackupDestination: dest,
-		MaxConnections:    installMaxConnections,
-		Restore:           restore,
-		DcctlVersion:      Version,
+		// Checked from argv by ValidateBackupSnapshotClass, and against the cluster by
+		// the install itself before anything is written.
+		BackupSnapshotClass: installBackupSnapClass,
+		MaxConnections:      installMaxConnections,
+		Restore:             restore,
+		DcctlVersion:        Version,
 	}
 }
 
@@ -242,6 +246,15 @@ the cluster, with one exception: the connection budget may be raised.`,
 				"those turned backups off")
 		}
 
+		// Volume-snapshot base backups: a name no object can have, or snapshots on a
+		// cluster whose other flags turned its backups off, are both knowable from argv.
+		// Whether the class exists, deletes what it snapshots and belongs to the right
+		// driver needs the cluster, and the install asks it before writing anything.
+		if err := bootstrap.ValidateBackupSnapshotClass(installBackupSnapClass,
+			bootstrap.DatabaseBackupsEnabled(installNoCNPG, installCompact, installNoTLS)); err != nil {
+			return err
+		}
+
 		// 🔴 SETTLED FROM ARGV, BEFORE ANY CLUSTER IS TOUCHED. Every way a restore's
 		// flags can be wrong — a recovery target with nothing to recover, a timestamp
 		// with no offset, an archive on a cluster that has no plugin to read it — is
@@ -293,6 +306,12 @@ func init() {
 			"(dc-postgresql). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — applying with it set "+
 			"destroys that StatefulSet and brings up an empty database on the same hostname")
 	installCmd.Flags().StringVar(&installBackupCredentials, "backup-credentials-file", "", "send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the cluster provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. Keep the file readable only by you")
+	installCmd.Flags().StringVar(&installBackupSnapClass, "backup-snapshot-class", "",
+		"take each database's daily base backup as a CSI volume snapshot with this VolumeSnapshotClass "+
+			"instead of a full copy in the backup store. A full copy still goes to the store weekly, WAL "+
+			"archiving is unchanged, and restores still read the store. The class must exist, use "+
+			"deletionPolicy Delete, and belong to the driver that provisions the database volumes. Every "+
+			"instance on the cluster follows it")
 	// Database restore (ADR-028 / ADR-020 A2.5). These are the CLUSTER's half: the
 	// relational store is installed once per cluster and shared by every instance, so
 	// recovering it is an install operation. The event store is an instance's, and

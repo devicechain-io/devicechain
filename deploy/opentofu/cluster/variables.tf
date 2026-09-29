@@ -430,6 +430,57 @@ variable "backup_schedule" {
   default     = "0 0 3 * * *"
 }
 
+variable "backup_snapshot_class" {
+  description = <<-EOT
+    Take each database's scheduled base backup as a CSI VOLUME SNAPSHOT with this
+    VolumeSnapshotClass, instead of a full copy in the object store. Empty (the
+    default) keeps object-store base backups. WAL archiving does not change.
+
+    The class must exist, and must delete the provider's snapshot when its
+    VolumeSnapshot is deleted (deletionPolicy Delete): old snapshots are removed by
+    deleting them, and under Retain the window would never be honoured. It must
+    also belong to the driver that provisions the database volumes, or every
+    snapshot fails; dcctl checks that, this configuration cannot (it does not know
+    which StorageClass the volumes use when none is named). The first two are
+    refused at plan time below.
+
+    🔴 AN OBJECT-STORE BASE BACKUP STAYS, on backup_object_store_schedule (weekly).
+    Barman prunes archived WAL only against base backups in the object store, and
+    every restore reads the object store: restore from a snapshot is not wired.
+    The trade is that the store keeps up to one interval of that schedule MORE
+    WAL than it does with daily object-store base backups, and a restore replays
+    up to that much more. See backup_object_store_storage in the cluster root.
+
+    CloudNativePG does not prune snapshots. The DeviceChain operator does, to this
+    store's recovery window, so a cluster without the operator is refused at plan
+    time. One from a release before this setting keeps every snapshot, and the
+    DatabaseSnapshotPruningStalled alert says so.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.backup_snapshot_class == "" || can(regex("^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$", var.backup_snapshot_class))
+    error_message = "backup_snapshot_class must be a Kubernetes object name (lowercase letters, digits, '-' and '.', starting and ending with a letter or digit), or empty to keep base backups in the object store."
+  }
+}
+
+variable "backup_object_store_schedule" {
+  description = <<-EOT
+    Six-field schedule for the object-store base backup while
+    backup_snapshot_class is set (read only then). Default Sunday 04:00. It is what
+    keeps the WAL archive pruned and what every restore reads, so it cannot be
+    turned off; a longer interval keeps more WAL in the store.
+  EOT
+  type        = string
+  default     = "0 0 4 * * 0"
+
+  validation {
+    condition     = length(compact(split(" ", var.backup_object_store_schedule))) == 6
+    error_message = "backup_object_store_schedule takes SIX fields -- CloudNativePG's schedule leads with SECONDS, unlike a Kubernetes CronJob -- for example \"0 0 4 * * 0\" for Sunday 04:00."
+  }
+}
+
 # ---------------------------------------------------------------------------
 # restore (ADR-028, ADR-020 A2.5)
 #
@@ -546,8 +597,9 @@ variable "backup_object_store_storage" {
     Data volume for the in-cluster object store.
 
     🔴 SIZED FROM THE EVENT STORE, so that under sustained ingest the EVENT STORE
-    fills first. Every scheduled backup is a FULL base backup of both databases,
-    and under ingest the archived WAL costs more per event than the data it
+    fills first. Every base backup that lands here is a FULL copy of its
+    database (volume-snapshot base backups, below, are taken at the storage
+    driver instead, with a weekly full copy still landing here), and under ingest the archived WAL costs more per event than the data it
     records (see the instance root's backup_retention_tsdb). The default holds,
     with 35% of it still free, what has landed here by the time one default
     event store (the instance root's timescale_storage, 32Gi) is FULL: up to
@@ -581,6 +633,13 @@ variable "backup_object_store_storage" {
         --compact's -- fills at about an eighth of those rates.
         backend/cli/bootstrap/backupsizing_test.go derives both figures from
         these defaults.
+      - volume-snapshot base backups (backup_snapshot_class). The object-store
+        base backup is then weekly, so each database keeps log back to the
+        newest weekly one before its window: up to 7 days more of each. With the
+        event store bounded as above, and at the measured relational share, the
+        default then fills at about 60 events/s sustained with snapshots, and at
+        about 29 if the relational store's log were all of it. The same test
+        derives both.
       - several instances ingesting into this one store: it is the CLUSTER's. Add
         about this much again per instance that ingests continuously, or use an
         external destination.

@@ -254,22 +254,30 @@ spec:
         # rule's, deliberately: one alert per failure, each saying the right thing.
         #
         # 36h against a daily schedule: one missed run is a warning, not a page.
+        #
+        # 🔑 8.5 DAYS WITH VOLUME-SNAPSHOT BASE BACKUPS (metrics.databaseBackupSnapshots).
+        # The object-store base backup is then weekly -- the snapshots take the daily
+        # slot, and have their own rules in
+        # prometheusrule-database-snapshot-backup.yaml -- and this series is the
+        # barman plugin's, which only object-store backups move. 36h there would fire
+        # six days a week. Weekly is the default object-store schedule
+        # (backup_object_store_schedule); a longer one set by hand fires this.
+        {{- $snapshots := eq (.Values.metrics.databaseBackupSnapshots | toString) "true" }}
         - alert: PostgresNoRecentBaseBackup
           expr: |
             (
               time()
               -
               barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace=~"{{ $dbsel }}"}
-            ) > 129600
+            ) > {{ ternary 734400 129600 $snapshots }}
           for: 30m
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "No successful database base backup in 36 hours"
+            summary: {{ ternary "No successful database base backup in the backup store in 8.5 days" "No successful database base backup in 36 hours" $snapshots | quote }}
             description: >-
-              {{ "{{ $labels.pod }}" }} has taken no successful base backup in 36 hours against a
-              daily schedule. WAL archiving alone restores NOTHING — a recovery replays WAL forward
+              {{ "{{ $labels.pod }}" }} has taken no successful base backup {{ ternary "into the backup store in 8.5 days, against a weekly schedule" "in 36 hours against a daily schedule" $snapshots }}. WAL archiving alone restores NOTHING — a recovery replays WAL forward
               from a base backup, so an ever-growing archive with no recent base is a longer and
               longer replay onto older and older state. Retention pruning has stopped too: obsolete
               backups are deleted only after a new backup completes.

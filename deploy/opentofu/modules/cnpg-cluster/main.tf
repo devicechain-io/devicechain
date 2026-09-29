@@ -308,6 +308,16 @@ variable "backup" {
     (backup_retention_rdb, backup_retention_tsdb), so a default here could only
     disagree with it -- and did: this module once defaulted to "30d" while both
     roots passed "7d", which read as one shared 30-day window.
+
+    `snapshot_class` turns on VOLUME-SNAPSHOT base backups: empty (the default)
+    keeps every base backup a full copy in the object store; a VolumeSnapshotClass
+    name makes the base backup on `schedule` a CSI snapshot of the database's
+    volumes. The object-store base backup then moves to `object_store_schedule`
+    (weekly by default) and stays, because barman prunes archived WAL only against
+    base backups in the object store, and because every restore reads the object
+    store -- restore from a snapshot is not wired. CloudNativePG does not prune
+    snapshots; the DeviceChain operator does, to `retention_policy`. See the
+    chart's scheduledbackup.yaml.
   EOT
 
   type = object({
@@ -324,8 +334,14 @@ variable "backup" {
     # archive-lag alert meaningful instead of red on every quiet instance.
     archive_timeout = optional(string, "5min")
 
-    schedule          = optional(string, "0 0 3 * * *")
-    retention_policy  = string
+    schedule         = optional(string, "0 0 3 * * *")
+    retention_policy = string
+
+    # Volume-snapshot base backups. Empty keeps object-store base backups; see the
+    # description above for what setting it changes.
+    snapshot_class        = optional(string, "")
+    object_store_schedule = optional(string, "0 0 4 * * 0")
+
     wal_max_parallel  = optional(number, 2)
     data_jobs         = optional(number, 2)
     endpoint_ca       = optional(object({ name = string, key = string }))
@@ -523,21 +539,23 @@ locals {
 
   backup_values = var.backup == null ? null : {
     backup = {
-      enabled            = true
-      bucket             = local.backup_bucket
-      endpointURL        = var.backup.endpoint_url
-      credentialsSecret  = var.backup.credentials_secret
-      accessKeyIdKey     = var.backup.access_key_id_key
-      secretAccessKeyKey = var.backup.secret_access_key_key
-      serverName         = local.backup_server_name
-      archiveTimeout     = var.backup.archive_timeout
-      schedule           = var.backup.schedule
-      retentionPolicy    = var.backup.retention_policy
-      walCompression     = "gzip"
-      dataCompression    = "gzip"
-      walMaxParallel     = var.backup.wal_max_parallel
-      dataJobs           = var.backup.data_jobs
-      endpointCASecret   = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
+      enabled             = true
+      bucket              = local.backup_bucket
+      endpointURL         = var.backup.endpoint_url
+      credentialsSecret   = var.backup.credentials_secret
+      accessKeyIdKey      = var.backup.access_key_id_key
+      secretAccessKeyKey  = var.backup.secret_access_key_key
+      serverName          = local.backup_server_name
+      archiveTimeout      = var.backup.archive_timeout
+      schedule            = var.backup.schedule
+      retentionPolicy     = var.backup.retention_policy
+      snapshotClass       = var.backup.snapshot_class
+      objectStoreSchedule = var.backup.object_store_schedule
+      walCompression      = "gzip"
+      dataCompression     = "gzip"
+      walMaxParallel      = var.backup.wal_max_parallel
+      dataJobs            = var.backup.data_jobs
+      endpointCASecret    = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
       sidecarResources = {
         requests = {
           cpu    = var.backup.sidecar_resources.cpu
@@ -598,6 +616,12 @@ locals {
     # The recovery window Helm is handed, read back out of the values like the
     # lines above, so a literal in backup_values reads here as what it is.
     backup_retention = tostring(local.backup_values == null ? null : local.backup_values.backup.retentionPolicy)
+    # The VolumeSnapshotClass Helm is handed, or null when base backups go to the
+    # object store (an empty class) or there are no backups. Read back like the lines
+    # above, so an install record built from it says what the chart was given.
+    backup_snapshot_class = tostring(local.backup_values == null ? null : (
+      local.backup_values.backup.snapshotClass == "" ? null : local.backup_values.backup.snapshotClass
+    ))
   }
 }
 
@@ -704,6 +728,11 @@ output "backup_destination" {
 output "backup_retention" {
   description = "The recovery window this store's backups are pruned to, as handed to its ObjectStore, or null if it has no backups. Read back from the release values rather than the variable, so it reports what the store was given."
   value       = local.reported.backup_retention
+}
+
+output "backup_snapshot_class" {
+  description = "The VolumeSnapshotClass this store's base backups are taken with, or null when they go to the object store or the store has no backups. Read back from the release values rather than the variable."
+  value       = local.reported.backup_snapshot_class
 }
 
 output "synchronous_enforced" {

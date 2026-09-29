@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,7 +71,11 @@ func InstanceNamespace(instance string) string { return instanceNamespacePrefix 
 // a namespace they made themselves, and labelling it by hand is how they say so. Contrast
 // the ownership keys in ownedsecret.go, which are annotations precisely so that nothing
 // can ever SELECT on them.
-const instanceNamespaceLabel = "devicechain.io/instance"
+//
+// 🔑 ITS NAME IS THE OPERATOR'S, because the operator reads it too: it acts on a
+// volume-snapshot ScheduledBackup only in a namespace carrying this label or the
+// infrastructure one. One constant, so the two cannot drift apart.
+const instanceNamespaceLabel = dcv1beta1.InstanceNamespaceLabel
 
 // ErrNamespaceUnavailable is the refusal of an instance that cannot own the namespace it
 // is named after: one that already exists and is not this instance's.

@@ -16,6 +16,7 @@ import (
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -59,6 +60,11 @@ type InstallOptions struct {
 	// BackupDestination is an off-site archive the operator already owns. Nil means
 	// the in-cluster object store.
 	BackupDestination *BackupDestination
+	// BackupSnapshotClass takes each database's scheduled base backup as a CSI volume
+	// snapshot with this VolumeSnapshotClass instead of a full copy in the backup
+	// store; a weekly copy still goes to the store. Empty keeps object-store base
+	// backups. Every instance on the cluster follows it.
+	BackupSnapshotClass string
 	// MaxConnections is the relational store's connection budget. Zero keeps what the
 	// cluster was installed with, or the default on a first install.
 	MaxConnections int
@@ -155,6 +161,11 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		if err := buildOperatorImageForInstall(ctx, st); err != nil {
 			return err
 		}
+		if class := backupSnapshotClass(st); class != "" {
+			wouldDo("refuse, before any write, a VolumeSnapshotClass " + class + " that does not exist, " +
+				"does not use deletionPolicy Delete, or belongs to another driver than the database volumes' " +
+				"-- NOT rehearsed, because the cluster may not exist yet")
+		}
 		wouldDo("install the operator — CRDs, RBAC and the controller Deployment at " +
 			operatorImageRef(st) + " — in namespace " + st.OperatorNamespace)
 		wouldDo("tofu init+apply deploy/opentofu/cluster — once per cluster, shared by every instance " +
@@ -172,7 +183,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		// Printed the way the real run prints it, not through wouldDo: these are
 		// sentences, and one of them says a restore will NOT happen, which "would" in
 		// front of it would turn into its own opposite.
-		printRelationalRestore(st.Restore, dryRunRdbArchiveState(ctx, st))
+		printRelationalRestore(st.Restore, dryRunRdbArchiveState(ctx, st), backupSnapshotClass(st))
 		return nil
 	}
 
@@ -191,21 +202,10 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 			binding.Describe(), err))
 	}
 
-	dyn, _, typed, err := kubeClients(st.KubeContext)
+	// The clients the first writes below go through come out of the refusals, so
+	// those writes cannot be reached without them. See connectAndRefuse.
+	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
 	if err != nil {
-		return fmt.Errorf("connecting to cluster %s: %w", binding.Describe(), err)
-	}
-	prev, err := previousInstall(ctx, typed)
-	if err != nil {
-		return err
-	}
-	if st.MaxConnections == 0 {
-		st.MaxConnections = defaultMaxConnections
-		if last := prev.lastCompleted(); last != nil && last.Outputs.Rdb.MaxConnections > 0 {
-			st.MaxConnections = last.Outputs.Rdb.MaxConnections
-		}
-	}
-	if err := refuseAReinstallThatWouldHurt(ctx, st, prev, settings, localClusterStateExists); err != nil {
 		return err
 	}
 
@@ -224,7 +224,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// are indistinguishable from the outside — the apply is green either way and no
 	// data moves — so an operator mid-incident has to be told which one is about to
 	// happen while they can still stop.
-	printRelationalRestore(st.Restore, live)
+	printRelationalRestore(st.Restore, live, backupSnapshotClass(st))
 
 	clusterVars, _, err := splitVars(infraVars(st))
 	if err != nil {
@@ -361,9 +361,11 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		Compact:           opts.Compact,
 		HA:                opts.HA,
 		BackupDestination: opts.BackupDestination,
-		MaxConnections:    opts.MaxConnections,
-		Restore:           opts.Restore,
-		Values:            map[string]string{},
+		// Read through backupSnapshotClass, which drops it when backups are off.
+		BackupSnapshotClass: opts.BackupSnapshotClass,
+		MaxConnections:      opts.MaxConnections,
+		Restore:             opts.Restore,
+		Values:              map[string]string{},
 	}
 }
 
@@ -397,8 +399,12 @@ func settleRdbArchivePath(st *State, live clusterArchiveState, now time.Time) {
 // printRelationalRestore tells the operator what this run will do to the relational
 // store. One printer for the rehearsal and the real run, so the two cannot describe the
 // same plan in different words — which is the whole claim a rehearsal makes.
-func printRelationalRestore(plan RestorePlan, live clusterArchiveState) {
-	for _, line := range describeRelationalRestore(plan, live, time.Now().UTC()) {
+func printRelationalRestore(plan RestorePlan, live clusterArchiveState, snapshotClass string) {
+	lines := describeRelationalRestore(plan, live, time.Now().UTC())
+	if len(lines) > 0 && snapshotClass != "" {
+		lines = append(lines, snapshotRestoreNote("relational store"))
+	}
+	for _, line := range lines {
 		fmt.Println(color.YellowString("  %s", line))
 	}
 }
@@ -416,6 +422,59 @@ func previousInstall(ctx context.Context, typed kubernetes.Interface) (*InstallR
 		return nil, nil
 	}
 	return &rec, nil
+}
+
+// installClients is the seam Install reaches the cluster through, so the refusals it
+// runs before the first write can be exercised, not only the checks they call.
+var installClients = func(kubeContext string) (dynamic.Interface, kubernetes.Interface, error) {
+	dyn, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dyn, typed, nil
+}
+
+// connectAndRefuse connects to the cluster and runs every refusal Install makes on
+// what the cluster already holds, handing back the clients only when none refuses.
+//
+// 🔑 THE CLIENTS ARE THE RETURN VALUE ON PURPOSE. Install's first writes -- the
+// infrastructure namespace, the cluster's credentials, the record marked applying --
+// go through them, so this call cannot be dropped from Install without those losing
+// the clients they need: it would not compile. A refusal called beside the writes
+// instead would be one line nothing notices missing. Everything in here reads;
+// nothing writes.
+func connectAndRefuse(ctx context.Context, st *State, settings InstallSettings,
+	stateExists func(uid string) (bool, error)) (dynamic.Interface, kubernetes.Interface, error) {
+	dyn, typed, err := installClients(st.KubeContext)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connecting to cluster %s: %w", st.Binding.Describe(), err)
+	}
+	prev, err := previousInstall(ctx, typed)
+	if err != nil {
+		return nil, nil, err
+	}
+	if st.MaxConnections == 0 {
+		st.MaxConnections = defaultMaxConnections
+		if last := prev.lastCompleted(); last != nil && last.Outputs.Rdb.MaxConnections > 0 {
+			st.MaxConnections = last.Outputs.Rdb.MaxConnections
+		}
+	}
+	if err := refuseAReinstallThatWouldHurt(ctx, st, prev, settings, stateExists); err != nil {
+		return nil, nil, err
+	}
+	// 🔴 BEFORE THE FIRST WRITE. A class that is missing, keeps the provider's
+	// snapshot when its VolumeSnapshot is deleted, or belongs to another driver is
+	// accepted by every API it passes through, and then fails every snapshot or keeps
+	// every one for ever. Found here, it costs a re-run; found after the apply, it
+	// costs a cluster recorded as installed with backups that do not work.
+	if class := backupSnapshotClass(st); class != "" {
+		doing("checking VolumeSnapshotClass " + class)
+		if err := checkVolumeSnapshotClass(ctx, dyn, typed, class, infraNamespace, RdbClusterName); err != nil {
+			return nil, nil, fail("checking VolumeSnapshotClass "+class, err)
+		}
+		done()
+	}
+	return dyn, typed, nil
 }
 
 // localClusterStateExists reports whether this machine holds the cluster root's state
@@ -529,6 +588,9 @@ func describeInstallSettings(s InstallSettings) string {
 	if s.BackupsExternal {
 		parts = append(parts, "off-site archive")
 	}
+	if s.BackupSnapshotClass != "" {
+		parts = append(parts, fmt.Sprintf("volume-snapshot base backups (%s)", s.BackupSnapshotClass))
+	}
 	return strings.Join(parts, ", ")
 }
 
@@ -596,6 +658,11 @@ func reportInstall(st *State, provider string) {
 	fmt.Printf("  %s %s\n", color.WhiteString("Connection budget:"),
 		color.GreenString("%d (each instance reserves its own share when it is bootstrapped)", st.MaxConnections))
 	printBackups("instances on this cluster", databaseBackupsEnabled(st), backupsAreExternal(st))
+	if class := backupSnapshotClass(st); class != "" {
+		fmt.Printf("  %s %s\n", color.WhiteString("Base backups:"), color.GreenString(
+			"daily volume snapshots (VolumeSnapshotClass %s), pruned by the operator to each store's window; "+
+				"a weekly one in the backup store, which is what a restore reads", class))
+	}
 	if p := st.Values["backupServerNameRdb"]; p != "" && databaseBackupsEnabled(st) {
 		fmt.Printf("  %s %s\n", color.WhiteString("Relational archive:"), color.GreenString(p))
 	}

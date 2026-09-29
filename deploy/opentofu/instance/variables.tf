@@ -329,6 +329,57 @@ variable "backup_schedule" {
   default     = "0 0 3 * * *"
 }
 
+variable "backup_snapshot_class" {
+  description = <<-EOT
+    Take each database's scheduled base backup as a CSI VOLUME SNAPSHOT with this
+    VolumeSnapshotClass, instead of a full copy in the object store. Empty (the
+    default) keeps object-store base backups. WAL archiving does not change.
+
+    The class must exist, and must delete the provider's snapshot when its
+    VolumeSnapshot is deleted (deletionPolicy Delete): old snapshots are removed by
+    deleting them, and under Retain the window would never be honoured. It must
+    also belong to the driver that provisions the database volumes, or every
+    snapshot fails; dcctl checks that, this configuration cannot (it does not know
+    which StorageClass the volumes use when none is named). The first two are
+    refused at plan time below.
+
+    🔴 AN OBJECT-STORE BASE BACKUP STAYS, on backup_object_store_schedule (weekly).
+    Barman prunes archived WAL only against base backups in the object store, and
+    every restore reads the object store: restore from a snapshot is not wired.
+    The trade is that the store keeps up to one interval of that schedule MORE
+    WAL than it does with daily object-store base backups, and a restore replays
+    up to that much more. See backup_object_store_storage in the cluster root.
+
+    CloudNativePG does not prune snapshots. The DeviceChain operator does, to this
+    store's recovery window, so a cluster without the operator is refused at plan
+    time. One from a release before this setting keeps every snapshot, and the
+    DatabaseSnapshotPruningStalled alert says so.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.backup_snapshot_class == "" || can(regex("^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$", var.backup_snapshot_class))
+    error_message = "backup_snapshot_class must be a Kubernetes object name (lowercase letters, digits, '-' and '.', starting and ending with a letter or digit), or empty to keep base backups in the object store."
+  }
+}
+
+variable "backup_object_store_schedule" {
+  description = <<-EOT
+    Six-field schedule for the object-store base backup while
+    backup_snapshot_class is set (read only then). Default Sunday 04:00. It is what
+    keeps the WAL archive pruned and what every restore reads, so it cannot be
+    turned off; a longer interval keeps more WAL in the store.
+  EOT
+  type        = string
+  default     = "0 0 4 * * 0"
+
+  validation {
+    condition     = length(compact(split(" ", var.backup_object_store_schedule))) == 6
+    error_message = "backup_object_store_schedule takes SIX fields -- CloudNativePG's schedule leads with SECONDS, unlike a Kubernetes CronJob -- for example \"0 0 4 * * 0\" for Sunday 04:00."
+  }
+}
+
 variable "restore_tsdb_from" {
   description = "Recover the EVENT store from this serverName instead of initialising an empty one. Same rules as restore_rdb_from, including the mandatory distinct backup_server_name_tsdb."
   type        = string

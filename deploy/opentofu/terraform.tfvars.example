@@ -99,6 +99,14 @@
 # backup_object_store_storage       = "160Gi"
 # backup_object_store_storage_class = ""
 #
+# Volume-snapshot base backups, for a cluster whose storage driver takes CSI snapshots.
+# Empty keeps base backups in the object store. Set in BOTH roots, to the same class: the
+# daily base backup becomes a snapshot, and a weekly one still goes to the object store
+# (it keeps the WAL archive pruned, and every restore reads it). The class must exist and
+# use deletionPolicy Delete. The operator prunes snapshots to each store's window.
+# backup_snapshot_class             = "pd-snapshots"
+# backup_object_store_schedule      = "0 0 4 * * 0"
+#
 # For an external destination, set the endpoint too — it is REQUIRED there and REFUSED
 # with "in-cluster" (the in-cluster endpoint is provisioned here, so an override would
 # name one destination while archiving to another). An EMPTY endpoint is not "no

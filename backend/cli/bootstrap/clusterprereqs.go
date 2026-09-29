@@ -259,6 +259,13 @@ func clusterOutputs(outputs map[string]tfexec.OutputMeta) (InstallOutputs, error
 	if meta, ok := outputs["grafana_namespace"]; ok {
 		out.GrafanaNamespace = optionalStringOutput(meta)
 	}
+	// The VolumeSnapshotClass the relational store's base backups are taken with, as
+	// its chart was handed it. Null (empty) for object-store base backups; validate
+	// holds it to the setting, so an apply that did not deliver what was asked for is
+	// never recorded as installed.
+	if meta, ok := outputs["database_backup_snapshot_class"]; ok {
+		out.BackupSnapshotClass = optionalStringOutput(meta)
+	}
 	return out, nil
 }
 

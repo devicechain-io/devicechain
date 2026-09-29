@@ -401,6 +401,34 @@ spec:
         # writing into it.
         serverName: {{ . }}
         {{- end }}
+
+  {{- with .Values.backup.snapshotClass }}
+  # Volume-snapshot base backups (opt-in; see scheduledbackup.yaml, which refuses a
+  # snapshotClass with backups off). This block only says HOW a snapshot is taken;
+  # the `<name>-snapshot` ScheduledBackup says when. WAL archiving stays the
+  # plugin's, above, and a WAL volume is snapshotted with the same class
+  # (walClassName defaults to className).
+  #
+  # `online: true` is a hot snapshot: CloudNativePG brackets it with
+  # pg_backup_start/stop, and `waitForArchive: true` waits for the WAL segment that
+  # closes it to be archived, so the snapshot plus the archive is consistent.
+  # `immediateCheckpoint: false` spreads the checkpoint that opens it rather than
+  # forcing one at full speed, which is the point of moving the daily base backup
+  # off a full read of the database.
+  #
+  # 🔴 `snapshotOwnerReference: backup` is what makes retention work at all:
+  # CloudNativePG does not prune snapshots, the DeviceChain operator does, by
+  # deleting the Backup -- and only an owned VolumeSnapshot goes with it.
+  backup:
+    target: prefer-standby
+    volumeSnapshot:
+      className: {{ . }}
+      snapshotOwnerReference: backup
+      online: true
+      onlineConfiguration:
+        immediateCheckpoint: false
+        waitForArchive: true
+  {{- end }}
   {{- end }}
 
   # 🔴 hostname, NOT zone. See the header: a topologyKey no node carries makes

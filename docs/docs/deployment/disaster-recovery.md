@@ -168,6 +168,14 @@ Recovery **builds** a new cluster and a new instance on it. There is deliberatel
 the running instance" step: restoring underneath services that have already created their own
 schemas means dropping tables they hold open and racing their migrations. Recover by rebuilding.
 
+:::note On a cluster that takes volume-snapshot base backups
+With [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups), both steps below still
+recover from the backup store, never from a snapshot: from the newest weekly base backup and the
+log archived since. So each can replay up to a week of log, and takes longer than it would with
+daily base backups. The snapshots belong to the cluster being replaced, and a rebuild has no step
+that reads them.
+:::
+
 You recover the two databases with two commands, in this order, because the two stores belong to
 different things:
 
@@ -450,7 +458,9 @@ database the other instances use, and the backup object store itself, stay where
 destroy does remove from that object store is the destroyed instance's own event-store backups,
 when they are in the cluster's own store. Backups in an object store you supplied are never
 deleted, and `--keep-backups` keeps the in-cluster ones too; see
-[What happens to the instance's backups](./bootstrap.md#destroy-backups).
+[What happens to the instance's backups](./bootstrap.md#destroy-backups). On a cluster that takes
+[volume-snapshot base backups](./bootstrap.md#snapshot-base-backups), the instance's snapshots go
+with its namespace either way.
 
 Keep the escrow artifact for as long as you keep any backup of that instance's databases. It is the
 only thing that can still read them. Delete it when those backups are gone, and not before.

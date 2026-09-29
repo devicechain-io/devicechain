@@ -20,7 +20,10 @@ control-plane database records (see [Custom resources](#custom-resources)).
 :::note Status
 Available: the Helm chart renders the per-service workloads and config, and `dcctl bootstrap`
 and `dcctl upgrade` drive an instance's lifecycle. The operator observes the `Instance`
-resource and acts on nothing. Planned, not started: instance status aggregation and
+resource and acts on nothing there. Its one other job is on a cluster installed with
+[`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups): every ten minutes it deletes
+the databases' volume-snapshot base backups that have left their recovery window, which
+CloudNativePG does not do. Planned, not started: instance status aggregation and
 per-environment Kustomize overlays.
 :::
 
@@ -273,7 +276,7 @@ DeviceChain deliberately gives each layer to one tool:
 |---|---|---|
 | Infrastructure | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
 | Workloads | **Helm chart** | Deployments, Services, and the per-area config ConfigMaps |
-| Lifecycle | **Operator** | watches the `Instance` resource; acts on nothing today (status aggregation is planned) |
+| Lifecycle | **Operator** | watches the `Instance` resource and acts on nothing there today (status aggregation is planned); prunes volume-snapshot base backups to their recovery window |
 | Instance identity + config | **`dcctl`** | writes the `Instance` declaration and the instance config Secret the workloads mount |
 | Business configuration | instance admin API / `/admin` console, and each tenant's own API / console | tenants, and each tenant's own settings (such as branding) |
 

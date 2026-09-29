@@ -3971,6 +3971,51 @@ que se accede a ellos con `kubectl port-forward`. Ese listener nunca es un puert
 un puerto del Service ni una ruta del ingress. Nada cambia en una instancia que no lo configure, y
 no hay que hacer nada. Consulta [Perfilar un servicio](./observability.md#profiling).
 
+#### Los respaldos base de las bases de datos pueden ser instantáneas de volumen {#next-snapshot-backups}
+
+En un clúster cuyo controlador de almacenamiento toma instantáneas de volumen CSI, `dcctl install
+--backup-snapshot-class <class>` toma el respaldo base diario de cada base de datos como una
+instantánea de volumen en lugar de una copia completa en el almacén de respaldos. No cambia nada
+si no pasas la opción. Consulta
+[Respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups).
+
+- El archivado del log no cambia, y un respaldo base completo sigue yendo al almacén de respaldos
+  una vez por semana, el domingo a las 04:00. El almacén solo poda el log archivado en relación con
+  los respaldos base que guarda, y toda restauración lee el almacén.
+- La clase tiene que existir, tener `deletionPolicy: Delete` y pertenecer al controlador que
+  aprovisiona los volúmenes de las bases de datos. `dcctl install` comprueba las tres cosas antes
+  de cambiar nada, y lo mismo hace cada `dcctl bootstrap`. Google Kubernetes Engine y Azure AKS
+  incluyen un controlador de instantáneas; en Amazon EKS, instala antes el complemento del
+  controlador de instantáneas.
+- CloudNativePG no borra las instantáneas antiguas. Ahora lo hace el operador de DeviceChain, cada
+  diez minutos: conserva todas las instantáneas dentro de la ventana de recuperación de la base de
+  datos y la más reciente anterior a ella. Para ello, el ClusterRole del operador gana, en todos
+  los namespaces: `get` sobre namespaces; `get`, `list` y `delete` sobre los Backups de
+  CloudNativePG; `get`, `list` y `patch` sobre los ScheduledBackups de CloudNativePG, para
+  registrar cada pasada; y `create` y `patch` sobre los Events de `events.k8s.io`, para informar
+  de lo que ha podado. Solo actúa en namespaces que creó DeviceChain, sobre los ScheduledBackups
+  que genera su propia configuración.
+- Una restauración (`--restore-rdb-from`, `--restore-tsdb-from`) sigue leyendo el almacén de
+  respaldos, no las instantáneas: el respaldo base semanal más reciente y el log desde entonces,
+  así que puede reproducir hasta una semana de log. Las instantáneas de una instancia se borran con
+  ella.
+- El almacén de respaldos guarda hasta una semana más de log de cada base de datos, así que se
+  llena antes donde el log es la mayor parte de lo que guarda: con las ventanas y el almacén
+  predeterminados, a unos 60 eventos por segundo de ingesta sostenida en lugar de unos 100.
+- `PostgresNoRecentSnapshotBackup`, `DatabaseSnapshotPruningStalled` y
+  `DatabaseSnapshotBackupsUnobserved` son nuevas, y en un clúster así `PostgresNoRecentBaseBackup`
+  espera 8,5 días en lugar de 36 horas. El kube-state-metrics de la pila de monitorización lee
+  ahora también los Backups y ScheduledBackups de CloudNativePG, que esas alertas necesitan.
+- El ajuste pertenece al clúster: todas las instancias lo siguen, y cambiarlo se rechaza mientras
+  haya instancias en el clúster.
+
+**Vuelve a ejecutar `dcctl install` con esta versión antes de cualquier bootstrap, upgrade o
+destroy.** El registro de instalación tiene un campo nuevo, y este `dcctl` rechaza un registro
+escrito por uno anterior: `dcctl bootstrap` y `dcctl upgrade` se detienen y lo dicen, y
+`dcctl destroy` sigue eliminando la instancia pero deja su base de datos y su login en la base de
+datos relacional compartida y sus respaldos en el almacén interno, y dice que lo hizo. Volver a
+ejecutar install ya es el primer paso de toda actualización.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

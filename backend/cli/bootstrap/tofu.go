@@ -326,7 +326,31 @@ func applyInstanceInfra(ctx context.Context, st *State, tf *tofuExec, vars []str
 			st.Values[databaseBackupsKey] = "true"
 		}
 	}
+	// Whether the event store's base backups are volume snapshots -- read back from
+	// the class its chart was handed, for the same reason. It renders the snapshot
+	// alerts and moves the object-store base-backup alert to the weekly schedule, and
+	// absence reads as OFF like the value above: wrong that way, the base-backup alert
+	// fires six days a week, which is loud; the other way, a snapshot schedule or
+	// pruning that stopped would say nothing.
+	st.Values[databaseBackupSnapshotsKey] = backupSnapshotsFromOutputs(outputs)
 	return nil
+}
+
+// backupSnapshotsFromOutputs is "true" only when the instance apply reports a class its
+// event store's chart was handed: a missing output, a null one (backups on, snapshots
+// off) and an unreadable one are all "false".
+//
+// 🔑 SEPARATED FROM THE APPLY SO IT CAN BE EXERCISED, like archiveFromOutputs. The
+// null case is the one that matters: every instance with backups reports this output,
+// and reading its presence as "on" would render the snapshot alerts on all of them --
+// DatabaseSnapshotBackupsUnobserved firing for ever, and PostgresNoRecentBaseBackup
+// moved to the weekly threshold on a cluster that takes a base backup daily, hiding a
+// week of failed ones.
+func backupSnapshotsFromOutputs(outputs map[string]tfexec.OutputMeta) string {
+	if meta, ok := outputs["database_backup_snapshot_class"]; ok && optionalStringOutput(meta) != "" {
+		return "true"
+	}
+	return "false"
 }
 
 // Where applyInfra stashes what the infrastructure actually provisioned for
@@ -334,10 +358,13 @@ func applyInstanceInfra(ctx context.Context, st *State, tf *tofuExec, vars []str
 // against. Read back from the OpenTofu outputs rather than derived from dcctl's
 // own flags — the flags are what was asked for, and these are what exists.
 const (
-	databaseBackupsKey       = "databaseBackups"
-	databaseNamespaceKey     = "databaseNamespace"
-	databaseBackupOffsiteKey = "databaseBackupOffsite"
-	cnpgNamespaceKey         = "cnpgNamespace"
+	databaseBackupsKey = "databaseBackups"
+	// databaseBackupSnapshotsKey is "true" when the event store's base backups are
+	// volume snapshots, read back from its apply.
+	databaseBackupSnapshotsKey = "databaseBackupSnapshots"
+	databaseNamespaceKey       = "databaseNamespace"
+	databaseBackupOffsiteKey   = "databaseBackupOffsite"
+	cnpgNamespaceKey           = "cnpgNamespace"
 	// mqttNodePortHolderKey is the namespace of another instance already holding the
 	// local MQTT node port, set by the render step. Empty means this instance may take it.
 	mqttNodePortHolderKey = "mqttNodePortHolder"
@@ -474,6 +501,14 @@ func infraVars(st *State) []string {
 	}
 	if !databaseBackupsEnabled(st) {
 		vars = append(vars, "enable_database_backups=false")
+	}
+	// Volume-snapshot base backups, from the one predicate: both roots declare the
+	// variable, so splitVars hands it to each, and a bootstrap follows the install
+	// record for it as for backups themselves. Emitted only when set, so the default
+	// stays the roots' own. backup_object_store_schedule is left at its default in
+	// both roots, so the two stores' weekly copies cannot drift apart.
+	if class := backupSnapshotClass(st); class != "" {
+		vars = append(vars, "backup_snapshot_class="+class)
 	}
 	if st.MaxConnections > 0 {
 		vars = append(vars, fmt.Sprintf("postgres_max_connections=%d", st.MaxConnections))
