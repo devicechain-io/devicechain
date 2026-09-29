@@ -3433,9 +3433,9 @@ them.
 when a database is holding write-ahead log it has not shipped, including when the archiver is slow
 or hung rather than failing. `BackupDestinationFillingFast` and `DatabaseVolumeFillingFast` fire
 on how fast the backup store or an event-store volume is filling, not only on a fixed threshold.
-The backup sizing guidance is corrected too: under sustained ingest, the archived log costs about
-as much as the data, so the default in-cluster store fills in hours rather than days. Size it for
-your ingest rate, or send backups to an object store you run. See
+The backup sizing guidance is corrected too: under sustained ingest, the archived log costs more
+per event than the data, so the previous 20 GiB default in-cluster store filled in hours rather
+than days; see the backup store item below. See
 [Backups that stop shipping](./observability.md#backup-archiving).
 
 #### A full ingest stream refuses new events instead of discarding unread ones
@@ -3533,8 +3533,8 @@ Instances installed with `--compact` keep their 25m and 64Mi requests.
 
 **The event store volume:** nothing changes for an existing instance; only instances created by
 this release get 32Gi. To grow an existing one, see [Event store
-volume](./bootstrap.md#event-store-volume). The backup destination is what fills first under
-sustained ingest, as the note above says; a larger event store does not change that.
+volume](./bootstrap.md#event-store-volume). A new cluster's backup store is now sized so that
+the event store fills first; see the backup store item below.
 
 The upgrade changes the pod templates of `device-management`, `event-management` and
 `event-sources`, so the rolling update schedules their new pods under the new placement
@@ -3626,6 +3626,28 @@ Nothing needs doing at the upgrade.
   relationships from the database.
 - Two more metrics, `kv_cache_local_max_entries` and `kv_cache_local_max_bytes`, give each cache's
   bound. `kv_cache_local_bytes` counts each entry's full size in memory.
+
+#### The backup store is sized so the event store fills first {#next-backup-store-size}
+
+A new cluster's in-cluster backup store is **160 GiB** instead of 20 GiB, and **20 GiB** instead
+of 8 GiB under `--compact` when TLS is kept. That is disk the cluster now claims on its default
+StorageClass. At 20 GiB, sustained ingest filled the store after 12 to 16 million events, well
+before a 32 GiB event store is full. Archiving then stopped, and the event store's primary filled
+its own volume with write-ahead log it could not ship. Measured on Google Kubernetes Engine, the
+archive costs up to about 1.9 KB per event for both databases, not the roughly 1 KB published
+before. The new size holds the archive of one full default event store with more than a third of
+the store free. See [Backup store size](./bootstrap.md#backup-store-size), including when one
+instance's worth is not enough: several instances ingesting, an event store that takes more than
+about a day to fill or never fills, or a grown event store.
+
+**Existing clusters keep their store's size.** The store's volume is now sized only when it is
+created: `dcctl install`, the first step of every upgrade, leaves an existing store's volume
+alone, and so does a direct `tofu apply`. Without that, the new default would ask a StorageClass
+without volume expansion to grow the volume, which it refuses, and a store you had grown by hand
+was already asked to shrink back to the default, which every provisioner refuses. Setting
+`backup_object_store_storage` on an existing store now does nothing. To give an existing cluster
+the new size, grow the volume yourself, on a StorageClass that allows expansion, as that page
+shows. On kind the size is not enforced, so nothing needs doing.
 
 ### The one-time durable-ingest cutover
 

@@ -364,36 +364,40 @@ variable "backup_retention" {
     switch record and gzips to tens of KiB, so an idle pair of stores costs well
     under a GiB per month. Under sustained ingest the archived WAL grows with the
     write rate instead, and costs about as much as the data it records. Measured
-    on a v0.18.0 benchmark cluster: the archive one ~15M-event run left behind
-    was about 14 GB, base backups included — roughly 1 KB per ingested event,
-    the same order as the ~1 KB per event the event store's own data costs. At
-    that rate the shipped 20Gi destination holds HOURS of sustained ingest, not
-    days, and the WAL term dominates:
+    on GKE benchmark clusters (v0.18.x): up to about 1.9 KB of archive per
+    ingested event, for both databases together, against about 1 KB per event
+    of the event store's own data. (An earlier measurement published here as
+    "about 1 KB per event, base backups included" was low.) Under sustained
+    ingest the WAL term dominates:
 
         destination ≈ (retention_days + 1) × compressed(rdb + tsdb)
                       + retention_days × daily_events × archived WAL per event
 
-    That term grows with retention, but at sustained ingest no reasonable
-    window keeps it inside 20Gi, and shortening the window is the wrong
+    That term grows with retention, and shortening the window is the wrong
     lever for it: it still keeps a full day of WAL, and it buys space by
-    shrinking how far back the databases can be recovered. Size the destination
-    for the ingest rate, or send backups to an object store you run. Barman
+    shrinking how far back the databases can be recovered. The in-cluster
+    destination's default (backup_object_store_storage) is sized so that one
+    default event store fills before it does; its description gives the rule and
+    what it does not cover. Past that, size the destination for the ingest rate,
+    or send backups to an object store you run. Barman
     prunes only a LIVE Cluster's own archive path, so an archive left by a
     destroyed instance is pruned by nothing — which is why `dcctl destroy`
     removes the instance's archive from the in-cluster store.
 
-    At the shipped 20Gi destination that budget is roughly 2.5 GiB of combined
-    compressed base backup — comfortable for a small-to-moderate instance at 7
-    days, and NOT comfortable at 30. A 30-day window was the original default and
-    it fills the shipped destination in about three weeks on an instance of any
-    real size, monotonically, because pruning removes nothing until backups start
+    The base-backup term alone is (retention_days + 2) copies at the peak --
+    one more is uploading while the oldest still predates the window -- so at 7
+    days nine compressed copies of both databases must fit, beside the WAL. A
+    30-day window was the original default, and it fills a destination sized for
+    7 days monotonically, because pruning removes nothing until backups start
     ageing out of the window. What follows is the documented cascade: the
     destination fills, archiving fails, WAL accumulates on the DATABASES' volumes,
     and PostgreSQL stops.
 
-    So: raising this REQUIRES raising backup_object_store_storage with it. There
-    is no check that enforces it — the sizes depend on data nobody knows at plan
-    time — which is why it is stated here rather than assumed.
+    So: raising this REQUIRES raising backup_object_store_storage with it -- and
+    on an existing store that means growing its volume, because that variable is
+    read only when the store is created. There is no check that enforces it — the
+    sizes depend on data nobody knows at plan time — which is why it is stated
+    here rather than assumed.
   EOT
   type        = string
   default     = "7d"
@@ -626,13 +630,15 @@ variable "timescale_storage" {
     lifecycle.retentionDays bounds the STORED DATA; the volume only decides how long
     filling takes.
 
-    🔴 This is not the first thing to fill under sustained ingest. The in-cluster
-    backup destination (the cluster root's backup_object_store_storage) takes the
-    archived WAL, which costs about as much per event as the data and is kept for the
-    backup retention window, not for retentionDays. When the destination fills,
-    archiving fails and WAL accumulates on THIS volume until it fills and PostgreSQL
-    stops. So the size here buys time between the archive alerts and that stop; the
-    destination is what has to be sized for the ingest rate.
+    🔴 With the default in-cluster backup destination (the cluster root's
+    backup_object_store_storage, sized from THIS default) and one instance
+    ingesting, this volume is what fills first under sustained ingest, and its own
+    alerts name the cause. The destination can still fill first: with several
+    instances on it, an event store that takes more than about a day to fill or is
+    bounded by retentionDays, or a smaller destination -- see that variable. Then
+    archiving fails and WAL accumulates on THIS volume until it fills and
+    PostgreSQL stops. Growing this volume moves that point too: every GiB added
+    here wants about five GiB more in the destination.
 
     Applied when an instance is created, or when a re-run finishes an interrupted
     bootstrap: dcctl upgrade does not re-apply this root, so an existing instance keeps

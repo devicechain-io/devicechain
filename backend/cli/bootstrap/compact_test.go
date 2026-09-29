@@ -408,11 +408,11 @@ func eventStoreCapacity(t *testing.T, size string) int64 {
 // less than two hours of that, and a GKE benchmark filled it within a 10-minute
 // run plus a ladder.
 //
-// This is the volume's own bound and nothing more. Under sustained ingest the
-// in-cluster backup destination fills first (the archived WAL costs about as much
-// per event as the data), after which WAL piles up on this volume; the destination
-// is sized by the cluster root's backup_object_store_storage, not here. So what
-// this buys is time between the archive alerts and the database stopping.
+// This is the volume's own bound and nothing more. The in-cluster backup
+// destination is sized from this default (backupsizing_test.go) so that, with one
+// instance ingesting, this volume is what fills first; with several instances on
+// the destination, or a destination smaller than the default, the destination
+// can fill first, and WAL then piles up on this volume.
 func TestDefaultEventStoreVolumeHoldsSixHoursAtTheDefaultCeiling(t *testing.T) {
 	raw, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
 	if err != nil {

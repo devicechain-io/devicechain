@@ -82,7 +82,7 @@ now arrive together.
 | `backup_destination` | What you get |
 | --- | --- |
 | `in-cluster` (default) | A single-replica MinIO (**AGPL-3.0**, see below) in the shared `dc-system` namespace, two buckets, WAL archiving and a daily base backup for each store. |
-| `external` | The same archiving, pointed at `backup_endpoint_url` with `backup_access_key` / `backup_secret_key`. Nothing is provisioned in-cluster. |
+| `external` | The same archiving, pointed at `backup_endpoint_url`, with the credentials in the `dc-backup-credentials` Secret (dcctl writes it from `--backup-credentials-file`). Nothing is provisioned in-cluster. |
 
 🔴 **An in-cluster destination is not off-site backup.** It shares the cluster's failure
 domain and, on a single-node install, the node's disk — lose the cluster and the backups
@@ -130,7 +130,10 @@ window, for *both* stores — and WAL volume tracks write rate, not database siz
 fills, archiving fails, and failed archiving does not stall commits: WAL accumulates on
 the *databases'* volumes until those fill and Postgres stops. An undersized bucket takes
 the instance down by a route that points nowhere near the bucket, which is what the
-archive-lag alert exists to catch first.
+archive-lag alert exists to catch first. The default (160Gi) is sized so that one default
+event store fills before it does under sustained ingest; the variable's description says
+what that does not cover. The size is read only when the volume is created: a later
+apply leaves an existing store's volume alone, so grow one with `kubectl patch`.
 
 The ingress controller and cert-manager are the TLS/ingress *capability*; the
 per-instance **Ingress resource + cert Issuer** that route to the app Services are

@@ -499,9 +499,11 @@ func infraVars(st *State) []string {
 			// enable_database_backups provision a destination rather than merely
 			// installing the plugin — before that, compact's footprint genuinely
 			// had no object store in it. Left out, a compact install would take the
-			// 20Gi default for a preset whose whole point is small nodes, which is
-			// the same bug TimescaleStorage was added to fix: shrink some volumes
+			// full-size default for a preset whose whole point is small nodes, which
+			// is the same bug TimescaleStorage was added to fix: shrink some volumes
 			// and the preset's disk claim describes a fraction of the disk it uses.
+			// Read only when the store is created: a re-run over an existing store
+			// leaves its volume alone (modules/object-store ignores later sizes).
 			"backup_object_store_storage="+compact.ObjectStoreStorage,
 			// Drop the prometheus-nats-exporter sidecar. It is a whole extra
 			// container per NATS pod, and what it publishes is BROKER-side cluster

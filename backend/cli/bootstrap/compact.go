@@ -95,13 +95,15 @@ type compactSizing struct {
 	// compact paths have materially different footprints, and only one of them has
 	// backups. That is worth knowing before reading either number.
 	//
-	// 🔴 It is NOT sized from the database volumes, and the intuition that it
-	// should be is wrong in the dangerous direction. What lands here is one base
-	// backup per store PLUS every WAL segment since, for the whole retention
-	// window — and WAL volume tracks WRITE RATE, not database size. A small,
-	// busy event store generates far more WAL than its own volume ever holds.
-	// Set at 2x TimescaleStorage as a starting point rather than a derivation,
-	// and it is the value in this struct with the least evidence behind it.
+	// 🔴 It is sized from the EVENT STORE, by the same rule as the shipped
+	// default: what lands here is one base backup per store PLUS every WAL
+	// segment since, and under sustained ingest the archived WAL costs more per
+	// event than the data it records -- so a small, busy event store sends far
+	// more here than its own volume ever holds. The rule is that, when
+	// TimescaleStorage is full, what has landed here (the archive of every event
+	// it holds, plus one base backup of each database, bounded by its volume)
+	// leaves 35% of this free; backupsizing_test.go holds this value to it. That
+	// needs about 16 GiB; 20Gi is the round size above it.
 	//
 	// When it fills, archiving fails. Archiving that fails does not stall commits:
 	// WAL accumulates on the DATABASE's volume until that fills and Postgres
@@ -152,7 +154,7 @@ var compact = compactSizing{
 	JetStreamStorage:   "3Gi",
 	PostgresStorage:    "2Gi",
 	TimescaleStorage:   "4Gi",
-	ObjectStoreStorage: "8Gi",
+	ObjectStoreStorage: "20Gi",
 
 	CPURequest:    "25m",
 	MemoryRequest: "64Mi",

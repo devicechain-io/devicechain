@@ -126,7 +126,7 @@ func TestTheOperatorConjunctionLivesOnlyWhereItIsTrue(t *testing.T) {
 		t.Errorf("the cluster root no longer derives backups_on as %q.\n"+
 			"  Both halves matter there: it installs the operator AND creates the relational\n"+
 			"  store, so a destination provisioned for an absent plugin is a running MinIO, a\n"+
-			"  20Gi volume, and no backups.", derivation)
+			"  data volume, and no backups.", derivation)
 	}
 	if strings.Contains(sources[assets.InstanceRootDir], derivation) {
 		t.Errorf("the instance root derives backups_on as %q, and it must not.\n"+
@@ -170,7 +170,7 @@ func TestTheInstanceRootAsksTheClusterWhetherThePluginIsThere(t *testing.T) {
 // This is the same bug TimescaleStorage was added to fix, one slice later: shrink
 // some of an install's volumes and leave one at its full-size default, and the
 // preset's disk claim describes a fraction of the disk it actually uses. Here the
-// gap is 20Gi against a preset that exists for small nodes.
+// gap is the full-size default against a preset that exists for small nodes.
 func TestCompactSizesTheBackupDestination(t *testing.T) {
 	vars := varsMap(t, compactState(true))
 

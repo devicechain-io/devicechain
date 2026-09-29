@@ -809,10 +809,12 @@ minutos, solo se habría disparado después.
 
 El almacén de objetos lo comparten todas las instancias del clúster, igual que la base de datos
 relacional. El chart de cada instancia lleva estas alertas, así que una alerta sobre un volumen
-compartido o sobre la base de datos compartida aparece una vez por instancia.
+compartido o sobre la base de datos compartida aparece una vez por instancia. El almacén
+predeterminado está dimensionado para una instancia con ingesta continua: con más, puede llenarse
+antes que cualquier almacén de eventos, y estas alertas son el aviso.
 
 Para saber qué tamaño necesita el almacén interno, consulta
-[El destino de respaldo predeterminado](./bootstrap.md#default-backup-destination).
+[Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size).
 
 ## Relacionado
 

@@ -3684,10 +3684,9 @@ anticipada sin enviar, también cuando el archivador es lento o está bloqueado 
 `BackupDestinationFillingFast` y `DatabaseVolumeFillingFast` se disparan según lo rápido que se
 llena el almacén de respaldos o un volumen del almacén de eventos, no solo por un umbral fijo.
 También se corrige la guía de dimensionamiento de respaldos: con ingesta sostenida, el log
-archivado cuesta aproximadamente lo mismo que los datos, así que el almacén interno predeterminado
-se llena en horas, no en días. Dimensiónalo según tu tasa de ingesta, o envía los respaldos a un
-almacén de objetos que gestiones tú. Consulta
-[Respaldos que dejan de enviarse](./observability.md#backup-archiving).
+archivado cuesta más por evento que los datos, así que el anterior almacén interno predeterminado
+de 20 GiB se llenaba en horas, no en días; consulta la nota sobre el almacén de respaldos más
+abajo. Consulta [Respaldos que dejan de enviarse](./observability.md#backup-archiving).
 
 #### Un stream de ingesta lleno rechaza eventos nuevos en lugar de descartar los no leídos
 
@@ -3793,9 +3792,9 @@ Las instancias instaladas con `--compact` conservan sus solicitudes de 25m y 64M
 
 **El volumen del almacén de eventos:** nada cambia en una instancia existente; solo las
 instancias creadas por esta versión reciben 32Gi. Para ampliar una existente, consulta
-[Volumen del almacén de eventos](./bootstrap.md#event-store-volume). Lo que se llena primero con
-una ingesta sostenida es el destino de respaldo, como dice la nota anterior; un almacén de eventos
-más grande no cambia eso.
+[Volumen del almacén de eventos](./bootstrap.md#event-store-volume). El almacén de respaldos de
+un clúster nuevo se dimensiona ahora para que se llene primero el almacén de eventos; consulta la
+nota sobre el almacén de respaldos más abajo.
 
 La actualización cambia las plantillas de pod de `device-management`, `event-management` y
 `event-sources`, así que la actualización gradual planifica sus pods nuevos con la nueva
@@ -3892,6 +3891,31 @@ No hay que hacer nada en la actualización.
   que no pasa la validación sigue sin leer sus relaciones de la base de datos.
 - Dos métricas más, `kv_cache_local_max_entries` y `kv_cache_local_max_bytes`, dan el límite de
   cada caché. `kv_cache_local_bytes` cuenta el tamaño completo en memoria de cada entrada.
+
+#### El almacén de respaldos se dimensiona para que el almacén de eventos se llene primero {#next-backup-store-size}
+
+El almacén de respaldos interno de un clúster nuevo tiene **160 GiB** en lugar de 20 GiB, y
+**20 GiB** en lugar de 8 GiB con `--compact` cuando se mantiene TLS. Es disco que el clúster
+reclama ahora en su StorageClass predeterminada. Con 20 GiB, una ingesta sostenida llenaba el
+almacén tras entre 12 y 16 millones de eventos, mucho antes de que se llene un almacén de eventos de
+32 GiB. Entonces el archivado se detenía, y el primario del almacén de eventos llenaba su propio
+volumen con log de escritura anticipada que no podía enviar. Medido en Google Kubernetes Engine,
+el archivo cuesta hasta unos 1,9 KB por evento para las dos bases de datos, no el
+aproximadamente 1 KB publicado antes. El nuevo tamaño guarda el archivo de un almacén de eventos
+predeterminado lleno con más de un tercio del almacén libre. Consulta
+[Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size), incluido cuándo no
+basta con el de una instancia: varias instancias con ingesta, un almacén de eventos que tarda más
+de aproximadamente un día en llenarse o no se llena nunca, o un almacén de eventos ampliado.
+
+**Los clústeres existentes conservan el tamaño de su almacén.** El volumen del almacén se
+dimensiona ahora solo al crearlo: `dcctl install`, el primer paso de toda actualización, deja
+intacto el volumen de un almacén existente, y lo mismo hace un `tofu apply` directo. Sin eso, el
+nuevo valor predeterminado pediría a una StorageClass sin expansión de volúmenes que ampliara el
+volumen, lo que rechaza, y a un almacén que hubieras ampliado a mano ya se le pedía reducirse al
+valor predeterminado, lo que rechaza todo aprovisionador. Establecer `backup_object_store_storage`
+en un almacén existente ya no hace nada. Para dar el nuevo tamaño a un clúster existente, amplía
+tú el volumen, en una StorageClass que lo permita, como muestra esa página. En kind el tamaño no
+se aplica, así que no hace falta nada.
 
 ### La transición única a la ingesta duradera
 
