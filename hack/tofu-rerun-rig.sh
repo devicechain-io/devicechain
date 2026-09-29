@@ -223,7 +223,7 @@ dcctl_check() {
   local expect="$1" name="$2" out="$work/dcctl-check-$1-$2.log"
   set +e
   (cd "$repo/backend/cli" &&
-    DCCTL_RIG_KUBE_CONTEXT="$ctx" DCCTL_RIG_NAMESPACE="$rig_ns" DCCTL_RIG_DEPLOYMENT="$name" \
+    DCCTL_RIG_KUBECONFIG="$kubeconfig" DCCTL_RIG_KUBE_CONTEXT="$ctx" DCCTL_RIG_NAMESPACE="$rig_ns" DCCTL_RIG_DEPLOYMENT="$name" \
       DCCTL_RIG_EXPECT="$expect" timeout 300 go test ./bootstrap/ -run '^TestLiveObjectStoreRolloutCheck$' -count=1 -v) >"$out" 2>&1
   local grc=$?
   set -e

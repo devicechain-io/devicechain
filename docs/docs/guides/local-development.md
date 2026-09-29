@@ -123,6 +123,16 @@ detector slows tests down several times over, so a test that asserts a wall-cloc
 under it without any race. Fix such a test so that its budget does not depend on how fast the
 binary runs.
 
+**dcctl's tests never reach your cluster.** The `backend/cli` tests start from an empty kubeconfig,
+whatever your current context is. Every package whose tests could pick up a cluster from the
+kubeconfig, from Helm or from OpenTofu has a `TestMain` that runs before any test. It points
+`KUBECONFIG` and the OpenTofu roots' kubeconfig path at an empty file, and it clears the in-cluster,
+`KUBE_*` and `HELM_KUBE*` variables. A run on your machine then behaves as it does in CI, and no test
+can act on the cluster you are connected to. A test that needs a cluster sets its own `KUBECONFIG`.
+A new package in `backend/cli` whose tests can reach a cluster needs the same `TestMain`. A test in
+`backend/cli/internal/kubeisolation` finds such packages from the import graph and fails until each
+has one.
+
 ### Fuzzing
 
 Plain `go test` runs each fuzz test's seed inputs only. To fuzz, use the wrapper. It finds every

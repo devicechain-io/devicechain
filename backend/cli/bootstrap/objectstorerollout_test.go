@@ -151,11 +151,24 @@ func TestAStoreOutputNamingNoDeploymentFails(t *testing.T) {
 //
 // DCCTL_RIG_EXPECT says which answer is right, "ready" or "unready"; the rig asks
 // for both, so a check that always answered one way fails one of the two runs.
+//
+// 🔴 THE CLUSTER COMES IN THROUGH A NAMED DOOR, DCCTL_RIG_KUBECONFIG. TestMain replaces
+// the ambient KUBECONFIG with an empty one before any test runs, so this — the one test
+// that is meant to reach a real cluster — sets it back from the rig's explicit value
+// for its own duration. And the "unready" leg requires the ROLLOUT refusal, not any
+// error: with no cluster to reach it would otherwise pass on a config error, and the
+// rig's negative control would be satisfied by the isolation instead of by the check.
 func TestLiveObjectStoreRolloutCheck(t *testing.T) {
 	kubeContext := os.Getenv("DCCTL_RIG_KUBE_CONTEXT")
 	if kubeContext == "" {
 		t.Skip("DCCTL_RIG_KUBE_CONTEXT is not set; this runs under hack/tofu-rerun-rig.sh")
 	}
+	kubeconfig := os.Getenv("DCCTL_RIG_KUBECONFIG")
+	if kubeconfig == "" {
+		t.Fatal("DCCTL_RIG_KUBE_CONTEXT is set but DCCTL_RIG_KUBECONFIG is not: this package's tests " +
+			"run against an empty kubeconfig, so the rig must name the one its cluster is in")
+	}
+	t.Setenv("KUBECONFIG", kubeconfig)
 	ref, err := json.Marshal(map[string]any{
 		"in_cluster": true,
 		"namespace":  os.Getenv("DCCTL_RIG_NAMESPACE"),
@@ -177,6 +190,9 @@ func TestLiveObjectStoreRolloutCheck(t *testing.T) {
 	case "unready":
 		if err == nil {
 			t.Fatal("dcctl accepted a store that has not rolled out")
+		}
+		if !strings.Contains(err.Error(), "has not rolled out") {
+			t.Fatalf("dcctl refused, but not because the store has not rolled out: %v", err)
 		}
 		t.Logf("refused, as it must be: %v", err)
 	default:
