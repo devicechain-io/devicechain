@@ -3779,9 +3779,9 @@ An event with more readings than fit in one database statement (more than about 
 measurements, 5,450 locations or 6,550 alerts, or 9,350 relationship anchors) could never be
 stored. The database driver refused the statement, `event-management` retried the event until
 its deliveries ran out, and then recorded it on the `failed-events` stream as a downstream
-failure rather than as a problem with the event. Such an event could come from a Sparkplug
-message with thousands of metrics, or from a JSON transport whose `maxReadingsPerMessage` had
-been raised above its default of 1000. The event store now writes a large event in as many
+failure rather than as a problem with the event. Before the 256-reading limit above, such an
+event could come from a Sparkplug message with thousands of metrics, or from a JSON transport
+whose `maxReadingsPerMessage` had been raised above its default of 1000. The event store now writes a large event in as many
 statements as it needs, inside the same transaction, so it is stored whole or not at all like
 any other, and a redelivery of it adds nothing. The same retry-then-downstream-failure path
 was taken by a state-change event whose session id is too large for the database's signed
