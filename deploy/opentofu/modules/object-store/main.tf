@@ -183,23 +183,23 @@ variable "storage" {
     Size of the object store's data volume.
 
     🔴 Sizing this is not the same question as sizing a database volume, and the
-    default is deliberately larger than it looks like it needs to be. This holds
+    root's default is deliberately larger than it looks like it needs to be. This holds
     a base backup PLUS every WAL segment since it, for the whole retention
     window, for BOTH stores. When it fills, archiving fails -- and archiving that
     fails does not stall commits, it accumulates WAL on the database's own volume
     until THAT fills and Postgres stops. So a too-small bucket takes the database
     down by a route that points nowhere near the bucket.
 
-    The default is the cluster root's (backup_object_store_storage), whose
-    description carries the derivation; it is repeated here only so that a
-    direct consumer of this module does not get a smaller one.
+    REQUIRED, with no default here: the size is the cluster root's
+    backup_object_store_storage, whose description carries the derivation. A
+    second default in this module would be the same policy written down twice,
+    and nothing would notice the two drifting apart.
 
     🔴 Read when the volume is CREATED, and never again: the claim ignores later
     changes to its request (see the lifecycle block on it). Grow a live store with
     `kubectl patch` on a StorageClass that allows volume expansion.
   EOT
   type        = string
-  default     = "160Gi"
 }
 
 variable "storage_class" {

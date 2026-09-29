@@ -31,14 +31,21 @@ variables {
 }
 
 # The negative control: on creation, the claim asks for what it is given. If this
-# failed, the next run would be passing for the wrong reason.
+# failed, the next runs would be passing for the wrong reason.
+#
+# 🔴 30Gi IS CHOSEN TO BE NO OTHER SIZE ANYWHERE: not the old default (20Gi), not
+# the new one (160Gi), not `--compact`'s (20Gi), and neither size the re-apply
+# runs pass. A creation size that equalled any of them could not tell
+# `storage = var.storage` apart from that size written into the claim as a
+# constant -- and a claim pinned to 20Gi is exactly the defect this suite exists
+# after: every new cluster getting a 20Gi store.
 run "creates_the_volume_at_the_given_size" {
   variables {
-    storage = "20Gi"
+    storage = "30Gi"
   }
 
   assert {
-    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].resources[0].requests.storage == "20Gi"
+    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].resources[0].requests.storage == "30Gi"
     error_message = "a new volume must be created at the size it is given"
   }
 }
@@ -55,7 +62,7 @@ run "a_larger_default_keeps_the_live_size" {
   }
 
   assert {
-    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].resources[0].requests.storage == "20Gi"
+    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].resources[0].requests.storage == "30Gi"
     error_message = "a re-apply with a larger size re-planned the live volume; a StorageClass without volume expansion refuses that, mid-apply"
   }
 }
@@ -72,7 +79,27 @@ run "a_smaller_size_keeps_the_live_size" {
   }
 
   assert {
-    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].resources[0].requests.storage == "20Gi"
+    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].resources[0].requests.storage == "30Gi"
     error_message = "a re-apply with a smaller size re-planned the live volume; every provisioner refuses a shrink"
+  }
+}
+
+# The rule ignores the SIZE, not the claim: anything else on it still follows the
+# configuration. Without this run, `ignore_changes = all` passes every run above
+# while silently freezing the storage class (and the labels) at whatever the
+# first apply wrote. Last, because a new class replaces the claim.
+run "a_new_storage_class_is_still_applied" {
+  plan_options {
+    refresh = false
+  }
+
+  variables {
+    storage       = "8Gi"
+    storage_class = "retained"
+  }
+
+  assert {
+    condition     = kubernetes_persistent_volume_claim_v1.data.spec[0].storage_class_name == "retained"
+    error_message = "a re-apply with a new storage_class did not reach the claim; the lifecycle rule is ignoring more than the size"
   }
 }

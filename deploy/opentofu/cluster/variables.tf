@@ -569,7 +569,7 @@ variable "backup_object_store_storage" {
         about this much again per instance that ingests continuously, or use an
         external destination.
       - an event store grown past its default: every GiB added there wants about
-        four and a half here.
+        five here.
     In those cases the percentage alerts (BackupDestinationAlmostFull at 85%,
     BackupDestinationFillingFast) are the warning, and PostgresWALArchivingFailing
     and PostgresWALArchiveBacklog the backstop. A base backup lands as one step,

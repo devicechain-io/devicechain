@@ -436,8 +436,8 @@ That holds for one instance whose event store fills within about a day. It does 
   the log. An instance whose stored data is bounded by a retention window (`retentionDays`) still
   sends a week of log here. At the measured cost, about 150 events per second sustained for a week
   fills the default store before any base backup is counted.
-- **when you grow the event store.** Each GiB added to the event-store volume needs about four
-  and a half GiB more here.
+- **when you grow the event store.** Each GiB added to the event-store volume needs about five
+  GiB more here.
 
 In those cases, the alerts described under
 [Backups that stop shipping](./observability.md#backup-archiving) are the warning:
@@ -968,7 +968,7 @@ kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge
 ```
 
 Growing this volume moves the point where the backup store fills first. Grow the backup store by
-about four and a half times what you add here; see [Backup store size](#backup-store-size).
+about five times what you add here; see [Backup store size](#backup-store-size).
 
 ## After bootstrap {#after-bootstrap}
 

@@ -474,7 +474,7 @@ cumple:
   semana de log. Con el coste medido, unos 150 eventos por segundo sostenidos durante una semana
   llenan el almacén predeterminado antes de contar ningún respaldo base.
 - **cuando amplías el almacén de eventos.** Cada GiB que añades al volumen del almacén de eventos
-  necesita unos cuatro GiB y medio más aquí.
+  necesita unos cinco GiB más aquí.
 
 En esos casos, el aviso son las alertas descritas en
 [Respaldos que dejan de enviarse](./observability.md#backup-archiving):
@@ -1044,7 +1044,7 @@ kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge
 ```
 
 Ampliar este volumen mueve el punto en que el almacén de respaldos se llena primero. Amplía el
-almacén de respaldos unas cuatro veces y media lo que añadas aquí; consulta
+almacén de respaldos unas cinco veces lo que añadas aquí; consulta
 [Tamaño del almacén de objetos de respaldo](#backup-store-size).
 
 ## Después del arranque inicial {#after-bootstrap}

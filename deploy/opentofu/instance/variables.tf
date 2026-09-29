@@ -638,7 +638,7 @@ variable "timescale_storage" {
     bounded by retentionDays, or a smaller destination -- see that variable. Then
     archiving fails and WAL accumulates on THIS volume until it fills and
     PostgreSQL stops. Growing this volume moves that point too: every GiB added
-    here wants about four and a half GiB more in the destination.
+    here wants about five GiB more in the destination.
 
     Applied when an instance is created, or when a re-run finishes an interrupted
     bootstrap: dcctl upgrade does not re-apply this root, so an existing instance keeps

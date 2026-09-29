@@ -71,9 +71,48 @@ cp -R "$modules_dir" "$work/modules"
 find "$work/modules" -name .terraform -type d -prune -exec rm -rf {} +
 find "$work/modules" -name .terraform.lock.hcl -type f -delete
 
+# 🔴 TEST AGAINST THE PROVIDER THE SHIPPED ROOTS RUN, NOT THE NEWEST ONE. A module
+# names its providers with no version (the roots pin them exactly), so a bare init
+# here would resolve whatever the registry calls latest. What a suite holds --
+# `ignore_changes` on a path through the provider's schema, for one -- is a fact
+# about ONE provider version, and a suite green on a different version says
+# nothing about the one users run. So each provider the cluster root pins is
+# pinned in the copy too, by an override file, read from the root's own
+# versions.tf: that file stays the one place a version is written.
+pins_file="$repo_root/deploy/opentofu/cluster/versions.tf"
+pins="$(awk '
+  /^[[:space:]]*[a-z0-9_-]+[[:space:]]*=[[:space:]]*\{[[:space:]]*$/ { name=$1; src=""; next }
+  /^[[:space:]]*source[[:space:]]*=/ { src=$3; gsub(/"/, "", src); next }
+  /^[[:space:]]*version[[:space:]]*=/ && name != "" && src != "" {
+    v=$3; gsub(/"/, "", v); print name, src, v; name=""; src=""
+  }
+' "$pins_file")"
+# An empty parse would pin nothing and quietly fall back to "latest" -- the very
+# thing this block exists to stop. The kubernetes pin is the one every current
+# suite depends on, so its absence means the parse broke.
+if ! grep -q '^kubernetes hashicorp/kubernetes [0-9]' <<<"$pins"; then
+  echo "FAIL: could not read the kubernetes provider pin from $pins_file" >&2
+  exit 1
+fi
+
 rc=0
 for m in "${suites[@]}"; do
   echo "== $m"
+  # Pin only the providers this module declares: an override may not introduce
+  # a requirement the module does not have.
+  override="$work/modules/$m/zz_ci_provider_pins_override.tf"
+  {
+    echo 'terraform {'
+    echo '  required_providers {'
+    while read -r name src ver; do
+      if grep -qs "source *= *\"$src\"" "$work/modules/$m"/*.tf; then
+        printf '    %s = {\n      source  = "%s"\n      version = "%s"\n    }\n' "$name" "$src" "$ver"
+        echo "   pinned $src $ver" >&2
+      fi
+    done <<<"$pins"
+    echo '  }'
+    echo '}'
+  } >"$override"
   if ! (cd "$work/modules/$m" && "$TF" init -backend=false -input=false >/dev/null &&
     "$TF" test -no-color); then
     echo "FAIL: $m" >&2
