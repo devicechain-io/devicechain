@@ -3589,8 +3589,9 @@ messages, most of them already processed, so on a busy instance it fired while n
   consumer except the two that hold ingest back, which `JetStreamUnreadBacklogNearFull` covers.
 - **Changed: `JetStreamStreamNearFull` is now `info`, and fires only for a stream that holds
   records for an operator:** `failed-decode`, `failed-events`, `connector-dispatch.dead`,
-  `max-deliveries`, and `dead-letters` while no service reports reading it. Nothing processes what
-  these streams hold, so near their ceiling they are about to discard records nobody has looked at.
+  `max-deliveries`, and `dead-letters` while `user-management`, which stores its letters, does not
+  report reading it. Nothing processes what these streams hold, so near their ceiling they are
+  about to discard records nobody has looked at.
   It now also counts a stream's message ceiling, not only its bytes. If you route or silence alerts
   by name or severity, check those rules: the default Alertmanager configuration of
   kube-prometheus-stack does not deliver `info` alerts.

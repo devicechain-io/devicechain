@@ -354,21 +354,21 @@ tests:
               stream: devicechain_connector-dispatch.dead
             exp_annotations:
               summary: "A stream of records nothing processes is near its ceiling"
-              description: "Stream devicechain_connector-dispatch.dead is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while no service reports reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+              description: "Stream devicechain_connector-dispatch.dead is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
           - exp_labels:
               severity: info
               devicechain_instance: devicechain
               stream: devicechain_failed-events
             exp_annotations:
               summary: "A stream of records nothing processes is near its ceiling"
-              description: "Stream devicechain_failed-events is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while no service reports reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+              description: "Stream devicechain_failed-events is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
           - exp_labels:
               severity: info
               devicechain_instance: devicechain
               stream: devicechain_max-deliveries
             exp_annotations:
               summary: "A stream of records nothing processes is near its ceiling"
-              description: "Stream devicechain_max-deliveries is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while no service reports reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+              description: "Stream devicechain_max-deliveries is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
 
   # ------------------------------------------------------------------
   # A sink some service reports reading is that consumer's to watch: dead-letters at
@@ -385,6 +385,59 @@ tests:
         values: '1x40'
       - series: 'devicechain_usermanagement_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-user-management-7c9f-aaaaa", job="devicechain/user-management", stream="devicechain_dead-letters", durable="devicechain_user-management_dead-letters"}'
         values: '3x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Only the STORE's reading takes dead-letters off this alert. command-delivery also
+  # reads it, to settle its commands, but a letter it has read is not stored: with
+  # user-management down and command-delivery running, the letters nobody has stored
+  # are near the ceiling and nothing else reports them. (Quiet if the `unless` matches
+  # any reader of the stream.)
+  # ------------------------------------------------------------------
+  - name: dead-letters read only by command-delivery still fires
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters"}'
+        values: '950x40'
+      - series: 'devicechain_commanddelivery_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters"}'
+        values: '1000x40'
+      - series: 'devicechain_commanddelivery_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters"}'
+        values: '1x40'
+      - series: 'devicechain_commanddelivery_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters", durable="devicechain_command-delivery_dead-letters"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              stream: devicechain_dead-letters
+            exp_annotations:
+              summary: "A stream of records nothing processes is near its ceiling"
+              description: "Stream devicechain_dead-letters is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+
+  # ------------------------------------------------------------------
+  # A sink with no ceiling (both limits -1, as JetStream reports "unlimited") has
+  # nothing to be near: quiet however much it holds. (Fires if a limit of -1 is
+  # clamped to 1 instead of dropped, which reads 5000 bytes as 5000x full.)
+  # ------------------------------------------------------------------
+  - name: an unlimited sink is never near its ceiling
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '5000x40'
+      - series: 'devicechain_eventsources_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '-1x40'
+      - series: 'devicechain_eventsources_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '5000x40'
+      - series: 'devicechain_eventsources_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '-1x40'
+      - series: 'devicechain_eventsources_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '1x40'
     alert_rule_test:
       - eval_time: 15m
         alertname: JetStreamStreamNearFull

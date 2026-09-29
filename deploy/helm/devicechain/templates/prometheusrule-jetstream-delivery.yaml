@@ -151,16 +151,21 @@ spec:
         # ingest-only profile, device-commands without LwM2M) -- the same history-blind
         # alert this replaced, at another severity.
         #
-        # `unless` drops a sink some service reports a consumer backlog on: dead-letters is
-        # read by user-management and command-delivery, so while they run it is theirs to
-        # watch (JetStreamDurableUnreadNearFull). The max-delivery recorder's durable is
-        # deliberately not sampled (core/messaging recorder.go), so max-deliveries stays in;
-        # MaxDeliveryRecordsWaiting fires long before this there, and this one says the
-        # queue itself is about to discard.
+        # `unless` drops dead-letters while user-management, the service that STORES the
+        # letters, reports its consumer backlog there: while it runs, its unread letters are
+        # its own to watch (JetStreamDurableUnreadNearFull). It matches that one durable, not
+        # any reader of the stream: command-delivery also reads dead-letters, but only to
+        # settle its commands, and letters it has read are not stored. Matching any reader
+        # would keep this quiet while user-management is down and command-delivery is not,
+        # which is exactly when nothing else reports the letters nobody has stored. The
+        # max-delivery recorder's durable is deliberately not sampled (core/messaging
+        # recorder.go), so max-deliveries stays in; MaxDeliveryRecordsWaiting fires long
+        # before this there, and this one says the queue itself is about to discard.
         #
         # Fill is the higher of bytes and messages, as the sampler computes it: a sink of
-        # small records reaches its message ceiling first. `> 0` on the message limit keeps
-        # an unlimited stream from dividing by it.
+        # small records reaches its message ceiling first. `> 0` on each limit keeps an
+        # unlimited stream (a limit of -1) from dividing by it: that stream has no ceiling
+        # to be near, so it drops out of that branch instead of reading as over it.
         #
         # 🔴 `info` IS DELIBERATE, and it is this chart's first use of that severity -- do
         # not "normalise" it to warning. What goes here is the oldest record of a failure,
@@ -172,7 +177,7 @@ spec:
             (
               max by (stream) (
                 {__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_bytes", namespace="{{ $ns }}"}
-                / clamp_min({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_limit_bytes", namespace="{{ $ns }}"}, 1)
+                / ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_limit_bytes", namespace="{{ $ns }}"} > 0)
               ) > 0.8
               or
               max by (stream) (
@@ -183,14 +188,14 @@ spec:
             and on (stream)
               (max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_sink", namespace="{{ $ns }}"}) == 1)
             unless on (stream)
-              max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", namespace="{{ $ns }}"})
+              max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable=~".+_user-management_dead-letters", namespace="{{ $ns }}"})
           for: 10m
           labels:
             severity: info
             devicechain_instance: {{ $id }}
           annotations:
             summary: "A stream of records nothing processes is near its ceiling"
-            description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while no service reports reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+            description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
         # A consumer's UNREAD backlog is over 80% of what its stream can hold. When it
         # reaches the ceiling the stream discards its oldest messages, read or not, and this
         # consumer never processes the ones it had not reached (JetStreamDurableLostUnread).

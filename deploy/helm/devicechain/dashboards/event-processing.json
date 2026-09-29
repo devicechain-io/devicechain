@@ -1605,7 +1605,7 @@
       "type": "prometheus",
       "uid": "${datasource}"
      },
-     "expr": "devicechain_eventprocessing_jetstream_consumer_unread_ratio{namespace=\"$namespace\"}",
+     "expr": "max by (durable) (devicechain_eventprocessing_jetstream_consumer_unread_ratio{namespace=\"$namespace\"})",
      "legendFormat": "{{durable}}"
     }
    ],

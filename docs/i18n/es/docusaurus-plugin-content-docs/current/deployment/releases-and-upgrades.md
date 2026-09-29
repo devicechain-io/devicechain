@@ -3854,12 +3854,12 @@ carga se disparaba sin que nada estuviera en riesgo.
   `JetStreamUnreadBacklogNearFull`.
 - **Cambia: `JetStreamStreamNearFull` pasa a `info`, y solo se dispara para un flujo que guarda
   registros para un operador:** `failed-decode`, `failed-events`, `connector-dispatch.dead`,
-  `max-deliveries`, y `dead-letters` mientras ningún servicio informe de que lo lee. Nada procesa lo
-  que contienen estos flujos, así que cerca de su límite están a punto de descartar registros que
-  nadie ha mirado. Ahora también tiene en cuenta el límite de mensajes de un flujo, no solo el de
-  bytes. Si enruta o silencia alertas por nombre o por severidad, revise esas reglas: la
-  configuración predeterminada de Alertmanager de kube-prometheus-stack no entrega las alertas
-  `info`.
+  `max-deliveries`, y `dead-letters` mientras `user-management`, que guarda sus cartas muertas, no
+  informe de que lo lee. Nada procesa lo que contienen estos flujos, así que cerca de su límite
+  están a punto de descartar registros que nadie ha mirado. Ahora también tiene en cuenta el límite
+  de mensajes de un flujo, no solo el de bytes. Si enruta o silencia alertas por nombre o por
+  severidad, revise esas reglas: la configuración predeterminada de Alertmanager de
+  kube-prometheus-stack no entrega las alertas `info`.
 - Series nuevas: `devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}` y
   `devicechain_<area>_jetstream_stream_sink{stream}`.
 
