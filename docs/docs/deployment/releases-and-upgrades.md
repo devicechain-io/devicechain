@@ -3578,6 +3578,27 @@ to 19 start, and log at startup that more than half the pool is given to writers
   commit waits for a standby. An installation with a single event-store instance has not been
   measured with them.
 
+#### Stream warnings are based on unread messages, not on history {#next-unread-alerts}
+
+`JetStreamStreamNearFull` fired for any stream over 80% of its byte ceiling. Streams keep a week of
+messages, most of them already processed, so on a busy instance it fired while nothing was at risk.
+
+- **New: `JetStreamDurableUnreadNearFull` (warning).** Fires when a consumer has not yet read more
+  than 80% of what its stream can hold, for 5 minutes. That is what happens before a stream
+  discards messages a consumer never read. Messages already read do not count. It covers every
+  consumer except the two that hold ingest back, which `JetStreamUnreadBacklogNearFull` covers.
+- **Changed: `JetStreamStreamNearFull` is now `info`, and fires only for a stream that holds
+  records for an operator:** `failed-decode`, `failed-events`, `connector-dispatch.dead`,
+  `max-deliveries`, and `dead-letters` while no service reports reading it. Nothing processes what
+  these streams hold, so near their ceiling they are about to discard records nobody has looked at.
+  It now also counts a stream's message ceiling, not only its bytes. If you route or silence alerts
+  by name or severity, check those rules: the default Alertmanager configuration of
+  kube-prometheus-stack does not deliver `info` alerts.
+- New series: `devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}` and
+  `devicechain_<area>_jetstream_stream_sink{stream}`.
+
+Nothing to do at upgrade. See [Messages a consumer never read](./observability.md#unread-loss).
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

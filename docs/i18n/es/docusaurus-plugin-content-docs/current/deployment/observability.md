@@ -236,12 +236,13 @@ había leído un mensaje cuando se descartó no lo leerá nunca. Los dos flujos 
 serían datos de dispositivos rechazan eventos nuevos antes de que eso le ocurra al consumidor que no
 puede perderlos (consulte [Contrapresión en la ruta de ingesta](#ingest-backpressure)). Todos los
 demás flujos, y todos los demás consumidores, se cubren aquí. El broker no informa de esta pérdida,
-así que cada servicio la mide para cada consumidor duradero que lee, y tres alertas vigilan el
+así que cada servicio la mide para cada consumidor duradero que lee, y estas alertas vigilan el
 resultado:
 
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
-| `JetStreamStreamNearFull` | warning | Un flujo lleva 10 minutos por encima del 80% de su límite de bytes. Todavía no se ha perdido nada. Cubre los flujos de todos los servicios. En `inbound-events` y `resolved-events` es normal en una instancia con carga, porque conservan una semana de eventos ya procesados. | Busque un consumidor que se esté quedando atrás. Si el tráfico simplemente ha superado el flujo, aumente su límite. En los dos flujos de ingesta, vigile `JetStreamUnreadBacklogNearFull` en su lugar. |
+| `JetStreamDurableUnreadNearFull` | warning | Un consumidor lleva 5 minutos sin haber leído más del 80% de lo que cabe en su flujo. Todavía no se ha perdido nada. Los mensajes que ya leyó no cuentan, así que un flujo lleno de historial ya procesado no la dispara. Cuando la cola sin leer llega al límite, el flujo descarta los mensajes más antiguos y este consumidor nunca procesará los que no había alcanzado. Para el consumidor de detección de `event-processing` mide el consumidor, no el punto de control desde el que la detección vuelve a leer; el punto de control nunca va por detrás de lo que el consumidor ha confirmado, así que el número es al menos lo que la detección podría perder. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. Los dos consumidores que frenan la ingesta los cubre `JetStreamUnreadBacklogNearFull` (consulte [Contrapresión en la ruta de ingesta](#ingest-backpressure)). |
+| `JetStreamStreamNearFull` | info | Un flujo que guarda registros para un operador, en lugar de mensajes que procesa un servicio, lleva 10 minutos por encima del 80% de su límite (en bytes o en mensajes). Son los registros de mensajes que fallaron (`failed-decode`, `failed-events`, `connector-dispatch.dead`), `max-deliveries`, y `dead-letters` mientras ningún servicio informe de que lo lee. Nada procesa lo que contienen, así que cuando se llenan descartan registros que nadie ha mirado. Los flujos que leen los servicios no se cubren: conservan una semana de historial que normalmente está cerca del límite, y las alertas de esta tabla vigilan a sus consumidores. | Busque qué lo está llenando: un decodificador que rechaza los mensajes de un dispositivo, eventos que no se pueden resolver o guardar, un conector cuyo destino rechaza todos los envíos. En `dead-letters`, compruebe que `user-management` está en marcha. Aumente el límite solo si hay que conservar los registros más tiempo. La configuración predeterminada de Alertmanager de kube-prometheus-stack suprime las alertas `info`, así que enrútela explícitamente si la quiere recibir. |
 | `JetStreamDurableLostUnread` | critical | Un consumidor pasó por encima de mensajes que se eliminaron antes de que los leyera. Nunca se procesaron. | Si en ese momento se estaba eliminando un tenant, es lo esperado: la eliminación borró mensajes a los que el consumidor aún no había llegado. Si no, el flujo estaba lleno mientras este consumidor iba atrasado. O bien el límite es demasiado pequeño para el tráfico, o bien el consumidor es más lento que su productor. |
 | `JetStreamDurableStalledBehindStream` | critical | Un consumidor lleva al menos dos minutos sin recibir ningún mensaje, y el flujo ya ha descartado mensajes por delante de él. Un consumidor que está leyendo, aunque sea despacio, no dispara esta alerta; sus pérdidas disparan `JetStreamDurableLostUnread`. | El servicio está en marcha, ya que es él quien lo informa, pero su consumidor no lee. Busque un procesamiento de mensajes bloqueado en una dependencia, como la base de datos, o pods esperando a estar listos. Si no se puede arreglar rápido, aumente el límite del flujo para que deje de descartar. |
 
@@ -250,7 +251,8 @@ Los límites son `streamMaxBytes` (los flujos de alto volumen), `streamMaxBytesC
 partir de su suma, así que aumente el volumen junto con ellos (consulte
 [Arrancar una instancia](./bootstrap.md)).
 
-Las alertas leen dos series, que cada servicio exporta para cada consumidor duradero que lee:
+Las alertas leen estas series. Cada servicio exporta las tres primeras para cada consumidor duradero
+que lee:
 
 - **`devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`** cuenta los
   mensajes que el consumidor pasó por encima sin leerlos. Es un límite inferior: una reentrega, o un
@@ -260,14 +262,25 @@ Las alertas leen dos series, que cada servicio exporta para cada consumidor dura
   muestra anterior (cada 30 segundos). Vale 0 mientras el consumidor lee, aunque vaya atrasado: esas
   pérdidas son del contador. Vuelve a 0 cuando el consumidor lee de nuevo, y el contador anterior
   toma el relevo.
+- **`devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}`** es la cola sin leer del
+  consumidor (pendientes más sin confirmar) dividida entre lo que cabe en el flujo, en mensajes o en
+  bytes, según qué límite sea más estricto. No se exporta para los dos consumidores que frenan la
+  ingesta; los servicios que escriben en sus flujos exportan el mismo número como
+  `jetstream_backpressure_unread_ratio`. No aparece hasta la primera muestra ni mientras no se
+  puede medir.
 
-Ambas existen con valor 0 desde que el servicio crea el lector del consumidor. Todas las réplicas de un servicio informan
+Cada servicio exporta además **`devicechain_<area>_jetstream_stream_sink{stream}`** para cada flujo
+que escribe o lee: 1 para un flujo que guarda registros para un operador, 0 para cualquier otro.
+`JetStreamStreamNearFull` solo lee el llenado de un flujo donde vale 1.
+
+Las dos primeras existen con valor 0 desde que el servicio crea el lector del consumidor; la
+proporción aparece con la primera muestra. Todas las réplicas de un servicio informan
 del mismo consumidor y cuentan la misma pérdida, así que combínelas con `max`, no con `sum`. Reiniciar
 un pod pone el contador a cero, así que léalo con `increase()` o `rate()`. Cada pod mide desde su
 propia primera muestra, así que una pérdida que el consumidor pasa por encima mientras todos los pods
 del servicio lector se reinician a la vez puede quedar sin contar. Un servicio sin pods en marcha no
-informa ninguna de las dos series, así que ninguna alerta puede dispararse por él; la advertencia de
-flujo casi lleno y sus alertas de salud de los pods cubren ese caso.
+informa ninguna de estas series, así que ninguna alerta por consumidor puede dispararse por él; sus
+alertas de salud de los pods cubren ese caso.
 
 ## Un consumidor que se queda atrás {#consumer-backlog}
 
@@ -343,7 +356,7 @@ de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila
 
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
-| `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo empieza a rechazar eventos. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
+| `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo rechaza eventos nuevos para todos los inquilinos: los dispositivos HTTP reciben `503` con `Retry-After`, los eventos de los dispositivos MQTT esperan en el flujo de captura, y las lecturas de Sparkplug y LwM2M, y los eventos de un broker MQTT externo, se descartan y se cuentan. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
 | `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80%. |
 
 Los servicios que escriben en los dos flujos exportan estas series:
@@ -403,7 +416,7 @@ sus avisos se registran como mensajes no entregados como siempre.
 | Alerta | Qué significa | Qué hacer |
 | --- | --- | --- |
 | `MaxDeliveryRecordsWaiting` | Hay avisos de mensajes que agotaron sus intentos esperando desde hace 15 minutos sin convertirse en registros. | Compruebe que todos los servicios están en marcha: uno caído registra tarde. Si el aviso persiste con todo sano, nombra un consumidor que ya ningún servicio lee (un lector retirado en una actualización); no se registrará y puede borrarse del stream. |
-| `ReplayCoveredDeliveriesExhausted` | Un consumidor que lee su stream desde su propio punto de control agotó intentos de entrega en los últimos 15 minutos, porque el punto de control lleva sin guardarse más tiempo del que el broker sigue reentregando. Todavía no se ha perdido nada. | Corrija lo que impide al servicio que indica la etiqueta `job` guardar su punto de control, normalmente su conexión a la base de datos. Mientras el servicio sigue en marcha, guarda lo que ha leído en cuanto el punto de control se guarda. Si se reinicia antes, vuelve a leer el stream desde el último punto de control guardado, y los eventos que el stream ya haya descartado no se pueden volver a leer, así que vigile también `JetStreamStreamNearFull`. |
+| `ReplayCoveredDeliveriesExhausted` | Un consumidor que lee su stream desde su propio punto de control agotó intentos de entrega en los últimos 15 minutos, porque el punto de control lleva sin guardarse más tiempo del que el broker sigue reentregando. Todavía no se ha perdido nada. | Corrija lo que impide al servicio que indica la etiqueta `job` guardar su punto de control, normalmente su conexión a la base de datos. Mientras el servicio sigue en marcha, guarda lo que ha leído en cuanto el punto de control se guarda. Si se reinicia antes, vuelve a leer el stream desde el último punto de control guardado, y los eventos que el stream ya haya descartado no se pueden volver a leer, así que vigile también `JetStreamDurableUnreadNearFull`. |
 
 ## Inquilinos medidos con el valor por defecto de la plataforma {#tenant-ceilings}
 

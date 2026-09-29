@@ -1584,6 +1584,85 @@
    }
   },
   {
+   "id": 34,
+   "type": "timeseries",
+   "title": "Consumer unread backlog (share of stream capacity)",
+   "description": "Each of this service's consumers: messages it has not read (pending plus unacknowledged) over what its stream can hold. History already read does not count, unlike the fill panels. At 100% the stream discards messages the consumer has not read.",
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 70
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "devicechain_eventprocessing_jetstream_consumer_unread_ratio{namespace=\"$namespace\"}",
+     "legendFormat": "{{durable}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 15,
+      "showPoints": "never",
+      "spanNulls": true,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "thresholdsStyle": {
+       "mode": "line"
+      }
+     },
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 0.8
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
    "id": 30,
    "type": "row",
    "title": "Geofence archive (manifest delivery)",
@@ -1592,7 +1671,7 @@
     "h": 1,
     "w": 24,
     "x": 0,
-    "y": 71
+    "y": 79
    }
   },
   {
@@ -1604,7 +1683,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 72
+    "y": 80
    },
    "datasource": {
     "type": "prometheus",
@@ -1680,7 +1759,7 @@
     "h": 8,
     "w": 12,
     "x": 12,
-    "y": 72
+    "y": 80
    },
    "datasource": {
     "type": "prometheus",
@@ -1740,7 +1819,7 @@
     "h": 8,
     "w": 12,
     "x": 0,
-    "y": 80
+    "y": 88
    },
    "datasource": {
     "type": "prometheus",

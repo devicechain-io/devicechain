@@ -15,8 +15,9 @@ import (
 // fake would restate them rather than check them.
 
 const (
-	pendingSeries    = "jetstream_consumer_pending_messages"
-	ackPendingSeries = "jetstream_consumer_ack_pending_messages"
+	pendingSeries     = "jetstream_consumer_pending_messages"
+	ackPendingSeries  = "jetstream_consumer_ack_pending_messages"
+	unreadRatioSeries = "jetstream_consumer_unread_ratio"
 )
 
 // readNoAck hands out n messages without acknowledging any of them.
@@ -37,7 +38,7 @@ func (g *unreadRig) readNoAck(n int) {
 func TestConsumerBacklogIsAbsentUntilSampled(t *testing.T) {
 	g := newUnreadRig(t, 0)
 	g.publish("t1", 10)
-	for _, s := range []string{pendingSeries, ackPendingSeries} {
+	for _, s := range []string{pendingSeries, ackPendingSeries, unreadRatioSeries} {
 		if v, found := g.series(s); found {
 			t.Errorf("%s is exported as %v before any sample; want it absent", s, v)
 		}
@@ -110,7 +111,7 @@ func TestConsumerBacklogIsWithdrawnWhenTheSampleFails(t *testing.T) {
 		t.Fatalf("delete consumer: %v", err)
 	}
 	g.sample()
-	for _, s := range []string{pendingSeries, ackPendingSeries} {
+	for _, s := range []string{pendingSeries, ackPendingSeries, unreadRatioSeries} {
 		if v, found := g.series(s); found {
 			t.Errorf("%s is still exported as %v for a durable that could not be read; want it absent", s, v)
 		}
@@ -131,7 +132,7 @@ func TestConsumerBacklogIsWithdrawnWhenItsStreamCannotBeRead(t *testing.T) {
 		t.Fatalf("delete stream: %v", err)
 	}
 	g.sample()
-	for _, s := range []string{pendingSeries, ackPendingSeries} {
+	for _, s := range []string{pendingSeries, ackPendingSeries, unreadRatioSeries} {
 		if v, found := g.series(s); found {
 			t.Errorf("%s is still exported as %v for a durable whose stream could not be read; want it absent", s, v)
 		}
