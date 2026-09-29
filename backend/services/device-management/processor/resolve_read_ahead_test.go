@@ -252,6 +252,51 @@ func TestAnEventNeverReadsTheDatabaseTwiceAtOnce(t *testing.T) {
 	}
 }
 
+// 🔑 A LOOKUP THE CACHE COULD NOT ANSWER AHEAD GOES STRAIGHT TO THE DATABASE. The read made
+// ahead already asked the cache and missed; asking it again on the lookup would be a second
+// bucket round trip for every miss — the case reading ahead exists to make cheaper, a fleet
+// reporting less often than every 5 s missing its relationships on every event — and a
+// second miss counted. So with every cache empty, each cache is read exactly once per
+// lookup the event makes: the device, its profile, its relationships, the scoped-group gate
+// and one membership read per target (the device and its one anchor). With the in-process
+// tier on as well as off: with it on, a bucket miss is not kept in memory, so a second
+// lookup would reach the bucket again.
+func TestAColdEventAsksEachCacheOncePerLookup(t *testing.T) {
+	for _, tier := range []struct {
+		name string
+		opts []messaging.CacheOption
+	}{
+		{"bucket only", []messaging.CacheOption{messaging.WithoutLocalCache()}},
+		{"memory and bucket", nil},
+	} {
+		t.Run(tier.name, func(t *testing.T) {
+			rig := newCountingResolveRig(t, true, func(_ string, kv *msgtest.MemoryKV) *messaging.Cache {
+				return kv.NewCache(tier.opts...)
+			})
+			if got := rig.totalGets(); got != 0 {
+				t.Fatalf("the rig's caches were read %d times before the event, want 0", got)
+			}
+
+			resolved := rig.resolve(tempEvent("21"))
+			if got := stampedUnit(t, resolved); got != "Cel" {
+				t.Fatalf("stamped unit = %q, want Cel", got)
+			}
+			want := map[string]int{"DeviceByToken": 1, "ProfileResolutionByType": 1, "RelationshipsBySource": 1,
+				"ScopedGroupsExist": 1, "MembershipsByEntity": 2}
+			for name, w := range want {
+				if got := rig.stores[name].Gets; got != w {
+					t.Errorf("%s gets = %d, want %d: a lookup the read-ahead missed asked the cache again",
+						name, got, w)
+				}
+			}
+			// The counterweight: the lookups really did miss, and went to the database.
+			if len(rig.statements()) == 0 {
+				t.Fatal("the cold event made no database read; the caches were not empty")
+			}
+		})
+	}
+}
+
 // The instrument for the test above: two statements from two goroutines are seen at once.
 // If SQLite serialized them below the pool, the test above would pass for the wrong reason.
 func TestTheStatementCounterSeesOverlap(t *testing.T) {

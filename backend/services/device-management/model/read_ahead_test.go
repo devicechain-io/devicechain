@@ -17,12 +17,19 @@ import (
 // counting store with the in-process tier off, so every cache read reaches its store.
 func readAheadStores(t *testing.T) (*CachedApi, map[string]*msgtest.MemoryKV, context.Context, uint) {
 	t.Helper()
+	return readAheadStoresWith(t, messaging.WithoutLocalCache())
+}
+
+// readAheadStoresWith is readAheadStores with each cache built with opts: with none, the
+// in-process tier is on, as in production.
+func readAheadStoresWith(t *testing.T, opts ...messaging.CacheOption) (*CachedApi, map[string]*msgtest.MemoryKV, context.Context, uint) {
+	t.Helper()
 	capi, _, ctx, deviceId := newCachedApiForTest(t)
 	stores := map[string]*msgtest.MemoryKV{}
 	build := func(name string) *messaging.Cache {
 		kv := msgtest.NewMemoryKV()
 		stores[name] = kv
-		return kv.NewCache(messaging.WithoutLocalCache())
+		return kv.NewCache(opts...)
 	}
 	capi.caches = &Caches{
 		DeviceByToken:           build("device"),
@@ -121,4 +128,64 @@ func TestAReadMadeAheadIsNotServedToAnotherTenant(t *testing.T) {
 	own, err := api.TrackedRelationshipsForDevice(ctx, deviceId)
 	require.NoError(t, err)
 	require.Len(t, own.Results, 1)
+}
+
+// 🔑 A READ PROCESS MEMORY CAN ANSWER NEVER GOES PAST IT. readAll asks memory for every key
+// on the caller's goroutine first, and hands only the rest to the bucket, at the same time.
+// Skipping that step still gets every answer right — a Get with the in-process tier on is
+// answered from memory too, so no count of bucket Gets moves — but it starts goroutines
+// for an event whose reads memory holds, which made such an event cost several times what
+// it did (BenchmarkWarmResolve). So the assertion is on the eventReads' own count of reads
+// made past memory, which only that step keeps at 0.
+func TestReadsMemoryHoldsNeverLeaveIt(t *testing.T) {
+	capi, stores, ctx, deviceId := readAheadStoresWith(t) // the in-process tier on
+	device := &Device{DeviceTypeId: 7}
+	device.ID = deviceId
+	targets := []MembershipTarget{{"device", deviceId}, {"area", 1}}
+
+	// The counterweight first: with memory empty, all five reads go past it. Without this, a
+	// counter stuck at 0 would read as the verdict below.
+	cold, ok := ReadAheadForEvent(ctx, capi, device).(*eventReads)
+	require.True(t, ok, "ReadAheadForEvent over the CachedApi did not read ahead")
+	ReadMembershipsAhead(ctx, cold, targets)
+	if cold.pastMemory != 5 {
+		t.Fatalf("with memory empty, %d reads went past it, want 5 (profile, relationships, "+
+			"scoped groups, two memberships)", cold.pastMemory)
+	}
+
+	// Every key through its cache, which keeps it in this process's memory as well as the
+	// bucket.
+	tenant := "acme"
+	require.NoError(t, capi.caches.ProfileResolutionByType.Set(ctx, profileResolutionByTypeKey(tenant, 7),
+		&ProfileResolution{Metrics: []ResolvedMetric{{MetricKey: "temp"}}}))
+	require.NoError(t, capi.caches.RelationshipsBySource.Set(ctx, relationshipsBySourceKey(tenant, deviceId),
+		&EntityRelationshipSearchResults{}))
+	require.NoError(t, capi.caches.ScopedGroupsExist.Set(ctx, tenant, true))
+	for _, tg := range targets {
+		require.NoError(t, capi.caches.MembershipsByEntity.Set(ctx,
+			membershipsByEntityKey(tenant, tg.Type, tg.Id), []GroupMembership{}))
+	}
+	before := totalGets(stores)
+
+	warm := ReadAheadForEvent(ctx, capi, device).(*eventReads)
+	ReadMembershipsAhead(ctx, warm, targets)
+	if warm.pastMemory != 0 {
+		t.Errorf("with every key in memory, %d reads went past it, want 0: readAll did not ask "+
+			"memory first", warm.pastMemory)
+	}
+	if got := totalGets(stores) - before; got != 0 {
+		t.Errorf("with every key in memory, the bucket was asked %d times, want 0", got)
+	}
+	// And each lookup is answered from what memory held. This rig has no profile or group
+	// tables, so an answer from the database would be an error.
+	res, err := warm.ProfileResolutionByDeviceType(ctx, 7)
+	require.NoError(t, err)
+	require.Len(t, res.Metrics, 1)
+	scoped, err := warm.AnyScopedGroups(ctx)
+	require.NoError(t, err)
+	require.True(t, scoped)
+	for _, tg := range targets {
+		_, err := warm.MembershipsForEntity(ctx, tg.Type, tg.Id)
+		require.NoError(t, err)
+	}
 }

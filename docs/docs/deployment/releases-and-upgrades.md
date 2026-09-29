@@ -3604,11 +3604,11 @@ Nothing to do at upgrade. See [Messages a consumer never read](./observability.m
 
 Nothing needs doing at the upgrade.
 
-- **Each replica now keeps up to 131,072 entries, or 24 MiB, in memory for each of the three
-  lookup caches kept per device** (a device by its token, its tracked relationships, its group
-  memberships). Before, every cache held at most 4,096 entries, so a replica that saw more than
-  4,096 devices within five seconds answered none of their relationship lookups from memory. The
-  caches kept per device type and per tenant still hold 4,096. Set
+- **The in-memory copy described [above](#next-local-cache) holds up to 131,072 entries, or
+  24 MiB, per replica for each of the three lookup caches kept per device** (a device by its
+  token, its tracked relationships, its group memberships), so a replica that sees a large fleet
+  within five seconds can answer its lookups from memory. The caches kept per device type and per
+  tenant hold 4,096 entries or 4 MiB. Set
   `inMemoryCache.perDeviceCacheEntries` and `inMemoryCache.perDeviceCacheMiB` in
   `device-management`'s configuration to change the bound, and raise the service's memory limit
   with it. A release before this one refuses to start with either setting, so remove them before
@@ -3625,8 +3625,7 @@ Nothing needs doing at the upgrade.
   counts connections as before, and a measurement that fails validation still never reads its
   relationships from the database.
 - Two more metrics, `kv_cache_local_max_entries` and `kv_cache_local_max_bytes`, give each cache's
-  bound. `kv_cache_local_bytes` now counts an entry's full size in memory, so it reads higher than
-  before for the same entries.
+  bound. `kv_cache_local_bytes` counts each entry's full size in memory.
 
 ### The one-time durable-ingest cutover
 

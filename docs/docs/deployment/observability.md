@@ -635,8 +635,9 @@ device by its token, its tracked relationships, its group memberships) each hold
 entries or 24 MiB per replica, set by `inMemoryCache.perDeviceCacheEntries` and
 `inMemoryCache.perDeviceCacheMiB`. That is about 87,000 devices with no tracked relationship, or
 about 26,000 with one. The profile and group-scope caches, kept per device type and per tenant,
-hold 4,096 entries or 4 MiB. Each drops the least recently used entry when it is full, and drops
-entries more than five seconds old as it stores new ones. A lookup NATS reported as absent is
+hold 4,096 entries or 4 MiB. Each drops the least recently used entry when it is full. As it
+stores a new entry it also drops expired ones from its least recently used end, stopping at the
+first that has not expired. A lookup NATS reported as absent is
 never kept. A change reaches the events that other replicas resolve up to five seconds later
 than it would through the bucket alone. Until then another replica can, for example, still
 resolve a device deleted or re-created under the same token through its old record, or evaluate
@@ -686,7 +687,8 @@ already had it in memory.
 - **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** and
   **`devicechain_devicemanagement_kv_cache_local_bytes{cache}`**: how many entries, and roughly
   how many bytes, a replica holds in memory for the cache. Expired entries count until a lookup
-  finds them, a newer entry is stored after them, or the cache needs the room.
+  finds them, the cache drops them from its least recently used end as it stores a new entry, or
+  the cache needs the room.
 - **`devicechain_devicemanagement_kv_cache_local_max_entries{cache}`** and
   **`devicechain_devicemanagement_kv_cache_local_max_bytes{cache}`**: the most entries, and
   bytes, the cache holds in memory before it drops the least recently used.

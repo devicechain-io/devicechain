@@ -459,8 +459,8 @@ resolvedor (cada uno de los trabajadores que resuelven eventos) autentica la cre
 lo que supone una lectura de la base de datos relacional, después consulta el perfil, las
 relaciones y el alcance de grupos del dispositivo en el almacén clave-valor del bróker de
 mensajes, y entrega el evento resuelto para que se publique. Esas tres consultas se hacen a la
-vez. Lo que el almacén clave-valor no puede responder se lee de la base de datos de una consulta
-en una, así que un resolvedor sigue ocupando como máximo una conexión a la base de datos. Un
+vez. Lo que el almacén clave-valor no puede responder se lee de la base de datos una consulta
+tras otra, así que un resolvedor sigue ocupando como máximo una conexión a la base de datos. Un
 resolvedor pasa la mayor parte de cada evento esperando respuestas, no usando CPU. Varios resolvedores trabajan a la
 vez. Los eventos que llegan mientras todos están ocupados esperan delante de ellos, en orden: hasta
 100 en la cola de entrega del pod y hasta 64 más en el último lote leído del flujo. El resto espera
@@ -667,8 +667,9 @@ grupos) guardan cada una hasta 131.072 entradas o 24 MiB por réplica, según
 `inMemoryCache.perDeviceCacheEntries` e `inMemoryCache.perDeviceCacheMiB`. Eso son unos 87.000
 dispositivos sin ninguna relación seguida, o unos 26.000 con una. Las cachés de perfil y de alcance
 de grupos, que se guardan por tipo de dispositivo y por inquilino, guardan 4096 entradas o 4 MiB.
-Cada una descarta primero la entrada usada hace más tiempo cuando está llena, y descarta las
-entradas de más de cinco segundos a medida que guarda otras nuevas. Una búsqueda que NATS informó
+Cada una descarta primero la entrada usada hace más tiempo cuando está llena. Al guardar una
+entrada nueva también descarta las caducadas desde su extremo de uso más antiguo, y se detiene en
+la primera que no ha caducado. Una búsqueda que NATS informó
 como ausente nunca se guarda. Un cambio llega a los eventos que resuelven las demás
 réplicas hasta cinco segundos más tarde de lo que llegaría solo a través del bucket. Hasta
 entonces otra réplica puede, por ejemplo, seguir resolviendo un dispositivo borrado, o vuelto a
@@ -721,8 +722,8 @@ réplicas que ya la tenían en memoria.
 - **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** y
   **`devicechain_devicemanagement_kv_cache_local_bytes{cache}`**: cuántas entradas, y
   aproximadamente cuántos bytes, guarda una réplica en memoria para la caché. Las entradas
-  caducadas cuentan hasta que una búsqueda las encuentra, se guarda una entrada más nueva después
-  de ellas o la caché necesita el espacio.
+  caducadas cuentan hasta que una búsqueda las encuentra, la caché las descarta desde su extremo
+  de uso más antiguo al guardar una entrada nueva, o la caché necesita el espacio.
 - **`devicechain_devicemanagement_kv_cache_local_max_entries{cache}`** y
   **`devicechain_devicemanagement_kv_cache_local_max_bytes{cache}`**: cuántas entradas, y cuántos
   bytes, guarda como máximo la caché en memoria antes de descartar la usada hace más tiempo.

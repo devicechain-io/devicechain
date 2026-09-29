@@ -46,7 +46,11 @@ type MembershipTarget struct {
 //     (ReadMembershipsAhead is called after it).
 //
 // Each cache read counts in the cache's own metrics exactly as the same read made by the
-// lookup itself would, so the hit and miss counts an operator reads do not move.
+// lookup itself would, and a lookup the read could not answer goes to the database without
+// asking the cache again, so it is counted once (TestAColdEventAsksEachCacheOncePerLookup).
+// The one difference: an event that ends before it uses a read — a measurement that fails
+// validation, or one whose profile read fails — has still made, and counted, the
+// relationships and scoped-group cache reads its lookups would never have made.
 //
 // The reads use the caller's context, so the tenant in every key is the caller's. Nothing is
 // cancelled early: every read is joined before this returns.
@@ -164,6 +168,9 @@ func (r *eventReads) read(ctx context.Context, k heldKey, memoryOnly bool) bool 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.held[k] = heldRead{value: value, answered: answered}
+	if !memoryOnly {
+		r.pastMemory++
+	}
 	return true
 }
 
@@ -203,6 +210,11 @@ type eventReads struct {
 
 	mu   sync.Mutex
 	held map[heldKey]heldRead
+	// pastMemory counts the reads made past process memory: those that may have asked the
+	// bucket. Nothing in the service reads it; it is how TestReadsMemoryHoldsNeverLeaveIt
+	// sees that readAll asked memory first, which no count of bucket Gets can show, since a
+	// Get answered from memory never reaches the bucket either.
+	pastMemory int
 }
 
 // take removes and returns what was read ahead for k. Each is used once: a second lookup of
