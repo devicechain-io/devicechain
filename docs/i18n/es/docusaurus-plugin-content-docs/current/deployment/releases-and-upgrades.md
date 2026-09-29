@@ -1631,7 +1631,9 @@ leer.
   captura hasta que se reanuda la ingesta.
 - Las lecturas de **Sparkplug y LwM2M**, y los mensajes de un bróker MQTT externo, se descartan y se
   cuentan, porque esos protocolos no dan a la plataforma forma de hacer que el dispositivo
-  reintente. Las transiciones de conexión y desconexión se siguen aceptando.
+  reintente. Las transiciones de conexión y desconexión se siguen aceptando, y nada limita
+  cuántas: una flota que se reconecta en bucle aún puede llevar el stream a su techo, donde descarta
+  sus eventos más antiguos como antes.
 - El rechazo afecta a **todos los inquilinos**, porque los streams son compartidos. Un
   `device-state` o un `event-processing` lentos no lo provocan.
 - Se añaden dos alertas: `JetStreamUnreadBacklogNearFull` (warning) y

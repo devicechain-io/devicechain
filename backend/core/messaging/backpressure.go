@@ -153,9 +153,15 @@ type backpressureGates struct {
 	now func() time.Time
 	// enabledAreas reports the functional areas the instance deploys; see gatingDurables.
 	enabledAreas func() ([]string, error)
+	// consumerInfo reads one durable's ConsumerInfo from the broker; a seam so a test can fail
+	// that call alone while StreamInfo still answers. It is set before the sampling loop
+	// starts and never written afterwards.
+	consumerInfo func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error)
 	gates        map[string]*gateState
 	// loop starts the sampling loop, once, at the first registration.
 	loop sync.Once
+	// loopDone is closed when the sampling loop returns.
+	loopDone chan struct{}
 }
 
 // backpressure returns this manager's gates, creating them on first use so that a manager
@@ -167,7 +173,11 @@ func (nmgr *NatsManager) backpressure() *backpressureGates {
 			nmgr:         nmgr,
 			now:          time.Now,
 			enabledAreas: core.EnabledFunctionalAreas,
-			gates:        map[string]*gateState{},
+			consumerInfo: func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+				return nmgr.js.ConsumerInfo(stream, durable, nats.Context(ctx))
+			},
+			gates:    map[string]*gateState{},
+			loopDone: make(chan struct{}),
 		}
 	})
 	return nmgr.bp
@@ -215,6 +225,7 @@ func (nmgr *NatsManager) registerBackpressure(suffix string) {
 // A tick that cannot measure leaves a gate's last measurement in place, and the gate reads as
 // refusing once no sample has succeeded for backpressureStaleAfter.
 func (nmgr *NatsManager) runBackpressure() {
+	defer close(nmgr.backpressure().loopDone)
 	ticker := time.NewTicker(backpressureSampleEvery)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -351,7 +362,7 @@ func (nmgr *NatsManager) measureBackpressure(ctx context.Context, stream, suffix
 		return "", 0, nil, err
 	}
 	for _, durable := range nmgr.gatingDurables(suffix) {
-		ci, cerr := nmgr.js.ConsumerInfo(stream, durable, nats.Context(ctx))
+		ci, cerr := nmgr.backpressure().consumerInfo(ctx, stream, durable)
 		if errors.Is(cerr, nats.ErrConsumerNotFound) {
 			continue
 		}

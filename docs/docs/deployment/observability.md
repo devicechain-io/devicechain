@@ -323,8 +323,11 @@ What each transport does while the stream is refusing:
 | LwM2M | Notifications are dropped and counted in `devicechain_lwm2mingest_notify_ingest_dropped_total`. The next notification replaces the lost one. |
 
 Connect and disconnect transitions (from the broker, Sparkplug births and deaths, LwM2M
-registrations) are still accepted while the stream is refusing. There is one per transition, not
-one per reading, and nothing would send a refused transition again. Only these two consumers
+registrations) are still accepted while the stream is refusing, because nothing would send a
+refused transition again. They land in the 10% of the stream kept above the refusal threshold.
+Nothing limits how many are admitted: devices decide how often they connect and disconnect, so a
+fleet that reconnects in a loop can fill that margin, and then the broker discards the oldest
+events, unread ones included, as it did before this release. Only these two consumers
 hold ingest back. A slow `device-state` or `event-processing` does not. Their unread losses are
 still reported by the alerts above. `event-processing`'s real position is its own checkpoint,
 which the gate does not see. `ReplayCoveredDeliveriesExhausted` watches that.
@@ -332,7 +335,7 @@ which the gate does not see. `ReplayCoveredDeliveriesExhausted` watches that.
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | A gating consumer has been more than 80% of its stream behind for 5 minutes. At 90% the stream starts refusing events. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. |
-| `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The refusal lifts on its own once that consumer's backlog is below 80%. |
+| `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The likeliest cause is that the consumer's service is not running: scaled to zero replicas or crash-looping. A deployed service that is not running still holds ingest back, on purpose. The refusal lifts on its own once that consumer's backlog is below 80%. |
 
 The services that write to the two streams export these series:
 

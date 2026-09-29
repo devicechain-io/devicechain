@@ -95,7 +95,7 @@ hay ningún bróker aparte que operar.
 Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo sentido.
 
 - **Suscripción ●**: `POST /{instanceId}/{tenant}/events` devuelve:
-  - `202` una vez encolado el evento;
+  - `202` una vez almacenado el evento en el stream de entrada de la plataforma;
   - `400` ante un cuerpo que no puede decodificar o un inquilino sintácticamente inválido;
   - `429` cuando el inquilino supera su límite de tasa de ingesta;
   - **`503` con una cabecera `Retry-After` cuando la plataforma aplica contrapresión**: un

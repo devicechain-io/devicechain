@@ -52,7 +52,7 @@ func TestHttpPublishRefusalAnswers503WithRetryAfter(t *testing.T) {
 		strings.NewReader(canonicalMeasurementBody)))
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Equal(t, "10", rec.Header().Get("Retry-After"), "every 503 from ingest must say when to retry")
+	assert.Equal(t, "10", rec.Header().Get("Retry-After"), "a backpressure 503 must say when to retry")
 	assert.True(t, dec.called)
 }
 

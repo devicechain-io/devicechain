@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -495,6 +496,106 @@ func TestAGateThatCannotMeasureStaysClosedAndSaysSo(t *testing.T) {
 	}
 	if v, ok := es.metric(t, "jetstream_backpressure_engaged", stream); !ok || v != 1 {
 		t.Fatalf("jetstream_backpressure_engaged = %v (present %v) while the gate is stale; want 1", v, ok)
+	}
+}
+
+// The broker answers StreamInfo but not one gating durable's ConsumerInfo, as when that call
+// times out or is denied: the sample FAILS, so a closed gate stays closed on its last
+// measurement and goes stale after 30 s. Skipping the durable instead would take the gate's
+// maximum over the durables that did answer (here none), read "nothing unread", and open a
+// gate whose reader is full.
+func TestAGateWhoseConsumerCannotBeMeasuredStaysClosed(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	clk := newTestClock()
+	bounds := bpBounds{maxMsgs: 20}
+	dm := newBPService(t, srv, "device-management", bounds)
+	dm.reader(t, streams.InboundEvents)
+	es := newBPService(t, srv, "event-sources", bounds)
+	g := es.nmgr.backpressure()
+	g.now = clk.now
+	var deny atomic.Bool
+	answer := g.consumerInfo
+	g.consumerInfo = func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+		if deny.Load() {
+			return nil, nats.ErrTimeout
+		}
+		return answer(ctx, stream, durable)
+	}
+	w := es.writer(t, streams.InboundEvents)
+	if refused, _ := fill(t, es, w, streams.InboundEvents, 18, []byte("m")); refused != 0 {
+		t.Fatalf("refused before full: %d", refused)
+	}
+	var bpe *BackpressureError
+	if err := es.nmgr.Backpressure(streams.InboundEvents); !errors.As(err, &bpe) || bpe.Stale {
+		t.Fatalf("precondition: the gate should be closed on a measurement at 18 of 20 unread, got %v", err)
+	}
+
+	deny.Store(true)
+	stream := StreamName("test", streams.InboundEvents)
+	if _, err := es.nmgr.js.StreamInfo(stream); err != nil {
+		t.Fatalf("precondition: StreamInfo must still answer, so only ConsumerInfo fails: %v", err)
+	}
+	es.sample(streams.InboundEvents)
+	err := es.nmgr.Backpressure(streams.InboundEvents)
+	if !errors.As(err, &bpe) || bpe.Stale || bpe.Durable != DurableName("test", "device-management", streams.InboundEvents) {
+		t.Fatalf("a ConsumerInfo that failed changed a closed gate's answer to %v; want it still closed on "+
+			"device-management's last measurement", err)
+	}
+	if v, ok := es.metric(t, "jetstream_backpressure_unread_ratio", stream); ok {
+		t.Fatalf("jetstream_backpressure_unread_ratio still reads %v; a sample that could not measure a "+
+			"durable must fail, and withdraw the series", v)
+	}
+	clk.advance(31 * time.Second)
+	es.sample(streams.InboundEvents)
+	if err := es.nmgr.Backpressure(streams.InboundEvents); !errors.As(err, &bpe) || !bpe.Stale {
+		t.Fatalf("31 s of failed ConsumerInfo the gate answered %v; want stale", err)
+	}
+}
+
+// Nothing in this test measures by hand after the writer is built: the background loop is
+// what closes the gate once the reader falls behind, and the loop ends once the connection
+// closes. Without the loop every gate goes stale 30 s after start and refuses everything.
+func TestTheSamplingLoopMeasuresWithoutBeingAsked(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	bounds := bpBounds{maxMsgs: 20}
+	dm := newBPService(t, srv, "device-management", bounds)
+	dm.reader(t, streams.InboundEvents)
+	es := newBPService(t, srv, "event-sources", bounds)
+	w := es.writer(t, streams.InboundEvents)
+	g := es.nmgr.backpressure()
+	g.mu.Lock()
+	registered := g.gates[streams.InboundEvents].sampledAt
+	g.mu.Unlock()
+	for i := 0; i < 18; i++ {
+		if err := w.WriteMessages(tenantCtx(), Message{Value: []byte("m")}); err != nil {
+			t.Fatalf("publish %d on a gate measured open: %v", i+1, err)
+		}
+	}
+
+	var bpe *BackpressureError
+	deadline := time.Now().Add(3 * backpressureSampleEvery)
+	for {
+		if err := es.nmgr.Backpressure(streams.InboundEvents); errors.As(err, &bpe) && !bpe.Stale {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no background sample closed the gate within %s of the reader falling 18 of 20 behind",
+				3*backpressureSampleEvery)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	g.mu.Lock()
+	sampled := g.gates[streams.InboundEvents].sampledAt
+	g.mu.Unlock()
+	if !sampled.After(registered) {
+		t.Fatalf("the gate closed but its last sample (%v) is not after registration's (%v)", sampled, registered)
+	}
+
+	es.nmgr.closeConn()
+	select {
+	case <-g.loopDone:
+	case <-time.After(3 * backpressureSampleEvery):
+		t.Fatalf("the sampling loop was still running %s after its connection closed", 3*backpressureSampleEvery)
 	}
 }
 

@@ -332,8 +332,11 @@ Qué hace cada transporte mientras el flujo rechaza:
 | LwM2M | Las notificaciones se descartan y se cuentan en `devicechain_lwm2mingest_notify_ingest_dropped_total`. La siguiente notificación sustituye a la perdida. |
 
 Las transiciones de conexión y desconexión (del broker, los nacimientos y muertes de Sparkplug, los
-registros de LwM2M) se siguen aceptando mientras el flujo rechaza. Hay una por transición, no una
-por lectura, y nada volvería a enviar una transición rechazada. Solo estos dos consumidores frenan
+registros de LwM2M) se siguen aceptando mientras el flujo rechaza, porque nada volvería a enviar una
+transición rechazada. Ocupan el 10% del flujo que queda por encima del umbral de rechazo. Nada
+limita cuántas se admiten: los dispositivos deciden con qué frecuencia se conectan y desconectan,
+así que una flota que se reconecta en bucle puede llenar ese margen, y entonces el broker descarta
+los eventos más antiguos, incluidos los no leídos, como hacía antes de esta versión. Solo estos dos consumidores frenan
 la ingesta. Un `device-state` o un `event-processing` lentos no lo hacen. Sus pérdidas sin leer las
 siguen informando las alertas anteriores. La posición real de `event-processing` es su propio punto
 de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila.
@@ -341,7 +344,7 @@ de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo empieza a rechazar eventos. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
-| `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80%. |
+| `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80%. |
 
 Los servicios que escriben en los dos flujos exportan estas series:
 

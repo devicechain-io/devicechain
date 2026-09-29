@@ -92,7 +92,7 @@ there is no separate broker to run.
 A `POST` endpoint for the same JSON event body. Simple, and one-way.
 
 - **Subscribe ●** — `POST /{instanceId}/{tenant}/events` returns:
-  - `202` once the event is queued;
+  - `202` once the event is stored in the platform's inbound stream;
   - `400` on a body it cannot decode or a syntactically invalid tenant;
   - `429` when the tenant is over its ingest rate limit;
   - **`503` with a `Retry-After` header when the platform is applying backpressure**: a consumer

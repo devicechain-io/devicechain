@@ -1534,7 +1534,8 @@ events, and that history does not count towards the limit. Only unread events do
   stream until ingest resumes.
 - **Sparkplug and LwM2M** readings, and messages from an external MQTT broker, are dropped and
   counted, because those protocols give the platform no way to make the device retry. Connect and
-  disconnect transitions are still accepted.
+  disconnect transitions are still accepted, and nothing limits how many: a fleet that reconnects
+  in a loop can still push the stream to its ceiling, where it discards its oldest events as before.
 - The refusal applies to **every tenant**, because the streams are shared. A slow `device-state`
   or `event-processing` does not cause it.
 - Two alerts are added: `JetStreamUnreadBacklogNearFull` (warning) and
