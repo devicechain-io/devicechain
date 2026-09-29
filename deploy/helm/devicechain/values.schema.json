@@ -3,7 +3,7 @@
   "title": "DeviceChain Helm values",
   "description": "Apply-time guard for DeviceChain deployment values (ADR-022). Validates the deployment-selection envelope; per-service config is validated fail-closed by each service at load (decision 1).",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "profile": {
       "type": "string",

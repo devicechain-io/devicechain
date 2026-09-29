@@ -239,7 +239,7 @@ func TestShippedCPULimitsCarryTheMeasuredSustainedRate(t *testing.T) {
 		})
 	}
 
-	// The rule has to be able to fail: the old event-sources limit is 1m short.
+	// The rule has to be able to fail: the old event-sources limit is 25m short.
 	t.Run("the check can fail", func(t *testing.T) {
 		vals := helmValues(compactState(false))
 		mergeFunctionalArea(vals, "event-sources", map[string]interface{}{
@@ -327,6 +327,31 @@ func TestMeasuredRequestAboveAnOperatorsLimitNamesMeasuredRequests(t *testing.T)
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
 	}
+
+	// The other side of the precedence: a request the operator DID write, on an area
+	// that also has a measured one, is named as theirs. Naming measuredRequests here
+	// would point them at a key they never set.
+	t.Run("the area's own request is named over the measured one", func(t *testing.T) {
+		_, err := renderChart(t, map[string]interface{}{
+			"functionalAreas": map[string]interface{}{
+				"device-management": map[string]interface{}{
+					"resources": map[string]interface{}{
+						"requests": map[string]interface{}{"cpu": "3"},
+					},
+				},
+			},
+		})
+		if err == nil {
+			t.Fatal("device-management rendered with a 3-core request above its 2-core limit")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "The request comes from functionalAreas.device-management.resources.requests.cpu") {
+			t.Errorf("the refusal does not name the operator's own request key: %v", msg)
+		}
+		if strings.Contains(msg, "measuredRequests") {
+			t.Errorf("the refusal names measuredRequests, which the operator did not set: %v", msg)
+		}
+	})
 
 	t.Run("with the measured requests off it renders", func(t *testing.T) {
 		vals := lowered()
@@ -631,6 +656,21 @@ func TestAreaValuesRefuseAnUnknownKey(t *testing.T) {
 			t.Errorf("event-sources requests.cpu = %q, want the measuredRequests value 1", have)
 		}
 	})
+}
+
+// The chart's top level refuses a key it does not read, like each area does. The
+// switch for the measured requests sits there, and a typo in it
+// (`useMeasuredRequest: false`) would render with the measured requests still on.
+// The counterweight is every other test here: dcctl's own values, which set only
+// declared keys, still render.
+func TestTopLevelValuesRefuseAnUnknownKey(t *testing.T) {
+	_, err := renderChart(t, map[string]interface{}{"useMeasuredRequest": false})
+	if err == nil {
+		t.Fatal("a top-level useMeasuredRequest rendered; the chart reads no such key")
+	}
+	if !strings.Contains(err.Error(), "'useMeasuredRequest'") {
+		t.Errorf("the refusal does not name the unknown key: %v", err)
+	}
 }
 
 // A quantity the chart cannot read is refused, not read as zero: a zero request
