@@ -14,6 +14,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventlimit"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -60,7 +61,7 @@ type EventWriter interface {
 // IngestMetrics are the optional Prometheus counters the ingest path updates; any nil
 // field is skipped so the ingester is usable in tests without a registry.
 type IngestMetrics struct {
-	MeasurementsEmitted prometheus.Counter // individual samples durably written
+	MeasurementsEmitted prometheus.Counter // samples of batches durably written in full (see Emitter.Emit on a partial write)
 	PresenceEmitted     prometheus.Counter // presence StateChange events durably written
 	DevicesRegistered   prometheus.Counter // devices auto-created on first sight
 	UnknownDropped      prometheus.Counter // samples/presence dropped: unknown device, auto-register off
@@ -384,14 +385,74 @@ func NewEmitter(writer EventWriter, now func() time.Time, dedupPrefix string, au
 	return &Emitter{writer: writer, now: now, dedupPrefix: dedupPrefix, authenticatedTransport: authenticatedTransport}
 }
 
-// Emit writes the samples for one device as a measurements UnresolvedEvent under the
+// Emit writes the samples for one device as measurements UnresolvedEvents under the
 // connection's tenant. The tenant flows through core.WithTenant into the message subject
 // (never from the source's own addressing — the connection-scoped tenancy invariant).
-// The DedupID makes a retry of the identical batch idempotent at JetStream.
+//
+// 🔴 A BATCH OVER THE PER-EVENT LIMIT IS SPLIT, NEVER REFUSED AND NEVER TRUNCATED. The samples
+// are cut, in order, into consecutive events of at most eventlimit.MaxReadingsPerEvent (one
+// entry, one reading, per sample), because a protocol gateway's device legitimately reports
+// more in one message than one event may carry — an industrial Sparkplug birth carries
+// hundreds to thousands of metrics — and refusing it would lose data the device cannot resend
+// in a smaller shape. A batch at or under the limit is ONE event, byte-for-byte what it was
+// before the limit existed. An empty batch writes nothing.
+//
+// Each piece's DedupID, and the event_id event-management derives, are functions of the
+// piece's own content, and the split is deterministic, so a retry of the identical batch
+// splits identically and every piece dedups at JetStream. (Two pieces of one batch with
+// identical name=value@time content would share an id, and the second would be dropped as a
+// duplicate. Only a device repeating the same readings within one message can do that, and
+// event-management would collapse those rows by event_id anyway.)
+//
+// All pieces go to the writer in ONE call, which publishes them in order under the device
+// key and whose backpressure refusal is whole-call, before anything is published. A publish
+// failure part-way through leaves the LEADING pieces stored, each a complete event, and
+// returns the error: the Sparkplug host retries the whole batch (the stored pieces dedup),
+// and the LwM2M Notify path counts the Notify as dropped, which now means "not fully
+// stored" rather than "none of it stored".
+//
+// Detection sees one event per piece. A piece advances the detection frontier to its own
+// latest time before its samples apply, so a sample never meets a later frontier than it
+// did in one combined event (nothing is admitted as late that was on time before), but a
+// hold or absence timer can now fire between two pieces of one wide message.
 func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, samples []Sample) error {
-	entries := make([]esmodel.UnresolvedMeasurementsEntry, 0, len(samples))
-	var latest int64
+	pieces := eventlimit.Split(samples)
+	if len(pieces) == 0 {
+		return nil
+	}
+	// ONE receipt instant per call, and one fallback event time for the whole batch. A piece
+	// whose samples carry no positive time of their own is dated at the BATCH's latest, not at
+	// the clock, so its dedup id is the same on a retry; only a batch with no positive time
+	// anywhere falls back to receipt, exactly as the unsplit batch always did.
+	now := e.now()
+	var batchLatest int64
 	for _, s := range samples {
+		if s.Time > batchLatest {
+			batchLatest = s.Time
+		}
+	}
+	if batchLatest == 0 {
+		batchLatest = now.UnixMilli() // never emit a year-0/1970 event time
+	}
+	msgs := make([]messaging.Message, 0, len(pieces))
+	for _, piece := range pieces {
+		msg, err := e.measurementMessage(tenant, source, deviceToken, piece, now, batchLatest)
+		if err != nil {
+			return err
+		}
+		msgs = append(msgs, msg)
+	}
+	return e.writer.WriteMessages(core.WithTenant(ctx, tenant), msgs...)
+}
+
+// measurementMessage builds ONE event from a piece of at most eventlimit.MaxReadingsPerEvent
+// samples. now is the call's receipt instant; fallbackLatest dates a piece none of whose
+// samples carries a positive time.
+func (e *Emitter) measurementMessage(tenant, source, deviceToken string, piece []Sample,
+	now time.Time, fallbackLatest int64) (messaging.Message, error) {
+	entries := make([]esmodel.UnresolvedMeasurementsEntry, 0, len(piece))
+	var latest int64
+	for _, s := range piece {
 		if s.Time > latest {
 			latest = s.Time
 		}
@@ -400,19 +461,19 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 		// as a minute of history, not flattened onto the envelope's single time.
 		//
 		// 🔴 THE GUARD BELOW IS PER SAMPLE, BECAUSE THE ENVELOPE'S IS NOT ENOUGH. The
-		// envelope falls back to now only when NO sample carried a positive time, and
-		// `latest` cannot be raised by a zero or negative one — so a batch where every
-		// time was negative produced an envelope stamped "now" over entries every one of
-		// which was dated before 1970, and a MIXED batch produced pre-1970 entries under a
-		// perfectly ordinary envelope, which nothing anywhere would have looked at twice.
+		// envelope falls back only when NO sample carried a positive time, and `latest`
+		// cannot be raised by a zero or negative one — so a batch where every time was
+		// negative produced an envelope stamped "now" over entries every one of which was
+		// dated before 1970, and a MIXED batch produced pre-1970 entries under a perfectly
+		// ordinary envelope, which nothing anywhere would have looked at twice.
 		//
-		// The substitution is the receipt clock, matching the envelope's own fallback and
-		// the LwM2M decoder's discipline for a device-relative time. It deliberately does
-		// NOT feed `latest`: the envelope time and the dedup id are both derived from the
-		// RAW times, so a retry of the identical batch must still hash to the same id.
+		// The substitution is the receipt clock, matching the LwM2M decoder's discipline for
+		// a device-relative time. It deliberately does NOT feed `latest`: the envelope time
+		// and the dedup id are both derived from the RAW times, so a retry of the identical
+		// batch must still hash to the same id.
 		ms := s.Time
 		if ms <= 0 {
-			ms = e.now().UnixMilli()
+			ms = now.UnixMilli()
 		}
 		occurred := time.UnixMilli(ms).UTC()
 		entries = append(entries, esmodel.UnresolvedMeasurementsEntry{
@@ -427,27 +488,26 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 		})
 	}
 	if latest == 0 {
-		latest = e.now().UnixMilli() // never emit a year-0/1970 event time
+		latest = fallbackLatest
 	}
 	ev := &esmodel.UnresolvedEvent{
 		Source:                 source,
 		Device:                 deviceToken,
 		EventType:              esmodel.Measurement,
 		OccurredTime:           time.UnixMilli(latest).UTC(),
-		ProcessedTime:          e.now().UTC(),
+		ProcessedTime:          now.UTC(),
 		Payload:                &esmodel.UnresolvedMeasurementsPayload{Entries: entries},
 		AuthenticatedTransport: e.authenticatedTransport,
 	}
 	encoded, err := esproto.MarshalUnresolvedEvent(ev)
 	if err != nil {
-		return err
+		return messaging.Message{}, err
 	}
-	tctx := core.WithTenant(ctx, tenant)
-	return e.writer.WriteMessages(tctx, messaging.Message{
+	return messaging.Message{
 		Key:     []byte(deviceToken),
 		Value:   encoded,
-		DedupID: measurementDedupID(e.dedupPrefix, tenant, deviceToken, latest, samples),
-	})
+		DedupID: measurementDedupID(e.dedupPrefix, tenant, deviceToken, latest, piece),
+	}, nil
 }
 
 // formatOptionalSessionId renders a session id that may be absent. Zero is the "no
@@ -671,16 +731,14 @@ func measurementDedupID(prefix, tenant, deviceToken string, occurredMillis int64
 // gate: its exposure is bounded (an opt-in broker an operator deliberately connects to, not
 // open-internet device ingest), and it can adopt IngestLimiter unchanged when that changes.
 //
-// 🔴 THAT GAP IS NOT ONLY ABOUT RATE, AND THE SECOND HALF IS EASIER TO MISS. Emit builds one
-// entry per sample handed to it, so the samples in ONE call are also the FAN-OUT of one
-// message — the stored rows, the projection writes and the evaluations on the single DETECT
-// goroutine every tenant shares. The JSON transports bound that with a hard per-message
-// ceiling (config.MaxReadingsPerMessage) and LwM2M with decode.MaxSamplesPerNotify, but
-// neither reaches HERE: Emit is downstream of both. Sparkplug is therefore unbounded on this
-// axis too — samplesFrom appends one Sample per numeric metric in a DDATA with no cap — and
-// it runs on paho's ordered receive goroutine, so a wide DDATA blocks that client's receive
-// as well. Adopting IngestLimiter closes the RATE half; the fan-out half wants a cap on the
-// Sparkplug decode, in the same shape as the other two sources have.
+// 🔴 THAT GAP IS NOT ONLY ABOUT RATE. Emit builds one entry per sample handed to it, so the
+// samples in ONE call are also the FAN-OUT of one message — the stored rows, the projection
+// writes and the evaluations on the single DETECT goroutine every tenant shares. Each EVENT
+// is bounded by eventlimit.MaxReadingsPerEvent, because Emit splits a larger batch; a
+// MESSAGE's total is still bounded only by the broker on the Sparkplug path, since
+// samplesFrom appends one Sample per numeric metric with no cap and Sparkplug does not yet
+// wire IngestLimiter. It runs on paho's ordered receive goroutine, so a wide DDATA also
+// blocks that client's receive. Adopting IngestLimiter closes the rate half.
 // Any gate here MUST stay label-free per tenant (no per-tenant metric labels — the ADR-023
 // cardinality lesson), as these counters and IngestLimiter's do.
 type Ingester struct {

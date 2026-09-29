@@ -109,7 +109,7 @@ func TestACapturedMessageWithNoAppendTimeIsReceivedNow(t *testing.T) {
 // that one instant, in UTC.
 func TestATimestamplessEventIsDatedWhenReceived(t *testing.T) {
 	received := time.Now().Add(-time.Hour)
-	ev, _, err := NewJsonDecoder(nil, 0).Decode([]byte(timestampless), received)
+	ev, _, err := NewJsonDecoder(nil).Decode([]byte(timestampless), received)
 	require.NoError(t, err)
 
 	assert.Equal(t, received.UTC(), ev.ProcessedTime, "ProcessedTime is the receipt time")
@@ -119,7 +119,7 @@ func TestATimestamplessEventIsDatedWhenReceived(t *testing.T) {
 // A reported time is never overwritten by the receipt time.
 func TestADeviceTimeIsKeptAndReceiptIsStamped(t *testing.T) {
 	received := time.Now().Add(-time.Hour)
-	ev, _, err := NewJsonDecoder(nil, 0).Decode([]byte(validEvent), received)
+	ev, _, err := NewJsonDecoder(nil).Decode([]byte(validEvent), received)
 	require.NoError(t, err)
 
 	assert.Equal(t, time.Date(2026, 7, 20, 10, 30, 0, 0, time.UTC), ev.OccurredTime.UTC())
@@ -130,7 +130,7 @@ func TestADeviceTimeIsKeptAndReceiptIsStamped(t *testing.T) {
 // the skew bound off.
 func TestNoReceiptTimeMeansNow(t *testing.T) {
 	before := time.Now()
-	ev, _, err := NewJsonDecoder(nil, 0).Decode([]byte(timestampless), time.Time{})
+	ev, _, err := NewJsonDecoder(nil).Decode([]byte(timestampless), time.Time{})
 	after := time.Now()
 	require.NoError(t, err)
 

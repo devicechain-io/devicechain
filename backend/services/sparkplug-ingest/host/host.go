@@ -652,7 +652,9 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 // must return in bounded time: a clean-session Host gets no broker redelivery, so a
 // short retry saves a sample across a brief blip, but a prolonged outage is left to
 // the Sparkplug host-offline path rather than blocking receive forever. On budget
-// exhaustion the samples are dropped and counted.
+// exhaustion the samples are dropped and counted. A message larger than one event is
+// emitted as several (adapter.Emitter.Emit), so "dropped" then means "not fully stored": a
+// publish that failed part-way kept its leading events, and each retry dedups them.
 func (c *Client) ingestSamples(externalId string, samples []Sample) {
 	c.ingestWithRetry(
 		func(ctx context.Context) error {
@@ -667,7 +669,8 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 				ev = log.Debug()
 			}
 			ev.Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
-				Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery).")
+				Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery); " +
+				"a message split across several events may already have stored its leading events.")
 		},
 	)
 }

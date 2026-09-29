@@ -23,45 +23,6 @@ const (
 	DefaultIngestMessagesPerSecond = 1000
 	DefaultIngestBurst             = 2000
 
-	// DefaultMaxReadingsPerMessage is the platform ceiling on the readings ONE inbound
-	// message may carry on the JSON transports (HTTP, external MQTT, and the platform
-	// broker's capture stream). A reading is one stored datum: a metric key for
-	// measurements, an entry for locations and alerts.
-	//
-	// 🔴 IT BOUNDS ONE MESSAGE'S COST, WHICH NO RATE CEILING CAN. The ADR-023 limiter
-	// meters MESSAGES, so a single POST of 40 000 readings costs one token; a per-tenant
-	// RATE gate cannot help either, because a bucket's first message always passes at
-	// full burst. What is being bounded is fan-out: every reading becomes a stored row, a
-	// projection write and an evaluation on the single DETECT goroutine every tenant
-	// shares, and a sliding window folds each one into a time-sorted buffer. The 1 MiB
-	// body/stream ceilings bound the BYTES and admit ~40 000 readings inside them, so
-	// they are not this bound.
-	//
-	// 🔑 HOW THIS RELATES TO adapter.DefaultSamplesPerMessage (25), WHICH IS NOT A RIVAL
-	// CEILING. That one is an assumed MEAN — the factor that scales a tenant's message
-	// ceiling into its sample ceiling, so a compliant multi-sample fleet is not shed. This
-	// is a hard MAXIMUM for a single message. A mean of 25 under a maximum of 1000 is one
-	// coherent shape, not two ceilings 40x apart, and the two are meant to be wired
-	// together: IngestLimiter takes a caller's per-message cap as its sampleBurstFloor
-	// (LwM2M passes decode.MaxSamplesPerNotify there) so a single compliant message never
-	// sheds on the burst edge. Both count the same unit — readings — which is why they can
-	// be compared at all.
-	//
-	// ⏭ The JSON transports do not yet wire adapter.IngestLimiter's stage 2, and should.
-	// Two things must exist first, and neither does: a send-time-aware AllowN (the stage-1
-	// gate deliberately splits a LIVE from a BACKLOG limiter and meters the backlog on the
-	// broker's append time, because metering a post-outage drain on ARRIVAL sheds data the
-	// broker already acknowledged — AllowSamples has no equivalent), and a redelivery
-	// signal at the post-decode hook, which today would double-charge every JetStream
-	// redelivery. Neither is a substitute for this ceiling in any case: a rate gate bounds
-	// sustained VOLUME, this bounds ONE message.
-	//
-	// 1000 leaves ample room for a store-and-forward device handing over a buffered batch
-	// while sitting well below what the byte ceiling admits. A device with more to deliver
-	// splits it across messages; it is REFUSED, never truncated, because a truncated batch
-	// is data loss that reads to the device as success.
-	DefaultMaxReadingsPerMessage = 1000
-
 	// Broker-presence defaults.
 	//
 	// The reconcile interval is the one with a real trade in it. It is how long a
@@ -212,13 +173,9 @@ type EventSourcesConfiguration struct {
 	IngestRateLimit IngestRateLimit
 	// HttpIngest carries the settings of the DEVICE-FACING HTTP listeners alone; the
 	// GraphQL/management server keeps the shared platform defaults.
-	HttpIngest HttpIngest
-	// MaxReadingsPerMessage caps the readings one inbound message may carry on the JSON
-	// transports. Like the rate ceiling it is fail-safe: a non-positive value falls back
-	// to the platform default, never to unlimited.
-	MaxReadingsPerMessage int
-	Contention            Contention
-	BrokerPresence        BrokerPresence
+	HttpIngest     HttpIngest
+	Contention     Contention
+	BrokerPresence BrokerPresence
 }
 
 // Creates the default event sources configuration
@@ -290,13 +247,14 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 	if c.IngestRateLimit.Burst <= 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
-	if c.MaxReadingsPerMessage <= 0 {
-		c.MaxReadingsPerMessage = DefaultMaxReadingsPerMessage
-	}
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
 // since removed, so a document still carrying one is reported rather than refused.
+//
+// maxReadingsPerMessage set the JSON transports' per-message reading ceiling, defaulting to
+// 1000 with no upper bound. The limit is now the platform's eventlimit.MaxReadingsPerEvent on
+// every transport, and a constant, so the key has nothing left to configure.
 //
 // inboundEventBatching (a `KafkaEventBatching`, on a platform that has never had Kafka in
 // it) named a producer batch size and a flush timeout for a producer that does not exist:
@@ -313,6 +271,10 @@ func (c *EventSourcesConfiguration) RetiredConfigKeys() map[string]string {
 		"inboundEventBatching": "Inbound events are not batched by this service and never were — " +
 			"the key configured a Kafka producer this platform does not have, and no code read it. " +
 			"Remove it; there is no replacement setting.",
+		"maxReadingsPerMessage": "The readings one event may carry are now a fixed platform limit of 256, the same " +
+			"on every transport, and no longer configurable — a value above 256 is no longer honoured, and neither " +
+			"is a value below it. Remove the key. A device that sends more than 256 readings in one message is " +
+			"refused and counted on total_msg_too_many_readings; it must split them across messages.",
 	}
 }
 

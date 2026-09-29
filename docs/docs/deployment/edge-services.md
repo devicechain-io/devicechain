@@ -483,11 +483,12 @@ certificate to carry the same timestamp, so an edge node can reject a delayed de
 session. This is also why every replica shares one client id: the broker's own duplicate-id takeover
 is what evicts a zombie host.
 
-:::caution Neither the message rate nor the size of one message is bounded on the Sparkplug path
-Sparkplug ingestion applies **no per-tenant ingest ceiling and sheds nothing**, and no per-message
-reading ceiling. A runaway edge node on a configured broker is not throttled at the door. Bound it at
-the broker, by the groups you subscribe to, and by the metric count per publish at the edge node. See
-[Unbounded Sparkplug ingest](#unbounded-sparkplug-ingest).
+:::caution The Sparkplug path bounds neither the message rate nor a message's total size
+Sparkplug ingestion applies **no per-tenant ingest ceiling and sheds nothing**. A message with more
+than 256 readings is split into consecutive events of at most 256, so no single event exceeds the
+platform limit, but the message's total is not bounded. A runaway edge node on a configured broker is
+not throttled at the door. Bound it at the broker, by the groups you subscribe to, and by the metric
+count per publish at the edge node. See [Unbounded Sparkplug ingest](#unbounded-sparkplug-ingest).
 :::
 
 ### Unbounded Sparkplug ingest {#unbounded-sparkplug-ingest}
@@ -498,12 +499,13 @@ connect to, rather than an open endpoint. The consequence is yours: a runaway ed
 configured broker is not throttled at the door. Bound it at the broker, or by the groups you subscribe
 to.
 
-**The two limits are separate, and neither applies here.** The rate limit above meters *messages*.
-The [per-message reading ceiling](../guides/connecting-a-device.md#how-much-one-message-may-carry)
-bounds what one message may cost once admitted. A Sparkplug DDATA carrying thousands of metrics is
-one message, and becomes one stored reading per metric — each its own row, state update and rule
-evaluation on the detection engine every tenant shares. Bound the metric count per publish at the edge node, the
-same way and for the same reason you bound its rate.
+**The rate limit does not apply here, and the reading limit is applied by splitting.** The rate
+limit above meters *messages*. The [per-event reading limit](../guides/connecting-a-device.md#how-much-one-message-may-carry)
+is applied on this path by splitting a message, not refusing it. A DDATA carrying thousands of
+metrics becomes several events, and still one stored reading per metric: each is its own row, state
+update and rule evaluation on the detection engine every tenant shares. Splitting bounds each event,
+not the message. Bound the metric count per publish at the edge node, the same way and for the same
+reason you bound its rate.
 
 The [tenant lifecycle gate](./tenant-deletion.md) still applies. Traffic for a deleting tenant is
 refused on this path like any other, and counted in `tenant_deleted_dropped_total`.
@@ -648,7 +650,7 @@ Prefix: `devicechain_lwm2mingest_`.
 | `handshake_failures_total` / `auth_errors_total` | Devices failing DTLS, and identities that are not provisioned. |
 | `observe_establish_refused_total` | An Observe the device refused or that otherwise failed. **The 1.0-only client symptom** — such a client answers the SenML Observe with `4.06` and never notifies. |
 | `notify_unknown_content_format_total` | Telemetry arriving in a format that is not decoded — a device that *does* notify, undecodably. Zero for a 1.0-only client. |
-| `notify_decode_failures_total` / `notify_samples_truncated_total` | Malformed or oversized payloads. |
+| `notify_decode_failures_total` | Malformed payloads. |
 | `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Readings a Notify carried that produced no measurement. **Non-numeric is normal** — a boolean or string IPSO reading is a device working correctly, and this counter is what tells that apart from a device that has gone quiet, which otherwise looks identical from here. The other two are firmware faults: a value that resolved to infinity or NaN, and a reading with no resource path. |
 | `observation_overflow_total` | A registration exceeding the 32-observation cap. Some of its resources are not observed. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling. |

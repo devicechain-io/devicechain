@@ -93,11 +93,11 @@ type ingester interface {
 
 // ingestLimiter is the narrow slice of *adapter.IngestLimiter onNotify uses to gate a Notify
 // against the tenant's ADR-023 ingest ceiling (ADR-075 L2c): AllowMessage before decode,
-// AllowSamples after. A nil limiter (an inert/presence-only deployment or a test) skips
+// AdmitSamples after. A nil limiter (an inert/presence-only deployment or a test) skips
 // gating.
 type ingestLimiter interface {
 	AllowMessage(tenant string) bool
-	AllowSamples(tenant string, n int) bool
+	AdmitSamples(tenant string, n int) int
 }
 
 // Metrics are the optional Prometheus instruments the Manager updates; any nil field is
@@ -110,7 +110,6 @@ type Metrics struct {
 	UnknownContentFormat    prometheus.Counter // a Notify in a content format this slice does not decode (e.g. TLV)
 	ObserveEstablishRefused prometheus.Counter // an Observe GET refused/failed (dominant cause: a 1.0-only client's 4.06)
 	TerminalNotifications   prometheus.Counter // a non-2.05 notification that terminated an observation (RFC 7641)
-	SamplesTruncated        prometheus.Counter // samples dropped from a single Notify past decode.MaxSamplesPerNotify
 	IngestDropped           prometheus.Counter // a Notify dropped on a retryable ingest error (no retry in the callback)
 	ActiveObservations      prometheus.Gauge   // live observations currently held across all sessions
 
@@ -395,7 +394,6 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 	}
 	// Counted BEFORE the zero-sample return, which is the whole point: that return is
 	// exactly the case where nothing else says anything happened.
-	incr(m.metrics.SamplesTruncated, skips.Truncated) // a single Notify's samples past decode.MaxSamplesPerNotify
 	incr(m.metrics.RecordsNonNumeric, skips.NonNumeric)
 	incr(m.metrics.RecordsNonFinite, skips.NonFinite)
 	incr(m.metrics.RecordsUnnamed, skips.Unnamed)
@@ -404,10 +402,24 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 	}
 	// STAGE 2 (ADR-075 L2c): the per-tenant sample-rate budget, charged with the decoded sample
 	// COUNT AFTER decode. It bounds measurement VOLUME — a slow trickle of enormous packs sails
-	// through the per-message gate but is shed here. A shed batch is dropped whole (best-effort
-	// telemetry; the next Notify supersedes).
-	if m.limiter != nil && !m.limiter.AllowSamples(target.Tenant, len(samples)) {
-		return
+	// through the per-message gate but is shed here.
+	//
+	// 🔴 IT IS CHARGED ONCE PER EVENT, NOT ONCE PER NOTIFY (AdmitSamples). The emitter stores a
+	// Notify as consecutive events of at most eventlimit.MaxReadingsPerEvent samples, and the
+	// bucket's burst is floored at that same number, so every charge fits an idle bucket.
+	// Charging the whole Notify at once would refuse, EVERY time, any Notify larger than the
+	// tenant's sample burst — a token bucket never admits more than its burst in one call — so
+	// a device whose packs outgrew a small tenant's burst would lose all of them for ever.
+	// Charged event by event, the leading events the budget admits are ingested and the rest
+	// are shed and counted: rate shedding, best-effort telemetry, the next Notify supersedes.
+	// The admitted count is a whole number of events, so samples[:admitted] splits in the
+	// emitter into exactly the events charged.
+	if m.limiter != nil {
+		admitted := m.limiter.AdmitSamples(target.Tenant, len(samples))
+		if admitted == 0 {
+			return
+		}
+		samples = samples[:admitted]
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), m.ingestTimeout)
 	defer cancel()

@@ -18,7 +18,7 @@ With plain MQTT, DeviceChain *is* the broker. Sparkplug ingestion works the othe
 
 - **Produces authoritative presence.** A node or device BIRTH marks the corresponding device online, and a DEATH marks it offline, immediately and explicitly. This makes Sparkplug a [presence-asserting](./device-presence.md) transport, as is [LwM2M](./lwm2m.md): a Sparkplug device's online state is authoritative, not inferred from a timeout. See [Death handling](#death-handling) for which deaths DeviceChain applies.
 
-- **Feeds the same pipeline.** Decoded measurements and presence changes flow into the normal decode → resolve → persist pipeline. Everything downstream — history, live state, dashboards and the detection engine — treats Sparkplug telemetry exactly like any other.
+- **Feeds the same pipeline.** Decoded measurements and presence changes flow into the normal decode → resolve → persist pipeline. Everything downstream — history, live state, dashboards and the detection engine — treats Sparkplug telemetry exactly like any other. A message with more than 256 metric values is stored as several consecutive events of at most 256 each. Every value keeps its own timestamp, and a redelivered message produces the same events rather than duplicates.
 
 ### Death handling {#death-handling}
 

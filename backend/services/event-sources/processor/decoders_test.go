@@ -21,7 +21,7 @@ import (
 // device's own death. The decoder MUST reject it. Mutation control: re-adding a
 // BuildStateChangePayload case to Decode turns this red.
 func TestJsonDecoderRejectsDeviceStateChange(t *testing.T) {
-	jd := NewJsonDecoder(map[string]string{}, 0)
+	jd := NewJsonDecoder(map[string]string{})
 	payload := []byte(`{"device":"d1","eventType":"` + model.StateChange.String() +
 		`","payload":{"state":"CONNECTED","sessionId":"18446744073709551615"}}`)
 
@@ -39,7 +39,7 @@ func TestJsonDecoderRejectsDeviceStateChange(t *testing.T) {
 // the assembled event stays false. Mutation control: adding an authenticatedTransport
 // field to JsonEvent/AssembleEvent turns this red.
 func TestJsonDecoderCannotSetAuthenticatedTransport(t *testing.T) {
-	jd := NewJsonDecoder(map[string]string{}, 0)
+	jd := NewJsonDecoder(map[string]string{})
 	// A well-formed device Measurement event that ALSO tries to inject the marker.
 	//
 	// The payload was FLAT until the decoder was made to fail closed — measurements

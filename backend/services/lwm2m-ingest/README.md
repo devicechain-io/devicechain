@@ -221,7 +221,8 @@ every command is confirmed with command-delivery before it reaches a device).
   timeout — not `maxSessions` — is what bounds a sustained ClientHello spray. This is
   inherent to the pion listener; keep the handshake timeout short.
 - Past the handshake, an **authenticated** device is bounded by the per-tenant ingest
-  limiter on both `/rd` and Notify, by `MaxSamplesPerNotify` on a single payload, by
+  limiter on both `/rd` and Notify (a Notify's samples are charged one event of at most
+  256 at a time, and a Notify larger than that is stored as several events), by
   `MaxObservationsPerRegistration` on how many Observes one registration can spawn, and
   by the min-lifetime clamp + re-register backoff on how fast it can churn durable
   presence writes.

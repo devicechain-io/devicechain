@@ -18,7 +18,7 @@ Con MQTT simple, DeviceChain *es* el broker. La ingesta de Sparkplug funciona al
 
 - **Produce presencia autoritativa.** Un BIRTH de nodo o dispositivo marca al dispositivo correspondiente como en línea, y un DEATH lo marca como fuera de línea, de forma inmediata y explícita. Esto hace de Sparkplug un transporte que [afirma presencia](./device-presence.md), al igual que [LwM2M](./lwm2m.md): el estado en línea de un dispositivo Sparkplug es autoritativo, no inferido a partir de un tiempo de espera (timeout). Consulta [Gestión de muertes](#death-handling) para ver qué muertes aplica DeviceChain.
 
-- **Alimenta la misma canalización.** Las mediciones decodificadas y los cambios de presencia fluyen hacia la canalización normal de decodificar → resolver → persistir. Todo lo que viene después —historial, estado en vivo, paneles y el motor de detección— trata la telemetría de Sparkplug exactamente igual que cualquier otra.
+- **Alimenta la misma canalización.** Las mediciones decodificadas y los cambios de presencia fluyen hacia la canalización normal de decodificar → resolver → persistir. Todo lo que viene después —historial, estado en vivo, paneles y el motor de detección— trata la telemetría de Sparkplug exactamente igual que cualquier otra. Un mensaje con más de 256 valores de métrica se almacena como varios eventos consecutivos de como máximo 256 cada uno. Cada valor conserva su propia marca de tiempo, y un mensaje reentregado produce los mismos eventos en lugar de duplicados.
 
 ### Gestión de muertes {#death-handling}
 

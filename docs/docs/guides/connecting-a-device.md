@@ -67,7 +67,7 @@ Every payload wraps its content in an `entries` array, and the shape fixes the J
 
 Both rules are enforced. A payload with no entries, an entry with nothing in it, a value of the wrong JSON type (a bare number where a string is expected, or a quoted alert `level`), or an alert `level` outside that range is rejected rather than silently accepted: HTTP answers `400`, and an MQTT publish is dead-lettered.
 
-One entry is one reading, taken at one instant. An entry may carry its own `occurredTime`. That is the instant the reading is stored, charted, evaluated and returned at, so a device that buffers readings while offline can upload a buffered run (up to the per-message ceiling below) and keep the history it actually recorded.
+One entry is one reading, taken at one instant. An entry may carry its own `occurredTime`. That is the instant the reading is stored, charted, evaluated and returned at, so a device that buffers readings while offline can upload a buffered run (up to the limit below) and keep the history it actually recorded.
 
 - An entry with no `occurredTime` takes the envelope's.
 - An envelope with no `occurredTime` is dated at the moment the platform received the message. A message that waited in the platform during an outage keeps the time it arrived, not the time it was processed.
@@ -77,20 +77,20 @@ One valid RFC 3339 value is refused anyway: **`0001-01-01T00:00:00Z`**, which th
 
 ### How much one message may carry {#how-much-one-message-may-carry}
 
-A message on this page's transports carries **at most 1000 readings**. The ceiling belongs to the JSON device event described above, on MQTT and HTTP. The transports the introduction points constrained and brownfield fleets at do not share it: [LwM2M](../concepts/lwm2m.md) bounds a single Notify at 256 samples instead, and [Sparkplug B](../concepts/sparkplug.md) applies no per-message ceiling at all (see [what an operator must know](../deployment/edge-services.md#sparkplug-what-an-operator-must-know)).
+An event carries **at most 256 readings**, on every transport. The limit is fixed and is not a setting. On this page's transports (the JSON device event on MQTT and HTTP), one message is one event, so a message over the limit is refused. The protocol gateways split instead: an [LwM2M](../concepts/lwm2m.md) Notify or a [Sparkplug B](../concepts/sparkplug.md) message with more readings becomes several consecutive events of at most 256 (see [what an operator must know](../deployment/edge-services.md#sparkplug-what-an-operator-must-know)).
 
-A reading is one stored datum. For measurements, that is one *metric key*, so an entry with twelve metrics is twelve readings. For locations and alerts, it is one entry. The ceiling counts keys rather than entries because a single entry can hold thousands of metrics, and it is the readings, not the entries, that become stored rows, state updates and rule evaluations.
+A reading is one stored datum. For measurements, that is one *metric key*, so an entry with twelve metrics is twelve readings. For locations and alerts, it is one entry. The limit counts keys rather than entries because a single entry can hold thousands of metrics, and it is the readings, not the entries, that become stored rows, state updates and rule evaluations.
 
-That fan-out is what the ceiling exists for. The per-tenant ingest limiter meters *messages*, and charges the same for a message of one reading as for a message of forty thousand. Without the ceiling, one message would be an unbounded cost the whole instance shares. A device with a deeper backlog uploads it as several messages.
+That fan-out is what the limit exists for. The per-tenant ingest limiter meters *messages*, and charges the same for a message of one reading as for a message of forty thousand. Without the limit, one message would be an unbounded cost the whole instance shares. A device with a deeper backlog uploads it as several messages.
 
-Over the ceiling, a message is **refused whole**, never trimmed to fit. A batch quietly cut short would be answered `202`, and the missing readings would be undetectable from either end. Nothing is stored and nothing is lost: the message is routed intact to the failed-decode stream.
+Over the limit, a message is **refused whole**, never trimmed to fit. A batch quietly cut short would be answered `202`, and the missing readings would be undetectable from either end. Nothing is stored and nothing is lost: the message is routed intact to the failed-decode stream.
 
 How the device finds out depends on the transport:
 
-- **HTTP** answers `400`, naming the count and the ceiling.
+- **HTTP** answers `400`, naming the count and the limit.
 - **MQTT** does not tell the device anything. The broker acknowledges a publish when it durably captures it, which is before the message is decoded. A `PUBACK` is therefore not a promise that the message was accepted, and a refusal that happens afterwards is visible only to the operator.
 
-Operators see every refusal on the `total_msg_too_many_readings` counter. The ceiling is an operator setting (`maxReadingsPerMessage`) for an instance whose fleet genuinely needs a different one. Lowering it does not rewrite history, but it does apply to anything still queued: messages already captured and not yet decoded are refused on the new value.
+Operators see every refusal on the `total_msg_too_many_readings` counter. The limit is not configurable. An instance upgraded from a release that allowed more refuses, on the new limit, messages that were already captured and not yet decoded.
 
 :::caution A deeply buffered batch is stored in full, but detection may not see all of it
 Storage holds every reading at its own instant, without qualification. Detection is different: a device that was offline and then uploads its whole run at once can have its older readings discarded by rules that use a time window or a hold time, with no log or alarm. See [Buffered uploads and windowed rules](#buffered-uploads-and-windowed-rules).

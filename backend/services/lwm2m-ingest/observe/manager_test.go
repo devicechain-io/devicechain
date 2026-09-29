@@ -247,7 +247,6 @@ func newGatedHarness(t *testing.T, limiter ingestLimiter) (*Manager, *fakeIngest
 		UnknownContentFormat:    prometheus.NewCounter(prometheus.CounterOpts{Name: "unknown_cf"}),
 		ObserveEstablishRefused: prometheus.NewCounter(prometheus.CounterOpts{Name: "establish_refused"}),
 		TerminalNotifications:   prometheus.NewCounter(prometheus.CounterOpts{Name: "terminal"}),
-		SamplesTruncated:        prometheus.NewCounter(prometheus.CounterOpts{Name: "samples_truncated"}),
 		IngestDropped:           prometheus.NewCounter(prometheus.CounterOpts{Name: "ingest_dropped"}),
 		ActiveObservations:      prometheus.NewGauge(prometheus.GaugeOpts{Name: "active_observations"}),
 		RecordsNonNumeric:       prometheus.NewCounter(prometheus.CounterOpts{Name: "records_non_numeric"}),
@@ -270,7 +269,7 @@ type fakeLimiter struct {
 	allowMessage bool
 	allowSamples bool
 	messageCalls int
-	sampleCharge []int // one entry per AllowSamples call: the n it was charged
+	sampleCharge []int // one entry per AdmitSamples call: the n it was charged
 }
 
 func (f *fakeLimiter) AllowMessage(tenant string) bool {
@@ -278,9 +277,15 @@ func (f *fakeLimiter) AllowMessage(tenant string) bool {
 	return f.allowMessage
 }
 
-func (f *fakeLimiter) AllowSamples(tenant string, n int) bool {
+// AdmitSamples admits all n or none, as the real limiter does for a message of at most one
+// event; the per-event charge itself is exercised against the real limiter in
+// notify_limit_test.go.
+func (f *fakeLimiter) AdmitSamples(tenant string, n int) int {
 	f.sampleCharge = append(f.sampleCharge, n)
-	return f.allowSamples
+	if f.allowSamples {
+		return n
+	}
+	return 0
 }
 
 func senmlNotify(body string) *pool.Message {

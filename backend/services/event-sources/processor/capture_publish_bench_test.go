@@ -218,7 +218,7 @@ func runCapturePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 	}
 
 	var failedDecodes atomic.Int64
-	src := NewGatewayJetStreamSource(nil, "bench", NewJsonDecoder(map[string]string{}, 0),
+	src := NewGatewayJetStreamSource(nil, "bench", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {}, benchInboundMessage,
 		func(string, string, []byte, error) error { failedDecodes.Add(1); return nil },
 		nil)

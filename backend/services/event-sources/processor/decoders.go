@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
 )
 
@@ -45,10 +44,10 @@ type Decoder interface {
 }
 
 // Create a new decoder based on the given type indicator.
-func NewDecoderForType(decodetype string, cfg map[string]string, maxReadings int) (Decoder, error) {
+func NewDecoderForType(decodetype string, cfg map[string]string) (Decoder, error) {
 	switch decodetype {
 	case DECODER_TYPE_JSON:
-		return NewJsonDecoder(cfg, maxReadings), nil
+		return NewJsonDecoder(cfg), nil
 	default:
 		return nil, fmt.Errorf("Unknown decoder type: %s", decodetype)
 	}
@@ -57,21 +56,13 @@ func NewDecoderForType(decodetype string, cfg map[string]string, maxReadings int
 // Decodes payloads that use json format.
 type JsonDecoder struct {
 	Configuration map[string]string
-	// MaxReadings is the per-message reading ceiling this decoder enforces. Always
-	// positive — the constructor refuses to represent "unlimited".
-	MaxReadings int
 }
 
-// Create a new json decoder. A non-positive maxReadings falls back to the platform
-// ceiling rather than meaning "unlimited", so no caller — including a test — can
-// construct a decoder that admits an unbounded batch.
-func NewJsonDecoder(cfg map[string]string, maxReadings int) *JsonDecoder {
-	if maxReadings <= 0 {
-		maxReadings = config.DefaultMaxReadingsPerMessage
-	}
+// Create a new json decoder. The readings one event may carry are not a decoder setting: every
+// decoder refuses above the platform's eventlimit.MaxReadingsPerEvent (see Decode).
+func NewJsonDecoder(cfg map[string]string) *JsonDecoder {
 	return &JsonDecoder{
 		Configuration: cfg,
-		MaxReadings:   maxReadings,
 	}
 }
 
@@ -280,90 +271,6 @@ func errNoEntries(kind, example string) error {
 	return fmt.Errorf("%s payload carries no entries: content belongs in payload.entries[], as %s", kind, example)
 }
 
-// ErrTooManyReadings marks a decode that failed because ONE message carried more
-// readings than the per-message ceiling admits.
-//
-// It exists so the caller can count an oversized batch apart from malformed JSON,
-// for the same reason ErrInvalidEventTime does: both are terminal decode failures
-// on the same path, and "a fleet sending batches too large" asks for different work
-// from "a fleet sending broken payloads" — the first is a firmware batching size,
-// the second is a firmware bug.
-var ErrTooManyReadings = errors.New("too many readings in one message")
-
-// readingCount is what a message actually costs downstream, and it is NOT the entry
-// count.
-//
-// 🔴 A MEASUREMENT ENTRY CARRIES A MAP, AND THE MAP IS UNBOUNDED. One entry holding
-// 30 000 metric keys is one entry, fits well inside the 1 MiB body ceiling, and still
-// becomes 30 000 stored readings across 30 000 series — every one of them its own
-// evaluation on the shared DETECT goroutine. A ceiling counting entries would wave it
-// through while reporting that it bounds the fan-out. So the charged unit is the
-// reading: for measurements the metric keys summed over the entries, and for locations
-// and alerts the entries themselves, each of which is exactly one reading.
-//
-// This is also the unit the rest of the platform already meters in — LwM2M's
-// MaxSamplesPerNotify and adapter.DefaultSamplesPerMessage both count samples — so the
-// three numbers are directly comparable instead of merely similar-looking.
-//
-// 🔴 IT REPORTS ok, AND THE FALL-THROUGH REFUSES rather than answering 1. Every payload
-// kind is named explicitly, including the one that genuinely is a single unit. The
-// difference only shows up for a kind added LATER: an entry-carrying payload wired into
-// Decode without a case here would be metered as one reading — uncapped, while
-// checkReadingCount above it still reads as though it were guarding the fan-out. That is
-// the same fail-open shape errNoEntries and BuildLocationsPayload were fixed for, and the
-// cost of getting it wrong is paid by the shared DETECT goroutine, not here.
-func readingCount(payload interface{}) (int, bool) {
-	switch p := payload.(type) {
-	case *model.UnresolvedMeasurementsPayload:
-		n := 0
-		for i := range p.Entries {
-			n += len(p.Entries[i].Measurements)
-		}
-		return n, true
-	case *model.UnresolvedLocationsPayload:
-		return len(p.Entries), true
-	case *model.UnresolvedAlertsPayload:
-		return len(p.Entries), true
-	case *model.UnresolvedNewRelationshipPayload:
-		// A relationship carries no entries: it is one indivisible unit of work.
-		return 1, true
-	}
-	return 0, false
-}
-
-// checkReadingCount is the upper bound that pairs with errNoEntries' lower one: not
-// zero, and not more than the ceiling.
-//
-// 🔴 IT REFUSES, IT DOES NOT TRUNCATE, and that is the whole decision. Truncating
-// would hand the device a 202 for a batch that was silently cut short — data loss
-// wearing a success code, which no operator and no device can detect. The device is
-// told the count, the ceiling, and what to do about it, and the message routes to
-// the failed-decode path intact so nothing is actually lost.
-//
-// The check runs AFTER the payload unmarshals rather than before. That is not a missed
-// opportunity to save the allocation: the 1 MiB body and stream ceilings already bound
-// what can be materialized, so there is no unbounded construction to prevent here. What
-// this bounds is FAN-OUT — the stored rows, the projection writes and the evaluations
-// on the shared DETECT goroutine that one message becomes.
-func checkReadingCount(kind string, payload interface{}, max int) error {
-	count, ok := readingCount(payload)
-	if !ok {
-		// Deliberately NOT ErrTooManyReadings: this is an unmetered payload kind, not an
-		// oversized batch, and counting it as one would put a code defect into the counter
-		// an operator reads as "the fleet is batching too large". It is still terminal, so
-		// the message routes to the failed-decode subject like any other refused decode.
-		return fmt.Errorf("%s payload of type %T has no reading count, so the per-message "+
-			"ceiling cannot be applied to it; give readingCount a case for it before "+
-			"routing it through this check", kind, payload)
-	}
-	if count <= max {
-		return nil
-	}
-	return fmt.Errorf("%w: %s payload carries %d readings, which is over the %d-reading per-message "+
-		"ceiling; split it across messages (nothing was stored — the message is refused whole, "+
-		"not truncated)", ErrTooManyReadings, kind, count, max)
-}
-
 // Parses a locations event.
 //
 // 🔴 This FAILS CLOSED, and that is the whole point of the function. The nested
@@ -394,9 +301,6 @@ func (jd *JsonDecoder) BuildLocationsPayload(source *JsonEvent) (*model.Unresolv
 	if len(payload.Entries) == 0 {
 		return nil, errNoEntries("location", `{"entries":[{"latitude":"...","longitude":"..."}]}`)
 	}
-	if err := checkReadingCount("location", payload, jd.MaxReadings); err != nil {
-		return nil, err
-	}
 	for i := range payload.Entries {
 		if err := validateLocationEntry(i, &payload.Entries[i]); err != nil {
 			return nil, err
@@ -420,9 +324,6 @@ func (jd *JsonDecoder) BuildMeasurementsPayload(source *JsonEvent) (*model.Unres
 	}
 	if len(payload.Entries) == 0 {
 		return nil, errNoEntries("measurement", `{"entries":[{"measurements":{"temperature":"21.5"}}]}`)
-	}
-	if err := checkReadingCount("measurement", payload, jd.MaxReadings); err != nil {
-		return nil, err
 	}
 	// The entries wrapper alone is only half the check. An entry carrying no
 	// measurements is the SAME silent success one level in: it persists nothing and
@@ -451,9 +352,6 @@ func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedA
 	}
 	if len(payload.Entries) == 0 {
 		return nil, errNoEntries("alert", `{"entries":[{"type":"...","level":1,"message":"...","source":"..."}]}`)
-	}
-	if err := checkReadingCount("alert", payload, jd.MaxReadings); err != nil {
-		return nil, err
 	}
 	// An empty alert entry is worse than an empty measurement one: it does not merely
 	// store nothing, it STORES A ROW with an empty type, message and source at level
@@ -544,32 +442,18 @@ func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.Unre
 		return nil, nil, err
 	}
 
-	// Create payload based on event type.
+	// Create payload based on event type. Each case yields a payload or an error; the
+	// per-event reading limit is then applied ONCE, below, to whatever was built.
+	var built interface{}
 	switch event.EventType {
 	case model.NewRelationship:
-		payload, err := jd.BuildNewRelationshipPayload(jevent)
-		if err != nil {
-			return nil, nil, err
-		}
-		return event, payload, nil
+		built, err = jd.BuildNewRelationshipPayload(jevent)
 	case model.Location:
-		payload, err := jd.BuildLocationsPayload(jevent)
-		if err != nil {
-			return nil, nil, err
-		}
-		return event, payload, nil
+		built, err = jd.BuildLocationsPayload(jevent)
 	case model.Measurement:
-		payload, err := jd.BuildMeasurementsPayload(jevent)
-		if err != nil {
-			return nil, nil, err
-		}
-		return event, payload, nil
+		built, err = jd.BuildMeasurementsPayload(jevent)
 	case model.Alert:
-		payload, err := jd.BuildAlertsPayload(jevent)
-		if err != nil {
-			return nil, nil, err
-		}
-		return event, payload, nil
+		built, err = jd.BuildAlertsPayload(jevent)
 	case model.StateChange:
 		// StateChange (presence, ADR-067) is a PLATFORM-PRODUCER event: a presence-
 		// asserting adapter (the Sparkplug host) emits it directly over the wire
@@ -589,7 +473,23 @@ func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.Unre
 		// device that simply does it again. What the demotion changes is the cost of the
 		// mistake, not whether it is one.
 		return nil, nil, fmt.Errorf("state-change (presence) events are platform-produced and not accepted from device ingest")
+	default:
+		return nil, nil, fmt.Errorf("unhandled event type: %s", jevent.EventType)
 	}
-
-	return nil, nil, fmt.Errorf("unhandled event type: %s", jevent.EventType)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 🔴 ONE CALL, FOR EVERY KIND. The limit used to be checked inside each Build*Payload, so
+	// a new payload kind had to remember the call; here a kind added to the switch above
+	// reaches it without being told, and one model.ReadingCount does not know is refused
+	// rather than waved through. The check runs after the payload is built, which is not a
+	// missed saving: the 1 MiB body and stream ceilings already bound what can be
+	// materialized. What this bounds is what one event becomes — its stored rows, projection
+	// writes and evaluations on the shared detection goroutine. It refuses whole, never
+	// truncates: the device is told the count and the limit, and the message routes to the
+	// failed-decode path intact.
+	if err := model.CheckReadingCount(built); err != nil {
+		return nil, nil, err
+	}
+	return event, built, nil
 }

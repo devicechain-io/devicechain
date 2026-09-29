@@ -3741,6 +3741,38 @@ instance but leaves its database and login in the shared relational database and
 the in-cluster store, and says it did.
 Re-running install is already the first step of every upgrade.
 
+#### An event carries at most 256 readings, and gateways split larger messages
+
+**One event now carries at most 256 readings, on every transport, and the limit is not
+configurable.** A reading is one metric value of a measurement, or one location or alert entry.
+Before this release, the JSON device event on HTTP and MQTT accepted up to 1000 readings by
+default, and an operator could raise that without an upper bound, or lower it.
+
+**Before you upgrade,** you can apply the new limit early: set `maxReadingsPerMessage: 256` in
+the event-sources configuration on your current release and watch `total_msg_too_many_readings`.
+Every message it counts is one this release refuses, so change those devices' firmware to send at
+most 256 readings per message.
+
+- **HTTP and MQTT:** a message with more than 256 readings is refused whole, never trimmed. HTTP
+  answers `400`, naming the count and the limit. On MQTT the device is not told, because the
+  broker acknowledges before decoding. The refusal is counted on `total_msg_too_many_readings`
+  and the message goes to the failed-decode stream. A device that batches more than 256 readings
+  must split them across messages. Messages captured before the upgrade and decoded after it,
+  including any still spooled at an edge agent, are judged on the new limit.
+- **The `maxReadingsPerMessage` setting is retired.** If your event-sources configuration still
+  sets it, the service starts, logs a warning and ignores it. A value you had set lower than 256
+  is no longer honoured either: the limit is 256. Remove the key.
+- **Sparkplug B:** a message with more than 256 metric values used to become one event. It now
+  becomes consecutive events of at most 256, with every value at its own timestamp. Queries that
+  count *events* see more of them for wide Sparkplug messages; the stored readings are the same.
+  Rules see each event on its own, so a hold-time or absence rule can now fire between two events
+  of one wide message.
+- **LwM2M:** a Notify with more than 256 numeric values used to keep the first 256 and drop the
+  rest. It is now stored as several events, and the tenant's sample budget is charged one event
+  at a time: a Notify larger than the budget can admit at once keeps the events it admits, and
+  the rest are counted on `ingest_samples_shed_total`. The `notify_samples_truncated_total` metric
+  is removed. Remove it from any dashboard or alert.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
