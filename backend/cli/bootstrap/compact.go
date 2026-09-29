@@ -109,7 +109,8 @@ type compactSizing struct {
 	// from filling sends its log here indefinitely instead: at the default windows
 	// (30 days relational, 7 event store) and the relational share measured once,
 	// 20Gi fills at about 13 events/s sustained -- an eighth of the default
-	// store's figure, which TestSteadyStateRateIsTheOnePublished derives.
+	// store's figure. TestSteadyStateRateIsTheOnePublished derives both, and holds
+	// this sentence to the value above.
 	//
 	// When it fills, archiving fails. Archiving that fails does not stall commits:
 	// WAL accumulates on the DATABASE's volume until that fills and Postgres

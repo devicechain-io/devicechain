@@ -787,11 +787,12 @@ run_assertions() {
   # retentionPolicy pattern, ^[1-9][0-9]*[dwm]$), plus empty for "keep every
   # backup". Anything else would be refused by the API server part-way through
   # the apply; hack/check-cnpg-chart-schema.sh renders every accepted unit and
-  # checks it against that pattern.
+  # checks it against that pattern. "m" is MONTHS there, so the reject lists carry
+  # hours and minutes -- the likeliest misreading of it -- as well as years.
   for v in 30d 4w 1m 7d ""; do accepts backup_retention_rdb "$v"; done
-  for v in 30 0d 30days "30 d" 1y -7d d 30D; do rejects backup_retention_rdb "$v"; done
+  for v in 30 0d 30days "30 d" 1y 1h 30min -7d d 30D; do rejects backup_retention_rdb "$v"; done
   for v in 7d 2w 1m ""; do accepts backup_retention_tsdb "$v"; done
-  for v in 7 0d 7days "7 d" 1y d 07d; do rejects backup_retention_tsdb "$v"; done
+  for v in 7 0d 7days "7 d" 1y 1h 30min d 07d; do rejects backup_retention_tsdb "$v"; done
 
   # The object store is provisioned only where it is used. An external destination
   # must not stand one up — that would be a MinIO pod and a volume nobody writes to,

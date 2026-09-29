@@ -260,9 +260,13 @@ func TestSteadyStateRateIsTheOnePublished(t *testing.T) {
 	}
 
 	measured := steadyStateEventsPerSecond(t, store, relationalArchiveShare, relationalDays, eventDays)
+	compactMeasured := steadyStateEventsPerSecond(t, compact.ObjectStoreStorage, relationalArchiveShare,
+		relationalDays, eventDays)
 	allRelational := steadyStateEventsPerSecond(t, store, 1, relationalDays, eventDays)
 	t.Logf("%s store, %dd relational / %dd event windows: %.1f events/s at share %.2f, %.1f at share 1",
 		store, relationalDays, eventDays, measured, relationalArchiveShare, allRelational)
+	t.Logf("--compact's %s store at the same windows: %.1f events/s at share %.2f",
+		compact.ObjectStoreStorage, compactMeasured, relationalArchiveShare)
 
 	// "About N" is honest when N is within 10% of the computed figure.
 	near := func(published, computed float64) bool {
@@ -282,6 +286,11 @@ func TestSteadyStateRateIsTheOnePublished(t *testing.T) {
 	enBootstrap := readDoc(filepath.Join("docs", "deployment", "bootstrap.md"))
 	esBootstrap := readDoc(filepath.Join("i18n", "es", "docusaurus-plugin-content-docs", "current",
 		"deployment", "bootstrap.md"))
+	// compact.go is this package's own source, so the cache does track it.
+	compactSrc, err := os.ReadFile("compact.go")
+	if err != nil {
+		t.Fatalf("reading compact.go: %v", err)
+	}
 
 	// Each space in a pattern matches any run of whitespace, so reflowing the prose
 	// -- a line break moving inside the sentence -- does not break the match.
@@ -290,26 +299,31 @@ func TestSteadyStateRateIsTheOnePublished(t *testing.T) {
 		text     string
 		pattern  string
 		computed float64
+		store    string
 	}{
 		{"backup_object_store_storage's description", string(clusterTF),
-			`about (\d+) events/s sustained fills this default`, measured},
+			`about (\d+) events/s sustained fills this default`, measured, store},
 		{"backup_object_store_storage's description", string(clusterTF),
-			`the figure would be about (\d+) events/s`, allRelational},
+			`the figure would be about (\d+) events/s`, allRelational, store},
 		{"bootstrap.md#backup-store-size", enBootstrap,
-			`about (\d+) events per second sustained fills the default store`, measured},
+			`about (\d+) events per second sustained fills the default store`, measured, store},
 		{"bootstrap.md#backup-store-size", enBootstrap,
-			`the figure would be about (\d+) events per second`, allRelational},
+			`the figure would be about (\d+) events per second`, allRelational, store},
 		{"the es bootstrap.md#backup-store-size", esBootstrap,
-			`unos (\d+) eventos por segundo sostenidos llenan el almacén predeterminado`, measured},
+			`unos (\d+) eventos por segundo sostenidos llenan el almacén predeterminado`, measured, store},
 		{"the es bootstrap.md#backup-store-size", esBootstrap,
-			`la cifra sería de unos (\d+) eventos`, allRelational},
+			`la cifra sería de unos (\d+) eventos`, allRelational, store},
+		// compact.go's comment on ObjectStoreStorage: the steady-state rate for the
+		// --compact store, at the same shipped windows.
+		{"compact.go's ObjectStoreStorage comment", string(compactSrc),
+			`(?:\d+)Gi fills at about (\d+) events/s sustained`, compactMeasured, compact.ObjectStoreStorage},
 	} {
 		pattern := regexp.MustCompile(strings.ReplaceAll(tc.pattern, " ", `\s+`))
 		for _, published := range publishedFigures(t, tc.what, tc.text, pattern) {
 			if !near(published, tc.computed) {
 				t.Errorf("%s says about %.0f events/s; the shipped defaults (%s store, %dd relational "+
 					"and %dd event-store windows) give %.1f. Change the prose with the defaults, in "+
-					"both locales and the variable description.", tc.what, published, store,
+					"both locales and the variable description.", tc.what, published, tc.store,
 					relationalDays, eventDays, tc.computed)
 			}
 		}
