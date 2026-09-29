@@ -68,9 +68,12 @@ func (e *BackpressureError) Is(target error) bool { return target == ErrStreamBa
 const (
 	// backpressureCloseRatio is the unread fraction of the ceiling at which the gate closes.
 	// The 10% left above it is the margin before DiscardOld would evict an unread message:
-	// what is in flight when the gate closes, what the sample interval lets through, and
-	// the state transitions that are admitted while it is closed (Message.BypassBackpressure)
-	// all land in it.
+	// what is in flight when the gate closes, what the sample interval lets through, the
+	// state transitions that are admitted while it is closed (Message.BypassBackpressure),
+	// and the messages the broker has acknowledged but not yet signalled to its consumers
+	// all land in it. That last one is why a measurement can read low: a PubAck is sent
+	// before the stream signals its consumers, and ConsumerInfo.NumPending is counted from
+	// that signal, so a sample reads low by whatever is still queued for it.
 	backpressureCloseRatio = 0.90
 	// backpressureOpenRatio is the fraction below which a closed gate opens again. The gap
 	// to the close ratio keeps a reader hovering at the threshold from flapping the gate
@@ -342,13 +345,126 @@ func (nmgr *NatsManager) sampleBackpressure(ctx context.Context, suffix string) 
 
 // MeasureBackpressureForTesting measures suffix's gate now, synchronously, as a tick of
 // runBackpressure does. Production never calls it: a gate is measured every few seconds, and a
-// test that fills a stream faster than that needs to say when each measurement happens. It takes a test's T for its Helper
-// method alone, as SetAckWaitForTesting does, so this package does not import testing.
-func (nmgr *NatsManager) MeasureBackpressureForTesting(tb interface{ Helper() }, suffix string) {
+// test that fills a stream faster than that needs to say when each measurement happens.
+//
+// It first waits, for up to backpressureSampleTimeout, until the broker has counted every
+// message the stream holds against each durable that gates it (see awaitConsumerCounts), so the
+// measurement reflects every publish that has returned; then it measures with a fresh
+// backpressureSampleTimeout of its own. When the broker never catches up, or cannot be read, it
+// fails the test and does not measure: a measurement of a count the wait could not trust is the
+// plausible answer the wait exists to prevent.
+//
+// It takes a test's T as an interface of the two methods it calls, Helper and Fatalf, so this
+// package does not import testing, as SetAckWaitForTesting does.
+func (nmgr *NatsManager) MeasureBackpressureForTesting(tb interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}, suffix string) {
 	tb.Helper()
+	wait, cancelWait := context.WithTimeout(context.Background(), backpressureSampleTimeout)
+	err := nmgr.awaitConsumerCounts(wait, suffix)
+	cancelWait()
+	if err != nil {
+		tb.Fatalf("measuring %s's backpressure: %v", suffix, err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), backpressureSampleTimeout)
 	defer cancel()
 	nmgr.sampleBackpressure(ctx, suffix)
+}
+
+// awaitConsumerCounts waits until the broker has counted every message suffix's stream holds
+// against each durable that gates it, or ctx ends.
+//
+// A PubAck is sent BEFORE the stream signals its consumers, and a consumer's NumPending is a
+// counter kept from that signal, so a ConsumerInfo read straight after a publish can miss the
+// message just acknowledged. Production does not care (it measures every few seconds, and the
+// close ratio leaves a margin for it); a test that asserts the gate closed at exactly one
+// message does.
+//
+// The count it waits for is LastSeq - max(Delivered.Stream, FirstSeq-1): every message after
+// the last one delivered. That holds when every message in the stream matches the durable's
+// filter and none was deleted from the middle, which is true of every fixture that measures
+// through MeasureBackpressureForTesting. When it does not hold the wait times out and says so;
+// it does not return a plausible answer.
+//
+// It reads ConsumerInfo through the gates' consumerInfo seam, the same call a sample makes.
+// On ctx's end it reports the last thing it actually observed (a durable still behind, or a
+// read that failed for a reason of its own), not the deadline cutting short the read in
+// flight, which says nothing about the broker.
+func (nmgr *NatsManager) awaitConsumerCounts(ctx context.Context, suffix string) error {
+	if !streams.AppliesBackpressure(suffix) {
+		return nil
+	}
+	if nmgr.js == nil {
+		return errors.New("messaging: not connected")
+	}
+	stream := StreamName(nmgr.Microservice.InstanceId, suffix)
+	g := nmgr.backpressure()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	var last error
+	for {
+		behind, err := nmgr.uncountedBy(ctx, g, stream, suffix)
+		switch {
+		case err == nil && behind == "":
+			return nil
+		case err == nil:
+			last = fmt.Errorf("messaging: %s: the broker had not counted every stored message against its "+
+				"consumers before the deadline: %s", stream, behind)
+		case ctx.Err() == nil:
+			last = fmt.Errorf("messaging: %s: could not read the consumers' counts: %w", stream, err)
+		}
+		select {
+		case <-ctx.Done():
+			if last == nil {
+				return fmt.Errorf("messaging: %s: could not read the consumers' counts: %w", stream, ctx.Err())
+			}
+			return last
+		case <-tick.C:
+		}
+	}
+}
+
+// uncountedBy names the first gating durable whose NumPending is not yet what the stream holds
+// past its delivered sequence, as "<durable>: pending N, want M"; "" when none is. A durable
+// that does not exist is skipped, as measureBackpressure skips it.
+//
+// It compares with !=, not <: an over-count is equally a state the gate must not be measured in.
+func (nmgr *NatsManager) uncountedBy(ctx context.Context, g *backpressureGates, stream, suffix string) (string, error) {
+	info, err := nmgr.js.StreamInfo(stream, nats.Context(ctx))
+	if err != nil {
+		return "", err
+	}
+	st := info.State
+	// Every gated stream declares exactly one BackpressureReader today, so nothing tests that
+	// this loop checks each durable rather than only the first: the first stream to declare a
+	// second reader should add that test.
+	for _, durable := range nmgr.gatingDurables(suffix) {
+		ci, cerr := g.consumerInfo(ctx, stream, durable)
+		if errors.Is(cerr, nats.ErrConsumerNotFound) {
+			continue
+		}
+		if cerr != nil {
+			return "", cerr
+		}
+		// FirstSeq-1 is the floor because a message DiscardOld has evicted is no longer
+		// pending to anyone, delivered or not. A stream that has never held a message reports
+		// FirstSeq 0 (and LastSeq 0); the guard only keeps FirstSeq-1 from wrapping there, since
+		// want is 0 either way.
+		from := ci.Delivered.Stream
+		if st.FirstSeq > 0 {
+			from = max(from, st.FirstSeq-1)
+		}
+		want := uint64(0)
+		if st.LastSeq > from {
+			want = st.LastSeq - from
+		}
+		if ci.NumPending != want {
+			return fmt.Sprintf("%s: pending %d, want %d", durable, ci.NumPending, want), nil
+		}
+	}
+	return "", nil
 }
 
 // measureBackpressure is the broker half of a sample: the worst gating durable, its ratio,
