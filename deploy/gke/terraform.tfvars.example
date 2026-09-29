@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (which git ignores) and fill in.
+project_id = "my-project"
+
+# location           = "us-east4-b"
+# cluster_name       = "devicechain"
+# node_machine_type  = "n2-standard-8"
+# node_count         = 3
+# loadgen_node_count = 1

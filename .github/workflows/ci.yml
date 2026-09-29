@@ -1970,6 +1970,18 @@ jobs:
             echo "::endgroup::"
           done
 
+      # deploy/gke creates a cluster rather than installing into one, and dcctl
+      # does not ship it, so it is not one of the roots above (hack/tofu-roots.sh
+      # lists what dcctl embeds, and other checks rely on that). It is checked on
+      # its own here so that broken HCL in it fails CI instead of a user's apply.
+      - name: tofu fmt, init and validate deploy/gke
+        working-directory: deploy/gke
+        run: |
+          set -euo pipefail
+          tofu fmt -check -recursive
+          tofu init -backend=false
+          tofu validate
+
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added
       # without one is the expected mistake rather than an unusual one. The self-test
