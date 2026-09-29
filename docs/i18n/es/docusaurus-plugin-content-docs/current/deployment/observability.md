@@ -494,7 +494,7 @@ esa espera una sola vez.
 
 | Métrica | Qué indica |
 | --- | --- |
-| `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. Lotes en el límite indican que trabajan a plena capacidad. |
+| `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. Lotes que crecen hacia el límite indican que los escritores están ocupados. Con 10 escritores compartiendo un mismo flujo, los lotes rara vez llegan al límite aunque el almacenamiento vaya retrasado, así que léala junto a la cola del consumidor. |
 | `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada lote que contiene sus eventos cuesta una transacción adicional, por muchos que contenga. Esos eventos aparecen en `persist_messages_total` como `failed` o `retry`. |
 | `devicechain_eventmanagement_persist_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
 
@@ -505,14 +505,23 @@ confirma.
 
 | Ajuste (configuración de `event-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
-| `persistence.writers` | `5` | Escritores en paralelo. Cada uno ocupa una conexión a la base de datos mientras escribe, así que debe ser menor que el pool de conexiones del servicio (`tsdbConfiguration.maxOpenConnections`, 20 si no se indica). Se permite más de la mitad del pool, y se registra al arrancar, porque entonces las lecturas compiten con los escritores por el resto. |
-| `persistence.maxBatch` | `32` | Máximo de eventos confirmados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
+| `persistence.writers` | `10` | Escritores en paralelo. Cada uno ocupa una conexión a la base de datos mientras escribe, así que debe ser menor que el pool de conexiones del servicio (`tsdbConfiguration.maxOpenConnections`, 20 si no se indica). Se permite más de la mitad del pool, y se registra al arrancar, porque entonces las lecturas compiten con los escritores por el resto. |
+| `persistence.maxBatch` | `64` | Máximo de eventos confirmados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
 | `persistence.lingerMillis` | `0` | Cuánto espera un escritor a más eventos antes de confirmar un lote incompleto, hasta `1000`. `0` confirma lo que ya está esperando. |
 
-Suba `maxBatch` antes que `writers`. En un almacén de eventos replicado, los lotes aumentan el
-rendimiento mucho más que los escritores adicionales, y no usan conexiones extra. Un valor fuera de
-rango impide que el servicio arranque, y el error nombra el ajuste. El servicio registra los
-valores que usa al arrancar.
+Los valores por defecto son el lote más grande y la mitad del pool de conexiones por defecto. Si la
+cola del consumidor de `event-management` sigue creciendo, el almacenamiento va retrasado, sea cual
+sea el tamaño de los lotes (ver [Un consumidor que se queda atrás](#consumer-backlog)). Añadir
+escritores no lo arregla con seguridad: reparten los mismos eventos en lotes más pequeños, y cada
+confirmación cuesta CPU al almacén de eventos. En las
+[mediciones en que se basan estos valores](./bootstrap.md#measured-throughput), el almacenamiento
+dejó de crecer cerca de 6000 eventos por segundo con lotes de unos 21 eventos de media ahí y de 28 a 30 por encima, por debajo
+del límite, mientras dos de los tres nodos, uno de ellos el del almacén de eventos, estaban al
+86-95% de CPU; no se aisló cuál de esas dos cosas limitó el ritmo. En una medición anterior, dos
+réplicas de 20 escritores cada una redujeron los lotes a unos 3 eventos, la base de datos del
+almacén de eventos usó más de 4 núcleos, y el conjunto almacenó menos que una réplica de 10. Los
+escritores son por réplica. Un valor fuera de rango impide que el servicio arranque, y el error
+nombra el ajuste. El servicio registra los valores que usa al arrancar.
 
 ### Estado en vivo de los dispositivos {#live-state-projection}
 

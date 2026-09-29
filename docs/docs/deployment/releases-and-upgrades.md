@@ -3542,6 +3542,42 @@ preference. A preference applies only when a pod is scheduled, though: if the ev
 primary later fails over to another node, a pod already running there stays until it is next
 rescheduled.
 
+#### event-management stores events with 10 writers and batches of up to 64 {#next-persistence-defaults}
+
+With the other per-event services sized to keep up, storing events became the first limit of a
+default installation: 5 writers committing up to 32 events each filled every batch from about
+4,400 events per second and stored no more than about 4,200. `persistence.writers` now defaults to
+`10` and `persistence.maxBatch` to `64`. Those were the settings of a tuned run that kept up to
+about 6,000 events per second with the CPU limits of `event-management` and the other per-event
+services raised to 4 cores. `event-management` used at most about 1.7 of them, and it was not
+measured under its default limit of 2, so no sustained rate is claimed for a default installation.
+That run also set `device-state`'s `projection.maxBatch` to `64` and `projection.lingerMillis` to
+`25`, which a default installation does not. Its batches averaged below 32, so it does not show the
+larger batch helping. See [Measured throughput](./bootstrap.md#measured-throughput) for the full
+settings.
+
+**Before you upgrade:** if you set `tsdbConfiguration.maxOpenConnections` for `event-management` to
+`10` or less and did not set `persistence.writers`, the new `event-management` pod refuses to
+start, and its error names `persistence.writers` and the size of the pool. The rolling update
+keeps the old pod running and storing events, and `dcctl upgrade` fails after waiting, with the
+instance partly upgraded. Set `persistence.writers` below your pool (your previous default was
+`5`), or remove the pool setting to use the default of 20, and run the upgrade again. Pools of 11
+to 19 start, and log at startup that more than half the pool is given to writers; set
+`persistence.writers` to half your pool to silence it.
+
+- An installation that sets `persistence.writers` or `persistence.maxBatch` keeps its values.
+- At rates where a writer finds one event at a time, nothing changes: it commits that event alone,
+  as before.
+- Under a backlog, up to 10 writers commit at once instead of 5, from the same pool of 20. The
+  pool's ceiling is unchanged, so the connections the event store keeps for `event-management`
+  still cover it.
+- `maxBatch` still accepts `1` to `64`.
+- `--compact` installations get the same defaults; their requests, limits and volumes do not
+  change.
+- Every measurement behind the new defaults was on a replicated (`--ha`) event store, where each
+  commit waits for a standby. An installation with a single event-store instance has not been
+  measured with them.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

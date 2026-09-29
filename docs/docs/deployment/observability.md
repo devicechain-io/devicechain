@@ -477,7 +477,7 @@ batch pays that wait once.
 
 | Metric | What it tells you |
 | --- | --- |
-| `devicechain_eventmanagement_persist_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. Batches at the limit mean they are working at full capacity. |
+| `devicechain_eventmanagement_persist_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. Batches that grow towards the limit mean the writers are busy. With 10 writers sharing one stream, batches seldom reach the limit even when storing is behind, so read this beside the consumer's backlog. |
 | `devicechain_eventmanagement_persist_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were written again. An occasional increase is one refused event. A steady rate means something is refusing writes repeatedly, such as a deleted tenant whose devices are still sending: each batch that holds its events costs one extra transaction, however many of them it holds. Those events show up in `persist_messages_total` under `failed` or `retry`. |
 | `devicechain_eventmanagement_persist_inflight` | Events writers hold, including those waiting for their batch to commit. |
 
@@ -487,13 +487,21 @@ batch pays that wait once.
 
 | Setting (`event-management` config) | Default | What it does |
 | --- | --- | --- |
-| `persistence.writers` | `5` | Writers running in parallel. Each holds one database connection while it writes, so it must be below the service's connection pool (`tsdbConfiguration.maxOpenConnections`, 20 unless set). More than half the pool is allowed, and logged at startup, because reads then compete with the writers for the rest. |
-| `persistence.maxBatch` | `32` | Most events committed in one transaction, from `1` to `64`. `1` turns batching off. |
+| `persistence.writers` | `10` | Writers running in parallel. Each holds one database connection while it writes, so it must be below the service's connection pool (`tsdbConfiguration.maxOpenConnections`, 20 unless set). More than half the pool is allowed, and logged at startup, because reads then compete with the writers for the rest. |
+| `persistence.maxBatch` | `64` | Most events committed in one transaction, from `1` to `64`. `1` turns batching off. |
 | `persistence.lingerMillis` | `0` | How long a writer waits for more events before committing a batch that is not full, up to `1000`. `0` commits what is already waiting. |
 
-Raise `maxBatch` before `writers`. On a replicated event store, batching raises throughput far more
-than extra writers do, and it uses no extra connections. Out-of-range values stop the service from
-starting, and the error names the setting. The service logs the values it is using when it starts.
+The defaults are the largest batch and half of the default connection pool. When the
+`event-management` consumer's backlog keeps growing, storing is behind, whatever the batch size
+(see [A consumer that stays behind](#consumer-backlog)). Adding writers is not a sure fix: they
+split the same events into smaller batches, and every commit costs the event store CPU. In the
+[measurements behind these defaults](./bootstrap.md#measured-throughput), storing stopped rising
+near 6,000 events per second with batches averaging about 21 there and 28 to 30 above it, below the limit, while two of the
+three nodes, one of them the event store's, were at 86 to 95% CPU; which of those held the rate was
+not isolated. In an earlier measurement, two replicas of 20 writers each cut batches to about 3
+events, the event store's database used over 4 cores, and the whole pipeline stored less than one
+replica of 10. Writers are per replica. Out-of-range values stop the service from starting, and the
+error names the setting. The service logs the values it is using when it starts.
 
 ### Live device state {#live-state-projection}
 

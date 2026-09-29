@@ -213,6 +213,33 @@ func TestABatchHoldsAtMostMaxBatchMessages(t *testing.T) {
 	}
 }
 
+// The default batch is taken whole: 128 messages at the default maxBatch are exactly two
+// transactions of 64 each. This pins the default as BEHAVIOUR, not just as a setting: a cap
+// anywhere on the path from the setting to CollectBatch (at 32, say) would still read 64
+// from the config and store every message, and only the transaction count shows it.
+func TestADefaultBatchCommitsMaxBatchMessagesInOneTransaction(t *testing.T) {
+	b := emconfig.DefaultPersistenceMaxBatch
+	r := newBatchRig(t, b)
+	r.run(r.messages(t, 2*b, fenceCostTenant, true))
+
+	if got := r.api.txs.Load(); got != 2 {
+		t.Errorf("%d messages at the default batch of %d took %d transactions; want 2", 2*b, b, got)
+	}
+	if got := r.api.committed.Load(); got != 2 {
+		t.Errorf("%d transactions committed; want 2", got)
+	}
+	if e := tenantEvents(t, r.db, fenceCostTenant); e != int64(2*b) {
+		t.Errorf("stored %d events; want %d", e, 2*b)
+	}
+	if got := len(r.acks.acked()); got != 2*b {
+		t.Errorf("%d messages acknowledged; want %d", got, 2*b)
+	}
+	// Two observations summing to 2b, neither above b (the transaction count), so each is b.
+	if got, sum := r.metric(t, metricBatchSize, "", ""), r.histogramSum(t, metricBatchSize); got != 2 || sum != float64(2*b) {
+		t.Errorf("batch-size histogram holds %v observations summing to %v; want 2 summing to %d", got, sum, 2*b)
+	}
+}
+
 // Every acknowledgement is sent after the transaction holding the message committed.
 func TestABatchIsAcknowledgedOnlyAfterItCommits(t *testing.T) {
 	r := newBatchRig(t, 8)
@@ -844,7 +871,7 @@ func TestTheWritersRunTheConfiguredSettings(t *testing.T) {
 	}{
 		{"configured", []ProcessorOption{WithPersistence(emconfig.PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: 7})},
 			emconfig.PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: 7}},
-		{"defaults", nil, emconfig.PersistenceConfiguration{Writers: 5, MaxBatch: 32}},
+		{"defaults", nil, emconfig.PersistenceConfiguration{Writers: 10, MaxBatch: 64}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-management"}
