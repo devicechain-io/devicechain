@@ -556,7 +556,9 @@ func init() {
 		"disaster recovery: recover the EVENT store from this archive path (the serverName inside "+
 			"the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. "+
 			"🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance "+
-			"and rebuilding it with this set, not by re-running against a live one")
+			"and rebuilding it with this set, not by re-running against a live one. When the backups are in the "+
+			"cluster's in-cluster object store, destroy with --keep-backups: a destroy without it deletes the "+
+			"archive this reads")
 	bootstrapCmd.Flags().StringVar(&bootstrapRestoreTsdbAt, "restore-tsdb-at", "",
 		"stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole "+
 			"archive. For the disaster where the data was destroyed correctly — a mistaken delete — so "+

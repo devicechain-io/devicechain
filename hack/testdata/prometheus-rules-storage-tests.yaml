@@ -12,8 +12,8 @@
 # the series is FREE bytes and the prose is a FULL percentage: every threshold in
 # the group reads as the complement of the number it is compared against.
 #
-# The cases below are states, not syntax. Three of them are negative controls and
-# they carry as much weight as the firing ones:
+# The cases below are states, not syntax. The negative controls carry as much
+# weight as the firing ones:
 #
 #   - the claim-name regex must not sweep up the OTHER PVCs that live in the same
 #     infrastructure namespace (the object store's and the broker's), because a
@@ -162,8 +162,8 @@ tests:
             exp_annotations:
               description: >-
                 dc-rdb-1-wal is over 85% full. A PostgreSQL volume that fills does not slow down, it
-                stops the database — and every replica is consuming the same writes at the same
-                rate, so there is no failover out of this and no second instance still serving. Grow
+                stops the database, and failing over does not rescue it: every replica holds the same
+                data, and when the cause is unshipped WAL it is the primary that fills first. Grow
                 it now: CloudNativePG expands a Cluster's volumes in place where the storage class
                 supports expansion, by raising spec.storage.size (or spec.walStorage.size for a -wal
                 claim). Reclaiming space is mostly not an alternative, because the tables that grow
@@ -243,8 +243,8 @@ tests:
             exp_annotations:
               description: >-
                 dc-tsdb-1 is over 85% full. A PostgreSQL volume that fills does not slow down, it
-                stops the database — and every replica is consuming the same writes at the same
-                rate, so there is no failover out of this and no second instance still serving. Grow
+                stops the database, and failing over does not rescue it: every replica holds the same
+                data, and when the cause is unshipped WAL it is the primary that fills first. Grow
                 it now: CloudNativePG expands a Cluster's volumes in place where the storage class
                 supports expansion, by raising spec.storage.size (or spec.walStorage.size for a -wal
                 claim). Reclaiming space is mostly not an alternative, because the tables that grow
@@ -334,4 +334,181 @@ tests:
         exp_alerts: []
       - eval_time: 100m
         alertname: DatabaseVolumeFillingUp
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE MEASURED CASE, REPLAYED. A v0.18.0 benchmark cluster: WAL archiving
+  # failed on a full object store, and the event-store primary kept every
+  # unshipped segment on its own 8 GiB volume. These are that run's own volume
+  # readings, one every 32 s from 03:00:43 UTC — the primary at 45 → 72 → 88 → 95 %,
+  # full at about 03:09:50, and PostgreSQL stopped. Its replicas climbed too, on
+  # the ingest itself, and were at 70 % when it did.
+  #
+  # The fixed thresholds see NONE of it in time: 85 % held for 15m cannot fire on a
+  # volume that goes from 85 % to full in two minutes, so DatabaseVolumeAlmostFull
+  # is still pending at the last reading. The rate rule fires at 7m — about two
+  # minutes before the primary is full — and on the replicas as well, which were
+  # on course to fill within the quarter hour.
+  # -------------------------------------------------------------------------
+  - name: the benchmark's event-store primary filling in minutes fires before it is full
+    interval: 32s
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "4724464025 4724464025 4724464025 4724464025 4552665333 4466765987 4294967296 4123168604 4037269258 3865470566 3521873182 3092376453 2405181685 1975684956 1460288880 1030792151 429496729 0 0 0 0 0 0"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "8589934592+0x22"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-2"}'
+        values: "4810363371 4810363371 4810363371 4724464025 4638564679 4466765987 3951369912 4037269258 3607772528 3779571220 3435973836 3521873182 3435973836 3006477107 3092376453 3178275799 2576980377 2576980377 2576980377 2576980377 2576980377 2576980377 2576980377"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-2"}'
+        values: "8589934592+0x22"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-3"}'
+        values: "4810363371 4810363371 4810363371 4724464025 4552665333 4466765987 4123168604 4037269258 3607772528 3779571220 3435973836 3521873182 3435973836 3006477107 3006477107 3178275799 2576980377 2576980377 2576980377 2576980377 2576980377 2576980377 2576980377"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-3"}'
+        values: "8589934592+0x22"
+    alert_rule_test:
+      # Pending, not yet firing: the `for` is still running.
+      - eval_time: 6m
+        alertname: DatabaseVolumeFillingFast
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: DatabaseVolumeFillingFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              persistentvolumeclaim: dc-tsdb-1
+            exp_annotations:
+              summary: "An event-store volume will be full within the hour at its current rate"
+              description: >-
+                dc-tsdb-1 is more than half full and filling fast enough to run out of space within
+                the hour. When it fills, PostgreSQL stops, and CloudNativePG does not fail over a
+                full disk. If only the primary's volume is climbing while its replicas' are not,
+                the cause is WAL the archiver has not shipped — see the WAL archiving and backup
+                destination alerts, and fix the destination first. If every member is climbing
+                together, it is data: ingest is outgrowing the volume, so grow it
+                (spec.storage.size on the Cluster, where the storage class supports expansion) or
+                shorten data retention.
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              persistentvolumeclaim: dc-tsdb-2
+            exp_annotations:
+              summary: "An event-store volume will be full within the hour at its current rate"
+              description: >-
+                dc-tsdb-2 is more than half full and filling fast enough to run out of space within
+                the hour. When it fills, PostgreSQL stops, and CloudNativePG does not fail over a
+                full disk. If only the primary's volume is climbing while its replicas' are not,
+                the cause is WAL the archiver has not shipped — see the WAL archiving and backup
+                destination alerts, and fix the destination first. If every member is climbing
+                together, it is data: ingest is outgrowing the volume, so grow it
+                (spec.storage.size on the Cluster, where the storage class supports expansion) or
+                shorten data retention.
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              persistentvolumeclaim: dc-tsdb-3
+            exp_annotations:
+              summary: "An event-store volume will be full within the hour at its current rate"
+              description: >-
+                dc-tsdb-3 is more than half full and filling fast enough to run out of space within
+                the hour. When it fills, PostgreSQL stops, and CloudNativePG does not fail over a
+                full disk. If only the primary's volume is climbing while its replicas' are not,
+                the cause is WAL the archiver has not shipped — see the WAL archiving and backup
+                destination alerts, and fix the destination first. If every member is climbing
+                together, it is data: ingest is outgrowing the volume, so grow it
+                (spec.storage.size on the Cluster, where the storage class supports expansion) or
+                shorten data retention.
+      # And the fixed threshold has still not fired at the primary's last reading.
+      - eval_time: 9m
+        alertname: DatabaseVolumeAlmostFull
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # NEGATIVE CONTROLS for the rate rule. Each is a volume that must NOT page:
+  #
+  #   - dc-tsdb-1: flat at 40 % free for three hours — full-ish, but not moving;
+  #   - dc-tsdb-2: 45 % free and creeping, on course to fill in about three days;
+  #   - dc-tsdb-3: falling fast (1 % a minute) but still with more than half free;
+  #   - dc-rdb-1: the RELATIONAL volume, 45 % free and falling 1 % a minute — a
+  #     large sort or an index build spilling temp files. The rule is scoped to the
+  #     event store: the relational rules wait an hour for exactly this;
+  #   - the object store's and the broker's claims beside it, falling just as fast:
+  #     not database volumes at all.
+  # -------------------------------------------------------------------------
+  - name: a full-but-flat, slow-growing or roomy volume, and every other claim, do not page as filling fast
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "3435973836+0x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "8589934592+0x180"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-2"}'
+        values: "3865470566-894784x180"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-2"}'
+        values: "8589934592+0x180"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-3"}'
+        values: "7730941132-85899345x30"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-3"}'
+        values: "8589934592+0x30"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "3865470566-85899345x20 2147483648+0x40"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-rdb-1"}'
+        values: "8589934592+0x60"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "9663676416-214748364x40"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x40"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "966367641-21474836x40"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-nats-js-dc-nats-0"}'
+        values: "2147483648+0x40"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DatabaseVolumeFillingFast
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: DatabaseVolumeFillingFast
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: DatabaseVolumeFillingFast
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The rate alert CLEARS when the volume is grown, like the threshold alerts do:
+  # capacity doubles and the new space is free, so the volume is more than half
+  # free again. Firing before, gone after.
+  # -------------------------------------------------------------------------
+  - name: growing a fast-filling event-store volume clears the rate alert
+    interval: 1m
+    input_series:
+      # 40 % free and falling 1 % of the volume a minute, then expanded to 16 GiB.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "3435973836-85899345x10 12025908428-85899345x20"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dci-devicechain", persistentvolumeclaim="dc-tsdb-1"}'
+        values: "8589934592+0x10 17179869184+0x20"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DatabaseVolumeFillingFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              persistentvolumeclaim: dc-tsdb-1
+            exp_annotations:
+              summary: "An event-store volume will be full within the hour at its current rate"
+              description: >-
+                dc-tsdb-1 is more than half full and filling fast enough to run out of space within
+                the hour. When it fills, PostgreSQL stops, and CloudNativePG does not fail over a
+                full disk. If only the primary's volume is climbing while its replicas' are not,
+                the cause is WAL the archiver has not shipped — see the WAL archiving and backup
+                destination alerts, and fix the destination first. If every member is climbing
+                together, it is data: ingest is outgrowing the volume, so grow it
+                (spec.storage.size on the Cluster, where the storage class supports expansion) or
+                shorten data retention.
+      - eval_time: 20m
+        alertname: DatabaseVolumeFillingFast
         exp_alerts: []

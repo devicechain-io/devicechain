@@ -54,6 +54,29 @@ func readClusterArchiveCredential(ctx context.Context, typed kubernetes.Interfac
 		return nil, nil
 	}
 	name := st.Install.Outputs.Archive.CredentialsSecret
+	data, err := readArchiveCredentialData(ctx, typed, st.Install.Outputs.Archive, st.ClusterUID)
+	if err != nil {
+		return nil, err
+	}
+	return &ownedSecret{
+		Name: name, Namespace: infraNamespace, Type: corev1.SecretTypeOpaque,
+		Labels: map[string]string{"app.kubernetes.io/component": "database-backup"},
+		Data:   data, Scope: ownerCluster,
+	}, nil
+}
+
+// readArchiveCredentialData is the one reader of the cluster's archive credential: the
+// Secret the install record names, refused unless it is this cluster's own, and exactly
+// the two keys the archive contract names.
+//
+// 🔴 ONE READER, TWO CALLERS. A bootstrap copies the credential into an instance's
+// namespace; a destroy presents it to the in-cluster store to delete a destroyed
+// instance's archive. A second, bare Get in the destroy path would present whatever
+// Secret happened to carry that name to a store it is about to delete from — the
+// ownership check below is the reason there is exactly one of these.
+func readArchiveCredentialData(ctx context.Context, typed kubernetes.Interface, archive ClusterArchive,
+	clusterUID string) (map[string]string, error) {
+	name := archive.CredentialsSecret
 	s, err := typed.CoreV1().Secrets(infraNamespace).Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
@@ -63,7 +86,7 @@ func readClusterArchiveCredential(ctx context.Context, typed kubernetes.Interfac
 	case err != nil:
 		return nil, fmt.Errorf("reading the cluster's archive credential %s/%s: %w", infraNamespace, name, err)
 	}
-	if reason := foreignReason(readOwnership(s), clusterOwner(st.ClusterUID)); reason != "" {
+	if reason := foreignReason(readOwnership(s), clusterOwner(clusterUID)); reason != "" {
 		return nil, fmt.Errorf("Secret %s/%s is not this cluster's archive credential: %s. Re-run "+
 			"`dcctl install` on this cluster", infraNamespace, name, reason)
 	}
@@ -71,18 +94,14 @@ func readClusterArchiveCredential(ctx context.Context, typed kubernetes.Interfac
 	// labels: whatever else was added to the cluster's Secret is not the instance's to
 	// carry into its own namespace.
 	data := map[string]string{}
-	for _, key := range []string{st.Install.Outputs.Archive.AccessKeyIDKey, st.Install.Outputs.Archive.SecretAccessKey} {
+	for _, key := range []string{archive.AccessKeyIDKey, archive.SecretAccessKey} {
 		if len(s.Data[key]) == 0 {
 			return nil, fmt.Errorf("the cluster's archive credential %s/%s has no %q, which the archive "+
 				"contract says the archiver presents", infraNamespace, name, key)
 		}
 		data[key] = string(s.Data[key])
 	}
-	return &ownedSecret{
-		Name: name, Namespace: infraNamespace, Type: corev1.SecretTypeOpaque,
-		Labels: map[string]string{"app.kubernetes.io/component": "database-backup"},
-		Data:   data, Scope: ownerCluster,
-	}, nil
+	return data, nil
 }
 
 // reuseOutcome says what was found where a previously minted credential would be.

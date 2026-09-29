@@ -498,11 +498,11 @@ func TestDestroyClosingMessageMatchesWhatActuallyHappened(t *testing.T) {
 	// The uninstalling path's line cannot be reached without a cluster, so it is asserted
 	// directly: both variants say the cluster was left running, and the one that left a
 	// database behind never says the instance was destroyed.
-	full := destroyedLine("inst", "c", "", false)
+	full := destroyedLine("inst", "c", "", "", false)
 	if !strings.Contains(full, `Instance "inst" destroyed`) || !strings.Contains(full, "cluster c left running") {
 		t.Errorf("a complete destroy should say so and name the cluster left running, got %q", full)
 	}
-	partial := destroyedLine("inst", "c", "the store could not be reached", false)
+	partial := destroyedLine("inst", "c", "the store could not be reached", "", false)
 	if strings.Contains(partial, "destroyed") {
 		t.Errorf("a destroy that left the database behind claims the instance was destroyed: %q", partial)
 	}

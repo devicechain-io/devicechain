@@ -495,10 +495,27 @@ variable "backup_retention" {
 
         destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
 
-    WAL is the cheap term and can be ignored: `archive_timeout` forces a segment
-    every 5 minutes, but a segment closed early is zero-filled past the switch
-    record and gzips to tens of KiB, so both stores together cost well under a
-    GiB per month. The base backups are the whole cost.
+    🔴 WAL IS CHEAP ONLY WHILE THE INSTANCE IS QUIET. `archive_timeout` forces a
+    segment every 5 minutes, but a segment closed early is zero-filled past the
+    switch record and gzips to tens of KiB, so an idle pair of stores costs well
+    under a GiB per month. Under sustained ingest the archived WAL grows with the
+    write rate instead, and costs about as much as the data it records. Measured
+    on a v0.18.0 benchmark cluster: the archive one ~15M-event run left behind
+    was about 14 GB, base backups included — roughly 1 KB per ingested event,
+    the same order as the ~1 KB per event the event store's own data costs. At
+    that rate the shipped 20Gi destination holds HOURS of sustained ingest, not
+    days, and the WAL term dominates:
+
+        destination ≈ (retention_days + 1) × compressed(rdb + tsdb)
+                      + retention_days × daily_events × archived WAL per event
+
+    No retention window bounds that term, and shortening the window is the
+    wrong lever for it: it still keeps a full day of WAL, and it buys space by
+    shrinking how far back the databases can be recovered. Size the destination
+    for the ingest rate, or send backups to an object store you run. Barman
+    prunes only a LIVE Cluster's own archive path, so an archive left by a
+    destroyed instance is pruned by nothing — which is why `dcctl destroy`
+    removes the instance's archive from the in-cluster store.
 
     At the shipped 20Gi destination that budget is roughly 2.5 GiB of combined
     compressed base backup — comfortable for a small-to-moderate instance at 7
@@ -532,12 +549,16 @@ variable "backup_object_store_storage" {
     combined compressed base backup. Raise BOTH together or neither: the
     arithmetic is multiplicative in the retention window and no check can enforce
     it, because the compressed size of a database is not knowable at plan time.
+    And the WAL term is NOT small under sustained ingest — see backup_retention:
+    measured, it is about as large as the data, so an instance ingesting
+    continuously outgrows the default in hours.
 
     🔴 When it fills, archiving fails — and failed archiving does not stall
     commits, it accumulates WAL on the DATABASES' own volumes until those fill and
     PostgreSQL stops. A too-small destination takes the instance down by a route
-    that points nowhere near a bucket. BackupDestinationAlmostFull fires at 85% to
-    give warning, which is the only reason the failure is survivable.
+    that points nowhere near a bucket. BackupDestinationAlmostFull fires at 85%,
+    and BackupDestinationFillingFast on a rate that fills it within the hour, to
+    give warning — which is the only reason the failure is survivable.
 
     🔴 Growing this later may not work in place. It is a PVC, so expansion needs a
     StorageClass with allowVolumeExpansion — kind's default local-path has none,

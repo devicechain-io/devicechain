@@ -168,6 +168,54 @@ spec:
               accumulating — the recovery gap, and unshipped WAL on the database's own volume, which
               will eventually fill it and stop PostgreSQL. Check the object store is reachable, has
               space, and still accepts these credentials.
+        # The archiver that is SLOW or HUNG rather than failing — the gap the rule
+        # above cannot see, because an archive_command that never returns records no
+        # failure at all.
+        #
+        # `cnpg_collector_pg_wal_archive_status{value="ready"}` is the number of
+        # `.ready` files in pg_wal/archive_status: segments PostgreSQL has finished
+        # and is still waiting to hand to the archiver. Every one of them is retained
+        # on the PRIMARY's own volume until it ships, and the replicas do not help —
+        # a standby does not keep the primary's unshipped WAL. That is the cascade
+        # measured on a v0.18.0 benchmark cluster: archiving failed on a full object
+        # store, and the event-store primary filled its volume (45% → 95% in about
+        # nine minutes) while its replicas were still at 70%.
+        #
+        # Series confirmed on the pinned CloudNativePG against a live cluster: the
+        # collector exports `value="ready"` and `value="done"` on every member, and a
+        # standby reports ready 0 (it marks received segments done).
+        #
+        # 32 segments = 512 MiB, half of the store's max_wal_size (64 segments). An
+        # archiver that keeps up holds a handful: the benchmark cluster read ready 0
+        # on its primary at rest — a loaded healthy value was not captured, which is
+        # why the threshold sits well above "a handful" rather than near it. 5m so a
+        # catch-up burst after the store comes back (a reconnect, a restart of the
+        # single-replica in-cluster store) does not page; at the benchmark's WAL rate
+        # a hung archiver crosses 32 in under two minutes, so this still fires well
+        # before a volume of the default size fills.
+        #
+        # 🔴 A RULE ON dc-rdb IS RENDERED BY EVERY INSTANCE. The relational store is
+        # the cluster's, and each instance's chart selects it, so a stalled relational
+        # archiver raises this once per instance, each carrying a different
+        # instance label. That is this whole file's existing pattern, not a new one.
+        - alert: PostgresWALArchiveBacklog
+          expr: |
+            cnpg_collector_pg_wal_archive_status{namespace=~"{{ $dbsel }}", value="ready"} > 32
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "PostgreSQL is holding WAL it has not shipped to the backup destination"
+            description: >-
+              {{ "{{ $labels.pod }}" }} has {{ "{{ $value }}" }} WAL segments (16 MiB each) waiting to be
+              archived. They stay on this database's own volume until they ship — the replicas do not
+              help, because a standby does not keep the primary's unshipped WAL — and when the volume
+              fills, PostgreSQL stops and does not fail over. If the WAL archiving failing alert is also
+              firing, the destination is refusing writes: check that the object store is reachable and
+              has space. If it is not, the archiver is slow or hung, or ingest is producing WAL faster
+              than it ships: check the backup sidecar's logs and the object store's free space, and
+              grow the database volume if the backlog keeps rising.
         # Never archived at all, which is NOT the same as "not recently" and is the
         # gap the two rules above leave between them.
         #
@@ -259,5 +307,51 @@ spec:
               archiving starts failing — and failed archiving does not stall commits, it accumulates
               WAL on the DATABASES' volumes until those fill and PostgreSQL stops. So this ends as a
               database outage whose cause points nowhere near a database. Grow the volume, shorten
-              backup_retention, or move to an external destination.
+              backup_retention, remove archives left behind by instances that no longer exist, or
+              move to an external destination.
+        # The same volume, filling FAST — which the fixed threshold above cannot see
+        # in time. At 85% for 15m it fires on a store that creeps; a store that fills
+        # in minutes is full before the rule's own `for` has run.
+        #
+        # Measured on a v0.18.0 benchmark cluster: the 20 GiB default store started a
+        # sustained-ingest run with about 6 GB free — the rest held by the archive of
+        # an instance destroyed earlier — and one ten-minute run at ~4,000 events/s
+        # took most of it. Archiving began failing on a full store, and the event-store
+        # primary filled its own volume minutes later.
+        #
+        # predict_linear over 10m, projected 1h ahead: a store whose recent rate
+        # empties it within the hour. Gated on less than 35% free because a store
+        # with room to spare takes a nightly base backup — gigabytes in a few minutes,
+        # and then flat — as a steep, short slope, and that is not a page. `for: 5m`
+        # lets the slope settle past a single burst while still firing several
+        # minutes before a store at the measured rate is full.
+        #
+        # 🔴 THE STORE IS THE CLUSTER'S, AND EVERY INSTANCE RENDERS THIS RULE, so it
+        # fires once per instance, as BackupDestinationAlmostFull always has.
+        - alert: BackupDestinationFillingFast
+          expr: |
+            (
+              predict_linear(kubelet_volume_stats_available_bytes{namespace="{{ $dbns }}", persistentvolumeclaim=~"dc-object-store.*"}[10m], 3600) < 0
+            )
+            and on (namespace, persistentvolumeclaim)
+            (
+              kubelet_volume_stats_available_bytes{namespace="{{ $dbns }}", persistentvolumeclaim=~"dc-object-store.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace="{{ $dbns }}", persistentvolumeclaim=~"dc-object-store.*"}
+            ) < 0.35
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The backup destination will be full within the hour at its current rate"
+            description: >-
+              {{ "{{ $labels.persistentvolumeclaim }}" }} is more than 65% full and filling fast enough to
+              run out of space within the hour. When it is full, WAL archiving fails for EVERY database
+              archiving into it, and each primary keeps its unshipped WAL on its own volume until that
+              fills and PostgreSQL stops. Likely causes, in order: an instance ingesting faster than the
+              store was sized for; archives left in the store by instances that no longer exist (list
+              the bucket and compare with the instances that are running); a scheduled base backup that
+              stopped, so nothing is being pruned. Grow the volume, remove what no running instance
+              owns, or move backups to an object store you run yourself.
 {{- end }}

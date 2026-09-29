@@ -625,6 +625,42 @@ Una tarea puede completar sus pasadas sin fallos mientras el trabajo para el que
 atascado. La eliminación de inquilinos es el caso para el que el chart tiene avisos propios; vea
 [Eliminación de inquilinos](./tenant-deletion.md#stalled-alert).
 
+## Respaldos que dejan de enviarse {#backup-archiving}
+
+Los respaldos de una base de datos fallan en silencio. El archivado se ejecuta junto a las
+escrituras, no en su camino, así que un archivo del log de escritura anticipada que no puede
+llegar a su destino no ralentiza nada ni hace fallar ninguna comprobación de salud. Pero
+PostgreSQL conserva cada segmento que no ha enviado, en el propio volumen de la base de datos, y
+solo los guarda el primario: las réplicas no ayudan. Cuando ese volumen se llena, PostgreSQL se
+detiene, y el operador de la base de datos no hace failover ante un disco lleno. La cadena
+habitual es: se llena el almacén de objetos de los respaldos, falla el archivado y después se
+llena el volumen del primario.
+
+Las alertas del chart para cada eslabón de esa cadena:
+
+| Alerta | Se dispara cuando | Qué hacer |
+| --- | --- | --- |
+| `PostgresWALArchivingFailing` | El último intento de archivado falló más recientemente que el último que tuvo éxito, durante 5 minutos. | Comprueba que el almacén de objetos es accesible, tiene espacio y acepta las credenciales. |
+| `PostgresWALArchiveBacklog` | Una base de datos tiene más de 32 segmentos de log terminados (512 MiB) esperando a enviarse, durante 5 minutos. Incluye un archivador lento o bloqueado que no registra ningún fallo. | Si también se dispara la alerta de fallo, arregla el destino. Si no, revisa los logs del sidecar de respaldos y el espacio libre del almacén, y amplía el volumen de la base de datos si la cola sigue creciendo. |
+| `BackupDestinationFillingFast` | El almacén de objetos interno está lleno en más de un 65 % y, al ritmo de los últimos 10 minutos, se llenará en menos de una hora. | Averigua qué escribe: una instancia que ingiere más rápido de lo previsto para el almacén, respaldos de instancias que ya no existen o una programación de respaldos base que se detuvo, de modo que nada se poda. Amplía el almacén, elimina lo que no pertenezca a ninguna instancia en marcha o saca los respaldos del clúster. |
+| `BackupDestinationAlmostFull` | El almacén de objetos interno está lleno en más de un 85 %, durante 15 minutos. | Lo mismo, con menos tiempo. |
+| `DatabaseVolumeFillingFast` | Un volumen del almacén de eventos está lleno en más de la mitad y, al ritmo de los últimos 15 minutos, se llenará en menos de una hora, durante 3 minutos. | Si solo sube el primario, es log sin enviar: arregla primero el archivado. Si suben todos los miembros, son datos: amplía el volumen o acorta la retención de datos. |
+| `DatabaseVolumeAlmostFull` | Un volumen de base de datos está lleno en más de un 85 %, durante 15 minutos. | Amplíalo ya. |
+
+Las dos alertas de ritmo existen porque los umbrales fijos son demasiado lentos para un volumen
+que se llena en minutos, que es lo que la ingesta sostenida hace con él. Se comprobaron con una
+prueba de rendimiento en la que el primario del almacén de eventos pasó del 45 % a lleno en unos
+nueve minutos después de que se llenara el almacén de objetos: la alerta de ritmo se dispara unos
+dos minutos antes de que el volumen se llene, mientras que la alerta del 85 %, que espera 15
+minutos, solo se habría disparado después.
+
+El almacén de objetos lo comparten todas las instancias del clúster, igual que la base de datos
+relacional. El chart de cada instancia lleva estas alertas, así que una alerta sobre un volumen
+compartido o sobre la base de datos compartida aparece una vez por instancia.
+
+Para saber qué tamaño necesita el almacén interno, consulta
+[El destino de respaldo predeterminado](./bootstrap.md#default-backup-destination).
+
 ## Relacionado
 
 - **[Arrancar una instancia](./bootstrap.md#install)** — `dcctl install`, el comando que

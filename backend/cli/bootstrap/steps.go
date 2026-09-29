@@ -209,10 +209,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// loud, because from the outside "it restored" and "it declined to restore" look
 	// identical.
 	for _, name := range paths.AlreadyLive {
-		fmt.Println(color.YellowString(
-			"  Cluster %s already exists, so its restore will NOT run: CloudNativePG reads "+
-				"spec.bootstrap only when it creates a cluster. Destroy the instance and rebuild "+
-				"it with the same flags to actually recover.", name))
+		fmt.Println(color.YellowString("  %s", alreadyLiveRestoreNote(name)))
 	}
 
 	// The NATS broker-auth credentials (ADR-025): the callout issuer nkey and the

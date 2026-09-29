@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,41 @@ func TestWithoutStateReachesTheDestroyOptions(t *testing.T) {
 	}
 	if f := destroyCmd.Flags().Lookup("without-state"); f == nil {
 		t.Error("destroy has no --without-state flag")
+	}
+}
+
+// --keep-backups reaches the options both destroy forms build, and --all — which asks
+// once and then destroys with --yes, so no per-instance prompt ever names an archive —
+// says in its own prompt that backups go with the instances unless it is passed.
+func TestKeepBackupsReachesTheDestroyOptionsAndTheBulkPrompt(t *testing.T) {
+	orig := destroyKeepBackups
+	t.Cleanup(func() { destroyKeepBackups = orig })
+	for _, want := range []bool{true, false} {
+		destroyKeepBackups = want
+		if got := destroyOptionsFor("acme", "", false, true); got.KeepBackups != want {
+			t.Errorf("--keep-backups=%v built options with KeepBackups=%v", want, got.KeepBackups)
+		}
+	}
+	if f := destroyCmd.Flags().Lookup("keep-backups"); f == nil {
+		t.Fatal("destroy has no --keep-backups flag")
+	}
+	for _, s := range []string{destroyAllPrompt(3, false), destroyAllBackupsNote(false)} {
+		if !strings.Contains(s, "backups") || !strings.Contains(s, "--keep-backups") {
+			t.Errorf("--all does not say its instances' backups are removed, or how to keep them: %q", s)
+		}
+	}
+	if s := destroyAllPrompt(3, true); !strings.Contains(s, "kept") {
+		t.Errorf("--all --keep-backups does not say the backups are kept: %q", s)
+	}
+}
+
+// 🔴 THE DOCUMENTED RECOVERY NAMES --keep-backups. --restore-tsdb-from recovers by
+// destroying the instance and rebuilding it, and a destroy without --keep-backups deletes
+// the in-cluster archive the rebuild reads.
+func TestTheRestoreFlagSaysToDestroyWithKeepBackups(t *testing.T) {
+	f := bootstrapCmd.Flags().Lookup("restore-tsdb-from")
+	if f == nil || !strings.Contains(f.Usage, "--keep-backups") {
+		t.Fatalf("--restore-tsdb-from's help sends the operator to a destroy that deletes its archive: %v", f)
 	}
 }
 

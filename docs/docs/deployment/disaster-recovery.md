@@ -227,6 +227,14 @@ it, and step 3 does not depend on it. It takes `--restore-tsdb-at` for a point i
 way. Every instance's event store archives under a path of its own, so read the path off the
 archive rather than guessing. `dc-tsdb` alone is the relational-style name and will not be there.
 
+:::warning Recovering an instance in a cluster that is still running
+To recover one instance's event store inside the cluster it runs in — for example to a moment
+before a mistaken delete — destroy the instance with `dcctl destroy --keep-backups`, then
+bootstrap it again with `--restore-tsdb-from` (and `--restore-tsdb-at`). When its backups are in
+the cluster's own object store, a destroy without `--keep-backups` deletes the very archive the
+restore reads.
+:::
+
 A restore is one of the few things allowed to run against an instance that already exists.
 Recovery is exactly the situation in which a run gets interrupted and has to be retried. A sharper
 guard makes that safe: it permits the retry only when the escrow artifact carries the key the
@@ -430,7 +438,11 @@ database and database login, its namespace — and its local state. It does **no
 artifact, which lives outside that directory by design. Destroy names the artifact on its way out.
 
 Destroy never deletes the cluster, nor the prerequisites `dcctl install` put on it: the relational
-database the other instances use and the backup object store stay where they are.
+database the other instances use, and the backup object store itself, stay where they are. What
+destroy does remove from that object store is the destroyed instance's own event-store backups,
+when they are in the cluster's own store. Backups in an object store you supplied are never
+deleted, and `--keep-backups` keeps the in-cluster ones too; see
+[What happens to the instance's backups](./bootstrap.md#destroy-backups).
 
 Keep the escrow artifact for as long as you keep any backup of that instance's databases. It is the
 only thing that can still read them. Delete it when those backups are gone, and not before.

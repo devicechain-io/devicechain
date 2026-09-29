@@ -246,6 +246,14 @@ el tiempo, de la misma forma. El almacén de eventos de cada instancia archiva b
 así que lee la ruta del archivo histórico en vez de adivinarla. `dc-tsdb` a secas es el nombre al
 estilo relacional y no estará allí.
 
+:::warning Recuperar una instancia en un clúster que sigue en marcha
+Para recuperar el almacén de eventos de una instancia dentro del clúster en el que se ejecuta —por
+ejemplo, hasta un momento anterior a un borrado por error—, destruye la instancia con
+`dcctl destroy --keep-backups` y luego vuelve a arrancarla con `--restore-tsdb-from` (y
+`--restore-tsdb-at`). Cuando sus copias de seguridad están en el almacén de objetos propio del
+clúster, un destroy sin `--keep-backups` borra justo el archivo que lee la restauración.
+:::
+
 Una restauración es una de las pocas cosas que sí pueden ejecutarse contra una instancia que ya
 existe. La recuperación es justamente la situación en la que una ejecución se interrumpe y hay que
 reintentarla. Una guarda más precisa lo hace seguro: permite el reintento solo cuando el artefacto
@@ -458,8 +466,12 @@ artefacto de depósito, que vive fuera de ese directorio por diseño. Destroy no
 terminar.
 
 Destroy nunca elimina el clúster, ni los requisitos previos que `dcctl install` dejó en él: la base
-de datos relacional que usan las demás instancias y el almacén de objetos de las copias de
-seguridad siguen donde están.
+de datos relacional que usan las demás instancias, y el propio almacén de objetos de las copias de
+seguridad, siguen donde están. Lo que destroy sí elimina de ese almacén son las copias de seguridad
+del almacén de eventos de la instancia destruida, cuando están en el almacén propio del clúster.
+Las copias en un almacén de objetos que tú proporcionaste no se borran nunca, y `--keep-backups`
+conserva también las del almacén interno; consulta
+[Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups).
 
 Conserva el artefacto de depósito mientras conserves cualquier copia de seguridad de las bases de
 datos de esa instancia. Es lo único que todavía puede leerlas. Elimínalo cuando esas copias hayan

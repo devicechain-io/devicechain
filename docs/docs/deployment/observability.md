@@ -594,6 +594,39 @@ so replicas that started together do not all reach the database at once.
 A task can pass cleanly while the work it exists for is stuck. Tenant deletion is the case the
 chart alerts on separately; see [Tenant deletion](./tenant-deletion.md#stalled-alert).
 
+## Backups that stop shipping {#backup-archiving}
+
+A database's backups fail quietly. Archiving runs beside the writes rather than in their way,
+so a write-ahead log archive that cannot reach its destination slows nothing down and trips no
+health check. But PostgreSQL keeps every segment it has not shipped, on the database's own
+volume, and only the primary holds them: the replicas do not help. When that volume fills,
+PostgreSQL stops, and the database operator does not fail over a full disk. The usual chain is:
+the backup object store fills, archiving fails, then the primary's volume fills.
+
+The chart's alerts for each link of that chain:
+
+| Alert | Fires when | What to do |
+| --- | --- | --- |
+| `PostgresWALArchivingFailing` | The last archive attempt failed more recently than the last one succeeded, for 5 minutes. | Check that the object store is reachable, has space and accepts the credentials. |
+| `PostgresWALArchiveBacklog` | A database has more than 32 finished log segments (512 MiB) waiting to ship, for 5 minutes. This includes an archiver that is slow or hung and records no failure at all. | If the failing alert fires too, fix the destination. If not, check the backup sidecar's logs and the store's free space, and grow the database volume if the backlog keeps rising. |
+| `BackupDestinationFillingFast` | The in-cluster object store is more than 65% full and, at its rate over the last 10 minutes, will be full within the hour. | Find what is writing: an instance ingesting faster than the store was sized for, backups left by instances that no longer exist, or a base backup schedule that stopped, so nothing is pruned. Grow the store, remove what no running instance owns, or move backups off the cluster. |
+| `BackupDestinationAlmostFull` | The in-cluster object store is more than 85% full, for 15 minutes. | The same, with less time. |
+| `DatabaseVolumeFillingFast` | An event-store volume is more than half full and, at its rate over the last 15 minutes, will be full within the hour, for 3 minutes. | If only the primary climbs, it is unshipped log: fix archiving first. If every member climbs, it is data: grow the volume or shorten data retention. |
+| `DatabaseVolumeAlmostFull` | A database volume is more than 85% full, for 15 minutes. | Grow it now. |
+
+The two rate alerts exist because the fixed thresholds are too slow for a volume that fills in
+minutes, which is what sustained ingest does to one. They were checked against a benchmark in
+which the event-store primary went from 45% to full in about nine minutes after the object store
+filled: the rate alert fires about two minutes before the volume is full, while the 85% alert,
+which waits 15 minutes, would have fired only after it.
+
+The object store is shared by every instance on the cluster, and so is the relational database.
+Each instance's chart carries these alerts, so an alert about a shared volume or the shared
+database is raised once per instance.
+
+For how large the in-cluster store needs to be, see
+[The default backup destination](./bootstrap.md#default-backup-destination).
+
 ## Related
 
 - **[Bootstrap an Instance](./bootstrap.md#install)** — `dcctl install`, the command
