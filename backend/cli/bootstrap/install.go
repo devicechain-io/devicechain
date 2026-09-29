@@ -16,6 +16,7 @@ import (
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -201,34 +202,11 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 			binding.Describe(), err))
 	}
 
-	dyn, _, typed, err := kubeClients(st.KubeContext)
-	if err != nil {
-		return fmt.Errorf("connecting to cluster %s: %w", binding.Describe(), err)
-	}
-	prev, err := previousInstall(ctx, typed)
+	// The clients the first writes below go through come out of the refusals, so
+	// those writes cannot be reached without them. See connectAndRefuse.
+	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
 	if err != nil {
 		return err
-	}
-	if st.MaxConnections == 0 {
-		st.MaxConnections = defaultMaxConnections
-		if last := prev.lastCompleted(); last != nil && last.Outputs.Rdb.MaxConnections > 0 {
-			st.MaxConnections = last.Outputs.Rdb.MaxConnections
-		}
-	}
-	if err := refuseAReinstallThatWouldHurt(ctx, st, prev, settings, localClusterStateExists); err != nil {
-		return err
-	}
-	// 🔴 BEFORE THE FIRST WRITE. A class that is missing, keeps the provider's
-	// snapshot when its VolumeSnapshot is deleted, or belongs to another driver is
-	// accepted by every API it passes through, and then fails every snapshot or keeps
-	// every one for ever. Found here, it costs a re-run; found after the apply, it
-	// costs a cluster recorded as installed with backups that do not work.
-	if class := backupSnapshotClass(st); class != "" {
-		doing("checking VolumeSnapshotClass " + class)
-		if err := checkVolumeSnapshotClass(ctx, dyn, typed, class, infraNamespace, RdbClusterName); err != nil {
-			return fail("checking VolumeSnapshotClass "+class, err)
-		}
-		done()
 	}
 
 	doing("settling the cluster's credentials")
@@ -444,6 +422,59 @@ func previousInstall(ctx context.Context, typed kubernetes.Interface) (*InstallR
 		return nil, nil
 	}
 	return &rec, nil
+}
+
+// installClients is the seam Install reaches the cluster through, so the refusals it
+// runs before the first write can be exercised, not only the checks they call.
+var installClients = func(kubeContext string) (dynamic.Interface, kubernetes.Interface, error) {
+	dyn, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dyn, typed, nil
+}
+
+// connectAndRefuse connects to the cluster and runs every refusal Install makes on
+// what the cluster already holds, handing back the clients only when none refuses.
+//
+// 🔑 THE CLIENTS ARE THE RETURN VALUE ON PURPOSE. Install's first writes -- the
+// infrastructure namespace, the cluster's credentials, the record marked applying --
+// go through them, so this call cannot be dropped from Install without those losing
+// the clients they need: it would not compile. A refusal called beside the writes
+// instead would be one line nothing notices missing. Everything in here reads;
+// nothing writes.
+func connectAndRefuse(ctx context.Context, st *State, settings InstallSettings,
+	stateExists func(uid string) (bool, error)) (dynamic.Interface, kubernetes.Interface, error) {
+	dyn, typed, err := installClients(st.KubeContext)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connecting to cluster %s: %w", st.Binding.Describe(), err)
+	}
+	prev, err := previousInstall(ctx, typed)
+	if err != nil {
+		return nil, nil, err
+	}
+	if st.MaxConnections == 0 {
+		st.MaxConnections = defaultMaxConnections
+		if last := prev.lastCompleted(); last != nil && last.Outputs.Rdb.MaxConnections > 0 {
+			st.MaxConnections = last.Outputs.Rdb.MaxConnections
+		}
+	}
+	if err := refuseAReinstallThatWouldHurt(ctx, st, prev, settings, stateExists); err != nil {
+		return nil, nil, err
+	}
+	// 🔴 BEFORE THE FIRST WRITE. A class that is missing, keeps the provider's
+	// snapshot when its VolumeSnapshot is deleted, or belongs to another driver is
+	// accepted by every API it passes through, and then fails every snapshot or keeps
+	// every one for ever. Found here, it costs a re-run; found after the apply, it
+	// costs a cluster recorded as installed with backups that do not work.
+	if class := backupSnapshotClass(st); class != "" {
+		doing("checking VolumeSnapshotClass " + class)
+		if err := checkVolumeSnapshotClass(ctx, dyn, typed, class, infraNamespace, RdbClusterName); err != nil {
+			return nil, nil, fail("checking VolumeSnapshotClass "+class, err)
+		}
+		done()
+	}
+	return dyn, typed, nil
 }
 
 // localClusterStateExists reports whether this machine holds the cluster root's state

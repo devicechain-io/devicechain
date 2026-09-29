@@ -455,3 +455,119 @@ func TestABootstrapRefusesAMissingSnapshotClassBeforeDeclaringTheInstance(t *tes
 		t.Errorf("a cluster without snapshots had its snapshot class checked %d time(s)", *connects)
 	}
 }
+
+// stubInstallClients points Install's connection at these clients and counts the
+// connections.
+func stubInstallClients(t *testing.T, dyn *dynamicfake.FakeDynamicClient, typed *fake.Clientset) *int {
+	t.Helper()
+	orig := installClients
+	t.Cleanup(func() { installClients = orig })
+	calls := 0
+	installClients = func(string) (dynamic.Interface, kubernetes.Interface, error) {
+		calls++
+		return dyn, typed, nil
+	}
+	return &calls
+}
+
+// writesOn names every action on a fake client that is not a read.
+func writesOn(actions []interface{ GetVerb() string }) []string {
+	var writes []string
+	for _, a := range actions {
+		switch a.GetVerb() {
+		case "get", "list", "watch":
+		default:
+			writes = append(writes, a.GetVerb())
+		}
+	}
+	return writes
+}
+
+// 🔴 THE INSTALL, NOT JUST THE CHECK. `dcctl install --backup-snapshot-class` on a
+// cluster without that class is refused where Install connects -- before the clients
+// every write goes through are handed back -- so nothing is written and the install
+// record is never marked applying. The OpenTofu precondition catches a missing class
+// only after both, and never catches one for another driver.
+func TestAnInstallRefusesABadSnapshotClassBeforeAnyWrite(t *testing.T) {
+	const gke = "pd.csi.storage.gke.io"
+	for _, tc := range []struct {
+		name    string
+		classes []*unstructured.Unstructured
+		refused string
+	}{
+		{"a class the cluster does not have", nil, `"pd-snapshots" does not exist`},
+		{"a class that keeps the provider's snapshot",
+			[]*unstructured.Unstructured{snapshotClassObject(testSnapshotClass, gke, "Retain")}, `deletionPolicy "Retain"`},
+		{"a class for another driver",
+			[]*unstructured.Unstructured{snapshotClassObject(testSnapshotClass, "ebs.csi.aws.com", "Delete")}, `is for driver "ebs.csi.aws.com"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn, typed := snapshotCluster(false, tc.classes, storageClass("premium-rwo", gke, true))
+			connects := stubInstallClients(t, dyn, typed)
+			st := aWritableState()
+			st.BackupSnapshotClass = testSnapshotClass
+
+			gotDyn, gotTyped, err := connectAndRefuse(context.Background(), st, installSettingsFor(st),
+				func(string) (bool, error) { return true, nil })
+			if err == nil || !strings.Contains(err.Error(), tc.refused) {
+				t.Fatalf("an install with %s was not refused for it: %v", tc.name, err)
+			}
+			if gotDyn != nil || gotTyped != nil {
+				t.Errorf("a refused install was still handed the clients its writes go through")
+			}
+			if *connects != 1 {
+				t.Errorf("connected %d time(s), want 1", *connects)
+			}
+			var acts []interface{ GetVerb() string }
+			for _, a := range typed.Actions() {
+				acts = append(acts, a)
+			}
+			for _, a := range dyn.Actions() {
+				acts = append(acts, a)
+			}
+			if w := writesOn(acts); len(w) > 0 {
+				t.Errorf("a refused install wrote to the cluster first: %v", w)
+			}
+		})
+	}
+
+	// The accept path hands the clients back; an install without the flag never
+	// looks for a class at all.
+	for _, class := range []string{testSnapshotClass, ""} {
+		dyn, typed := snapshotCluster(false,
+			[]*unstructured.Unstructured{snapshotClassObject(testSnapshotClass, gke, "Delete")},
+			storageClass("premium-rwo", gke, true))
+		stubInstallClients(t, dyn, typed)
+		st := aWritableState()
+		st.BackupSnapshotClass = class
+		gotDyn, gotTyped, err := connectAndRefuse(context.Background(), st, installSettingsFor(st),
+			func(string) (bool, error) { return true, nil })
+		if err != nil || gotDyn == nil || gotTyped == nil {
+			t.Errorf("class %q: an install with nothing to refuse got (%v, %v, %v)", class, gotDyn, gotTyped, err)
+		}
+		if looked := len(dyn.Actions()) > 0; looked != (class != "") {
+			t.Errorf("class %q: the VolumeSnapshotClass was read: %v", class, looked)
+		}
+	}
+}
+
+// What the chart's snapshot alerts are told, from what the instance apply reports. The
+// output exists on every instance with backups -- null when snapshots are off -- so its
+// PRESENCE must not read as "on".
+func TestSnapshotAlertsFollowTheReportedClassNotTheOutputsPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outputs map[string]tfexec.OutputMeta
+		want    string
+	}{
+		{"a class", map[string]tfexec.OutputMeta{"database_backup_snapshot_class": {Value: json.RawMessage(`"pd-snapshots"`)}}, "true"},
+		{"null (backups on, snapshots off)", map[string]tfexec.OutputMeta{"database_backup_snapshot_class": {Value: json.RawMessage(`null`)}}, "false"},
+		{"an empty string", map[string]tfexec.OutputMeta{"database_backup_snapshot_class": {Value: json.RawMessage(`""`)}}, "false"},
+		{"no such output", map[string]tfexec.OutputMeta{"database_backups_enabled": {Value: json.RawMessage(`true`)}}, "false"},
+		{"an unreadable one", map[string]tfexec.OutputMeta{"database_backup_snapshot_class": {Value: json.RawMessage(`true`)}}, "false"},
+	} {
+		if got := backupSnapshotsFromOutputs(tc.outputs); got != tc.want {
+			t.Errorf("%s: databaseBackupSnapshots = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

@@ -270,3 +270,39 @@ tests:
       - eval_time: 90m
         alertname: DatabaseSnapshotPruningStalled
         exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The snapshots stopped, and the weekly object-store base backup of the SAME
+  # Cluster completed an hour ago. That Backup is a Backup too, with a fresh
+  # stoppedAt, so a rule that took the newest completed Backup of any method would
+  # read the store as backed up and stay quiet for up to a week of missed
+  # snapshots. Only the snapshot's age counts.
+  # -------------------------------------------------------------------------
+  - name: a fresh object-store backup does not hide stopped snapshots
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dci-devicechain", cluster="dc-tsdb", backup="dc-tsdb-snapshot-1", method="volumeSnapshot", phase="completed"}'
+        values: "5000+0x2500"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dci-devicechain", cluster="dc-tsdb", backup="dc-tsdb-backup-1", method="plugin", phase="completed"}'
+        values: "140400+0x2500"
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dci-devicechain", cluster="dc-tsdb", scheduledbackup="dc-tsdb-snapshot", method="volumeSnapshot"}'
+        values: "0+60x2500"
+    alert_rule_test:
+      - eval_time: 40h
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              cluster: dc-tsdb
+            exp_annotations:
+              summary: "No database snapshot backup has completed in 36 hours"
+              description: >-
+                The dc-tsdb database in dci-devicechain has completed no volume-snapshot base
+                backup in 36 hours against a daily schedule, or has never completed one.
+                Point-in-time recovery still works from the weekly base backup in the backup
+                store and the log since, so nothing is lost yet. Check the events on the
+                ScheduledBackup dc-tsdb-snapshot and on its latest Backups: a VolumeSnapshotClass
+                that was deleted, or that belongs to a different storage driver from the database
+                volumes, fails every snapshot.

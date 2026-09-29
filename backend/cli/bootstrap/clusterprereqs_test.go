@@ -215,12 +215,12 @@ func TestApplyInfraAppliesOnlyTheInstanceInOrder(t *testing.T) {
 // is held by its source the same way.
 func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 	fset, positions := callPositions(t, "install.go", "Install",
-		"refuseAReinstallThatWouldHurt", "resolveCredentials", "splitVars", "checkRelationalStoreOwner",
+		"connectAndRefuse", "resolveCredentials", "splitVars", "checkRelationalStoreOwner",
 		"ensureInfraNamespace", "writeClusterSecrets", "markInstallApplying", "applyClusterPrereqs",
 		"withProvisionerSession", "writeInstalled")
 
 	for _, want := range []struct{ name, why string }{
-		{"refuseAReinstallThatWouldHurt", "a re-install from another machine, or one that changes the cluster under running instances, would go ahead"},
+		{"connectAndRefuse", "a re-install from another machine, one that changes the cluster under running instances, or one naming a VolumeSnapshotClass that cannot work, would go ahead"},
 		{"resolveCredentials", "a re-install would mint fresh passwords over the ones the live store runs on"},
 		{"splitVars", "every -var would go to the cluster root, and it would refuse the instance root's"},
 		{"checkRelationalStoreOwner", "a store built before per-instance logins would have its owner Secret rewritten under it"},
@@ -237,9 +237,9 @@ func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 	}
 
 	assertCallOrder(t, "Install", fset, positions, []callOrder{
-		{"refuseAReinstallThatWouldHurt", "checkRelationalStoreOwner",
+		{"connectAndRefuse", "checkRelationalStoreOwner",
 			"a re-install that would hurt the cluster must be refused before anything is checked or written"},
-		{"refuseAReinstallThatWouldHurt", "markInstallApplying",
+		{"connectAndRefuse", "markInstallApplying",
 			"a refused re-install must not leave the record reading as applying, which every bootstrap refuses"},
 		{"resolveCredentials", "writeClusterSecrets",
 			"the credentials written are the ones this run settled, reusing what the live store holds"},
@@ -260,6 +260,26 @@ func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 			"a cluster recorded as installed without its base identity refuses the first bootstrap"},
 		{"applyClusterPrereqs", "writeInstalled",
 			"the record may say installed only after the apply that installs has succeeded"},
+	})
+}
+
+// The refusals Install runs before its first write live in connectAndRefuse, which
+// hands Install the clients every write goes through; this holds what is inside it.
+// TestAnInstallRefusesABadSnapshotClassBeforeAnyWrite exercises the snapshot half.
+func TestInstallRefusesInsideTheConnectionItWritesThrough(t *testing.T) {
+	fset, positions := callPositions(t, "install.go", "connectAndRefuse",
+		"installClients", "previousInstall", "refuseAReinstallThatWouldHurt", "checkVolumeSnapshotClass")
+	for _, want := range []struct{ name, why string }{
+		{"refuseAReinstallThatWouldHurt", "a re-install from another machine, or one that changes the cluster under running instances, would go ahead"},
+		{"checkVolumeSnapshotClass", "a VolumeSnapshotClass that cannot take or prune snapshots would be installed"},
+	} {
+		if _, ok := positions[want.name]; !ok {
+			t.Fatalf("connectAndRefuse no longer calls %s — %s", want.name, want.why)
+		}
+	}
+	assertCallOrder(t, "connectAndRefuse", fset, positions, []callOrder{
+		{"previousInstall", "refuseAReinstallThatWouldHurt",
+			"the re-install refusal judges the record this run read"},
 	})
 }
 

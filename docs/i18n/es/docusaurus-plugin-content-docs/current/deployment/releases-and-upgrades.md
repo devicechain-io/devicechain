@@ -3989,9 +3989,12 @@ si no pasas la opción. Consulta
   controlador de instantáneas.
 - CloudNativePG no borra las instantáneas antiguas. Ahora lo hace el operador de DeviceChain, cada
   diez minutos: conserva todas las instantáneas dentro de la ventana de recuperación de la base de
-  datos y la más reciente anterior a ella. Para ello, el operador puede ahora leer namespaces y
-  listar y borrar Backups de CloudNativePG en todos los namespaces, y solo actúa en namespaces que
-  creó DeviceChain, sobre los ScheduledBackups que genera su propia configuración.
+  datos y la más reciente anterior a ella. Para ello, el ClusterRole del operador gana, en todos
+  los namespaces: `get` sobre namespaces; `get`, `list` y `delete` sobre los Backups de
+  CloudNativePG; `get`, `list` y `patch` sobre los ScheduledBackups de CloudNativePG, para
+  registrar cada pasada; y `create` y `patch` sobre los Events de `events.k8s.io`, para informar
+  de lo que ha podado. Solo actúa en namespaces que creó DeviceChain, sobre los ScheduledBackups
+  que genera su propia configuración.
 - Una restauración (`--restore-rdb-from`, `--restore-tsdb-from`) sigue leyendo el almacén de
   respaldos, no las instantáneas: el respaldo base semanal más reciente y el log desde entonces,
   así que puede reproducir hasta una semana de log. Las instantáneas de una instancia se borran con

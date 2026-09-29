@@ -83,8 +83,16 @@ variable "cnpg_cluster_metrics" {
     (`kube_cnpg_backup_stopped_at`) and when the DeviceChain operator last pruned
     each ScheduledBackup's volume snapshots
     (`kube_cnpg_scheduledbackup_snapshot_retention_checked_at`), which the
-    volume-snapshot backup alerts read. One series per Backup, which each store's
-    recovery window bounds, and one per ScheduledBackup.
+    volume-snapshot backup alerts read, on every install with CloudNativePG, not
+    only those taking snapshots. One series per ScheduledBackup, and one per Backup
+    object that exists. The DeviceChain operator prunes snapshot Backups to each
+    store's recovery window, but NOTHING bounds the object-store Backups: that
+    ScheduledBackup sets no backupOwnerReference, and the backup plugin's retention
+    prunes the object store, not the Backup objects that describe it. So they
+    accumulate, one per store per scheduled run (daily by default, weekly with
+    snapshots on), and each is a series here. That is a few hundred a year per
+    store, not a cardinality problem; it is stated so nobody reads the series
+    count as bounded by the windows.
 
     🔴 SET THIS FROM WHETHER CLOUDNATIVEPG IS INSTALLED, not from taste — the root
     passes enable_cnpg. With no CNPG CRDs in the cluster, kube-state-metrics has
@@ -463,7 +471,8 @@ locals {
               #
               # Yields kube_cnpg_backup_stopped_at{namespace,backup,cluster,method,
               # phase}: the time a Backup finished, as a unix timestamp (0 while it
-              # has not). One series per Backup, which the retention windows bound.
+              # has not). One series per Backup object; see the variable's
+              # description for why the object-store ones are not bounded.
               {
                 groupVersionKind = {
                   group   = "postgresql.cnpg.io"

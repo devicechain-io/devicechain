@@ -332,11 +332,25 @@ func applyInstanceInfra(ctx context.Context, st *State, tf *tofuExec, vars []str
 	// absence reads as OFF like the value above: wrong that way, the base-backup alert
 	// fires six days a week, which is loud; the other way, a snapshot schedule or
 	// pruning that stopped would say nothing.
-	st.Values[databaseBackupSnapshotsKey] = "false"
-	if meta, ok := outputs["database_backup_snapshot_class"]; ok && optionalStringOutput(meta) != "" {
-		st.Values[databaseBackupSnapshotsKey] = "true"
-	}
+	st.Values[databaseBackupSnapshotsKey] = backupSnapshotsFromOutputs(outputs)
 	return nil
+}
+
+// backupSnapshotsFromOutputs is "true" only when the instance apply reports a class its
+// event store's chart was handed: a missing output, a null one (backups on, snapshots
+// off) and an unreadable one are all "false".
+//
+// 🔑 SEPARATED FROM THE APPLY SO IT CAN BE EXERCISED, like archiveFromOutputs. The
+// null case is the one that matters: every instance with backups reports this output,
+// and reading its presence as "on" would render the snapshot alerts on all of them --
+// DatabaseSnapshotBackupsUnobserved firing for ever, and PostgresNoRecentBaseBackup
+// moved to the weekly threshold on a cluster that takes a base backup daily, hiding a
+// week of failed ones.
+func backupSnapshotsFromOutputs(outputs map[string]tfexec.OutputMeta) string {
+	if meta, ok := outputs["database_backup_snapshot_class"]; ok && optionalStringOutput(meta) != "" {
+		return "true"
+	}
+	return "false"
 }
 
 // Where applyInfra stashes what the infrastructure actually provisioned for

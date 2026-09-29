@@ -328,3 +328,70 @@ func TestSnapshotRetentionWithoutCloudNativePG(t *testing.T) {
 		t.Errorf("a pass on a cluster without CloudNativePG failed: %v", err)
 	}
 }
+
+// replacingWriter stands in for a second replica, an operator or CloudNativePG acting
+// between the pruner's list and its delete: before forwarding the delete of `name`, it
+// deletes that Backup itself and creates a new one under the same name.
+type replacingWriter struct {
+	client.Client
+	t        *testing.T
+	name     string
+	replaced bool
+}
+
+func (w *replacingWriter) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if obj.GetName() == w.name && !w.replaced {
+		w.replaced = true
+		old := &unstructured.Unstructured{}
+		old.SetGroupVersionKind(backupGVK)
+		if err := w.Client.Get(ctx, client.ObjectKeyFromObject(obj), old); err != nil {
+			w.t.Fatalf("reading %s before replacing it: %v", w.name, err)
+		}
+		if err := w.Client.Delete(ctx, old); err != nil {
+			w.t.Fatalf("deleting %s to replace it: %v", w.name, err)
+		}
+		fresh := &unstructured.Unstructured{Object: map[string]any{
+			"spec":   old.Object["spec"],
+			"status": map[string]any{"phase": "running"},
+		}}
+		fresh.SetGroupVersionKind(backupGVK)
+		fresh.SetNamespace(old.GetNamespace())
+		fresh.SetName(old.GetName())
+		fresh.SetLabels(old.GetLabels())
+		if err := w.Client.Create(ctx, fresh); err != nil {
+			w.t.Fatalf("recreating %s: %v", w.name, err)
+		}
+	}
+	return w.Client.Delete(ctx, obj, opts...)
+}
+
+// 🔴 A DELETE IS OF THE BACKUP THAT WAS READ, NOT OF WHATEVER NOW HAS ITS NAME. Between
+// the pruner's list and its delete, the old Backup goes and a new one takes its name.
+// The delete must leave the new one alone -- it is not the snapshot the pass judged
+// old -- and must count as done, so the pass still finishes and records itself.
+func TestSnapshotRetentionDeletesOnlyTheBackupItRead(t *testing.T) {
+	c := apiServer(t, true)
+	day := 24 * time.Hour
+	now := time.Now().Add(30 * day).Truncate(time.Second)
+	mkNamespace(t, c, "dc-system", map[string]string{dcv1beta1.ComponentLabel: dcv1beta1.InfrastructureComponent})
+	snapshotSchedule(t, c, "dc-system", "dc-rdb-snapshot", "dc-rdb", "7d", nil)
+	backup(t, c, "dc-system", "rdb-d1", "dc-rdb-snapshot", "dc-rdb", "volumeSnapshot", "completed", now.Add(-day))
+	backup(t, c, "dc-system", "rdb-d8", "dc-rdb-snapshot", "dc-rdb", "volumeSnapshot", "completed", now.Add(-8*day))
+	backup(t, c, "dc-system", "rdb-d9", "dc-rdb-snapshot", "dc-rdb", "volumeSnapshot", "completed", now.Add(-9*day))
+
+	w := &replacingWriter{Client: c, t: t, name: "rdb-d9"}
+	p := &controllers.SnapshotRetention{Reader: c, Writer: w, Recorder: events.NewFakeRecorder(10),
+		Now: func() time.Time { return now }}
+	if err := p.Pass(context.Background()); err != nil {
+		t.Fatalf("a pass whose Backup was replaced under it failed: %v", err)
+	}
+	if !w.replaced {
+		t.Fatal("the pass never deleted rdb-d9, so this test replaced nothing")
+	}
+	if got := backupNames(t, c, "dc-system"); strings.Join(got, ",") != "rdb-d1,rdb-d8,rdb-d9" {
+		t.Errorf("Backups left: %v, want rdb-d1,rdb-d8,rdb-d9 -- the new rdb-d9 is not the one the pass read", got)
+	}
+	if got, want := checkedAt(t, c, "dc-system", "dc-rdb-snapshot"), now.UTC().Format(time.RFC3339); got != want {
+		t.Errorf("the pass recorded itself at %q, want %q", got, want)
+	}
+}

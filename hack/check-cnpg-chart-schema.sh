@@ -253,10 +253,14 @@ rendered+=("$(render_case backup-ha "${base[@]}" --set instances=3 --set synchro
 # which no other case does, and a second ScheduledBackup of a different method, so
 # both are validated against the CRDs only here. The HA case carries a WAL volume
 # (which the class snapshots too) and a serverName, as a restored or HA store does.
+# The class is one variable because check_snapshot_wiring asserts the Cluster names
+# THIS class: a template that rendered any other name passes the CRD walk, and then
+# every snapshot fails at runtime against a class the cluster does not have.
+export SNAPSHOT_CLASS=pd-snapshots
 rendered+=("$(render_case backup-snapshot-single "${base[@]}" --set instances=1 "${backup[@]}" \
-  --set backup.snapshotClass=pd-snapshots)")
+  --set backup.snapshotClass="$SNAPSHOT_CLASS")")
 rendered+=("$(render_case backup-snapshot-ha "${base[@]}" --set instances=3 --set synchronous.enabled=true "${backup[@]}" \
-  --set backup.snapshotClass=pd-snapshots --set backup.retentionPolicy=7d \
+  --set backup.snapshotClass="$SNAPSHOT_CLASS" --set backup.retentionPolicy=7d \
   --set backup.serverName=dc-store-restored --set walStorage.enabled=true --set walStorage.size=2Gi)")
 
 # The RESTORE shape (A2.5c). A separate case rather than a variation, because
@@ -470,7 +474,7 @@ PY
 say "checking $(( ${#rendered[@]} )) rendered configurations"
 
 python3 - "$crds" "${rendered[@]}" <<'PY'
-import re, sys, yaml
+import os, re, sys, yaml
 
 crd_path, rendered_paths = sys.argv[1], sys.argv[2:]
 
@@ -801,9 +805,24 @@ def check_snapshot_wiring(docs, case, failures):
             failures.append("%s names Cluster %r, which this chart does not render" % (where, cname))
             continue
         vs = dig(cluster, ("spec", "backup", "volumeSnapshot")) or {}
-        if not vs.get("className"):
-            failures.append("%s takes volume snapshots of a Cluster with no VolumeSnapshotClass: "
-                            "every backup fails" % where)
+        want_class = os.environ["SNAPSHOT_CLASS"]
+        if vs.get("className") != want_class:
+            failures.append("%s: Cluster/%s snapshots with VolumeSnapshotClass %r, not the %r the "
+                            "case passed -- every backup fails against a class the cluster "
+                            "does not have" % (where, cname, vs.get("className"), want_class))
+        # ONLINE, by value. An offline snapshot makes CloudNativePG fence and stop
+        # the instance it snapshots -- a single-instance store would go down for
+        # every daily snapshot, and nothing in the schema says so. waitForArchive
+        # is what makes an online snapshot restorable: without it the snapshot can
+        # finish before the WAL it needs has reached the archive.
+        if vs.get("online") is not True:
+            failures.append("%s: Cluster/%s volumeSnapshot.online is %r, not true -- an offline "
+                            "snapshot stops the instance it snapshots" % (where, cname, vs.get("online")))
+        if (vs.get("onlineConfiguration") or {}).get("waitForArchive") is not True:
+            failures.append("%s: Cluster/%s volumeSnapshot.onlineConfiguration.waitForArchive is "
+                            "%r, not true -- a snapshot can finish before the WAL it needs is "
+                            "archived" % (where, cname,
+                                          (vs.get("onlineConfiguration") or {}).get("waitForArchive")))
         if vs.get("snapshotOwnerReference") != "backup":
             failures.append("%s: Cluster/%s snapshotOwnerReference is %r, not 'backup' -- pruning "
                             "deletes the Backup and every VolumeSnapshot stays"

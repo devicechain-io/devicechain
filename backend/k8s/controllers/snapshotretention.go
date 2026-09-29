@@ -52,7 +52,7 @@ import (
 // election off and the Deployment at one replica. Two replicas would both prune;
 // that is safe rather than merely unlikely, because each delete is conditional on
 // the UID it read and a delete that finds the Backup gone, or replaced, is treated
-// as done.
+// as done (TestSnapshotRetentionDeletesOnlyTheBackupItRead replaces one mid-pass).
 //
 // 🔴 WHEN IT STOPS, SOMETHING HAS TO SAY SO. A retention promise enforced by a
 // component whose failure is silent is a plausible value, not a guarantee. After

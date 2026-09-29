@@ -3716,9 +3716,11 @@ instead of a full copy in the backup store. Nothing changes unless you pass the 
   on Amazon EKS, install the snapshot controller add-on first.
 - CloudNativePG does not delete old snapshots. The DeviceChain operator now does, every ten
   minutes: it keeps every snapshot inside the database's recovery window and the newest one
-  before it. To do that, the operator can now read namespaces and list and delete CloudNativePG
-  Backups in every namespace, and it acts only in namespaces DeviceChain created, on the
-  ScheduledBackups its own configuration renders.
+  before it. To do that, the operator's ClusterRole gains, in every namespace: `get` on
+  namespaces; `get`, `list` and `delete` on CloudNativePG Backups; `get`, `list` and `patch` on
+  CloudNativePG ScheduledBackups, to record each pass; and `create` and `patch` on
+  `events.k8s.io` Events, to report what it pruned. It acts only in namespaces DeviceChain
+  created, on the ScheduledBackups its own configuration renders.
 - A restore (`--restore-rdb-from`, `--restore-tsdb-from`) still reads the backup store, not the
   snapshots: the newest weekly base backup and the log since, so it can replay up to a week of
   log. An instance's snapshots are deleted with it.
