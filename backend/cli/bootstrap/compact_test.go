@@ -386,6 +386,54 @@ func TestCompactSizesEveryGrowingVolume(t *testing.T) {
 	}
 }
 
+// The event store's volume, measured on GKE (v0.18.0, SSD persistent disks): a
+// stored measurement event cost about 1.05 KB on the primary (2.5 GB over 2.4M
+// events), and pg_wal about 1.1 GB more, held at max_wal_size only while archiving
+// keeps up. The upper end of each is used, and 10% of the volume is kept free.
+const (
+	measuredEventStoreBytesPerEvent int64 = 1100
+	measuredEventStoreWALBytes      int64 = 1100 << 20
+	eventStoreHoursAtDefaultCeiling int64 = 6
+)
+
+// eventStoreCapacity is how many measured events a volume of this size holds with
+// 10% of it kept free.
+func eventStoreCapacity(t *testing.T, size string) int64 {
+	t.Helper()
+	return (volumeMiB(t, size)<<20 - measuredEventStoreWALBytes) * 9 / 10 / measuredEventStoreBytesPerEvent
+}
+
+// The default event-store volume alone holds six hours of one tenant sending at
+// its full default ceiling. The previous 8Gi filled at about six million events,
+// less than two hours of that, and a GKE benchmark filled it within a 10-minute
+// run plus a ladder.
+//
+// This is the volume's own bound and nothing more. Under sustained ingest the
+// in-cluster backup destination fills first (the archived WAL costs about as much
+// per event as the data), after which WAL piles up on this volume; the destination
+// is sized by the cluster root's backup_object_store_storage, not here. So what
+// this buys is time between the archive alerts and the database stopping.
+func TestDefaultEventStoreVolumeHoldsSixHoursAtTheDefaultCeiling(t *testing.T) {
+	raw, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading embedded variables.tf: %v", err)
+	}
+	need := eventStoreHoursAtDefaultCeiling * 3600 * int64(defaultIngestCeiling(t))
+
+	// The rule has to be able to fail: the previous default does not meet it.
+	if prev := eventStoreCapacity(t, "8Gi"); prev >= need {
+		t.Fatalf("8Gi holds %d events against the %d the rule needs: the rule no longer "+
+			"tells the previous default from a sufficient one", prev, need)
+	}
+
+	size := tofuDefault(t, raw, "timescale_storage")
+	if got := eventStoreCapacity(t, size); got < need {
+		t.Errorf("timescale_storage default %s holds %d events, below the %d that %d hours "+
+			"at the default ceiling of %.0f messages/s needs", size, got, need,
+			eventStoreHoursAtDefaultCeiling, defaultIngestCeiling(t))
+	}
+}
+
 // valueOf returns the value of a "name=value" var, failing if it is absent.
 func valueOf(t *testing.T, vars []string, name string) string {
 	t.Helper()
@@ -454,6 +502,16 @@ func TestCompactLowersRequestsAndNotLimits(t *testing.T) {
 	if _, ok := helmValues(compactState(true))["resources"]; !ok {
 		t.Fatal("--compact set no resources: the pods keep the full-size requests and " +
 			"the preset's whole scheduling claim is unfounded")
+	}
+	// The chart's measured per-area requests sit between the top-level map and an
+	// area's own block, so they would win over the lowered requests above. A
+	// failure here names the missing switch rather than a request comparison.
+	if on, ok := helmValues(compactState(true))["useMeasuredRequests"]; !ok || on != false {
+		t.Errorf("--compact sets useMeasuredRequests = %v (set: %v), want false: the chart's "+
+			"measured requests would keep the busiest services above the compact request", on, ok)
+	}
+	if _, ok := helmValues(compactState(false))["useMeasuredRequests"]; ok {
+		t.Error("a default install sets useMeasuredRequests; it should leave the chart's default alone")
 	}
 
 	shipped := byArea(t, renderContainers(t, nil))

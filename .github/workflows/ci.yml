@@ -1646,6 +1646,23 @@ jobs:
           refuses "unknown key under an area's resources" "additional properties 'limit' not allowed" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set functionalAreas.event-sources.resources.limit.cpu=4
+          # A measured request is a chart default the operator never wrote, so the
+          # refusal has to say where it came from and how to turn it off.
+          refuses "measured request above an area limit" "measuredRequests.cpu" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.device-management.resources.limits.cpu=300m
+          refuses "unknown key under measuredRequests" "additional properties 'memory' not allowed" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.device-management.measuredRequests.memory=1Gi
+          # The opt-out switches are the keys a typo hurts most: a misspelled one would
+          # render and leave the rule it meant to turn off in place.
+          refuses "misspelled key in an area's values" "additional properties 'avoidEventStorePrimry' not allowed" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.event-sources.avoidEventStorePrimry=false
+          renders "measured requests off, area limit lowered" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set useMeasuredRequests=false \
+            --set functionalAreas.device-management.resources.limits.cpu=300m
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "inline config, ingest-only" --set profile=ingest-only \

@@ -597,7 +597,9 @@ que ya existen en lugar de añadir un eje de ajuste propio:
 - **solicitudes** (requests) de programación más bajas (25m / 64Mi), para que los pods quepan
   en un nodo pequeño. Los límites quedan intactos: bajar el límite de memoria convierte la
   presión en OOMKills y bajar el límite de CPU produce throttling, y ninguna de las dos cosas
-  reduce nada. `device-management` y `event-management` conservan sus límites de CPU más altos;
+  reduce nada. `device-management`, `event-management`, `event-sources` y `device-state`
+  conservan sus límites de CPU más altos, y las solicitudes por servicio que usa una instalación
+  predeterminada se desactivan para que las más bajas se apliquen a todos los servicios;
   consulta [Dimensionamiento de los servicios](#service-sizing);
 - sin la pila de monitorización, el mayor consumidor individual;
 - sin cert-manager, ya que con TLS desactivado nada necesita que se emita un certificado
@@ -850,25 +852,62 @@ que `dcctl ha verify` vuelva a pasar.
 
 ### Dimensionamiento de los servicios {#service-sizing}
 
-Cada servicio de backend solicita 100m de CPU y 128Mi de memoria (25m y 64Mi con
-[`--compact`](#--compact)) y tiene un límite de 500m y 256Mi, con dos excepciones:
-`device-management` y `event-management` pueden usar cada uno hasta 2 núcleos de CPU. Esos dos
-hacen el trabajo por evento de resolver y almacenar cada evento, y están dimensionados para el
-tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
-mensajes por segundo, con una lectura por mensaje. La consola se dimensiona por separado.
+Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi. La CPU se
+dimensiona por servicio a partir de mediciones:
 
+| Servicio | Solicitud de CPU | Límite de CPU |
+| --- | --- | --- |
+| `device-management` | 500m | 2 núcleos |
+| `event-management` | 400m | 2 núcleos |
+| `device-state` | 400m | 2 núcleos |
+| `event-sources` | 150m | 2 núcleos |
+| cualquier otro servicio de backend | 100m | 500m |
+
+Con [`--compact`](#--compact), cada servicio de backend solicita en cambio 25m y 64Mi, y los
+límites quedan como arriba. La consola se dimensiona por separado.
+
+Estos cuatro servicios hacen el trabajo por evento: recibir, resolver y almacenar cada evento, y
+fusionarlo en el estado en vivo de cada dispositivo. Sus límites están dimensionados para el
+tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
+mensajes por segundo con una lectura por mensaje, y para el ritmo que sostiene una instalación
+predeterminada (consulta [Rendimiento medido](#measured-throughput)).
+
+- **Las solicitudes son lo que cada servicio usa al techo predeterminado de un inquilino.** Una
+  solicitud es la CPU que el planificador reserva para un pod en su nodo. Cada una de las de
+  arriba es lo que ese servicio usó, medido, al techo predeterminado, redondeado hacia arriba.
+  Con todos los servicios solicitando los mismos 100m, el planificador no podía distinguir los
+  servicios ocupados de los inactivos al ubicarlos, y puso los más ocupados en un mismo nodo. La
+  memoria se queda en 128Mi: en v0.18.0 ningún servicio de la ruta de eventos usó más de 40Mi en
+  ninguna muestra, ni siquiera a 4800 eventos por segundo.
 - **Los límites no reservan nada.** Kubernetes planifica un pod según sus solicitudes, así que
-  los límites más altos no necesitan espacio adicional en un nodo. Solo permiten que los dos
-  servicios usen la CPU que el nodo tiene libre mientras están ocupados. `--compact` reduce sus
-  solicitudes, como en todos los servicios de backend, y no toca los límites.
+  los límites más altos no necesitan espacio adicional en un nodo. Solo permiten que un servicio
+  ocupado use la CPU que el nodo tiene libre. `--compact` reduce todas las solicitudes y no toca
+  los límites.
 - **Bajar un límite de CPU recorta el rendimiento; no ahorra capacidad.** Con 500m, en un clúster
   kind `--ha` de cuatro nodos, `device-management` resolvía como máximo unos 720 eventos por
   segundo, frenado por su límite en casi todos los periodos de planificación, y cada evento por
-  encima de eso esperaba en el stream de entrada. Medido sin un límite que lo frenara, usaba hasta
-  0,96 milinúcleos de CPU por evento y `event-management` hasta 0,53 por evento almacenado, así que
-  el techo predeterminado necesita alrededor de un núcleo y de medio núcleo; cada límite es el
-  doble, porque un límite de CPU se aplica en periodos cortos y un servicio ocupado lo alcanza en
-  ráfagas mucho antes que su media.
+  encima de eso esperaba en el stream de entrada. Medido allí sin un límite que lo frenara, usaba
+  hasta 0,96 milinúcleos de CPU por evento y `event-management` hasta 0,53 por evento almacenado,
+  así que el techo predeterminado necesita alrededor de un núcleo y de medio núcleo; cada límite es
+  el doble, porque un límite de CPU se aplica en periodos cortos y un servicio ocupado lo alcanza
+  en ráfagas mucho antes que su media. En un clúster en la nube de tres nodos, con 500m,
+  `event-sources` quedaba frenado por su límite en el 84% de los periodos de planificación a 4000
+  eventos por segundo, y sus respuestas más lentas limitaron el ritmo al que podían enviar los
+  dispositivos a unos 4300 eventos por segundo; `device-state` fusionaba el estado en vivo a no
+  más de unos 2300 eventos por segundo, así que la vista en vivo de los dispositivos se retrasaba
+  minutos. Medidos sin un límite que los frenara, usan 0,14 y 0,37 milinúcleos por evento, así que
+  al ritmo que sostiene una instalación predeterminada necesitan alrededor de medio núcleo y de
+  núcleo y medio.
+- **Los servicios más ocupados evitan el primario del almacén de eventos.** `device-management`,
+  `event-management` y `event-sources` prefieren un nodo que no ejecute el primario del almacén
+  de eventos de la instancia (en las instalaciones que usan CloudNativePG, la opción
+  predeterminada), que es el proceso individual más ocupado de una instalación. Es una
+  preferencia, no un requisito: en un clúster con menos nodos que servicios ocupados se siguen
+  planificando. Solo se aplica cuando se planifica un pod, así que una conmutación por error de
+  la base de datos no mueve los pods en ejecución. Con la configuración ajustada de abajo, sacar
+  `event-management` de ese nodo elevó el ritmo sostenido de unos 4750 a unos 5600 eventos por
+  segundo; su efecto con la configuración predeterminada no se ha medido. Para desactivarlo en un
+  servicio, establece `functionalAreas.<servicio>.avoidEventStorePrimary: false`.
 - **Más tráfico necesita más.** Varios inquilinos enviando cada uno a su techo, mensajes con
   muchas lecturas, o un inquilino [admitido por encima de su
   techo](../concepts/governance.md#ingest-above-ceiling) mientras se pone al día necesitan más
@@ -885,18 +924,68 @@ mensajes por segundo, con una lectura por mensaje. La consola se dimensiona por 
           cpu: "4"
   ```
 
-  El bloque `functionalAreas.<servicio>.resources` de un servicio se combina clave a clave sobre
-  los `resources` de nivel superior, así que indica solo lo que cambia. Para garantizar la CPU
-  cuando el nodo está saturado, aumenta también la solicitud. Una solicitud por encima del límite
-  de su servicio se rechaza al generar el chart.
+  La CPU y la memoria de un servicio vienen de tres sitios, y cada uno prevalece sobre el
+  anterior, clave a clave: los `resources` de nivel superior, después la solicitud de CPU medida
+  del servicio (`functionalAreas.<servicio>.measuredRequests`), y después los
+  `functionalAreas.<servicio>.resources` propios del servicio. Así que indica solo lo que cambia.
+  Para garantizar la CPU cuando el nodo está saturado, aumenta también la solicitud en los
+  `resources` propios del servicio. Una solicitud por encima del límite de su servicio se rechaza
+  al generar el chart, y el rechazo indica de dónde vino cada valor.
 
-  El límite de CPU propio de esos dos servicios se define de la misma forma, así que un
-  `resources.limits.cpu` de nivel superior no lo sustituye: un límite de nivel superior de 4
-  núcleos da 4 núcleos a los demás servicios de backend y deja estos dos en 2. Define el suyo en
-  `functionalAreas`, como arriba.
+  Los límites y las solicitudes de CPU propios de esos cuatro servicios se definen de la misma
+  forma, así que los `resources` de nivel superior no los sustituyen: un límite de nivel superior
+  de 4 núcleos da 4 núcleos a los demás servicios de backend y deja estos cuatro en 2, y un
+  `requests.cpu` de nivel superior no les llega. Define los suyos en `functionalAreas`, como
+  arriba. En una instalación solo con el chart, `useMeasuredRequests: false` desactiva las
+  solicitudes medidas, de modo que las solicitudes de nivel superior se aplican a todos los
+  servicios; es lo que hace `--compact`.
 
 La métrica que muestra un servicio frenado por su límite es
 `container_cpu_cfs_throttled_periods_total` de su contenedor.
+
+#### Rendimiento medido {#measured-throughput}
+
+| Versión | Clúster | Configuración | Ritmo sostenido | Resultado |
+| --- | --- | --- | --- | --- |
+| v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-8 (8 vCPU cada uno), discos persistentes SSD, `--ha` | los valores predeterminados de v0.18.0, anteriores al dimensionamiento de arriba | unos 3800 eventos/s | Dos ejecuciones de 10 minutos a 4000 eventos/s ofrecidos almacenaron cada una los 2 399 000 eventos aceptados, sin perder ni duplicar ninguno. La etapa más lenta mantuvo el 96,5% del ritmo ofrecido en una ejecución (la resolución, 3858 por segundo) y el 98% en la otra. El estado en vivo de los dispositivos solo siguió el ritmo hasta unos 2300 eventos por segundo, con el límite de 500m que tenía entonces `device-state`. |
+| v0.18.0 | el mismo | ajustada: ver abajo | unos 5600 eventos/s | Ejecuciones de 180 segundos. A 5600 ofrecidos, cada etapa mantuvo al menos el 98,9% del ritmo ofrecido, la cola se vació en 3 segundos y cada evento aceptado se almacenó exactamente una vez. El estado en vivo siguió el ritmo. |
+
+Ambas filas se midieron en v0.18.0, con el generador de carga en un nodo aparte. Con la
+configuración predeterminada, lo que frenó el ritmo fue el grupo de resolutores de
+`device-management` y, más allá de él, los límites de CPU de `event-sources` y `device-state` que
+el dimensionamiento de arriba aumenta. La fila ajustada usó `device-management` con 2 réplicas,
+`resolution.workers: 32` y `rdbConfiguration.maxOpenConnections: 48`; `event-sources` con 2
+réplicas; `event-management` con `persistence.writers: 10` y `persistence.maxBatch: 64`, en un
+nodo sin el primario del almacén de eventos; `device-state` con `projection.writers: 5`,
+`projection.maxBatch: 64` y `projection.lingerMillis: 25`; límites de CPU de 4 núcleos (2 para
+`event-processing`); y límites de memoria de 1Gi.
+
+#### Volumen del almacén de eventos {#event-store-volume}
+
+Cada instancia del almacén de eventos tiene un volumen de 32Gi, así que tres con `--ha` (4Gi cada
+uno con `--compact`). Una medición almacenada ocupa alrededor de 1,05 KB, y el registro de
+escritura anticipada de la base de datos ocupa alrededor de 1,1 GB más mientras las copias de
+seguridad le siguen el ritmo, así que 32Gi contienen unos 27 millones de eventos: unas siete
+horas de un inquilino que envía a su techo predeterminado completo.
+
+El volumen no es lo primero que se llena con una ingesta sostenida. Con el
+[destino de respaldo predeterminado](#default-backup-destination), el registro de escritura
+anticipada archivado ocupa por evento más o menos lo mismo que los datos, y se conserva durante la
+ventana de recuperación de las copias de seguridad, así que ese almacén se llena primero. Cuando
+está lleno, el archivado se detiene, y el registro que la base de datos no puede enviar se
+acumula en este volumen hasta que se llena y la base de datos se detiene. El volumen más grande
+da tiempo entre las [alertas](./observability.md#backup-archiving) y esa parada; lo que hay que
+dimensionar para el ritmo de ingesta es el destino de respaldo. Una ventana de retención
+(`retentionDays` en la configuración `lifecycle` de event-management) limita los datos
+almacenados en una instancia que deba funcionar indefinidamente, pero no el archivo.
+
+El tamaño se fija al crear una instancia; `dcctl upgrade` no cambia el volumen de una instancia
+existente. Para ampliarlo, con una StorageClass que permita la expansión de volúmenes:
+
+```bash
+kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
+  -p '{"spec":{"storage":{"size":"64Gi"}}}'
+```
 
 ## Después del arranque inicial {#after-bootstrap}
 

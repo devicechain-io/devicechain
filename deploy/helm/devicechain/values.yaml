@@ -667,11 +667,15 @@ blobStorage:
 
 # E7 (ADR-022 review): default pod resource requests/limits. An area's own
 # functionalAreas.<area>.resources is merged over this map key by key, so an area
-# sets only what differs (see device-management and event-management below, which
-# raise only limits.cpu). These are lightweight Go services
+# sets only what differs (see the event-path areas below — device-management,
+# event-management, event-sources and device-state — which raise only limits.cpu).
+# These are lightweight Go services
 # (~50MB baseline per the mission); requests size for scheduling, limits cap the
 # blast radius. requests are mandatory (values.schema.json enforces non-empty
 # resources) so pods land in the Burstable/Guaranteed QoS class, not BestEffort.
+#
+# The memory request stays 128Mi for every area: on GKE (v0.18.0) no event-path
+# pod's working set passed 40Mi in any kubectl top sample, up to 4800 events/s.
 resources:
   requests:
     cpu: 100m
@@ -679,6 +683,23 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
+
+# Per-area CPU REQUESTS sized from measurement (functionalAreas.<area>.measuredRequests).
+# true (the default) applies each area's measuredRequests over the top-level
+# resources.requests above; an area's own functionalAreas.<area>.resources.requests
+# still wins over both. So with this on, a top-level requests.cpu does NOT reach an
+# area that has a measured request: set that area's own resources.requests instead.
+#
+# `dcctl install --compact` sets this to false, so its lowered top-level requests reach
+# every area: a small node is the one place a request sized for the default ingest
+# ceiling is the wrong answer. It is one top-level switch rather than per-area values
+# written by dcctl so that dcctl keeps not knowing which areas the chart sizes.
+#
+# Requests decide where the scheduler places a pod and nothing else. With every area
+# at the same 100m the scheduler could not tell a service that resolves every event
+# from one that is idle, and on a three-node GKE cluster it put the busiest services
+# on the node running the event store's primary.
+useMeasuredRequests: true
 
 # GOMEMLIMIT, as a percentage of each container's own memory LIMIT.
 #
@@ -1005,9 +1026,9 @@ functionalAreas:
   # allowed lateness (event-processing watermarkLatenessSeconds); an event whose publish
   # failed is republished only after the inbound AckWait (60 s), beyond that lateness.
   device-management:
-    # CPU LIMIT raised from the 500m default. Requests and the memory limit are the
-    # defaults above: this block is merged over them key by key, so --compact still
-    # lowers the requests.
+    # CPU LIMIT raised from the 500m default. The CPU request is measuredRequests
+    # below; the memory request and limit are the defaults above. This block is
+    # merged over them key by key.
     #
     # At 500m this service was the ceiling of the whole ingest path: on a four-node
     # --ha kind cluster it resolved at most ~720 events/s, CPU-throttled in 99.9% of
@@ -1026,6 +1047,23 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
+    # CPU REQUEST at the default 1000 messages/s tenant ceiling, applied while
+    # useMeasuredRequests is on (not under --compact). Measured on GKE (3 x
+    # n2-standard-8, SSD persistent disks, --ha, v0.18.0): 0.38 cores at 800 events/s
+    # and 0.72 at 1600, so at most 0.475 millicores per event: 475m, rounded up to
+    # 500m. That is about half the kind figure above; the kind figure holds the
+    # limit, and the production-shaped cluster sizes the request, which only places
+    # the pod. backend/cli/bootstrap/sizing_test.go holds both.
+    measuredRequests:
+      cpu: 500m
+    # Prefer a node that is not running this instance's event-store primary
+    # (templates/_helpers.tpl devicechain.eventStorePrimaryAntiAffinity). Preferred,
+    # never required: on a cluster with fewer nodes than busy services the pod still
+    # schedules. Measured on the same GKE cluster with TUNED settings (not these
+    # defaults), moving event-management off that node raised the sustained rate from
+    # ~4.75k to ~5.6k events/s; the node carrying the primary ran at 87-97% CPU in
+    # every tuned rung.
+    avoidEventStorePrimary: true
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)
       # rejects any inbound event that does not present a valid device credential;
@@ -1051,6 +1089,24 @@ functionalAreas:
       #     workers: 10     # must be below rdbConfiguration.maxOpenConnections
       #                     # (20 unless set); above half of it is logged.
   event-sources:
+    # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
+    # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in
+    # 84% of scheduling periods at 4000 events/s and 100% at 4800; its synchronous
+    # inbound publish then took p50 59 ms / p99 236 ms, and those slower responses
+    # capped the rate devices could send at about 4,300 events/s. Unthrottled it costs
+    # 0.138 millicores per event, so the ~3,800 events/s a default --ha install
+    # sustains needs 525m on average: more than the old limit. "2" matches
+    # device-management and event-management. backend/cli/bootstrap/sizing_test.go
+    # holds it to that measurement.
+    resources:
+      limits:
+        cpu: "2"
+    # 0.10 cores at 800 events/s (0.125 millicores per event), 0.138 unthrottled at
+    # 4000: 138m at the default ceiling, rounded up to 150m.
+    measuredRequests:
+      cpu: 150m
+    # See device-management above.
+    avoidEventStorePrimary: true
     config: {}
     # Per-message READING ceiling for the JSON transports — HTTP, external MQTT and
     # the platform broker's capture stream (ADR-023). A reading is one stored datum:
@@ -1166,7 +1222,8 @@ functionalAreas:
         port: 8081
   event-management:
     # CPU LIMIT raised from the 500m default, merged over the defaults like
-    # device-management's (above) and by the same rule. Measured unthrottled it costs
+    # device-management's (above) and by the same rule; the CPU request is
+    # measuredRequests below. Measured unthrottled on kind it costs
     # up to 0.53 millicores per stored event, so the default 1000 messages/s tenant
     # ceiling needs ~0.5 core: exactly the old limit, which it would have hit as soon
     # as device-management stopped holding it back (it was already throttled in 4% of
@@ -1175,6 +1232,14 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
+    # GKE (as device-management): 0.29 cores at 800 events/s and 0.56 at 1600, at most
+    # 0.3625 millicores per stored event: 363m at the default ceiling, rounded up to
+    # 400m.
+    measuredRequests:
+      cpu: 400m
+    # See device-management above. This is the service the tuned GKE measurement
+    # moved.
+    avoidEventStorePrimary: true
     config: {}
     # anchorSweepIntervalSeconds: 3600  # ADR-044 decision 3 reconciliation-sweep
     # cadence. Unset defaults to hourly; a negative value disables the sweep (the
@@ -1232,6 +1297,27 @@ functionalAreas:
     #                         # 1000. 0 commits only what is already waiting, which
     #                         # adds no latency.
   device-state:
+    # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
+    # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in
+    # every scheduling period from 2400 events/s and merged live state at ~2.3k/s at
+    # most, so at the ~3,800 events/s the rest of a default --ha install sustains, the
+    # live device view fell minutes behind (943k events after a 10-minute run).
+    # Measured with its limit lifted it costs 0.374 millicores per event: ~1.4 cores at
+    # 3,800. "2" matches the other event-path services. sizing_test.go holds it.
+    #
+    # Not measured at these defaults: with this limit gone, device-state's writers
+    # commit faster against the relational store, which device-management's
+    # credential reads share. A tuned run with twice the writers and no linger drove
+    # that store to 2.6-2.8 cores; projection.lingerMillis: 25 took it back to 1.6-1.8.
+    resources:
+      limits:
+        cpu: "2"
+    # Every rung at the old limit was throttled and under-reads, so the request uses
+    # the unthrottled 0.374 millicores per event: 374m at the default ceiling, rounded
+    # up to 400m. (No avoidEventStorePrimary: its store is the relational one, which
+    # does not run in the instance namespace.)
+    measuredRequests:
+      cpu: 400m
     config: {}
     # Live-state projection (defaults shown). Each writer merges the events already
     # waiting for it, up to maxBatch, in one transaction, which is what lets the

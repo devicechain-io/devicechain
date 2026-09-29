@@ -484,11 +484,19 @@ func helmValues(st *State) map[string]interface{} {
 
 	// Compact lowers the SCHEDULING requests so the pods fit a small node. It does
 	// not touch limits — see compactSizing.CPURequest. These are the TOP-LEVEL
-	// resources; the chart merges an area's own block (device-management's and
-	// event-management's raised CPU limits) over them key by key, so the lowered
-	// requests reach every area without this knowing which areas have one.
+	// resources; the chart merges an area's own block (the event-path areas' raised
+	// CPU limits) over them key by key, so the lowered requests reach every area
+	// without this knowing which areas have one.
+	//
+	// The chart's measured per-area requests (functionalAreas.<area>.measuredRequests)
+	// sit between the top-level map and an area's own block, so they would win over
+	// the lowered requests. Switching that layer off is ONE top-level write, like the
+	// requests themselves. Writing per-area requests here instead would need a second
+	// list, in dcctl, of which areas the chart sizes — the knowledge this is written
+	// not to have.
 	if st.Compact {
 		vals["resources"] = compact.resourceValues()
+		vals["useMeasuredRequests"] = false
 	}
 
 	// LwM2M PSK provisioning (--lwm2m-identities): render the device PSKs into a

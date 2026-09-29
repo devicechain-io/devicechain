@@ -3487,6 +3487,61 @@ Nothing needs doing at the upgrade.
   `kv_cache_request_duration_seconds{op="get"}` now counts only the lookups memory could not
   answer. See [Caches that stop answering](./observability.md#kv-caches).
 
+#### Services are sized from measured throughput {#next-service-sizing}
+
+`event-sources` and `device-state` may now use up to 2 CPU cores, like `device-management` and
+`event-management`. At 500m, `event-sources`' slower responses capped the rate devices could send,
+and `device-state` let the live device view fall minutes behind at rates the rest of an
+installation handled. The four services also **request** CPU sized from measurement instead of
+100m each: `device-management` 500m, `event-management` 400m, `device-state` 400m,
+`event-sources` 150m. `device-management`, `event-management` and `event-sources` prefer a node
+that is not running the event store's primary. A new instance's event store gets a 32Gi volume
+instead of 8Gi. See [Service sizing](./bootstrap.md#service-sizing), which also records the
+measured throughput.
+
+**Before you upgrade an instance installed without `--compact`:**
+
+- **Check there is room for the larger requests.** Once upgraded, the instance requests about
+  1 CPU more than before. During the rolling update each service runs its new pod beside the old
+  one, so the nodes need the new requests free as well: about 1.5 CPU for these four services.
+  Compare the nodes' free allocatable CPU (`kubectl describe nodes`, "Allocated resources") with
+  the table in Service sizing. If a new pod cannot be placed, it stays `Pending` and the upgrade
+  fails after waiting, with the instance partly upgraded: services whose new pods started are on
+  the new release, and the rest are still on the old one. Make room and run `dcctl upgrade` again
+  to finish. An instance built with `dcctl` has no way to keep the old requests; the remedy is
+  capacity.
+- **A `ResourceQuota` or `LimitRange` on the instance's namespace** can refuse the new 2-core limit
+  of `event-sources` and `device-state`, or the larger requests, as it could for
+  `device-management` and `event-management` in v0.18.0.
+
+Instances installed with `--compact` keep their 25m and 64Mi requests.
+
+**If you install the chart yourself, with your own values:**
+
+- A top-level `resources.requests.cpu` no longer reaches `device-management`,
+  `event-management`, `device-state` or `event-sources`: their measured request wins over it. Set
+  theirs under `functionalAreas.<service>.resources.requests`, or set `useMeasuredRequests: false`
+  to apply the top-level requests to every service again.
+- A top-level `resources.limits.cpu` above 2 cores now lowers `event-sources` and `device-state`
+  to 2, as it already did for the other two. Set theirs under
+  `functionalAreas.<service>.resources.limits`.
+- A service's own CPU limit below its measured request (for example `100m` on `event-sources`)
+  rendered before and is now refused, naming `measuredRequests`. Raise the limit, set the
+  service's own request, or set `useMeasuredRequests: false`.
+- The chart's top-level values and a service's block under `functionalAreas` now refuse a key
+  the chart does not read, so a misspelled key fails the render instead of being ignored.
+
+**The event store volume:** nothing changes for an existing instance; only instances created by
+this release get 32Gi. To grow an existing one, see [Event store
+volume](./bootstrap.md#event-store-volume). The backup destination is what fills first under
+sustained ingest, as the note above says; a larger event store does not change that.
+
+The upgrade changes the pod templates of `device-management`, `event-management` and
+`event-sources`, so the rolling update schedules their new pods under the new placement
+preference. A preference applies only when a pod is scheduled, though: if the event store's
+primary later fails over to another node, a pod already running there stays until it is next
+rescheduled.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
