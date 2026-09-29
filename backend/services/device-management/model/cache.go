@@ -102,18 +102,33 @@ type Caches struct {
 // pass that removed anything restarts the settle window, and that window is held above
 // messaging.RetainedCacheWindow plus the purge timeout, far longer than 5 s.
 //
+// 🔑 THE THREE CACHES KEYED BY DEVICE ARE SIZED FOR THE FLEET; THE OTHER TWO ARE NOT.
+// DeviceByToken, RelationshipsBySource and MembershipsByEntity hold an entry per device
+// (MembershipsByEntity also one per area or asset a device is tracked to), so each keeps
+// cfg.InMemoryCache's bound (131,072 entries and 24 MiB by default), where messaging's
+// default of 4,096 entries evicted an entry for every event once a replica saw more than
+// 4,096 devices within 5 s. ProfileResolutionByType and ScopedGroupsExist are keyed by
+// device type and by tenant, of which there are few, and keep that default on purpose: a
+// larger bound there would only be memory promised and never used. What the budget costs
+// against the memory limit is set out at config.DefaultPerDeviceCacheMiB. The bound does
+// not lengthen how long any entry is kept (that is still the 5 s above, capped at the
+// bucket TTL), so the erasure argument above is unchanged by it. The split is pinned
+// through this function by TestPerDeviceCachesHoldMoreThanTheDefaultBound.
+//
 // A new cache whose readers need another replica's write visible at once is built with
 // messaging.WithoutLocalCache(), with a comment here saying why, and is taken out of
 // TestEveryDeviceManagementCacheKeepsItsInProcessTier, which otherwise fails on it: the
 // decision above is pinned there, through this function, over a real broker.
 func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementConfiguration) (*Caches, error) {
+	perDevice := messaging.WithLocalBounds(cfg.InMemoryCache.PerDeviceCacheEntries,
+		cfg.InMemoryCache.PerDeviceCacheMiB<<20)
 	deviceByToken, err := nmgr.NewCache(CACHE_NAME_DEVICE_BY_TOKEN,
-		time.Duration(cfg.DeviceCacheTtlSeconds)*time.Second)
+		time.Duration(cfg.DeviceCacheTtlSeconds)*time.Second, perDevice)
 	if err != nil {
 		return nil, err
 	}
 	relationshipsBySource, err := nmgr.NewCache(CACHE_NAME_RELATIONSHIPS_BY_SOURCE,
-		time.Duration(cfg.RelationshipCacheTtlSeconds)*time.Second)
+		time.Duration(cfg.RelationshipCacheTtlSeconds)*time.Second, perDevice)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +141,7 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 		return nil, err
 	}
 	membershipsByEntity, err := nmgr.NewCache(CACHE_NAME_MEMBERSHIPS_BY_ENTITY,
-		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second)
+		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second, perDevice)
 	if err != nil {
 		return nil, err
 	}

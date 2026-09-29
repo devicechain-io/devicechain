@@ -456,10 +456,12 @@ registran como mensajes no entregados y aparecen en `dcctl dead-letters`, y no a
 
 `device-management` resuelve cada evento entrante antes de que nada lo almacene o lo evalúe. Un
 resolvedor (cada uno de los trabajadores que resuelven eventos) autentica la credencial del evento,
-lo que supone una lectura de la base de datos relacional, después consulta el perfil y las
-relaciones del dispositivo en el almacén clave-valor del bróker de mensajes, y entrega el evento
-resuelto para que se publique. Las consultas se hacen una tras otra, así que un resolvedor pasa la
-mayor parte de cada evento esperando respuestas, no usando CPU. Varios resolvedores trabajan a la
+lo que supone una lectura de la base de datos relacional, después consulta el perfil, las
+relaciones y el alcance de grupos del dispositivo en el almacén clave-valor del bróker de
+mensajes, y entrega el evento resuelto para que se publique. Esas tres consultas se hacen a la
+vez. Lo que el almacén clave-valor no puede responder se lee de la base de datos de una consulta
+en una, así que un resolvedor sigue ocupando como máximo una conexión a la base de datos. Un
+resolvedor pasa la mayor parte de cada evento esperando respuestas, no usando CPU. Varios resolvedores trabajan a la
 vez. Los eventos que llegan mientras todos están ocupados esperan delante de ellos, en orden: hasta
 100 en la cola de entrega del pod y hasta 64 más en el último lote leído del flujo. El resto espera
 en el flujo.
@@ -478,13 +480,15 @@ medida.
 
 | Ajuste (configuración de `device-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras autentica la credencial de un evento, lo que hace con cada evento que lleva una (todos los eventos, con la autenticación de dispositivos `required` por defecto). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. |
+| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras autentica la credencial de un evento, lo que hace con cada evento que lleva una (todos los eventos, con la autenticación de dispositivos `required` por defecto). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. Las consultas de un resolvedor al almacén clave-valor se hacen a la vez, pero sus lecturas de la base de datos siguen haciéndose de una en una, así que nunca ocupa más de una conexión. |
+| `inMemoryCache.perDeviceCacheEntries` | `131072` | Cuántas entradas, como máximo, guarda cada réplica en memoria de cada una de las tres cachés que se guardan por dispositivo: un dispositivo por su token, sus relaciones seguidas y sus pertenencias a grupos. Consulte [Cachés que dejan de responder](#kv-caches). |
+| `inMemoryCache.perDeviceCacheMiB` | `24` | Cuánta memoria, en MiB, ocupa como máximo cada una de esas tres cachés en cada réplica. Suba con él el límite de memoria del servicio. Consulte [Cachés que dejan de responder](#kv-caches). |
 
 Súbalo cuando `resolve_inflight` se mantenga en `resolve_workers` mientras al pod le sobra CPU. Si
 el pod está en su límite de CPU, más resolvedores no ayudan: dele más CPU (consulte
 [Dimensionamiento de los servicios](./bootstrap.md#service-sizing)). Medido dentro del
-proceso contra un bróker de tres servidores, con cada consulta tardando 750 µs, 5 resolvedores
-resolvieron unos 1500 eventos por segundo y 10 unos 2900. Los resolvedores terminan los eventos
+proceso contra un bróker de tres servidores, con cada consulta tardando 750 µs y hechas una tras
+otra, 5 resolvedores resolvieron unos 1500 eventos por segundo y 10 unos 2900. Los resolvedores terminan los eventos
 fuera del orden de llegada, por una fracción de segundo; la detección los aplica en el orden en que
 llegan al flujo de eventos resueltos. Un valor fuera de rango impide que el servicio arranque, y el
 error nombra el ajuste. El servicio registra el valor que usa al arrancar.
@@ -657,15 +661,38 @@ lecturas de la base de datos.
 Cada réplica de `device-management` también guarda en memoria lo que leyó de un bucket, o escribió
 en él, durante hasta cinco segundos (menos si el tiempo de vida de la caché es menor), y responde
 desde ahí sin preguntar a NATS, incluso mientras el bucket se está omitiendo. Los cinco segundos
-cuentan desde que se leyó el valor, no desde la última vez que se usó, y cada caché guarda como
-máximo 4096 entradas o unos 4 MiB, descartando primero las usadas hace más tiempo. Una búsqueda que
-NATS informó como ausente nunca se guarda. Un cambio llega a los eventos que resuelven las demás
+cuentan desde que se leyó el valor, no desde la última vez que se usó. Las tres cachés que se
+guardan por dispositivo (un dispositivo por su token, sus relaciones seguidas y sus pertenencias a
+grupos) guardan cada una hasta 131.072 entradas o 24 MiB por réplica, según
+`inMemoryCache.perDeviceCacheEntries` e `inMemoryCache.perDeviceCacheMiB`. Eso son unos 87.000
+dispositivos sin ninguna relación seguida, o unos 26.000 con una. Las cachés de perfil y de alcance
+de grupos, que se guardan por tipo de dispositivo y por inquilino, guardan 4096 entradas o 4 MiB.
+Cada una descarta primero la entrada usada hace más tiempo cuando está llena, y descarta las
+entradas de más de cinco segundos a medida que guarda otras nuevas. Una búsqueda que NATS informó
+como ausente nunca se guarda. Un cambio llega a los eventos que resuelven las demás
 réplicas hasta cinco segundos más tarde de lo que llegaría solo a través del bucket. Hasta
 entonces otra réplica puede, por ejemplo, seguir resolviendo un dispositivo borrado, o vuelto a
 crear con el mismo token, a través de su registro anterior, o evaluar una regla cuyo alcance de
 grupo acaba de cambiar con el alcance anterior. Los eventos que presentan una credencial de
 dispositivo no se ven afectados por un dispositivo borrado: las credenciales se comprueban contra
 la base de datos en cada evento.
+
+**Flotas que informan con menos frecuencia que cada cinco segundos.** Un valor se guarda en memoria
+cinco segundos desde que se leyó, por grande que sea la caché. Así que un dispositivo que informa
+con menos frecuencia nunca se responde desde memoria, y cada uno de sus eventos cuesta una lectura
+del bucket de clave-valor. En un clúster GKE de tres nodos esa lectura tardó unos 1,5 ms. Con los
+10 resolvedores por defecto, cada uno dedicando ese tiempo a cada uno de esos eventos, una flota
+así se resuelve más despacio que una cuyos dispositivos informan cada pocos segundos. Para
+resolverla más rápido, añada resolvedores (`resolution.workers`, dentro del pool de conexiones) o
+réplicas de `device-management`. La señal es
+`kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` cerca del ritmo de
+eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por debajo de
+`kv_cache_local_max_entries`. Una flota demasiado grande para la caché muestra en cambio
+`kv_cache_local_evictions_total{reason="capacity"}` creciendo cerca del ritmo de eventos, con
+`kv_cache_local_entries` en `kv_cache_local_max_entries` o `kv_cache_local_bytes` en
+`kv_cache_local_max_bytes`. Entonces suba el límite, y con él el límite de memoria: con los valores
+por defecto las cinco cachés guardan como máximo 80 MiB, y sin `GOMEMLIMIT` el heap puede crecer
+hasta aproximadamente el doble de lo que guarda antes de recolectarse.
 
 Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
 Espera hasta cinco segundos, porque solo el líder del bucket puede aceptarlo. Si aun así falla, el
@@ -676,7 +703,9 @@ réplicas que ya la tenían en memoria.
 - **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 mientras el bucket se está
   omitiendo.
 - **`devicechain_devicemanagement_kv_cache_failures_total{cache, op, reason}`**: operaciones que
-  agotaron el tiempo (`reason="timeout"`) o fallaron (`reason="error"`).
+  agotaron el tiempo (`reason="timeout"`) o fallaron (`reason="error"`). Las consultas de un evento
+  se hacen a la vez, así que cuando un bucket deja de responder, varias pueden agotar el tiempo
+  juntas antes de que se omita, y cada una cuenta aquí.
 - **`devicechain_devicemanagement_kv_cache_bypassed_total{cache, op}`**: búsquedas y escrituras que
   fueron a la base de datos en su lugar.
 - **`devicechain_devicemanagement_kv_cache_request_duration_seconds{cache, op}`**: cuánto tardó
@@ -692,9 +721,13 @@ réplicas que ya la tenían en memoria.
 - **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** y
   **`devicechain_devicemanagement_kv_cache_local_bytes{cache}`**: cuántas entradas, y
   aproximadamente cuántos bytes, guarda una réplica en memoria para la caché. Las entradas
-  caducadas cuentan hasta que una búsqueda las encuentra o la caché necesita el espacio.
+  caducadas cuentan hasta que una búsqueda las encuentra, se guarda una entrada más nueva después
+  de ellas o la caché necesita el espacio.
+- **`devicechain_devicemanagement_kv_cache_local_max_entries{cache}`** y
+  **`devicechain_devicemanagement_kv_cache_local_max_bytes{cache}`**: cuántas entradas, y cuántos
+  bytes, guarda como máximo la caché en memoria antes de descartar la usada hace más tiempo.
 
-Una caché creada sin la copia en memoria no tiene ninguna de las cuatro series `kv_cache_local_`.
+Una caché creada sin la copia en memoria no tiene ninguna de las seis series `kv_cache_local_`.
 Hoy todas las cachés de `device-management` la tienen.
 
 Por otra parte, resolver un evento que tarda más de cinco segundos, por la razón que sea, se

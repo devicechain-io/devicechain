@@ -19,18 +19,31 @@ import (
 // it.
 const DefaultLocalCacheTTL = 5 * time.Second
 
-// defaultLocalMaxEntries and defaultLocalMaxBytes bound one Cache's in-process copy. With
-// the five device-management caches that is at most 20 MiB of accounted bytes, against a
-// 256 MiB area memory limit; the heap can hold up to about twice that before a collection.
+// defaultLocalMaxEntries and defaultLocalMaxBytes bound one Cache's in-process copy unless
+// it is built WithLocalBounds. They suit a cache keyed by something there are few of (a
+// device type, a tenant). A cache keyed per device holds one entry for every device that
+// reported within its TTL, so it passes WithLocalBounds sized for the fleet, and whoever
+// builds it states what that costs against the service's memory limit, remembering that
+// the heap can grow to about twice what is live before a collection.
 const (
 	defaultLocalMaxEntries = 4096
 	defaultLocalMaxBytes   = 4 << 20
 )
 
-// localEntryOverhead is what one held entry costs beyond its key and value bytes: the list
-// element, the entry struct and the map slot, rounded up. It is counted against the byte
-// cap so that a cache full of tiny values is bounded by memory, not only by count.
-const localEntryOverhead = 128
+// localEntryOverhead is what one held entry costs on the heap beyond its key bytes and its
+// value's CAPACITY: the list element (48 B), the entry struct (72 B, allocated as 80) and
+// its slot in the key map, which a Go map spreads over more memory the emptier it is. A
+// map slot here is 25 B (a 16-B string header, an 8-B pointer and a control byte), and a
+// map just past growth is 7/16 full, so the worst case is 25 / (7/16), 58 B rounded up.
+// That makes 186 B, rounded up to 192. Measured on Go 1.26, linux/amd64, over 50,000 to 131,072
+// entries with 16-B keys, everything but the key came to between 163 and 181 B more than
+// the value's capacity, depending on how full the map was. The value 128 this replaced
+// undercounted an entry by up to 53 B of that. TestLocalEntryOverheadCoversTheHeap holds the
+// arithmetic above against the running Go's own struct sizes.
+//
+// It is counted against the byte cap so that a cache full of tiny values is bounded by
+// memory, not only by count, and so that the cap bounds the heap it says it does.
+const localEntryOverhead = 192
 
 // CacheOption adjusts one Cache when it is built.
 type CacheOption func(*cacheOptions)
@@ -57,6 +70,20 @@ func WithLocalTTL(d time.Duration) CacheOption {
 		panic("messaging: WithLocalTTL needs a positive duration; use WithoutLocalCache to turn the in-process tier off")
 	}
 	return func(o *cacheOptions) { o.localTTL = d }
+}
+
+// WithLocalBounds sets how many entries, and how many accounted bytes (see
+// localEntryOverhead), this Cache keeps in process memory, in place of the 4,096 entries
+// and 4 MiB a cache keeps otherwise. Both must be positive: it panics otherwise, as
+// WithLocalTTL does, so a computed zero cannot shrink a cache to nothing by accident.
+func WithLocalBounds(maxEntries, maxBytes int) CacheOption {
+	if maxEntries <= 0 || maxBytes <= 0 {
+		panic("messaging: WithLocalBounds needs a positive entry count and byte count")
+	}
+	return func(o *cacheOptions) {
+		o.maxEntries = maxEntries
+		o.maxBytes = maxBytes
+	}
 }
 
 // WithoutLocalCache turns the in-process tier off, so every Get asks the bucket. It is for
@@ -146,6 +173,29 @@ func (l *localCache) get(key string, now time.Time) ([]byte, bool) {
 	return e.data, true
 }
 
+// peek is get for a caller that will call get next when this finds nothing: a live entry
+// is a hit, counted and moved to the front as get does, but a missing or expired entry is
+// left to that get, which counts the miss and removes what expired. So a lookup that
+// peeks first is still counted once.
+func (l *localCache) peek(key string, now time.Time) ([]byte, bool) {
+	if l == nil {
+		return nil, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	el, ok := l.byKey[key]
+	if !ok {
+		return nil, false
+	}
+	e := el.Value.(*localEntry)
+	if !now.Before(e.expires) {
+		return nil, false
+	}
+	l.order.MoveToFront(el)
+	l.obs.localLookup(true)
+	return e.data, true
+}
+
 // generation is read by a Get before it asks the bucket, and handed back to fill.
 func (l *localCache) generation() uint64 {
 	if l == nil {
@@ -200,8 +250,8 @@ func (l *localCache) invalidate(key string) {
 	l.report()
 }
 
-// len reports the entries and accounted bytes held, expired entries not yet removed
-// included.
+// len reports the entries and accounted bytes held, expired entries not yet removed (by the
+// lookup that finds them, or a newer store behind them) included.
 func (l *localCache) len() (entries, bytes int) {
 	if l == nil {
 		return 0, 0
@@ -215,11 +265,24 @@ func (l *localCache) len() (entries, bytes int) {
 // caps hold. A value too large for the byte cap on its own is not held at all, and the
 // entry it would have replaced is gone too, so an older value is never left in its place.
 // Called with mu held.
+//
+// An entry is charged its value's CAPACITY, not its length: the allocation behind a slice
+// is rounded up to a size class, and that rounding is heap the cap has to see.
+//
+// Then entries past their expiry at the least recently used end are dropped. A key read
+// less often than the TTL is never answered from memory, because it has expired by the
+// time it is read again; without this, a fleet reporting less often than that would fill
+// the cache with entries nothing can use, and hold memory for every device in it rather
+// than for those that reported within the TTL. The back is only the least recently USED,
+// not the oldest stored, so this stops at a live entry even when an expired one sits in
+// front of it; that one goes when a lookup finds it, as before. The loop always stops,
+// with no check for an empty list: the entry just stored is in it, with an expiry still
+// ahead (a value too big to store returned above, before anything was removed here).
 func (l *localCache) insert(key string, data []byte, now time.Time) {
 	if el, ok := l.byKey[key]; ok {
 		l.remove(el, "")
 	}
-	size := len(key) + len(data) + localEntryOverhead
+	size := len(key) + cap(data) + localEntryOverhead
 	if size > l.maxBytes {
 		return
 	}
@@ -227,6 +290,9 @@ func (l *localCache) insert(key string, data []byte, now time.Time) {
 	l.bytes += size
 	for l.order.Len() > l.maxEntries || l.bytes > l.maxBytes {
 		l.remove(l.order.Back(), "capacity")
+	}
+	for back := l.order.Back(); !now.Before(back.Value.(*localEntry).expires); back = l.order.Back() {
+		l.remove(back, "expired")
 	}
 }
 

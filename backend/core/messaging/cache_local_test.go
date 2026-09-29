@@ -507,7 +507,9 @@ func TestTheLocalCopyIsBoundedByBytes(t *testing.T) {
 	store := newCountingStore()
 	c := newCache("test", store, nil, 0)
 	ctx := context.Background()
-	one := len("k0") + len(`"xx"`) + localEntryOverhead
+	// A Set holds json.Marshal's 4 bytes, whose allocation holds 8, and an entry is charged
+	// the capacity it holds.
+	one := len("k0") + 8 + localEntryOverhead
 	c.local.maxBytes = 2 * one
 	for _, k := range []string{"k0", "k1", "k2"} {
 		if err := c.Set(ctx, k, "xx"); err != nil {

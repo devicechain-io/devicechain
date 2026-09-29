@@ -236,6 +236,9 @@ type streamMetrics struct {
 	cacheLocalEvictions *prometheus.CounterVec
 	cacheLocalEntries   *prometheus.GaugeVec
 	cacheLocalBytes     *prometheus.GaugeVec
+	// The bounds each in-process copy was built with, so its fill can be read against them.
+	cacheLocalMaxEntries *prometheus.GaugeVec
+	cacheLocalMaxBytes   *prometheus.GaugeVec
 }
 
 // cacheBuckets spans a loopback KV answer to the Get/Set budget. Nothing lands above it
@@ -373,11 +376,19 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"time in memory), capacity (the copy was full), deleted (the entry was evicted on a change).",
 			[]string{"cache", "reason"}),
 		cacheLocalEntries: ms.NewGaugeVec("kv_cache_local_entries",
-			"Entries held in a key-value cache's in-process copy, including expired ones not yet removed.",
+			"Entries held in a key-value cache's in-process copy, including expired ones not yet removed "+
+				"by a lookup or a newer store.",
 			[]string{"cache"}),
 		cacheLocalBytes: ms.NewGaugeVec("kv_cache_local_bytes",
 			"Approximate bytes held in a key-value cache's in-process copy (keys, values and a fixed "+
 				"per-entry overhead), including expired entries not yet removed.",
+			[]string{"cache"}),
+		cacheLocalMaxEntries: ms.NewGaugeVec("kv_cache_local_max_entries",
+			"The most entries a key-value cache's in-process copy holds before it drops the least recently used.",
+			[]string{"cache"}),
+		cacheLocalMaxBytes: ms.NewGaugeVec("kv_cache_local_max_bytes",
+			"The most bytes, counted as kv_cache_local_bytes counts them, that a key-value cache's in-process "+
+				"copy holds before it drops the least recently used.",
 			[]string{"cache"}),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
@@ -472,12 +483,14 @@ func (o *cacheObserver) init() {
 	o.m.cacheUnavailable.WithLabelValues(o.cache).Set(0)
 }
 
-// initLocal creates the in-process tier's series at 0, for the reason init gives. Called
-// only for a cache whose in-process tier is on.
-func (o *cacheObserver) initLocal() {
+// initLocal creates the in-process tier's series at 0, for the reason init gives, and
+// records the bounds it was built with. Called only for a cache whose in-process tier is on.
+func (o *cacheObserver) initLocal(maxEntries, maxBytes int) {
 	if o == nil || o.m.cacheLocalLookups == nil {
 		return
 	}
+	o.m.cacheLocalMaxEntries.WithLabelValues(o.cache).Set(float64(maxEntries))
+	o.m.cacheLocalMaxBytes.WithLabelValues(o.cache).Set(float64(maxBytes))
 	o.localHit = o.m.cacheLocalLookups.WithLabelValues(o.cache, "hit")
 	o.localMiss = o.m.cacheLocalLookups.WithLabelValues(o.cache, "miss")
 	o.localHit.Add(0)

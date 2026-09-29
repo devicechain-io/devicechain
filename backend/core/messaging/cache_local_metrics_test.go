@@ -39,16 +39,19 @@ func TestLocalLookupMetrics(t *testing.T) {
 		return testutil.ToFloat64(m.cacheLocalEvictions.WithLabelValues("device-by-token", reason))
 	}
 
-	// Created at 0 when the cache was built: 2 lookup results, 3 eviction reasons, 2 gauges.
+	// Created at 0 when the cache was built: 2 lookup results, 3 eviction reasons, 2 gauges,
+	// and the 2 bound gauges at what the cache was built with.
 	for _, name := range []string{"kv_cache_local_lookups_total", "kv_cache_local_evictions_total",
-		"kv_cache_local_entries", "kv_cache_local_bytes"} {
+		"kv_cache_local_entries", "kv_cache_local_bytes", "kv_cache_local_max_entries",
+		"kv_cache_local_max_bytes"} {
 		full := "devicechain_devicemanagement_" + name
 		n, err := testutil.GatherAndCount(reg, full)
 		if err != nil {
 			t.Fatalf("gather %s: %v", full, err)
 		}
 		want := map[string]int{"kv_cache_local_lookups_total": 2, "kv_cache_local_evictions_total": 3,
-			"kv_cache_local_entries": 1, "kv_cache_local_bytes": 1}[name]
+			"kv_cache_local_entries": 1, "kv_cache_local_bytes": 1, "kv_cache_local_max_entries": 1,
+			"kv_cache_local_max_bytes": 1}[name]
 		if n != want {
 			t.Errorf("%s has %d series at construction, want %d", full, n, want)
 		}
@@ -87,7 +90,9 @@ func TestLocalLookupMetrics(t *testing.T) {
 	if got := testutil.ToFloat64(m.cacheLocalEntries.WithLabelValues("device-by-token")); got != 1 {
 		t.Errorf("entries = %v, want 1 (acme|b, refilled)", got)
 	}
-	wantBytes := float64(len("acme|b") + len(`"vb"`) + localEntryOverhead)
+	// The refilled value is a clone of the bucket's 4 bytes, whose allocation holds 8, and
+	// an entry is charged the capacity it holds.
+	wantBytes := float64(len("acme|b") + 8 + localEntryOverhead)
 	if got := testutil.ToFloat64(m.cacheLocalBytes.WithLabelValues("device-by-token")); got != wantBytes {
 		t.Errorf("bytes = %v, want %v", got, wantBytes)
 	}

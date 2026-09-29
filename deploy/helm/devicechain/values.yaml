@@ -1081,13 +1081,26 @@ functionalAreas:
       maxEventFutureSkewSeconds: 300
       # Inbound event resolution (default shown). Each resolver authenticates an
       # event's credential (one database read, holding one pooled connection) and then
-      # looks up its profile and relationships in the message broker's key-value
-      # store, one after another, so a resolver spends most of its time waiting for
-      # replies and more resolvers resolve more events per second until the pod runs
-      # out of CPU.
+      # looks up its profile, relationships and group scope in the message broker's
+      # key-value store, at the same time, reading the database only for what that
+      # store could not answer, one lookup at a time. So a resolver spends most of its
+      # time waiting for replies, still holds at most one connection, and more
+      # resolvers resolve more events per second until the pod runs out of CPU.
       #   resolution:
       #     workers: 10     # must be below rdbConfiguration.maxOpenConnections
       #                     # (20 unless set); above half of it is logged.
+      #
+      # What each replica keeps in its own memory of each of the three lookup caches
+      # kept per device (a device by its token, its tracked relationships, its group
+      # memberships), per cache (defaults shown). An entry costs about 290 bytes for a
+      # device with no tracked relationship and 950 with one, so 24 MiB holds about
+      # 87,000 or 26,000 devices. An entry is kept 5 s from when it was read, so a
+      # device reporting less often than that is never answered from memory, however
+      # large these are. At the defaults the five caches hold at most 80 MiB, which
+      # the heap can double before a collection: raise the memory limit with them.
+      #   inMemoryCache:
+      #     perDeviceCacheEntries: 131072
+      #     perDeviceCacheMiB: 24
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

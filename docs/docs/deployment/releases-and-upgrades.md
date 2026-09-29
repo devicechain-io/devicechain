@@ -3600,6 +3600,34 @@ messages, most of them already processed, so on a busy instance it fired while n
 
 Nothing to do at upgrade. See [Messages a consumer never read](./observability.md#unread-loss).
 
+#### device-management keeps more devices' lookups in memory, and makes an event's lookups at the same time {#next-per-device-cache}
+
+Nothing needs doing at the upgrade.
+
+- **Each replica now keeps up to 131,072 entries, or 24 MiB, in memory for each of the three
+  lookup caches kept per device** (a device by its token, its tracked relationships, its group
+  memberships). Before, every cache held at most 4,096 entries, so a replica that saw more than
+  4,096 devices within five seconds answered none of their relationship lookups from memory. The
+  caches kept per device type and per tenant still hold 4,096. Set
+  `inMemoryCache.perDeviceCacheEntries` and `inMemoryCache.perDeviceCacheMiB` in
+  `device-management`'s configuration to change the bound, and raise the service's memory limit
+  with it. A release before this one refuses to start with either setting, so remove them before
+  going back to one.
+- **A device that reports less often than every five seconds is still not answered from memory**,
+  however large the cache: a value is kept for five seconds from when it was read, and each of
+  that device's events still reads the key-value bucket once. See
+  [Caches that stop answering](./observability.md#kv-caches) for what that costs and what to
+  raise.
+- **An event's profile, relationships and group-scope lookups are made at the same time**, and so
+  are its group-membership lookups, instead of one after another. An event that misses memory for
+  all three waits for one round trip to NATS rather than three. The database is still read one
+  lookup at a time, for whatever the caches could not answer, so `resolution.workers` still
+  counts connections as before, and a measurement that fails validation still never reads its
+  relationships from the database.
+- Two more metrics, `kv_cache_local_max_entries` and `kv_cache_local_max_bytes`, give each cache's
+  bound. `kv_cache_local_bytes` now counts an entry's full size in memory, so it reads higher than
+  before for the same entries.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

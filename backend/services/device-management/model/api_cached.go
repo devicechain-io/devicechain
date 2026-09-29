@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // CachedApi is a caching decorator over *Api implementing the ADR-022 review B2
@@ -155,10 +156,41 @@ func (capi *CachedApi) AnyScopedGroups(ctx context.Context) (bool, error) {
 	if !hasTenant {
 		return capi.Api.AnyScopedGroups(ctx)
 	}
-	var cached bool
-	if found, err := capi.caches.ScopedGroupsExist.Get(ctx, tenant, &cached); err == nil && found {
+	if cached, answered, _ := capi.cachedAnyScopedGroups(ctx, tenant, false); answered {
 		return cached, nil
 	}
+	return capi.loadAnyScopedGroups(ctx, tenant)
+}
+
+// cachedAnyScopedGroups is the cache half of AnyScopedGroups (see readCache for the three
+// results).
+func (capi *CachedApi) cachedAnyScopedGroups(ctx context.Context, tenant string, memoryOnly bool) (value, answered, settled bool) {
+	answered, settled = readCache(ctx, capi.caches.ScopedGroupsExist, tenant, &value, memoryOnly)
+	return value, answered, settled
+}
+
+// readCache reads key from c into dest: the cache half of every cached read here, so all of
+// them treat a miss and a cache error alike, as not answered, and go on to the database.
+//
+// With memoryOnly it asks only the in-process copy, and settled reports whether that was
+// enough to decide: false when memory held nothing live, and the caller must ask again
+// without memoryOnly. Without it, settled is always true.
+func readCache(ctx context.Context, c *messaging.Cache, key string, dest any, memoryOnly bool) (answered, settled bool) {
+	if memoryOnly {
+		found, err := c.GetFromMemory(key, dest)
+		if err != nil {
+			// Held, but it would not decode: as Get's decode error does, go to the database.
+			return false, true
+		}
+		return found, found
+	}
+	found, err := c.Get(ctx, key, dest)
+	return err == nil && found, true
+}
+
+// loadAnyScopedGroups is the database half of AnyScopedGroups: it reads the database and
+// stores the answer in the cache.
+func (capi *CachedApi) loadAnyScopedGroups(ctx context.Context, tenant string) (bool, error) {
 	exists, err := capi.Api.AnyScopedGroups(ctx)
 	if err != nil {
 		return false, err
@@ -188,11 +220,20 @@ func (capi *CachedApi) MembershipsForEntity(ctx context.Context, entityType stri
 	}
 
 	key := membershipsByEntityKey(tenant, entityType, entityId)
-	var cached []GroupMembership
-	if found, err := capi.caches.MembershipsByEntity.Get(ctx, key, &cached); err == nil && found {
+	if cached, answered, _ := capi.cachedMemberships(ctx, key, false); answered {
 		return cached, nil
 	}
+	return capi.loadMemberships(ctx, key, entityType, entityId)
+}
 
+// cachedMemberships is the cache half of MembershipsForEntity (see readCache).
+func (capi *CachedApi) cachedMemberships(ctx context.Context, key string, memoryOnly bool) (value []GroupMembership, answered, settled bool) {
+	answered, settled = readCache(ctx, capi.caches.MembershipsByEntity, key, &value, memoryOnly)
+	return value, answered, settled
+}
+
+// loadMemberships is the database half of MembershipsForEntity.
+func (capi *CachedApi) loadMemberships(ctx context.Context, key, entityType string, entityId uint) ([]GroupMembership, error) {
 	memberships, err := capi.Api.MembershipsForEntity(ctx, entityType, entityId)
 	if err != nil {
 		return nil, err
@@ -277,10 +318,15 @@ func (capi *CachedApi) TrackedRelationshipsForDevice(ctx context.Context,
 	}
 
 	key := relationshipsBySourceKey(tenant, deviceId)
-	if results := capi.getRelationships(ctx, key); results != nil {
+	if results, answered, _ := capi.cachedRelationships(ctx, key, false); answered {
 		return results, nil
 	}
+	return capi.loadRelationships(ctx, key, deviceId)
+}
 
+// loadRelationships is the database half of TrackedRelationshipsForDevice.
+func (capi *CachedApi) loadRelationships(ctx context.Context, key string,
+	deviceId uint) (*EntityRelationshipSearchResults, error) {
 	results, err := capi.Api.TrackedRelationshipsForDevice(ctx, deviceId)
 	if err != nil {
 		return nil, err
@@ -292,14 +338,15 @@ func (capi *CachedApi) TrackedRelationshipsForDevice(ctx context.Context,
 	return results, nil
 }
 
-// getRelationships returns the cached relationship results for key, or nil on a
-// miss (or any cache error, which degrades to a DB lookup by the caller).
-func (capi *CachedApi) getRelationships(ctx context.Context, key string) *EntityRelationshipSearchResults {
+// cachedRelationships is the cache half of TrackedRelationshipsForDevice (see readCache).
+func (capi *CachedApi) cachedRelationships(ctx context.Context, key string,
+	memoryOnly bool) (*EntityRelationshipSearchResults, bool, bool) {
 	var results EntityRelationshipSearchResults
-	if found, err := capi.caches.RelationshipsBySource.Get(ctx, key, &results); err == nil && found {
-		return &results
+	answered, settled := readCache(ctx, capi.caches.RelationshipsBySource, key, &results, memoryOnly)
+	if !answered {
+		return nil, false, settled
 	}
-	return nil
+	return &results, true, settled
 }
 
 // UpdateDevice forwards to the DB then evicts the device's by-token entry so a
@@ -373,11 +420,26 @@ func (capi *CachedApi) ProfileResolutionByDeviceType(ctx context.Context, device
 	}
 
 	key := profileResolutionByTypeKey(tenant, deviceTypeId)
-	var cached ProfileResolution
-	if found, err := capi.caches.ProfileResolutionByType.Get(ctx, key, &cached); err == nil && found {
-		return &cached, nil
+	if cached, answered, _ := capi.cachedProfileResolution(ctx, key, false); answered {
+		return cached, nil
 	}
+	return capi.loadProfileResolution(ctx, key, deviceTypeId)
+}
 
+// cachedProfileResolution is the cache half of ProfileResolutionByDeviceType (see
+// readCache).
+func (capi *CachedApi) cachedProfileResolution(ctx context.Context, key string,
+	memoryOnly bool) (*ProfileResolution, bool, bool) {
+	var cached ProfileResolution
+	answered, settled := readCache(ctx, capi.caches.ProfileResolutionByType, key, &cached, memoryOnly)
+	if !answered {
+		return nil, false, settled
+	}
+	return &cached, true, settled
+}
+
+// loadProfileResolution is the database half of ProfileResolutionByDeviceType.
+func (capi *CachedApi) loadProfileResolution(ctx context.Context, key string, deviceTypeId uint) (*ProfileResolution, error) {
 	res, err := capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
 	if err != nil {
 		return nil, err

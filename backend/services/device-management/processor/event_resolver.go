@@ -191,28 +191,27 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []mo
 	return &EventResolutionResults{Device: device, Resolved: resolved}
 }
 
-// membershipTarget is one entity whose dynamic-group memberships contribute to an
-// event's scope stamp — the reporting device or one of its tracked anchors.
-type membershipTarget struct {
-	Type string
-	Id   uint
-}
-
 // unionMemberships resolves and de-duplicates the rule-scoped group memberships across
 // the given targets (the device ∪ each tracked anchor) into the event's ScopeMemberships
 // (ADR-062). Each read is served from the negative-caching membership cache, so a
 // non-member target (the common case) is a cache hit returning empty. De-dup is by
 // (group token, version): a device tracked into two arid areas is in scope once.
-func (rez *EventResolver) unionMemberships(ctx context.Context, targets []membershipTarget) ([]model.GroupRef, error) {
+//
+// api is the event's own (model.ReadAheadForEvent). The membership caches of all the
+// targets are read at the same time once the gate below has opened; the database is still
+// read one target after another, in target order, for whatever they could not answer.
+func (rez *EventResolver) unionMemberships(ctx context.Context, api model.DeviceManagementApi,
+	targets []model.MembershipTarget) ([]model.GroupRef, error) {
 	// Pay-nothing short-circuit (ADR-062 Decision 7): a tenant with no rule-scoped group
 	// does zero per-target reads — one cached EXISTS check gates the whole union.
-	any, err := rez.Api.AnyScopedGroups(ctx)
+	any, err := api.AnyScopedGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !any {
 		return nil, nil
 	}
+	model.ReadMembershipsAhead(ctx, api, targets)
 	type mkey struct {
 		token   string
 		version int32
@@ -220,7 +219,7 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, targets []member
 	seen := make(map[mkey]struct{})
 	out := make([]model.GroupRef, 0)
 	for _, t := range targets {
-		ms, err := rez.Api.MembershipsForEntity(ctx, t.Type, t.Id)
+		ms, err := api.MembershipsForEntity(ctx, t.Type, t.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -246,8 +245,9 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, targets []member
 // Callers resolve it BEFORE any state mutation so a transient lookup failure can never
 // leave a committed side effect (e.g. a created relationship) that a redelivery would
 // then duplicate.
-func (rez *EventResolver) resolveProfile(ctx context.Context, device *model.Device) (*model.ProfileResolution, uint, error) {
-	res, err := rez.Api.ProfileResolutionByDeviceType(ctx, device.DeviceTypeId)
+func (rez *EventResolver) resolveProfile(ctx context.Context, api model.DeviceManagementApi,
+	device *model.Device) (*model.ProfileResolution, uint, error) {
+	res, err := api.ProfileResolutionByDeviceType(ctx, device.DeviceTypeId)
 	if err != nil {
 		return nil, uint(dmproto.FailureReason_ApiCallFailed), fmt.Errorf("could not resolve device profile: %w", err)
 	}
@@ -300,11 +300,12 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// device holds no prior state for a group it only now joined, so their absence tears down
 	// nothing. They land on the device's next telemetry event, which anchors the now-tracked
 	// relationship.
-	res, reason, err := rez.resolveProfile(ctx, device)
+	api := model.ReadAheadForEvent(ctx, rez.Api, device)
+	res, reason, err := rez.resolveProfile(ctx, api, device)
 	if err != nil {
 		return nil, reason, err
 	}
-	_, memberships, reason, err := rez.deviceAnchors(ctx, device)
+	_, memberships, reason, err := rez.deviceAnchors(ctx, api, device)
 	if err != nil {
 		return nil, reason, err
 	}
@@ -636,11 +637,19 @@ func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model
 // being dropped (ADR-013 addendum 2026-07-01).
 func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
+	// The event's cache reads of its profile, relationships and scoped-group gate are
+	// made here, at the same time (model.ReadAheadForEvent). Each is still USED where it
+	// always was, and any database read for what the caches could not answer is still
+	// made there, one after another, so every failure is reported in the order it was
+	// before: a measurement that fails validation reports Invalid even when its
+	// relationships could not be read, and never reads them from the database.
+	api := model.ReadAheadForEvent(ctx, rez.Api, device)
+
 	// The event's ONE read of its type's published profile. Validation, the classifier
 	// and unit stamp, and the version token below all come from this value, so they all
 	// name the same profile version. Reading it first changes nothing else: every read
 	// here is a read, and every failure maps to ApiCallFailed as each one did before.
-	res, reason, err := rez.resolveProfile(ctx, device)
+	res, reason, err := rez.resolveProfile(ctx, api, device)
 	if err != nil {
 		return nil, reason, err
 	}
@@ -665,7 +674,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 
 	// Denormalize the full set of the device's tracked relationships as anchors, and the
 	// device+anchor dynamic-group memberships (ADR-062) stamped alongside them.
-	anchors, memberships, reason, err := rez.deviceAnchors(ctx, device)
+	anchors, memberships, reason, err := rez.deviceAnchors(ctx, api, device)
 	if err != nil {
 		return nil, reason, err
 	}
@@ -758,12 +767,13 @@ func (rez *EventResolver) warnIfLocationUndeclared(ctx context.Context,
 // one per tracked relationship — or an empty set when the device has no tracked
 // relationship. Every anchor is denormalized onto the event (ADR-013 addendum
 // 2026-07-01), so a device assigned to several targets is queryable by each.
-func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Device) ([]model.ResolvedAnchor, []model.GroupRef, uint, error) {
+func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceManagementApi,
+	device *model.Device) ([]model.ResolvedAnchor, []model.GroupRef, uint, error) {
 	// A device's tracked-relationship set is denormalized in full onto every event, so
 	// this genuinely needs all rows. TrackedRelationshipsForDevice is the named full-set
 	// read (ADR-029); the search criteria this used to assemble — and the flag it set on
 	// their pagination to lift the LIMIT — are both gone.
-	drels, err := rez.Api.TrackedRelationshipsForDevice(ctx, device.ID)
+	drels, err := api.TrackedRelationshipsForDevice(ctx, device.ID)
 	if err != nil {
 		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
@@ -771,7 +781,7 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 	// The membership stamp (ADR-062) is the union over the device itself and every
 	// emitted anchor: a device-facet rule matches on the device's memberships, a
 	// geographic rule ("arid areas") matches on an area anchor's.
-	targets := []membershipTarget{{Type: string(entity.TypeDevice), Id: device.ID}}
+	targets := []model.MembershipTarget{{Type: string(entity.TypeDevice), Id: device.ID}}
 	for i := range drels.Results {
 		r := &drels.Results[i]
 		// TargetToken is denormalized at relationship-create time (ADR-044). An empty
@@ -789,9 +799,9 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, device *model.Devic
 			AnchorToken:    r.TargetToken,
 			RelationshipId: r.ID,
 		})
-		targets = append(targets, membershipTarget{Type: r.TargetType, Id: r.TargetId})
+		targets = append(targets, model.MembershipTarget{Type: r.TargetType, Id: r.TargetId})
 	}
-	memberships, err := rez.unionMemberships(ctx, targets)
+	memberships, err := rez.unionMemberships(ctx, api, targets)
 	if err != nil {
 		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
 	}
