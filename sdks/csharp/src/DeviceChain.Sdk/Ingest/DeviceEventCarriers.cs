@@ -69,9 +69,12 @@ public sealed class HttpDeviceEventCarrier : IDeviceEventCarrier
         if (response.Status != accepted)
         {
             string detail = response.Body.Length == 0 ? "" : Encoding.UTF8.GetString(response.Body);
+            // RetryAfter rides along: a 503 that carries one is the platform's backpressure
+            // refusal (certainly not stored, retry after the delay), where a bare 503 is a
+            // failed publish that may have been stored.
             throw new GraphQlRequestException(
                 $"ingress {path} returned {response.Status}: {detail.Trim()}",
-                response.Status);
+                response.Status, retryAfter: response.RetryAfter);
         }
     }
 }

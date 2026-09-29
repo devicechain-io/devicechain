@@ -93,6 +93,9 @@ type MqttEventSource struct {
 	// before it is queued for decode; a false return sheds the message. nil
 	// disables metering (used by tests that exercise decoding in isolation).
 	allow RateGate
+	// admit reports whether the ingest pipeline is accepting events (see
+	// HttpEventSource.admit). Never nil.
+	admit func(source string) error
 
 	// fail ends the process for a cause found after startup: a broker that refuses
 	// this source's subscription on a reconnect. It must not block its caller, which is
@@ -120,6 +123,12 @@ type MqttEventSource struct {
 var errNoFailHook = errors.New("an MQTT event source needs a way to end the process " +
 	"when a reconnect's subscription is refused; none was given")
 
+// errNoAdmit is what the HTTP and external-MQTT constructors return for a nil admit. A
+// source built without asking whether the pipeline is accepting would publish into a
+// stream that is refusing, and the call site would not show that the question was left out.
+var errNoAdmit = errors.New("an event source needs to ask whether the ingest pipeline is accepting " +
+	"events (backpressure); none was given")
+
 // Create a new MQTT event source based on the given configuration. tlsConfig is
 // non-nil when the broker terminates TLS on the MQTT gateway (ADR-025), in which
 // case the client dials ssl:// and verifies the server; nil dials plaintext.
@@ -130,9 +139,12 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
-	allow RateGate, fail func(error)) (*MqttEventSource, error) {
+	allow RateGate, admit func(source string) error, fail func(error)) (*MqttEventSource, error) {
 	if fail == nil {
 		return nil, errNoFailHook
+	}
+	if admit == nil {
+		return nil, errNoAdmit
 	}
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
@@ -157,6 +169,7 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	es.decoded = decoded
 	es.failed = failed
 	es.allow = allow
+	es.admit = admit
 	return es, nil
 }
 
@@ -272,6 +285,17 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// to decode (a command envelope is not an event), so the failure counter rose
 	// too. None of that is a device's doing and none of it is an event.
 	if isCommandPlane(msg.Topic()) {
+		return
+	}
+
+	// Drop while the pipeline is applying backpressure, before metering so a dropped
+	// message spends no rate-limit token. 🔴 THE PUBLISHER IS NOT TOLD: paho acknowledged
+	// the message to the external broker before this callback ran (auto-ack, clean
+	// session), so this protocol has no lever to make the device retry. The drop is counted
+	// by admit (total_msg_backpressured), which is all that can be done on a broker the
+	// platform does not own. The platform's own broker keeps such messages instead, in the
+	// capture stream (see GatewayJetStreamSource).
+	if es.admit(es.Id) != nil {
 		return
 	}
 

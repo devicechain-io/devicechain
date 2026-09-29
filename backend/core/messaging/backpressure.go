@@ -1,0 +1,464 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package messaging
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/streams"
+	nats "github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
+)
+
+// Backpressure on the ingest path: a stream that must not discard a message its reader has
+// not read REFUSES new ones instead, while that reader is far behind.
+//
+// Every stream discards its oldest message when full (DiscardOld). On the two streams whose
+// unread loss is device data (streams.Stream.BackpressureReaders), that eviction took events a
+// device had already been told were accepted. The broker cannot make that refusal itself:
+// what these streams hold at their ceiling is mostly a week of history every reader has
+// ALREADY read, so discard-new would refuse on read history and stop ingest for good, and the
+// retentions that would make "full" mean "full of unread" break replay (see the field's
+// comment). So the platform's own writers make the refusal, from the quantity that decides
+// whether anything is lost: each declared reader's UNREAD backlog against the stream's
+// ceiling. The broker keeps discarding old as a counted backstop.
+//
+// The gate is per stream and per process. Every service that writes to a gated stream, or
+// forwards into one, keeps its own copy, sampled from the broker, so none of them depends on
+// another service's view or version.
+
+// ErrStreamBackpressure is what every backpressure refusal matches (errors.Is). It is
+// retryable: the stream is not broken, a reader is behind, and the refusal lifts once it
+// catches up. A transport advises BackpressureRetryAfter.
+var ErrStreamBackpressure = errors.New("messaging: stream is applying backpressure")
+
+// BackpressureError says which stream refused and why.
+type BackpressureError struct {
+	// Stream is the full stream name.
+	Stream string
+	// Durable is the reader whose backlog closed the gate, "" when Stale.
+	Durable string
+	// Ratio is that reader's unread backlog over the stream's capacity at the last sample.
+	Ratio float64
+	// Stale is set when the backlog could not be measured recently enough to trust: the
+	// gate then reads as closed (fail closed), whatever it last measured.
+	Stale bool
+}
+
+func (e *BackpressureError) Error() string {
+	if e.Stale {
+		return fmt.Sprintf("messaging: stream %s is applying backpressure: its readers' backlog has not "+
+			"been measured in the last %s", e.Stream, backpressureStaleAfter)
+	}
+	return fmt.Sprintf("messaging: stream %s is applying backpressure: consumer %s has not read %.0f%% of "+
+		"what the stream can hold", e.Stream, e.Durable, e.Ratio*100)
+}
+
+// Is makes a *BackpressureError match ErrStreamBackpressure.
+func (e *BackpressureError) Is(target error) bool { return target == ErrStreamBackpressure }
+
+const (
+	// backpressureCloseRatio is the unread fraction of the ceiling at which the gate closes.
+	// The 10% left above it is the margin before DiscardOld would evict an unread message:
+	// what is in flight when the gate closes, what the sample interval lets through, and
+	// the state transitions that are admitted while it is closed (Message.BypassBackpressure)
+	// all land in it.
+	backpressureCloseRatio = 0.90
+	// backpressureOpenRatio is the fraction below which a closed gate opens again. The gap
+	// to the close ratio keeps a reader hovering at the threshold from flapping the gate
+	// open and shut on every sample.
+	backpressureOpenRatio = 0.80
+	// backpressureSampleEvery is how often every registered gate is re-measured.
+	backpressureSampleEvery = 5 * time.Second
+	// backpressureStaleAfter is how old the last successful measurement may be before the
+	// gate reads as closed. A gate that cannot see the backlog cannot say it is safe to add
+	// to it.
+	backpressureStaleAfter = 30 * time.Second
+	// backpressureSampleTimeout bounds one measurement.
+	backpressureSampleTimeout = 5 * time.Second
+
+	// BackpressureRetryAfter is what a transport advises a refused client to wait: two
+	// sample intervals, so a retry lands after the gate has been measured again.
+	BackpressureRetryAfter = 2 * backpressureSampleEvery
+)
+
+// These are constants, not configuration, on purpose: a knob here is a way to switch a
+// fail-closed guard off, and nothing about an install changes what "about to discard an
+// unread event" means.
+
+// unreadRatio is one durable's unread backlog (NumPending + NumAckPending) over the stream's
+// capacity, in whichever of messages or bytes binds first. 0 for an empty stream.
+//
+// 🔴 THE BYTE FORM ASSUMES UNREAD MESSAGES ARE THE SIZE OF THE STREAM'S AVERAGE. The broker
+// reports the stream's total bytes, not the unread messages' bytes, so a burst of large unread
+// messages over small history is under-counted and the stream can reach its ceiling before
+// the ratio reaches the close threshold. The 10% above the threshold is the only margin for
+// that; DiscardOld is still the backstop, and the readers' unread-loss counters still see it.
+func unreadRatio(st nats.StreamState, cfg nats.StreamConfig, ci *nats.ConsumerInfo) float64 {
+	unread := ci.NumPending + uint64(max(0, ci.NumAckPending))
+	r := 0.0
+	if cfg.MaxMsgs > 0 {
+		r = float64(unread) / float64(cfg.MaxMsgs)
+	}
+	if cfg.MaxBytes > 0 && st.Msgs > 0 {
+		avg := float64(st.Bytes) / float64(st.Msgs)
+		r = max(r, float64(unread)*avg/float64(cfg.MaxBytes))
+	}
+	return r
+}
+
+// gateNext is the hysteresis: a gate closes at the close ratio and opens again only below
+// the open ratio.
+func gateNext(closed bool, ratio float64) bool {
+	if closed {
+		return ratio >= backpressureOpenRatio
+	}
+	return ratio >= backpressureCloseRatio
+}
+
+// gateState is one gated stream's last measurement. Everything is guarded by
+// backpressureGates.mu.
+type gateState struct {
+	suffix string
+	stream string
+	// closed is the hysteresis state, and only a successful sample moves it. Staleness is
+	// NOT written into it: it is applied when the gate is consulted, so a gate that was
+	// open before a measurement outage opens straight away when measurement resumes below
+	// the close ratio, rather than waiting for the open ratio as if it had really closed.
+	closed bool
+	// worst and ratio are the durable with the highest unread ratio and that ratio.
+	worst string
+	ratio float64
+	// sampledAt is the last SUCCESSFUL sample; zero until the first.
+	sampledAt time.Time
+	// failing edge-triggers the failed-sample warning.
+	failing bool
+	// measured is the set of durables whose ratio series this gate last exported.
+	measured []string
+}
+
+// backpressureGates is one manager's set of gates, keyed by suffix.
+type backpressureGates struct {
+	nmgr *NatsManager
+	mu   sync.Mutex
+	// now is the clock staleness is judged by; a seam for the staleness test.
+	now func() time.Time
+	// enabledAreas reports the functional areas the instance deploys; see gatingDurables.
+	enabledAreas func() ([]string, error)
+	gates        map[string]*gateState
+	// loop starts the sampling loop, once, at the first registration.
+	loop sync.Once
+}
+
+// backpressure returns this manager's gates, creating them on first use so that a manager
+// assembled as a struct literal (as tests outside this package do) gates like one built by
+// NewNatsManager.
+func (nmgr *NatsManager) backpressure() *backpressureGates {
+	nmgr.bpOnce.Do(func() {
+		nmgr.bp = &backpressureGates{
+			nmgr:         nmgr,
+			now:          time.Now,
+			enabledAreas: core.EnabledFunctionalAreas,
+			gates:        map[string]*gateState{},
+		}
+	})
+	return nmgr.bp
+}
+
+// registerBackpressure starts gating suffix's stream in this process and takes one
+// synchronous sample, so a writer built on a healthy broker is not born refusing. It is
+// idempotent: the connection callback that builds writers and readers can run more than
+// once, and a second registration changes nothing.
+//
+// A failed first sample does NOT fail the caller: it leaves the gate unmeasured, which reads
+// as closed until a sample succeeds (fail closed). Failing NewWriter instead would crash-loop
+// a service's start on one slow JetStream API answer during a rolling restart.
+func (nmgr *NatsManager) registerBackpressure(suffix string) {
+	if !streams.AppliesBackpressure(suffix) {
+		return
+	}
+	g := nmgr.backpressure()
+	g.mu.Lock()
+	_, exists := g.gates[suffix]
+	if !exists {
+		g.gates[suffix] = &gateState{suffix: suffix, stream: StreamName(nmgr.Microservice.InstanceId, suffix)}
+	}
+	g.mu.Unlock()
+	if exists {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), backpressureSampleTimeout)
+	defer cancel()
+	nmgr.sampleBackpressure(ctx, suffix)
+	g.loop.Do(func() { go nmgr.runBackpressure() })
+}
+
+// runBackpressure measures every registered gate every backpressureSampleEvery, for as long
+// as the manager's connection is open.
+//
+// 🔑 IT FOLLOWS THE CONNECTION, NOT THE LIFECYCLE, deliberately. The gates are consulted by
+// writers and readers, which belong to the connection (see NewNatsManager), and a stop's drain
+// stage still publishes on it after the metrics sampler has been cancelled: a gate whose loop
+// ended with that sampler would go stale thirty seconds into a long drain and refuse messages
+// whose source was already acknowledged. Tying it to the connection also means a manager a test
+// assembles by hand, which never runs ExecuteStart, is measured like a real one. The loop ends
+// at the first tick after the connection closes, which a stop always reaches.
+//
+// A tick that cannot measure leaves a gate's last measurement in place, and the gate reads as
+// refusing once no sample has succeeded for backpressureStaleAfter.
+func (nmgr *NatsManager) runBackpressure() {
+	ticker := time.NewTicker(backpressureSampleEvery)
+	defer ticker.Stop()
+	for range ticker.C {
+		if nmgr.nc == nil || nmgr.nc.IsClosed() {
+			return
+		}
+		g := nmgr.backpressure()
+		g.mu.Lock()
+		suffixes := make([]string, 0, len(g.gates))
+		for s := range g.gates {
+			suffixes = append(suffixes, s)
+		}
+		g.mu.Unlock()
+		for _, s := range suffixes {
+			ctx, cancel := context.WithTimeout(context.Background(), backpressureSampleTimeout)
+			nmgr.sampleBackpressure(ctx, s)
+			cancel()
+		}
+	}
+}
+
+// Backpressure reports whether suffix's stream is refusing new messages: nil when it is
+// not (or never refuses), else a *BackpressureError, which matches ErrStreamBackpressure.
+// A gated stream this process has not registered, or has not measured within
+// backpressureStaleAfter, reads as refusing.
+//
+// It never waits on the broker: it reads the last measurement runBackpressure made.
+func (nmgr *NatsManager) Backpressure(suffix string) error {
+	if !streams.AppliesBackpressure(suffix) {
+		return nil
+	}
+	g := nmgr.backpressure()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	gs, ok := g.gates[suffix]
+	if !ok {
+		return &BackpressureError{Stream: StreamName(nmgr.Microservice.InstanceId, suffix), Stale: true}
+	}
+	switch {
+	case gs.sampledAt.IsZero() || g.now().Sub(gs.sampledAt) > backpressureStaleAfter:
+		return &BackpressureError{Stream: gs.stream, Stale: true}
+	case gs.closed:
+		return &BackpressureError{Stream: gs.stream, Durable: gs.worst, Ratio: gs.ratio}
+	}
+	return nil
+}
+
+// sampleBackpressure measures one gated stream: its StreamInfo, then the ConsumerInfo of each
+// durable that gates it. It updates the per-durable ratio series, applies the hysteresis and
+// logs a transition (Warn on close, Info on open). Any failure leaves the last successful
+// measurement in place, so the gate goes stale — and reads as closed — once failures have
+// lasted backpressureStaleAfter.
+//
+// A durable that does not exist yet (its service has not started on this instance) has
+// nothing unread and gates nothing. Any other ConsumerInfo error fails the whole sample:
+// the gate's answer is the MAXIMUM over its durables, and a maximum over the ones that
+// happened to answer can say "open" while the one that did not is full.
+func (nmgr *NatsManager) sampleBackpressure(ctx context.Context, suffix string) {
+	g := nmgr.backpressure()
+	g.mu.Lock()
+	gs, ok := g.gates[suffix]
+	g.mu.Unlock()
+	if !ok {
+		return
+	}
+	worst, ratio, measured, err := nmgr.measureBackpressure(ctx, gs.stream, suffix)
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err != nil {
+		// The ratio series are withdrawn, not left at their last value: a gauge frozen at an
+		// old reading is exported as a current one (see consumerPending on streamMetrics).
+		// The gate itself keeps its last measurement until it goes stale.
+		if nmgr.metrics != nil {
+			for _, d := range gs.measured {
+				nmgr.metrics.forgetUnreadRatio(gs.stream, d)
+			}
+		}
+		gs.measured = nil
+		if !gs.failing {
+			gs.failing = true
+			sampleFailureLog(ctx).Err(err).Str("stream", gs.stream).
+				Msg("Could not measure a stream's unread backlog; if this lasts 30 s the stream is treated as full " +
+					"and new events are refused")
+		}
+		return
+	}
+	if gs.failing {
+		gs.failing = false
+		log.Info().Str("stream", gs.stream).Msg("Measuring the stream's unread backlog again")
+	}
+	if nmgr.metrics != nil {
+		for _, d := range gs.measured {
+			if !slices.Contains(measured, d) {
+				nmgr.metrics.forgetUnreadRatio(gs.stream, d)
+			}
+		}
+	}
+	gs.measured = measured
+	was := gs.closed
+	gs.closed = gateNext(gs.closed, ratio)
+	gs.worst, gs.ratio = worst, ratio
+	gs.sampledAt = g.now()
+	switch {
+	case gs.closed && !was:
+		log.Warn().Str("stream", gs.stream).Str("durable", worst).Float64("unreadRatio", ratio).
+			Msg("Refusing new messages on this stream: a consumer's unread backlog is near the stream's ceiling, " +
+				"and accepting more would discard messages it has not read")
+	case !gs.closed && was:
+		log.Info().Str("stream", gs.stream).Float64("unreadRatio", ratio).
+			Msg("Accepting new messages on this stream again: the consumer's unread backlog has fallen")
+	}
+}
+
+// MeasureBackpressureForTesting measures suffix's gate now, synchronously, as a tick of
+// runBackpressure does. Production never calls it: a gate is measured every few seconds, and a
+// test that fills a stream faster than that needs to say when each measurement happens. It takes a test's T for its Helper
+// method alone, as SetAckWaitForTesting does, so this package does not import testing.
+func (nmgr *NatsManager) MeasureBackpressureForTesting(tb interface{ Helper() }, suffix string) {
+	tb.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), backpressureSampleTimeout)
+	defer cancel()
+	nmgr.sampleBackpressure(ctx, suffix)
+}
+
+// measureBackpressure is the broker half of a sample: the worst gating durable, its ratio,
+// and the durables measured.
+func (nmgr *NatsManager) measureBackpressure(ctx context.Context, stream, suffix string) (worst string, ratio float64, measured []string, err error) {
+	if nmgr.js == nil {
+		return "", 0, nil, errors.New("messaging: not connected")
+	}
+	info, err := nmgr.js.StreamInfo(stream, nats.Context(ctx))
+	if err != nil {
+		return "", 0, nil, err
+	}
+	for _, durable := range nmgr.gatingDurables(suffix) {
+		ci, cerr := nmgr.js.ConsumerInfo(stream, durable, nats.Context(ctx))
+		if errors.Is(cerr, nats.ErrConsumerNotFound) {
+			continue
+		}
+		if cerr != nil {
+			return "", 0, nil, cerr
+		}
+		r := unreadRatio(info.State, info.Config, ci)
+		if nmgr.metrics != nil {
+			nmgr.metrics.setUnreadRatio(stream, durable, r)
+		}
+		measured = append(measured, durable)
+		if worst == "" || r > ratio {
+			worst, ratio = durable, r
+		}
+	}
+	return worst, ratio, measured, nil
+}
+
+// gatingDurables names the durables whose backlog gates suffix's stream: one per area the
+// stream declares in BackpressureReaders, less any area the instance does not deploy.
+//
+// 🔴 THE DEPLOYED-AREA FILTER IS WHAT KEEPS A REMOVED SERVICE FROM STOPPING INGEST. A durable
+// outlives its service: an instance moved to a narrower profile keeps the durables of the
+// areas it dropped, and nothing reads them again, so their backlog grows by every message the
+// stream takes. Counted, such a durable would close the gate for good some time after the
+// profile change. The deployed set is read from the per-area configuration mount every pod
+// carries (core.EnabledFunctionalAreas), the same directory the chart writes one key per
+// deployed area into.
+//
+// When that set cannot be read, or does not include this service's own area (so it is not
+// the mount this assumes it is), every declared reader counts: a gate that cannot tell which
+// readers are live errs toward protecting all of them.
+func (nmgr *NatsManager) gatingDurables(suffix string) []string {
+	declared := streams.BackpressureReadersFor(suffix)
+	areas := declared
+	if enabled, err := nmgr.backpressure().enabledAreas(); err == nil && slices.Contains(enabled, nmgr.Microservice.FunctionalArea) {
+		areas = nil
+		for _, a := range declared {
+			if slices.Contains(enabled, a) {
+				areas = append(areas, a)
+			}
+		}
+	}
+	out := make([]string, 0, len(areas))
+	for _, a := range areas {
+		out = append(out, DurableName(nmgr.Microservice.InstanceId, a, suffix))
+	}
+	return out
+}
+
+// bypassesBackpressure reports whether a batch is admitted past a closed gate: every message
+// in it carries Message.BypassBackpressure.
+func bypassesBackpressure(msgs []Message) bool {
+	for i := range msgs {
+		if !msgs[i].BypassBackpressure {
+			return false
+		}
+	}
+	return len(msgs) > 0
+}
+
+// countRefused records n messages a writer refused on stream.
+func (nmgr *NatsManager) countRefused(stream string, n int) {
+	if nmgr.metrics != nil {
+		nmgr.metrics.countRefused(stream, n)
+	}
+}
+
+// engagedCollector exports jetstream_backpressure_engaged at SCRAPE time, by consulting each
+// gate. A gauge the sampler set would read 0 exactly when it matters most: a sample that
+// fails leaves the last value in place while the gate, gone stale, refuses everything. Read
+// at scrape, the series says what a writer would be told at that moment, staleness included.
+type engagedCollector struct {
+	desc *prometheus.Desc
+	mu   sync.Mutex
+	nmgr *NatsManager
+}
+
+func (c *engagedCollector) Describe(ch chan<- *prometheus.Desc) { ch <- c.desc }
+
+func (c *engagedCollector) Collect(ch chan<- prometheus.Metric) {
+	c.mu.Lock()
+	nmgr := c.nmgr
+	c.mu.Unlock()
+	if nmgr == nil {
+		return
+	}
+	g := nmgr.backpressure()
+	g.mu.Lock()
+	suffixes := make([]string, 0, len(g.gates))
+	for s := range g.gates {
+		suffixes = append(suffixes, s)
+	}
+	g.mu.Unlock()
+	slices.Sort(suffixes)
+	for _, s := range suffixes {
+		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue,
+			boolGauge(nmgr.Backpressure(s) != nil), StreamName(nmgr.Microservice.InstanceId, s))
+	}
+}
+
+// bind attaches the collector to the manager whose gates it reports.
+func (c *engagedCollector) bind(nmgr *NatsManager) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.nmgr = nmgr
+	c.mu.Unlock()
+}

@@ -5,16 +5,19 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
 
@@ -65,6 +68,12 @@ type HttpEventSource struct {
 	// before the body is read/decoded; a false return sheds the request with a
 	// 429. nil disables metering (used by tests that exercise decoding directly).
 	allow RateGate
+	// admit reports whether the ingest pipeline is accepting events: nil when it is, an
+	// error matching messaging.ErrStreamBackpressure while inbound-events is refusing
+	// because a reader is far behind. It is asked BEFORE the body is read, so a refused
+	// request costs no read, no decode and no rate-limit token. Never nil (the
+	// constructor refuses one).
+	admit func(source string) error
 	// earlyClose accounts for a connection that closed without ever delivering a
 	// request, which is what a header-timeout close looks like from the outside. nil
 	// disables the accounting.
@@ -85,7 +94,14 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
 	allow RateGate,
+	admit func(source string) error,
 	earlyClose func(string)) (*HttpEventSource, error) {
+	// Refused rather than defaulted to "always admit": an ingest path built without the
+	// question would accept events into a stream that is refusing them, and nothing at the
+	// call site would show it had been left out.
+	if admit == nil {
+		return nil, errNoAdmit
+	}
 	port, err := config.HttpSourcePort(srcConfig)
 	if err != nil {
 		return nil, err
@@ -101,6 +117,7 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 		decoded:    decoded,
 		failed:     failed,
 		allow:      allow,
+		admit:      admit,
 		earlyClose: earlyClose,
 	}
 	es.lifecycle = core.NewLifecycleManager("http-event-source", es, core.NewNoOpLifecycleCallbacks())
@@ -120,9 +137,12 @@ func (es *HttpEventSource) handler() http.Handler {
 }
 
 // handleEvent decodes a single posted event and forwards it to the shared
-// publish path. It returns 202 once the event is accepted into the pipeline
-// (delivery to NATS is asynchronous, as on the MQTT path) and 400 when the body
-// cannot be decoded.
+// publish path. It returns 202 once the event is stored in the inbound stream, 400
+// when the body cannot be decoded, 429 when the tenant is over its ingest ceiling,
+// and 503 when it was not accepted: with a Retry-After when the pipeline refused it
+// under backpressure (a reader is far behind; the event was certainly not stored),
+// and without one when the publish itself failed (it may or may not have been
+// stored, so a retry can duplicate it).
 func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
 	if tenant == "" {
@@ -135,6 +155,14 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// fail-closed guard in messaging.WriteMessages (both call core.ValidateToken).
 	if err := core.ValidateToken(tenant); err != nil {
 		http.Error(w, fmt.Sprintf("invalid tenant in path: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Refuse while the pipeline is applying backpressure, before reading the body and
+	// before metering: a refused request should cost the tenant no rate-limit token,
+	// or the retry the 503 asks for would be charged twice.
+	if err := es.admit(es.Id); err != nil {
+		writeBackpressured(w)
 		return
 	}
 
@@ -171,10 +199,33 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// loss ADR-030 removes from the MQTT path, on the one transport that can
 	// actually say so. A client that retries on 503 now loses nothing.
 	if err := es.decoded(es.Id, tenant, event, payload, 0); err != nil {
+		// The gate can close between the admit check and the publish; that refusal is
+		// the same answer as the one above.
+		if errors.Is(err, messaging.ErrStreamBackpressure) {
+			writeBackpressured(w)
+			return
+		}
 		http.Error(w, "unable to accept event: downstream unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// retryAfterSeconds is the Retry-After a backpressure refusal carries: the interval after
+// which the gate has been measured again.
+var retryAfterSeconds = strconv.Itoa(int(messaging.BackpressureRetryAfter / time.Second))
+
+// writeBackpressured answers a backpressure refusal: 503 with a Retry-After.
+//
+// 🔴 ONLY A REFUSAL CARRIES THE Retry-After. It means "certainly not stored, come back in
+// this long", which a refusal is: nothing was published. A publish that FAILED is a bare
+// 503, because a publish that timed out may have been stored before its acknowledgement was
+// lost, and a client (the load harness is one) that counts a Retry-After 503 as a clean
+// non-accept would then be wrong about what the platform holds.
+func writeBackpressured(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", retryAfterSeconds)
+	http.Error(w, "ingest is applying backpressure: a consumer is far behind; retry later",
+		http.StatusServiceUnavailable)
 }
 
 // Initialize event source

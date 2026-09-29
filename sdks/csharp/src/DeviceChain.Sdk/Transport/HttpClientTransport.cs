@@ -47,6 +47,11 @@ public sealed class HttpClientTransport : IHttpTransport
 
         using HttpResponseMessage response = await _http.SendAsync(message, cancellationToken).ConfigureAwait(false);
         byte[] body = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-        return new HttpTransportResponse { Status = (int)response.StatusCode, Body = body };
+        return new HttpTransportResponse
+        {
+            Status = (int)response.StatusCode,
+            Body = body,
+            RetryAfter = HttpRetryAfter.Parse(response.Headers.RetryAfter?.ToString(), DateTimeOffset.UtcNow),
+        };
     }
 }

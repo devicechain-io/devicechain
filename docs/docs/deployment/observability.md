@@ -228,12 +228,15 @@ is it doing?" is answerable at a glance.
 
 Every JetStream stream has a ceiling. When a stream is full it discards its **oldest** messages to
 make room, so ingest keeps running. A consumer that had not read a message yet when it was
-discarded will never read it. The broker does not report this, so every service measures it for
+discarded will never read it. The two ingest streams whose loss would be device data refuse new
+events before that happens to the consumer that must not lose them (see
+[Backpressure on the ingest path](#ingest-backpressure)). Every other stream, and every other
+consumer, is covered here. The broker does not report this loss, so every service measures it for
 each durable consumer it reads, and three alerts watch the result:
 
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
-| `JetStreamStreamNearFull` | warning | A stream has been over 80% of its byte ceiling for 10 minutes. Nothing has been lost yet. It covers the streams of every service. | Look for a consumer that is falling behind. If the traffic has simply outgrown the stream, raise its ceiling. |
+| `JetStreamStreamNearFull` | warning | A stream has been over 80% of its byte ceiling for 10 minutes. Nothing has been lost yet. It covers the streams of every service. On `inbound-events` and `resolved-events` it is normal on a busy instance, because they keep a week of events that have already been processed. | Look for a consumer that is falling behind. If the traffic has simply outgrown the stream, raise its ceiling. On the two ingest streams, watch `JetStreamUnreadBacklogNearFull` instead. |
 | `JetStreamDurableLostUnread` | critical | A consumer moved past messages that were removed before it read them. They were never processed. | If a tenant was being deleted at the time, this is expected: the deletion removed messages the consumer had not reached yet. Otherwise the stream was full while this consumer was behind. Either the ceiling is too small for the traffic, or the consumer is slower than its producer. |
 | `JetStreamDurableStalledBehindStream` | critical | A consumer has been handed no messages for at least two minutes, and the stream has already discarded messages ahead of it. A consumer that is reading, however slowly, does not fire this one; its losses fire `JetStreamDurableLostUnread`. | The service is running, since it reports this, but its consumer is not reading. Look for message handling stuck on a dependency such as the database, or pods waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding. |
 
@@ -280,7 +283,68 @@ keeps restarting under a backlog may never raise it: watch its restart count as 
 
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
-| `JetStreamDurableFallingBehind` | warning | A consumer has had more than 10000 messages waiting for it for 15 minutes. Whatever that service derives from the stream is that far behind: for `device-state`, a device's live state lags its stored events. `event-processing`'s detection consumer is not covered, because `DetectConsumerBacklogHigh` watches it and a takeover replays it by design. | Compare the consumer's rate with the stream's. If it is keeping pace but not catching up, give it capacity (for `device-state`, see [its settings](#live-state-projection) and its database). If it has stopped, `JetStreamDurableStalledBehindStream` and the service's logs say why. If the stream fills before it catches up, messages it has not reached will be discarded. |
+| `JetStreamDurableFallingBehind` | warning | A consumer has had more than 10000 messages waiting for it for 15 minutes. Whatever that service derives from the stream is that far behind: for `device-state`, a device's live state lags its stored events. `event-processing`'s detection consumer is not covered, because `DetectConsumerBacklogHigh` watches it and a takeover replays it by design. | Compare the consumer's rate with the stream's. If it is keeping pace but not catching up, give it capacity (for `device-state`, see [its settings](#live-state-projection) and its database). If it has stopped, `JetStreamDurableStalledBehindStream` and the service's logs say why. If the stream fills before it catches up, messages it has not reached will be discarded, except for the two consumers that hold ingest back (see [Backpressure on the ingest path](#ingest-backpressure)), where new events are refused first. |
+
+## Backpressure on the ingest path {#ingest-backpressure}
+
+Two streams carry events the platform must not lose before it has processed them:
+`inbound-events` (events waiting to be resolved) and `resolved-events` (events waiting to be
+stored). Each has one consumer whose unread events would be lost if the stream discarded them:
+`device-management`'s on `inbound-events`, and `event-management`'s on `resolved-events`. On
+these two streams the platform refuses new events rather than discard ones that consumer has not
+read yet.
+
+- When that consumer's **unread** backlog reaches **90%** of what the stream can hold, the
+  services that write to the stream start refusing new events. They accept events again once the
+  backlog is below **80%**. Only the unread backlog counts. The events already processed that
+  the stream keeps for a week do not, so a full stream whose consumer is caught up refuses
+  nothing.
+- A service that cannot measure the backlog for 30 seconds treats the stream as full and refuses
+  too.
+- `device-management` stops reading `inbound-events` while `resolved-events` is refusing, and
+  `event-sources` stops reading the MQTT capture stream while `inbound-events` is refusing. The
+  backlog waits in the stream before, and no message uses up its delivery attempts.
+- The refusal applies to **every tenant**, because the streams are shared. A single tenant sending
+  more than the pipeline can process can therefore hold back the others. The per-tenant ingest
+  ceiling (see [Tenants metered at the platform default](#tenant-ceilings)) is the control that
+  prevents this.
+- The broker still discards the oldest message when a stream is full. That now happens only if
+  events arrive faster than the gate can act, and the alerts in
+  [Messages a consumer never read](#unread-loss) still report it.
+
+What each transport does while the stream is refusing:
+
+| Transport | What the device sees |
+| --- | --- |
+| HTTP | `503` with `Retry-After: 10`, before the body is read. The event was not stored. Retry it. |
+| MQTT (the platform broker) | Nothing. The broker acknowledged the message before the platform could refuse it. The message waits in the capture stream, which discards its oldest messages once it is full (`JetStreamDurableLostUnread`). |
+| External MQTT broker | Nothing. The message was already acknowledged. It is dropped and counted in `devicechain_eventsources_total_msg_backpressured{source}`. |
+| Sparkplug | Readings are dropped without retrying and counted in `devicechain_sparkplugingest_ingest_failures_total`. |
+| LwM2M | Notifications are dropped and counted in `devicechain_lwm2mingest_notify_ingest_dropped_total`. The next notification replaces the lost one. |
+
+Connect and disconnect transitions (from the broker, Sparkplug births and deaths, LwM2M
+registrations) are still accepted while the stream is refusing. There is one per transition, not
+one per reading, and nothing would send a refused transition again. Only these two consumers
+hold ingest back. A slow `device-state` or `event-processing` does not. Their unread losses are
+still reported by the alerts above. `event-processing`'s real position is its own checkpoint,
+which the gate does not see. `ReplayCoveredDeliveriesExhausted` watches that.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `JetStreamUnreadBacklogNearFull` | warning | A gating consumer has been more than 80% of its stream behind for 5 minutes. At 90% the stream starts refusing events. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. |
+| `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The refusal lifts on its own once that consumer's backlog is below 80%. |
+
+The services that write to the two streams export these series:
+
+- **`devicechain_<area>_jetstream_backpressure_unread_ratio{stream, durable}`**: the consumer's
+  unread backlog (pending plus unacknowledged) divided by what the stream can hold, in messages or
+  bytes, whichever limit is tighter. It is absent while it cannot be measured. Combine the pods
+  with `max`.
+- **`devicechain_<area>_jetstream_backpressure_engaged{stream}`**: 1 while the service is refusing,
+  including while it cannot measure the backlog. It is read when Prometheus scrapes, so it cannot
+  show 0 when the service is in fact refusing.
+- **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: messages the service did not
+  publish because the stream was refusing.
 
 ## Messages held past their acknowledgement window {#held-past-ack-wait}
 

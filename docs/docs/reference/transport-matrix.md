@@ -69,6 +69,13 @@ there is no separate broker to run.
   PUBACKed when the broker captured it, so nothing tells the publisher; this transport has no
   `429` to send. If your fleet can burst past its limit, size it against the limit rather than
   relying on backpressure that does not exist.
+
+  The same is true when the platform itself is refusing events because a consumer is far behind
+  (see [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)).
+  The broker has already acknowledged the device, so the message is not refused: it waits in the
+  capture stream until the pipeline accepts events again. If the refusal lasts long enough to fill
+  the capture stream, its oldest messages are discarded, and `JetStreamDurableLostUnread` reports
+  it.
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A
   publish reaches a device that is connected and subscribed at that instant. The broker does not
   hold it for a device that is not, and nothing tells the platform whether the device received
@@ -88,11 +95,17 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   - `202` once the event is queued;
   - `400` on a body it cannot decode or a syntactically invalid tenant;
   - `429` when the tenant is over its ingest rate limit;
-  - **`503` when the event could not be handed to the stream.**
+  - **`503` with a `Retry-After` header when the platform is applying backpressure**: a consumer
+    is so far behind that accepting more would push out events it has not processed (see
+    [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure));
+  - **`503` without a `Retry-After` when the event could not be handed to the stream.**
 
   Retry on `503`: it is the platform telling you, on the only transport that can, that your data
-  did not land. A `429` also means the event was not accepted; it carries a `Retry-After` header,
-  so back off and retry. `202` and `400` are terminal for that request.
+  may not have landed. A `503` with a `Retry-After` means the event was certainly not stored, so
+  wait that long and send it again. A `503` without one means the publish failed, and if it
+  failed after the stream had stored the event, a retry stores it twice. A `429` also means the
+  event was not accepted; it carries a `Retry-After` header, so back off and retry. `202` and `400`
+  are terminal for that request.
 - **Write ○ / Read ○** — **there is no downlink at all.** A device that reaches the platform only
   over HTTP cannot be commanded. This is less a gap awaiting a fix than the shape of the
   integration: give a device that must receive commands an MQTT connection as well.
@@ -115,7 +128,8 @@ The platform can also act as a client on a broker you already run, to ingest fro
   - the connection is plaintext (no TLS);
   - it presents no broker credentials;
   - it is at-most-once in effect;
-  - a message refused for being over a limit is dropped, with nothing sent back to the publisher.
+  - a message refused for being over a limit, or while the platform is applying backpressure, is
+    dropped, with nothing sent back to the publisher.
 
   Prefer the platform broker unless you specifically need to read from an existing one.
 
@@ -144,6 +158,11 @@ For brownfield fleets already speaking Sparkplug to their own broker.
   string, byte-array, DataSet or Template metric is skipped as the payload is decoded, with
   nothing recorded and nothing said. If your fleet's interesting signals are booleans — a run
   flag, a fault bit — you will see a device that is authoritatively online and reporting nothing.
+
+  While the platform is applying backpressure (see
+  [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)), readings
+  are dropped without a retry and counted. BIRTH and DEATH are still accepted, so presence stays
+  correct.
 - **Write ○ — deliberately out of scope, not unfinished.** There is no Sparkplug command egress
   (`DCMD`), and none is waiting on work: a Sparkplug fleet sits on the *customer's* MQTT
   infrastructure, so nothing bridges the platform's command stream to it. A command issued to a
@@ -204,6 +223,11 @@ For constrained devices over CoAP/UDP with DTLS.
   Observed objects are restricted to a built-in allowlist that is not configurable, capped at 32
   observations per registration. Observations **do not survive a leader failover**: presence is
   reconstructed, and telemetry is re-established only as each device's registration renews.
+
+  While the platform is applying backpressure (see
+  [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)), a
+  notification is dropped and counted, and the next one replaces it. Registration and
+  disconnection are still accepted, so presence stays correct.
 - Commands to a sleeping device are held durably and drained when it next checks in, recorded
   as `PARKED`. This is the one place a command the transport has already tried to deliver is kept
   for the device instead of being lost. It is not the platform's only hold: for every transport —

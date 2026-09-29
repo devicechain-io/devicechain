@@ -168,6 +168,20 @@ type streamMetrics struct {
 	cacheFailures    *prometheus.CounterVec
 	cacheBypassed    *prometheus.CounterVec
 	cacheUnavailable *prometheus.GaugeVec
+
+	// Backpressure (backpressure.go). unreadRatio is each GATING durable's unread backlog over
+	// its stream's capacity, as the writers of that stream measure it. It is not a copy of
+	// consumerPending: that series is exported by the service that READS the durable, and
+	// only for its own readers; this one is exported by every service that WRITES the stream,
+	// for the durables that gate it, which is what the refusal is decided on. Absent while
+	// not measured, like consumerPending.
+	//
+	// publishRefused counts messages a writer refused under backpressure, by stream, created
+	// at 0 when a writer on a gated stream is built. engaged is the scrape-time gauge of each
+	// gate (engagedCollector); nil on a microservice with no registry.
+	unreadRatio    *prometheus.GaugeVec
+	publishRefused *prometheus.CounterVec
+	engaged        *engagedCollector
 }
 
 // cacheBuckets spans a loopback KV answer to the Get/Set budget. Nothing lands above it
@@ -272,9 +286,66 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		cacheUnavailable: ms.NewGaugeVec("kv_cache_unavailable",
 			"1 while the key-value cache is bypassed after an operation timed out or could not reach it.",
 			[]string{"cache"}),
+		unreadRatio: ms.NewGaugeVec("jetstream_backpressure_unread_ratio",
+			"A gating consumer's unread backlog (pending plus unacknowledged) over what its stream can hold, "+
+				"as this service measures it before writing to the stream. At 0.9 the stream refuses new "+
+				"messages until it is below 0.8. Absent while not measured.",
+			[]string{"stream", "durable"}),
+		publishRefused: ms.NewCounterVec("jetstream_publish_refused_total",
+			"Messages this service did not publish because the stream was applying backpressure.",
+			[]string{"stream"}),
+		engaged:  newEngagedCollector(ms),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
+}
+
+// newEngagedCollector builds and registers the scrape-time engaged gauge, or returns nil for
+// a microservice with no registry (one assembled as a struct literal).
+func newEngagedCollector(ms *core.Microservice) *engagedCollector {
+	reg := ms.MetricsRegisterer()
+	if reg == nil {
+		return nil
+	}
+	c := &engagedCollector{desc: prometheus.NewDesc(
+		prometheus.BuildFQName(core.METRICS_NAMESPACE, ms.MetricsSubsystem(), "jetstream_backpressure_engaged"),
+		"1 while this service is refusing new messages on the stream (backpressure), including while it "+
+			"cannot measure the stream's backlog; 0 otherwise. Evaluated at scrape time.",
+		[]string{"stream"}, nil)}
+	reg.MustRegister(c)
+	return c
+}
+
+// setUnreadRatio records one gating durable's unread ratio.
+func (m *streamMetrics) setUnreadRatio(stream, durable string, r float64) {
+	if m == nil || m.unreadRatio == nil {
+		return
+	}
+	m.unreadRatio.WithLabelValues(stream, durable).Set(r)
+}
+
+// forgetUnreadRatio withdraws a durable's ratio series: it was not measured.
+func (m *streamMetrics) forgetUnreadRatio(stream, durable string) {
+	if m == nil || m.unreadRatio == nil {
+		return
+	}
+	m.unreadRatio.DeleteLabelValues(stream, durable)
+}
+
+// initRefused creates a gated stream's refused counter at 0, for the reason initDurable gives.
+func (m *streamMetrics) initRefused(stream string) {
+	if m == nil || m.publishRefused == nil {
+		return
+	}
+	m.publishRefused.WithLabelValues(stream).Add(0)
+}
+
+// countRefused counts n refused messages.
+func (m *streamMetrics) countRefused(stream string, n int) {
+	if m == nil || m.publishRefused == nil {
+		return
+	}
+	m.publishRefused.WithLabelValues(stream).Add(float64(n))
 }
 
 // cacheObserver records one Cache's metrics. Every method is a no-op on a nil receiver,

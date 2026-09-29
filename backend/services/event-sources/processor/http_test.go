@@ -36,6 +36,17 @@ func newTestHttpSource(t *testing.T, allow RateGate) (*HttpEventSource, *capture
 func newTestHttpSourceWithIngest(t *testing.T, allow RateGate, ingest config.HttpIngest,
 	earlyClose func(string)) (*HttpEventSource, *capturedDecode, *capturedFailure) {
 	t.Helper()
+	return newTestHttpSourceAdmitting(t, allow, admitAll, ingest, earlyClose)
+}
+
+// admitAll is an ingest pipeline that is always accepting.
+func admitAll(string) error { return nil }
+
+// newTestHttpSourceAdmitting is newTestHttpSourceWithIngest with the backpressure question
+// spelled out, for the tests that drive a refusal.
+func newTestHttpSourceAdmitting(t *testing.T, allow RateGate, admit func(string) error, ingest config.HttpIngest,
+	earlyClose func(string)) (*HttpEventSource, *capturedDecode, *capturedFailure) {
+	t.Helper()
 	dec := &capturedDecode{}
 	fail := &capturedFailure{}
 	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", ingest,
@@ -54,7 +65,7 @@ func newTestHttpSourceWithIngest(t *testing.T, allow RateGate, ingest config.Htt
 			fail.err = err
 			return nil
 		},
-		allow, earlyClose)
+		allow, admit, earlyClose)
 	assert.NoError(t, err)
 	return es, dec, fail
 }
@@ -192,7 +203,7 @@ func TestNewHttpEventSource_Port(t *testing.T) {
 	newSource := func(cfg map[string]string) (*HttpEventSource, error) {
 		return NewHttpEventSource("http-test", cfg, "inst-1", config.HttpIngest{},
 			NewJsonDecoder(map[string]string{}, 0),
-			func(string, []byte) {}, nil, nil, nil, nil)
+			func(string, []byte) {}, nil, nil, nil, admitAll, nil)
 	}
 
 	es, err := newSource(map[string]string{"port": "9000"})

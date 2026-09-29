@@ -1401,7 +1401,7 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 	// round trip for a governance reason rather than a delivery one. A large FAILED
 	// share is the shared port-forward dropping, which is a tunnel fault.
 	if snap.Shed > 0 {
-		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the per-tenant ingest ceiling. Presence transitions "+
+		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the ingress (the per-tenant ingest ceiling, or backpressure). Presence transitions "+
 			"share that ceiling, and a target the platform believes absent has its command HELD rather than dispatched — so a failed "+
 			"round trip here cannot be told apart from a governed one", snap.Shed)
 	}

@@ -112,6 +112,7 @@ namespace DeviceChain.Sdk.Unity
                             Body = sent.downloadHandler != null && sent.downloadHandler.data != null
                                 ? sent.downloadHandler.data
                                 : Array.Empty<byte>(),
+                            RetryAfter = HttpRetryAfter.Parse(sent.GetResponseHeader("Retry-After"), DateTimeOffset.UtcNow),
                         });
                     }
                     finally

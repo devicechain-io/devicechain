@@ -103,9 +103,9 @@ var (
 	InboundEventsWriter messaging.MessageWriter
 	FailedDecodeWriter  messaging.MessageWriter
 	// CaptureReader is the durable consumer of raw device telemetry (ADR-030
-	// amendment). It is the gateway's ingest path: the broker persists a device's
-	// publish here before it PUBACKs, so the message is durable before our code
-	// runs. Shared across pods — one durable, messages distributed — which is what
+	// amendment). It is the gateway's ingest path: the broker stores a device's
+	// publish here itself, so the message is in a stream before our code runs (the
+	// PUBACK does not wait for this stream; see streams.DeviceEventsCapture). Shared across pods — one durable, messages distributed — which is what
 	// lets event-sources scale past a single replica at all.
 	CaptureReader messaging.MessageReader
 	// GatewaySource is the capture-stream source, held from the INITIALIZE phase
@@ -139,6 +139,11 @@ var (
 	// tenant, whose values here are exactly the unverified strings off the wire
 	// (ADR-023 G.3).
 	TenantGoneCounter *prometheus.CounterVec
+	// BackpressureCounter counts inbound messages refused because inbound-events is applying
+	// backpressure: a reader of it is so far behind that accepting more would discard events
+	// it has not read. Apart from RateLimitedCounter because the cause is the platform, not
+	// the tenant. Labelled by SOURCE only.
+	BackpressureCounter *prometheus.CounterVec
 	// InvalidEventTimeCounter counts inbound messages refused because a timestamp on
 	// them — the envelope's or any entry's — is not an RFC3339 instant. A subset of
 	// FailedDecodeCounter, kept separate because a fleet with wrong clocks is a
@@ -230,6 +235,11 @@ func initializeMetrics() {
 		"total_http_connections_closed_before_request",
 		"Count of connections to an HTTP ingest listener that closed before delivering a request — "+
 			"a header-timeout close, but equally a port scan, a TCP health check or a client that hung up",
+		[]string{"source"})
+	BackpressureCounter = Microservice.NewCounterVec(
+		"total_msg_backpressured",
+		"Count of inbound messages refused because the ingest pipeline is applying backpressure "+
+			"(a consumer's unread backlog is near its stream's ceiling)",
 		[]string{"source"})
 	TenantGoneCounter = Microservice.NewCounterVec(
 		"total_msg_tenant_deleted",
@@ -389,8 +399,9 @@ func buildEventSources() error {
 		case processor.TYPE_MQTT:
 			// THE GATEWAY SOURCE IS NO LONGER AN MQTT CLIENT (ADR-030 amendment). A
 			// source pointed at our OWN broker consumes the durable capture stream the
-			// broker writes every device publish into before it PUBACKs the device, so
-			// the message is durable before any of our code runs.
+			// broker writes every device publish into, so the message is in a stream
+			// before any of our code runs (the PUBACK does not wait for that store; see
+			// streams.DeviceEventsCapture).
 			//
 			// An MQTT client could not have been made durable here at all, which is why
 			// this is a replacement rather than a fix. NATS discards a CleanSession
@@ -447,7 +458,7 @@ func buildEventSources() error {
 			// reconnect is a post-startup failure; see the source's onConnect.
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, nil, "", "",
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				ingestGate, failProcess)
+				ingestGate, admitInbound, failProcess)
 			if err != nil {
 				return err
 			}
@@ -456,7 +467,7 @@ func buildEventSources() error {
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
 				Configuration.HttpIngest,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				ingestGate, onConnectionClosedBeforeRequest)
+				ingestGate, admitInbound, onConnectionClosedBeforeRequest)
 			if err != nil {
 				return err
 			}
@@ -482,6 +493,31 @@ func onMessageReceived(source string, raw []byte) {
 //
 // The admission decision itself — including which timeline a message is metered on —
 // lives in processor.NewRateGate; this is only the shed accounting.
+// admitInbound reports whether inbound-events is accepting events, counting a refusal
+// against source. The HTTP and external-MQTT sources ask it before reading a message.
+//
+// The answer itself comes from inboundBackpressure; this adds the accounting.
+func admitInbound(source string) error {
+	err := inboundBackpressure()
+	if err != nil {
+		BackpressureCounter.WithLabelValues(source).Inc()
+	}
+	return err
+}
+
+// inboundBackpressure is inbound-events' gate as this process sees it. A variable only so
+// that a test driving the HTTP listener without a broker can open it; nothing in
+// production reassigns it.
+//
+// With no manager it refuses: an answer of "accepting" from a process that cannot see the
+// stream is the fail-open this exists to prevent.
+var inboundBackpressure = func() error {
+	if NatsManager == nil {
+		return messaging.ErrStreamBackpressure
+	}
+	return NatsManager.Backpressure(streams.InboundEvents)
+}
+
 // onTenantGone accounts for a message refused by the ADR-077 lifecycle gate. Same
 // no-per-tenant-label discipline as onRateShed, and for a sharper reason here: the whole
 // point of this path is that it fires for tenants that no longer exist, so a tenant label
@@ -599,6 +635,11 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 	}
 	err := InboundEventsWriter.WriteMessages(ctx, msg)
 	InboundEventsWriter.HandleResponse(err)
+	// The gate can close between a source's admit check and this publish; the refusal is
+	// counted the same way, and the source answers it as it answers any refusal.
+	if errors.Is(err, messaging.ErrStreamBackpressure) {
+		BackpressureCounter.WithLabelValues(source).Inc()
+	}
 	return err
 }
 

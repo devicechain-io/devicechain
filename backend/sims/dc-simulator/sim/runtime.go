@@ -26,11 +26,12 @@ const httpTimeout = 15 * time.Second
 // actually applied instead of the one it asked for.
 type Stats struct {
 	// Emitted counts accepted emits (HTTP 202). Shed counts emits rejected at the
-	// per-tenant ingest ceiling (HTTP 429, ADR-023/063) — a DEFINITIVE clean
-	// non-accept: the ingress returns it before reading the body, so the event
-	// provably never entered the pipeline and is not persisted. Failed counts every
-	// OTHER non-202 (a 400, a 503, a transport error) — outcomes that are
-	// INDETERMINATE (a timeout may have persisted server-side) or are real errors.
+	// per-tenant ingest ceiling (HTTP 429, ADR-023/063) or under the platform's
+	// backpressure (HTTP 503 with a Retry-After) — each a DEFINITIVE clean non-accept:
+	// the ingress refuses before anything is published, so the event provably never
+	// entered the pipeline and is not persisted. Failed counts every OTHER non-202 (a
+	// 400, a bare 503, a transport error) — outcomes that are INDETERMINATE (a timeout
+	// may have persisted server-side) or are real errors.
 	//
 	// Separating shed from failed is what makes a governed run reconcilable (ADR-064
 	// L3): under a contention floor a best-effort tenant is EXPECTED to shed, and a

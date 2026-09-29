@@ -105,12 +105,14 @@ func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring
 	t.Helper()
 	savedConfig, savedSources, savedMs := Configuration, EventSources, Microservice
 	savedLive, savedBacklog, savedHTTP, savedShed := RateLimiter, BacklogRateLimiter, HttpRateLimiter, ShedPriorityResolver
-	savedInbound, savedFailed := InboundEventsWriter, FailedDecodeWriter
+	savedInbound, savedFailed, savedAdmission := InboundEventsWriter, FailedDecodeWriter, inboundBackpressure
 	t.Cleanup(func() {
 		Configuration, EventSources, Microservice = savedConfig, savedSources, savedMs
 		RateLimiter, BacklogRateLimiter, HttpRateLimiter, ShedPriorityResolver = savedLive, savedBacklog, savedHTTP, savedShed
-		InboundEventsWriter, FailedDecodeWriter = savedInbound, savedFailed
+		InboundEventsWriter, FailedDecodeWriter, inboundBackpressure = savedInbound, savedFailed, savedAdmission
 	})
+	// No broker here, so the pipeline is declared open: these tests are about the rate gate.
+	inboundBackpressure = func() error { return nil }
 
 	reg := prometheus.NewRegistry()
 	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}

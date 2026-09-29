@@ -23,13 +23,24 @@ import (
 // maxIngressResponseBytes bounds how much of an unexpected error body is read.
 const maxIngressResponseBytes = 4096
 
-// ErrShed marks an emit the ingress REJECTED at the per-tenant rate limit (HTTP 429,
-// ADR-023/063). It is a definitive, clean non-accept — the ingress returns 429 before
-// reading the body, so the event provably never entered the pipeline — which is what
-// lets a governed run distinguish an EXPECTED shed from a real failure and reconcile
-// persisted == emitted with the shed events correctly absent. EmitMeasurements wraps
-// it so callers test with errors.Is(err, ErrShed); EmitAll routes it to Stats.Shed.
-var ErrShed = errors.New("emit shed at ingress rate limit (HTTP 429)")
+// ErrShed marks an emit the ingress REJECTED cleanly: at the per-tenant rate limit (HTTP
+// 429, ADR-023/063), or under backpressure (HTTP 503 with a Retry-After, ErrBackpressured).
+// Both are definitive non-accepts — the ingress refuses before anything is published, so
+// the event provably never entered the pipeline — which is what lets a governed run
+// distinguish an EXPECTED shed from a real failure and reconcile persisted == emitted with
+// the shed events correctly absent. EmitMeasurements wraps it so callers test with
+// errors.Is(err, ErrShed); EmitAll routes it to Stats.Shed.
+var ErrShed = errors.New("emit shed at ingress (HTTP 429, or 503 under backpressure)")
+
+// ErrBackpressured marks the backpressure kind of shed: the platform refused the event
+// because a reader of its ingest stream is far behind, and said so with a 503 carrying a
+// Retry-After. It always travels with ErrShed, so the accounting is the shed accounting;
+// it exists so a caller can tell the platform's refusal from the tenant's ceiling.
+//
+// 🔴 A 503 WITHOUT a Retry-After is NOT this. The ingress answers a bare 503 when its
+// publish failed, and a publish that timed out may have been stored, so counting it as a
+// clean non-accept would make a reconciliation wrong about what the platform holds.
+var ErrBackpressured = errors.New("emit refused at ingress under backpressure (HTTP 503 with Retry-After)")
 
 // MetricsFunc returns the metrics device d (the i-th in rt.Devices) emits on
 // the current tick. It is pure per-device value generation — EmitAll owns the
@@ -341,7 +352,8 @@ func eventTimestamp() string {
 // JsonEvent envelope for device d, POSTs it to the real device-plane HTTP ingress
 // route a physical device uses (no sim-only backdoor), authenticated by the
 // credential bootstrap.go provisioned, and classifies the response — 202 accepted,
-// 429 wrapped as ErrShed, anything else a failure.
+// 429 and a backpressure 503 (one carrying a Retry-After) wrapped as ErrShed, anything
+// else a failure.
 //
 // 🔴 It is a shared helper rather than a shape each emitter repeats, and the reason
 // is the 429 branch specifically. ErrShed is what keeps a governed run reconcilable
@@ -389,6 +401,10 @@ func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 		// wrap ErrShed so EmitAll routes it to Stats.Shed rather than Stats.Failed.
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
 		return fmt.Errorf("ingress %s returned 429 (%s): %w", url, strings.TrimSpace(string(raw)), ErrShed)
+	}
+	if resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("Retry-After") != "" {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
+		return fmt.Errorf("ingress %s returned 503 (%s): %w: %w", url, strings.TrimSpace(string(raw)), ErrBackpressured, ErrShed)
 	}
 	if resp.StatusCode != http.StatusAccepted {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))

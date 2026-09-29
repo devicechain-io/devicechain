@@ -285,6 +285,46 @@ type Stream struct {
 	// exhaustion, and the lease's local deadline (30s) makes a zombie outliving AckWait x
 	// MaxDeliver unrealistic — see ResolvedEventsProcessor's type comment.
 	ReplayCovered []string
+	// BackpressureReaders names the areas whose durable on this stream must never lose a
+	// message it has not read yet. While any of them is so far behind that its UNREAD backlog
+	// fills 90% of the stream's ceiling, the stream applies backpressure: core/messaging
+	// refuses its writers (messaging.ErrStreamBackpressure), and a reader that forwards into
+	// it (Forwards) stops fetching, until that backlog is below 80%. Empty means the stream
+	// never refuses: when it is full it discards its oldest message, read or not, and the
+	// readers' unread-loss counters are what record a message nobody had read.
+	//
+	// 🔴 THE BROKER STILL DISCARDS OLD, AND THAT IS DELIBERATE. Every stream is Limits
+	// retention with a week of history, so what a busy stream holds at its ceiling is mostly
+	// messages every reader has ALREADY read. Discard-new would refuse on that history and
+	// stop ingest for good on any install averaging more than a few events a second over a
+	// week. Interest or work-queue retention would make "full" mean "full of unread", but
+	// rule preview and DETECT replay need the read history, an interest stream with no
+	// consumer acknowledges a publish and stores nothing, and the broker refuses a retention
+	// change to or from work-queue on a live stream. So the broker keeps discarding old, as a
+	// counted backstop, and the refusal is made by the platform's own writers from the
+	// readers' backlog, which is the quantity that decides whether anything is lost.
+	//
+	// 🔴 A NAME HERE CAN STOP INGEST FOR EVERY TENANT. The stream is shared by all tenants, so
+	// one slow reader listed here refuses everyone's events. That is why the list holds only
+	// the readers whose unread loss IS data loss (resolution, and persistence), and not a
+	// reader that loses only a projection (device-state's live view converges on the next
+	// event) or one that has its own recovery (event-processing replays by sequence from its
+	// checkpoint, and its unread position is that checkpoint, which no durable's backlog
+	// shows). Their loss stays counted by the unread-loss alerts, as before.
+	//
+	// Each name must be in Areas, and none may be in ReplayCovered.
+	BackpressureReaders []string
+	// Forwards maps an area that reads this stream to the stream it forwards what it reads
+	// into, when that stream applies backpressure. Every reader the area opens on this stream
+	// then parks before each fetch while the downstream stream's gate is closed, so a closed
+	// gate holds the backlog here instead of failing a publish: a message already fetched has
+	// spent one of its MaxDeliver deliveries, and a forwarding hop that failed its publish
+	// would leave it unacked and spend another, until the message is given up on as poison.
+	// Parking before the fetch spends none.
+	//
+	// It is a declaration rather than an option at the call site so that the wiring cannot be
+	// left out: NewReader applies it from the reader's area, and a test pins the table.
+	Forwards map[string]string
 	// Why records what drives this stream's volume. It is the reasoning behind
 	// the tier, kept next to the tier so a reclassification has to confront it.
 	Why string
@@ -544,9 +584,17 @@ var All = []Stream{
 	// IS NOT NULL" — and alternate ids are optional and usually absent, so it
 	// backstops only the events that carry one. Widening the window trades memory
 	// for a longer covered outage; it does not remove the residual.
+	//
+	// It applies BACKPRESSURE on device-management's backlog: an event device-management has
+	// not resolved is an event nothing downstream has, so a full stream refuses new events
+	// rather than discard one of those. device-management forwards into resolved-events, so
+	// it stops reading here while that stream's gate is closed, and the backlog it leaves is
+	// what closes this one.
 	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
-		DeadLetterKind: kindEvent,
-		Why:            "raw device telemetry — the primary ingest path"},
+		DeadLetterKind:      kindEvent,
+		BackpressureReaders: []string{"device-management"},
+		Forwards:            map[string]string{"device-management": ResolvedEvents},
+		Why:                 "raw device telemetry — the primary ingest path"},
 	//
 	// event-processing is REPLAY-COVERED: DETECT acks a resolved event only after a
 	// snapshot checkpoint covers it, applies every delivery on first sight (true while the
@@ -560,9 +608,17 @@ var All = []Stream{
 	// a Nats-Msg-Id that a redelivery of its source reproduces (processor.resolvedDedupID), so
 	// the copy published on the first redelivery, one inbound AckWait after the fetch, is
 	// dropped rather than stored twice. A declared window shorter than that would switch it off.
+	//
+	// It applies BACKPRESSURE on event-management's backlog alone: an event it has not
+	// persisted is lost when evicted. device-state is not listed, because its unread loss is
+	// a stale live view that the device's next event repairs, and at the shipped sizing it is
+	// the slowest reader, so gating on it would stop every tenant's ingest to let a projection
+	// catch up. event-processing is not listed because its unread position is its checkpoint,
+	// which its durable's backlog does not show (see BackpressureReaders).
 	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
-		ReplayCovered: []string{"event-processing"},
-		Why:           "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
+		ReplayCovered:       []string{"event-processing"},
+		BackpressureReaders: []string{"event-management"},
+		Why:                 "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
 
 	// One message per detection, and a subscribe-able product in its own right
 	// (ADR-037): clients live-subscribe by tenant like any other event feed.
@@ -599,19 +655,33 @@ var All = []Stream{
 	{Suffix: DeviceCommands, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
-	// reason the gateway is no longer an MQTT client: the broker writes a device's
-	// publish here before it PUBACKs, so the message is durable BEFORE our code
-	// runs. The previous design acked the device from an in-memory channel, so
-	// anything buffered at SIGKILL was silently lost — and could not be fixed by
-	// manual acking, because NATS speaks MQTT 3.1.1, where a CleanSession
-	// disconnect discards the session and shared subscriptions do not exist at all.
+	// reason the gateway is no longer an MQTT client: the broker stores a device's
+	// publish here itself, so the message is in a stream BEFORE our code runs. The
+	// previous design acked the device from an in-memory channel, so anything
+	// buffered at SIGKILL was silently lost — and could not be fixed by manual
+	// acking, because NATS speaks MQTT 3.1.1, where a CleanSession disconnect
+	// discards the session and shared subscriptions do not exist at all.
+	//
+	// 🔴 THE PUBACK DOES NOT WAIT FOR THIS STREAM. For QoS 1 the broker's MQTT gateway
+	// publishes the message into the subject space with no reply subject and PUBACKs once
+	// its own session store has it; this stream stores the message from its own ingest
+	// queue, and a failure to store is only logged by the broker (nats-server's mqtt.go
+	// and stream.go; the edge agent's spool comment records the same). So a refusal here
+	// could never reach the device, which is why this stream does NOT apply backpressure:
+	// discard-new would drop the NEWEST message after its PUBACK with nothing in the
+	// platform counting it, where discard-old drops the oldest unread one and
+	// event-sources' capture durable counts it as unread loss.
+	//
+	// event-sources forwards what it reads here into inbound-events, so it stops reading
+	// while that stream applies backpressure, and the backlog waits here.
 	//
 	// Nothing in the platform publishes here; the producer is the device. Writers
 	// are refused (messaging.WriteMessages) rather than allowed to publish to a
 	// subject that matches no stream.
 	{Suffix: DeviceEventsCapture, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
 		MaxBytesCap: deviceEventsCaptureMaxBytesCap, DeadLetterKind: kindEvent,
-		Why: "raw device publishes, captured before PUBACK — the ingest durability floor"},
+		Forwards: map[string]string{"event-sources": InboundEvents},
+		Why:      "raw device publishes, captured by the broker — the ingest durability floor"},
 
 	// PER-DEVICE, and it is the device token that makes a response ATTRIBUTABLE.
 	//
@@ -860,6 +930,24 @@ func ReplayCoveredBy(suffix, area string) bool {
 		}
 	}
 	return false
+}
+
+// BackpressureReadersFor returns the areas whose unread backlog on suffix's stream makes it
+// refuse its writers, or nil for a stream that never refuses. See Stream.BackpressureReaders.
+func BackpressureReadersFor(suffix string) []string {
+	return bySuffix[suffix].BackpressureReaders
+}
+
+// AppliesBackpressure reports whether suffix's stream refuses its writers while a declared
+// reader's unread backlog nears its ceiling.
+func AppliesBackpressure(suffix string) bool {
+	return len(bySuffix[suffix].BackpressureReaders) > 0
+}
+
+// ForwardsInto returns the stream area forwards what it reads from suffix's stream into, or
+// "" when it forwards nowhere that applies backpressure. See Stream.Forwards.
+func ForwardsInto(suffix, area string) string {
+	return bySuffix[suffix].Forwards[area]
 }
 
 // IsDeclared reports whether a suffix names a declared stream.

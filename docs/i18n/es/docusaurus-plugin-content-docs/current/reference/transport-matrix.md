@@ -72,6 +72,13 @@ hay ningún bróker aparte que operar.
   recibió su PUBACK cuando el bróker lo capturó, así que nada informa al publicador; en este
   transporte no hay un `429` que enviar. Si tu flota puede superar su límite a ráfagas,
   dimensiónala contra ese límite en lugar de confiar en una contrapresión que no existe.
+
+  Lo mismo ocurre cuando la propia plataforma rechaza eventos porque un consumidor va muy atrasado
+  (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)).
+  El bróker ya confirmó el mensaje al dispositivo, así que no se rechaza: espera en el stream de
+  captura hasta que la canalización vuelva a aceptar eventos. Si el rechazo dura lo suficiente
+  para llenar el stream de captura, se descartan sus mensajes más antiguos, y
+  `JetStreamDurableLostUnread` lo informa.
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
   confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
   instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si
@@ -91,10 +98,16 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   - `202` una vez encolado el evento;
   - `400` ante un cuerpo que no puede decodificar o un inquilino sintácticamente inválido;
   - `429` cuando el inquilino supera su límite de tasa de ingesta;
-  - **`503` cuando el evento no pudo entregarse al stream.**
+  - **`503` con una cabecera `Retry-After` cuando la plataforma aplica contrapresión**: un
+    consumidor va tan atrasado que aceptar más desplazaría eventos que aún no ha procesado
+    (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure));
+  - **`503` sin `Retry-After` cuando el evento no pudo entregarse al stream.**
 
   Reintenta ante un `503`: es la plataforma diciéndote, en el único transporte que puede hacerlo,
-  que tus datos no llegaron. Un `429` también significa que el evento no se aceptó; lleva una
+  que tus datos quizá no llegaron. Un `503` con `Retry-After` significa que el evento no se
+  almacenó con toda seguridad, así que espera ese tiempo y vuelve a enviarlo. Un `503` sin él
+  significa que la publicación falló, y si falló después de que el stream almacenara el evento, un
+  reintento lo almacena dos veces. Un `429` también significa que el evento no se aceptó; lleva una
   cabecera `Retry-After`, así que espera y reintenta. `202` y `400` son terminales para esa
   petición.
 - **Escritura ○ / Lectura ○**: **no hay ningún canal descendente en absoluto.** Un dispositivo que
@@ -122,7 +135,8 @@ La plataforma también puede actuar como cliente en un bróker que ya operes, pa
   - la conexión es en claro (sin TLS);
   - no presenta ninguna credencial de bróker;
   - en la práctica es como mucho una vez;
-  - un mensaje rechazado por exceder un límite se descarta, sin devolver nada al publicador.
+  - un mensaje rechazado por exceder un límite, o mientras la plataforma aplica contrapresión, se
+    descarta, sin devolver nada al publicador.
 
   Prefiere el bróker de la plataforma salvo que necesites específicamente leer de uno ya existente.
 
@@ -153,6 +167,11 @@ Para flotas ya existentes que hablan Sparkplug con su propio bróker.
   al decodificar el payload, sin registrar nada y sin decir nada. Si las señales interesantes de tu
   flota son booleanas (un indicador de marcha, un bit de fallo), verás un dispositivo
   autoritativamente en línea que no reporta nada.
+
+  Mientras la plataforma aplica contrapresión (consulta
+  [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)), las
+  lecturas se descartan sin reintento y se cuentan. BIRTH y DEATH se siguen aceptando, así que la
+  presencia sigue siendo correcta.
 - **Escritura ○: deliberadamente fuera de alcance, no inacabado.** No hay salida de comandos
   Sparkplug (`DCMD`), y ninguna espera trabajo pendiente: una flota Sparkplug reside en la
   infraestructura MQTT *del cliente*, así que nada tiende un puente entre el flujo de comandos de la
@@ -220,6 +239,11 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
   configurable, con un tope de 32 observaciones por registro. Las observaciones **no sobreviven a
   un relevo de líder**: la presencia se reconstruye, y la telemetría se restablece solo a medida que
   se renueva el registro de cada dispositivo.
+
+  Mientras la plataforma aplica contrapresión (consulta
+  [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)), una
+  notificación se descarta y se cuenta, y la siguiente la sustituye. El registro y la desconexión se
+  siguen aceptando, así que la presencia sigue siendo correcta.
 - Los comandos a un dispositivo dormido se retienen de forma duradera y se drenan cuando vuelve a
   aparecer, registrados como `PARKED`. Es el único lugar donde un comando que el transporte ya
   intentó entregar se conserva para el dispositivo en vez de perderse. No es la única retención de

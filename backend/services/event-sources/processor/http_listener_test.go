@@ -98,7 +98,7 @@ func newListeningSource(t *testing.T, id string, ingest config.HttpIngest,
 			return dec.publishErr
 		},
 		func(string, string, []byte, error) error { return nil },
-		nil, earlyClose)
+		nil, admitAll, earlyClose)
 	require.NoError(t, err)
 	es.Port = 0 // let the OS choose, so the test needs no fixed port
 
