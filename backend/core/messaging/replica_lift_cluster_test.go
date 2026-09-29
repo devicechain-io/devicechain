@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/kv"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -94,7 +95,10 @@ func jsGroupNotServingYet(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, nats.ErrNoStreamResponse) || errors.Is(err, nats.ErrNoResponders) ||
+	// The legacy handle and the jetstream handle each have their own no-stream-response
+	// sentinel, and a KV put can come back with either.
+	if errors.Is(err, nats.ErrNoStreamResponse) || errors.Is(err, jetstream.ErrNoStreamResponse) ||
+		errors.Is(err, nats.ErrNoResponders) ||
 		errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

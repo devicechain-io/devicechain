@@ -11,6 +11,7 @@ import (
 	"time"
 
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // These tests exist because settleRetry is the one piece of the clustered-test
@@ -30,6 +31,10 @@ func TestSettleRetryClassifiesTheSettlingTransients(t *testing.T) {
 		// The two identities actually observed failing CI, by identity rather than
 		// by text, so a message reword upstream does not silently un-cover them.
 		{"no stream response", nats.ErrNoStreamResponse},
+		{"no stream response (jetstream)", jetstream.ErrNoStreamResponse},
+		// The jetstream sentinel behind a message that no longer says "no response from
+		// stream": only its identity can recognise it.
+		{"reworded jetstream no stream response", reworded{jetstream.ErrNoStreamResponse}},
 		{"no responders", nats.ErrNoResponders},
 		{"timeout", nats.ErrTimeout},
 		{"context deadline", context.DeadlineExceeded},
@@ -73,6 +78,13 @@ func TestSettleRetryClassifiesTheSettlingTransients(t *testing.T) {
 		})
 	}
 }
+
+// reworded is an error whose message says nothing of the error it wraps, as the message of
+// an upstream error can change while its identity does not.
+type reworded struct{ err error }
+
+func (r reworded) Error() string { return "reworded" }
+func (r reworded) Unwrap() error { return r.err }
 
 // TestSettleRetryFailsFastOnARealError is the mutation that matters: a genuine
 // JetStream error must surface on the FIRST attempt, unchanged, rather than being

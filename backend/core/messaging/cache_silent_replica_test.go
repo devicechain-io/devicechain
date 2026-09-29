@@ -63,6 +63,20 @@ func replicatedCacheManager(t *testing.T, srv *natsserver.Server) (*NatsManager,
 
 func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 	t.Helper()
+	return newSilentReplicaRigSeededThrough(t, func(store kvPutter) kvPutter { return store })
+}
+
+// kvPutter is the one call the rig seeds its bucket with.
+type kvPutter interface {
+	Put(key string, value []byte) (uint64, error)
+}
+
+// newSilentReplicaRigSeededThrough is newSilentReplicaRig with the bucket handle the keys
+// are seeded through passed to wrap first, so a test can put a fault between the rig and
+// the bucket and see the rig's setup meet it. Every rig test seeds through the plain
+// handle unchanged.
+func newSilentReplicaRigSeededThrough(t *testing.T, wrap func(kvPutter) kvPutter) *silentReplicaRig {
+	t.Helper()
 	servers, faults := dctest.StartJetStreamClusterWithRouteFaults(t, 3)
 
 	setup, _ := replicatedCacheManager(t, servers[0])
@@ -84,7 +98,7 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 	for i := 0; i < silentRigKeys; i++ {
 		rig.keys = append(rig.keys, fmt.Sprintf("tenant|device-%02d", i))
 	}
-	if err := seedSilentRig(store, rig.keys); err != nil {
+	if err := seedSilentRig(wrap(store), rig.keys); err != nil {
 		t.Fatal(err)
 	}
 	// Every replica must hold every key before one of them is silenced: a follower that
@@ -196,9 +210,7 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 // simply retried. Teaching the retry to wait out ErrCacheUnavailable instead would hide
 // a breaker that opens on a healthy cluster; TestSettleRetryDoesNotRetryABypassedCache
 // pins that it does not.
-func seedSilentRig(store interface {
-	Put(key string, value []byte) (uint64, error)
-}, keys []string) error {
+func seedSilentRig(store kvPutter, keys []string) error {
 	for _, key := range keys {
 		data, err := json.Marshal(silentRigValue(key))
 		if err != nil {
@@ -275,6 +287,74 @@ func TestTheSilentRigSeedsThroughTheSettlingWindow(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestTheSilentRigSeedingFailsFastOnARealError is the counterweight to the test above:
+// seedSilentRig retries only the settling window. A put that fails for any other reason
+// fails the rig on that put, naming the cause, rather than being retried until it works
+// or skipped and left for the warm-up read to trip over.
+func TestTheSilentRigSeedingFailsFastOnARealError(t *testing.T) {
+	boom := errors.New("boom")
+	bucket := &settlingBucket{transient: boom, stored: map[string][]byte{}}
+
+	err := seedSilentRig(bucket, []string{"tenant|device-00", "tenant|device-01"})
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("seeding through a put that failed for a real reason = %v, want an error wrapping %v", err, boom)
+	}
+	if bucket.puts != 1 {
+		t.Fatalf("puts = %d, want 1: a real error is not retried, and no key is written after it", bucket.puts)
+	}
+	if len(bucket.stored) != 0 {
+		t.Fatalf("stored %d keys, want none: the rig stops at the first real failure", len(bucket.stored))
+	}
+}
+
+// firstPutTimesOut stands between the rig and its bucket and answers the first put with a
+// request timeout, as a put into a group that is still settling can be answered, without
+// passing it on. Every later put reaches the bucket.
+type firstPutTimesOut struct {
+	store    kvPutter
+	injected int
+	puts     int
+}
+
+func (f *firstPutTimesOut) Put(key string, value []byte) (uint64, error) {
+	f.puts++
+	if f.injected == 0 {
+		f.injected++
+		return 0, nats.ErrTimeout
+	}
+	return f.store.Put(key, value)
+}
+
+// TestTheSilentRigComesUpThroughASettlingTimeout is the rig's setup failure on the real
+// cluster: one seeding put meets a settling timeout. Seeded through a Cache, that timeout
+// opened the Cache's breaker and the rig failed with "messaging: cache unavailable" before
+// any test had asserted anything. The rig must come up, and the fault must have been met:
+// a rig that seeds some other way than through the handle it is given never meets it, and
+// fails here.
+func TestTheSilentRigComesUpThroughASettlingTimeout(t *testing.T) {
+	var fault *firstPutTimesOut
+	rig := newSilentReplicaRigSeededThrough(t, func(store kvPutter) kvPutter {
+		fault = &firstPutTimesOut{store: store}
+		return fault
+	})
+
+	if fault == nil || fault.injected != 1 {
+		t.Fatal("the rig never seeded through the handle it was given, so the settling timeout was never met")
+	}
+	if fault.puts != silentRigKeys+1 {
+		t.Fatalf("seeding puts = %d, want %d: the timed-out put retried once, every other key written once",
+			fault.puts, silentRigKeys+1)
+	}
+	// The rig's warm-up has read every key back through the measuring Cache; one more read
+	// shows that Cache's breaker is closed as the tests begin.
+	var got string
+	found, err := rig.cache.Get(context.Background(), rig.keys[0], &got)
+	if err != nil || !found || got != silentRigValue(rig.keys[0]) {
+		t.Fatalf("read of %q after setup = (%v, %v, %q), want the stored value", rig.keys[0], found, err, got)
 	}
 }
 
