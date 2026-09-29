@@ -660,25 +660,35 @@ func TestEveryDeclaredStreamIsStillCreatedDiscardOld(t *testing.T) {
 // consumerInfoFunc is the gates' consumerInfo seam.
 type consumerInfoFunc func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error)
 
-// lagOnce wraps a consumerInfo so that the first read after a durable's NumPending rises
-// reports it one low, as the broker does between a PubAck and its signal loop, and every read
-// after that the true value.
-type lagOnce struct {
+// lagBehind wraps a consumerInfo so that the first l.reads reads after a durable's NumPending
+// rises report it one low, as the broker does between a PubAck and its signal loop, and every
+// read after that the true value.
+//
+// It lags for SEVERAL reads, not one, so the regression test below can tell a wait that polls
+// until the count is right from one that reads the seam once, discards the answer, and then
+// measures: with a single lagging read, that discarded read would use up the lag and the
+// measurement would see the true count by accident.
+type lagBehind struct {
 	mu    sync.Mutex
 	inner consumerInfoFunc
+	reads int
 	seen  map[string]uint64
+	left  map[string]int
 }
 
-func (l *lagOnce) info(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+func (l *lagBehind) info(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
 	ci, err := l.inner(ctx, stream, durable)
 	if err != nil {
 		return ci, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	prev := l.seen[durable]
+	if ci.NumPending > l.seen[durable] {
+		l.left[durable] = l.reads
+	}
 	l.seen[durable] = ci.NumPending
-	if ci.NumPending > prev {
+	if l.left[durable] > 0 {
+		l.left[durable]--
 		lagged := *ci
 		lagged.NumPending--
 		return &lagged, nil
@@ -693,8 +703,8 @@ func withoutSamplingLoop(s *bpService) {
 	s.nmgr.backpressure().loop.Do(func() {})
 }
 
-// A publish is acknowledged before the broker counts it against its consumers. Every read of
-// this seam after a publish reports one message fewer than the stream holds, once: measured
+// A publish is acknowledged before the broker counts it against its consumers. The first three
+// reads of this seam after a publish report one message fewer than the stream holds: measured
 // straight away, the gate reads 17 of 20 at the 18th publish, stays open, and admits a 19th.
 // Measured once the broker has counted the publish, it closes at exactly 18, as it does when
 // the broker is quick.
@@ -706,7 +716,7 @@ func TestTheGateIsMeasuredOnlyOnceTheBrokerHasCountedThePublish(t *testing.T) {
 	es := newBPService(t, srv, "event-sources", bounds)
 	withoutSamplingLoop(es)
 	g := es.nmgr.backpressure()
-	l := &lagOnce{inner: g.consumerInfo, seen: map[string]uint64{}}
+	l := &lagBehind{inner: g.consumerInfo, reads: 3, seen: map[string]uint64{}, left: map[string]int{}}
 	g.consumerInfo = l.info // before the writer: nothing reads the seam yet
 	w := es.writer(t, streams.InboundEvents)
 
@@ -813,5 +823,87 @@ func TestMeasuringFailsTheTestWhenTheBrokerNeverCountsThePublish(t *testing.T) {
 	if !sampled.Equal(registered) {
 		t.Fatalf("the gate was measured (sampledAt %v, registration's %v) after the hook declared the broker's "+
 			"count untrustworthy", sampled, registered)
+	}
+}
+
+// A broker whose consumers cannot be read, for a reason that is not the deadline, must FAIL the
+// test that measures it, saying it could not read the counts and why, and must not be measured:
+// a wait that took an unreadable count for a settled one would hand every test a measurement
+// nothing checked.
+func TestMeasuringFailsTheTestWhenTheConsumersCannotBeRead(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	clk := newTestClock()
+	bounds := bpBounds{maxMsgs: 20}
+	dm := newBPService(t, srv, "device-management", bounds)
+	dm.reader(t, streams.InboundEvents)
+	es := newBPService(t, srv, "event-sources", bounds)
+	withoutSamplingLoop(es)
+	g := es.nmgr.backpressure()
+	g.now = clk.now
+	w := es.writer(t, streams.InboundEvents) // registration's sample reads the real broker
+	if err := w.WriteMessages(tenantCtx(), Message{Value: []byte("m")}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	var reads atomic.Int64
+	g.consumerInfo = func(context.Context, string, string) (*nats.ConsumerInfo, error) {
+		reads.Add(1)
+		return nil, errors.New("denied")
+	}
+	g.mu.Lock()
+	registered := g.gates[streams.InboundEvents].sampledAt
+	g.mu.Unlock()
+	clk.advance(time.Second) // a measurement from here on moves sampledAt
+
+	rec := &fatalRecorder{}
+	es.nmgr.MeasureBackpressureForTesting(rec, streams.InboundEvents)
+
+	rec.mu.Lock()
+	calls := slices.Clone(rec.calls)
+	rec.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("the hook called Fatalf %d times (%q) against consumers it could not read; want once", len(calls), calls)
+	}
+	for _, want := range []string{"could not read the consumers' counts", "denied"} {
+		if !strings.Contains(calls[0], want) {
+			t.Fatalf("the failure %q does not contain %q", calls[0], want)
+		}
+	}
+	if reads.Load() < 2 {
+		t.Fatalf("the seam was read %d times; the wait should have retried it", reads.Load())
+	}
+	g.mu.Lock()
+	sampled := g.gates[streams.InboundEvents].sampledAt
+	g.mu.Unlock()
+	if !sampled.Equal(registered) {
+		t.Fatalf("the gate was measured (sampledAt %v, registration's %v) after the hook could not read the "+
+			"consumers", sampled, registered)
+	}
+}
+
+// A gated stream that has evicted messages its reader never read holds fewer than it ever
+// took: FirstSeq has moved past 1 and NumPending counts only what is still there. The wait must
+// count from the eviction too, and settle; counting from the durable's delivered sequence alone
+// would wait for messages that no longer exist and fail every measurement of such a stream.
+func TestWaitingForTheBrokersCountSettlesOnAStreamThatHasEvicted(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	bounds := bpBounds{maxMsgs: 20}
+	dm := newBPService(t, srv, "device-management", bounds)
+	dm.reader(t, streams.InboundEvents) // never reads
+	es := newBPService(t, srv, "event-sources", bounds)
+	w := es.writer(t, streams.InboundEvents)
+	// State transitions pass a closed gate, so these fill the stream past its ceiling and
+	// DiscardOld evicts the oldest.
+	for i := 0; i < 25; i++ {
+		if err := w.WriteMessages(tenantCtx(), Message{Value: []byte("m"), BypassBackpressure: true}); err != nil {
+			t.Fatalf("publish %d: %v", i+1, err)
+		}
+	}
+	if st := streamState(t, es.nmgr, streams.InboundEvents); st.FirstSeq != 6 || st.LastSeq != 25 {
+		t.Fatalf("precondition: the stream holds %d..%d; want 6..25, the first five evicted", st.FirstSeq, st.LastSeq)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), backpressureSampleTimeout)
+	defer cancel()
+	if err := es.nmgr.awaitConsumerCounts(ctx, streams.InboundEvents); err != nil {
+		t.Fatalf("waiting on a stream that has evicted: %v; want it settled at 20 pending", err)
 	}
 }

@@ -354,8 +354,8 @@ func (nmgr *NatsManager) sampleBackpressure(ctx context.Context, suffix string) 
 // fails the test and does not measure: a measurement of a count the wait could not trust is the
 // plausible answer the wait exists to prevent.
 //
-// It takes a test's T for its Helper and Fatalf methods alone, as SetAckWaitForTesting does, so
-// this package does not import testing.
+// It takes a test's T as an interface of the two methods it calls, Helper and Fatalf, so this
+// package does not import testing, as SetAckWaitForTesting does.
 func (nmgr *NatsManager) MeasureBackpressureForTesting(tb interface {
 	Helper()
 	Fatalf(format string, args ...any)
@@ -437,6 +437,9 @@ func (nmgr *NatsManager) uncountedBy(ctx context.Context, g *backpressureGates, 
 		return "", err
 	}
 	st := info.State
+	// Every gated stream declares exactly one BackpressureReader today, so nothing tests that
+	// this loop checks each durable rather than only the first: the first stream to declare a
+	// second reader should add that test.
 	for _, durable := range nmgr.gatingDurables(suffix) {
 		ci, cerr := g.consumerInfo(ctx, stream, durable)
 		if errors.Is(cerr, nats.ErrConsumerNotFound) {
@@ -445,8 +448,10 @@ func (nmgr *NatsManager) uncountedBy(ctx context.Context, g *backpressureGates, 
 		if cerr != nil {
 			return "", cerr
 		}
-		// A stream that has never held a message reports FirstSeq 0, not LastSeq+1, so
-		// FirstSeq-1 is only a floor once there is a first sequence.
+		// FirstSeq-1 is the floor because a message DiscardOld has evicted is no longer
+		// pending to anyone, delivered or not. A stream that has never held a message reports
+		// FirstSeq 0 (and LastSeq 0); the guard only keeps FirstSeq-1 from wrapping there, since
+		// want is 0 either way.
 		from := ci.Delivered.Stream
 		if st.FirstSeq > 0 {
 			from = max(from, st.FirstSeq-1)
