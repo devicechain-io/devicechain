@@ -338,8 +338,9 @@ Tres causas más que conviene revisar:
   cierta, el siguiente evento reactiva la misma alarma. Limpiar es un acuse de que la ha visto, no
   una supresión.
 - **Un dispositivo que sale del alcance de una regla y luego se queda en silencio** conserva su
-  alarma levantada. Los cambios de alcance surten efecto en el siguiente evento del dispositivo, y
-  un dispositivo en silencio no tiene siguiente evento.
+  alarma levantada. Los cambios de alcance surten efecto en el siguiente evento del dispositivo (en
+  unos cinco segundos cuando `device-management` tiene más de una réplica), y un dispositivo en
+  silencio no tiene siguiente evento.
 - **La regla que la levantó ya no se ejecuta.** Una regla que se omite al cargarse —la pestaña
   **Rule Health** del perfil la muestra como un error de compilación— no se evalúa, así que nada
   resuelve la alarma que levantó antes. Limpie la alarma a mano cuando haya corregido o retirado la
@@ -359,7 +360,8 @@ Por orden de frecuencia con la que resulta ser la respuesta:
    cierta. Revise los eventos recientes del dispositivo para ver la clave exacta.
 4. **La regla está delimitada a un grupo en el que el dispositivo no está actualmente.** La
    membresía se registra en cada evento a medida que se resuelve, así que un dispositivo recién
-   añadido se incorpora en su siguiente evento.
+   añadido se incorpora en su siguiente evento (en unos cinco segundos cuando `device-management`
+   tiene más de una réplica).
 5. **Un umbral dinámico no tiene atributo definido en ese dispositivo.** Un umbral creado en el
    formulario lee el atributo del propio dispositivo, y un dispositivo sin un valor numérico
    `SERVER` o `SHARED` para él no dispara. Un valor que no es un número, o uno establecido con

@@ -22,7 +22,7 @@ A rule states a **condition** over the profile's telemetry, declares its **sever
 
 By default a rule applies to **every device** that resolves to its profile. You can instead **scope a rule to a [dynamic group](./domain-model.md#facets-and-dynamic-groups)**, so it fires only for the devices that are currently members. For example, you can run a stricter heat rule only on *devices in arid areas*. Scoping is optional and set per rule. Absence and area-correlation rules cannot be scoped, and publishing a scoped one is refused.
 
-Group membership is recorded on each event **as it is resolved**. The engine therefore sees exactly which rules applied at that moment, including when it replays history to preview or re-derive firings. When a device joins or leaves the group, it is enrolled or dropped on its next event, with no rule edit and no rescan.
+Group membership is recorded on each event **as it is resolved**. The engine therefore sees exactly which rules applied at that moment, including when it replays history to preview or re-derive firings. When a device joins or leaves the group, it is enrolled or dropped on its next event (within about five seconds when `device-management` runs more than one replica), with no rule edit and no rescan.
 
 ## Condition types {#condition-types}
 

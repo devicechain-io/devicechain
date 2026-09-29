@@ -232,9 +232,10 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 		return
 	}
 
-	// Resolve the device token to its row id through the interface (the cached accessor). A store
-	// error is transient (retry); an EMPTY result is a device that no longer exists (deleted between
-	// detection and dispatch) — poison, dropped, since a retry cannot bring it back.
+	// Resolve the device token to its row id through the interface, which main.go wires to the
+	// plain (uncached) Api so a delete on any replica is seen at once. A store error is transient
+	// (retry); an EMPTY result is a device that no longer exists (deleted between detection and
+	// dispatch) — poison, dropped, since a retry cannot bring it back.
 	devices, err := rc.Api.DevicesByToken(msgctx, []string{req.DeviceToken})
 	if err != nil {
 		rc.retryOrDrop(msg, done, err, "resolve device for raise-alarm")

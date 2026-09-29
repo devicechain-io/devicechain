@@ -603,10 +603,23 @@ connections. Every replica of a bucket answers reads, so until the other servers
 silence, which takes between one and one and a half minutes, some of the reads are sent to the
 server that is gone. Events keep being resolved in that time, at the cost of more database reads.
 
+Each `device-management` replica also keeps what it read from, or wrote to, a bucket in memory
+for up to five seconds (less if the cache's time to live is shorter), and answers from there
+without asking NATS, including while the bucket is being skipped. The five seconds count from
+when the value was read, not from when it was last used, and each cache holds at most 4,096
+entries or about 4 MiB, dropping the least recently used first. A lookup NATS reported as absent
+is never kept. A change reaches the events that other replicas resolve up to five seconds later
+than it would through the bucket alone. Until then another replica can, for example, still
+resolve a device deleted or re-created under the same token through its old record, or evaluate
+a rule whose group scope was just changed against the previous scope. Events that present a
+device credential are not affected by a deleted device: credentials are checked against the
+database on every event.
+
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
 waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the
 service logs `A key-value cache eviction failed`, and the old entry can be served until it
-expires, which is the cache's configured time to live.
+expires, which is the cache's configured time to live, plus up to five seconds on replicas that
+already had it in memory.
 
 - **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 while the bucket is being
   skipped.
@@ -615,7 +628,22 @@ expires, which is the cache's configured time to live.
 - **`devicechain_devicemanagement_kv_cache_bypassed_total{cache, op}`**: lookups and writes that
   went to the database instead.
 - **`devicechain_devicemanagement_kv_cache_request_duration_seconds{cache, op}`**: how long each
-  operation took. A lookup or write is cut off at half a second, a removal at five seconds.
+  operation took at the bucket. A lookup or write is cut off at half a second, a removal at five
+  seconds. A lookup answered from memory never reaches the bucket, so `op="get"` counts only the
+  lookups memory could not answer.
+- **`devicechain_devicemanagement_kv_cache_local_lookups_total{cache, result}`**: lookups
+  answered from memory (`result="hit"`) or passed on to the bucket (`result="miss"`).
+- **`devicechain_devicemanagement_kv_cache_local_evictions_total{cache, reason}`**: entries
+  dropped from memory because they were five seconds old (`reason="expired"`), because the cache
+  was full (`reason="capacity"`), or because the entry was removed after a change
+  (`reason="deleted"`).
+- **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** and
+  **`devicechain_devicemanagement_kv_cache_local_bytes{cache}`**: how many entries, and roughly
+  how many bytes, a replica holds in memory for the cache. Expired entries count until a lookup
+  finds them or the cache needs the room.
+
+A cache built without the in-memory copy has none of the four `kv_cache_local_` series. Today
+every `device-management` cache has it.
 
 Separately, resolving an event that takes longer than five seconds for any reason is logged as a
 warning (`Event resolution is slow`): the first one at once, then at most one line every 30

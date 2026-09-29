@@ -29,6 +29,13 @@ import (
 // REAL cached decorator over a real (SQLite) Api. The cache stores are counting in-memory
 // doubles, so a Get here is exactly one key-value round trip in production.
 //
+// 🔑 TWO KINDS OF COUNT. A Cache keeps what it read in process memory for a few seconds
+// (messaging.DefaultLocalCacheTTL), and a Get answered from there never reaches the store.
+// So the rig is built two ways: with production's caches, which count what a warm event
+// costs within that window (nothing), and over kvTierOnly, which counts what the same
+// event costs at the key-value store once memory has expired — the per-event read set
+// the resolver itself makes.
+//
 // 🔑 THE CACHES ARE FOUND BY REFLECTION rather than named, so the rig does not care which
 // cache fields model.Caches declares. That is what lets these tests run against a tree
 // whose cache set differs from the one they were written on, and report the difference as
@@ -65,7 +72,7 @@ var resolveRigTables = []any{&model.Device{}, &model.DeviceType{}, &model.Device
 	&model.DeviceProfileVersion{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 	&model.DetectionRule{}, &model.DetectionRuleScopeRef{}, &model.EntityRelationship{},
 	&model.EntityRelationshipType{}, &model.GeoFenceSetVersion{}, &model.EntityGroupFacetRef{},
-	&model.EntityGroupMembership{}}
+	&model.EntityGroupMembership{}, &model.DeviceCredential{}}
 
 // buildResolveRig seeds the rig into db. extraMetrics declares that many more metrics on
 // the profile beside "temp", to size the published version the per-type entry carries.
@@ -162,6 +169,12 @@ func buildResolveRig(t testing.TB, db *gorm.DB, scoped bool, extraMetrics int,
 		t.Fatalf("register sql counter: %v", err)
 	}
 	return rig
+}
+
+// kvTierOnly is a rig wrap that builds every cache with its in-process tier off, so each
+// Get the resolver makes reaches the counting store.
+func kvTierOnly(_ string, kv *msgtest.MemoryKV) *messaging.Cache {
+	return kv.NewCache(messaging.WithoutLocalCache())
 }
 
 func mustCreate(t testing.TB, db *gorm.DB, row any, what string) {
@@ -262,14 +275,16 @@ func stampedUnit(t testing.TB, resolved *model.ResolvedEvent) string {
 }
 
 // A warm measurement event reads a device type's published profile from the cache ONCE,
-// and costs four key-value reads in all: device, profile, tracked relationships and the
-// tenant's scoped-groups gate.
+// and costs four key-value reads in all at the store: device, profile, tracked
+// relationships and the tenant's scoped-groups gate. (The rig trusts the device token, as
+// auth mode disabled does; a credentialed event reads its credential from the database
+// instead of the device from the cache, so it costs three.)
 //
 // Before, the same event read the profile three times — its metric definitions once to
 // validate and once to stamp classifiers, and its rule scope from a second cache — which
 // was six reads per event and let the three reads straddle a publish.
 func TestAWarmMeasurementEventCostsFourKvReads(t *testing.T) {
-	rig := newCountingResolveRig(t, false, nil)
+	rig := newCountingResolveRig(t, false, kvTierOnly)
 	rig.resolve(tempEvent("21"))
 	rig.resetCounters()
 
@@ -309,7 +324,7 @@ func TestAWarmMeasurementEventCostsFourKvReads(t *testing.T) {
 // device plus each tracked anchor — on top of the same single profile read. Pinned so a
 // later change cannot hide inside the +1+N term.
 func TestAWarmMeasurementEventInARuleScopedTenantAddsOneReadPerTarget(t *testing.T) {
-	rig := newCountingResolveRig(t, true, nil)
+	rig := newCountingResolveRig(t, true, kvTierOnly)
 	rig.resolve(tempEvent("21"))
 	rig.resetCounters()
 
@@ -334,7 +349,7 @@ func TestAWarmMeasurementEventInARuleScopedTenantAddsOneReadPerTarget(t *testing
 // the definitions into the per-type entry does not add a read to the events that do not
 // use them. It is a non-regression row, so it passes on either side of the fold.
 func TestAWarmLocationEventStillCostsFourKvReads(t *testing.T) {
-	rig := newCountingResolveRig(t, false, nil)
+	rig := newCountingResolveRig(t, false, kvTierOnly)
 	rig.resolve(devLocationEvent())
 	rig.resetCounters()
 
@@ -437,7 +452,9 @@ func TestAMeasurementIsValidatedAndStampedFromOneProfileVersion(t *testing.T) {
 		if !strings.HasSuffix(field, "ByType") {
 			return nil
 		}
-		return messaging.NewCacheOver(&hookedKV{MemoryKV: kv, after: hook})
+		// The hook sits on the key-value store, so the in-process tier is off: with it on,
+		// the armed read would be answered from memory and the hook would never fire.
+		return messaging.NewCacheOver(&hookedKV{MemoryKV: kv, after: hook}, messaging.WithoutLocalCache())
 	})
 
 	warm := rig.resolve(tempEvent("21"))

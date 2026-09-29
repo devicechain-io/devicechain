@@ -4,6 +4,7 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -79,6 +80,29 @@ var ErrCacheUnavailable = errors.New("messaging: cache unavailable; bypassed aft
 // there and its reads are fine. Neither does the CALLER giving up: a request whose own
 // context was cancelled or ran out says nothing about the cache, and letting it open the
 // breaker would let one slow client switch the cache off for everyone.
+//
+// 🔑 TWO TIERS: PROCESS MEMORY IN FRONT OF THE BUCKET. A hit in the bucket is still a
+// network round trip, and the device-management resolver makes several of them, one after
+// another, for every event. So a Cache also keeps each value it reads from or writes to
+// the bucket in process memory for DefaultLocalCacheTTL (5 s, capped at the bucket's TTL),
+// and a Get it can answer from there never asks the bucket at all. What that costs:
+//
+//   - A change made through ANOTHER replica reaches this one up to 5 s later than it
+//     would through the bucket alone. The bucket has only ever been cache-aside (a read
+//     racing a mutation can store the old value until the TTL), so every adopter already
+//     tolerates TTL-bounded staleness; this adds at most 5 s to it. A cache whose readers
+//     cannot tolerate that is built WithoutLocalCache.
+//   - On the replica that made the change, Delete clears the bucket first and then memory,
+//     and a Get that was reading the bucket across a Set or Delete does not refill memory
+//     with what it read. So this replica's memory never holds a value older than the
+//     change it made, beyond the cache-aside race the bucket already had.
+//   - A miss is never kept in memory: only what the bucket returned, or accepted from Set.
+//   - A memory hit is served whatever the breaker's state. It is within its TTL, and it
+//     never touched the bucket the breaker protects. A memory miss while the breaker is
+//     open returns ErrCacheUnavailable, as before.
+//   - Memory holds encoded bytes and decodes them for each Get, so callers never share an
+//     object. It is bounded per Cache by entry count and bytes, evicting least recently
+//     used first.
 type Cache struct {
 	kv      cacheStore
 	name    string        // the bucket's entry in the kv inventory, for logs and metrics
@@ -87,6 +111,7 @@ type Cache struct {
 	bypass  time.Duration // cacheBypassFor; likewise
 	now     func() time.Time
 	obs     *cacheObserver // nil-safe
+	local   *localCache    // nil when the in-process tier is off
 
 	mu        sync.Mutex
 	openUntil time.Time // zero while the cache is answering (the breaker is closed)
@@ -116,11 +141,24 @@ type cacheStore interface {
 // It exists for tests: production goes through NewCache, which supplies the real
 // JetStream bucket. It is exported because the decorators worth testing this way live in
 // the service modules, not in core.
-func NewCacheOver(store cacheStore) *Cache {
-	return newCache("test", store, nil)
+//
+// With no options it has the in-process tier ON, as production does, so a decorator test
+// exercises what production runs. A test that measures what reaches the bucket passes
+// WithoutLocalCache, by name.
+func NewCacheOver(store cacheStore, opts ...CacheOption) *Cache {
+	return newCache("test", store, nil, 0, opts...)
 }
 
-func newCache(name string, store cacheStore, m *streamMetrics) *Cache {
+// newCache builds a Cache. bucketTTL is the bucket's entry TTL, which caps the in-process
+// TTL: memory never holds a value longer than the bucket would have. Zero means no cap.
+func newCache(name string, store cacheStore, m *streamMetrics, bucketTTL time.Duration, opts ...CacheOption) *Cache {
+	o := defaultCacheOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if bucketTTL > 0 && o.localTTL > bucketTTL {
+		o.localTTL = bucketTTL
+	}
 	c := &Cache{
 		kv:      store,
 		name:    name,
@@ -131,6 +169,10 @@ func newCache(name string, store cacheStore, m *streamMetrics) *Cache {
 		obs:     m.cacheObserver(name),
 	}
 	c.obs.init()
+	c.local = newLocalCache(o, c.obs)
+	if c.local != nil {
+		c.obs.initLocal()
+	}
 	return c
 }
 
@@ -141,7 +183,10 @@ func newCache(name string, store cacheStore, m *streamMetrics) *Cache {
 // The bucket is created, bounded and tracked through KeyValueStore like every other
 // bucket; only the handle the Cache reads and writes through is the jetstream package's,
 // because that is the one whose calls take a context.
-func (nmgr *NatsManager) NewCache(name string, ttl time.Duration) (*Cache, error) {
+//
+// The Cache keeps what it reads and writes in process memory for DefaultLocalCacheTTL, or
+// ttl if that is shorter; opts change that per cache (see the Cache doc comment).
+func (nmgr *NatsManager) NewCache(name string, ttl time.Duration, opts ...CacheOption) (*Cache, error) {
 	bucket := CacheBucketName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, name)
 	if _, err := nmgr.KeyValueStore(name, bucket, ttl); err != nil {
 		return nil, err
@@ -156,12 +201,14 @@ func (nmgr *NatsManager) NewCache(name string, ttl time.Duration) (*Cache, error
 	if err != nil {
 		return nil, err
 	}
-	return newCache(name, store, nmgr.metrics), nil
+	return newCache(name, store, nmgr.metrics, ttl, opts...), nil
 }
 
 // Set stores value under key, JSON-encoding it. The entry expires after the
 // bucket TTL configured at construction. While the cache is bypassed it returns
-// ErrCacheUnavailable without trying.
+// ErrCacheUnavailable without trying. Only a write the bucket accepted is also kept in
+// process memory, so memory never holds what the bucket would not return; a write that
+// failed drops what memory held for the key, since it may have landed anyway.
 func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -178,6 +225,14 @@ func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
 	_, err = c.kv.Put(opctx, kvKey(key), data)
 	c.obs.observe("set", time.Since(start))
 	c.settle(ctx, "set", probe, err)
+	if err == nil {
+		// data is this call's own encoding, which no caller can reach.
+		c.local.put(key, data, c.now())
+	} else {
+		// A failed Put may still have landed (a timeout the bucket applied anyway), so what
+		// memory held for the key is no longer known to match the bucket. Drop it.
+		c.local.invalidate(key)
+	}
 	return err
 }
 
@@ -186,7 +241,20 @@ func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
 // returns an error — a transport or decode error, or ErrCacheUnavailable while the cache
 // is bypassed — so callers can degrade a miss-or-error to a DB lookup and no failure is
 // ever mistaken for the key being absent.
+//
+// A value held in process memory and not yet expired is answered from there, before the
+// breaker is consulted and without a round trip. Otherwise the bucket is asked, and a value
+// it returns is kept in memory for the next Get (a miss is not).
 func (c *Cache) Get(ctx context.Context, key string, dest interface{}) (bool, error) {
+	if data, ok := c.local.get(key, c.now()); ok {
+		if err := json.Unmarshal(data, dest); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	// Read before asking the bucket: a Set or Delete that lands while the read is in
+	// flight moves it, and the fill below is then dropped.
+	gen := c.local.generation()
 	probe, ok := c.admit()
 	if !ok {
 		c.obs.bypassed("get")
@@ -205,14 +273,23 @@ func (c *Cache) Get(ctx context.Context, key string, dest interface{}) (bool, er
 		return false, err
 	}
 	// A decode error is returned but not fed to the breaker: the bucket answered.
-	if err := json.Unmarshal(entry.Value(), dest); err != nil {
+	value := entry.Value()
+	if err := json.Unmarshal(value, dest); err != nil {
 		return false, err
 	}
+	// A copy: the entry's buffer belongs to the client library, and memory must hold
+	// bytes nothing else can write to.
+	c.local.fill(key, bytes.Clone(value), c.now(), gen)
 	return true, nil
 }
 
 // Delete evicts an entry, tolerating a miss. Used to invalidate a cached entry
 // on mutation so a stale value is not served (bounded further by the TTL).
+//
+// It clears the bucket FIRST and this process's memory SECOND, whatever the bucket
+// answered. The other order would let a Get running between the two read the old value
+// from the bucket and put it back in memory. Other replicas' memory is not reached: they
+// keep what they hold until it expires, at most DefaultLocalCacheTTL.
 //
 // 🔴 IT IS NEVER SKIPPED, AND IT OUTLIVES ITS CALLER. A skipped or abandoned eviction
 // leaves a stale entry that is served, as a wrong answer, once the cache is read again —
@@ -226,6 +303,7 @@ func (c *Cache) Delete(ctx context.Context, key string) error {
 	defer cancel()
 	start := time.Now()
 	err := c.kv.Delete(opctx, kvKey(key))
+	c.local.invalidate(key)
 	c.obs.observe("delete", time.Since(start))
 	c.settle(context.Background(), "delete", false, err)
 	if err != nil && !isNotFound(err) {

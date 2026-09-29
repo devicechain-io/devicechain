@@ -91,7 +91,9 @@ type DeviceManagementConfiguration struct {
 	// validation (ADR-016), plus the rule scope and fence-set version stamped onto every
 	// event (ADR-051/078). Its name predates that cache holding more than the metric
 	// definitions, and is kept because a rename would reject every existing values file.
-	// All are NATS KV bucket TTLs, in seconds (ADR-007).
+	// All are NATS KV bucket TTLs, in seconds (ADR-007). Each also caps how long a replica
+	// keeps what it read in process memory (messaging.DefaultLocalCacheTTL, 5 s), so a TTL
+	// below 5 s shortens that too.
 	DeviceCacheTtlSeconds       int
 	RelationshipCacheTtlSeconds int
 	MetricDefCacheTtlSeconds    int

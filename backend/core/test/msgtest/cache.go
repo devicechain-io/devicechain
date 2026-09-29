@@ -41,8 +41,12 @@ func NewMemoryKV() *MemoryKV {
 	return &MemoryKV{values: map[string][]byte{}}
 }
 
-// NewCache returns a messaging.Cache backed by this store.
-func (m *MemoryKV) NewCache() *messaging.Cache { return messaging.NewCacheOver(m) }
+// NewCache returns a messaging.Cache backed by this store. Like production, it keeps what
+// it reads in process memory unless opts say otherwise, so a test that counts what reaches
+// this store passes messaging.WithoutLocalCache().
+func (m *MemoryKV) NewCache(opts ...messaging.CacheOption) *messaging.Cache {
+	return messaging.NewCacheOver(m, opts...)
+}
 
 func (m *MemoryKV) Put(ctx context.Context, key string, value []byte) (uint64, error) {
 	if err := ctx.Err(); err != nil {

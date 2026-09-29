@@ -21,7 +21,7 @@ import (
 // returns a minimal NatsManager wired to it, plus a cleanup func. It is a
 // white-box harness for the KV-backed Cache and DistributedLock: only the js
 // context and Microservice identity fields they read are populated.
-func newTestManager(t *testing.T) (*NatsManager, func()) {
+func newTestManager(t testing.TB) (*NatsManager, func()) {
 	t.Helper()
 	opts := &natsserver.Options{
 		Host:      "127.0.0.1",

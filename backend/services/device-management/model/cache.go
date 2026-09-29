@@ -67,6 +67,45 @@ type Caches struct {
 // service configuration (ADR-022 decision 1) and backed by NATS JetStream KV
 // (ADR-007: NATS KV cache backend). The returned bundle is held by CachedApi so
 // it can serve, populate, and evict entries.
+//
+// 🔑 EVERY ONE OF THEM KEEPS ITS IN-PROCESS TIER, AND THAT WAS DECIDED CACHE BY CACHE. A
+// messaging.Cache holds what it read in process memory for up to 5 s (never longer than
+// the bucket TTL below), so a change made through ANOTHER replica reaches this one's events
+// up to 5 s later than through the bucket alone. Each of these was already cache-aside
+// with TTL-bounded staleness (a read racing a mutation can re-store the old value until
+// the TTL, see MembershipsForEntity), so what changes is the size of a bound every reader
+// already lives with:
+//
+//   - DeviceByToken: read per event when the device token is trusted (auth disabled,
+//     optional with no credential, a transport-authenticated event). A device deleted, or
+//     deleted and re-created under the same token, through another replica resolves to its
+//     old row for up to 5 s here. Credentials are NOT cached (AuthenticateDevice reads the
+//     database every event), so under required auth a deleted device's credentialed events
+//     are still refused at once. The raise-alarm consumer, whose drop of an edge for a
+//     deleted device must hold at once, reads devices through the plain Api instead
+//     (main.go, newRaiseAlarmConsumer).
+//   - RelationshipsBySource: a new or removed tracked edge reaches events on other
+//     replicas within 5 s.
+//   - ProfileResolutionByType, MembershipsByEntity, ScopedGroupsExist: a publish or
+//     rollback commits the version and its scope memberships together, but they sit in
+//     three caches whose copies expire independently. For up to 5 s after one, another
+//     replica can stamp an event with the new version and the old memberships, or the
+//     reverse — so a rule whose group scope changed can be evaluated against the previous
+//     scope. The event is still stamped with ONE version (the resolution is one entry),
+//     and scope arming already could not rely on sub-TTL visibility.
+//
+// None of them is on the tenant-erasure path. The erasure fence is a database write
+// callback and reads no cache. The KV purge runs in user-management against the buckets
+// directly. A replica can still write a purged tenant's key back for a few seconds — an
+// entry served from memory sends the resolver on to the next lookup, whose miss is filled
+// from the database into the bucket — but the purge sweeps the buckets on every pass, a
+// pass that removed anything restarts the settle window, and that window is held above
+// messaging.RetainedCacheWindow plus the purge timeout, far longer than 5 s.
+//
+// A new cache whose readers need another replica's write visible at once is built with
+// messaging.WithoutLocalCache(), with a comment here saying why, and is taken out of
+// TestEveryDeviceManagementCacheKeepsItsInProcessTier, which otherwise fails on it: the
+// decision above is pinned there, through this function, over a real broker.
 func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementConfiguration) (*Caches, error) {
 	deviceByToken, err := nmgr.NewCache(CACHE_NAME_DEVICE_BY_TOKEN,
 		time.Duration(cfg.DeviceCacheTtlSeconds)*time.Second)

@@ -82,7 +82,8 @@ func TestTheCachedRelationshipReadIsServedFromCacheOnARepeatCall(t *testing.T) {
 	require.NoError(t, err, "second read")
 	require.Len(t, second.Results, 1, "the cached read must return the same set")
 
-	require.Equal(t, 2, kv.Gets, "the second read did not consult the cache")
+	require.Equal(t, 1, kv.Gets, "the second read reached the key-value store; within the "+
+		"in-process TTL it must be answered from memory")
 	require.Equal(t, 1, kv.Puts, "the second read wrote to the cache again, so it was a MISS: "+
 		"the entry is being stored under a key the read does not look under, and the cache "+
 		"never serves anything")

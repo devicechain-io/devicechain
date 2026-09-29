@@ -23,7 +23,9 @@ func TestResolveCarriesOnWhenEveryCacheGoesSilent(t *testing.T) {
 	rig := newCountingResolveRig(t, false, func(field string, kv *msgtest.MemoryKV) *messaging.Cache {
 		s := &msgtest.SilentKV{MemoryKV: kv}
 		silent = append(silent, s)
-		return messaging.NewCacheOver(s)
+		// In-process tier off: with it on, the warm-up would leave every value in memory
+		// and no read would reach the silenced store.
+		return messaging.NewCacheOver(s, messaging.WithoutLocalCache())
 	})
 	rig.resolve(tempEvent("21"))
 	rig.resetCounters()

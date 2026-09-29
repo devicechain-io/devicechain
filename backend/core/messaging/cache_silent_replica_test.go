@@ -161,7 +161,10 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if rig.cache, err = measuring.NewCache(kv.BucketDeviceByToken, time.Hour); err != nil {
+	// The in-process tier is off: this rig measures how reads reach a silent REPLICA, and
+	// with the tier on the warm-up below would leave every key in memory, so no faulted
+	// read would ever reach the bucket.
+	if rig.cache, err = measuring.NewCache(kv.BucketDeviceByToken, time.Hour, WithoutLocalCache()); err != nil {
 		t.Fatalf("open the cache from server %d: %v", client, err)
 	}
 

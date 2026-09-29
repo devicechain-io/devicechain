@@ -315,8 +315,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 
 	// Reader + consumer for REACT raise-alarm requests (ADR-051 slice 5c / ADR-057): the raise-alarm
-	// subject is the sole alarm-raise path since the 6d cutover retired the measurement evaluator. It
-	// uses the cached Api so device-token resolution hits the by-token cache.
+	// subject is the sole alarm-raise path since the 6d cutover retired the measurement evaluator.
 	rareader, err := nmgr.NewReader(streams.RaiseAlarm)
 	if err != nil {
 		return err
@@ -326,13 +325,26 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// actions it could not dispatch; an edge it dispatched successfully could still die
 	// here, with the same consequence — a raise that does not re-emit until the condition
 	// re-breaches, a resolve that strands its alarm.
-	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, RaiseAlarmReader,
-		core.NewNoOpLifecycleCallbacks(), CachedApi, deadLetters, RaiseAlarmMetrics)
+	RaiseAlarmConsumer = newRaiseAlarmConsumer(RaiseAlarmReader, deadLetters)
 	if err = RaiseAlarmConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// newRaiseAlarmConsumer assembles the raise-alarm consumer from this service's globals. It
+// is a function of its own so raise_alarm_wiring_test.go can check which Api it is given.
+//
+// 🔴 IT GETS THE PLAIN Api, NOT THE CACHED ONE. The consumer drops an edge for a device
+// that no longer exists (deleted between detection and dispatch), and it learns that by
+// resolving the device token. Through the cached Api that read can be answered from another
+// replica's process memory for a few seconds after the delete (messaging.DefaultLocalCacheTTL),
+// and the edge would then be applied to a device row that is gone. It is one indexed read
+// per rule edge, far off the per-event path, so the database answers it every time.
+func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink) *processor.RaiseAlarmConsumer {
+	return processor.NewRaiseAlarmConsumer(Microservice, reader,
+		core.NewNoOpLifecycleCallbacks(), Api, dead, RaiseAlarmMetrics)
 }
 
 // wireDetectionRuleValidator injects the ADR-044 sync-validation gate onto the shared
