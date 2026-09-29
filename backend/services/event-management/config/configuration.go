@@ -28,9 +28,9 @@ const (
 	// up to 32 events each, every batch was full from 4,400 events a second and each commit
 	// took about 38 ms, so storing stopped near 5 x 32 / 38 ms, about 4,200 a second, while
 	// the service itself was well inside its CPU limit. At 10 writers and batches of up to
-	// 64, storing kept up to about 6,000 a second. There the service used about 1.7 cores
-	// on average with its CPU limit raised to 4; it was not measured under its default limit
-	// of 2. Past about 6,000, batches averaged 28 to 30 events, below the cap, while two of
+	// 64, storing kept up to about 6,000 a second. There the service used at most about 1.7
+	// cores with its CPU limit raised to 4; it was not measured under its default limit of
+	// 2. Batches averaged about 21 events at 6,000 and 28 to 30 above it, below the cap, while two of
 	// the three nodes, one of them the event store's, were at 86 to 95% CPU; which of those
 	// held the rate was not isolated.
 	//

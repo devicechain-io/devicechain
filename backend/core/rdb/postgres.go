@@ -380,7 +380,7 @@ func CheckWriterCount(key string, writers int, cfg config.MicroserviceDatastoreC
 //
 // And nothing measured has shown a larger cap would help. On a three-node cloud cluster,
 // event-management at 10 writers stopped rising near 6,000 events a second with batches
-// averaging 21 to 30, under this cap. device-state's batches did reach it (60 to 63, with a
+// averaging about 21 at 6,000 and 28 to 30 above it, under this cap. device-state's batches did reach it (60 to 63, with a
 // 25 ms linger) in the same run; a larger cap is a change to make from a measurement of
 // that, not ahead of one.
 const MaxWriterBatch = 64

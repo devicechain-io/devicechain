@@ -904,11 +904,11 @@ primary; `device-state` with `projection.writers: 5`, `projection.maxBatch: 64` 
 of 1Gi. The later tuned row kept `device-management` at its defaults and one replica, and otherwise
 used the same `event-management` and `device-state` settings, with CPU limits of 4 cores and memory
 limits of 1Gi for `device-management`, `event-sources`, `event-management` and `device-state`.
-There, `event-management` used about 1.7 cores on average; it was not measured under its default
+There, `event-management` used at most about 1.7 cores; it was not measured under its default
 limit of 2. Its batches averaged below 32 in every run, so the measurement does not show a batch
 of 64 helping over 32. A default installation with the new persistence settings has not been
-measured end to end, so no sustained rate is given for it here. Past about 6,000 events per second, storing stopped rising with batches averaging 28 to
-30, below the limit, while two of the three nodes, one of them the event store's, were at 86 to 95%
+measured end to end, so no sustained rate is given for it here. Batches averaged about 21 events at 6,000 per second; past it, storing stopped rising with batches
+averaging 28 to 30, below the limit, while two of the three nodes, one of them the event store's, were at 86 to 95%
 CPU. Which of those held the rate was not isolated, but more throughput on that cluster needs more
 nodes before more per-service tuning.
 

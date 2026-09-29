@@ -3810,9 +3810,13 @@ ser el primer límite de una instalación predeterminada: 5 escritores que confi
 eventos cada uno llenaban todos los lotes desde unos 4400 eventos por segundo y no almacenaban más
 de unos 4200. `persistence.writers` pasa a valer `10` por defecto y `persistence.maxBatch` `64`.
 Eran los ajustes de una ejecución ajustada que siguió el ritmo hasta unos 6000 eventos por segundo
-con los límites de CPU de los demás servicios aumentados; sus lotes quedaron por debajo de 32 de
-media, así que no muestra que el lote más grande ayude. Ver [Rendimiento
-medido](./bootstrap.md#measured-throughput).
+con los límites de CPU de `event-management` y de los demás servicios por evento aumentados a 4
+núcleos. `event-management` usó como mucho unos 1,7 de ellos, y no se midió con su límite por
+defecto de 2, así que no se afirma un ritmo sostenido para una instalación predeterminada. Esa
+ejecución también fijó `projection.maxBatch` de `device-state` en `64` y `projection.lingerMillis`
+en `25`, que una instalación predeterminada no tiene. Sus lotes quedaron por debajo de 32 de media,
+así que no muestra que el lote más grande ayude. Ver [Rendimiento
+medido](./bootstrap.md#measured-throughput) para los ajustes completos.
 
 **Antes de actualizar:** si fijó `tsdbConfiguration.maxOpenConnections` de `event-management` en
 `10` o menos y no fijó `persistence.writers`, el nuevo pod de `event-management` no arranca, y su

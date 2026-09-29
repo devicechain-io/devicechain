@@ -3548,9 +3548,13 @@ With the other per-event services sized to keep up, storing events became the fi
 default installation: 5 writers committing up to 32 events each filled every batch from about
 4,400 events per second and stored no more than about 4,200. `persistence.writers` now defaults to
 `10` and `persistence.maxBatch` to `64`. Those were the settings of a tuned run that kept up to
-about 6,000 events per second with the other services' CPU limits raised; its batches averaged
-below 32, so it does not show the larger batch helping. See [Measured
-throughput](./bootstrap.md#measured-throughput).
+about 6,000 events per second with the CPU limits of `event-management` and the other per-event
+services raised to 4 cores. `event-management` used at most about 1.7 of them, and it was not
+measured under its default limit of 2, so no sustained rate is claimed for a default installation.
+That run also set `device-state`'s `projection.maxBatch` to `64` and `projection.lingerMillis` to
+`25`, which a default installation does not. Its batches averaged below 32, so it does not show the
+larger batch helping. See [Measured throughput](./bootstrap.md#measured-throughput) for the full
+settings.
 
 **Before you upgrade:** if you set `tsdbConfiguration.maxOpenConnections` for `event-management` to
 `10` or less and did not set `persistence.writers`, the new `event-management` pod refuses to

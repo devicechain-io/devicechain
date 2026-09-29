@@ -971,12 +971,12 @@ eventos; `device-state` con `projection.writers: 5`, `projection.maxBatch: 64` y
 de memoria de 1Gi. La fila ajustada posterior dejó `device-management` con sus valores por defecto
 y una réplica, y por lo demás usó los mismos ajustes de `event-management` y `device-state`, con
 límites de CPU de 4 núcleos y de memoria de 1Gi para `device-management`, `event-sources`,
-`event-management` y `device-state`. En ella, `event-management` usó de media unos 1,7 núcleos; no
+`event-management` y `device-state`. En ella, `event-management` usó como mucho unos 1,7 núcleos; no
 se midió con su límite por defecto de 2. Sus lotes quedaron por debajo de 32 de media en todas las
 ejecuciones, así que la medición no muestra que un lote de 64 ayude más que uno de 32. Una
 instalación predeterminada con los nuevos valores de persistencia no se ha medido de extremo a
-extremo, así que aquí no se da un ritmo sostenido para ella. Por encima de unos 6000 eventos por segundo, el almacenamiento dejó de crecer
-con lotes de 28 a 30 eventos de media, por debajo del límite, mientras dos de los tres nodos, uno
+extremo, así que aquí no se da un ritmo sostenido para ella. Los lotes fueron de unos 21 eventos de media a 6000 por segundo; por encima, el almacenamiento dejó de
+crecer con lotes de 28 a 30 eventos de media, por debajo del límite, mientras dos de los tres nodos, uno
 de ellos el del almacén de eventos, estaban al 86-95% de CPU. No se aisló cuál de esas dos cosas
 limitó el ritmo, pero para más rendimiento en ese clúster hacen falta más nodos antes que más
 ajustes por servicio.

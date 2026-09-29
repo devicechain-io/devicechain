@@ -515,7 +515,7 @@ sea el tamaño de los lotes (ver [Un consumidor que se queda atrás](#consumer-b
 escritores no lo arregla con seguridad: reparten los mismos eventos en lotes más pequeños, y cada
 confirmación cuesta CPU al almacén de eventos. En las
 [mediciones en que se basan estos valores](./bootstrap.md#measured-throughput), el almacenamiento
-dejó de crecer cerca de 6000 eventos por segundo con lotes de 21 a 30 eventos de media, por debajo
+dejó de crecer cerca de 6000 eventos por segundo con lotes de unos 21 eventos de media ahí y de 28 a 30 por encima, por debajo
 del límite, mientras dos de los tres nodos, uno de ellos el del almacén de eventos, estaban al
 86-95% de CPU; no se aisló cuál de esas dos cosas limitó el ritmo. En una medición anterior, dos
 réplicas de 20 escritores cada una redujeron los lotes a unos 3 eventos, la base de datos del

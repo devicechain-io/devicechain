@@ -6,6 +6,8 @@ package messaging
 import (
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // numbered is a message CollectBatch can tell apart: its Subject is its index.
@@ -39,6 +41,25 @@ func TestCollectBatchTakesWhatIsWaitingUpToMax(t *testing.T) {
 	}
 	if len(ch) != 0 {
 		t.Errorf("%d messages left behind", len(ch))
+	}
+}
+
+// At the largest batch a writer may be configured with, CollectBatch takes that many
+// whole: nothing between the setting and the batch trims it. A writer running at the cap
+// commits twice as few transactions as one silently held to half of it, and nothing else
+// about the batches it writes would show the difference.
+func TestCollectBatchTakesAWholeBatchAtTheWriterCap(t *testing.T) {
+	max := rdb.MaxWriterBatch
+	ch := filled(2*max+1, true)
+	for i := 0; i < 2; i++ {
+		batch, open := CollectBatch(ch, max, 0, admitAll)
+		if !open || len(batch) != max {
+			t.Fatalf("batch %d holds %d messages open=%v; want %d, open", i, len(batch), open, max)
+		}
+	}
+	batch, open := CollectBatch(ch, max, 0, admitAll)
+	if open || len(batch) != 1 {
+		t.Fatalf("last batch holds %d messages open=%v; want 1, closed", len(batch), open)
 	}
 }
 

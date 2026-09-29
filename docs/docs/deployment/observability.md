@@ -496,7 +496,7 @@ The defaults are the largest batch and half of the default connection pool. When
 (see [A consumer that stays behind](#consumer-backlog)). Adding writers is not a sure fix: they
 split the same events into smaller batches, and every commit costs the event store CPU. In the
 [measurements behind these defaults](./bootstrap.md#measured-throughput), storing stopped rising
-near 6,000 events per second with batches averaging 21 to 30, below the limit, while two of the
+near 6,000 events per second with batches averaging about 21 there and 28 to 30 above it, below the limit, while two of the
 three nodes, one of them the event store's, were at 86 to 95% CPU; which of those held the rate was
 not isolated. In an earlier measurement, two replicas of 20 writers each cut batches to about 3
 events, the event store's database used over 4 cores, and the whole pipeline stored less than one

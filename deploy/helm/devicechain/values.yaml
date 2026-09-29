@@ -1288,8 +1288,9 @@ functionalAreas:
     # which is what lets the event store keep up when every commit waits for a standby.
     # Measured on GKE (3 x n2-standard-8, SSD persistent disks, --ha): 5 writers x 32
     # filled every batch from 4,400 events/s and stored at most ~4,200/s (5 x 32 per
-    # ~38 ms commit); 10 x 64 kept up to ~6,000/s with batches averaging 21-30. That
-    # run raised this service's CPU limit to 4 and it used ~1.7 cores on average; it
+    # ~38 ms commit); 10 x 64 kept up to ~6,000/s with batches averaging ~21 at 6,000
+    # and 28-30 above it. That run raised this service's CPU limit to 4 and it used
+    # at most ~1.7 cores; it
     # was not measured under the default limit of 2. More writers are not better on
     # their own: they split the stream into smaller batches, and every commit costs
     # the event store CPU.
