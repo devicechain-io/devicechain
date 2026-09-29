@@ -559,6 +559,42 @@ tolerations:
 {{- end }}
 {{- end -}}
 
+{{/*
+devicechain.eventStorePrimaryAntiAffinity: a PREFERRED pod anti-affinity against this
+instance's event-store primary, for an area whose values set avoidEventStorePrimary.
+
+The selector is the label CloudNativePG puts on a primary pod and moves on promotion
+(cnpg.io/instanceRole: primary, the label dcctl's own database checks read). No
+namespace is named, so the term matches only pods in this pod's own namespace: the
+instance namespace, whose only CloudNativePG cluster is the event store (the
+relational store runs in the cluster's infrastructure namespace). That is also why no
+cluster name appears here: the namespace makes the distinction, and there is no name
+to keep in step with the OpenTofu root. An install whose event store is not a
+CloudNativePG cluster has no pod with that label, so the term matches nothing.
+
+Preferred, never required: a required term would leave the pod Pending on a cluster
+with fewer nodes than busy services. IgnoredDuringExecution: a failover that promotes
+a standby on this pod's node does not move the pod; the next reschedule of either does.
+
+Measured on GKE (values.yaml, device-management): with every area requesting the same
+CPU, the scheduler put the event-store primary, event-management and replicas of
+device-management and event-sources on one node.
+Parameters: areaCfg.
+*/}}
+{{- define "devicechain.eventStorePrimaryAntiAffinity" -}}
+{{- if get .areaCfg "avoidEventStorePrimary" -}}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              cnpg.io/instanceRole: primary
+{{- end }}
+{{- end -}}
+
 {{/* Identifying labels for an instance-scoped resource (namespace, ConfigMaps). */}}
 {{- define "devicechain.instanceLabels" -}}
 devicechain.io/instance: {{ .Values.instance.id }}
@@ -604,13 +640,26 @@ fail, only mislead. So a decimal or unitless limit is refused here.
 {{- end -}}
 
 {{/*
-devicechain.areaResources renders one area's container resources: the top-level
-`resources` map with the area's own `functionalAreas.<area>.resources` merged over
-it KEY BY KEY.
+devicechain.areaResources renders one area's container resources from three
+layers, each merged over the one before it KEY BY KEY:
+
+  1. the top-level `resources` map;
+  2. the area's `functionalAreas.<area>.measuredRequests` (CPU requests sized from
+     measurement, values.yaml), over the requests only, and only while
+     `useMeasuredRequests` is true;
+  3. the area's own `functionalAreas.<area>.resources`, which wins over both.
+
+The measured requests are a layer of their own, with a switch, rather than values
+under the area's `resources`, because `dcctl install --compact` lowers requests by
+writing ONE top-level map and must reach every area. Were they under `resources`,
+they would win over compact's top-level requests, and the only repair would be for
+dcctl to write per-area requests: a second list, in dcctl, of which areas the chart
+sizes. Compact sets `useMeasuredRequests: false` instead, and dcctl stays ignorant
+of the list.
 
 It is a merge and not a replacement because the top-level map is written by more
 than one hand. `dcctl install --compact` lowers the top-level REQUESTS; the chart
-raises some areas' CPU LIMITS (device-management and event-management, values.yaml).
+raises some areas' CPU LIMITS (the event-path areas, values.yaml).
 Under replacement, an area with a block of its own lost whichever half it did not
 restate: raising one limit rendered that area with no requests at all, which took
 it out of the compact preset, and the only repair was for dcctl to know which areas
@@ -623,7 +672,10 @@ console (frontend.yaml) is not a functional area and keeps its own block.
 
 deepCopy on BOTH sides is load-bearing: mergeOverwrite writes into its first
 argument, and without the copy the first area with a block of its own would be
-merged INTO .Values.resources, handing its limits to every area rendered after it.
+merged INTO .Values.resources, handing its limits (or its measured request) to every
+area rendered after it. The measured layer needs no copy of its own: it merges into
+$base's requests, which the copy of .Values.resources already owns, and is only
+ever read.
 
 An area cannot REMOVE a key the top-level map sets (Helm deletes a null before any
 template sees it, so it arrives here as "not set" and the default fills it). To
@@ -632,9 +684,10 @@ areas that want one.
 
 A request above its limit is refused here, naming the area and which map each of
 the two came from: a top-level request can be refused against an area's own limit
-that the operator never wrote (the chart sets device-management's and
-event-management's CPU limits), and a message naming only the area would send
-them looking for a key that is not in their values. The API server would
+that the operator never wrote (the chart sets the event-path areas' CPU limits),
+and an operator's own lowered limit can be refused against a measured request they
+never wrote either; a message naming only the area would send them looking for a
+key that is not in their values. The API server would
 refuse the pod anyway, but only when the ReplicaSet creates it, where `helm
 upgrade` merely times out; and the merge makes it reachable from a values file
 that used to be valid (an area that set only requests.memory above the top-level
@@ -644,6 +697,13 @@ Parameters: area (the name, for messages), areaCfg, root.
 */}}
 {{- define "devicechain.areaResources" -}}
 {{- $base := deepCopy (.root.Values.resources | default dict) -}}
+{{- $measured := dict -}}
+{{- if .root.Values.useMeasuredRequests -}}
+{{- $measured = get .areaCfg "measuredRequests" | default dict -}}
+{{- end -}}
+{{- if $measured -}}
+{{- $_ := set $base "requests" (mergeOverwrite (get $base "requests" | default dict) $measured) -}}
+{{- end -}}
 {{- $own := deepCopy (get .areaCfg "resources" | default dict) -}}
 {{- $res := mergeOverwrite $base $own -}}
 {{- range $dim := list "cpu" "memory" -}}
@@ -654,7 +714,13 @@ Parameters: area (the name, for messages), areaCfg, root.
 {{- $l := include "devicechain.quantityScalar" (dict "dim" $dim "q" $lim "area" $.area) | float64 -}}
 {{- if gt $r $l -}}
 {{- $area := printf "functionalAreas.%s.resources" $.area -}}
-{{- $reqAt := ternary (printf "%s.requests.%s" $area $dim) (printf "the top-level resources.requests.%s" $dim) (hasKey (dig "requests" dict $own) $dim) -}}
+{{- $reqAt := printf "the top-level resources.requests.%s" $dim -}}
+{{- if hasKey $measured $dim -}}
+{{- $reqAt = printf "functionalAreas.%s.measuredRequests.%s, the chart's measured default for this service (set useMeasuredRequests: false to turn the measured requests off, or set %s.requests.%s)" $.area $dim $area $dim -}}
+{{- end -}}
+{{- if hasKey (dig "requests" dict $own) $dim -}}
+{{- $reqAt = printf "%s.requests.%s" $area $dim -}}
+{{- end -}}
 {{- $limAt := printf "the top-level resources.limits.%s" $dim -}}
 {{- $fix := "Raise the limit or lower the request." -}}
 {{- if hasKey (dig "limits" dict $own) $dim -}}

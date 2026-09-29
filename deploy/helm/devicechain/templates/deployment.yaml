@@ -181,6 +181,9 @@ spec:
       */}}
       terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
       {{- include "devicechain.nodeLossTolerations" $root | nindent 6 }}
+      {{- with include "devicechain.eventStorePrimaryAntiAffinity" (dict "areaCfg" $areaCfg) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- if $root.Values.serviceAccount.create }}
       serviceAccountName: {{ include "devicechain.serviceAccountName" $root }}
       {{- end }}

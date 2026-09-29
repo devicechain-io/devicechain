@@ -110,7 +110,10 @@ type compactSizing struct {
 	// exists to catch before it gets there.
 	ObjectStoreStorage string
 
-	// Scheduling requests. Lowering REQUESTS fixes scheduling — pods sitting
+	// Scheduling requests, for EVERY area: the preset also turns off the chart's
+	// measured per-area requests (useMeasuredRequests, see helmValues), which would
+	// otherwise keep the busiest services at their full-size request. Lowering
+	// REQUESTS fixes scheduling — pods sitting
 	// Pending on a small node — and does not itself lower usage. The limits are
 	// left alone because lowering them shrinks nothing: a lower MEMORY limit
 	// converts memory pressure into OOMKills, and a lower CPU limit throttles.

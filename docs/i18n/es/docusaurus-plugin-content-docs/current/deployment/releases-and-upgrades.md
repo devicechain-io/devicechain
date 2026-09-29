@@ -3742,6 +3742,67 @@ No hay que hacer nada en la actualización.
   las búsquedas que la memoria no pudo responder. Consulte [Cachés que dejan de
   responder](./observability.md#kv-caches).
 
+#### Los servicios se dimensionan según el rendimiento medido {#next-service-sizing}
+
+`event-sources` y `device-state` pueden usar ahora hasta 2 núcleos de CPU, como
+`device-management` y `event-management`. Con 500m, las respuestas más lentas de `event-sources`
+limitaban el ritmo al que podían enviar los dispositivos, y `device-state` dejaba que la vista en
+vivo de los dispositivos se retrasara minutos a ritmos que el resto de la instalación soportaba.
+Los cuatro servicios también **solicitan** CPU dimensionada a partir de mediciones en lugar de
+100m cada uno: `device-management` 500m, `event-management` 400m, `device-state` 400m,
+`event-sources` 150m. `device-management`, `event-management` y `event-sources` prefieren un nodo
+que no ejecute el primario del almacén de eventos. El almacén de eventos de una instancia nueva
+recibe un volumen de 32Gi en lugar de 8Gi. Consulta
+[Dimensionamiento de los servicios](./bootstrap.md#service-sizing), que también recoge el
+rendimiento medido.
+
+**Antes de actualizar una instancia instalada sin `--compact`:**
+
+- **Comprueba que hay espacio para las solicitudes mayores.** Una vez actualizada, la instancia
+  solicita alrededor de 1 CPU más que antes. Durante la actualización gradual cada servicio
+  ejecuta su pod nuevo junto al anterior, así que los nodos necesitan libres también las nuevas
+  solicitudes: alrededor de 1,5 CPU para estos cuatro servicios. Compara la CPU asignable libre de
+  los nodos (`kubectl describe nodes`, "Allocated resources") con la tabla de Dimensionamiento de
+  los servicios. Si un pod nuevo no se puede ubicar, queda en `Pending` y la actualización falla
+  tras esperar, con la instancia actualizada a medias: los servicios cuyos pods nuevos arrancaron
+  están en la nueva versión, y el resto sigue en la anterior. Haz espacio y vuelve a ejecutar
+  `dcctl upgrade` para terminar. Una instancia creada con `dcctl` no tiene forma de conservar las
+  solicitudes anteriores; el remedio es la capacidad.
+- **Un `ResourceQuota` o `LimitRange` en el namespace de la instancia** puede rechazar el nuevo
+  límite de 2 núcleos de `event-sources` y `device-state`, o las solicitudes mayores, como podía
+  hacerlo con `device-management` y `event-management` en v0.18.0.
+
+Las instancias instaladas con `--compact` conservan sus solicitudes de 25m y 64Mi.
+
+**Si instalas el chart tú mismo, con tus propios valores:**
+
+- Un `resources.requests.cpu` de nivel superior ya no llega a `device-management`,
+  `event-management`, `device-state` ni `event-sources`: su solicitud medida prevalece. Define las
+  suyas en `functionalAreas.<servicio>.resources.requests`, o establece
+  `useMeasuredRequests: false` para que las solicitudes de nivel superior vuelvan a aplicarse a
+  todos los servicios.
+- Un `resources.limits.cpu` de nivel superior por encima de 2 núcleos ahora baja
+  `event-sources` y `device-state` a 2, como ya hacía con los otros dos. Define los suyos en
+  `functionalAreas.<servicio>.resources.limits`.
+- Un límite de CPU propio de un servicio por debajo de su solicitud medida (por ejemplo `100m` en
+  `event-sources`) antes se generaba y ahora se rechaza, nombrando `measuredRequests`. Aumenta el
+  límite, define la solicitud propia del servicio o establece `useMeasuredRequests: false`.
+- Los valores de nivel superior del chart y el bloque de un servicio en `functionalAreas` ahora
+  rechazan una clave que el chart no lee, así que una clave mal escrita hace fallar la generación
+  en lugar de ignorarse.
+
+**El volumen del almacén de eventos:** nada cambia en una instancia existente; solo las
+instancias creadas por esta versión reciben 32Gi. Para ampliar una existente, consulta
+[Volumen del almacén de eventos](./bootstrap.md#event-store-volume). Lo que se llena primero con
+una ingesta sostenida es el destino de respaldo, como dice la nota anterior; un almacén de eventos
+más grande no cambia eso.
+
+La actualización cambia las plantillas de pod de `device-management`, `event-management` y
+`event-sources`, así que la actualización gradual planifica sus pods nuevos con la nueva
+preferencia de ubicación. Pero una preferencia solo se aplica cuando se planifica un pod: si el
+primario del almacén de eventos cambia después a otro nodo, un pod que ya se ejecuta allí se queda
+hasta que se vuelva a planificar.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

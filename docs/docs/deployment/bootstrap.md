@@ -559,8 +559,10 @@ already exist rather than adding a tuning axis of its own:
   JetStream, 2Gi relational Postgres, 4Gi TimescaleDB);
 - lower scheduling **requests** (25m / 64Mi), so pods fit a small node. Limits are untouched:
   lowering the memory limit converts pressure into OOMKills and lowering the CPU limit
-  throttles, and neither shrinks anything. `device-management` and `event-management` keep
-  their higher CPU limits; see [Service sizing](#service-sizing);
+  throttles, and neither shrinks anything. `device-management`, `event-management`,
+  `event-sources` and `device-state` keep their higher CPU limits, and the per-service requests
+  a default installation uses are turned off so the lower ones apply to every service; see
+  [Service sizing](#service-sizing);
 - no monitoring stack, the single largest consumer;
 - no cert-manager, since with TLS off nothing needs a certificate issued (keep TLS and
   cert-manager stays — see below), and consequently no database backup plugin.
@@ -791,24 +793,56 @@ Plan a node's return the way you plan its loss, and do not take a second node do
 
 ### Service sizing {#service-sizing}
 
-Every backend service requests 100m of CPU and 128Mi of memory (25m and 64Mi under
-[`--compact`](#--compact)) and is limited to 500m and 256Mi, with two exceptions:
-`device-management` and `event-management` may each use up to 2 CPU cores. Those two do the
-per-event work of resolving and storing every event, and they are sized for live device traffic
-at a tenant's default ingest ceiling of 1000 messages per second, one reading per message. The
-console is sized separately.
+Every backend service requests 128Mi of memory and is limited to 256Mi. CPU is sized per service
+from measurement:
 
+| Service | CPU request | CPU limit |
+| --- | --- | --- |
+| `device-management` | 500m | 2 cores |
+| `event-management` | 400m | 2 cores |
+| `device-state` | 400m | 2 cores |
+| `event-sources` | 150m | 2 cores |
+| every other backend service | 100m | 500m |
+
+Under [`--compact`](#--compact) every backend service requests 25m and 64Mi instead, and the
+limits stay as above. The console is sized separately.
+
+These four services do the per-event work: receiving, resolving and storing every event, and
+merging it into each device's live state. Their limits are sized for live device traffic at a
+tenant's default ingest ceiling of 1000 messages per second, one reading per message, and for the
+rate a default installation sustains (see [Measured throughput](#measured-throughput)).
+
+- **Requests are what each service uses at a tenant's default ceiling.** A request is the CPU
+  the scheduler sets aside for a pod on its node. Each one above is what that service was measured
+  to use at the default ceiling, rounded up. With every service requesting the same 100m, the
+  scheduler could not tell the busy services from idle ones when it placed them, and put the
+  busiest on one node. Memory stays at 128Mi: on v0.18.0 no event-path service used more than
+  40Mi in any sample, even at 4800 events per second.
 - **Limits do not reserve anything.** Kubernetes schedules a pod by its requests, so the higher
-  limits need no extra room on a node. They only let the two services use CPU the node has spare
-  while they are busy. `--compact` lowers their requests, as it does for every backend service,
-  and leaves the limits alone.
+  limits need no extra room on a node. They only let a busy service use CPU the node has spare.
+  `--compact` lowers every request, and leaves the limits alone.
 - **Lowering a CPU limit caps throughput; it does not save capacity.** At 500m, on a four-node
   `--ha` kind cluster, `device-management` resolved at most about 720 events per second, held
   back by its limit in almost every scheduling period, and every event above that waited in the
-  inbound stream. Measured without a limit in the way, it used up to 0.96 millicores of CPU per
-  event and `event-management` up to 0.53 per stored event, so the default ceiling needs about
+  inbound stream. Measured there without a limit in the way, it used up to 0.96 millicores of CPU
+  per event and `event-management` up to 0.53 per stored event, so the default ceiling needs about
   one core and half a core; each limit is twice that, because a CPU limit is enforced over short
-  periods and a busy service reaches it in bursts well before its average does.
+  periods and a busy service reaches it in bursts well before its average does. On a three-node
+  cloud cluster, at 500m, `event-sources` was held back by its limit in 84% of scheduling periods
+  at 4000 events per second, and its slower responses capped the rate devices could send at about
+  4,300 events per second; `device-state` merged live state at no more than about 2,300 events per
+  second, so the live device view fell minutes behind. Measured without a limit in the way, they
+  use 0.14 and 0.37 millicores per event, so at the rate a default installation sustains they need
+  about half a core and one and a half cores.
+- **The busiest services avoid the event store's primary.** `device-management`,
+  `event-management` and `event-sources` prefer a node that is not running the instance's
+  event-store primary (on installations using CloudNativePG, the default), which is the busiest
+  single process in an installation. It is a preference, not a requirement: on a cluster with
+  fewer nodes than busy services they are still scheduled. It applies only when a pod is
+  scheduled, so a database failover does not move running pods. With the tuned settings below,
+  moving `event-management` off that node raised the sustained rate from about 4,750 to about
+  5,600 events per second; its effect at the default settings has not been measured. To turn it
+  off for one service, set `functionalAreas.<service>.avoidEventStorePrimary: false`.
 - **More traffic needs more.** Several tenants each sending at their ceiling, messages that carry
   many readings, or a tenant that is [admitted above its
   ceiling](../concepts/governance.md#ingest-above-ceiling) while it catches up all need more
@@ -824,16 +858,65 @@ console is sized separately.
           cpu: "4"
   ```
 
-  A service's `functionalAreas.<service>.resources` is merged over the top-level `resources` key
-  by key, so set only what differs. To guarantee the CPU when the node is contended, raise the
-  request as well. A request above its service's limit is refused when the chart renders.
+  A service's CPU and memory come from three places, and each one wins over the one before it,
+  key by key: the top-level `resources`, then the service's measured CPU request
+  (`functionalAreas.<service>.measuredRequests`), then the service's own
+  `functionalAreas.<service>.resources`. So set only what differs. To guarantee the CPU when the
+  node is contended, raise the request under the service's own `resources` as well. A request
+  above its service's limit is refused when the chart renders, and the refusal names where each
+  value came from.
 
-  The two services' own CPU limit is set that way too, so a top-level `resources.limits.cpu`
-  does not replace it: a top-level limit of 4 cores gives every other backend service 4 cores
-  and leaves these two at 2. Set theirs under `functionalAreas`, as above.
+  The four services' own CPU limits and requests are set that way too, so the top-level
+  `resources` does not replace them: a top-level limit of 4 cores gives every other backend
+  service 4 cores and leaves these four at 2, and a top-level `requests.cpu` does not reach them.
+  Set theirs under `functionalAreas`, as above. On a chart-only installation,
+  `useMeasuredRequests: false` turns the measured requests off, so the top-level requests apply
+  to every service; that is what `--compact` does.
 
 The metric that shows a service held back by its limit is
 `container_cpu_cfs_throttled_periods_total` for its container.
+
+#### Measured throughput {#measured-throughput}
+
+| Release | Cluster | Settings | Sustained rate | Result |
+| --- | --- | --- | --- | --- |
+| v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-8 (8 vCPU each), SSD persistent disks, `--ha` | the defaults v0.18.0 shipped, before the sizing above | about 3,800 events/s | Two 10-minute runs at 4,000 events/s offered each stored all 2,399,000 accepted events, with none lost and none duplicated. The slowest stage kept 96.5% of the offered rate in one run (resolution, 3,858 per second) and 98% in the other. Live device state kept up only to about 2,300 events per second, at `device-state`'s then 500m limit. |
+| v0.18.0 | the same | tuned: see below | about 5,600 events/s | 180-second runs. At 5,600 offered, every stage kept at least 98.9% of the offered rate, the backlog drained in 3 seconds, and every accepted event was stored exactly once. Live device state kept up. |
+
+Both rows were measured on v0.18.0, with the load generator on a separate node. At the default
+settings, what held the rate was `device-management`'s pool of resolvers, and past it the CPU
+limits of `event-sources` and `device-state` that the sizing above raises. The tuned row
+used `device-management` at 2 replicas with `resolution.workers: 32` and
+`rdbConfiguration.maxOpenConnections: 48`; `event-sources` at 2 replicas; `event-management` with
+`persistence.writers: 10` and `persistence.maxBatch: 64`, on a node without the event-store
+primary; `device-state` with `projection.writers: 5`, `projection.maxBatch: 64` and
+`projection.lingerMillis: 25`; CPU limits of 4 cores (2 for `event-processing`); and memory limits
+of 1Gi.
+
+#### Event store volume {#event-store-volume}
+
+Each event-store instance has a 32Gi volume, so three of them under `--ha` (4Gi each under
+`--compact`). A stored measurement costs about 1.05 KB, and the database's write-ahead log takes
+about 1.1 GB more while backups keep up with it, so 32Gi holds about 27 million events: about
+seven hours of one tenant sending at its full default ceiling.
+
+The volume is not what fills first under sustained ingest. With the
+[default backup destination](#default-backup-destination), the archived write-ahead log costs about
+as much per event as the data, and it is kept for the backup recovery window, so that store fills
+first. When it is full, archiving stops, and the write-ahead log the database cannot ship piles up
+on this volume until it fills and the database stops. The larger volume buys time between the
+[alerts](./observability.md#backup-archiving) and that stop; the backup destination is what has to
+be sized for the ingest rate. A retention window (`retentionDays` in event-management's
+`lifecycle` settings) bounds the stored data on an instance meant to run indefinitely, but not
+the archive.
+
+The size is fixed when an instance is created; `dcctl upgrade` does not change an existing
+instance's volume. To grow one, on a StorageClass that allows volume expansion:
+
+```bash
+kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
+  -p '{"spec":{"storage":{"size":"64Gi"}}}'
+```
 
 ## After bootstrap {#after-bootstrap}
 

@@ -55,7 +55,7 @@ func checkSystem(d *doctor, dockerRoot string) {
 			d.pass(fmt.Sprintf("free on %s: %dGi", dockerRoot, availGi))
 		} else {
 			d.fail(fmt.Sprintf("free on %s: %dGi (low)", dockerRoot, availGi),
-				"free up space; need >= 40Gi for images + DB PVCs")
+				"free up space; need >= 40Gi for images + DB PVCs (kind's local-path volumes take what the data uses, not the size they claim)")
 		}
 	} else {
 		d.warn("could not read free space for "+dockerRoot, "check 'df -h "+dockerRoot+"'")

@@ -611,9 +611,40 @@ variable "timescale_analytics_reserved_connections" {
 }
 
 variable "timescale_storage" {
-  description = "PersistentVolume size for the event store, PER INSTANCE. 🔴 This is spec.storage.size on the CloudNativePG Cluster, so the cluster-wide total is this times timescale_instances — three times this under --ha. It sized a single StatefulSet before A2.4."
+  description = <<-EOT
+    PersistentVolume size for the event store, PER INSTANCE. 🔴 This is spec.storage.size
+    on the CloudNativePG Cluster, so the cluster-wide total is this times
+    timescale_instances — three times this under --ha. It sized a single StatefulSet
+    before A2.4.
+
+    Sized from measurement (v0.18.0, GKE, SSD persistent disks): a stored measurement
+    event costs about 1.05 KB on the primary, and pg_wal about 1.1 GB more, held at
+    max_wal_size only while WAL archiving keeps up. 32Gi holds about 27 million events
+    with 10% kept free — about seven hours of one tenant at its full default ceiling of
+    1000 messages/s (backend/cli/bootstrap/compact_test.go holds it to six). 8Gi, the
+    previous default, filled at about six million. event-management's
+    lifecycle.retentionDays bounds the STORED DATA; the volume only decides how long
+    filling takes.
+
+    🔴 This is not the first thing to fill under sustained ingest. The in-cluster
+    backup destination (the cluster root's backup_object_store_storage) takes the
+    archived WAL, which costs about as much per event as the data and is kept for the
+    backup retention window, not for retentionDays. When the destination fills,
+    archiving fails and WAL accumulates on THIS volume until it fills and PostgreSQL
+    stops. So the size here buys time between the archive alerts and that stop; the
+    destination is what has to be sized for the ingest rate.
+
+    Applied when an instance is created, or when a re-run finishes an interrupted
+    bootstrap: dcctl upgrade does not re-apply this root, so an existing instance keeps
+    its volume. Growing one in place is a patch to the Cluster's spec.storage.size and
+    needs a StorageClass with allowVolumeExpansion (kind's local-path has none). The
+    one path that meets an existing volume is a bootstrap interrupted under an earlier
+    release (8Gi) and finished by this one: the apply asks for the larger size, which
+    a StorageClass without expansion refuses. Destroy the half-built instance and
+    bootstrap it again instead.
+  EOT
   type        = string
-  default     = "8Gi"
+  default     = "32Gi"
 }
 
 variable "timescale_storage_class" {

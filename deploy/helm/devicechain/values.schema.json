@@ -153,6 +153,10 @@
       },
       "required": ["requests"]
     },
+    "useMeasuredRequests": {
+      "type": "boolean",
+      "description": "Apply each area's functionalAreas.<area>.measuredRequests over the top-level resources.requests. dcctl install --compact sets false, so the top-level requests reach every area."
+    },
     "serviceAccount": {
       "type": "object",
       "properties": {
@@ -350,8 +354,21 @@
                 "valueFrom": { "type": "object" }
               }
             }
+          },
+          "measuredRequests": {
+            "type": "object",
+            "description": "CPU request sized from measurement, applied over the top-level resources.requests while useMeasuredRequests is true. The area's own resources.requests wins over it.",
+            "properties": {
+              "cpu": { "type": ["string", "number"] }
+            },
+            "additionalProperties": false
+          },
+          "avoidEventStorePrimary": {
+            "type": "boolean",
+            "description": "Prefer (never require) a node that is not running this instance's event-store primary."
           }
-        }
+        },
+        "additionalProperties": false
       }
     }
   }
