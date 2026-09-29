@@ -320,11 +320,13 @@ spec:
         # primary filled its own volume minutes later.
         #
         # predict_linear over 10m, projected 1h ahead: a store whose recent rate
-        # empties it within the hour. Gated on less than 35% free because a store
-        # with room to spare takes a nightly base backup — gigabytes in a few minutes,
-        # and then flat — as a steep, short slope, and that is not a page. `for: 5m`
-        # lets the slope settle past a single burst while still firing several
-        # minutes before a store at the measured rate is full.
+        # empties it within the hour. `for: 5m` lets the slope settle past a short
+        # burst — a small base backup, gigabytes in a few minutes and then flat —
+        # while still firing several minutes before a store at the measured rate is
+        # full. Gated on less than 35% free for what the `for` cannot settle: a LARGE
+        # base backup, steep for longer than five minutes, on a store with room to
+        # spare. Projected an hour ahead it empties the store, and it stops long
+        # before it does; that is not a page.
         #
         # 🔴 THE STORE IS THE CLUSTER'S, AND EVERY INSTANCE RENDERS THIS RULE, so it
         # fires once per instance, as BackupDestinationAlmostFull always has.

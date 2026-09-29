@@ -117,17 +117,38 @@ type archiveFacts struct {
 	RecordedErr error
 }
 
-// restoredArchiveSuffix is the stamp RestoredArchivePath appends: a path minted for ONE
-// restored Cluster, so its own whatever it was restored from.
-var restoredArchiveSuffix = regexp.MustCompile(`-restored-[0-9]{8}T[0-9]{6}Z$`)
+// restoredArchiveStamp is the stamp RestoredArchivePath appends.
+const restoredArchiveStamp = `-restored-[0-9]{8}T[0-9]{6}Z`
+
+// restoredArchiveSuffix matches a path RestoredArchivePath minted: minted for ONE
+// restored Cluster, so its own whatever it was restored from — including a restore of
+// another instance's archive, which is how an instance can own a path that does not
+// start with its own name.
+var restoredArchiveSuffix = regexp.MustCompile(restoredArchiveStamp + `$`)
+
+// instanceArchivePaths matches every path dcctl names for instance's event store from
+// that instance's own name: dc-tsdb-<instance> (before the UID half), with the first
+// eight hex characters of a declaration's UID (freshTsdbArchivePath), and either of those
+// with any number of restore stamps (RestoredArchivePath of an earlier generation).
+//
+// 🔴 THE ONE DEFINITION OF "THIS INSTANCE'S NAME". The removal refusal and the listing of
+// earlier archives both read it, because a looser copy in either is a real defect: a
+// plain `dc-tsdb-acme-` prefix also matches `dc-tsdb-acme-prod-deadbeef/`, which is
+// instance acme-prod's archive. The UID half is exactly eight hex characters, so that
+// match is gone; what remains ambiguous is instance "acme-<8 hex>" archiving from before
+// the UID half, which no current dcctl writes.
+func instanceArchivePaths(instance string) *regexp.Regexp {
+	return regexp.MustCompile(`^` + regexp.QuoteMeta(TsdbClusterName+"-"+instance) + `(-[0-9a-f]{8})?(` +
+		restoredArchiveStamp + `)*$`)
+}
 
 // archivePathRefusal says why path must not be removed as instance's archive, or "".
 //
 // 🔴 A DELETE BY PREFIX IS ONLY AS SAFE AS THE PREFIX. The path comes from the live
-// Cluster, which dcctl rendered — but a hand-edited serverName is still a string, and
-// this is the one place it becomes an argument to a recursive delete.
+// Cluster, which dcctl rendered, or from what an earlier run of this destroy recorded —
+// but a hand-edited serverName or record is still a string, and this is the one place it
+// becomes an argument to a recursive delete.
 func archivePathRefusal(instance, path string) string {
-	own := TsdbClusterName + "-" + instance
 	switch {
 	case path == "":
 		// The own-name default: every event store archiving that way on this cluster
@@ -136,7 +157,7 @@ func archivePathRefusal(instance, path string) string {
 			"archiving that way on this cluster would share; refusing to remove it", TsdbClusterName)
 	case strings.ContainsAny(path, "/\\*?") || path == "." || path == "..":
 		return fmt.Sprintf("the event store's archive path %q is not a single path segment; refusing to remove it", path)
-	case path == own || strings.HasPrefix(path, own+"-") || restoredArchiveSuffix.MatchString(path):
+	case instanceArchivePaths(instance).MatchString(path) || restoredArchiveSuffix.MatchString(path):
 		return ""
 	default:
 		return fmt.Sprintf("the event store archives under %q, which is not a path dcctl names for instance %q; "+
@@ -424,10 +445,28 @@ var openInClusterArchiveStore = openArchiveStoreThroughPortForward
 // settleInstanceArchive carries out the plan, once the instance's namespace is gone. It
 // returns why the archive was left, "" when nothing of it was.
 //
-// 🔴 IT NEVER FAILS THE DESTROY. Everything else of the instance is already gone, and
-// failing here would keep a local state describing an instance that no longer exists.
-// What was left is said, and the closing line is not green.
+// 🔴 IT FAILS THE DESTROY ONLY WHEN THE COMMAND WAS INTERRUPTED. Everything else of the
+// instance is already gone, and failing over an unreachable store or a refused delete
+// would keep a local state describing an instance that no longer exists: what was left is
+// said, and the closing line is not green. An interrupt is different, because the
+// operator stopped the command rather than the store refusing it — and folding it into a
+// "left" reason would let the destroy go on to remove the local state, the record of
+// which archive this is with it, so the half-deleted archive could never be resumed. It is
+// returned as an error instead, and a re-run finishes the removal from that record.
 func settleInstanceArchive(ctx context.Context, kubeContext string, dyn dynamic.Interface,
+	typed kubernetes.Interface, instance string, p archivePlan) (string, error) {
+	leftArchive := settleArchive(ctx, kubeContext, dyn, typed, instance, p)
+	if leftArchive != "" && p.Action == archiveRemove {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("stopped while removing the instance's event-store backups at %s because the "+
+				"command was interrupted; everything else of the instance has been removed, and re-running "+
+				"`dcctl destroy` finishes removing them: %w", p.location(), err)
+		}
+	}
+	return leftArchive, nil
+}
+
+func settleArchive(ctx context.Context, kubeContext string, dyn dynamic.Interface,
 	typed kubernetes.Interface, instance string, p archivePlan) (leftArchive string) {
 	switch p.Action {
 	case archiveNone:
@@ -522,16 +561,16 @@ func removeInstanceArchive(ctx context.Context, kubeContext string, typed kubern
 // destroy run with --keep-backups — which is precisely an archive someone meant to keep,
 // to rebuild from. What can be proved is the one path the live event store was using.
 func reportEarlierArchives(ctx context.Context, store archiveStore, instance string, p archivePlan) {
-	own := TsdbClusterName + "-" + instance
-	earlier := regexp.MustCompile(`^` + regexp.QuoteMeta(own) + `(-[0-9a-f]{8})?(-restored-[0-9]{8}T[0-9]{6}Z)*/$`)
-	prefixes, err := store.ListPrefixes(ctx, p.Bucket, own)
+	earlier := instanceArchivePaths(instance)
+	prefixes, err := store.ListPrefixes(ctx, p.Bucket, TsdbClusterName+"-"+instance)
 	if err != nil {
 		fmt.Println(color.HiBlackString("  (could not list other archives in %s: %v)", p.Bucket, err))
 		return
 	}
 	var lines []string
 	for _, pre := range prefixes {
-		if pre == p.Prefix || !earlier.MatchString(pre) {
+		path, isDir := strings.CutSuffix(pre, "/")
+		if pre == p.Prefix || !isDir || !earlier.MatchString(path) {
 			continue
 		}
 		size := "size unknown"

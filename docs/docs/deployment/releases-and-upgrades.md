@@ -1504,8 +1504,8 @@ they are. Pass `--keep-backups` to keep the in-cluster backups as well — and d
 you rebuild an instance from its own backups in the same cluster with `--restore-tsdb-from`,
 because a destroy without it deletes the archive that restore reads. If the object store cannot
 be reached, destroy still finishes, and says what it left. Archives left behind by destroys run
-with an earlier release stay where they are: destroy lists the ones under the same instance name,
-and [What happens to the instance's backups](./bootstrap.md#destroy-backups) shows how to remove
+with an earlier release stay where they are: after removing the instance's own backups, destroy
+lists the ones under the same instance name, and [What happens to the instance's backups](./bootstrap.md#destroy-backups) shows how to remove
 them.
 
 **New alerts warn before archiving takes a database down.** `PostgresWALArchiveBacklog` fires

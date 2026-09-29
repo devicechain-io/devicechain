@@ -1009,12 +1009,16 @@ el mismo nombre de instancia.
   instancia, el destroy termina igualmente. Indica qué dejó, y su línea final no da la instancia
   por destruida del todo.
 
-Un destroy que se interrumpe después de que el almacén de eventos haya desaparecido recuerda la
-ruta que leyó, así que ejecutarlo de nuevo sigue eliminando los respaldos.
+Un destroy que se interrumpe después de que el almacén de eventos haya desaparecido, incluido uno
+interrumpido mientras elimina los respaldos, recuerda la ruta que leyó, así que ejecutarlo de nuevo
+sigue eliminándolos.
 
 Las versiones anteriores a esta dejaban los respaldos de una instancia destruida en el almacén
-interno, donde nada los elimina nunca. Destroy enumera las rutas del bucket que parecen archivos
-anteriores del mismo nombre de instancia, y las deja. Para encontrar y eliminar esos archivos a
+interno, donde nada los elimina nunca. Después de eliminar los respaldos de la propia instancia,
+destroy enumera las rutas del bucket que parecen archivos anteriores del mismo nombre de
+instancia, y las deja. No enumera nada cuando deja en su sitio los respaldos de la propia
+instancia: con `--keep-backups`, en un almacén externo, o cuando no pudo acceder al almacén o
+borrar en él. Para encontrar y eliminar esos archivos a
 mano, accede al almacén mediante un port-forward y usa cualquier cliente S3, por ejemplo la CLI
 de AWS:
 

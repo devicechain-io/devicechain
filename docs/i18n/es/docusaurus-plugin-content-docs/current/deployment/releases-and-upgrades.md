@@ -1598,8 +1598,8 @@ conservar también los respaldos internos, y pásalo sin falta antes de reconstr
 partir de sus propios respaldos en el mismo clúster con `--restore-tsdb-from`, porque un destroy
 sin esa opción borra el archivo que lee esa restauración. Si no se puede acceder al almacén de
 objetos, destroy termina igualmente e indica qué dejó. Los archivos que dejaron destroys
-ejecutados con una versión anterior siguen donde están: destroy enumera los que tienen el mismo
-nombre de instancia, y [Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups)
+ejecutados con una versión anterior siguen donde están: después de eliminar los respaldos de la
+propia instancia, destroy enumera los que tienen el mismo nombre de instancia, y [Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups)
 explica cómo eliminarlos.
 
 **Nuevas alertas avisan antes de que el archivado detenga una base de datos.**

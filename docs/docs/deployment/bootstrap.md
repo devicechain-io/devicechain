@@ -941,12 +941,14 @@ instance name.
   instance's, the destroy still finishes. It says what it left, and its closing line does not
   report the instance as fully destroyed.
 
-A destroy interrupted after the event store is gone remembers the path it read, so running it
-again still removes the backups.
+A destroy interrupted after the event store is gone, including one interrupted while it removes
+the backups, remembers the path it read, so running it again still removes them.
 
 Releases before this one left a destroyed instance's backups in the in-cluster store, where
-nothing ever removes them. Destroy lists paths in the bucket that look like earlier archives of
-the same instance name, and leaves them. To find and remove such archives by hand, reach the
+nothing ever removes them. After it removes the instance's own backups, destroy lists paths in
+the bucket that look like earlier archives of the same instance name, and leaves them. It lists
+nothing when it leaves the instance's own backups in place: with `--keep-backups`, in an external
+store, or when it could not reach the store or delete from it. To find and remove such archives by hand, reach the
 store through a port-forward and use any S3 client, for example the AWS CLI:
 
 ```bash

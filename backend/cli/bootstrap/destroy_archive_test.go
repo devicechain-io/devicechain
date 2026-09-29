@@ -141,6 +141,10 @@ func acmeArchive() *fakeArchiveStore {
 			"dc-tsdb-acme2-9f9f9f9f/wals/x",
 			// An earlier generation of acme, left by an earlier dcctl.
 			"dc-tsdb-acme-0badc0de/wals/x",
+			// Instance acme-prod, whose paths start with acme's AND a dash: before the
+			// UID half, and with it.
+			"dc-tsdb-acme-prod/wals/x",
+			"dc-tsdb-acme-prod-deadbeef/wals/x",
 		},
 		// The relational store's archive: the cluster's, never an instance's.
 		"devicechain-rdb": {"dc-rdb/wals/x"},
@@ -149,7 +153,7 @@ func acmeArchive() *fakeArchiveStore {
 
 func acmeArchiveSurvivors() []string {
 	return []string{"dc-tsdb-acme-0badc0de/wals/x", testArchivePath + "-restored-20260928T000000Z/wals/x",
-		"dc-tsdb-acme2-9f9f9f9f/wals/x"}
+		"dc-tsdb-acme-prod-deadbeef/wals/x", "dc-tsdb-acme-prod/wals/x", "dc-tsdb-acme2-9f9f9f9f/wals/x"}
 }
 
 const inClusterEndpoint = "http://dc-object-store.dc-system:9000"
@@ -209,8 +213,10 @@ func TestDestroyRemovesOnlyTheInstancesArchive(t *testing.T) {
 			t.Errorf("the earlier archive %s was not named as left in place:\n%s", p, out)
 		}
 	}
-	if strings.Contains(out, "acme2") {
-		t.Errorf("another instance's archive was named as one of acme's:\n%s", out)
+	for _, other := range []string{"acme2", "acme-prod"} {
+		if strings.Contains(out, other) {
+			t.Errorf("instance %s's archive was named as one of acme's:\n%s", other, out)
+		}
 	}
 	if !strings.Contains(out, `Instance "acme" destroyed;`) {
 		t.Errorf("a destroy that removed everything did not close as destroyed:\n%s", out)
@@ -423,6 +429,86 @@ func TestAnArchiveIsNotRemovedWhileItsEventStoreIsStillThere(t *testing.T) {
 	}
 }
 
+// 🔴 AND THE NAMESPACE MUST BE GONE TOO, NOT ONLY THE EVENT STORE. The namespace step
+// leaves a namespace that is not labelled as this instance's and reports done; here the
+// event store in it went with the tofu destroy, so the event-store half of the gate
+// passes, and only the namespace half stands between a namespace nobody has accounted
+// for and a delete of the archive.
+func TestAnArchiveIsNotRemovedWhileItsNamespaceIsStillThere(t *testing.T) {
+	r := newTeardownRig(t, []*release.Release{deviceChainRelease(helmReleaseNameFor("acme"), "acme")}, nil, "acme")
+	if err := r.typed.Tracker().Add(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: InstanceNamespace("acme")}}); err != nil {
+		t.Fatal(err)
+	}
+	r.withInstallRecord(t, false)
+	dyn := r.withEventStore(t, archivingEventStore(testArchivePath, inClusterEndpoint)...)
+	tofu := destroyInstanceInfrastructure
+	destroyInstanceInfrastructure = func(ctx context.Context, kubeContext, instance string) error {
+		if err := dyn.Resource(clusterGVR).Namespace(InstanceNamespace("acme")).Delete(ctx, TsdbClusterName, metav1.DeleteOptions{}); err != nil {
+			t.Errorf("deleting the event store: %v", err)
+		}
+		return tofu(ctx, kubeContext, instance)
+	}
+	store := acmeArchive()
+	opens := withArchiveStore(t, store, nil)
+
+	out, err := r.destroy(t, false)
+	if err != nil {
+		t.Fatalf("destroy failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "will be REMOVED once the instance is gone") {
+		t.Fatalf("the removal was never planned, so this test proves nothing:\n%s", out)
+	}
+	if !slices.Contains(r.calls, "tofu destroy kind-c acme") {
+		t.Fatalf("tofu destroy did not run, so the event store was never removed and this test proves nothing:\n%s", out)
+	}
+	if *opens != 0 || len(store.deletes) != 0 {
+		t.Fatalf("the archive was deleted from while namespace %s is still there (opens %d, deletes %q)\n%s",
+			InstanceNamespace("acme"), *opens, store.deletes, out)
+	}
+	if want := "namespace " + InstanceNamespace("acme") + " is still there"; !strings.Contains(out, want) {
+		t.Errorf("the transcript does not say why the archive was left; want %q in:\n%s", want, out)
+	}
+}
+
+// 🔴 AN INTERRUPT WHILE THE ARCHIVE IS BEING REMOVED FAILS THE DESTROY, AND A RE-RUN
+// FINISHES IT. Read as one more "left" reason, the destroy went on to remove the local
+// state — the record of which archive this is with it — and the half-deleted archive
+// could never be resumed, only removed by hand.
+func TestAnInterruptDuringTheArchiveRemovalIsResumable(t *testing.T) {
+	r := archiveRig(t, testArchivePath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := acmeArchive()
+	store.onDelete = func([]string) {
+		cancel()
+		store.deleteErr = context.Canceled
+	}
+	withArchiveStore(t, store, nil)
+
+	out, err := r.destroyWith(t, ctx, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("an interrupted archive removal returned %v, want context.Canceled\n%s", err, out)
+	}
+	if r.stateRemoved() {
+		t.Fatalf("an interrupted archive removal removed the local state a re-run resumes from\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "re-running `dcctl destroy` finishes removing them") {
+		t.Errorf("the error does not say a re-run finishes the job: %v", err)
+	}
+
+	store.onDelete, store.deleteErr = nil, nil
+	out, err = r.destroy(t, false)
+	if err != nil {
+		t.Fatalf("the resumed destroy failed: %v\n%s", err, out)
+	}
+	if got, want := store.keys(testArchiveBucket), acmeArchiveSurvivors(); !slices.Equal(got, want) {
+		t.Errorf("the resumed destroy left:\n  %s\nwant exactly:\n  %s\n%s", strings.Join(got, "\n  "), strings.Join(want, "\n  "), out)
+	}
+	if !r.stateRemoved() {
+		t.Errorf("the resumed destroy did not finish\n%s", out)
+	}
+}
+
 // 🔴 A DESTROY THAT DIES AFTER THE EVENT STORE IS GONE STILL FINISHES ON A RE-RUN. The
 // path is read from the live event store, which the destroy deletes well before it
 // reaches the archive; a re-run would have nothing left to read it from. The namespace
@@ -532,6 +618,23 @@ func TestPlanArchiveRemoval(t *testing.T) {
 			archiveUnknown, "", "not a single path segment"},
 		{"another instance's path", archiveFacts{Record: inCluster(), Live: live("dc-tsdb-other-12345678"), Store: store},
 			archiveUnknown, "", "not a path dcctl names for instance"},
+		// acme's name, a dash, and then acme-prod's: a prefix of acme's is not acme's.
+		{"an instance whose name starts with this one's and a dash", archiveFacts{Record: inCluster(),
+			Live: live("dc-tsdb-acme-prod-deadbeef"), Store: store},
+			archiveUnknown, "", "not a path dcctl names for instance"},
+		{"the same, from before the UID half", archiveFacts{Record: inCluster(), Live: live("dc-tsdb-acme-prod"), Store: store},
+			archiveUnknown, "", "not a path dcctl names for instance"},
+		{"an earlier generation of this instance, restored", archiveFacts{Record: inCluster(),
+			Live: live("dc-tsdb-acme-0badc0de-restored-20260928T000000Z-restored-20260929T000000Z"), Store: store},
+			archiveRemove, "dc-tsdb-acme-0badc0de-restored-20260928T000000Z-restored-20260929T000000Z/", ""},
+		// 🔴 THE RECORD IS A FILE ON DISK, AND A RESUME DELETES WHAT IT NAMES: it is held
+		// to the same ownership as a path read from the live Cluster.
+		{"recorded, but another instance's path", archiveFacts{Record: inCluster(), Recorded: &recordedArchive{
+			Instance: "acme", Bucket: testArchiveBucket, Prefix: "dc-tsdb-other-12345678/", Endpoint: inClusterEndpoint}},
+			archiveUnknown, "", "not a path dcctl names for instance"},
+		{"recorded, but the own-name path", archiveFacts{Record: inCluster(), Recorded: &recordedArchive{
+			Instance: "acme", Bucket: testArchiveBucket, Prefix: "/", Endpoint: inClusterEndpoint}},
+			archiveUnknown, "", "its own name"},
 		{"the ObjectStore unreadable", archiveFacts{Record: inCluster(), Live: live(testArchivePath), StoreErr: errors.New("gone")},
 			archiveUnknown, "", "ObjectStore could not be read (gone)"},
 		{"a different store than the record's", archiveFacts{Record: inCluster(), Live: live(testArchivePath),

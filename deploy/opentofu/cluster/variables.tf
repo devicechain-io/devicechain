@@ -509,8 +509,9 @@ variable "backup_retention" {
         destination ≈ (retention_days + 1) × compressed(rdb + tsdb)
                       + retention_days × daily_events × archived WAL per event
 
-    No retention window bounds that term, and shortening the window is the
-    wrong lever for it: it still keeps a full day of WAL, and it buys space by
+    That term grows with retention, but at sustained ingest no reasonable
+    window keeps it inside 20Gi, and shortening the window is the wrong
+    lever for it: it still keeps a full day of WAL, and it buys space by
     shrinking how far back the databases can be recovered. Size the destination
     for the ingest rate, or send backups to an object store you run. Barman
     prunes only a LIVE Cluster's own archive path, so an archive left by a

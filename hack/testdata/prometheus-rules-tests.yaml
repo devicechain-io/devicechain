@@ -535,7 +535,31 @@ tests:
         exp_alerts: []
 
   # -------------------------------------------------------------------------
-  # NEGATIVE CONTROLS for the store's rate rule. A nightly base backup lands
+  # 🔴 THE CASE THE FREE-SPACE GATE IS FOR, and the only one that reaches it. A long
+  # base backup on a store with room: 200 MB a minute for 15 minutes from 12.5 GB free
+  # of 20 GiB. The 10m slope projects the store empty within the hour from about 3m
+  # on, and stays that steep past the 5m `for` — so without the gate this fires at 8m.
+  # It ends at 9.5 GB free, 44% of the store, never under the 35% gate. (The short
+  # burst in the next group flattens before the `for` completes, so the `for` alone
+  # quiets it; it proves nothing about the gate.)
+  # -------------------------------------------------------------------------
+  - name: a long base backup on a store with room is not filling fast
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "12500000000-200000000x15 9500000000+0x30"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x45"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # NEGATIVE CONTROLS for the store's rate rule. A small base backup lands
   # gigabytes in minutes and then stops — on a store with room, that is not a page.
   # A store creeping up over days is AlmostFull's to report, not this rule's. And
   # another namespace's store, however fast it falls, is not this instance's.

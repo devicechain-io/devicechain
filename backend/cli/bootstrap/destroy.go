@@ -374,7 +374,10 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 	}
 	// 🔴 LAST ON THE CLUSTER, once the namespace is gone: until then the event store may
 	// still be archiving into the path being removed.
-	leftArchive = settleInstanceArchive(ctx, kubeContext, dyn, typed, opts.Instance, archive)
+	leftArchive, err = settleInstanceArchive(ctx, kubeContext, dyn, typed, opts.Instance, archive)
+	if err != nil {
+		return "", "", err
+	}
 	return leftDatabase, leftArchive, nil
 }
 
