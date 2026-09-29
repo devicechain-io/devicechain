@@ -111,7 +111,10 @@ reads exactly like a run that checked them.
   `<table>_occurred_time_idx` index Timescale creates for you. That made a false green
   trivial to reach: a flatten author working *from the golden* writes that index as a
   plain `CREATE INDEX`, omits `create_hypertable`, and `verify` reports `ok` for six plain
-  tables that should be six hypertables. Hypertables (with their dimension and chunk
+  tables that should be six hypertables. (Since event-management's index trim, only
+  `measurement_events` still carries its `<table>_occurred_time_idx`, so for the other five
+  hypertables the catalog probe is the only witness that they are hypertables at all.)
+  Hypertables (with their dimension and chunk
   interval), continuous aggregates and the aggregate's refresh policy are now captured as
   pseudo-DDL `TIMESCALE ...` lines. Compression and retention policies are deliberately
   **not** captured — those are reconciled at runtime from configuration

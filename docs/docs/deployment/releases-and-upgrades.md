@@ -3787,6 +3787,40 @@ any other, and a redelivery of it adds nothing. The same retry-then-downstream-f
 was taken by a state-change event whose session id is too large for the database's signed
 64-bit column; that event is now recorded as invalid on its first delivery. Nothing needs doing.
 
+#### The event store updates fewer indexes for each event {#next-event-store-indexes}
+
+`event-management` removes twelve indexes from the event store. Each one either repeated what
+another index already gave the same queries, or was read by no query the platform makes. Each
+stored row now updates fewer indexes: a base event row three instead of five (four instead of six
+when it carries an alternate id), a measurement row four instead of five, a location, alert or
+relationship-anchor row two instead of four, and a presence-change row one instead of four. A
+measurement event with one reading and no anchors, for example, updates seven indexes instead of
+ten.
+
+- The indexes that stop an event being stored twice are unchanged, and every read
+  `event-management` serves is still served by an index.
+- **A device's event list does more work on recent data.** The total shown with a device's
+  event list, and a list of a device's events filtered by event type, now visit every one of the
+  device's rows that is not yet compressed (the last week of data, by default) instead of only
+  the rows they count or return. Compressed data is read per device, as before. A device that
+  sends events at a high rate shows this most.
+- **SQL and BI access.** A query on `analytics.event_anchors` or `analytics.state_change_events`
+  that filters on time alone now reads all of your tenant's rows in each not-yet-compressed chunk
+  the range touches (a day of data per chunk, by default), rather than only the rows in the
+  range. Add an anchor filter (`anchor_type` and `anchor_token`) or a device filter
+  (`device_token`) and it is served by an index as before. The other views are unaffected.
+- **At the upgrade.** The first time the new `event-management` starts, it removes the indexes
+  one at a time. Removing one needs a moment when no other transaction is using that table, and
+  while it waits, reads and writes of that table wait with it. Each attempt gives up after at
+  most 5 seconds, and a busy table is retried every 2 seconds for up to a minute. If a long
+  query or a tenant erasure keeps a table busy longer, `event-management` stops with an error
+  that names the table and the index, and continues from there when it restarts; the previous
+  `event-management` keeps storing events meanwhile. If it keeps stopping, look for
+  long-running SQL or BI queries against the event store. Removing an index also locks every
+  chunk of its table; if the database runs out of lock slots, the error says so and names the
+  setting to raise.
+- Going back to `v0.18.0` leaves the indexes removed, and `v0.18.0` works without them.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

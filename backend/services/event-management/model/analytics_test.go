@@ -241,18 +241,31 @@ func TestAnalyticsViewsOnlyNameColumnsTheModelsStillHave(t *testing.T) {
 	}
 }
 
-// TestAnalyticsMigrationIsRegisteredLast pins the ordering the view bodies depend on.
+// TestAnalyticsMigrationRunsAfterTheLocationFixColumns pins the ordering the view
+// bodies depend on.
 //
 // The location view names accuracy, speed and heading, which an earlier migration
 // appends. Registered before it, this migration would fail on a fresh install with an
-// error about a column — pointing at the table rather than at the ordering.
-func TestAnalyticsMigrationIsRegisteredLast(t *testing.T) {
-	if len(Migrations) == 0 {
-		t.Fatal("the migration chain is empty")
+// error about a column — pointing at the table rather than at the ordering. (It was
+// the LAST migration when this test was written, and the test asserted that; a later
+// migration appended after it changes nothing the views depend on.)
+func TestAnalyticsMigrationRunsAfterTheLocationFixColumns(t *testing.T) {
+	position := func(id string) int {
+		for i, m := range Migrations {
+			if m.ID == id {
+				return i
+			}
+		}
+		return -1
 	}
-	last := Migrations[len(Migrations)-1]
-	if want := NewAnalyticsSurfaceSchema().ID; last.ID != want {
-		t.Errorf("the last migration is %s, want the analytics surface (%s)", last.ID, want)
+	analytics := position(NewAnalyticsSurfaceSchema().ID)
+	location := position(NewLocationFixFieldsSchema().ID)
+	if analytics < 0 || location < 0 {
+		t.Fatalf("both migrations must be in the chain: analytics at %d, location fix at %d", analytics, location)
+	}
+	if analytics < location {
+		t.Errorf("the analytics surface runs at %d, before the location-fix columns it names (%d)",
+			analytics, location)
 	}
 	seen := map[string]bool{}
 	for _, m := range Migrations {

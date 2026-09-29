@@ -54,9 +54,15 @@ type Event struct {
 // own content-derived identity and is unique within (tenant, occurred_time) by
 // construction, so it closes the order.
 //
-// The leading column matches idx_events_tenant_device_type_time — declared
-// (tenant_id, device_token, event_type, occurred_time DESC) — so the common per-device
-// read stays index-ordered. Neither column is nullable, so no NULLS placement is needed.
+// The per-device read is served in time order by events_device_token_occurred_time_idx
+// (device_token, occurred_time DESC), with tenant_id and any event_type filter checked
+// per row. Tokens are unique within a tenant, so the tenant check only discards another
+// tenant's reuse of a token; the event_id tiebreak sorts within one timestamp. What that
+// index does NOT give is an index-only answer: it carries no tenant_id, so the COUNT that
+// ListOf issues before the page, and a device read filtered to a rare event type, visit
+// each of the device's rows in the uncompressed (recent) chunks — compressed chunks are
+// segmented by (tenant_id, device_token) and read per device either way. Neither column
+// is nullable, so no NULLS placement is needed.
 func (Event) DefaultOrder() string {
 	return "events.occurred_time DESC, events.event_id DESC"
 }

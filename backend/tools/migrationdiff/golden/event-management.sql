@@ -17,27 +17,15 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
  THEN substring(session_user::text from 11)
  END
  $$;
-CREATE INDEX "idx_event-management_alert_events_tenant_id" ON "event-management".alert_events USING btree (tenant_id);
-CREATE INDEX "idx_event-management_event_anchors_tenant_id" ON "event-management".event_anchors USING btree (tenant_id);
-CREATE INDEX "idx_event-management_location_events_tenant_id" ON "event-management".location_events USING btree (tenant_id);
-CREATE INDEX "idx_event-management_measurement_events_tenant_id" ON "event-management".measurement_events USING btree (tenant_id);
-CREATE INDEX "idx_event-management_state_change_events_tenant_id" ON "event-management".state_change_events USING btree (tenant_id);
-CREATE INDEX alert_events_occurred_time_idx ON "event-management".alert_events USING btree (occurred_time DESC);
 CREATE INDEX alert_events_tenant_id_occurred_time_idx ON "event-management".alert_events USING btree (tenant_id, occurred_time DESC);
-CREATE INDEX event_anchors_occurred_time_idx ON "event-management".event_anchors USING btree (occurred_time DESC);
 CREATE INDEX events_device_token_occurred_time_idx ON "event-management".events USING btree (device_token, occurred_time DESC);
-CREATE INDEX events_occurred_time_idx ON "event-management".events USING btree (occurred_time DESC);
 CREATE INDEX events_tenant_id_occurred_time_idx ON "event-management".events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
-CREATE INDEX idx_events_tenant_device_type_time ON "event-management".events USING btree (tenant_id, device_token, event_type, occurred_time DESC);
 CREATE INDEX idx_measurement_tenant_device_name_time ON "event-management".measurement_events USING btree (tenant_id, device_token, name, occurred_time DESC);
-CREATE INDEX idx_state_change_events_lookup ON "event-management".state_change_events USING btree (tenant_id, device_token, occurred_time DESC);
-CREATE INDEX location_events_occurred_time_idx ON "event-management".location_events USING btree (occurred_time DESC);
 CREATE INDEX location_events_tenant_id_occurred_time_idx ON "event-management".location_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX measurement_events_occurred_time_idx ON "event-management".measurement_events USING btree (occurred_time DESC);
 CREATE INDEX measurement_events_tenant_id_occurred_time_idx ON "event-management".measurement_events USING btree (tenant_id, occurred_time DESC);
-CREATE INDEX state_change_events_occurred_time_idx ON "event-management".state_change_events USING btree (occurred_time DESC);
 CREATE SCHEMA "event-management";
 CREATE SCHEMA analytics;
 CREATE SEQUENCE "event-management".audit_events_id_seq
