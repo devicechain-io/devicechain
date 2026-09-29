@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -175,9 +176,12 @@ type NatsManager struct {
 	// by streamMu because SubscribeLive can ensure a stream at runtime while the
 	// metrics sampler reads the set. The sampler polls each for fill (ADR-023).
 	// bucketNames is the parallel set of KV buckets, held separately because they
-	// get replication metrics only (streamMetrics.sample explains why).
+	// get replication metrics only (streamMetrics.sample explains why). sinkStreams is
+	// the subset of streamNames declared as sinks (isSinkStream), recorded when the
+	// stream is ensured because that is where its suffix is known; nil until the first.
 	streamMu    sync.Mutex
 	streamNames []string
+	sinkStreams map[string]bool
 	bucketNames []string
 	metrics     *streamMetrics
 	samplerWg   sync.WaitGroup
@@ -811,7 +815,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	nmgr.trackStream(name)
+	nmgr.trackStream(name, suffix)
 	return name, nil
 }
 
@@ -869,11 +873,18 @@ func (nmgr *NatsManager) reconcileStreamReplicas(name string, current nats.Strea
 }
 
 // trackStream records a stream this service has ensured, so the metrics sampler
-// polls it. Deduped and mutex-guarded because SubscribeLive can ensure a stream at
-// runtime concurrently with the sampler reading the set.
-func (nmgr *NatsManager) trackStream(name string) {
+// polls it, and whether it is declared a sink. Deduped and mutex-guarded because
+// SubscribeLive can ensure a stream at runtime concurrently with the sampler reading
+// the set.
+func (nmgr *NatsManager) trackStream(name, suffix string) {
 	nmgr.streamMu.Lock()
 	defer nmgr.streamMu.Unlock()
+	if isSinkStream(suffix) {
+		if nmgr.sinkStreams == nil {
+			nmgr.sinkStreams = map[string]bool{}
+		}
+		nmgr.sinkStreams[name] = true
+	}
 	for _, n := range nmgr.streamNames {
 		if n == name {
 			return
@@ -889,8 +900,16 @@ func (nmgr *NatsManager) trackedStreams() []string {
 	return append([]string(nil), nmgr.streamNames...)
 }
 
+// trackedSinks returns a snapshot of the ensured streams declared as sinks.
+func (nmgr *NatsManager) trackedSinks() map[string]bool {
+	nmgr.streamMu.Lock()
+	defer nmgr.streamMu.Unlock()
+	return maps.Clone(nmgr.sinkStreams)
+}
+
 // trackedDurables returns a snapshot of the durables this service's readers consume,
-// for the sampler's per-durable unread-loss series. Read under streamMu because it is
+// for the sampler's per-durable unread-loss and backlog series, each marked with whether
+// it gates its stream (see consumerUnreadRatio). Read under streamMu because it is
 // written under it (NewReader) while the sampler runs on its own goroutine. Deduped:
 // two readers on one suffix share one durable, and it is one cursor to sample.
 func (nmgr *NatsManager) trackedDurables() []durableRef {
@@ -899,7 +918,8 @@ func (nmgr *NatsManager) trackedDurables() []durableRef {
 	out := make([]durableRef, 0, len(nmgr.readers))
 	seen := make(map[durableRef]bool, len(nmgr.readers))
 	for _, r := range nmgr.readers {
-		d := durableRef{stream: r.stream, durable: r.durable}
+		d := durableRef{stream: r.stream, durable: r.durable,
+			gates: gatesItsStream(r.suffix, nmgr.Microservice.FunctionalArea)}
 		if !seen[d] {
 			seen[d] = true
 			out = append(out, d)
@@ -973,8 +993,8 @@ func (nmgr *NatsManager) runStreamMetrics(ctx context.Context) {
 // cannot drift apart, and so a test can drive exactly the pass production runs.
 func (nmgr *NatsManager) sampleNow(ctx context.Context) {
 	nmgr.reportReplicaClamp()
-	nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedBuckets(), nmgr.trackedDurables(),
-		nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+	nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedSinks(), nmgr.trackedBuckets(),
+		nmgr.trackedDurables(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 }
 
 // ----------------

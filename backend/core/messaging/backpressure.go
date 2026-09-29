@@ -529,6 +529,17 @@ func (nmgr *NatsManager) gatingDurables(suffix string) []string {
 	return out
 }
 
+// gatesItsStream reports whether area's durable on suffix's stream is one whose unread
+// backlog makes the stream refuse its writers: area is declared in the stream's
+// BackpressureReaders. The reader's side uses it to leave that durable's unread ratio to
+// the writers, who measure it for the gate (see consumerUnreadRatio).
+//
+// It does not apply gatingDurables' deployed-area filter, and need not: a reader is only
+// built by a running service, so its area is deployed.
+func gatesItsStream(suffix, area string) bool {
+	return slices.Contains(streams.BackpressureReadersFor(suffix), area)
+}
+
 // bypassesBackpressure reports whether a batch is admitted past a closed gate: every message
 // in it carries Message.BypassBackpressure.
 func bypassesBackpressure(msgs []Message) bool {

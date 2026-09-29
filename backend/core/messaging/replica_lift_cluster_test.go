@@ -521,7 +521,7 @@ func TestReplicationMetricsReportBrokerStateNotConfig(t *testing.T) {
 	// Sampling the multi-stream + bucket path together, WITH an assertion — an
 	// earlier version ended here with a bare call and no check, which proves only
 	// that it does not panic and would pass on any values at all.
-	nmgr.metrics.sample(context.Background(), nmgr.js, nmgr.trackedStreams(), buckets, nil, nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+	nmgr.metrics.sample(context.Background(), nmgr.js, nmgr.trackedStreams(), nil, buckets, nil, nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 	if got := testutil.ToFloat64(nmgr.metrics.brokerClustered); got != 1 {
 		t.Errorf("brokerClustered = %v while sampling a real 3-node cluster, want 1: this is "+
 			"the gauge that distinguishes a correct single-node install from a cluster "+
@@ -610,7 +610,7 @@ func TestReplicationGaugesCarryTheRightNumbers(t *testing.T) {
 	if _, err := nmgr.KeyValueStore("leases", "test_gauges", time.Hour); err != nil {
 		t.Fatalf("KeyValueStore: %v", err)
 	}
-	nmgr.metrics.sample(context.Background(), nmgr.js, nil, nmgr.trackedBuckets(), nil, nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+	nmgr.metrics.sample(context.Background(), nmgr.js, nil, nil, nmgr.trackedBuckets(), nil, nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
 
 	name := kvStreamPrefix + "test_gauges"
 	desired := testutil.ToFloat64(nmgr.metrics.replicasDesired.WithLabelValues(name))

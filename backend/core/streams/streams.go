@@ -614,7 +614,9 @@ var All = []Stream{
 	// a stale live view that the device's next event repairs, and at the shipped sizing it is
 	// the slowest reader, so gating on it would stop every tenant's ingest to let a projection
 	// catch up. event-processing is not listed because its unread position is its checkpoint,
-	// which its durable's backlog does not show (see BackpressureReaders).
+	// which its durable's backlog does not show exactly (see BackpressureReaders). That
+	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
+	// bound: the checkpoint is never behind what the durable has acknowledged.
 	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
 		ReplayCovered:       []string{"event-processing"},
 		BackpressureReaders: []string{"event-management"},

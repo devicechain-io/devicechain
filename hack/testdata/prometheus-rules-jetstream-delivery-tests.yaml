@@ -17,9 +17,12 @@
 #     counter as a reset), and a restart is not a loss. A series that goes from n to
 #     n+k after the restart must page.
 #
-# JetStreamStreamNearFull was widened from one service's streams to every service's.
-# The fill case below is read from device-state's series, which the old selector —
-# named for event-processing — could not see at all.
+# JetStreamStreamNearFull reads a stream's FILL only for a stream declared a sink (the
+# failed-message records, the dead letters, the max-delivery capture), and not for one a
+# service reports reading. A stream full of history its consumers have already read is
+# QUIET: that was the defect, and the first fill scenario below is it, measured the way
+# production reports it (the fill from the writer, the backlog from a different reader
+# service). JetStreamDurableUnreadNearFull warns on a consumer's unread backlog instead.
 #
 # THE SERIES, and what is known about each:
 #
@@ -29,7 +32,16 @@
 #     GaugeVec created at 0 at the same moment. The quiet scenarios carry both AT ZERO
 #     rather than omitting them: an alert silent because its series is missing and one
 #     silent because nothing was lost look identical, and only one is a working alert.
-#   - devicechain_<area>_jetstream_stream_used_bytes / _limit_bytes{stream} — gauges.
+#   - devicechain_<area>_jetstream_stream_used_bytes / _limit_bytes{stream} — gauges,
+#     as are _used_messages / _limit_messages; every service reports them for each stream
+#     it ensures.
+#   - devicechain_<area>_jetstream_stream_sink{stream} — 1 for a stream core/streams
+#     declares a sink, 0 for any other, set beside the fill gauges. The quiet scenarios
+#     carry it AT ZERO for the reason given for the unread pair below.
+#   - devicechain_<area>_jetstream_consumer_unread_ratio{stream,durable} — a GaugeVec
+#     exported by the service that READS a durable, except for a durable that gates its
+#     stream, from its 30 s sample. Absent until the first sample and withdrawn when the
+#     durable cannot be read. Every replica reports it, so the rule takes the max.
 #   - devicechain_<area>_jetstream_consumer_pending_messages{stream,durable} — a GaugeVec
 #     that, unlike the two above, is NOT created at 0: it appears at a pod's first sample
 #     (30 s after the pod starts) and is withdrawn while the durable cannot be read. So a
@@ -112,7 +124,7 @@ tests:
               durable: devicechain_notification-management_alarm-events
             exp_annotations:
               summary: "a consumer lost messages it never read"
-              description: "Durable devicechain_notification-management_alarm-events on stream devicechain_alarm-events stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamStreamNearFull and the consumer's own backlog tell the two apart."
+              description: "Durable devicechain_notification-management_alarm-events on stream devicechain_alarm-events stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamDurableFallingBehind and JetStreamDurableUnreadNearFull, which watch this consumer's backlog, tell the two apart."
       # 🔑 IT CLEARS ONCE THE WINDOW ROLLS PAST THE LAST LOSS. Widening the
       # window would make a one-off loss page for hours; this fails if it does.
       - eval_time: 45m
@@ -163,7 +175,7 @@ tests:
               durable: devicechain_outbound-connectors_connector-dispatch
             exp_annotations:
               summary: "a consumer lost messages it never read"
-              description: "Durable devicechain_outbound-connectors_connector-dispatch on stream devicechain_connector-dispatch stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamStreamNearFull and the consumer's own backlog tell the two apart."
+              description: "Durable devicechain_outbound-connectors_connector-dispatch on stream devicechain_connector-dispatch stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamDurableFallingBehind and JetStreamDurableUnreadNearFull, which watch this consumer's backlog, tell the two apart."
 
   # ------------------------------------------------------------------
   # A stalled durable with messages already discarded ahead of it.
@@ -201,21 +213,133 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
-  # 🔴 THE WIDENING. device-state's stream is near full; the replaced alert
-  # selected event-processing's series only and could not see this. A second
-  # stream at half full stays quiet.
+  # 🔴 THE DEFECT. resolved-events at 95% of its ceiling, measured as production
+  # reports it: the fill from the service that WRITES it (device-management) and from a
+  # reader that ensures it too (device-state), the backlog from device-state, which has
+  # read all but 12 messages. That is a week of history consumers have read, and it
+  # loses nothing. Before, JetStreamStreamNearFull fired a warning here, from 5M events
+  # on, on every busy healthy install.
   # ------------------------------------------------------------------
-  - name: a near-full stream in any service warns
+  - name: a stream full of history its consumers have read is quiet
     interval: 1m
     input_series:
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '950x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '1000x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '9500x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '10000x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '0x40'
       - series: 'devicechain_devicestate_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events"}'
-        values: '900x40'
+        values: '950x40'
       - series: 'devicechain_devicestate_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events"}'
         values: '1000x40'
-      - series: 'devicechain_devicestate_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_device-events"}'
-        values: '500x40'
-      - series: 'devicechain_devicestate_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_device-events"}'
+      - series: 'devicechain_devicestate_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events"}'
+        values: '9500x40'
+      - series: 'devicechain_devicestate_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events"}'
+        values: '10000x40'
+      - series: 'devicechain_devicestate_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events"}'
+        values: '0x40'
+      - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '12x40'
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0.0012x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: JetStreamStreamNearFull
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamDurableUnreadNearFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 NOT SELECTED BY ABSENCE. An ingest-only install: device-management writes
+  # resolved-events and nothing that reads it is deployed, so no consumer backlog is
+  # reported at all. The stream still fills with a week of history, and it is still
+  # not a sink. A rule that selected "streams nobody reports reading" fires here.
+  # ------------------------------------------------------------------
+  - name: a stream whose readers are not deployed is quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '950x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
         values: '1000x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '9500x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '10000x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_resolved-events"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Sinks near their ceiling warn, at info, after 10m, one alert per stream across the
+  # services that report it:
+  #   - failed-events at 90% of its bytes, reported by both of its writers;
+  #   - max-deliveries at 85%, whose recorder durable is never sampled;
+  #   - connector-dispatch.dead with small records: 10% of its bytes but 90% of its
+  #     MESSAGE ceiling, which is the limit it reaches first;
+  #   - failed-decode at 50%: under the threshold, quiet.
+  # ------------------------------------------------------------------
+  - name: a sink near its ceiling warns at info
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_failed-events"}'
+        values: '900x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_failed-events"}'
+        values: '1000x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_failed-events"}'
+        values: '90x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_failed-events"}'
+        values: '10000x40'
+      - series: 'devicechain_devicemanagement_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management", stream="devicechain_failed-events"}'
+        values: '1x40'
+      - series: 'devicechain_eventmanagement_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-event-management-7c9f-bbbbb", job="devicechain/event-management", stream="devicechain_failed-events"}'
+        values: '900x40'
+      - series: 'devicechain_eventmanagement_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-event-management-7c9f-bbbbb", job="devicechain/event-management", stream="devicechain_failed-events"}'
+        values: '1000x40'
+      - series: 'devicechain_eventmanagement_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-event-management-7c9f-bbbbb", job="devicechain/event-management", stream="devicechain_failed-events"}'
+        values: '90x40'
+      - series: 'devicechain_eventmanagement_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-event-management-7c9f-bbbbb", job="devicechain/event-management", stream="devicechain_failed-events"}'
+        values: '10000x40'
+      - series: 'devicechain_eventmanagement_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-event-management-7c9f-bbbbb", job="devicechain/event-management", stream="devicechain_failed-events"}'
+        values: '1x40'
+      - series: 'devicechain_eventsources_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_max-deliveries"}'
+        values: '850x40'
+      - series: 'devicechain_eventsources_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_max-deliveries"}'
+        values: '1000x40'
+      - series: 'devicechain_eventsources_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_max-deliveries"}'
+        values: '1x40'
+      - series: 'devicechain_outboundconnectors_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-outbound-connectors-7c9f-ddddd", job="devicechain/outbound-connectors", stream="devicechain_connector-dispatch.dead"}'
+        values: '100x40'
+      - series: 'devicechain_outboundconnectors_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-outbound-connectors-7c9f-ddddd", job="devicechain/outbound-connectors", stream="devicechain_connector-dispatch.dead"}'
+        values: '1000x40'
+      - series: 'devicechain_outboundconnectors_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-outbound-connectors-7c9f-ddddd", job="devicechain/outbound-connectors", stream="devicechain_connector-dispatch.dead"}'
+        values: '9000x40'
+      - series: 'devicechain_outboundconnectors_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-outbound-connectors-7c9f-ddddd", job="devicechain/outbound-connectors", stream="devicechain_connector-dispatch.dead"}'
+        values: '10000x40'
+      - series: 'devicechain_outboundconnectors_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-outbound-connectors-7c9f-ddddd", job="devicechain/outbound-connectors", stream="devicechain_connector-dispatch.dead"}'
+        values: '1x40'
+      - series: 'devicechain_eventsources_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '500x40'
+      - series: 'devicechain_eventsources_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '1000x40'
+      - series: 'devicechain_eventsources_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '50x40'
+      - series: 'devicechain_eventsources_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '10000x40'
+      - series: 'devicechain_eventsources_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '1x40'
     alert_rule_test:
       # Over the threshold from the first sample, but the 10m `for` has not elapsed.
       - eval_time: 5m
@@ -225,12 +349,151 @@ tests:
         alertname: JetStreamStreamNearFull
         exp_alerts:
           - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              stream: devicechain_connector-dispatch.dead
+            exp_annotations:
+              summary: "A stream of records nothing processes is near its ceiling"
+              description: "Stream devicechain_connector-dispatch.dead is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              stream: devicechain_failed-events
+            exp_annotations:
+              summary: "A stream of records nothing processes is near its ceiling"
+              description: "Stream devicechain_failed-events is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              stream: devicechain_max-deliveries
+            exp_annotations:
+              summary: "A stream of records nothing processes is near its ceiling"
+              description: "Stream devicechain_max-deliveries is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+
+  # ------------------------------------------------------------------
+  # A sink some service reports reading is that consumer's to watch: dead-letters at
+  # 95%, read by user-management, is quiet while user-management reports its backlog.
+  # ------------------------------------------------------------------
+  - name: a sink a service reads is left to its consumer
+    interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-user-management-7c9f-aaaaa", job="devicechain/user-management", stream="devicechain_dead-letters"}'
+        values: '950x40'
+      - series: 'devicechain_usermanagement_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-user-management-7c9f-aaaaa", job="devicechain/user-management", stream="devicechain_dead-letters"}'
+        values: '1000x40'
+      - series: 'devicechain_usermanagement_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-user-management-7c9f-aaaaa", job="devicechain/user-management", stream="devicechain_dead-letters"}'
+        values: '1x40'
+      - series: 'devicechain_usermanagement_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-user-management-7c9f-aaaaa", job="devicechain/user-management", stream="devicechain_dead-letters", durable="devicechain_user-management_dead-letters"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Only the STORE's reading takes dead-letters off this alert. command-delivery also
+  # reads it, to settle its commands, but a letter it has read is not stored: with
+  # user-management down and command-delivery running, the letters nobody has stored
+  # are near the ceiling and nothing else reports them. (Quiet if the `unless` matches
+  # any reader of the stream.)
+  # ------------------------------------------------------------------
+  - name: dead-letters read only by command-delivery still fires
+    interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters"}'
+        values: '950x40'
+      - series: 'devicechain_commanddelivery_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters"}'
+        values: '1000x40'
+      - series: 'devicechain_commanddelivery_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters"}'
+        values: '1x40'
+      - series: 'devicechain_commanddelivery_jetstream_consumer_pending_messages{namespace="dci-devicechain", pod="dc-command-delivery-7c9f-aaaaa", job="devicechain/command-delivery", stream="devicechain_dead-letters", durable="devicechain_command-delivery_dead-letters"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              stream: devicechain_dead-letters
+            exp_annotations:
+              summary: "A stream of records nothing processes is near its ceiling"
+              description: "Stream devicechain_dead-letters is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+
+  # ------------------------------------------------------------------
+  # A sink with no ceiling (both limits -1, as JetStream reports "unlimited") has
+  # nothing to be near: quiet however much it holds. (Fires if a limit of -1 is
+  # clamped to 1 instead of dropped, which reads 5000 bytes as 5000x full.)
+  # ------------------------------------------------------------------
+  - name: an unlimited sink is never near its ceiling
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_stream_used_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '5000x40'
+      - series: 'devicechain_eventsources_jetstream_stream_limit_bytes{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '-1x40'
+      - series: 'devicechain_eventsources_jetstream_stream_used_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '5000x40'
+      - series: 'devicechain_eventsources_jetstream_stream_limit_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '-1x40'
+      - series: 'devicechain_eventsources_jetstream_stream_sink{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="devicechain_failed-decode"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamStreamNearFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A consumer's unread backlog over 80% of its stream: warns after 5m, once per
+  # durable although two pods of the reading service report it.
+  # ------------------------------------------------------------------
+  - name: a consumer's unread backlog near the ceiling warns after 5m
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0.85x10'
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-device-state-7c9f-fffff", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0.84x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: JetStreamDurableUnreadNearFull
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: JetStreamDurableUnreadNearFull
+        exp_alerts:
+          - exp_labels:
               severity: warning
               devicechain_instance: devicechain
               stream: devicechain_resolved-events
+              durable: devicechain_device-state_resolved-events
             exp_annotations:
-              summary: "A JetStream stream is near its ceiling"
-              description: "Stream devicechain_resolved-events is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread). On inbound-events and resolved-events this is normal on a busy instance, because they keep a week of events their consumers have already read; what matters there is the unread backlog, which JetStreamUnreadBacklogNearFull watches."
+              summary: "A consumer is close to losing messages it has not read"
+              description: "Durable devicechain_device-state_resolved-events has not yet read 85% of what stream devicechain_resolved-events can hold. Once its unread backlog reaches the stream's ceiling, the stream discards its oldest messages to make room, and this consumer will never process the ones it had not reached (JetStreamDurableLostUnread). New messages are still accepted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
+
+  # ------------------------------------------------------------------
+  # 🔴 MAX, NOT SUM, and quiet cases each carrying its series:
+  #   - two pods measuring the same consumer at 0.5 and 0.45 (a sum would be 0.95);
+  #   - a spike over 0.8 shorter than the `for`;
+  #   - another instance's namespace at 0.99.
+  # ------------------------------------------------------------------
+  - name: two readers under the threshold, a short spike and another instance are quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0.5x10'
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-device-state-7c9f-fffff", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0.45x10'
+      - series: 'devicechain_eventprocessing_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-processing-7c9f-ggggg", job="devicechain/event-processing", stream="devicechain_derived-events", durable="devicechain_event-processing_derived-events"}'
+        values: '0.85x3 0.5x7'
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-other", pod="dc-device-state-7c9f-zzzzz", job="other/device-state", stream="other_resolved-events", durable="other_device-state_resolved-events"}'
+        values: '0.99x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: JetStreamDurableUnreadNearFull
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: JetStreamDurableUnreadNearFull
+        exp_alerts: []
 
   # ------------------------------------------------------------------
   # A send ran past the acknowledgement window: one worker-stage count on
@@ -422,7 +685,7 @@ tests:
               stream: devicechain_resolved-events
             exp_annotations:
               summary: "A consumer ran out of delivery attempts because it could not save its checkpoint"
-              description: "5 message(s) on devicechain_resolved-events ran out of delivery attempts to devicechain/event-processing in the last 15 minutes. This consumer re-reads the stream from its own saved checkpoint, so nothing has been lost and no dead letter is written, but its checkpoint has not been saved for longer than the broker keeps redelivering: look for the service's database or broker connection failing. While it is running it keeps what it has read in memory and saves it when the checkpoint succeeds. If it restarts first, it re-reads the stream from the last saved checkpoint, and a message the stream has already discarded (JetStreamStreamNearFull) cannot be re-read."
+              description: "5 message(s) on devicechain_resolved-events ran out of delivery attempts to devicechain/event-processing in the last 15 minutes. This consumer re-reads the stream from its own saved checkpoint, so nothing has been lost and no dead letter is written, but its checkpoint has not been saved for longer than the broker keeps redelivering: look for the service's database or broker connection failing. While it is running it keeps what it has read in memory and saves it when the checkpoint succeeds. If it restarts first, it re-reads the stream from the last saved checkpoint, and a message the stream has already discarded cannot be re-read (JetStreamDurableUnreadNearFull warns before that)."
       # The window has passed and nothing new ran out: quiet again.
       - eval_time: 30m
         alertname: ReplayCoveredDeliveriesExhausted
@@ -603,7 +866,7 @@ tests:
               durable: devicechain_device-management_inbound-events
             exp_annotations:
               summary: "A consumer's unread backlog is near its stream's ceiling"
-              description: "Durable devicechain_device-management_inbound-events has not yet processed 85% of what stream devicechain_inbound-events can hold. At 90% the platform stops accepting new events on that stream, for every tenant, rather than discard events this consumer has not read. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
+              description: "Durable devicechain_device-management_inbound-events has not yet processed 85% of what stream devicechain_inbound-events can hold. At 90% the platform stops accepting new events on that stream, for every tenant, rather than discard events this consumer has not read: HTTP devices are answered 503 with a Retry-After, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
 
   # ------------------------------------------------------------------
   # 🔴 MAX, NOT SUM, and quiet cases each carrying its series:

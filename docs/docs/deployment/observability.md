@@ -232,11 +232,12 @@ discarded will never read it. The two ingest streams whose loss would be device 
 events before that happens to the consumer that must not lose them (see
 [Backpressure on the ingest path](#ingest-backpressure)). Every other stream, and every other
 consumer, is covered here. The broker does not report this loss, so every service measures it for
-each durable consumer it reads, and three alerts watch the result:
+each durable consumer it reads, and these alerts watch the result:
 
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
-| `JetStreamStreamNearFull` | warning | A stream has been over 80% of its byte ceiling for 10 minutes. Nothing has been lost yet. It covers the streams of every service. On `inbound-events` and `resolved-events` it is normal on a busy instance, because they keep a week of events that have already been processed. | Look for a consumer that is falling behind. If the traffic has simply outgrown the stream, raise its ceiling. On the two ingest streams, watch `JetStreamUnreadBacklogNearFull` instead. |
+| `JetStreamDurableUnreadNearFull` | warning | A consumer has not yet read more than 80% of what its stream can hold, for 5 minutes. Nothing has been lost yet. Messages it has already read do not count, so a stream that is full of processed history does not fire this. When the unread backlog reaches the ceiling, the stream discards the oldest messages and this consumer never processes the ones it had not reached. For `event-processing`'s detection consumer this measures the consumer, not the checkpoint detection replays from; the checkpoint is never behind what the consumer has acknowledged, so the number is at least what detection could lose. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. The two consumers that hold ingest back are covered by `JetStreamUnreadBacklogNearFull` instead (see [Backpressure on the ingest path](#ingest-backpressure)). |
+| `JetStreamStreamNearFull` | info | A stream that holds records for an operator, rather than messages a service processes, has been over 80% of its ceiling (bytes or messages) for 10 minutes. These are the records of messages that failed (`failed-decode`, `failed-events`, `connector-dispatch.dead`), `max-deliveries`, and `dead-letters` while `user-management`, which stores its letters, does not report reading it. Nothing processes what they hold, so once full they discard records nobody has looked at. Streams that services read are not covered: they keep a week of history that is normally near the ceiling, and the alerts in this table watch their consumers instead. | Find what is filling it: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. On `dead-letters`, check that `user-management` is running. Raise the ceiling only if the records must be kept for longer. The default Alertmanager configuration of kube-prometheus-stack suppresses `info` alerts, so route this one explicitly if you want to receive it. |
 | `JetStreamDurableLostUnread` | critical | A consumer moved past messages that were removed before it read them. They were never processed. | If a tenant was being deleted at the time, this is expected: the deletion removed messages the consumer had not reached yet. Otherwise the stream was full while this consumer was behind. Either the ceiling is too small for the traffic, or the consumer is slower than its producer. |
 | `JetStreamDurableStalledBehindStream` | critical | A consumer has been handed no messages for at least two minutes, and the stream has already discarded messages ahead of it. A consumer that is reading, however slowly, does not fire this one; its losses fire `JetStreamDurableLostUnread`. | The service is running, since it reports this, but its consumer is not reading. Look for message handling stuck on a dependency such as the database, or pods waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding. |
 
@@ -244,7 +245,8 @@ The ceilings are `streamMaxBytes` (the high-volume streams), `streamMaxBytesCold
 `streamMaxMsgs` under `instance.config.infrastructure.nats`. The JetStream volume is sized from
 their sum, so raise the volume with them (see [Bootstrap an Instance](./bootstrap.md)).
 
-The alerts read two series, which every service exports for each durable consumer it reads:
+The alerts read these series. Every service exports the first three for each durable consumer it
+reads:
 
 - **`devicechain_<area>_jetstream_consumer_unread_skipped_total{stream, durable}`** counts the
   messages the consumer moved past without reading them. It is a lower bound: a redelivery, or a
@@ -254,13 +256,23 @@ The alerts read two series, which every service exports for each durable consume
   sample (every 30 seconds). It is 0 while the consumer is reading, even when it is behind: those
   losses are the counter's. It drops back to 0 when the consumer reads again, and the counter above
   takes over.
+- **`devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}`** is the consumer's unread
+  backlog (pending plus unacknowledged) divided by what the stream can hold, in messages or bytes,
+  whichever limit is tighter. It is not exported for the two consumers that hold ingest back; the
+  services writing to their streams export the same number as `jetstream_backpressure_unread_ratio`.
+  It is absent until the first sample and while it cannot be measured.
 
-Both exist at 0 from the moment the service creates the consumer's reader. Every replica of a service reports the same
+Every service also exports **`devicechain_<area>_jetstream_stream_sink{stream}`** for each stream it
+writes or reads: 1 for a stream that holds records for an operator, 0 for any other.
+`JetStreamStreamNearFull` reads a stream's fill only where it is 1.
+
+The first two exist at 0 from the moment the service creates the consumer's reader; the ratio
+appears at the first sample. Every replica of a service reports the same
 consumer and counts the same loss, so combine them with `max`, not `sum`. A pod restart resets the
 counter, so read it with `increase()` or `rate()`. Each pod measures from its own first sample, so a
 loss the consumer moves past while every pod of the reading service is restarting at once can go
-uncounted. A service with no running pods reports neither series, so neither alert can fire for
-it; the near-full warning and your pod-health alerts cover that case.
+uncounted. A service with no running pods reports none of these series, so none of the
+per-consumer alerts can fire for it; your pod-health alerts cover that case.
 
 ## A consumer that stays behind {#consumer-backlog}
 
@@ -334,7 +346,7 @@ which the gate does not see. `ReplayCoveredDeliveriesExhausted` watches that.
 
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
-| `JetStreamUnreadBacklogNearFull` | warning | A gating consumer has been more than 80% of its stream behind for 5 minutes. At 90% the stream starts refusing events. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. |
+| `JetStreamUnreadBacklogNearFull` | warning | A gating consumer has been more than 80% of its stream behind for 5 minutes. At 90% the stream refuses new events for every tenant: HTTP devices get `503` with a `Retry-After`, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. |
 | `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The likeliest cause is that the consumer's service is not running: scaled to zero replicas or crash-looping. A deployed service that is not running still holds ingest back, on purpose. The refusal lifts on its own once that consumer's backlog is below 80%. |
 
 The services that write to the two streams export these series:
@@ -391,7 +403,7 @@ that read `resolved-events` have no such checkpoint, and their notices are dead-
 | Alert | What it means | What to do |
 | --- | --- | --- |
 | `MaxDeliveryRecordsWaiting` | Notices of messages that ran out of delivery attempts have waited 15 minutes without being recorded. | Check that every service is running: one that is down records late. If a notice stays once everything is healthy, it names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream. |
-| `ReplayCoveredDeliveriesExhausted` | A consumer that reads its stream from its own checkpoint ran out of delivery attempts in the last 15 minutes, because the checkpoint has not been saved for longer than the broker keeps redelivering. Nothing has been lost yet. | Fix whatever stops the service named by the `job` label from saving its checkpoint, usually its database connection. While the service runs, it saves what it has read once the checkpoint succeeds. If it restarts first, it reads the stream again from the last saved checkpoint, and events the stream has already discarded cannot be read again, so also watch `JetStreamStreamNearFull`. |
+| `ReplayCoveredDeliveriesExhausted` | A consumer that reads its stream from its own checkpoint ran out of delivery attempts in the last 15 minutes, because the checkpoint has not been saved for longer than the broker keeps redelivering. Nothing has been lost yet. | Fix whatever stops the service named by the `job` label from saving its checkpoint, usually its database connection. While the service runs, it saves what it has read once the checkpoint succeeds. If it restarts first, it reads the stream again from the last saved checkpoint, and events the stream has already discarded cannot be read again, so also watch `JetStreamDurableUnreadNearFull`. |
 
 ## Tenants metered at the platform default {#tenant-ceilings}
 

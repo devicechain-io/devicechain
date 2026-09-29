@@ -3841,6 +3841,31 @@ evitarlo.
   replicado (`--ha`), en el que cada confirmación espera a una réplica. Una instalación con una
   sola instancia del almacén de eventos no se ha medido con ellos.
 
+#### Los avisos de flujo se basan en los mensajes sin leer, no en el historial {#next-unread-alerts}
+
+`JetStreamStreamNearFull` se disparaba para cualquier flujo por encima del 80% de su límite de bytes.
+Los flujos conservan una semana de mensajes, casi todos ya procesados, así que en una instancia con
+carga se disparaba sin que nada estuviera en riesgo.
+
+- **Nueva: `JetStreamDurableUnreadNearFull` (warning).** Se dispara cuando un consumidor lleva
+  5 minutos sin haber leído más del 80% de lo que cabe en su flujo. Es lo que ocurre antes de que un
+  flujo descarte mensajes que un consumidor nunca leyó. Los mensajes ya leídos no cuentan. Cubre a
+  todos los consumidores salvo los dos que frenan la ingesta, que cubre
+  `JetStreamUnreadBacklogNearFull`.
+- **Cambia: `JetStreamStreamNearFull` pasa a `info`, y solo se dispara para un flujo que guarda
+  registros para un operador:** `failed-decode`, `failed-events`, `connector-dispatch.dead`,
+  `max-deliveries`, y `dead-letters` mientras `user-management`, que guarda sus cartas muertas, no
+  informe de que lo lee. Nada procesa lo que contienen estos flujos, así que cerca de su límite
+  están a punto de descartar registros que nadie ha mirado. Ahora también tiene en cuenta el límite
+  de mensajes de un flujo, no solo el de bytes. Si enruta o silencia alertas por nombre o por
+  severidad, revise esas reglas: la configuración predeterminada de Alertmanager de
+  kube-prometheus-stack no entrega las alertas `info`.
+- Series nuevas: `devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}` y
+  `devicechain_<area>_jetstream_stream_sink{stream}`.
+
+No hay nada que hacer en la actualización. Consulte
+[Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

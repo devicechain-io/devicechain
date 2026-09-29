@@ -7,10 +7,15 @@ WHY THIS GROUP EXISTS. Every stream is bounded and discards its OLDEST message o
 full (DiscardOld). That is the right policy for a platform that must keep ingesting,
 and it is silent by construction: the broker removes the message, a durable that had
 not reached it steps over the hole on its next pull, and nothing records that the
-message was never read. The fill alert says a stream is full; it cannot say whether
-any reader was still behind what went, because a full stream whose readers are all
-caught up loses nothing. The two per-durable series below are that record, sampled by
+message was never read. The two per-durable series below are that record, sampled by
 every service for the durables it reads (core/messaging/stream_metrics.go).
+
+A stream's FILL cannot say whether any reader was behind what went: every stream keeps a
+week of history, so a busy one sits at its ceiling full of messages its readers have
+already read, which loses nothing. So the warning BEFORE a loss is per durable, on its
+UNREAD backlog against the ceiling (jetstream_consumer_unread_ratio,
+JetStreamDurableUnreadNearFull), and the fill alert is kept only for the streams declared
+as sinks, where nothing processes what is held (JetStreamStreamNearFull).
 
 🔑 SELECTED BY NAME, NOT LISTED — the same reasoning as DeadLetterWriteLost in
 prometheusrule-dead-letter.yaml. Every service that reads a stream exports these series under its
@@ -49,9 +54,9 @@ resolved-events, gated on event-management's), the services that write the strea
 new events while that consumer's UNREAD backlog is at 90% of the ceiling, until it is
 below 80% (core/messaging/backpressure.go; the declaration is core/streams'
 BackpressureReaders). The broker still discards old as the backstop, so the loss rules
-above still apply there if the gate is ever outrun. The two rules after
-JetStreamStreamNearFull watch it: a gating consumer's backlog nearing the gate, and the
-gate engaged. Both are exported by the WRITERS of the stream, not its readers, and the
+above still apply there if the gate is ever outrun. JetStreamUnreadBacklogNearFull and
+JetStreamIngestBackpressureEngaged watch it: a gating consumer's backlog nearing the gate,
+and the gate engaged. Both are exported by the WRITERS of the stream, not its readers, and the
 engaged gauge is evaluated at scrape time, so a gate that cannot measure (and so refuses)
 reads 1 rather than a stale 0.
 
@@ -84,7 +89,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "a consumer lost messages it never read"
-            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamStreamNearFull and the consumer's own backlog tell the two apart."
+            description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamDurableFallingBehind and JetStreamDurableUnreadNearFull, which watch this consumer's backlog, tell the two apart."
         # A durable that has stopped reading while the stream discards the messages
         # ahead of it. Its cursor does not move, so the counter above cannot see the
         # loss until it resumes; this gauge states it while it is happening. The gauge
@@ -129,23 +134,95 @@ spec:
           annotations:
             summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
             description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} has had more than 10000 messages waiting for it for the last 15 minutes ({{ "{{ $value }}" }} now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, messages the consumer has not reached will be lost, except where the stream applies backpressure (inbound-events for device-management, resolved-events for event-management): there new events are refused instead (JetStreamIngestBackpressureEngaged)."
-        # Renamed and widened from EventProcessingStreamNearFull, which selected one
-        # service's streams only. Every service exports the fill gauges for the streams
-        # it ensures, and a stream's owner is not knowable here, so this selects all of
-        # them by name.
+        # A stream declared as a SINK is near its ceiling: the failed-message records
+        # (failed-decode, failed-events, connector-dispatch.dead), the dead letters, and the
+        # max-delivery capture. Nothing processes what a sink holds, so "full" means its
+        # oldest records are about to be discarded unseen. Any other stream is left out:
+        # what it holds at its ceiling is mostly a week of history its consumers have
+        # already read, which loses nothing, and each consumer's own unread backlog is
+        # watched by JetStreamDurableUnreadNearFull or, where the stream refuses writers
+        # instead, JetStreamUnreadBacklogNearFull.
+        #
+        # 🔑 SELECTED BY DECLARATION, NOT BY A LIST OR BY ABSENCE. jetstream_stream_sink is
+        # 1 for a stream core/streams declares NotLettered ("the stream is itself a sink, or
+        # a report") and 0 for every other, so a new sink is covered by the declaration it
+        # needs anyway. Selecting instead by "no consumer backlog is reported" would fire on
+        # a healthy install whose readers are simply not deployed (resolved-events on the
+        # ingest-only profile, device-commands without LwM2M) -- the same history-blind
+        # alert this replaced, at another severity.
+        #
+        # `unless` drops dead-letters while user-management, the service that STORES the
+        # letters, reports its consumer backlog there: while it runs, its unread letters are
+        # its own to watch (JetStreamDurableUnreadNearFull). It matches that one durable, not
+        # any reader of the stream: command-delivery also reads dead-letters, but only to
+        # settle its commands, and letters it has read are not stored. Matching any reader
+        # would keep this quiet while user-management is down and command-delivery is not,
+        # which is exactly when nothing else reports the letters nobody has stored. The
+        # max-delivery recorder's durable is deliberately not sampled (core/messaging
+        # recorder.go), so max-deliveries stays in; MaxDeliveryRecordsWaiting fires long
+        # before this there, and this one says the queue itself is about to discard.
+        #
+        # Fill is the higher of bytes and messages, as the sampler computes it: a sink of
+        # small records reaches its message ceiling first. `> 0` on each limit keeps an
+        # unlimited stream (a limit of -1) from dividing by it: that stream has no ceiling
+        # to be near, so it drops out of that branch instead of reading as over it.
+        #
+        # 🔴 `info` IS DELIBERATE, and it is this chart's first use of that severity -- do
+        # not "normalise" it to warning. What goes here is the oldest record of a failure,
+        # kept for an operator, never a message a consumer would have processed. Note that
+        # kube-prometheus-stack's default Alertmanager config suppresses info alerts
+        # (InfoInhibitor); the docs tell operators to route it if they want it.
         - alert: JetStreamStreamNearFull
           expr: |
-            max by (stream) (
-              {__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_bytes", namespace="{{ $ns }}"}
-              / clamp_min({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_limit_bytes", namespace="{{ $ns }}"}, 1)
-            ) > 0.8
+            (
+              max by (stream) (
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_bytes", namespace="{{ $ns }}"}
+                / ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_limit_bytes", namespace="{{ $ns }}"} > 0)
+              ) > 0.8
+              or
+              max by (stream) (
+                {__name__=~"devicechain_[a-z0-9]+_jetstream_stream_used_messages", namespace="{{ $ns }}"}
+                / ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_limit_messages", namespace="{{ $ns }}"} > 0)
+              ) > 0.8
+            )
+            and on (stream)
+              (max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_sink", namespace="{{ $ns }}"}) == 1)
+            unless on (stream)
+              max by (stream) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable=~".+_user-management_dead-letters", namespace="{{ $ns }}"})
           for: 10m
+          labels:
+            severity: info
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A stream of records nothing processes is near its ceiling"
+            description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode, failed-events and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, events that fail to resolve or store, a connector whose destination refuses every send. Raise the stream's ceiling only if the records must be kept for longer."
+        # A consumer's UNREAD backlog is over 80% of what its stream can hold. When it
+        # reaches the ceiling the stream discards its oldest messages, read or not, and this
+        # consumer never processes the ones it had not reached (JetStreamDurableLostUnread).
+        # Unlike the stream's fill, history the consumer has already read does not count.
+        # Exported by the service that READS the durable, for every durable it reads except
+        # the ones whose stream refuses writers for them (JetStreamUnreadBacklogNearFull
+        # watches those, from the writers' side), so the two rules never fire for the same
+        # durable.
+        #
+        # event-processing's replay-covered resolved-events durable is included, and what it
+        # measures there is the DURABLE, not DETECT's checkpoint (its real position, which
+        # it replays from). DETECT acks a message only once its checkpoint covers it, so the
+        # checkpoint is never behind what the durable has acknowledged and the ratio is at
+        # least its exposure in normal operation: a message evicted before the checkpoint
+        # covers it cannot be replayed either.
+        #
+        # `max by`: every replica measures the same durable. It needs a running pod of the
+        # reading service, like the other per-durable rules.
+        - alert: JetStreamDurableUnreadNearFull
+          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", namespace="{{ $ns }}"}) > 0.8
+          for: 5m
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "A JetStream stream is near its ceiling"
-            description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its byte ceiling for 10m; the oldest messages will be discarded once it is full, and any consumer that has not read them by then will never see them (JetStreamDurableLostUnread). On inbound-events and resolved-events this is normal on a busy instance, because they keep a week of events their consumers have already read; what matters there is the unread backlog, which JetStreamUnreadBacklogNearFull watches."
+            summary: "A consumer is close to losing messages it has not read"
+            description: "Durable {{ "{{ $labels.durable }}" }} has not yet read {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. Once its unread backlog reaches the stream's ceiling, the stream discards its oldest messages to make room, and this consumer will never process the ones it had not reached (JetStreamDurableLostUnread). New messages are still accepted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
         # A gating consumer's UNREAD backlog is over 80% of what its stream can hold. At
         # 90% the stream's writers refuse new events (JetStreamIngestBackpressureEngaged).
         # Exported by every service that WRITES the stream, for the consumers that gate it
@@ -159,7 +236,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "A consumer's unread backlog is near its stream's ceiling"
-            description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. At 90% the platform stops accepting new events on that stream, for every tenant, rather than discard events this consumer has not read. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
+            description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. At 90% the platform stops accepting new events on that stream, for every tenant, rather than discard events this consumer has not read: HTTP devices are answered 503 with a Retry-After, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
         # The gate is closed: the stream's writers are refusing new events. Evaluated at
         # scrape time, so it also reads 1 while a writer cannot measure the backlog (a gate
         # that cannot measure refuses). `max by`: any writer pod refusing is an outage.
@@ -222,5 +299,5 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "A consumer ran out of delivery attempts because it could not save its checkpoint"
-            description: "{{`{{ $value }}`}} message(s) on {{`{{ $labels.stream }}`}} ran out of delivery attempts to {{`{{ $labels.job }}`}} in the last 15 minutes. This consumer re-reads the stream from its own saved checkpoint, so nothing has been lost and no dead letter is written, but its checkpoint has not been saved for longer than the broker keeps redelivering: look for the service's database or broker connection failing. While it is running it keeps what it has read in memory and saves it when the checkpoint succeeds. If it restarts first, it re-reads the stream from the last saved checkpoint, and a message the stream has already discarded (JetStreamStreamNearFull) cannot be re-read."
+            description: "{{`{{ $value }}`}} message(s) on {{`{{ $labels.stream }}`}} ran out of delivery attempts to {{`{{ $labels.job }}`}} in the last 15 minutes. This consumer re-reads the stream from its own saved checkpoint, so nothing has been lost and no dead letter is written, but its checkpoint has not been saved for longer than the broker keeps redelivering: look for the service's database or broker connection failing. While it is running it keeps what it has read in memory and saves it when the checkpoint succeeds. If it restarts first, it re-reads the stream from the last saved checkpoint, and a message the stream has already discarded cannot be re-read (JetStreamDurableUnreadNearFull warns before that)."
 {{- end }}

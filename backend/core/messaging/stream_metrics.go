@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/streams"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -18,20 +19,27 @@ import (
 const (
 	// streamMetricsSampleInterval is how often each stream's fill is sampled. The
 	// stream ceilings (ADR-023) evict the oldest messages via DiscardOld when a
-	// stream fills, which is otherwise silent; this sampling surfaces the fill as a
-	// gauge and an edge-triggered warning so an operator sees a backlog building
-	// BEFORE data is dropped. A 30s cadence is cheap (one StreamInfo per stream, one
-	// ConsumerInfo per reader durable) and fast enough to catch a backlog well before
+	// stream fills, which is otherwise silent; this sampling surfaces the fill, and each
+	// reader durable's unread backlog against it, as gauges so an operator sees a
+	// backlog building BEFORE data is dropped. A 30s cadence is cheap (one StreamInfo
+	// per stream, one ConsumerInfo per reader durable) and fast enough to catch a backlog well before
 	// the 7-day/size window closes.
 	streamMetricsSampleInterval = 30 * time.Second
 
 	// streamNearFullThreshold is the fill fraction (bytes or messages, whichever is
-	// higher) at which a stream is warned as near-full.
+	// higher) at which a stream is logged as near-full.
 	streamNearFullThreshold = 0.8
+
+	// nearFullMsg and nearFullSinkMsg are the edge-triggered near-full lines (see sample).
+	nearFullMsg = "JetStream stream is near its size ceiling; once full it discards its oldest " +
+		"messages, read or not (jetstream_consumer_unread_ratio says whether a consumer has not read them)"
+	nearFullSinkMsg = "JetStream stream that holds records for an operator is near its size " +
+		"ceiling; once full it discards its oldest records (DiscardOld), which no service processes"
 )
 
 // streamMetrics exposes per-stream JetStream fill as Prometheus gauges and logs an
-// edge-triggered warning when a stream nears its ceiling. Stream names are a small,
+// edge-triggered line when a stream nears its ceiling (a warning for a declared sink,
+// an info for any other stream; see sample). Stream names are a small,
 // known, platform-controlled set (one per suffix), so the {stream} label is bounded
 // — unlike a tenant-derived label, it is not a cardinality risk.
 type streamMetrics struct {
@@ -39,6 +47,23 @@ type streamMetrics struct {
 	limitBytes *prometheus.GaugeVec
 	usedMsgs   *prometheus.GaugeVec
 	limitMsgs  *prometheus.GaugeVec
+
+	// streamSink is 1 for a stream declared as holding records for an operator rather than
+	// work for a service (core/streams: DeadLetterKind NotLettered — the failed-message
+	// records, the dead letters and the max-delivery capture), and 0 for every other stream,
+	// set beside the fill gauges above. It exists for the one alert that may read
+	// a stream's FILL as a warning of loss, JetStreamStreamNearFull: every stream keeps a
+	// week of history, so a stream services read sits at its ceiling full of messages they
+	// have already read, and its fill says nothing. A sink's fill is different: nothing
+	// processes what it holds, so near its ceiling it is about to discard records nobody
+	// has looked at.
+	//
+	// 🔑 A DECLARATION, NOT A LIST. It is read from the stream's declared DeadLetterKind, the
+	// field that already says "this stream is itself a sink, or a report", so a new sink is
+	// covered by the declaration that has to be written for it anyway, and a stream whose
+	// readers are merely not deployed (resolved-events on an ingest-only install) is never
+	// mistaken for one.
+	streamSink *prometheus.GaugeVec
 
 	// The replication triple (ADR-020 A0). These exist because every other check
 	// that an instance is highly available is made at INSTALL time — a rendered
@@ -92,7 +117,7 @@ type streamMetrics struct {
 	maxDeliveryRecords *prometheus.CounterVec
 
 	// warned tracks whether a stream is currently above the near-full threshold, so
-	// the warning fires once on the way up (and an info once on the way back down)
+	// the near-full line fires once on the way up (and an info once on the way back down)
 	// rather than every sample. Accessed only from the single sampler goroutine.
 	warned map[string]bool
 
@@ -140,6 +165,25 @@ type streamMetrics struct {
 	// consumer nobody is measuring. Absent means "not measured", never "nothing waiting".
 	consumerPending    *prometheus.GaugeVec
 	consumerAckPending *prometheus.GaugeVec
+
+	// consumerUnreadRatio is each reader durable's unread backlog (pending plus
+	// unacknowledged) over what its stream can hold, computed by unreadRatio — the SAME
+	// function the backpressure gate decides on, so the warning and the refusal can never
+	// disagree about what "unread" means. It exists because a stream's fill cannot say it:
+	// every stream is Limits retention with a week of history, so a busy one sits near its
+	// ceiling full of messages every consumer has ALREADY read, and that loses nothing.
+	// What loses something is a consumer whose UNREAD backlog reaches the ceiling, because
+	// DiscardOld then evicts messages it has not reached.
+	//
+	// NOT exported for a durable that gates its stream (streams.Stream.BackpressureReaders):
+	// for those the stream refuses writers before it discards, and the writers already
+	// export the same quantity as jetstream_backpressure_unread_ratio, which is what the
+	// refusal is decided on. Absent there means "measured elsewhere", and the two alerts
+	// stay disjoint by construction instead of by a PromQL exclusion.
+	//
+	// Absent until the first sample and withdrawn with the backlog pair (forgetBacklog), for
+	// the reason given on consumerPending.
+	consumerUnreadRatio *prometheus.GaugeVec
 
 	// durables holds each durable's previous sample, which the counter is the difference
 	// against. Accessed only from the single sampler goroutine, like warned.
@@ -217,6 +261,9 @@ var publishBuckets = []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 
 // durableRef names one durable consumer on one stream: a reader this service created.
 type durableRef struct {
 	stream, durable string
+	// gates is set when this durable's unread backlog makes its stream refuse writers
+	// (gatesItsStream); its unread ratio is then the writers' to export, not the reader's.
+	gates bool
 }
 
 // durableSample is what the unread counter differences between two samples: the
@@ -234,6 +281,10 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		limitBytes: ms.NewGaugeVec("jetstream_stream_limit_bytes", "Configured MaxBytes ceiling for a JetStream stream.", []string{"stream"}),
 		usedMsgs:   ms.NewGaugeVec("jetstream_stream_used_messages", "Current message count in a JetStream stream.", []string{"stream"}),
 		limitMsgs:  ms.NewGaugeVec("jetstream_stream_limit_messages", "Configured MaxMsgs ceiling for a JetStream stream.", []string{"stream"}),
+		streamSink: ms.NewGaugeVec("jetstream_stream_sink",
+			"1 for a stream that holds records for an operator rather than messages for a service to process "+
+				"(failed-message records, dead letters, max-delivery notices), 0 for any other stream.",
+			[]string{"stream"}),
 		replicasDesired: ms.NewGaugeVec("jetstream_replicas_desired",
 			"Replica count this instance is configured for (instance.config.infrastructure.nats.streamReplicas).",
 			[]string{"stream"}),
@@ -262,6 +313,13 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		consumerAckPending: ms.NewGaugeVec("jetstream_consumer_ack_pending_messages",
 			"Messages handed to this durable and not yet acknowledged, as of the last 30 s sample. "+
 				"Absent until the first sample, and while the durable cannot be read.",
+			[]string{"stream", "durable"}),
+		consumerUnreadRatio: ms.NewGaugeVec("jetstream_consumer_unread_ratio",
+			"This durable's unread backlog (pending plus unacknowledged) over what its stream can hold, in "+
+				"messages or bytes, whichever limit is tighter, as of the last 30 s sample. At 1 the stream "+
+				"discards messages it has not read. Not exported for a durable whose backlog makes the stream "+
+				"refuse writers instead (see jetstream_backpressure_unread_ratio). Absent until the first "+
+				"sample, and while the durable cannot be read.",
 			[]string{"stream", "durable"}),
 		heldPastAckWait: ms.NewCounterVec("reader_held_past_ack_wait_total",
 			"Messages a capacity-bounded reader held past their acknowledgement window, so the broker "+
@@ -626,19 +684,18 @@ func sampleFailureLog(ctx context.Context) *zerolog.Event {
 }
 
 // sample polls each stream and KV bucket once and updates its gauges, emitting an
-// edge-triggered warning when a stream crosses the near-full threshold. A
+// edge-triggered line when a stream crosses the near-full threshold. A
 // per-stream StreamInfo error is logged at warn and skipped: it does not stall the
 // sampler, but a sample that silently stops arriving hides exactly the broker trouble
 // these gauges exist to show. A failure caused by the pass being cancelled (shutdown)
 // stays at debug, so a rollout does not print a warning per stream.
 //
 // Buckets deliberately get the replication triple and NOT the fill gauges, even
-// though a KV bucket is a stream and its fill is just as real. The reason is the
-// alert built on those gauges: JetStreamStreamNearFull selects `max by (stream)`
-// over every stream EVERY service reports, with no name filter. A
-// Cache bucket is created DiscardNew and is SUPPOSED to sit near its ceiling —
-// that is a bounded cache working correctly, not a backlog — so folding buckets
-// into the fill gauges would fire a warning-severity alert as designed behaviour.
+// though a KV bucket is a stream and its fill is just as real. A Cache bucket is
+// created DiscardNew and is SUPPOSED to sit near its ceiling — that is a bounded cache
+// working correctly, not a backlog — so its fill is exactly the history-blind number
+// the alerts were moved off, and the stream-fill series (read by dashboards, and by
+// JetStreamStreamNearFull for declared sinks) would show every bounded cache as full.
 // Bucket disk is already accounted for up front by the ADR-023 reservation, which
 // is the right place for it. Replication is different: it is a correctness
 // property, it is the same property for a bucket as for a stream, and for
@@ -659,11 +716,17 @@ func sampleFailureLog(ctx context.Context) *zerolog.Event {
 // the loop returns before touching them. That is harmless where it happens -- the pass
 // is cancelled only when the service is stopping, and the pod's series go with it.
 //
+// sinks is the subset of names declared as sinks (isSinkStream). Each reads 1 on the
+// streamSink marker (every other stream 0), and its near-full log line is a warning, because nothing processes what a sink
+// holds, so near its ceiling it is about to discard records nobody has looked at. Any
+// other stream near its ceiling is normally full of history its readers have already
+// read, which is why its line is only an info.
+//
 // durables are the readers this service created. Each is sampled right after its
 // stream, against that stream's StreamInfo — the same snapshot the fill gauges read —
 // so a durable whose stream could not be read this pass is skipped with it.
-func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, names, buckets []string,
-	durables []durableRef, desired int, clustered bool) {
+func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, names []string, sinks map[string]bool,
+	buckets []string, durables []durableRef, desired int, clustered bool) {
 	m.brokerClustered.Set(boolGauge(clustered))
 	for _, name := range buckets {
 		if ctx.Err() != nil {
@@ -699,15 +762,20 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 		m.usedMsgs.WithLabelValues(name).Set(float64(info.State.Msgs))
 		m.limitBytes.WithLabelValues(name).Set(float64(info.Config.MaxBytes))
 		m.limitMsgs.WithLabelValues(name).Set(float64(info.Config.MaxMsgs))
+		m.streamSink.WithLabelValues(name).Set(boolGauge(sinks[name]))
 
 		pct := streamFillRatio(info)
 		switch {
 		case pct >= streamNearFullThreshold && !m.warned[name]:
 			m.warned[name] = true
-			log.Warn().Str("stream", name).Float64("utilization", pct).
+			ev, msg := log.Info(), nearFullMsg
+			if sinks[name] {
+				ev, msg = log.Warn(), nearFullSinkMsg
+			}
+			ev.Str("stream", name).Float64("utilization", pct).
 				Uint64("bytes", info.State.Bytes).Int64("maxBytes", info.Config.MaxBytes).
 				Uint64("msgs", info.State.Msgs).Int64("maxMsgs", info.Config.MaxMsgs).
-				Msg("JetStream stream is near its size ceiling; the oldest messages will be evicted (DiscardOld) once it is full")
+				Msg(msg)
 		case pct < streamNearFullThreshold && m.warned[name]:
 			m.warned[name] = false
 			log.Info().Str("stream", name).Float64("utilization", pct).
@@ -793,6 +861,9 @@ func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamCont
 	}
 	m.consumerPending.WithLabelValues(d.stream, d.durable).Set(float64(ci.NumPending))
 	m.consumerAckPending.WithLabelValues(d.stream, d.durable).Set(float64(ci.NumAckPending))
+	if !d.gates {
+		m.consumerUnreadRatio.WithLabelValues(d.stream, d.durable).Set(unreadRatio(info.State, info.Config, ci))
+	}
 	cur := durableSample{
 		deliveredStream:   ci.Delivered.Stream,
 		deliveredConsumer: ci.Delivered.Consumer,
@@ -818,10 +889,19 @@ func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamCont
 	m.unreadGap.WithLabelValues(d.stream, d.durable).Set(float64(gap))
 }
 
-// forgetBacklog withdraws a durable's backlog series: it was not measured this pass.
+// forgetBacklog withdraws a durable's backlog series (pending, ack pending, unread
+// ratio): it was not measured this pass.
 func (m *streamMetrics) forgetBacklog(d durableRef) {
 	m.consumerPending.DeleteLabelValues(d.stream, d.durable)
 	m.consumerAckPending.DeleteLabelValues(d.stream, d.durable)
+	m.consumerUnreadRatio.DeleteLabelValues(d.stream, d.durable)
+}
+
+// isSinkStream reports whether suffix's stream is declared to hold records for an operator
+// rather than work for a service: its DeadLetterKind is NotLettered, which core/streams
+// documents as "the stream is itself a sink, or a report". See streamSink.
+func isSinkStream(suffix string) bool {
+	return streams.DeadLetterKindFor(suffix) == streams.NotLettered
 }
 
 // unreadGap is how many sequences were removed between a durable's cursor and the
