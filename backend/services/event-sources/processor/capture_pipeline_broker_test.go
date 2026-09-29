@@ -85,7 +85,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	src := NewGatewayJetStreamSource(nil, "gw-e2e", NewJsonDecoder(map[string]string{}, 0),
+	src := NewGatewayJetStreamSource(nil, "gw-e2e", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {}, benchInboundMessage,
 		func(_ string, _ string, _ []byte, err error) error {
 			t.Errorf("unexpected failed-decode: %v", err)

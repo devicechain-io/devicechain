@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventlimit"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -63,7 +64,7 @@ func TestIngestLimiter_SampleStageChargesCountAndCounts(t *testing.T) {
 	assert.Equal(t, float64(30), counterValue(shed), "no-op batches charged nothing")
 }
 
-// The sample burst is FLOORED at the per-Notify cap, so a single compliant batch up to the cap
+// The sample burst is FLOORED at the per-event limit, so a single charge up to the limit
 // always fits — the AllowN(n>burst) forever-shed edge is closed. A batch the floored limiter
 // admits is shed by an unfloored (floor 0) one built from the same tiny ceiling.
 func TestIngestLimiter_SampleBurstFlooredAtCap(t *testing.T) {
@@ -124,4 +125,24 @@ func TestIngestLimiter_NilMetricsSafe(t *testing.T) {
 	assert.True(t, l.AllowMessage("acme"))
 	assert.False(t, l.AllowMessage("acme"), "shed with nil MessagesShed does not panic")
 	assert.False(t, l.AllowSamples("acme", 1_000_000), "shed with nil SamplesShed does not panic")
+}
+
+// 🔴 A MESSAGE LARGER THAN THE SAMPLE BURST IS CHARGED EVENT BY EVENT. At the smallest ceiling
+// (burst 1, so the sample burst is the 256 floor) one charge of 600 could never fit and would
+// be refused for ever; charged per event, the first 256 are admitted and the other 344 are
+// counted as shed. The admitted count is a whole number of events, so the prefix the caller
+// ingests splits into exactly the events that were charged.
+func TestIngestLimiter_AdmitSamplesChargesPerEvent(t *testing.T) {
+	shed := counter()
+	l := NewIngestLimiter(flatResolve(1), DefaultSamplesPerMessage, eventlimit.MaxReadingsPerEvent,
+		IngestLimiterMetrics{SamplesShed: shed}, nil)
+	assert.Equal(t, 256, l.AdmitSamples("acme", 600), "the budget admits one event's worth")
+	assert.Equal(t, float64(344), counterValue(shed), "every sample not admitted is counted, once")
+	assert.Equal(t, 0, l.AdmitSamples("acme", 10), "the bucket is now empty")
+	assert.Equal(t, float64(354), counterValue(shed))
+
+	roomy := NewIngestLimiter(flatResolve(1000), DefaultSamplesPerMessage, eventlimit.MaxReadingsPerEvent,
+		IngestLimiterMetrics{}, nil)
+	assert.Equal(t, 600, roomy.AdmitSamples("acme", 600), "a budget with room admits the whole message")
+	assert.Equal(t, 0, roomy.AdmitSamples("acme", 0), "nothing to charge admits nothing")
 }

@@ -276,7 +276,7 @@ func startPipelineCaseWith(t *testing.T, w *heldWriter, n, numDelivered int, fai
 			`"payload":{"entries":[{"measurements":{"t":"%d"}}]}}`, i)
 		pc.reader.msgs = append(pc.reader.msgs, capturedMsg(captureSubject, body, numDelivered, uint64(i+1), ack))
 	}
-	pc.source = NewGatewayJetStreamSource(nil, "gw-pipeline", NewJsonDecoder(map[string]string{}, 0),
+	pc.source = NewGatewayJetStreamSource(nil, "gw-pipeline", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		build,
 		func(string, string, []byte, error) error {
@@ -375,7 +375,7 @@ func TestAHeldPublishThatFailsLeavesItsMessageUnacked(t *testing.T) {
 }
 
 func TestStartingWithoutAnInboundWriterFailsLoudly(t *testing.T) {
-	source := NewGatewayJetStreamSource(nil, "gw-no-writer", NewJsonDecoder(map[string]string{}, 0),
+	source := NewGatewayJetStreamSource(nil, "gw-no-writer", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
 			return nil, messaging.Message{}, false
@@ -654,7 +654,7 @@ func TestStopTellsTheWriterItIsDrainingWhileTheReadLoopIsBlocked(t *testing.T) {
 // A source that was never started — the shutdown after a startup failure that came before
 // its reader and writer were wired — stops cleanly, without touching the writer it never got.
 func TestStoppingASourceThatNeverStartedDoesNothing(t *testing.T) {
-	source := NewGatewayJetStreamSource(nil, "gw-never-started", NewJsonDecoder(map[string]string{}, 0),
+	source := NewGatewayJetStreamSource(nil, "gw-never-started", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
 			return nil, messaging.Message{}, false

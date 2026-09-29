@@ -260,30 +260,33 @@ func TestBaseValueResetMidPack(t *testing.T) {
 	assert.Equal(t, 203.0, s[2].Value) // inherits 200
 }
 
-// A pack with more numeric records than MaxSamplesPerNotify is capped at the cap, with the
-// overflow reported as the truncation count — the per-message DoS bound that keeps one Notify
-// from flooding the store and that floors the sample limiter's burst.
-func TestSamplesCappedAtMaxPerNotify(t *testing.T) {
-	// Build a pack of cap+50 numeric records under one base name.
+// senmlPack builds one SenML-JSON pack of n numeric records /3303/0/0 … /3303/0/(n-1),
+// record i carrying the value i.
+func senmlPack(n int) []byte {
 	var b strings.Builder
 	b.WriteString(`[{"bn":"/3303/0/","n":"0","v":0}`)
-	for i := 1; i < MaxSamplesPerNotify+50; i++ {
+	for i := 1; i < n; i++ {
 		fmt.Fprintf(&b, `,{"n":"%d","v":%d}`, i, i)
 	}
 	b.WriteString(`]`)
-
-	samples, skips, err := Samples(message.AppSenmlJSON, []byte(b.String()), fixedNow)
-	require.NoError(t, err)
-	assert.Len(t, samples, MaxSamplesPerNotify, "output capped at the per-Notify maximum")
-	assert.Equal(t, 50, skips.Truncated, "the 50 records past the cap are reported dropped")
-	assert.Equal(t, 50, skips.Total(), "a truncated pack of otherwise-good records skips nothing else")
-	// The kept samples are the FIRST cap records, in order (the tail is what is dropped).
-	assert.Equal(t, "/3303/0/0", samples[0].Name)
-	assert.Equal(t, float64(MaxSamplesPerNotify-1), samples[MaxSamplesPerNotify-1].Value)
+	return []byte(b.String())
 }
 
-// A pack at or below the cap is never truncated (the common case): truncated is 0.
-func TestSamplesNotTruncatedUnderCap(t *testing.T) {
+// 🔴 A NOTIFY IS DECODED WHOLE. The decode used to keep the first 256 numeric records and
+// drop the rest, counted; the shared emitter now splits a large batch into events of at most
+// 256 readings, so nothing is cut here. The per-tenant sample budget still bounds volume.
+func TestA300SampleNotifyKeepsEverySample(t *testing.T) {
+	samples, skips, err := Samples(message.AppSenmlJSON, senmlPack(300), fixedNow)
+	require.NoError(t, err)
+	require.Equal(t, 300, len(samples), "every numeric record becomes a sample")
+	assert.Equal(t, 0, skips.Total(), "a pack of good records skips nothing")
+	assert.Equal(t, "/3303/0/0", samples[0].Name)
+	assert.Equal(t, "/3303/0/299", samples[299].Name, "the tail is kept, in order")
+	assert.Equal(t, 299.0, samples[299].Value)
+}
+
+// A small pack of good records (the common case) skips nothing.
+func TestASmallPackSkipsNothing(t *testing.T) {
 	payload := []byte(`[{"bn":"/3303/0/","n":"5700","v":21.5},{"n":"5601","v":20.1}]`)
 	samples, skips, err := Samples(message.AppSenmlJSON, payload, fixedNow)
 	require.NoError(t, err)

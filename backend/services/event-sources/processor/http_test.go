@@ -50,7 +50,7 @@ func newTestHttpSourceAdmitting(t *testing.T, allow RateGate, admit func(string)
 	dec := &capturedDecode{}
 	fail := &capturedFailure{}
 	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", ingest,
-		NewJsonDecoder(map[string]string{}, 0),
+		NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}, captureSeq uint64) error {
 			dec.called = true
@@ -202,7 +202,7 @@ func TestHttpEventSource_WrongMethod(t *testing.T) {
 func TestNewHttpEventSource_Port(t *testing.T) {
 	newSource := func(cfg map[string]string) (*HttpEventSource, error) {
 		return NewHttpEventSource("http-test", cfg, "inst-1", config.HttpIngest{},
-			NewJsonDecoder(map[string]string{}, 0),
+			NewJsonDecoder(map[string]string{}),
 			func(string, []byte) {}, nil, nil, nil, admitAll, nil)
 	}
 

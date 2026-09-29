@@ -4016,6 +4016,40 @@ escrito por uno anterior: `dcctl bootstrap` y `dcctl upgrade` se detienen y lo d
 datos relacional compartida y sus respaldos en el almacén interno, y dice que lo hizo. Volver a
 ejecutar install ya es el primer paso de toda actualización.
 
+#### Un evento lleva como máximo 256 lecturas, y las pasarelas dividen los mensajes mayores
+
+**Un evento lleva ahora como máximo 256 lecturas, en todos los transportes, y el límite no es
+configurable.** Una lectura es un valor de métrica de una medición, o una entrada de ubicación o
+de alerta. Antes de esta versión, el evento JSON de dispositivo en HTTP y MQTT admitía hasta 1000
+lecturas por defecto, y un operador podía subir ese valor sin límite superior, o bajarlo.
+
+**Antes de actualizar,** puedes aplicar el límite nuevo por adelantado: establece
+`maxReadingsPerMessage: 256` en la configuración de event-sources de tu versión actual y vigila
+`total_msg_too_many_readings`. Cada mensaje que cuente es uno que esta versión rechaza, así que
+cambia el firmware de esos dispositivos para que envíen como máximo 256 lecturas por mensaje.
+
+- **HTTP y MQTT:** un mensaje con más de 256 lecturas se rechaza entero, nunca se recorta. HTTP
+  responde `400`, indicando el número de lecturas y el límite. En MQTT no se avisa al
+  dispositivo, porque el broker confirma antes de decodificar. El rechazo se cuenta en
+  `total_msg_too_many_readings` y el mensaje va al flujo de decodificación fallida. Un
+  dispositivo que agrupe más de 256 lecturas debe repartirlas entre varios mensajes. Los
+  mensajes capturados antes de la actualización y decodificados después, incluidos los que sigan
+  en la cola de un agente de borde, se evalúan con el límite nuevo.
+- **El ajuste `maxReadingsPerMessage` queda retirado.** Si tu configuración de event-sources aún
+  lo incluye, el servicio arranca, registra un aviso y lo ignora. Un valor que hubieras fijado por
+  debajo de 256 tampoco se respeta ya: el límite es 256. Elimina la clave.
+- **Sparkplug B:** un mensaje con más de 256 valores de métrica se convertía en un solo evento.
+  Ahora se convierte en eventos consecutivos de como máximo 256, cada valor con su propia marca de
+  tiempo. Las consultas que cuentan *eventos* verán más en los mensajes Sparkplug anchos; las
+  lecturas almacenadas son las mismas. Las reglas ven cada evento por separado, así que una regla
+  de tiempo de retención o de ausencia puede dispararse ahora entre dos eventos de un mismo
+  mensaje ancho.
+- **LwM2M:** un Notify con más de 256 valores numéricos conservaba los 256 primeros y descartaba
+  el resto. Ahora se almacena como varios eventos, y el presupuesto de muestras del inquilino se
+  cobra evento a evento: un Notify mayor de lo que el presupuesto puede admitir de una vez conserva
+  los eventos que admite, y el resto se cuenta en `ingest_samples_shed_total`. Se elimina la
+  métrica `notify_samples_truncated_total`. Quítala de cualquier panel o alerta.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

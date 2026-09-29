@@ -40,6 +40,7 @@ DeviceChain **Observes** the device's *sensor* object instances and decodes each
 - Observation is capped at 32 instances per registration.
 - Neither the range nor the cap is a setting.
 - Management objects (Security, Server, Device and the rest of the OMA set) are never observed.
+- A Notify with more than 256 numeric values is stored as several events of at most 256 each, rather than cut short. The tenant's sample budget still applies: a Notify larger than what the budget can admit at once keeps the events it admits, and the rest are shed and counted in `ingest_samples_shed_total`.
 
 Only **SenML-JSON** notifications are decoded today, and you should size that up front: a conformant LwM2M 1.0-only client cannot produce them. SenML arrived in LwM2M 1.1, so a 1.0 client correctly answers the Observe with `4.06 Not Acceptable`. Such a device still registers, drives presence and accepts commands, but reports **no telemetry at all**. This is the single largest functional gap in LwM2M support today; decoding the older TLV format is the follow-up that closes it. Both refusals are counted, so an operator can see it happening rather than infer it from missing data.
 

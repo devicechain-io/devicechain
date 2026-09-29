@@ -86,18 +86,27 @@ func TestEveryEntryTimeIsFloored(t *testing.T) {
 	}
 }
 
-// TestTheEnvelopeGuardStillHoldsForAnEmptyBatch is the counterweight to the per-entry
-// floor: with every entry floored, the only way `latest` can still be zero is a batch with
-// no samples at all, and the envelope guard is what covers it.
-func TestTheEnvelopeGuardStillHoldsForAnEmptyBatch(t *testing.T) {
+// TestTheEnvelopeGuardStillHoldsForATimelessBatch is the counterweight to the per-entry
+// floor: `latest` is raised only by a positive sample time, so a batch in which NO sample
+// carries one is dated by the envelope guard, at receipt — never at 1970.
+//
+// An EMPTY batch no longer reaches the guard: it writes nothing at all, because an event with
+// no entries stores nothing and would only be a message on the stream saying so. Neither
+// ingest path hands Emit an empty batch; this pins that one would not be published.
+func TestTheEnvelopeGuardStillHoldsForATimelessBatch(t *testing.T) {
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "lw", true)
-	require.NoError(t, e.Emit(context.Background(), "acme", "lwm2m", "dev-1", nil))
-	require.Len(t, w.msgs, 1)
+	require.NoError(t, e.Emit(context.Background(), "acme", "lwm2m", "dev-1",
+		[]Sample{{Name: "/3303/0/5700", Value: 1, Time: 0}, {Name: "/3303/0/5701", Value: 2, Time: -5}}))
+	require.Equal(t, 1, len(w.msgs))
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
 	require.NoError(t, err)
 	assert.Equal(t, fixedNow().UnixMilli(), ev.OccurredTime.UnixMilli())
+
+	empty := &fakeWriter{}
+	require.NoError(t, NewEmitter(empty, fixedNow, "lw", true).Emit(context.Background(), "acme", "lwm2m", "dev-1", nil))
+	assert.Equal(t, 0, len(empty.msgs), "an empty batch publishes nothing")
 }
 
 // TestFlooringAnEntryDoesNotMoveTheDedupID. The floor repairs what is STORED and must not

@@ -53,6 +53,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventlimit"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -356,8 +357,6 @@ func buildMetrics() {
 			"Observe requests refused or failed (dominant cause: a conformant LwM2M 1.0-only client answering the SenML Observe with 4.06)."),
 		TerminalNotifications: Microservice.NewCounter("observe_terminal_notifications_total",
 			"Notifications that terminated an observation (RFC 7641, e.g. 4.04 after the observed instance was deleted)."),
-		SamplesTruncated: Microservice.NewCounter("notify_samples_truncated_total",
-			"Samples dropped from a single Notify past the per-message cap (decode.MaxSamplesPerNotify)."),
 		RecordsNonNumeric: Microservice.NewCounter("notify_records_non_numeric_total",
 			"SenML records skipped for carrying no numeric value (boolean/string/opaque readings, or sum-only). "+
 				"Expected for a fleet whose objects are not measurements; it is what tells that apart from silence."),
@@ -644,9 +643,10 @@ func buildIngestLimiter(client *svcclient.Client, infra mscfg.InfrastructureConf
 			Msg("Per-tenant LwM2M ingest overrides enabled (ADR-023, fail-open to platform default).")
 	}
 	// The sample budget is the message ceiling scaled by DefaultSamplesPerMessage, with its burst
-	// floored at decode.MaxSamplesPerNotify — the SAME symbol the decoder caps a single Notify at,
-	// so a compliant batch always fits the bucket and is shed only on sustained rate.
-	return adapter.NewIngestLimiter(resolve, adapter.DefaultSamplesPerMessage, decode.MaxSamplesPerNotify, limiterMetrics, unresolved)
+	// floored at the platform's per-event limit — the SAME number the emitter splits a Notify
+	// at, and the most AdmitSamples charges at once — so every charge fits an idle bucket and
+	// a Notify is shed only on sustained rate.
+	return adapter.NewIngestLimiter(resolve, adapter.DefaultSamplesPerMessage, eventlimit.MaxReadingsPerEvent, limiterMetrics, unresolved)
 }
 
 // assertedActiveReader is the device-state read the reconstruction pass needs (*adapter.Reconciler

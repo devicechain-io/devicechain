@@ -83,11 +83,11 @@ func TestHttpAcceptedEventCarriesNoRetryAfter(t *testing.T) {
 // that is refusing, and nothing at the call site would show it.
 func TestSourcesRefuseToBeBuiltWithoutAdmit(t *testing.T) {
 	_, err := NewHttpEventSource("h", map[string]string{}, "inst-1", config.HttpIngest{},
-		NewJsonDecoder(map[string]string{}, 0), func(string, []byte) {}, nil, nil, nil, nil, nil)
+		NewJsonDecoder(map[string]string{}), func(string, []byte) {}, nil, nil, nil, nil, nil)
 	require.ErrorIs(t, err, errNoAdmit)
 
 	_, err = NewMqttEventSource("m", map[string]string{"host": "h", "port": "1883", "topic": "t"},
-		nil, "", "", NewJsonDecoder(map[string]string{}, 0),
+		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },

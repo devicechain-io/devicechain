@@ -99,12 +99,12 @@ func (r *recordingIngester) batchCount() int {
 // report WHY (a refused Observe, an undecodable Notify, an unknown content format) instead of a bare
 // timeout — a failed Block2 reassembly is otherwise indistinguishable from "the client never sent it".
 type obsMetrics struct {
-	notifies, decodeFail, unknownCF, refused, terminal, truncated, dropped prometheus.Counter
+	notifies, decodeFail, unknownCF, refused, terminal, dropped prometheus.Counter
 }
 
 func newObsMetrics() *obsMetrics {
 	c := func(n string) prometheus.Counter { return prometheus.NewCounter(prometheus.CounterOpts{Name: n}) }
-	return &obsMetrics{c("notifies"), c("decode_fail"), c("unknown_cf"), c("refused"), c("terminal"), c("truncated"), c("dropped")}
+	return &obsMetrics{c("notifies"), c("decode_fail"), c("unknown_cf"), c("refused"), c("terminal"), c("dropped")}
 }
 
 func (m *obsMetrics) manager() observe.Metrics {
@@ -114,15 +114,14 @@ func (m *obsMetrics) manager() observe.Metrics {
 		UnknownContentFormat:    m.unknownCF,
 		ObserveEstablishRefused: m.refused,
 		TerminalNotifications:   m.terminal,
-		SamplesTruncated:        m.truncated,
 		IngestDropped:           m.dropped,
 	}
 }
 
 func (m *obsMetrics) dump() string {
-	return fmt.Sprintf("observe metrics: notifies=%.0f decodeFail=%.0f unknownCF=%.0f observeRefused=%.0f terminal=%.0f truncated=%.0f ingestDropped=%.0f",
+	return fmt.Sprintf("observe metrics: notifies=%.0f decodeFail=%.0f unknownCF=%.0f observeRefused=%.0f terminal=%.0f ingestDropped=%.0f",
 		testutil.ToFloat64(m.notifies), testutil.ToFloat64(m.decodeFail), testutil.ToFloat64(m.unknownCF),
-		testutil.ToFloat64(m.refused), testutil.ToFloat64(m.terminal), testutil.ToFloat64(m.truncated), testutil.ToFloat64(m.dropped))
+		testutil.ToFloat64(m.refused), testutil.ToFloat64(m.terminal), testutil.ToFloat64(m.dropped))
 }
 
 // interopHarness is one in-process server plus the recording seams a scenario asserts against.
@@ -375,7 +374,7 @@ func TestLeshanInterop(t *testing.T) {
 	// resources and forces a small CoAP block size, so reading /3441/0 is a ~2KB SenML pack split into
 	// ≥8 Block2 blocks. It also fires a change so a blockwise NOTIFICATION is reassembled, not just the
 	// initial response. Proves go-coap reassembles a Leshan-fragmented notify and our decoder reads the
-	// whole pack with correct content. 100 < the 256 MaxSamplesPerNotify cap, so nothing is truncated.
+	// whole pack with correct content. 100 is under the 256-reading per-event limit, so it is one event.
 	t.Run("observe_block2", func(t *testing.T) {
 		const n = 100
 		h := startInteropServer(t, Options{})

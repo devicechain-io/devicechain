@@ -34,18 +34,6 @@ var ErrUnsupportedSenmlVersion = errors.New("lwm2m: unsupported SenML version")
 // defaults to 10 and SHOULD be omitted when it equals the default, so an absent bver is 10.
 const senmlVersion = 10
 
-// MaxSamplesPerNotify bounds how many measurement samples one Notify/Send payload may yield.
-// A single SenML pack is otherwise limited only by the CoAP (blockwise) body size, so one
-// message could carry hundreds of samples and flood the time-series store past a per-message
-// rate gate — the DoS shape the per-tenant sample budget (ADR-075 L2c) exists to bound. This
-// caps a SINGLE message's contribution: samples past it are dropped and counted (mirroring the
-// MaxObservationsPerRegistration cap on a registration's object list). It is deliberately
-// generous — observation is at object-instance granularity, so a real IPSO Notify is a handful
-// of resources — so a compliant device never trips it. The caller passes THIS symbol as the
-// sample limiter's burst floor, so a batch no larger than the cap always fits the bucket and is
-// shed on sustained rate, never permanently on the burst edge.
-const MaxSamplesPerNotify = 256
-
 // absoluteTimeThreshold is RFC 8428 §4.5.3's boundary: a RESOLVED time (bt+t) at or above
 // 2^28 is an absolute time in seconds since the Unix epoch; below it is relative to "now".
 // We stamp receipt time for the relative case rather than doing now-relative arithmetic —
@@ -74,10 +62,6 @@ const maxAbsoluteTimeSeconds = 1 << 40
 // The counts are per RECORD, not per sample: one record yields at most one sample, so they
 // are the same unit as the samples that did survive.
 type Skips struct {
-	// Truncated is records dropped by MaxSamplesPerNotify. It is an UPPER BOUND — the tail
-	// past the cap is not examined, so it may include records that would themselves have
-	// been skipped — and exists to make truncation visible, never to reconstruct the data.
-	Truncated int
 	// NonNumeric is records carrying no numeric value: a boolean/string/opaque reading
 	// (vb/vs/vd) or a sum-only record. The expected steady state for a fleet whose IPSO
 	// objects are not measurements, and the reason an empty result is not an error.
@@ -92,7 +76,7 @@ type Skips struct {
 }
 
 // Total is every record the decode dropped, for a caller that wants one number.
-func (s Skips) Total() int { return s.Truncated + s.NonNumeric + s.NonFinite + s.Unnamed }
+func (s Skips) Total() int { return s.NonNumeric + s.NonFinite + s.Unnamed }
 
 // Samples decodes one payload of the given CoAP content format into measurement samples,
 // stamping the receipt clock (now) wherever the payload carries no absolute time. It returns
@@ -101,8 +85,11 @@ func (s Skips) Total() int { return s.Truncated + s.NonNumeric + s.NonFinite + s
 // and no error (nothing to measure is not an error) — with the skip accounted in Skips, which
 // is what tells that case apart from a device that sent nothing.
 //
-// The sample slice is capped at MaxSamplesPerNotify; see Skips for what the second return
-// value accounts for.
+// Every numeric record becomes a sample: the decode does not bound a pack. What bounds a
+// Notify's volume is the per-tenant sample budget the caller charges, and what bounds one
+// event is the shared emitter, which splits a large batch into events of at most
+// eventlimit.MaxReadingsPerEvent readings. See Skips for what the second return value
+// accounts for.
 func Samples(cf message.MediaType, payload []byte, now func() time.Time) ([]adapter.Sample, Skips, error) {
 	switch cf {
 	case message.AppSenmlJSON:
@@ -133,10 +120,8 @@ type senmlRecord struct {
 // (bn/bt/bv/bver) are STICKY per RFC 8428 §4.1: a base field applies to its own record and
 // every record after it until another record sets that same base field — so they are carried
 // forward, not read only from record 0. A record whose base version is not the one we decode
-// rejects the pack whole — but note the MaxSamplesPerNotify cap can return before scanning the
-// tail, so this guarantee covers only the records examined up to the cap (the emitted prefix is
-// still self-consistently the decoded version; a pathological unsupported bver hidden past the
-// cap is simply not reached). Non-numeric records (vb/vs/vd), sum-only records (s with no v),
+// rejects the pack whole, wherever in the pack it sits: every record is examined. Non-numeric
+// records (vb/vs/vd), sum-only records (s with no v),
 // and records resolving to a non-finite value or an empty name are skipped, never emitted.
 func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, Skips, error) {
 	var records []senmlRecord
@@ -151,7 +136,7 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, Sk
 		baseVersion = senmlVersion
 		skips       Skips
 	)
-	out := make([]adapter.Sample, 0, min(len(records), MaxSamplesPerNotify))
+	out := make([]adapter.Sample, 0, len(records))
 	for i := range records {
 		r := &records[i]
 		// Apply sticky base fields in declaration order before resolving this record.
@@ -193,15 +178,6 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, Sk
 		if !ok {
 			skips.Unnamed++
 			continue
-		}
-
-		if len(out) >= MaxSamplesPerNotify {
-			// The cap is reached and this record would have emitted a sample. Stop: drop it
-			// and every remaining record, counting them as an upper bound on samples dropped
-			// (the tail is not scanned, so some may have been non-numeric). This bounds one
-			// message's contribution to the downstream store and the sample-limiter charge.
-			skips.Truncated = len(records) - i
-			return out, skips, nil
 		}
 
 		out = append(out, adapter.Sample{

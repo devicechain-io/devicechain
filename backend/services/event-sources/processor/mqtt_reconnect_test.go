@@ -52,7 +52,7 @@ func newExternalMqttSource(t *testing.T, host string, port int, topic string, re
 	}
 	es, err := NewMqttEventSource("ext", map[string]string{
 		"host": host, "port": strconv.Itoa(port), "topic": topic,
-	}, nil, "", "", NewJsonDecoder(map[string]string{}, 0),
+	}, nil, "", "", NewJsonDecoder(map[string]string{}),
 		received,
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
@@ -398,7 +398,7 @@ func TestClassifyResubscribe(t *testing.T) {
 // A source with no way to end the process would have to swallow a refused re-subscribe.
 func TestAnMqttSourceWithoutAFailHookIsRefused(t *testing.T) {
 	_, err := NewMqttEventSource("ext", map[string]string{"host": "h", "port": "1883", "topic": "t"},
-		nil, "", "", NewJsonDecoder(map[string]string{}, 0),
+		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },

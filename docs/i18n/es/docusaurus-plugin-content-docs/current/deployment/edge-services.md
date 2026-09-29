@@ -516,12 +516,13 @@ muerte retrasada de una sesión anterior. Es también la razón por la que todas
 un mismo client id: lo que expulsa a un host zombi es el propio desalojo por client id duplicado del
 broker.
 
-:::caution En la vía de Sparkplug no se acota ni la tasa de mensajes ni el tamaño de un mensaje
-La ingesta de Sparkplug **no aplica ningún techo de ingesta por inquilino y no descarta nada**, ni
-tiene techo de lecturas por mensaje. Un nodo de borde desbocado en un broker configurado no se limita
-en la puerta. Acótalo en el broker, mediante los grupos a los que te suscribes, y mediante el número
-de métricas por publicación en el nodo de borde. Consulta
-[Ingesta de Sparkplug sin límite](#unbounded-sparkplug-ingest).
+:::caution La vía de Sparkplug no acota ni la tasa de mensajes ni el tamaño total de un mensaje
+La ingesta de Sparkplug **no aplica ningún techo de ingesta por inquilino y no descarta nada**. Un
+mensaje con más de 256 lecturas se divide en eventos consecutivos de como máximo 256, así que ningún
+evento supera el límite de la plataforma, pero el total del mensaje no está acotado. Un nodo de borde
+desbocado en un broker configurado no se limita en la puerta. Acótalo en el broker, mediante los
+grupos a los que te suscribes, y mediante el número de métricas por publicación en el nodo de borde.
+Consulta [Ingesta de Sparkplug sin límite](#unbounded-sparkplug-ingest).
 :::
 
 ### Ingesta de Sparkplug sin límite {#unbounded-sparkplug-ingest}
@@ -532,13 +533,13 @@ exposición es un broker al que elegiste conectarte deliberadamente, y no un end
 consecuencia es tuya: un nodo de borde desbocado en un broker configurado no se limita en la puerta.
 Acótalo en el broker, o mediante los grupos a los que te suscribes.
 
-**Son dos límites distintos, y aquí no se aplica ninguno.** El límite de tasa anterior mide
-*mensajes*. El [techo de lecturas por mensaje](../guides/connecting-a-device.md#how-much-one-message-may-carry)
-acota lo que un mensaje puede costar una vez admitido. Un DDATA de Sparkplug que lleve miles de
-métricas es un solo mensaje, y se convierte en una lectura almacenada por métrica: cada una, su propia
+**El límite de tasa no se aplica aquí, y el límite de lecturas se aplica dividiendo.** El límite de
+tasa anterior mide *mensajes*. El [límite de lecturas por evento](../guides/connecting-a-device.md#how-much-one-message-may-carry)
+se aplica en esta vía dividiendo el mensaje, no rechazándolo. Un DDATA que lleve miles de métricas se
+convierte en varios eventos, y sigue siendo una lectura almacenada por métrica: cada una, su propia
 fila, actualización de estado y evaluación de reglas en el motor de detección que comparten todos los
-inquilinos. Acota el número de métricas por publicación en el nodo de borde, del mismo modo y por la
-misma razón por la que acotas su tasa.
+inquilinos. La división acota cada evento, no el mensaje. Acota el número de métricas por publicación
+en el nodo de borde, del mismo modo y por la misma razón por la que acotas su tasa.
 
 La [puerta del ciclo de vida del inquilino](./tenant-deletion.md) sigue aplicándose. El tráfico de un
 inquilino en eliminación se rechaza en esta vía como en cualquier otra, y se cuenta en
@@ -693,7 +694,7 @@ Prefijo: `devicechain_lwm2mingest_`.
 | `handshake_failures_total` / `auth_errors_total` | Dispositivos que fallan DTLS, e identidades no aprovisionadas. |
 | `observe_establish_refused_total` | Un Observe que el dispositivo rechazó o que falló por otra causa. **El síntoma del cliente solo 1.0**: ese cliente responde al Observe SenML con `4.06` y nunca notifica. |
 | `notify_unknown_content_format_total` | Telemetría que llega en un formato que no se decodifica: un dispositivo que *sí* notifica, de forma indescifrable. Cero para un cliente solo 1.0. |
-| `notify_decode_failures_total` / `notify_samples_truncated_total` | Payloads malformados o demasiado grandes. |
+| `notify_decode_failures_total` | Payloads malformados. |
 | `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Lecturas que traía un Notify y que no produjeron ninguna medición. **Que no sean numéricas es normal**: una lectura IPSO booleana o de texto es un dispositivo funcionando bien, y este contador es lo que distingue ese caso del de un dispositivo que se ha quedado callado, que desde aquí se ve igual. Los otros dos son fallos de firmware: un valor que resolvió a infinito o NaN, y una lectura sin ruta de recurso. |
 | `observation_overflow_total` | Un registro que supera el tope de 32 observaciones. Algunos de sus recursos no se observan. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta. |

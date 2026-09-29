@@ -67,7 +67,7 @@ Todo payload envuelve su contenido en un arreglo `entries`, y la forma fija el t
 
 Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `400` y una publicación MQTT va a la cola de mensajes fallidos.
 
-Una entrada es una lectura, tomada en un instante. Una entrada puede llevar su propio `occurredTime`. Ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se devuelve, de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir una serie acumulada (hasta el tope por mensaje descrito más abajo) y conservar el historial que realmente registró.
+Una entrada es una lectura, tomada en un instante. Una entrada puede llevar su propio `occurredTime`. Ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se devuelve, de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir una serie acumulada (hasta el límite descrito más abajo) y conservar el historial que realmente registró.
 
 - Una entrada sin `occurredTime` toma la del sobre.
 - Un sobre sin `occurredTime` se fecha en el momento en que la plataforma recibió el mensaje. Un mensaje que esperó en la plataforma durante una caída conserva la hora en que llegó, no la hora en que se procesó.
@@ -77,20 +77,20 @@ Hay un valor RFC 3339 válido que se rechaza igualmente: **`0001-01-01T00:00:00Z
 
 ### Cuánto puede llevar un mensaje {#how-much-one-message-may-carry}
 
-Un mensaje en los transportes de esta página admite **como máximo 1000 lecturas**. El tope pertenece al evento JSON de dispositivo descrito arriba, en MQTT y HTTP. Los transportes a los que la introducción dirige las flotas restringidas y heredadas no lo comparten: [LwM2M](../concepts/lwm2m.md) acota un solo Notify en 256 muestras, y [Sparkplug B](../concepts/sparkplug.md) no aplica ningún tope por mensaje (consulta [lo que un operador debe saber](../deployment/edge-services.md#sparkplug-what-an-operator-must-know)).
+Un evento lleva **como máximo 256 lecturas**, en todos los transportes. El límite es fijo y no es un ajuste. En los transportes de esta página (el evento JSON de dispositivo en MQTT y HTTP) un mensaje es un evento, así que un mensaje por encima del límite se rechaza. Las pasarelas de protocolo lo dividen en su lugar: un Notify de [LwM2M](../concepts/lwm2m.md) o un mensaje de [Sparkplug B](../concepts/sparkplug.md) con más lecturas se convierte en varios eventos consecutivos de como máximo 256 (consulta [lo que un operador debe saber](../deployment/edge-services.md#sparkplug-what-an-operator-must-know)).
 
-Una lectura es un dato almacenado. En mediciones, es una *clave de métrica*, así que una entrada con doce métricas son doce lecturas. En ubicaciones y alertas, es una entrada. El tope cuenta claves en lugar de entradas porque una sola entrada puede llevar miles de métricas, y son las lecturas, no las entradas, las que se convierten en filas almacenadas, actualizaciones de estado y evaluaciones de reglas.
+Una lectura es un dato almacenado. En mediciones, es una *clave de métrica*, así que una entrada con doce métricas son doce lecturas. En ubicaciones y alertas, es una entrada. El límite cuenta claves en lugar de entradas porque una sola entrada puede llevar miles de métricas, y son las lecturas, no las entradas, las que se convierten en filas almacenadas, actualizaciones de estado y evaluaciones de reglas.
 
-Ese abanico es la razón de ser del tope. El limitador de ingesta por inquilino mide *mensajes*, y cobra lo mismo por un mensaje de una lectura que por uno de cuarenta mil. Sin el tope, un solo mensaje sería un coste ilimitado que comparte toda la instancia. Un dispositivo con un backlog más profundo lo sube en varios mensajes.
+Ese abanico es la razón de ser del límite. El limitador de ingesta por inquilino mide *mensajes*, y cobra lo mismo por un mensaje de una lectura que por uno de cuarenta mil. Sin el límite, un solo mensaje sería un coste ilimitado que comparte toda la instancia. Un dispositivo con un backlog más profundo lo sube en varios mensajes.
 
-Por encima del tope, el mensaje se **rechaza entero**, nunca se recorta para que quepa. Un lote recortado en silencio se respondería con `202`, y las lecturas ausentes serían indetectables desde ambos extremos. No se almacena nada y no se pierde nada: el mensaje se enruta íntegro al flujo de decodificación fallida.
+Por encima del límite, el mensaje se **rechaza entero**, nunca se recorta para que quepa. Un lote recortado en silencio se respondería con `202`, y las lecturas ausentes serían indetectables desde ambos extremos. No se almacena nada y no se pierde nada: el mensaje se enruta íntegro al flujo de decodificación fallida.
 
 Cómo se entera el dispositivo depende del transporte:
 
-- **HTTP** responde `400`, indicando el número de lecturas y el tope.
+- **HTTP** responde `400`, indicando el número de lecturas y el límite.
 - **MQTT** no le dice nada al dispositivo. El broker confirma una publicación cuando la captura de forma duradera, lo que ocurre antes de decodificar el mensaje. Por tanto, un `PUBACK` no promete que el mensaje se aceptara, y un rechazo posterior solo es visible para el operador.
 
-Los operadores ven todos los rechazos en el contador `total_msg_too_many_readings`. El tope es un ajuste de operador (`maxReadingsPerMessage`) para una instancia cuya flota necesite realmente otro valor. Bajarlo no reescribe el historial, pero sí se aplica a lo que siga en cola: los mensajes ya capturados y aún sin decodificar se rechazan con el valor nuevo.
+Los operadores ven todos los rechazos en el contador `total_msg_too_many_readings`. El límite no es configurable. Una instancia actualizada desde una versión que admitía más rechaza con el límite nuevo los mensajes ya capturados y aún sin decodificar.
 
 :::caution Un lote muy acumulado se almacena entero, pero la detección puede no verlo todo
 El almacenamiento guarda cada lectura en su propio instante, sin matices. La detección es otra cosa: un dispositivo que estuvo sin conexión y luego sube toda su serie de golpe puede ver cómo las reglas con ventana de tiempo o con tiempo de sostenimiento descartan sus lecturas más antiguas, sin registro ni alarma. Consulta [Subidas acumuladas y reglas con ventana](#buffered-uploads-and-windowed-rules).

@@ -15,8 +15,8 @@ import (
 // 🔴 THE TWO AXES ARE INDEPENDENT, AND A BENCHMARK THAT CONFLATES THEM CANNOT SEE THE
 // DEFECT. They are:
 //
-//   - k, the entries in one message — bounded by the ingest ceiling
-//     (config.DefaultMaxReadingsPerMessage on the JSON transports);
+//   - k, the entries in one message — bounded per event by the platform's
+//     eventlimit.MaxReadingsPerEvent (256) on every transport;
 //   - W, the window DEPTH the message lands in — bounded by NOTHING. A 24h sliding rule
 //     on a 1 Hz series holds W ≈ 86 400 samples, and this engine's own state-budget note
 //     expects "hundreds of thousands of retained samples".
