@@ -92,7 +92,10 @@ func TestStoppingAbandonsAProfileInProgress(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the trace request never ended")
 	}
-	assert.False(t, trace.IsEnabled(), "the trace was left running")
+	// The client can see the cut connection a moment before the handler's trace.Stop
+	// returns, so the release is waited for, within a bound far shorter than the trace.
+	assert.Eventually(t, func() bool { return !trace.IsEnabled() }, 2*time.Second, 5*time.Millisecond,
+		"the trace was left running")
 }
 
 // A listener that cannot bind refuses the start, naming itself, and the service is left

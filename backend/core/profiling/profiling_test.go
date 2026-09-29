@@ -212,7 +212,11 @@ func TestStopAbandonsATraceWithACutConnection(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the trace was not abandoned")
 	}
-	assert.False(t, trace.IsEnabled())
+	// The client can see the cut connection a moment before the handler's trace.Stop
+	// returns, so the tracer being released is waited for, within a bound far shorter
+	// than the trace's 30 seconds.
+	assert.Eventually(t, func() bool { return !trace.IsEnabled() }, 2*time.Second, 5*time.Millisecond,
+		"the tracer was left on")
 }
 
 // churn keeps the scheduler busy until the test ends, so an execution trace produces
