@@ -63,28 +63,43 @@ func replicatedCacheManager(t *testing.T, srv *natsserver.Server) (*NatsManager,
 
 func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 	t.Helper()
+	return newSilentReplicaRigSeededThrough(t, func(store kvPutter) kvPutter { return store })
+}
+
+// kvPutter is the one call the rig seeds its bucket with.
+type kvPutter interface {
+	Put(key string, value []byte) (uint64, error)
+}
+
+// newSilentReplicaRigSeededThrough is newSilentReplicaRig with the bucket handle the keys
+// are seeded through passed to wrap first, so a test can put a fault between the rig and
+// the bucket and see the rig's setup meet it. Every rig test seeds through the plain
+// handle unchanged.
+func newSilentReplicaRigSeededThrough(t *testing.T, wrap func(kvPutter) kvPutter) *silentReplicaRig {
+	t.Helper()
 	servers, faults := dctest.StartJetStreamClusterWithRouteFaults(t, 3)
 
 	setup, _ := replicatedCacheManager(t, servers[0])
+	bucket := CacheBucketName("test", "area", kv.BucketDeviceByToken)
 	// The first create places a new R3 group, and meets the same settling window every
 	// other create on these clusters is retried through; a refused placement is not in
-	// that window and still fails here at once.
-	var writer *Cache
-	retryWhileGroupSettles(t, "create the cache", func() error {
+	// that window and still fails here at once. It is the call NewCache makes first, so
+	// the bucket is the one a Cache would have opened.
+	var store nats.KeyValue
+	retryWhileGroupSettles(t, "create the bucket", func() error {
 		var err error
-		writer, err = setup.NewCache(kv.BucketDeviceByToken, time.Hour)
+		store, err = setup.KeyValueStore(kv.BucketDeviceByToken, bucket, time.Hour)
 		return err
 	})
-	stream := kvStreamPrefix + CacheBucketName("test", "area", kv.BucketDeviceByToken)
+	stream := kvStreamPrefix + bucket
 	waitForReplicated(t, setup.js, stream, 3)
 
 	rig := &silentReplicaRig{servers: servers, faults: faults, js: setup.js, stream: stream}
 	for i := 0; i < silentRigKeys; i++ {
-		key := fmt.Sprintf("tenant|device-%02d", i)
-		rig.keys = append(rig.keys, key)
-		retryWhileGroupSettles(t, "put "+key, func() error {
-			return writer.Set(context.Background(), key, silentRigValue(key))
-		})
+		rig.keys = append(rig.keys, fmt.Sprintf("tenant|device-%02d", i))
+	}
+	if err := seedSilentRig(wrap(store), rig.keys); err != nil {
+		t.Fatal(err)
 	}
 	// Every replica must hold every key before one of them is silenced: a follower that
 	// has not caught up answers a direct get with not-found, which would read as a key
@@ -133,7 +148,6 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
-	bucket := CacheBucketName("test", "area", kv.BucketDeviceByToken)
 	settled := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -180,6 +194,168 @@ func newSilentReplicaRig(t *testing.T) *silentReplicaRig {
 		}
 	}
 	return rig
+}
+
+// seedSilentRig writes each key to the rig's bucket, retrying through the settling
+// window, with the bytes and the key encoding a Cache would have stored, so the measuring
+// Cache reads them back as its own. A change to how a Cache encodes fails the rig's
+// warm-up read loudly rather than passing silently.
+//
+// 🔴 THE KEYS ARE SEEDED THROUGH A PLAIN HANDLE, NOT THROUGH A CACHE. The group is still
+// settling here, and a Cache that meets one settling timeout (or a no-responders answer)
+// opens its breaker: every call for the next 5 s then returns ErrCacheUnavailable without
+// a round trip. That is a product answer, not a settling transient, so the retry gives up
+// on it and the rig fails on the first write that met the window, before the test has
+// asserted anything. A plain handle has no breaker, so a put that met the window is
+// simply retried. Teaching the retry to wait out ErrCacheUnavailable instead would hide
+// a breaker that opens on a healthy cluster; TestSettleRetryDoesNotRetryABypassedCache
+// pins that it does not.
+func seedSilentRig(store kvPutter, keys []string) error {
+	for _, key := range keys {
+		data, err := json.Marshal(silentRigValue(key))
+		if err != nil {
+			return fmt.Errorf("encode %q: %w", key, err)
+		}
+		if err := settleRetry(func() error {
+			_, err := store.Put(kvKey(key), data)
+			return err
+		}, 30*time.Second, 50*time.Millisecond); err != nil {
+			return fmt.Errorf("put %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// settlingBucket is a bucket whose first put meets the settling window and fails with
+// transient; every later put lands.
+type settlingBucket struct {
+	transient error
+	puts      int
+	stored    map[string][]byte
+}
+
+func (b *settlingBucket) Put(key string, value []byte) (uint64, error) {
+	b.puts++
+	if b.puts == 1 {
+		return 0, b.transient
+	}
+	b.stored[key] = value
+	return uint64(b.puts), nil
+}
+
+// TestTheSilentRigSeedsThroughTheSettlingWindow is the rig's setup failure, without the
+// cluster: one settling transient on the first seeding write. Seeded through a Cache, that
+// transient opened the Cache's breaker, the retry was answered "messaging: cache
+// unavailable", and the rig failed before any of its tests had asserted anything (CI saw
+// it on the first key, 1.3 s into the test, which is the no-responders fast path). Seeded
+// as it is now, the write is retried and every key holds what a Cache would have stored.
+func TestTheSilentRigSeedsThroughTheSettlingWindow(t *testing.T) {
+	transients := []struct {
+		name string
+		err  error
+	}{
+		// What a put meets while the group settles: no responders yet, answered fast,
+		// in the legacy handle's and the jetstream handle's spelling; or a timeout.
+		{"no stream response", nats.ErrNoStreamResponse},
+		{"no stream response (jetstream)", jetstream.ErrNoStreamResponse},
+		{"no responders", nats.ErrNoResponders},
+		{"request timeout", nats.ErrTimeout},
+		{"context deadline", context.DeadlineExceeded},
+	}
+	for _, tc := range transients {
+		t.Run(tc.name, func(t *testing.T) {
+			keys := []string{"tenant|device-00", "tenant|device-01", "tenant|device-02"}
+			bucket := &settlingBucket{transient: tc.err, stored: map[string][]byte{}}
+
+			if err := seedSilentRig(bucket, keys); err != nil {
+				t.Fatalf("seeding through one settling transient = %v, want it retried and nil", err)
+			}
+			if bucket.puts != len(keys)+1 {
+				t.Fatalf("puts = %d, want %d: the first key's write retried once, every other written once",
+					bucket.puts, len(keys)+1)
+			}
+			if len(bucket.stored) != len(keys) {
+				t.Fatalf("stored %d keys, want %d", len(bucket.stored), len(keys))
+			}
+			for _, key := range keys {
+				// What the measuring Cache reads back: its own key encoding, and the JSON of
+				// the value.
+				var got string
+				if err := json.Unmarshal(bucket.stored[kvKey(key)], &got); err != nil || got != silentRigValue(key) {
+					t.Fatalf("stored under %q = (%q, %v), want %q",
+						kvKey(key), bucket.stored[kvKey(key)], err, silentRigValue(key))
+				}
+			}
+		})
+	}
+}
+
+// TestTheSilentRigSeedingFailsFastOnARealError is the counterweight to the test above:
+// seedSilentRig retries only the settling window. A put that fails for any other reason
+// fails the rig on that put, naming the cause, rather than being retried until it works
+// or skipped and left for the warm-up read to trip over.
+func TestTheSilentRigSeedingFailsFastOnARealError(t *testing.T) {
+	boom := errors.New("boom")
+	bucket := &settlingBucket{transient: boom, stored: map[string][]byte{}}
+
+	err := seedSilentRig(bucket, []string{"tenant|device-00", "tenant|device-01"})
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("seeding through a put that failed for a real reason = %v, want an error wrapping %v", err, boom)
+	}
+	if bucket.puts != 1 {
+		t.Fatalf("puts = %d, want 1: a real error is not retried, and no key is written after it", bucket.puts)
+	}
+	if len(bucket.stored) != 0 {
+		t.Fatalf("stored %d keys, want none: the rig stops at the first real failure", len(bucket.stored))
+	}
+}
+
+// firstPutTimesOut stands between the rig and its bucket and answers the first put with a
+// request timeout, as a put into a group that is still settling can be answered, without
+// passing it on. Every later put reaches the bucket.
+type firstPutTimesOut struct {
+	store    kvPutter
+	injected int
+	puts     int
+}
+
+func (f *firstPutTimesOut) Put(key string, value []byte) (uint64, error) {
+	f.puts++
+	if f.injected == 0 {
+		f.injected++
+		return 0, nats.ErrTimeout
+	}
+	return f.store.Put(key, value)
+}
+
+// TestTheSilentRigComesUpThroughASettlingTimeout is the rig's setup failure on the real
+// cluster: one seeding put meets a settling timeout. Seeded through a Cache, that timeout
+// opened the Cache's breaker and the rig failed with "messaging: cache unavailable" before
+// any test had asserted anything. The rig must come up, and the fault must have been met:
+// a rig that seeds some other way than through the handle it is given never meets it, and
+// fails here.
+func TestTheSilentRigComesUpThroughASettlingTimeout(t *testing.T) {
+	var fault *firstPutTimesOut
+	rig := newSilentReplicaRigSeededThrough(t, func(store kvPutter) kvPutter {
+		fault = &firstPutTimesOut{store: store}
+		return fault
+	})
+
+	if fault == nil || fault.injected != 1 {
+		t.Fatal("the rig never seeded through the handle it was given, so the settling timeout was never met")
+	}
+	if fault.puts != silentRigKeys+1 {
+		t.Fatalf("seeding puts = %d, want %d: the timed-out put retried once, every other key written once",
+			fault.puts, silentRigKeys+1)
+	}
+	// The rig's warm-up has read every key back through the measuring Cache; one more read
+	// shows that Cache's breaker is closed as the tests begin.
+	var got string
+	found, err := rig.cache.Get(context.Background(), rig.keys[0], &got)
+	if err != nil || !found || got != silentRigValue(rig.keys[0]) {
+		t.Fatalf("read of %q after setup = (%v, %v, %q), want the stored value", rig.keys[0], found, err, got)
+	}
 }
 
 // leaderAtFault is the recorded leader, checked again just before a fault is injected.
