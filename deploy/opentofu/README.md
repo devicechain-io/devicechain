@@ -114,9 +114,10 @@ reported as such.
 Two stores means **two buckets**, never one bucket with two prefixes
 (`backup_bucket_rdb`, `backup_bucket_tsdb`). Core data and event data are independent
 restore domains: the event store can be restored without touching the control plane, and
-each carries its own retention window. `hack/check-tofu-validations.sh` asserts the two
-resolve to different paths, because a copy-paste that points both at one bucket collapses
-that split silently.
+each carries its own retention window — `backup_retention_rdb` in the cluster root
+(default `30d`) and `backup_retention_tsdb` in the instance root (default `7d`).
+`hack/check-tofu-validations.sh` asserts the two resolve to different paths, because a
+copy-paste that points both at one bucket collapses that split silently.
 
 🔴 **`backup_schedule` takes SIX cron fields, not five.** CloudNativePG's schedule carries
 a leading *seconds* field, unlike a Kubernetes CronJob. A five-field entry is accepted by
@@ -126,7 +127,8 @@ default is `0 0 3 * * *`, daily at 03:00.
 
 🔴 **Sizing `backup_object_store_storage` is not the same question as sizing a database
 volume.** It holds a base backup plus every WAL segment since it, for the retention
-window, for *both* stores — and WAL volume tracks write rate, not database size. When it
+window of *each* store (`backup_retention_rdb`, `backup_retention_tsdb`) — and WAL
+volume tracks write rate, not database size. When it
 fills, archiving fails, and failed archiving does not stall commits: WAL accumulates on
 the *databases'* volumes until those fill and Postgres stops. An undersized bucket takes
 the instance down by a route that points nowhere near the bucket, which is what the

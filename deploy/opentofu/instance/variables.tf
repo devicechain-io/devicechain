@@ -346,61 +346,55 @@ variable "restore_tsdb_target_time" {
   }
 }
 
-variable "backup_retention" {
+variable "backup_retention_tsdb" {
   description = <<-EOT
-    Recovery WINDOW to keep, e.g. "7d". Not a backup count: this guarantees the
-    cluster stays restorable to any point in the window, so barman keeps the base
-    backup predating the window plus every WAL since. Empty disables pruning.
+    Recovery WINDOW for this instance's EVENT store. The relational store's
+    window is the cluster root's backup_retention_rdb (default 30d). Not a backup
+    count: barman keeps the base backup predating the window plus every WAL
+    segment since, so the store stays restorable to any point inside it. A whole
+    number and a unit -- days (d), weeks (w) or months (m), e.g. "7d"; `m` is
+    MONTHS, not minutes. Empty disables pruning.
 
-    🔴 THIS AND backup_object_store_storage ARE ONE DECISION, and the first
-    version of this configuration shipped them as two. Every scheduled backup is
-    a FULL base backup, so a `Nd` window retains roughly `N+1` complete copies of
-    BOTH databases:
-
-        destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
+    Seven days, not thirty: event history is bulk and already under its own
+    lifecycle (event-management's retentionDays), and this store's archive is
+    what fills the backup destination.
 
     🔴 WAL IS CHEAP ONLY WHILE THE INSTANCE IS QUIET. `archive_timeout` forces a
     segment every 5 minutes, but a segment closed early is zero-filled past the
-    switch record and gzips to tens of KiB, so an idle pair of stores costs well
-    under a GiB per month. Under sustained ingest the archived WAL grows with the
-    write rate instead, and costs about as much as the data it records. Measured
-    on GKE benchmark clusters (v0.18.x): up to about 1.9 KB of archive per
-    ingested event, for both databases together, against about 1 KB per event
-    of the event store's own data. (An earlier measurement published here as
-    "about 1 KB per event, base backups included" was low.) Under sustained
-    ingest the WAL term dominates:
+    switch record and gzips to tens of KiB, so an idle store costs well under a
+    GiB per month. Under sustained ingest the archived WAL grows with the write
+    rate instead, and costs about as much as the data it records. Measured on GKE
+    benchmark clusters (v0.18.x): up to about 1.9 KB of archive per ingested
+    event for both databases together -- most of it this store's -- against about
+    1 KB per event of this store's own data. Under sustained ingest the WAL term
+    dominates:
 
-        destination ≈ (retention_days + 1) × compressed(rdb + tsdb)
-                      + retention_days × daily_events × archived WAL per event
+        destination ≈ (days + 2) × compressed(event store)
+                      + days × daily_events × this store's archived WAL per event
 
-    That term grows with retention, and shortening the window is the wrong
-    lever for it: it still keeps a full day of WAL, and it buys space by
-    shrinking how far back the databases can be recovered. The in-cluster
-    destination's default (backup_object_store_storage) is sized so that one
-    default event store fills before it does; its description gives the rule and
-    what it does not cover. Past that, size the destination for the ingest rate,
-    or send backups to an object store you run. Barman
-    prunes only a LIVE Cluster's own archive path, so an archive left by a
-    destroyed instance is pruned by nothing — which is why `dcctl destroy`
-    removes the instance's archive from the in-cluster store.
+    (days + 2): one base backup is uploading while the oldest still predates the
+    window, so 7 days keeps nine compressed copies of this store.
 
-    The base-backup term alone is (retention_days + 2) copies at the peak --
-    one more is uploading while the oldest still predates the window -- so at 7
-    days nine compressed copies of both databases must fit, beside the WAL. A
-    30-day window was the original default, and it fills a destination sized for
-    7 days monotonically, because pruning removes nothing until backups start
-    ageing out of the window. What follows is the documented cascade: the
-    destination fills, archiving fails, WAL accumulates on the DATABASES' volumes,
-    and PostgreSQL stops.
+    🔴 Shortening the window is the wrong lever for ingest: it still keeps a full
+    day of WAL, and it buys space by shrinking how far back telemetry can be
+    recovered. Size the destination instead (the cluster root's
+    backup_object_store_storage, whose description gives the sizing rule and
+    what it does not cover), or send backups to an object store you run.
 
-    So: raising this REQUIRES raising backup_object_store_storage with it -- and
-    on an existing store that means growing its volume, because that variable is
-    read only when the store is created. There is no check that enforces it — the
-    sizes depend on data nobody knows at plan time — which is why it is stated
-    here rather than assumed.
+    Raising this REQUIRES raising that with it -- and on an existing store that
+    means growing its volume, because that variable is read only when the store
+    is created. No check can enforce it: a database's compressed size is not
+    knowable at plan time. Barman prunes only a LIVE Cluster's own archive path,
+    so an archive left by a destroyed instance is pruned by nothing -- which is
+    why `dcctl destroy` removes the instance's archive from the in-cluster store.
   EOT
   type        = string
   default     = "7d"
+
+  validation {
+    condition     = can(regex("^([1-9][0-9]*[dwm])?$", var.backup_retention_tsdb))
+    error_message = "backup_retention_tsdb must be a whole number followed by d (days), w (weeks) or m (MONTHS), for example \"7d\" or \"2w\"; or empty to keep every backup. CloudNativePG accepts no other form, and the API server would refuse it part-way through the apply."
+  }
 }
 
 # --- TimescaleDB (event hypertables, ADR-004) -----------------------------------

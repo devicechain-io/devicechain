@@ -105,6 +105,12 @@ type compactSizing struct {
 	// leaves 35% of this free; backupsizing_test.go holds this value to it. That
 	// needs about 16 GiB; 20Gi is the round size above it.
 	//
+	// That rule is about an event store that FILLS. One a retention window keeps
+	// from filling sends its log here indefinitely instead: at the default windows
+	// (30 days relational, 7 event store) and the relational share measured once,
+	// 20Gi fills at about 13 events/s sustained -- an eighth of the default
+	// store's figure, which TestSteadyStateRateIsTheOnePublished derives.
+	//
 	// When it fills, archiving fails. Archiving that fails does not stall commits:
 	// WAL accumulates on the DATABASE's volume until that fills and Postgres
 	// stops. So an undersized value here takes the instance down by a route that

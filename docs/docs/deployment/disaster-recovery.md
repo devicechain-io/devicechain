@@ -45,7 +45,15 @@ Plan around two consequences:
   retention. Core data is small and changes when someone changes something. Event data is bulk,
   append-mostly, and already under a retention policy
   ([data lifecycle](../concepts/architecture.md)). Keeping base backups of chunks the lifecycle
-  reconciler is about to drop is paying twice to store the same rows.
+  reconciler is about to drop is paying twice to store the same rows. They do not get the same
+  retention either: by default core data can be recovered to any point in the last 30 days and
+  event data to any point in the last 7 (see [Recovery windows](./bootstrap.md#backup-retention)).
+  A point-in-time target, whether `--restore-rdb-at` or `--restore-tsdb-at`, must fall inside that
+  store's window; anything older is no longer in the archive. So a restore of both stores to one
+  point must fall inside the shorter window. Core data restored further back than that sits beside
+  event data at a later point, which is the mismatch described above in the other direction: a
+  tenant created since the core-data target still has telemetry, but no tenant row to drive its
+  deletion.
 - **Different recovery targets.** Restoring core data alone gives you a *working* instance: devices
   reconnect, detection rules run, commands dispatch, secrets decrypt. Restoring event data
   backfills history into it. An instance missing its event data is degraded (empty history

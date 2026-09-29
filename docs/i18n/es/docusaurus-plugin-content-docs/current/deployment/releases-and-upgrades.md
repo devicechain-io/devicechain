@@ -3917,6 +3917,49 @@ en un almacén existente ya no hace nada. Para dar el nuevo tamaño a un clúste
 tú el volumen, en una StorageClass que lo permita, como muestra esa página. En kind el tamaño no
 se aplica, así que no hace falta nada.
 
+#### Cada base de datos conserva su propia ventana de recuperación: 30 días para los datos de núcleo, 7 para los de eventos {#next-backup-retention}
+
+El ajuste `backup_retention`, que cada configuración de OpenTofu declaraba con el mismo nombre, se
+sustituye por uno por base de datos: `backup_retention_rdb` en la configuración del clúster, por
+defecto `30d`, y `backup_retention_tsdb` en la de la instancia, por defecto `7d`. La base de datos
+relacional guarda inquilinos, usuarios, dispositivos, reglas, secretos y el último estado conocido
+de cada dispositivo, y ahora se puede recuperar a cualquier punto de los últimos 30 días en lugar
+de 7. El almacén de eventos conserva 7 días, como antes. Una ventana tiene que ser un número entero
+y una unidad, `d` para días, `w` para semanas o `m` para meses, y cualquier otra forma se rechaza
+antes de empezar la aplicación. Consulta [Ventanas de recuperación](./bootstrap.md#backup-retention).
+
+Los datos de núcleo de un inquilino eliminado también siguen siendo restaurables desde los
+respaldos durante 30 días en lugar de 7, hasta que salen de la ventana. Consulta
+[Qué se conserva deliberadamente](./tenant-deletion.md#retained).
+
+**Al actualizar**, `dcctl install` aplica la nueva ventana a la base de datos relacional. El cambio
+afecta a la configuración de respaldos de esa base de datos; la especificación del propio clúster
+de base de datos no cambia. Los respaldos ya tomados se conservan. Nada sale de una ventana de 30
+días hasta que tiene 30 días, así que durante unas tres semanas después de la actualización la
+parte de la base de datos relacional en el almacén de respaldos crece: hacia unas cuatro veces el
+log que conserva hoy, más unos 23 respaldos base nocturnos más. Después se estabiliza.
+
+**Antes de actualizar, comprueba el margen del almacén.** Un clúster existente conserva el tamaño
+de su almacén (consulta el apartado anterior), así que un almacén creado antes de esta versión
+sigue teniendo 20 GiB salvo que lo hayas ampliado, y lo mismo el almacén con `--compact`. Cuando el
+almacén de eventos no se llena nunca porque lo limita una ventana de retención, el ritmo de ingesta
+sostenido que llena un almacén de 20 GiB baja de unos 19 a unos 13 eventos por segundo, y el del
+almacén predeterminado de 160 GiB de unos 150 a unos 100. Esas cifras usan la parte del log de la
+base de datos relacional medida una sola vez, aproximadamente un 14 % para una flota pequeña que
+informa con frecuencia. No está medida para flotas más grandes o más lentas, donde probablemente es
+mayor; si el log relacional fuera todo el archivo, la cifra de 160 GiB sería de unos 35. Si el
+almacén tiene poco margen, amplía primero su volumen, como muestra
+[Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size). Si aplicas tú mismo
+la configuración de OpenTofu, puedes conservar en su lugar la ventana anterior con
+`backup_retention_rdb = "7d"`; `dcctl install` no tiene ninguna opción para ello.
+
+**Si configuraste `backup_retention`, cámbiale el nombre**: `backup_retention_rdb` en la
+configuración del clúster, `backup_retention_tsdb` en la de la instancia. Cómo falla el nombre
+anterior depende de dónde esté. Un `-var backup_retention=…` se rechaza. Una línea
+`backup_retention` en un archivo `.tfvars` solo produce un aviso, y el almacén recibe entonces su
+nuevo valor predeterminado en lugar del tuyo: 30 días para la base de datos relacional, 7 para el
+almacén de eventos. Una variable de entorno `TF_VAR_backup_retention` se ignora sin ningún aviso.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

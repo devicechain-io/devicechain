@@ -5,6 +5,12 @@ package bootstrap
 
 import (
 	"io/fs"
+	"math"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	assets "github.com/devicechain-io/dc-deploy"
@@ -32,10 +38,16 @@ import (
 // LARGER.
 //
 // 🔴 What this does NOT cover, and the docs say so: an event store that takes more
-// than about a day to fill (every 03:00 base backup of the window is then kept,
-// not one), one that never fills because a retention window bounds it (the store
-// then holds seven days of WAL at whatever rate the instance ingests), and several
-// instances ingesting into the one store, which belongs to the cluster.
+// than about a day to fill (every 03:00 base backup of each store's window is then
+// kept, not one), one that never fills because a retention window bounds it (the
+// store then holds each database's window of WAL at whatever rate the instances
+// ingest: see TestSteadyStateRateIsTheOnePublished), and several instances
+// ingesting into the one store, which belongs to the cluster.
+//
+// No recovery window appears in this rule, and that is not an oversight: it counts
+// the archive of EVERY event the event store holds, with nothing pruned, so no
+// window can keep more than it does. The relational store's 30-day window moved
+// the steady-state case, not this one.
 const (
 	// Stored bytes per event on the event store's primary. Round 2 on GKE (after
 	// v0.18.0): 18,060 MiB of table at about 19.0M events, ≈ 997 B; round 1: about
@@ -61,6 +73,21 @@ const (
 	// before the event store is full -- the event store's own alerts name the
 	// cause, rather than the backup store's pointing an operator at a bucket.
 	backupStoreFreeAtFullFraction = 0.35
+
+	// The relational store's share of what the backup store holds under ingest.
+	// device-state writes last-known state there as events arrive, so its WAL grows
+	// with ingest too. ONE sample, round 2 on GKE, a small fleet (1,000-1,600
+	// devices reporting every 250 ms) at about 4,000 events/s: the relational
+	// bucket held 700 MiB against the event store's 4.4 GiB, ≈ 13.5%, rounded to
+	// 14%. Those are cumulative bucket contents, base backups and idle segments
+	// included, not an archive rate.
+	//
+	// 🔴 NOT a conservative bound. At lower rates device-state batches fewer writes
+	// per transaction, and a large fleet of slow devices touches a different row
+	// and page per event, so the share is likely higher there; neither is
+	// measured. That is why the published text gives the figure at a share of 1
+	// beside this one, and why TestSteadyStateRateIsTheOnePublished pins both.
+	relationalArchiveShare = 0.14
 )
 
 // backupStoreNeed returns the bytes a backup store must have to hold, with the
@@ -148,5 +175,143 @@ func TestCompactBackupStoreIsSmallerThanTheDefault(t *testing.T) {
 	if volumeMiB(t, compact.ObjectStoreStorage) >= volumeMiB(t, def) {
 		t.Errorf("--compact's ObjectStoreStorage %s is not below the default %s: the preset "+
 			"would claim at least a full-size install's backup disk", compact.ObjectStoreStorage, def)
+	}
+}
+
+// steadyStateEventsPerSecond is the sustained ingest rate at which a store of size
+// store fills with log alone when the event store never fills: each database keeps
+// its own window of archive, weighted by its share of it.
+//
+//	rate = store / (86,400 × archiveBytesPerEventHigh × ((1-share)·eventDays + share·relationalDays))
+func steadyStateEventsPerSecond(t *testing.T, store string, share float64, relationalDays, eventDays int64) float64 {
+	t.Helper()
+
+	weightedDays := (1-share)*float64(eventDays) + share*float64(relationalDays)
+	if weightedDays <= 0 {
+		t.Fatalf("a %d-day and %d-day window at share %.2f keep no log at all", relationalDays,
+			eventDays, share)
+	}
+	return float64(volumeMiB(t, store)<<20) / (86400 * float64(archiveBytesPerEventHigh) * weightedDays)
+}
+
+// windowDays parses a default window of the form "<n>d", failing on any other unit
+// rather than guessing how many days "1m" is.
+func windowDays(t *testing.T, window string) int64 {
+	t.Helper()
+
+	m := regexp.MustCompile(`^([1-9][0-9]*)d$`).FindStringSubmatch(window)
+	if m == nil {
+		t.Fatalf("window %q is not whole days; this test does not guess what a week or a "+
+			"month is in the arithmetic", window)
+	}
+	n, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		t.Fatalf("window %q: %v", window, err)
+	}
+	return n
+}
+
+// publishedFigures returns every number the pattern's one group captures in text,
+// failing when there is none: a sentence that was reworded away must not pass by
+// being absent.
+func publishedFigures(t *testing.T, what, text string, pattern *regexp.Regexp) []float64 {
+	t.Helper()
+
+	var out []float64
+	for _, m := range pattern.FindAllStringSubmatch(text, -1) {
+		n, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			t.Fatalf("%s: %q is not a number", what, m[1])
+		}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s no longer matches %s; if the sentence was reworded, point this test at "+
+			"the new wording rather than deleting the check", what, pattern)
+	}
+	return out
+}
+
+// The steady-state figures the docs and the backup_object_store_storage description
+// publish -- the rate that fills the default store when the event store never
+// fills, at the measured relational share and at a share of 1 -- are the ones the
+// shipped defaults give. The windows are read from the variables each store's
+// root declares, so changing a window, the store or the constants without the
+// prose fails here.
+func TestSteadyStateRateIsTheOnePublished(t *testing.T) {
+	instanceTF, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading the embedded instance variables.tf: %v", err)
+	}
+	clusterTF, err := fs.ReadFile(assets.OpenTofuCluster(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading the embedded cluster variables.tf: %v", err)
+	}
+	relationalDays := windowDays(t, tofuDefault(t, clusterTF, "backup_retention_rdb"))
+	eventDays := windowDays(t, tofuDefault(t, instanceTF, "backup_retention_tsdb"))
+	store := tofuDefault(t, clusterTF, "backup_object_store_storage")
+
+	// Control: with one 7-day window for both stores -- the shape before each store
+	// had its own -- the formula reproduces the "about 150" published for it then.
+	// If it does not, it no longer computes what it claims to.
+	if got := steadyStateEventsPerSecond(t, store, relationalArchiveShare, 7, 7); got < 145 || got > 155 {
+		t.Fatalf("a shared 7-day window gives %.1f events/s against %s; the figure published "+
+			"for that shape was about 150, so the formula has drifted", got, store)
+	}
+
+	measured := steadyStateEventsPerSecond(t, store, relationalArchiveShare, relationalDays, eventDays)
+	allRelational := steadyStateEventsPerSecond(t, store, 1, relationalDays, eventDays)
+	t.Logf("%s store, %dd relational / %dd event windows: %.1f events/s at share %.2f, %.1f at share 1",
+		store, relationalDays, eventDays, measured, relationalArchiveShare, allRelational)
+
+	// "About N" is honest when N is within 10% of the computed figure.
+	near := func(published, computed float64) bool {
+		return math.Abs(published-computed) <= 0.1*computed
+	}
+
+	// The docs are outside this module, so `go test` does not track them for its
+	// cache: run with -count=1, as CI does.
+	docs := filepath.Join("..", "..", "..", "docs")
+	readDoc := func(rel string) string {
+		b, err := os.ReadFile(filepath.Join(docs, rel))
+		if err != nil {
+			t.Fatalf("reading %s: %v", rel, err)
+		}
+		return string(b)
+	}
+	enBootstrap := readDoc(filepath.Join("docs", "deployment", "bootstrap.md"))
+	esBootstrap := readDoc(filepath.Join("i18n", "es", "docusaurus-plugin-content-docs", "current",
+		"deployment", "bootstrap.md"))
+
+	// Each space in a pattern matches any run of whitespace, so reflowing the prose
+	// -- a line break moving inside the sentence -- does not break the match.
+	for _, tc := range []struct {
+		what     string
+		text     string
+		pattern  string
+		computed float64
+	}{
+		{"backup_object_store_storage's description", string(clusterTF),
+			`about (\d+) events/s sustained fills this default`, measured},
+		{"backup_object_store_storage's description", string(clusterTF),
+			`the figure would be about (\d+) events/s`, allRelational},
+		{"bootstrap.md#backup-store-size", enBootstrap,
+			`about (\d+) events per second sustained fills the default store`, measured},
+		{"bootstrap.md#backup-store-size", enBootstrap,
+			`the figure would be about (\d+) events per second`, allRelational},
+		{"the es bootstrap.md#backup-store-size", esBootstrap,
+			`unos (\d+) eventos por segundo sostenidos llenan el almacén predeterminado`, measured},
+		{"the es bootstrap.md#backup-store-size", esBootstrap,
+			`la cifra sería de unos (\d+) eventos`, allRelational},
+	} {
+		pattern := regexp.MustCompile(strings.ReplaceAll(tc.pattern, " ", `\s+`))
+		for _, published := range publishedFigures(t, tc.what, tc.text, pattern) {
+			if !near(published, tc.computed) {
+				t.Errorf("%s says about %.0f events/s; the shipped defaults (%s store, %dd relational "+
+					"and %dd event-store windows) give %.1f. Change the prose with the defaults, in "+
+					"both locales and the variable description.", tc.what, published, store,
+					relationalDays, eventDays, tc.computed)
+			}
+		}
 	}
 }

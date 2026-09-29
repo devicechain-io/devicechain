@@ -108,7 +108,7 @@ locals {
     access_key_id_key     = local.backup_credentials.access_key
     secret_access_key_key = local.backup_credentials.secret_key
     schedule              = var.backup_schedule
-    retention_policy      = var.backup_retention
+    retention_policy      = var.backup_retention_rdb
 
     # Threaded from the root so a RESTORE is expressible without editing module
     # source mid-incident. CloudNativePG refuses to let a recovered cluster

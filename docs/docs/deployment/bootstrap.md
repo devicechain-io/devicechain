@@ -413,6 +413,21 @@ domain, so it cannot be disaster recovery. Pass `--backup-credentials-file` to `
 to name an object store you already own. See [Disaster Recovery](./disaster-recovery.md) and
 the OpenTofu configuration's `backup_destination`.
 
+#### Recovery windows {#backup-retention}
+
+Each database keeps its own recovery window: the span of time it can be restored to any point
+within. The relational database, which holds tenants, users, devices, rules, secrets and each
+device's last-known state, keeps **30 days**; set it with `backup_retention_rdb` in the cluster's
+OpenTofu configuration. Each instance's event store keeps **7 days**; set it with
+`backup_retention_tsdb` in the instance's configuration. The relational database gets the longer
+window because an instance cannot be rebuilt without it, and the mistakes it is restored from, such
+as a bad migration or a mistaken delete, are often found days later. Event history is bulk, has
+its own [data lifecycle](../concepts/architecture.md), and its log is what fills the backup store.
+
+A window is a whole number and a unit: `d` for days, `w` for weeks or `m` for **months** (not
+minutes). Anything else is refused before the apply starts. An empty window keeps every backup.
+Lengthening a window keeps more in the backup store: see below.
+
 #### Backup store size {#backup-store-size}
 
 The default store is 160 GiB, sized from the default event store so that, under sustained
@@ -430,12 +445,21 @@ That holds for one instance whose event store fills within about a day. It does 
   instance adds its own archive. Add about 160 GiB for each such instance, or send backups to an
   object store you run (`--backup-credentials-file`), which is the recommended production setup
   anyway.
-- **when the event store takes more than about a day to fill, or never fills.** The store keeps a
-  full base backup of each database for every day of the seven-day recovery window, plus the log
-  archived between them: at seven days, nine compressed copies of both databases must fit beside
-  the log. An instance whose stored data is bounded by a retention window (`retentionDays`) still
-  sends a week of log here. At the measured cost, about 150 events per second sustained for a week
-  fills the default store before any base backup is counted.
+- **when the event store takes more than about a day to fill.** The store keeps a full base
+  backup of each database for every day of that database's [recovery window](#backup-retention),
+  plus the log archived since. At the default windows that
+  is 32 compressed copies of the relational database and 9 of the event store, and they must fit
+  beside the log: 32 times the relational database's compressed size plus 9 times the event
+  store's must stay under 160 GiB. The relational database is normally megabytes, so in practice
+  the event store must compress to well under about 17 GiB.
+- **when an instance's stored data is bounded by a retention window (`retentionDays`).** Its event
+  store never fills, but it still sends its log here: a week of the event store's, and 30 days of
+  the relational database's, whose log grows with ingest because it records each device's
+  last-known state. In the one measurement taken, of a small fleet reporting fast, the relational
+  database's backups were about 14% of the store's contents. At that share, about 100 events per
+  second sustained fills the default store before any base backup is counted. The share is not measured
+  for larger or slower fleets, where it is likely higher: if the relational database's log were
+  all of it, the figure would be about 35 events per second.
 - **when you grow the event store.** Each GiB added to the event-store volume needs about five
   GiB more here.
 
@@ -458,7 +482,8 @@ kubectl -n dc-system patch pvc dc-object-store-data \
 
 On kind, the volume is not limited to its size: it uses what the host disk has.
 
-Shortening the recovery window (`backup_retention`) is not a fix for ingest: it keeps less
+Shortening a recovery window (`backup_retention_tsdb` for an instance's event store,
+`backup_retention_rdb` for the relational database) is not a fix for ingest: it keeps less
 history but still a full day of log, and it gives up recovery range to buy space. The alerts
 described under [Backups that stop shipping](./observability.md#backup-archiving) warn before
 the store or a database volume fills.

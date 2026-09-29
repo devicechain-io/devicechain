@@ -482,61 +482,63 @@ variable "restore_rdb_target_time" {
   }
 }
 
-variable "backup_retention" {
+variable "backup_retention_rdb" {
   description = <<-EOT
-    Recovery WINDOW to keep, e.g. "7d". Not a backup count: this guarantees the
-    cluster stays restorable to any point in the window, so barman keeps the base
-    backup predating the window plus every WAL since. Empty disables pruning.
+    Recovery WINDOW for the RELATIONAL store: tenants, users, devices, rules,
+    secrets and every device's last-known state, for every instance on this
+    cluster. Each instance's EVENT store has its own window, the instance root's
+    backup_retention_tsdb (default 7d). Not a backup count: barman keeps the base
+    backup that predates the window plus every WAL segment since, so the store
+    stays restorable to any point inside it. A whole number and a unit -- days
+    (d), weeks (w) or months (m), e.g. "30d" -- which is the only form
+    CloudNativePG accepts; `m` is MONTHS, not minutes. Empty disables pruning.
 
-    🔴 THIS AND backup_object_store_storage ARE ONE DECISION, and the first
-    version of this configuration shipped them as two. Every scheduled backup is
-    a FULL base backup, so a `Nd` window retains roughly `N+1` complete copies of
-    BOTH databases:
+    Why 30 days here and 7 for the event store: this store is the one an
+    instance cannot be rebuilt without, and the damage it is recovered from -- a
+    bad migration, a mistaken delete -- is often found days later. Event history
+    is bulk, has its own lifecycle (event-management's retentionDays), and its
+    archive is what fills the backup destination.
 
-        destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
+    🔴 30 DAYS WAS ONCE THE DEFAULT FOR BOTH STORES, AND IT WAS RETIRED. A window
+    of that length for both databases filled a 20 GiB destination monotonically --
+    pruning removes nothing until backups start ageing out -- and what followed
+    was the documented cascade: the destination fills, archiving fails, WAL
+    accumulates on the DATABASES' volumes, and PostgreSQL stops. It is back for
+    this store alone because this store is small (megabytes; it grows with a
+    fleet's configuration, not with time) and its share of the archive under
+    ingest is small, and because the default destination is now sized from the
+    event store. A destination still at 20 GiB -- an existing one, which keeps
+    its size through `dcctl install`, or `--compact`'s -- has far less room for
+    it: see backup_object_store_storage.
 
-    🔴 WAL IS CHEAP ONLY WHILE THE INSTANCE IS QUIET. `archive_timeout` forces a
-    segment every 5 minutes, but a segment closed early is zero-filled past the
-    switch record and gzips to tens of KiB, so an idle pair of stores costs well
-    under a GiB per month. Under sustained ingest the archived WAL grows with the
-    write rate instead, and costs about as much as the data it records. Measured
-    on GKE benchmark clusters (v0.18.x): up to about 1.9 KB of archive per
-    ingested event, for both databases together, against about 1 KB per event
-    of the event store's own data. (An earlier measurement published here as
-    "about 1 KB per event, base backups included" was low.) Under sustained
-    ingest the WAL term dominates:
+    What the window keeps in the destination, at the peak:
 
-        destination ≈ (retention_days + 1) × compressed(rdb + tsdb)
-                      + retention_days × daily_events × archived WAL per event
+        (days + 2) × compressed(relational store) + days × its archived WAL per day
 
-    That term grows with retention, and shortening the window is the wrong
-    lever for it: it still keeps a full day of WAL, and it buys space by
-    shrinking how far back the databases can be recovered. The in-cluster
-    destination's default (backup_object_store_storage) is sized so that one
-    default event store fills before it does; its description gives the rule and
-    what it does not cover. Past that, size the destination for the ingest rate,
-    or send backups to an object store you run. Barman
-    prunes only a LIVE Cluster's own archive path, so an archive left by a
-    destroyed instance is pruned by nothing — which is why `dcctl destroy`
-    removes the instance's archive from the in-cluster store.
+    (days + 2): one base backup is uploading while the oldest still predates the
+    window. So 30 days keeps 32 compressed copies of this store.
 
-    The base-backup term alone is (retention_days + 2) copies at the peak --
-    one more is uploading while the oldest still predates the window -- so at 7
-    days nine compressed copies of both databases must fit, beside the WAL. A
-    30-day window was the original default, and it fills a destination sized for
-    7 days monotonically, because pruning removes nothing until backups start
-    ageing out of the window. What follows is the documented cascade: the
-    destination fills, archiving fails, WAL accumulates on the DATABASES' volumes,
-    and PostgreSQL stops.
+    🔴 ITS WAL IS NOT QUIET UNDER INGEST. device-state writes last-known state
+    here as events arrive, so this store's archive grows with the ingest rate of
+    EVERY instance on the cluster. In the one sample taken (GKE, v0.18.x, a small
+    fleet reporting fast, about 4,000 events/s) this store held about 14% of the
+    backup store's contents, the event store the rest. That share is not measured
+    at lower rates or for larger, slower fleets, where device-state batches less
+    and it is likely higher. See backup_object_store_storage for what the longer
+    window does to the rate the default destination absorbs.
 
-    So: raising this REQUIRES raising backup_object_store_storage with it -- and
-    on an existing store that means growing its volume, because that variable is
-    read only when the store is created. There is no check that enforces it — the
-    sizes depend on data nobody knows at plan time — which is why it is stated
-    here rather than assumed.
+    Raising this REQUIRES raising backup_object_store_storage with it -- and on
+    an existing store that means growing its volume, because that variable is
+    read only when the store is created. No check can enforce it: a database's
+    compressed size is not knowable at plan time.
   EOT
   type        = string
-  default     = "7d"
+  default     = "30d"
+
+  validation {
+    condition     = can(regex("^([1-9][0-9]*[dwm])?$", var.backup_retention_rdb))
+    error_message = "backup_retention_rdb must be a whole number followed by d (days), w (weeks) or m (MONTHS), for example \"30d\", \"4w\" or \"1m\"; or empty to keep every backup. CloudNativePG accepts no other form, and the API server would refuse it part-way through the apply."
+  }
 }
 
 variable "backup_object_store_storage" {
@@ -546,25 +548,39 @@ variable "backup_object_store_storage" {
     🔴 SIZED FROM THE EVENT STORE, so that under sustained ingest the EVENT STORE
     fills first. Every scheduled backup is a FULL base backup of both databases,
     and under ingest the archived WAL costs more per event than the data it
-    records (see backup_retention). The default holds, with 35% of it still free,
-    what has landed here by the time one default event store (the instance root's
-    timescale_storage, 32Gi) is FULL: up to about 1.9 KB of archived WAL per event
-    for both databases (measured on GKE, v0.18.x, against about 1 KB per event of
-    stored data), plus one full base backup of each database, bounded by its
-    volume. That is about 98 GiB; 35% free is BackupDestinationFillingFast's gate,
+    records (see the instance root's backup_retention_tsdb). The default holds,
+    with 35% of it still free, what has landed here by the time one default
+    event store (the instance root's timescale_storage, 32Gi) is FULL: up to
+    about 1.9 KB of archived WAL per event for both databases (measured on GKE,
+    v0.18.x, against about 1 KB per event of stored data), plus one full base
+    backup of each database, bounded by its volume. That is about 98 GiB; 35% free is BackupDestinationFillingFast's gate,
     so neither backup-store alert fires before the event store's own alerts do.
     backend/cli/bootstrap/backupsizing_test.go holds this default to that rule.
 
     What it does NOT cover:
       - an event store that takes more than about a day to fill. Every 03:00 base
-        backup in the window is then kept, not one: the base-backup term alone is
-        (retention_days + 2) compressed copies of both databases, about nine at
-        7 days, so the default fits that only while the two databases together
-        compress to under about 17 GiB (160 GiB over nine), less the WAL.
+        backup in each store's window is then kept, not one: (days + 2) compressed
+        copies of each database -- at the default windows, 32 of the relational
+        store (backup_retention_rdb, 30d) and 9 of the event store (the instance
+        root's backup_retention_tsdb, 7d). The default fits that only while
+        32 × compressed(relational) + 9 × compressed(event store) stays under 160
+        GiB, less the WAL: an event store compressing to about 17 GiB leaves no
+        room for the relational store's copies, and every GiB the relational
+        store compresses to costs 32 here. (It is normally megabytes; a relational
+        volume near its 8Gi default would not fit at all.)
       - an event store that never fills, because event-management's retentionDays
-        bounds it. The store then holds seven days of WAL at whatever rate the
-        instance ingests: at the measured cost, about 150 events/s sustained for a
-        week fills this default before any base backup is counted.
+        bounds it. The store then holds each database's window of WAL at whatever
+        rate the instances ingest: 7 days of the event store's and 30 days of the
+        relational store's. At the measured cost, and at the relational share
+        measured once (about 14% of the backup store's contents, a small fleet
+        reporting fast at 4,000 events/s), about 100 events/s sustained fills this
+        default before any base backup is counted. That share is not measured at
+        lower rates or for larger, slower fleets, where it is likely higher; if
+        the relational store's log were all of the archive, the figure would be
+        about 35 events/s. A 20 GiB store -- one created before this default, or
+        --compact's -- fills at about an eighth of those rates.
+        backend/cli/bootstrap/backupsizing_test.go derives both figures from
+        these defaults.
       - several instances ingesting into this one store: it is the CLUSTER's. Add
         about this much again per instance that ingests continuously, or use an
         external destination.
@@ -575,9 +591,10 @@ variable "backup_object_store_storage" {
     and PostgresWALArchiveBacklog the backstop. A base backup lands as one step,
     so a store already past 85% can fill at the next 03:00.
 
-    Raising backup_retention still REQUIRES raising this with it: the arithmetic
-    is multiplicative in the window and no check can enforce it, because the
-    compressed size of a database is not knowable at plan time.
+    Raising either store's window (backup_retention_rdb here,
+    backup_retention_tsdb in the instance root) still REQUIRES raising this with
+    it: the arithmetic is multiplicative in the window and no check can enforce
+    it, because the compressed size of a database is not knowable at plan time.
 
     🔴 When it fills, archiving fails — and failed archiving does not stall
     commits, it accumulates WAL on the DATABASES' own volumes until those fill and
