@@ -126,7 +126,7 @@ locals {
     access_key_id_key     = var.backup_access_key_id_key
     secret_access_key_key = var.backup_secret_access_key_key
     schedule              = var.backup_schedule
-    retention_policy      = var.backup_retention
+    retention_policy      = var.backup_retention_tsdb
     server_name           = var.backup_server_name_tsdb
 
     # 🔴 Four parallel WAL uploads for the event store against the relational

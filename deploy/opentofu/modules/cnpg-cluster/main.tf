@@ -303,6 +303,11 @@ variable "backup" {
     A RESTORED cluster must set it: CloudNativePG refuses to archive back over
     the path it recovered from, so a recovery that keeps the old value comes up
     with archiving permanently broken.
+
+    `retention_policy` has no default: each root states its own store's window
+    (backup_retention_rdb, backup_retention_tsdb), so a default here could only
+    disagree with it -- and did: this module once defaulted to "30d" while both
+    roots passed "7d", which read as one shared 30-day window.
   EOT
 
   type = object({
@@ -320,7 +325,7 @@ variable "backup" {
     archive_timeout = optional(string, "5min")
 
     schedule          = optional(string, "0 0 3 * * *")
-    retention_policy  = optional(string, "30d")
+    retention_policy  = string
     wal_max_parallel  = optional(number, 2)
     data_jobs         = optional(number, 2)
     endpoint_ca       = optional(object({ name = string, key = string }))
@@ -590,6 +595,9 @@ locals {
       local.backup_values.backup.bucket,
       local.backup_values.backup.serverName != "" ? local.backup_values.backup.serverName : local.base_values.name,
     ))
+    # The recovery window Helm is handed, read back out of the values like the
+    # lines above, so a literal in backup_values reads here as what it is.
+    backup_retention = tostring(local.backup_values == null ? null : local.backup_values.backup.retentionPolicy)
   }
 }
 
@@ -691,6 +699,11 @@ output "cluster_name" {
 output "backup_destination" {
   description = "Where this store's WAL and base backups actually go, or null if it has none. Read this rather than re-deriving it from the flags -- a store whose backup block was dropped is indistinguishable from one that has it, right up until a restore is attempted."
   value       = local.reported.backup_destination
+}
+
+output "backup_retention" {
+  description = "The recovery window this store's backups are pruned to, as handed to its ObjectStore, or null if it has no backups. Read back from the release values rather than the variable, so it reports what the store was given."
+  value       = local.reported.backup_retention
 }
 
 output "synchronous_enforced" {

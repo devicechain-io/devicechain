@@ -233,6 +233,16 @@ rendered+=("$(render_case single "${base[@]}" --set instances=1 \
   --set 'bootstrap.postInitTemplateSQL[0]=CREATE EXTENSION IF NOT EXISTS timescaledb')")
 rendered+=("$(render_case ha "${base[@]}" --set instances=3 --set synchronous.enabled=true)")
 rendered+=("$(render_case backup-single "${base[@]}" --set instances=1 "${backup[@]}")")
+# Every UNIT the OpenTofu roots accept for a recovery window (backup_retention_rdb,
+# backup_retention_tsdb: d, w or m), each rendered once. The values default
+# supplies `d`; these two supply the others. The CRD walk checks each one against
+# the ObjectStore's own retentionPolicy pattern, so the roots' validation and the
+# API server's cannot disagree about a unit without this going red -- a window the
+# roots accept and the CRD refuses would fail part-way through an apply.
+rendered+=("$(render_case backup-weeks "${base[@]}" --set instances=1 "${backup[@]}" \
+  --set backup.retentionPolicy=4w)")
+rendered+=("$(render_case backup-months "${base[@]}" --set instances=1 "${backup[@]}" \
+  --set backup.retentionPolicy=1m)")
 rendered+=("$(render_case backup-ha "${base[@]}" --set instances=3 --set synchronous.enabled=true "${backup[@]}" \
   --set backup.serverName=dc-store-restored --set walStorage.enabled=true --set walStorage.size=2Gi \
   --set walStorage.storageClass=fast-ssd \
@@ -430,7 +440,7 @@ PY
 say "checking $(( ${#rendered[@]} )) rendered configurations"
 
 python3 - "$crds" "${rendered[@]}" <<'PY'
-import sys, yaml
+import re, sys, yaml
 
 crd_path, rendered_paths = sys.argv[1], sys.argv[2:]
 
@@ -448,10 +458,26 @@ if not schemas:
     sys.exit("no CRD schemas were parsed -- the check would pass vacuously")
 
 
+# (path, value) of every string checked against a CRD `pattern`, and the ones
+# that failed it. Unlike an unknown field, a value outside its pattern is not
+# pruned: the API server REFUSES the object, which through Helm fails the apply
+# part-way through. Kept apart from `problems` because the remedy differs.
+patterns_checked = []
+pattern_failures = []
+
+
 def walk(obj, schema, path, problems):
     """Report fields the schema does not define. Structural pruning only: this is
-    what the API server drops silently and Helm never mentions."""
+    what the API server drops silently and Helm never mentions. Also checks every
+    string against its schema `pattern`, which the API server enforces."""
     if schema is None:
+        return
+    if isinstance(obj, str) and "pattern" in schema:
+        # The API server's semantics: an unanchored search, so an anchored
+        # pattern (the usual case) is what makes it a full match.
+        patterns_checked.append((path, obj))
+        if not re.search(schema["pattern"], obj):
+            pattern_failures.append("%s = %r does not match %s" % (path, obj, schema["pattern"]))
         return
     # A subtree the CRD explicitly refuses to constrain. Anything goes; recursing
     # would invent violations.
@@ -797,6 +823,28 @@ if uncovered:
         % "\n".join("    spec.%s -- %s" % (".".join(p[1:]), why) for p, why in uncovered)
     )
 
+if pattern_failures:
+    print("Values the CustomResourceDefinition's pattern refuses:\n")
+    for f in pattern_failures:
+        print("  " + f)
+    sys.exit(
+        "\nThe API server REFUSES these objects, so the apply fails part-way through.\n"
+        "Whatever validation admitted the value upstream is wider than the CRD."
+    )
+
+# The positive control for the pattern check: the recovery window was checked, in
+# every unit the OpenTofu roots accept. A walk that stopped reaching
+# spec.retentionPolicy -- a renamed field, a schema that dropped its pattern --
+# would otherwise pass every value by never looking at one.
+window_units = {v[-1:] for p, v in patterns_checked if p == "ObjectStore.spec.retentionPolicy"}
+if window_units != {"d", "w", "m"}:
+    sys.exit(
+        "the ObjectStore's retentionPolicy was checked against the CRD's pattern in\n"
+        "  units %s, not d, w and m. The OpenTofu roots accept all three, so each must\n"
+        "  be proven to reach the API server in a form it accepts."
+        % (sorted(window_units) or "none")
+    )
+
 required = {"Cluster", "ObjectStore", "ScheduledBackup"}
 missing = required - kinds_seen
 if missing:
@@ -821,6 +869,8 @@ if failures:
 print("    %d custom resources validated across %d configurations" % (checked, len(rendered_paths)))
 print("    kinds covered: %s" % ", ".join(sorted(kinds_seen)))
 print("    %d WAL archiver(s) checked for backup wiring" % archivers_checked)
+print("    %d value(s) checked against a CRD pattern; recovery-window units: %s" % (
+    len(patterns_checked), ", ".join(sorted(window_units))))
 print("    %d recovery bootstrap(s) checked for restore wiring" % restores_checked)
 print("    %d optional block(s) exercised: %s" % (
     len(OPTIONAL_BRANCHES),

@@ -3649,6 +3649,46 @@ was already asked to shrink back to the default, which every provisioner refuses
 the new size, grow the volume yourself, on a StorageClass that allows expansion, as that page
 shows. On kind the size is not enforced, so nothing needs doing.
 
+#### Each database keeps its own recovery window: 30 days for core data, 7 for event data {#next-backup-retention}
+
+The `backup_retention` setting, which each OpenTofu configuration declared under the same name, is
+replaced by one setting per database: `backup_retention_rdb` in the cluster configuration, default
+`30d`, and `backup_retention_tsdb` in the instance configuration, default `7d`. The relational
+database holds tenants, users, devices, rules, secrets and each device's last-known state, and it
+can now be recovered to any point in the last 30 days instead of 7. The event store keeps 7 days,
+as before. A window must be a whole number and a unit, `d` for days, `w` for weeks or `m` for
+months, and anything else is refused before the apply starts. See
+[Recovery windows](./bootstrap.md#backup-retention).
+
+A deleted tenant's core data now also stays restorable from backups for 30 days rather than 7,
+until it ages out of the window. See [What is deliberately kept](./tenant-deletion.md#retained).
+
+**At upgrade**, `dcctl install` gives the relational database the new window. The change is to
+that database's backup configuration; the database cluster's own specification does not change.
+Backups already taken are kept. Nothing ages out of a 30-day window until it is 30 days old, so for
+about three weeks after the upgrade the relational database's share of the backup store grows:
+toward about four times the log it keeps today, plus about 23 more nightly base backups. Then it
+levels off.
+
+**Before you upgrade, check the store's headroom.** An existing cluster keeps its store's size (see
+the previous item), so a store created before this release is still 20 GiB unless you grew it, and
+so is the store under `--compact`. Where the event store never fills because a retention window
+bounds it, the sustained ingest rate that fills a 20 GiB store falls from about 19 to about 13
+events per second, and the default 160 GiB store's from about 150 to about 100. Those figures use
+the relational database's share of the log measured once, about 14% for a small fleet reporting
+fast. It is not measured for larger or slower fleets, where it is likely higher; if the relational
+log were all of it, the 160 GiB figure would be about 35. If the store has little room to spare,
+grow its volume first, as [Backup store size](./bootstrap.md#backup-store-size) shows. If you apply
+the OpenTofu configuration yourself, you can instead keep the old window with
+`backup_retention_rdb = "7d"`; `dcctl install` has no option for it.
+
+**If you set `backup_retention`, rename it**: `backup_retention_rdb` in the cluster configuration,
+`backup_retention_tsdb` in the instance configuration. How the old name fails depends on where it
+is set. A `-var backup_retention=…` is refused. A `backup_retention` line in a `.tfvars` file draws
+only a warning, and the store then gets its new default instead of your value: 30 days for the
+relational database, 7 for the event store. A `TF_VAR_backup_retention` environment variable is
+ignored without any warning.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

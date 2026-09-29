@@ -380,9 +380,11 @@ tests:
                 dc-object-store-data is over 85% full. When it fills, WAL archiving starts failing —
                 and failed archiving does not stall commits, it accumulates WAL on the DATABASES'
                 volumes until those fill and PostgreSQL stops. So this ends as a database outage
-                whose cause points nowhere near a database. Grow the volume, shorten
-                backup_retention, remove archives left behind by instances that no longer exist,
-                or move to an external destination.
+                whose cause points nowhere near a database. Grow the volume first. Otherwise
+                remove archives left behind by instances that no longer exist, move to an
+                external destination, or shorten a store's recovery window in the OpenTofu
+                configuration (backup_retention_tsdb for an instance's event store,
+                backup_retention_rdb for the relational store).
 
   # -------------------------------------------------------------------------
   # A PVC in some other namespace must not be attributed to this instance. The

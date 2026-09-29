@@ -77,6 +77,13 @@ Some records survive on purpose, and none of them contains the tenant's own data
   otherwise the erasure's own evidence would be the last place the customer's details lived.
 - **The audit journal, with the identities in it destroyed.** See below.
 
+**Backups are the exception to that sentence.** A backup is a copy of a whole database, so a
+deleted tenant's data stays in the backup archive until it ages out of that database's
+[recovery window](./bootstrap.md#backup-retention): its core data for 30 days by default
+(`backup_retention_rdb`), and its event data for 7 (`backup_retention_tsdb`). Until then, a restore
+to a point before the deletion brings that data back. Backups sent to an object store you supplied
+are also subject to that store's own lifecycle rules.
+
 ### The audit journal {#audit}
 
 Every change to an entity is recorded in an audit journal: when it happened, which table, which

@@ -84,6 +84,14 @@ Algunos registros sobreviven a propósito, y ninguno contiene datos propios del 
   lugar donde vivirían los datos del cliente.
 - **El diario de auditoría, con las identidades que contiene destruidas.** Consulta más abajo.
 
+**Los respaldos son la excepción a esa frase.** Un respaldo es una copia de una base de datos
+entera, así que los datos de un inquilino eliminado permanecen en el archivo de respaldos hasta que
+salen de la [ventana de recuperación](./bootstrap.md#backup-retention) de esa base de datos: sus
+datos de núcleo durante 30 días por defecto (`backup_retention_rdb`), y sus datos de eventos
+durante 7 (`backup_retention_tsdb`). Hasta entonces, una restauración a un punto anterior a la
+eliminación los recupera. Los respaldos enviados a un almacén de objetos que hayas proporcionado
+están sujetos además a las reglas de ciclo de vida de ese almacén.
+
 ### El diario de auditoría {#audit}
 
 Cada cambio en una entidad queda registrado en un diario de auditoría: cuándo ocurrió, qué tabla,

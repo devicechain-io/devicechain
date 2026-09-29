@@ -769,6 +769,31 @@ run_assertions() {
   evaluates '"s3://events-only/dc-tsdb"' 'module.cnpg_tsdb.backup_destination' -var backup_bucket_tsdb=events-only
   evaluates '"s3://devicechain-rdb/dc-rdb"' 'module.cnpg_rdb.backup_destination' -var backup_bucket_tsdb=events-only
 
+  # --- each store's recovery window ----------------------------------------------
+  # 30 days for the relational store, 7 for the event store: one window per store,
+  # declared in the root that owns it. Read back through the module's reported
+  # values (backup_retention is read out of what Helm is handed), so a literal
+  # anywhere on the path root -> module -> values shows. The overrides use windows
+  # no default has (13d, 11d): at the defaults, a hard-coded "30d" or "7d" would
+  # coincide with the right answer.
+  evaluates '"30d"' 'module.cnpg_rdb.backup_retention'
+  evaluates '"13d"' 'module.cnpg_rdb.backup_retention' -var backup_retention_rdb=13d
+  evaluates '"7d"' 'module.cnpg_tsdb.backup_retention'
+  evaluates '"11d"' 'module.cnpg_tsdb.backup_retention' -var backup_retention_tsdb=11d
+  evaluates 'tostring(null)' 'module.cnpg_rdb.backup_retention' -var enable_database_backups=false
+  evaluates 'tostring(null)' 'module.cnpg_tsdb.backup_retention' -var enable_database_backups=false
+
+  # The grammar is CloudNativePG's own (the plugin CRD's ObjectStore
+  # retentionPolicy pattern, ^[1-9][0-9]*[dwm]$), plus empty for "keep every
+  # backup". Anything else would be refused by the API server part-way through
+  # the apply; hack/check-cnpg-chart-schema.sh renders every accepted unit and
+  # checks it against that pattern. "m" is MONTHS there, so the reject lists carry
+  # hours and minutes -- the likeliest misreading of it -- as well as years.
+  for v in 30d 4w 1m 7d ""; do accepts backup_retention_rdb "$v"; done
+  for v in 30 0d 30days "30 d" 1y 1h 30min -7d d 30D; do rejects backup_retention_rdb "$v"; done
+  for v in 7d 2w 1m ""; do accepts backup_retention_tsdb "$v"; done
+  for v in 7 0d 7days "7 d" 1y 1h 30min d 07d; do rejects backup_retention_tsdb "$v"; done
+
   # The object store is provisioned only where it is used. An external destination
   # must not stand one up — that would be a MinIO pod and a volume nobody writes to,
   # on the configuration whose whole point is that storage lives elsewhere.

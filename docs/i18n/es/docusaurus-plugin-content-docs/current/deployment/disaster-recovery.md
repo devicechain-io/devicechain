@@ -50,7 +50,16 @@ Planifica en torno a dos consecuencias:
   cambia algo. Los datos de eventos son volumen, casi siempre de anexado, y ya están sujetos a una
   política de retención ([ciclo de vida de los datos](../concepts/architecture.md)). Conservar
   copias base de fragmentos que el reconciliador de ciclo de vida está a punto de eliminar es
-  pagar dos veces por almacenar las mismas filas.
+  pagar dos veces por almacenar las mismas filas. Tampoco reciben la misma retención: por
+  defecto, los datos de núcleo se pueden recuperar a cualquier punto de los últimos 30 días y los
+  datos de eventos a cualquier punto de los últimos 7 (consulta
+  [Ventanas de recuperación](./bootstrap.md#backup-retention)). Un objetivo de un punto en el
+  tiempo, sea `--restore-rdb-at` o `--restore-tsdb-at`, tiene que caer dentro de la ventana de ese
+  almacén; lo anterior ya no está en el archivo. Así que una restauración de los dos almacenes a un
+  mismo punto tiene que caer dentro de la ventana más corta. Unos datos de núcleo restaurados más
+  atrás quedan junto a datos de eventos de un punto posterior, que es el desajuste descrito arriba
+  en la otra dirección: un inquilino creado después del objetivo de los datos de núcleo sigue
+  teniendo telemetría, pero ninguna fila de inquilino que impulse su borrado.
 - **Objetivos de recuperación distintos.** Restaurar solo los datos de núcleo te devuelve una
   instancia *operativa*: los dispositivos se reconectan, las reglas de detección se ejecutan, los
   comandos se despachan y los secretos se descifran. Restaurar los datos de eventos rellena el

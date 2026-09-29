@@ -446,6 +446,24 @@ comparte su dominio de fallo, así que no puede constituir recuperación ante de
 Consulta [Recuperación ante desastres](./disaster-recovery.md) y el `backup_destination` de la
 configuración de OpenTofu.
 
+#### Ventanas de recuperación {#backup-retention}
+
+Cada base de datos conserva su propia ventana de recuperación: el intervalo de tiempo dentro del
+cual se puede restaurar a cualquier punto. La base de datos relacional, que guarda inquilinos,
+usuarios, dispositivos, reglas, secretos y el último estado conocido de cada dispositivo, conserva
+**30 días**; se ajusta con `backup_retention_rdb` en la configuración de OpenTofu del clúster. El
+almacén de eventos de cada instancia conserva **7 días**; se ajusta con `backup_retention_tsdb` en
+la configuración de la instancia. La base de datos relacional tiene la ventana más larga porque sin
+ella no se puede reconstruir una instancia, y los errores de los que se restaura, como una
+migración defectuosa o un borrado por error, se descubren a menudo días después. El historial de
+eventos es voluminoso, tiene su propio [ciclo de vida de los datos](../concepts/architecture.md), y
+su log es lo que llena el almacén de respaldos.
+
+Una ventana es un número entero y una unidad: `d` para días, `w` para semanas o `m` para **meses**
+(no minutos). Cualquier otra forma se rechaza antes de empezar la aplicación. Una ventana vacía
+conserva todos los respaldos. Alargar una ventana guarda más en el almacén de respaldos: consulta
+más abajo.
+
 #### Tamaño del almacén de objetos de respaldo {#backup-store-size}
 
 El almacén predeterminado tiene 160 GiB, dimensionado a partir del almacén de eventos
@@ -466,13 +484,24 @@ cumple:
   cada instancia añade su propio archivo. Añade unos 160 GiB por cada una de esas instancias, o
   envía los respaldos a un almacén de objetos que gestiones tú (`--backup-credentials-file`), que
   es de todos modos la configuración de producción recomendada.
-- **cuando el almacén de eventos tarda más de aproximadamente un día en llenarse, o no se llena
-  nunca.** El almacén guarda un respaldo base completo de cada base de datos por cada día de la
-  ventana de recuperación de siete días, más el log archivado entre ellos: con siete días, nueve
-  copias comprimidas de las dos bases de datos tienen que caber junto al log. Una instancia cuyos
-  datos almacenados limita una ventana de retención (`retentionDays`) sigue enviando aquí una
-  semana de log. Con el coste medido, unos 150 eventos por segundo sostenidos durante una semana
-  llenan el almacén predeterminado antes de contar ningún respaldo base.
+- **cuando el almacén de eventos tarda más de aproximadamente un día en llenarse.** El almacén
+  guarda un respaldo base completo de cada base de datos por cada día de la
+  [ventana de recuperación](#backup-retention) de esa base de datos, más el log archivado desde
+  entonces. Con las ventanas predeterminadas son 32 copias comprimidas de la base de datos
+  relacional y 9 del almacén de eventos, y tienen que caber junto al log: 32 veces el tamaño
+  comprimido de la base de datos relacional más 9 veces el del almacén de eventos tiene que quedar
+  por debajo de 160 GiB. La base de datos relacional ocupa normalmente megabytes, así que en la
+  práctica el almacén de eventos tiene que comprimirse bastante por debajo de unos 17 GiB.
+- **cuando una ventana de retención (`retentionDays`) limita los datos almacenados de una
+  instancia.** Su almacén de eventos no se llena nunca, pero sigue enviando aquí su log: una semana
+  del almacén de eventos y 30 días de la base de datos relacional, cuyo log crece con la ingesta
+  porque registra el último estado conocido de cada dispositivo. En la única medición realizada,
+  de una flota pequeña que informa con frecuencia, los respaldos de la base de datos relacional
+  eran aproximadamente un 14 % del contenido del almacén. Con esa proporción, unos 100 eventos por
+  segundo sostenidos llenan el almacén predeterminado antes de contar ningún respaldo base. La
+  proporción no está medida para flotas más grandes o más lentas, donde probablemente es mayor: si
+  el log de la base de datos relacional fuera todo el archivo, la cifra sería de unos 35 eventos
+  por segundo.
 - **cuando amplías el almacén de eventos.** Cada GiB que añades al volumen del almacén de eventos
   necesita unos cinco GiB más aquí.
 
@@ -497,9 +526,10 @@ kubectl -n dc-system patch pvc dc-object-store-data \
 
 En kind, el volumen no está limitado a su tamaño: usa lo que tenga el disco del host.
 
-Acortar la ventana de recuperación (`backup_retention`) no resuelve la ingesta: guarda menos
-historial pero sigue guardando un día completo de log, y renuncia a alcance de recuperación para
-ganar espacio. Las alertas descritas en
+Acortar una ventana de recuperación (`backup_retention_tsdb` para el almacén de eventos de una
+instancia, `backup_retention_rdb` para la base de datos relacional) no resuelve la ingesta: guarda
+menos historial pero sigue guardando un día completo de log, y renuncia a alcance de recuperación
+para ganar espacio. Las alertas descritas en
 [Respaldos que dejan de enviarse](./observability.md#backup-archiving) avisan antes de que se
 llene el almacén o un volumen de base de datos.
 
