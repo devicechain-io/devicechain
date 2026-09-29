@@ -142,6 +142,12 @@ type Microservice struct {
 	muxOnce sync.Once
 	mux     *http.ServeMux
 
+	// profiler is the opt-in profiling listener, nil unless ENV_PROFILER_ADDRESS asked
+	// for one and ExecuteStart started it. It is a SEPARATE server on a separate address,
+	// never a route on mux above: the traffic port does not serve profiles. Atomic
+	// because the start and the shutdown run on different goroutines.
+	profiler atomic.Pointer[profilerListener]
+
 	// notLive is the liveness latch: nil while this process can still do its job, and
 	// the first recorded reason once a component has declared that only a restart can
 	// clear its state. See MarkNotLive. Usable at its zero value, so a struct literal
@@ -971,9 +977,16 @@ func (ms *Microservice) Start(ctx context.Context) error {
 	return ms.lifecycle.Start(ctx)
 }
 
-// Start microservice (as called by lifecycle manager)
+// ExecuteStart is the shared start step, called by the lifecycle manager. It starts the
+// opt-in profiling listener (see startProfiler), and does nothing else.
+//
+// The listener lives HERE because this is the one step every service shares: each
+// builds a Microservice and runs its own start in Starter.Postprocess and its own stop
+// in Stopper.Preprocess. So this runs before every service's own start, and ExecuteStop
+// after every service's own stop, and the listener is up for the whole of both — the
+// stop being the slow part somebody is most likely to want a profile of.
 func (ms *Microservice) ExecuteStart(ctx context.Context) error {
-	return nil
+	return ms.startProfiler()
 }
 
 // Stop microservice
@@ -981,9 +994,10 @@ func (ms *Microservice) Stop(ctx context.Context) error {
 	return ms.lifecycle.Stop(ctx)
 }
 
-// Stop microservice (as called by lifecycle manager)
+// ExecuteStop is the shared stop step, called by the lifecycle manager after the
+// service's own stop. It closes the profiling listener, if one is running.
 func (ms *Microservice) ExecuteStop(ctx context.Context) error {
-	return nil
+	return ms.stopProfiler(ctx)
 }
 
 // Terminate microservice

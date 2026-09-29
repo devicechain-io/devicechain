@@ -1064,6 +1064,15 @@ functionalAreas:
     # ~4.75k to ~5.6k events/s; the node carrying the primary ran at 87-97% CPU in
     # every tuned rung.
     avoidEventStorePrimary: true
+    # Profiling listener: Go runtime profiles (CPU, heap, goroutines, execution
+    # trace) served by this service on a port of its own. OFF, here and in every
+    # area. Any area takes the same block. Turning it on restarts this area's pods
+    # and no others. The default address is the pod's loopback, reachable only with
+    # `kubectl port-forward` and never through the Service or the ingress; any other
+    # address exposes unauthenticated profiles to whatever can reach the pod.
+    #   profiler:
+    #     enabled: false
+    #     address: "127.0.0.1:6060"   # an IP address and a port; not a port the pod serves
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)
       # rejects any inbound event that does not present a valid device credential;

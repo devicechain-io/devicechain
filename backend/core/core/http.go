@@ -5,6 +5,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -218,12 +219,20 @@ type HttpServerOptions struct {
 // NewHttpServerForHandler for everything else about the server it returns, including
 // why WriteTimeout and IdleTimeout are not offered here at all.
 func NewHttpServerForHandlerWithOptions(port int32, handler http.Handler, opts HttpServerOptions) *HttpServer {
+	return NewHttpServerAt(fmt.Sprintf(":%d", port), handler, opts)
+}
+
+// NewHttpServerAt is NewHttpServerForHandlerWithOptions on an explicit listen ADDRESS,
+// host and port, rather than a port on every interface. It exists for the profiling
+// listener, whose default is the pod's loopback address alone. Everything else about the
+// server it returns is as NewHttpServerForHandler describes.
+func NewHttpServerAt(addr string, handler http.Handler, opts HttpServerOptions) *HttpServer {
 	readHeaderTimeout := opts.ReadHeaderTimeout
 	if readHeaderTimeout <= 0 {
 		readHeaderTimeout = httpReadHeaderTimeout
 	}
 	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", port),
+		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ConnState:         opts.ConnState,
@@ -341,5 +350,34 @@ func (s *HttpServer) Shutdown(ctx context.Context) error {
 	// network connection". Closing it second also lets the serve loop see a server
 	// shutting down rather than an Accept error it would log as a failure.
 	_ = ln.Close()
+	return err
+}
+
+// Close cuts every connection the server still holds, without waiting for the
+// responses on them to finish. It is for after a Shutdown whose ctx ran out: a graceful
+// shutdown waits for every response to be written, and a client that has stopped
+// reading never lets one be, so a caller that must not wait on its clients follows a
+// bounded Shutdown with this. It is a no-op on a server that was never started, for the
+// same reason Shutdown is.
+//
+// Like Shutdown, it neither closes nor accounts for hijacked connections.
+func (s *HttpServer) Close() error {
+	s.mu.Lock()
+	ln := s.ln
+	started := ln != nil
+	if started {
+		s.stopped = true
+	}
+	s.mu.Unlock()
+	if !started {
+		return nil
+	}
+	err := s.server.Close()
+	_ = ln.Close() // for the reason Shutdown gives
+	// A Shutdown that ran first has closed the listeners already; closing them again is
+	// what the error would report, and it is not a failure to stop.
+	if errors.Is(err, net.ErrClosed) {
+		err = nil
+	}
 	return err
 }

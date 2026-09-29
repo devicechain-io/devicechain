@@ -35,6 +35,9 @@ sirve las dos sondas estándar de Kubernetes:
 Debido a que cada pod habla las mismas convenciones, la pila de monitoreo recolecta métricas de
 toda la instancia de manera uniforme; no hay trabajo de integración por servicio.
 
+Cada servicio puede servir además perfiles del runtime de Go en un listener propio. Está
+desactivado por defecto; consulta [Perfilar un servicio](#profiling).
+
 ## Registros {#logs}
 
 Cada servicio escribe registros JSON estructurados en stderr, un objeto por línea. Cada línea
@@ -815,6 +818,129 @@ antes que cualquier almacén de eventos, y estas alertas son el aviso.
 
 Para saber qué tamaño necesita el almacén interno, consulta
 [Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size).
+
+## Perfilar un servicio {#profiling}
+
+Las métricas muestran cuánto trabajo hace un servicio y cuánto tarda. No muestran en qué se va el
+tiempo dentro de él. Para eso, un servicio puede servir los perfiles del runtime de Go: un perfil
+de CPU, los perfiles de heap y de asignaciones, un volcado de goroutines y una traza de ejecución.
+Los perfiles se sirven en un listener propio del servicio, separado de su puerto HTTP.
+
+### Por qué está desactivado
+
+Los perfiles exponen el interior del servicio, incluidos nombres de funciones, pilas de llamadas y
+dónde asigna memoria. Un perfil de CPU o una traza también consumen CPU mientras duran. El listener
+es una herramienta de medición, no una fuente de monitoreo, así que permanece desactivado hasta que
+lo actives para el servicio que quieras medir.
+
+Cuando está activado, escucha por defecto en la dirección de loopback del pod, `127.0.0.1:6060`.
+El listener nunca es un puerto del contenedor, un puerto del Service ni una ruta del ingress. No
+tiene autenticación propia. Solo puede alcanzarlo quien tenga permiso del clúster para hacer
+port-forward al pod, así que el acceso lo controlan los permisos del clúster, no DeviceChain.
+
+### Activarlo
+
+Se configura por servicio bajo `functionalAreas`. Solo se reinician los pods de ese servicio:
+
+```yaml
+functionalAreas:
+  device-management:
+    profiler:
+      enabled: true
+```
+
+- **Instalada directamente con el chart de Helm:** añade el bloque a tus valores y ejecuta
+  `helm upgrade` como de costumbre.
+- **Instalada con `dcctl bootstrap`:** `dcctl` no tiene una opción para esto. Cambia la release
+  con `helm upgrade`, usando la versión del chart que ya ejecuta la instancia. `helm list -n default`
+  muestra esa versión, y la release se llama `dc-<instance>`:
+
+  ```bash
+  helm get values dc-<instance> -n default -o yaml > dc-values.yaml
+  # añade a dc-values.yaml el bloque profiler de arriba
+  helm upgrade dc-<instance> oci://ghcr.io/devicechain-io/charts/devicechain \
+    --version <chart-version> -n default -f dc-values.yaml
+  ```
+
+  Esto cambia solo la configuración de los pods, no el Secret de configuración de la instancia
+  que gestiona `dcctl`. El siguiente `dcctl upgrade` o `dcctl bootstrap` recalcula la release y
+  vuelve a desactivar el listener.
+
+La configuración se rechaza al instalar si el servicio no está desplegado, porque no haría nada.
+También se rechaza si la dirección usa un puerto que el pod del servicio ya sirve. Una vez en
+marcha, el pod registra `Profiling listener is ON` con la dirección.
+
+### Capturar un perfil
+
+Reenvía un puerto local al pod y apunta a él las herramientas de Go. Necesitas una instalación de
+Go en tu propia máquina; las imágenes de los servicios no la incluyen.
+
+```bash
+kubectl -n dci-<instance> port-forward deploy/device-management 6060:6060
+
+# un perfil de CPU de 30 segundos, abierto en el navegador
+go tool pprof -http=:8081 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'
+
+# el heap, guardado para abrirlo después
+curl -o heap.pb.gz http://127.0.0.1:6060/debug/pprof/heap
+
+# una traza de ejecución de 5 segundos
+curl -o trace.out 'http://127.0.0.1:6060/debug/pprof/trace?seconds=5'
+go tool trace trace.out
+```
+
+Un port-forward a un Deployment llega a **uno** de sus pods. Cuando un servicio ejecuta más de una
+réplica, reenvía al pod que quieres por su nombre (`kubectl port-forward pod/<name> …`).
+
+| Ruta bajo `/debug/pprof/` | Qué es |
+| --- | --- |
+| `profile?seconds=N` | Perfil de CPU, de 1 a 60 segundos (30 por defecto) |
+| `trace?seconds=N` | Traza de ejecución, de 1 a 60 segundos (1 por defecto) |
+| `heap` | Heap vivo, muestreado (`?gc=1` ejecuta antes una recolección) |
+| `allocs` | Todas las asignaciones desde que arrancó el proceso, muestreadas |
+| `goroutine` | La pila de cada goroutine (`?debug=2` para la forma de texto completa) |
+| `threadcreate` | Pilas que crearon hilos del sistema operativo |
+
+`?debug=1` devuelve un perfil instantáneo como texto en lugar del formato binario.
+
+### Qué no sirve, y por qué
+
+- **`block` y `mutex` responden 404.** Su muestreo está desactivado en estos servicios, así que
+  estarían siempre vacíos, y un perfil vacío se leería como "sin contención" cuando no se midió
+  nada.
+- **Se rechaza un perfil de heap o de asignaciones sobre una ventana de tiempo (`?seconds=` en
+  ellos).** Toma dos instantáneas y compáralas con `go tool pprof -base first.pb.gz second.pb.gz`.
+- **`cmdline` y `symbol` no se sirven.** Los perfiles llevan sus propios símbolos.
+- **Un perfil de CPU y una traza a la vez.** Una segunda petición de cualquiera de ellos responde
+  409 hasta que termina la primera.
+- **Un perfil en curso cuando el servicio se apaga se abandona**, para que el apagado no lo espere.
+  Un perfil de CPU responde 503. A una traza se le corta la conexión, así que tu herramienta
+  informa de un error en lugar de guardar una traza que parece completa.
+- **Una descarga que deja de leerse se corta.** Un perfil debe llegarte en los 10 segundos
+  siguientes al tiempo que pediste (`?seconds=` más 10). A un cliente que se detiene más tiempo,
+  como un `kubectl port-forward` atascado o un `curl` suspendido, se le cierra la conexión, así
+  que no puede mantener la traza en marcha. Al apagarse, se cierra cualquier conexión que siga
+  abierta un segundo después de que el listener empiece a detenerse.
+- **Cada perfil se sirve en una conexión propia.** La respuesta cierra su conexión, así que una
+  herramienta que reutiliza conexiones abre una nueva para la siguiente petición.
+
+### Otra dirección
+
+`profiler.address` fija dónde escucha el listener. Debe ser una dirección IP y un puerto, por
+ejemplo `0.0.0.0:6060` para un perfilador que recoge datos desde otros pods. El servicio se niega a
+arrancar con un nombre de host, sin puerto o con su propio puerto 8080.
+
+:::warning Cualquier dirección que no sea loopback queda abierta a la red del clúster
+El listener no tiene autenticación, y el chart no genera ninguna network policy que limite quién
+puede conectarse a un servicio. Así que en una dirección que no sea loopback, cualquier cosa que
+alcance la IP del pod puede leer sus perfiles, salvo que añadas tu propia network policy de
+entrada. El servicio registra un aviso cuando arranca en una dirección así.
+:::
+
+### Desactivarlo
+
+Pon `enabled: false` o quita el bloque, y actualiza la release igual que al activarlo. Solo se
+reinician los pods de ese servicio.
 
 ## Relacionado
 

@@ -217,6 +217,23 @@ functionalAreas:
         port: 8081   # POST /{instanceId}/{tenant}/events
 ```
 
+An area can serve Go runtime profiles (CPU, heap, goroutines, execution trace) for
+measuring where it spends its time. This is off by default. When it is on, the
+profiles are served on a separate listener, which is never a container port, a
+Service port or an ingress route. The default address is the pod's loopback, so you
+reach it with `kubectl port-forward`. Turning it on restarts that area's pods only:
+
+```yaml
+functionalAreas:
+  device-management:
+    profiler:
+      enabled: true
+      # address: "127.0.0.1:6060"   # default; an IP address and a port
+```
+
+The documentation's observability page, under "Profiling a service", explains how to
+capture a profile.
+
 `values.schema.json` validates the deployment-selection envelope (profile enum,
 area names, image/instance shape) at `helm install`/`upgrade` time.
 

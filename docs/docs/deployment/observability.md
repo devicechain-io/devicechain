@@ -36,6 +36,9 @@ serves the two standard Kubernetes probes:
 Because every pod speaks the same conventions, the monitoring stack scrapes the
 whole instance uniformly — there is no per-service integration work.
 
+Each service can also serve Go runtime profiles on a listener of its own. This is off
+by default; see [Profiling a service](#profiling).
+
 ## Logs {#logs}
 
 Every service writes structured JSON logs to stderr, one object per line. Each line
@@ -774,6 +777,129 @@ warning.
 
 For how large the in-cluster store needs to be, see
 [Backup store size](./bootstrap.md#backup-store-size).
+
+## Profiling a service {#profiling}
+
+Metrics show how much work a service does and how long it takes. They do not show where the
+time goes inside it. For that, a service can serve Go's runtime profiles: a CPU profile, the
+heap and allocation profiles, a goroutine dump, and an execution trace. The profiles are served
+on a listener of the service's own, separate from its HTTP port.
+
+### Why it is off
+
+The profiles expose the service's internals, including function names, call stacks and where
+it allocates memory. A CPU profile or a trace also costs CPU for as long as it runs. The
+listener is a measuring tool, not a monitoring feed, so it stays off until you turn it on for
+the service you want to measure.
+
+When it is on, it listens on the pod's loopback address, `127.0.0.1:6060`, by default. The
+listener is never a container port, a Service port or an ingress route. It has no
+authentication of its own. Only someone the cluster allows to port-forward to the pod can
+reach it, so access is controlled by the cluster's permissions, not by DeviceChain.
+
+### Turning it on
+
+Set it per service under `functionalAreas`. Only that service's pods restart:
+
+```yaml
+functionalAreas:
+  device-management:
+    profiler:
+      enabled: true
+```
+
+- **Installed from the Helm chart directly:** add the block to your values and run
+  `helm upgrade` as you normally do.
+- **Installed with `dcctl bootstrap`:** `dcctl` has no option for this. Change the release
+  with `helm upgrade`, using the chart version the instance already runs. `helm list -n default`
+  shows that version, and the release is named `dc-<instance>`:
+
+  ```bash
+  helm get values dc-<instance> -n default -o yaml > dc-values.yaml
+  # add the profiler block above to dc-values.yaml
+  helm upgrade dc-<instance> oci://ghcr.io/devicechain-io/charts/devicechain \
+    --version <chart-version> -n default -f dc-values.yaml
+  ```
+
+  This changes only the pod settings, not the instance configuration Secret that `dcctl`
+  owns. The next `dcctl upgrade` or `dcctl bootstrap` recomputes the release and turns the
+  listener off again.
+
+The setting is refused at install time if the service is not deployed, because it would do
+nothing. It is also refused if the address uses a port the service's pod already serves.
+Once the pod is running, it logs `Profiling listener is ON` with the address.
+
+### Capturing a profile
+
+Forward a local port to the pod, then point Go's tools at it. You need a Go toolchain on your
+own machine; the service images do not include one.
+
+```bash
+kubectl -n dci-<instance> port-forward deploy/device-management 6060:6060
+
+# a 30-second CPU profile, opened in a browser
+go tool pprof -http=:8081 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'
+
+# the heap, saved to open later
+curl -o heap.pb.gz http://127.0.0.1:6060/debug/pprof/heap
+
+# a 5-second execution trace
+curl -o trace.out 'http://127.0.0.1:6060/debug/pprof/trace?seconds=5'
+go tool trace trace.out
+```
+
+A port-forward to a Deployment reaches **one** of its pods. When a service runs more than
+one replica, forward to the pod you mean by name (`kubectl port-forward pod/<name> …`).
+
+| Path under `/debug/pprof/` | What it is |
+| --- | --- |
+| `profile?seconds=N` | CPU profile, 1 to 60 seconds (default 30) |
+| `trace?seconds=N` | Execution trace, 1 to 60 seconds (default 1) |
+| `heap` | Live heap, sampled (`?gc=1` runs a collection first) |
+| `allocs` | Every allocation since the process started, sampled |
+| `goroutine` | Every goroutine's stack (`?debug=2` for the full text form) |
+| `threadcreate` | Stacks that created operating-system threads |
+
+`?debug=1` returns a snapshot profile as text rather than the binary format.
+
+### What it does not serve, and why
+
+- **`block` and `mutex` answer 404.** Their sampling is off in these services, so they would
+  always be empty, and an empty profile would read as "no contention" when nothing was
+  measured.
+- **A heap or allocation profile over a time window (`?seconds=` on those) is refused.**
+  Take two snapshots and compare them with `go tool pprof -base first.pb.gz second.pb.gz`.
+- **`cmdline` and `symbol` are not served.** The profiles carry their own symbols.
+- **One CPU profile and one trace at a time.** A second request for either answers 409 until
+  the first ends.
+- **A profile in progress when the service shuts down is abandoned** so that shutdown does not
+  wait for it. A CPU profile answers 503. A trace has its connection cut, so your tool reports
+  an error instead of saving a trace that looks complete.
+- **A download that stops being read is cut.** A profile must reach you within 10 seconds of
+  the time you asked for (`?seconds=` plus 10). A client that stalls longer than that, such as
+  a stuck `kubectl port-forward` or a suspended `curl`, has its connection closed, so it cannot
+  keep the trace running. At shutdown, a connection still open a second after the listener
+  starts to stop is closed.
+- **Each profile is served on a connection of its own.** The response closes its connection, so
+  a tool that reuses connections opens a new one for the next request.
+
+### Another address
+
+`profiler.address` sets where the listener binds. It must be an IP address and a port, for
+example `0.0.0.0:6060` for a profiler that collects from other pods. The service refuses to
+start on a host name, a missing port, or its own port 8080.
+
+:::warning Any address other than loopback is open to the cluster network
+The listener has no authentication, and the chart renders no network policy that limits who
+can connect to a service. So on a non-loopback address, anything that can reach the pod's IP
+can read its profiles unless you add an ingress network policy of your own.
+The service logs a warning when it starts on such an address.
+:::
+
+### Turning it off
+
+Set `enabled: false` or remove the block, and upgrade the release the same way you turned it on.
+Only that service's pods restart.
 
 ## Related
 

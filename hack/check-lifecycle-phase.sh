@@ -203,6 +203,8 @@ func NewHttpServerForHandlerWithOptions(port int32, handler any, opts HttpServer
 	return nil
 }
 
+func NewHttpServerAt(addr string, handler any, opts HttpServerOptions) *HttpServer { return nil }
+
 func (ms *Microservice) RegisterProbes(gate any) {}
 
 func (ms *Microservice) NewCounter(name, help string, labels []string) any { return nil }

@@ -58,7 +58,8 @@ func carryForwardFromRelease(st *State, previous map[string]interface{}) {
 // Copied as opaque structures rather than parsed back into State: reconstructing the
 // identities from their own rendering would mean depending on the exact shape
 // lwm2mProvisioning emits, which is the fragile direction. The values are carried
-// forward byte for byte, and the next bootstrap is what changes them.
+// forward byte for byte, and the next bootstrap is what changes them — with one
+// exception, an area's profiler block, which is dropped (see withoutProfiler).
 var carriedValuePaths = [][]string{
 	{"extraSecrets"},
 	{"functionalAreas", "lwm2m-ingest"},
@@ -101,6 +102,36 @@ func carryReleaseValues(vals, previous map[string]interface{}) {
 		if _, already := dst[leaf]; already {
 			continue
 		}
+		if path[0] == "functionalAreas" {
+			value = withoutProfiler(value)
+		}
 		dst[leaf] = value
 	}
+}
+
+// withoutProfiler drops an area's profiler block from what is carried.
+//
+// The profiling listener is a measuring knob set on the release by hand (dcctl has no
+// option for it and records nothing about it), so an upgrade turns it off for every
+// area whose block it recomputes — which is every area but the one carried above.
+// Carrying it for that one would make lwm2m-ingest the single area a dcctl upgrade
+// left profiling, for no reason but where its pre-shared keys happen to live. Off is
+// also the safe direction for a listener nobody asked this run for.
+//
+// It copies rather than edits: previous is the release's own record.
+func withoutProfiler(value interface{}) interface{} {
+	area, ok := value.(map[string]interface{})
+	if !ok {
+		return value
+	}
+	if _, has := area["profiler"]; !has {
+		return value
+	}
+	out := make(map[string]interface{}, len(area))
+	for k, v := range area {
+		if k != "profiler" {
+			out[k] = v
+		}
+	}
+	return out
 }

@@ -832,6 +832,66 @@ turns out to want an unbounded heap more than a small one.
 {{- end -}}
 
 {{/*
+devicechain.profilerAddress is the address one functional area's opt-in profiling
+listener binds, or "" when that area's listener is off (the default). deployment.yaml
+writes a non-empty answer into DC_PROFILER_ADDRESS, which is the service's only
+switch for it.
+
+It is a per-area POD setting rather than a key in the instance configuration, and
+that is deliberate. The instance document is one Secret shared by every area, so a
+key there restarts every service when it changes — which disturbs exactly the steady
+state a profile is taken to measure — and under instance.existingSecret (every dcctl
+install) the chart cannot write it at all. An environment variable on one Deployment
+restarts that service alone, and works whichever way the document is supplied. The
+service still fails closed on it: a value it cannot use refuses startup.
+
+The default is the pod's loopback address, reachable only through kubectl
+port-forward. The listener is never a container port or a Service port; nothing here
+renders one.
+
+A TCP port the area's own pod already serves is refused HERE, because the service
+would otherwise bind the profiler first and then fail its own listener with an error
+that names the wrong one. The service refuses its own HTTP port too; this also covers
+the area's TCP extraPorts, which only the chart knows. A UDP extraPort (lwm2m-ingest's
+CoAPS) is a different port space and does not collide with the TCP profiler, so it is
+not refused. The address's syntax is judged by the service, which is the one reader
+that has to be right about it.
+*/}}
+{{- define "devicechain.profilerAddress" -}}
+{{- $root := .root -}}
+{{- $p := get .areaCfg "profiler" | default dict -}}
+{{- if $p.enabled -}}
+{{- $addr := $p.address | default "127.0.0.1:6060" -}}
+{{- $port := regexFind "[0-9]+$" $addr -}}
+{{- $taken := list (toString $root.Values.service.port) -}}
+{{- range $x := get .areaCfg "extraPorts" | default list -}}
+{{- if eq (upper ($x.protocol | default "TCP")) "TCP" -}}
+{{- $taken = append $taken (toString $x.port) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $port (has $port $taken) -}}
+{{- fail (printf "functionalAreas.%s.profiler.address %q uses port %s, which the %s pod already serves over TCP (its TCP ports: %s). Choose another port for the profiling listener." .area $addr $port .area (join ", " $taken)) -}}
+{{- end -}}
+{{- $addr -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.validateProfilerAreas refuses a profiling listener turned on for an area
+this release does not deploy. Such a setting renders nothing, so without this it
+would be accepted and do nothing, and the first sign would be a refused port-forward.
+*/}}
+{{- define "devicechain.validateProfilerAreas" -}}
+{{- $enabled := splitList "," (include "devicechain.enabledAreas" .) -}}
+{{- range $area, $cfg := .Values.functionalAreas | default dict -}}
+{{- $p := get ($cfg | default dict) "profiler" | default dict -}}
+{{- if and $p.enabled (not (has $area $enabled)) -}}
+{{- fail (printf "functionalAreas.%s.profiler.enabled is true, but %s is not deployed by this release, so it would turn nothing on. Deploy the area, or remove the setting." $area $area) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 devicechain.instanceConfig renders the instance-wide configuration document, with
 coordinates for areas this deployment did not enable removed.
 

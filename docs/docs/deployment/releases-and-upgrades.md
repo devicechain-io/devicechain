@@ -3689,6 +3689,17 @@ only a warning, and the store then gets its new default instead of your value: 3
 relational database, 7 for the event store. A `TF_VAR_backup_retention` environment variable is
 ignored without any warning.
 
+#### Any service can serve Go runtime profiles, off by default {#next-profiling}
+
+Every service can now serve Go runtime profiles (CPU, heap, allocations, goroutines and the
+execution trace), so you can measure where a service spends its time instead of inferring it.
+It is off unless you turn it on for a service with
+`functionalAreas.<service>.profiler.enabled: true`. Only that service's pods restart. The
+profiles are served on a listener of their own, on the pod's loopback address by default, so
+you reach them with `kubectl port-forward`. That listener is never a container port, a Service
+port or an ingress route. Nothing changes for an instance that does not set it, and nothing
+needs doing. See [Profiling a service](./observability.md#profiling).
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

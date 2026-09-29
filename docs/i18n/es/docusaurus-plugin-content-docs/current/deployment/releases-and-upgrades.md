@@ -3960,6 +3960,17 @@ anterior depende de dónde esté. Un `-var backup_retention=…` se rechaza. Una
 nuevo valor predeterminado en lugar del tuyo: 30 días para la base de datos relacional, 7 para el
 almacén de eventos. Una variable de entorno `TF_VAR_backup_retention` se ignora sin ningún aviso.
 
+#### Cualquier servicio puede servir perfiles del runtime de Go, desactivado por defecto {#next-profiling}
+
+Cada servicio puede servir ahora perfiles del runtime de Go (CPU, memoria, asignaciones,
+goroutines y la traza de ejecución), para que puedas medir en qué gasta su tiempo un servicio en
+lugar de deducirlo. Está desactivado salvo que lo actives para un servicio con
+`functionalAreas.<service>.profiler.enabled: true`. Solo se reinician los pods de ese servicio.
+Los perfiles se sirven en un listener propio, por defecto en la dirección de loopback del pod, así
+que se accede a ellos con `kubectl port-forward`. Ese listener nunca es un puerto del contenedor,
+un puerto del Service ni una ruta del ingress. Nada cambia en una instancia que no lo configure, y
+no hay que hacer nada. Consulta [Perfilar un servicio](./observability.md#profiling).
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
