@@ -29,10 +29,16 @@ TIME-SERIES store's hypertables and never touches these tables, so on a healthy
 install with retention working perfectly the relational volume still climbs.
 
 And a PostgreSQL data volume that fills does not degrade, it STOPS the database —
-and every replica is filling at the same rate off the same writes, so there is no
-failover out of it. Until this file there was nothing between "growing quietly for
-six months" and "the platform is down"; the chart alerted on the object store's
-PVC and on no database volume at all.
+and every replica is filling at the same rate off the same DATA, so there is no
+failover out of it. (Not off the same WAL: WAL held back for a stalled archiver is
+the primary's alone, so the primary fills FIRST. Measured on a v0.18.0 benchmark
+cluster when archiving failed: the event-store primary went from 45% to 95% in
+about nine minutes while its replicas were at 70% — and CloudNativePG does not fail
+over a full disk. DatabaseVolumeFillingFast below is for that case.)
+
+Until this file there was nothing between "growing quietly for six months" and
+"the platform is down"; the chart alerted on the object store's PVC and on no
+database volume at all.
 
 🔴 WHY A FRACTION AND NOT A SIZE, and this is the whole design constraint. The
 underlying quantity is MONOTONIC. Any rule of the shape "used bytes > N" latches:
@@ -169,9 +175,9 @@ spec:
             summary: "A database volume is almost full"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is over 85% full. A PostgreSQL volume that
-              fills does not slow down, it stops the database — and every replica is consuming the
-              same writes at the same rate, so there is no failover out of this and no second
-              instance still serving. Grow it now: CloudNativePG expands a Cluster's volumes in
+              fills does not slow down, it stops the database, and failing over does not rescue it:
+              every replica holds the same data, and when the cause is unshipped WAL it is the
+              primary that fills first. Grow it now: CloudNativePG expands a Cluster's volumes in
               place where the storage class supports expansion, by raising spec.storage.size (or
               spec.walStorage.size for a -wal claim). Reclaiming space is mostly not an
               alternative, because the tables that grow are append-only and stored events point at
@@ -181,4 +187,51 @@ spec:
 
               If this is a -wal claim, treat it as a stalled archiver first — unshipped WAL is
               retained until it ships, and the WAL archiving alerts say why it is not shipping.
+        # An EVENT-STORE volume filling fast, which neither threshold above sees in
+        # time: 85% held for 15m fires after a volume filling in minutes is already
+        # full.
+        #
+        # Measured on a v0.18.0 benchmark cluster: archiving failed on a full object
+        # store, and the event-store primary's volume went 45% → 72% → 88% → 95% over
+        # about nine minutes, then PostgreSQL stopped. Replayed as a unit test, this
+        # rule fires about two minutes before the primary is full; the two above do not
+        # fire at all before it.
+        #
+        # predict_linear over 15m, projected 1h ahead, gated on less than half free:
+        # a volume with room to spare is not paged on for a burst, and one at the
+        # measured rate is. `for: 3m`, because at that rate three minutes is a third of
+        # what is left.
+        #
+        # 🔴 dc-tsdb ONLY. The relational store's volume takes transient spills — a
+        # large sort, an index build, VACUUM FULL — steep enough to project a fill
+        # within the hour and then gives the space back; the rules above wait an hour
+        # for exactly that reason, and a critical page on every index build is the
+        # fastest way to have this switched off. The event store is where sustained
+        # ingest, and the WAL a stalled archiver holds back, fill a volume in minutes.
+        - alert: DatabaseVolumeFillingFast
+          expr: |
+            (
+              predict_linear(kubelet_volume_stats_available_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-tsdb-.*"}[15m], 3600) < 0
+            )
+            and on (namespace, persistentvolumeclaim)
+            (
+              kubelet_volume_stats_available_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-tsdb-.*"}
+              /
+              kubelet_volume_stats_capacity_bytes{namespace=~"{{ $dbsel }}", persistentvolumeclaim=~"dc-tsdb-.*"}
+            ) < 0.5
+          for: 3m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "An event-store volume will be full within the hour at its current rate"
+            description: >-
+              {{ "{{ $labels.persistentvolumeclaim }}" }} is more than half full and filling fast enough
+              to run out of space within the hour. When it fills, PostgreSQL stops, and CloudNativePG
+              does not fail over a full disk. If only the primary's volume is climbing while its
+              replicas' are not, the cause is WAL the archiver has not shipped — see the WAL archiving
+              and backup destination alerts, and fix the destination first. If every member is
+              climbing together, it is data: ingest is outgrowing the volume, so grow it
+              (spec.storage.size on the Cluster, where the storage class supports expansion) or
+              shorten data retention.
 {{- end }}

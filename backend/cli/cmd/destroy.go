@@ -21,6 +21,7 @@ var (
 	destroyAssumeYes    bool
 	destroyAll          bool
 	destroyWithoutState bool
+	destroyKeepBackups  bool
 )
 
 // destroyCmd removes a DeviceChain instance — the inverse of bootstrap.
@@ -35,6 +36,17 @@ instance's infrastructure state; its database and login on the shared relational
 store; its namespace, waiting until it is gone; and, last, its local state under
 ~/.devicechain/instances/<instance>. The root-key escrow is kept. A destroy that
 fails part-way keeps the local state, and running it again resumes.
+
+Once the namespace is gone, destroy also removes the instance's event-store
+backups (WAL archive and base backups) from the cluster's in-cluster object store:
+everything under the exact path the event store was archiving to, read from it
+before anything was changed, and it checks that the path is empty afterwards.
+Backups in an object store you supplied (install --backup-credentials-file) are
+never deleted; destroy prints where they are. --keep-backups keeps in-cluster
+backups too — use it when you mean to rebuild the instance from them with
+"dcctl bootstrap --restore-tsdb-from", because a destroy without it deletes the
+archive that restore would read. If the object store cannot be reached, destroy
+still finishes and names the archive it left.
 
 If the instance's infrastructure state is missing or empty but its broker or event
 store is running, or the state cannot be read, or it still holds the cluster's shared
@@ -84,6 +96,9 @@ func init() {
 	destroyCmd.Flags().BoolVar(&destroyDryRun, "dry-run", false, "print what would happen without destroying anything")
 	destroyCmd.Flags().BoolVarP(&destroyAssumeYes, "yes", "y", false, "assume yes for prompts")
 	destroyCmd.Flags().BoolVar(&destroyAll, "all", false, "destroy EVERY instance on this machine (takes no arguments)")
+	destroyCmd.Flags().BoolVar(&destroyKeepBackups, "keep-backups", false,
+		"keep the instance's event-store backups in the cluster's in-cluster object store (they are removed by default; "+
+			"backups in an object store you supplied are never removed). Use it to rebuild the instance from them with --restore-tsdb-from")
 	destroyCmd.Flags().BoolVar(&destroyWithoutState, "without-state", false,
 		"skip tofu destroy and remove the instance by its release, database, login and namespace (for an instance whose infrastructure state is lost)")
 
@@ -125,11 +140,12 @@ func destroyEveryInstance(ctx context.Context) error {
 	if destroyWithoutState {
 		fmt.Println(color.YellowString("\n--without-state: tofu destroy is SKIPPED for every instance above."))
 	}
+	fmt.Println(color.YellowString("\n%s", destroyAllBackupsNote(destroyKeepBackups)))
 	if destroyDryRun {
 		fmt.Println(color.YellowString("\n[dry-run] nothing was destroyed."))
 		return nil
 	}
-	prompt := fmt.Sprintf("Permanently destroy ALL %d instance(s) above? This deletes ALL of their data; every cluster stays", len(known))
+	prompt := destroyAllPrompt(len(known), destroyKeepBackups)
 	if !destroyAssumeYes && !bootstrap.Confirm(prompt) {
 		fmt.Println(color.YellowString("Aborted."))
 		return nil
@@ -162,6 +178,28 @@ func destroyEveryInstance(ctx context.Context) error {
 	return nil
 }
 
+// destroyAllBackupsNote is what --all says about the instances' backups before it asks.
+// 🔴 --all ASKS ONCE AND THEN DESTROYS WITH --yes, so the per-instance prompt that names
+// each archive never appears: this line and the prompt below are the only warning.
+func destroyAllBackupsNote(keep bool) string {
+	if keep {
+		return "--keep-backups: every instance's event-store backups are KEPT."
+	}
+	return "Every instance's event-store backups in its cluster's in-cluster object store are REMOVED with it\n" +
+		"(backups in an object store you supplied are never removed). Pass --keep-backups to keep them —\n" +
+		"for example to rebuild an instance from them with --restore-tsdb-from."
+}
+
+// destroyAllPrompt is --all's one confirmation.
+func destroyAllPrompt(n int, keep bool) string {
+	backups := ", including their backups in each cluster's in-cluster object store (pass --keep-backups to keep them)"
+	if keep {
+		backups = "; their backups are kept (--keep-backups)"
+	}
+	return fmt.Sprintf("Permanently destroy ALL %d instance(s) above? This deletes ALL of their data%s; every cluster stays",
+		n, backups)
+}
+
 // destroyOptionsFor builds one instance's destroy options, for both the single form and
 // every instance of --all.
 //
@@ -177,5 +215,6 @@ func destroyOptionsFor(instance, kubeContext string, dryRun, assumeYes bool) boo
 			AssumeYes:   assumeYes,
 		},
 		WithoutState: destroyWithoutState,
+		KeepBackups:  destroyKeepBackups,
 	}
 }

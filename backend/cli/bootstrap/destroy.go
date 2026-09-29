@@ -25,12 +25,17 @@ type DestroyOptions struct {
 	// infrastructure state: the chart release, the database and login, and the
 	// namespace. For an instance whose state is lost, or cannot be destroyed from.
 	WithoutState bool
+	// KeepBackups keeps the instance's event-store backups in the cluster's in-cluster
+	// object store, which destroy otherwise removes once the instance is gone. Backups in
+	// an object store the operator supplied are never removed either way.
+	KeepBackups bool
 }
 
 // Destroy removes one DeviceChain instance — the inverse of bootstrap: its Helm release,
 // its own infrastructure (`tofu destroy` over the instance root), its database and login
-// on the shared relational store, its namespace, and its local state (root-key escrow
-// spared).
+// on the shared relational store, its namespace, its event-store backups in the cluster's
+// in-cluster object store (never in one the operator supplied; kept with --keep-backups),
+// and its local state (root-key escrow spared).
 //
 // 🔴 IT NEVER DELETES THE CLUSTER, OR ANYTHING ELSE THE CLUSTER'S OTHER INSTANCES SHARE.
 // A cluster holds many instances and the prerequisites `dcctl install` put there serve
@@ -61,11 +66,16 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 		}
 		// Two values, not one repeated: the namespace this would delete comes through
 		// InstanceNamespace, the local state directory is named for the instance itself.
+		backups := "remove the instance's event-store backups from the cluster's in-cluster object store " +
+			"(never from an object store you supplied), "
+		if opts.KeepBackups {
+			backups = "KEEP the instance's event-store backups (--keep-backups), "
+		}
 		wouldDo(fmt.Sprintf(
 			"uninstall the instance release, %sdrop its database and login from the shared relational store, "+
-				"delete namespace %s and wait until it is gone, and remove ~/.devicechain/instances/%s "+
+				"delete namespace %s and wait until it is gone, %sand remove ~/.devicechain/instances/%s "+
 				"(root-key escrow kept), LEAVING cluster %s running",
-			infra, InstanceNamespace(opts.Instance), opts.Instance, binding.describe()))
+			infra, InstanceNamespace(opts.Instance), backups, opts.Instance, binding.describe()))
 		return nil
 	}
 
@@ -134,13 +144,30 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 		}
 	}
 
+	// 🔴 AND WHICH ARCHIVE IS THIS INSTANCE'S IS READ HERE, BEFORE THE FIRST CHANGE: the
+	// only trustworthy record of it is the live event store, which the steps below delete.
+	// A failure to read it is not a failure of the destroy — see settleInstanceArchive.
+	archive := archivePlan{Action: archiveUnknown}
+	if dyn, typed, err := teardownClients(opts.KubeContext); err != nil {
+		archive.Reason = fmt.Sprintf("the cluster could not be reached to read where they are (%v)", err)
+	} else {
+		archive = readArchivePlan(ctx, dyn, typed, opts.Instance, opts.KeepBackups)
+	}
+	if archive.Action == archiveRemove {
+		// Said before anything is changed, and even under --yes, so that a scripted
+		// destroy leaves a line naming what it is about to delete.
+		fmt.Println(color.YellowString("Its event-store backups at %s in the cluster's in-cluster object store will be "+
+			"REMOVED once the instance is gone. Pass --keep-backups to keep them — for example to rebuild this "+
+			"instance from them with --restore-tsdb-from.", archive.location()))
+	}
+
 	// 🔴 RETURNING ON AN OUTCOME IS WHAT KEEPS THE CLOSING LINE TRUE. An abort is not a
 	// completed uninstall: uninstallInstance once returned nil for both, so declining the
 	// confirmation still fell through to removeInstanceState — deleting the tfstate of an
 	// instance the operator had just said to leave alone. And the nothing-here outcome has
 	// already removed the local state and said what happened; falling through would remove
 	// it a second time and then claim a destroy over a cluster nothing touched.
-	leftDatabase, err := uninstallInstance(ctx, opts, stateHasResources)
+	leftDatabase, leftArchive, err := uninstallInstance(ctx, opts, stateHasResources, archive)
 	if err != nil {
 		if destroyNeedsNoFurtherWork(err) {
 			return nil
@@ -152,25 +179,25 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	if err := removeInstanceState(opts); err != nil {
 		return err
 	}
-	fmt.Println(destroyedLine(opts.Instance, binding.describe(), leftDatabase, opts.WithoutState))
+	fmt.Println(destroyedLine(opts.Instance, binding.describe(), leftDatabase, leftArchive, opts.WithoutState))
 	return nil
 }
 
 // destroyedLine is the closing line of a destroy that uninstalled the instance.
-func destroyedLine(instance, cluster, leftDatabase string, withoutState bool) string {
+func destroyedLine(instance, cluster, leftDatabase, leftArchive string, withoutState bool) string {
 	if withoutState {
 		// 🔴 NOT GREEN EITHER. Nothing checked that the instance's infrastructure was
 		// all in its namespace; the operator asked for that, and the line says so.
 		return color.YellowString("\nInstance %q removed WITHOUT tofu destroy (--without-state); cluster %s left running. "+
-			"Anything of its infrastructure outside namespace %s was not removed.%s",
-			instance, cluster, InstanceNamespace(instance), leftDatabaseNote(leftDatabase))
+			"Anything of its infrastructure outside namespace %s was not removed.%s%s",
+			instance, cluster, InstanceNamespace(instance), leftDatabaseNote(leftDatabase), leftArchiveNote(leftArchive))
 	}
-	if leftDatabase != "" {
-		// 🔴 NOT GREEN. Something of this instance is still on the shared store, and a
+	if leftDatabase != "" || leftArchive != "" {
+		// 🔴 NOT GREEN. Something of this instance is still on a shared store, and a
 		// closing line that says it is gone is the sentence this command keeps being
 		// fixed for.
-		return color.YellowString("\nInstance %q uninstalled; cluster %s left running.%s",
-			instance, cluster, leftDatabaseNote(leftDatabase))
+		return color.YellowString("\nInstance %q uninstalled; cluster %s left running.%s%s",
+			instance, cluster, leftDatabaseNote(leftDatabase), leftArchiveNote(leftArchive))
 	}
 	return color.HiGreenString("\nInstance %q destroyed; cluster %s left running.", instance, cluster)
 }
@@ -213,18 +240,45 @@ func leftDatabaseNote(leftDatabase string) string {
 	return " Its database, if it has one, was LEFT on the shared relational store: " + leftDatabase
 }
 
+// leftArchiveNote is the event-store backups half of a closing line, empty when nothing
+// of them was left that destroy was meant to remove.
+func leftArchiveNote(leftArchive string) string {
+	if leftArchive == "" {
+		return ""
+	}
+	return " Its event-store backups " + leftArchive
+}
+
 // uninstallInstance removes the instance from its cluster, in this order: the chart
 // release, the instance root's infrastructure (`tofu destroy`, unless there is nothing in
 // state or the operator said --without-state), its database and login on the shared
-// relational store, and its namespace — waited on until it is gone. It returns a
-// non-empty reason when the database was left on the store.
-func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResources bool) (leftDatabase string, err error) {
+// relational store, its namespace — waited on until it is gone — and then its
+// event-store backups in the in-cluster object store, as the archive plan says. It returns
+// a non-empty reason when the database, or the backups, were left.
+func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResources bool,
+	archive archivePlan) (leftDatabase, leftArchive string, err error) {
 	kubeContext := opts.KubeContext
+	backups := ""
+	switch archive.Action {
+	case archiveRemove:
+		backups = fmt.Sprintf(", and its backups in the cluster's in-cluster object store (%s) — which is what "+
+			"--restore-tsdb-from would rebuild it from; pass --keep-backups to keep them", archive.location())
+	case archiveExternal:
+		backups = "; its backups in the object store you supplied are kept"
+	}
 	if !opts.AssumeYes && !confirm(fmt.Sprintf(
-		"Destroy instance %q? This deletes the instance and ALL ITS DATA; the cluster and its shared prerequisites stay",
-		opts.Instance)) {
+		"Destroy instance %q? This deletes the instance and ALL ITS DATA%s; the cluster and its shared prerequisites stay",
+		opts.Instance, backups)) {
 		fmt.Println(color.YellowString("Aborted."))
-		return "", errDestroyAborted
+		return "", "", errDestroyAborted
+	}
+	// What was settled is written down before the first change, so a destroy that dies
+	// after the event store is gone can still finish the job. See recordedArchiveFile.
+	if archive.Action == archiveRemove && !archive.FromRecorded {
+		if err := recordArchivePlan(opts.Instance, archive); err != nil {
+			fmt.Println(color.YellowString("  warning: could not record which archive this destroy removes (%v); "+
+				"if the destroy is interrupted, a re-run will not be able to remove it", err))
+		}
 	}
 
 	// Lock and intent BEFORE the first deletion. See beginDestroy.
@@ -239,7 +293,7 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 		if err := uninstallOutcome(err, func() error {
 			return resolveForeignRelease(ctx, kubeContext, opts, err)
 		}); err != nil {
-			return "", err
+			return "", "", err
 		}
 	} else {
 		done()
@@ -251,7 +305,7 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 	// init: context canceled". That reads as a broken infrastructure root, not as the
 	// operator's own Ctrl-C. Still a context.Canceled underneath, for anything that asks.
 	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("stopped after uninstalling the instance's chart release because the command "+
+		return "", "", fmt.Errorf("stopped after uninstalling the instance's chart release because the command "+
 			"was interrupted; nothing after it has been removed, and re-running `dcctl destroy` resumes "+
 			"from here: %w", err)
 	}
@@ -268,7 +322,7 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 	default:
 		fmt.Println(color.WhiteString("destroying the instance's infrastructure (tofu destroy)..."))
 		if err := destroyInstanceInfrastructure(ctx, kubeContext, opts.Instance); err != nil {
-			return "", fmt.Errorf("destroying the instance's infrastructure: %w", err)
+			return "", "", fmt.Errorf("destroying the instance's infrastructure: %w", err)
 		}
 	}
 	// 🔴 AND THE NAMESPACE, WHICH THE UNINSTALL DOES NOT ALWAYS REACH. dcctl writes the
@@ -277,9 +331,9 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 	// uninstall, and the uninstall above reports that as success. See
 	// removeInstanceNamespace for why the leftover makes this very command the remedy
 	// that does not work.
-	_, typed, err := teardownClients(kubeContext)
+	dyn, typed, err := teardownClients(kubeContext)
 	if err != nil {
-		return "", fmt.Errorf("connecting to the cluster to remove the instance namespace: %w", err)
+		return "", "", fmt.Errorf("connecting to the cluster to remove the instance namespace: %w", err)
 	}
 	// 🔴 AND ITS DATABASE AND LOGIN ON THE SHARED STORE, which nothing above reaches: the
 	// store is the cluster's, so uninstalling the instance leaves both behind — and a
@@ -288,13 +342,13 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 	doing("dropping the instance's database and login")
 	leftDatabase, err = removeInstanceRelationalLogin(ctx, typed, kubeContext, opts.Instance)
 	if err != nil {
-		return "", fail("removing the instance's database and login", err)
+		return "", "", fail("removing the instance's database and login", err)
 	}
 	done()
 	doing(fmt.Sprintf("deleting namespace %s and waiting until it is gone", InstanceNamespace(opts.Instance)))
 	torn, err := removeInstanceNamespaces(ctx, typed, opts.Instance)
 	if err != nil {
-		return "", fail("removing the instance namespace", err)
+		return "", "", fail("removing the instance namespace", err)
 	}
 	// 🔑 WAITED ON ONLY WHEN THIS RUN DELETED IT, AND ON THE ONE IT ACTUALLY DELETED. A
 	// namespace left alone because it is not labelled as this instance's is not going
@@ -304,7 +358,7 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 	// a prefix, and nothing in between would have said so.
 	if torn.Deleted {
 		if err := waitForNamespaceGone(ctx, typed, torn.Namespace, namespaceGoneTimeout, namespaceGonePollEach); err != nil {
-			return "", fail("waiting for the instance namespace to be deleted", err)
+			return "", "", fail("waiting for the instance namespace to be deleted", err)
 		}
 	}
 	done()
@@ -318,7 +372,13 @@ func uninstallInstance(ctx context.Context, opts DestroyOptions, stateHasResourc
 				"carried the %s prefix. A new instance of the same name is built in %s.",
 			torn.Namespace, instanceNamespacePrefix, InstanceNamespace(opts.Instance)))
 	}
-	return leftDatabase, nil
+	// 🔴 LAST ON THE CLUSTER, once the namespace is gone: until then the event store may
+	// still be archiving into the path being removed.
+	leftArchive, err = settleInstanceArchive(ctx, kubeContext, dyn, typed, opts.Instance, archive)
+	if err != nil {
+		return "", "", err
+	}
+	return leftDatabase, leftArchive, nil
 }
 
 // removeInstanceState removes the instance's persisted local state, sparing root-key

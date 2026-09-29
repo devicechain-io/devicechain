@@ -1585,6 +1585,34 @@ se comprueban contra un clúster real en cada versión.
 Una vez que esté en una versión que registra una declaración, las actualizaciones in situ
 corrientes se reanudan. `dcctl instances list` muestra qué hay declarado y en qué clúster.
 
+### Próxima versión {#next-upgrade}
+
+#### `dcctl destroy` elimina los respaldos internos de una instancia, y nuevas alertas avisan antes de que el archivado detenga una base de datos
+
+**`dcctl destroy` ahora elimina los respaldos de una instancia del almacén de objetos propio del
+clúster.** Cuando el namespace de la instancia ya no existe, destroy borra todo lo que hay bajo la
+ruta a la que archivaba su almacén de eventos, y comprueba que la ruta ha quedado vacía. Lee esa
+ruta antes de cambiar nada, y la muestra. Los respaldos en un almacén de objetos que tú
+proporcionaste no se borran nunca: destroy indica dónde están. Pasa `--keep-backups` para
+conservar también los respaldos internos, y pásalo sin falta antes de reconstruir una instancia a
+partir de sus propios respaldos en el mismo clúster con `--restore-tsdb-from`, porque un destroy
+sin esa opción borra el archivo que lee esa restauración. Si no se puede acceder al almacén de
+objetos, destroy termina igualmente e indica qué dejó. Los archivos que dejaron destroys
+ejecutados con una versión anterior siguen donde están: después de eliminar los respaldos de la
+propia instancia, destroy enumera los que tienen el mismo nombre de instancia, y [Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups)
+explica cómo eliminarlos.
+
+**Nuevas alertas avisan antes de que el archivado detenga una base de datos.**
+`PostgresWALArchiveBacklog` se dispara cuando una base de datos retiene log de escritura
+anticipada sin enviar, también cuando el archivador es lento o está bloqueado en lugar de fallar.
+`BackupDestinationFillingFast` y `DatabaseVolumeFillingFast` se disparan según lo rápido que se
+llena el almacén de respaldos o un volumen del almacén de eventos, no solo por un umbral fijo.
+También se corrige la guía de dimensionamiento de respaldos: con ingesta sostenida, el log
+archivado cuesta aproximadamente lo mismo que los datos, así que el almacén interno predeterminado
+se llena en horas, no en días. Dimensiónalo según tu tasa de ingesta, o envía los respaldos a un
+almacén de objetos que gestiones tú. Consulta
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving).
+
 ### v0.18.0 — lo que fallaba en silencio ahora lo dice, y la ingesta sigue el ritmo de su techo {#v0180-upgrade}
 
 `v0.18.0` es una actualización en el sitio desde `v0.17.0`: `dcctl install` para el clúster y

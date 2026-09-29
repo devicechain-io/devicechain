@@ -359,10 +359,28 @@ variable "backup_retention" {
 
         destination ≈ (retention_days + 1) × compressed(rdb + tsdb) + WAL
 
-    WAL is the cheap term and can be ignored: `archive_timeout` forces a segment
-    every 5 minutes, but a segment closed early is zero-filled past the switch
-    record and gzips to tens of KiB, so both stores together cost well under a
-    GiB per month. The base backups are the whole cost.
+    🔴 WAL IS CHEAP ONLY WHILE THE INSTANCE IS QUIET. `archive_timeout` forces a
+    segment every 5 minutes, but a segment closed early is zero-filled past the
+    switch record and gzips to tens of KiB, so an idle pair of stores costs well
+    under a GiB per month. Under sustained ingest the archived WAL grows with the
+    write rate instead, and costs about as much as the data it records. Measured
+    on a v0.18.0 benchmark cluster: the archive one ~15M-event run left behind
+    was about 14 GB, base backups included — roughly 1 KB per ingested event,
+    the same order as the ~1 KB per event the event store's own data costs. At
+    that rate the shipped 20Gi destination holds HOURS of sustained ingest, not
+    days, and the WAL term dominates:
+
+        destination ≈ (retention_days + 1) × compressed(rdb + tsdb)
+                      + retention_days × daily_events × archived WAL per event
+
+    That term grows with retention, but at sustained ingest no reasonable
+    window keeps it inside 20Gi, and shortening the window is the wrong
+    lever for it: it still keeps a full day of WAL, and it buys space by
+    shrinking how far back the databases can be recovered. Size the destination
+    for the ingest rate, or send backups to an object store you run. Barman
+    prunes only a LIVE Cluster's own archive path, so an archive left by a
+    destroyed instance is pruned by nothing — which is why `dcctl destroy`
+    removes the instance's archive from the in-cluster store.
 
     At the shipped 20Gi destination that budget is roughly 2.5 GiB of combined
     compressed base backup — comfortable for a small-to-moderate instance at 7

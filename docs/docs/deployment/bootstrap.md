@@ -412,6 +412,27 @@ domain, so it cannot be disaster recovery. Pass `--backup-credentials-file` to `
 to name an object store you already own. See [Disaster Recovery](./disaster-recovery.md) and
 the OpenTofu configuration's `backup_destination`.
 
+The default store is sized for a quiet instance, not for sustained ingest. It holds a full base
+backup of each database for every day of the seven-day recovery window, plus the write-ahead log
+archived between them. While an instance is quiet, that log costs almost nothing. Under sustained
+ingest it grows with the write rate, and costs about as much as the data it records: in a
+benchmark of v0.18.0, the archive grew by roughly 1 KB per ingested event, base backups
+included. At a few thousand events per second, the 20 GiB default fills in hours. When it is
+full, archiving stops for every instance on the cluster, and each database keeps its unshipped
+log on its own volume until that fills too and the database stops.
+
+So for an instance that ingests continuously, do one of these:
+
+- send backups to an object store you run (`--backup-credentials-file`), which is the
+  recommended production setup anyway;
+- or grow the in-cluster store (`backup_object_store_storage`) to fit your ingest rate times the
+  recovery window.
+
+Shortening the recovery window (`backup_retention`) is not a fix for ingest: it keeps less
+history but still a full day of log, and it gives up recovery range to buy space. The alerts
+described under [Backups that stop shipping](./observability.md#backup-archiving) warn before
+the store or a database volume fills.
+
 ## Prerequisites {#prerequisites}
 
 - **A Kubernetes cluster, version 1.29 or newer**, and a kube-context pointing at it. The
@@ -891,11 +912,58 @@ dcctl destroy local my-instance
 4. Its namespace, if it is still there. A bootstrap that stopped before Helm installed
    anything leaves a namespace with no release to uninstall. Destroy waits to see the
    namespace fully gone.
-5. It checks that what it deleted is really absent, and only after that removes its local
+5. Its event-store backups, when they are in the cluster's own backup object store (the
+   [default destination](#default-backup-destination)): everything under the path the
+   instance's event store was archiving to — its write-ahead log archive and base backups —
+   is deleted, and destroy checks that the path is empty afterwards.
+6. It checks that what it deleted is really absent, and only after that removes its local
    state under `~/.devicechain/instances/<instance>/`.
 
 The root-key escrow artifact is kept — see
 [Disaster Recovery](./disaster-recovery.md#after-destroy).
+
+### What happens to the instance's backups {#destroy-backups}
+
+Destroy reads which path the instance's event store archives to before it changes anything,
+prints it, and removes that path only once the instance's namespace is gone, so nothing is
+still writing to it. It removes that one path and nothing else: not the shared relational
+database's backups, not another instance's, and not an older archive left under the same
+instance name.
+
+- **Backups in an object store you supplied** (`dcctl install --backup-credentials-file`) are
+  never deleted. They are the copy that outlives the cluster. Destroy prints where they are;
+  delete them yourself when you no longer need them.
+- **`--keep-backups`** keeps the in-cluster backups too. Use it when you mean to rebuild the
+  instance from them with `dcctl bootstrap --restore-tsdb-from` in the same cluster: a destroy
+  without it deletes exactly the archive that restore reads. `dcctl destroy --all` accepts
+  `--keep-backups`, and applies it to every instance.
+- **If the object store cannot be reached**, or destroy cannot tell which path is the
+  instance's, the destroy still finishes. It says what it left, and its closing line does not
+  report the instance as fully destroyed.
+
+A destroy interrupted after the event store is gone, including one interrupted while it removes
+the backups, remembers the path it read, so running it again still removes them.
+
+Releases before this one left a destroyed instance's backups in the in-cluster store, where
+nothing ever removes them. After it removes the instance's own backups, destroy lists paths in
+the bucket that look like earlier archives of the same instance name, and leaves them. It lists
+nothing when it leaves the instance's own backups in place: with `--keep-backups`, in an external
+store, or when it could not reach the store or delete from it. To find and remove such archives by hand, reach the
+store through a port-forward and use any S3 client, for example the AWS CLI:
+
+```bash
+kubectl -n dc-system port-forward svc/dc-object-store 9000:9000 &
+export AWS_ACCESS_KEY_ID="$(kubectl -n dc-system get secret dc-object-store-credentials \
+  -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d)"
+export AWS_SECRET_ACCESS_KEY="$(kubectl -n dc-system get secret dc-object-store-credentials \
+  -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d)"
+aws s3 ls s3://devicechain-tsdb/ --endpoint-url http://127.0.0.1:9000
+aws s3 rm --recursive s3://devicechain-tsdb/<path>/ --endpoint-url http://127.0.0.1:9000
+```
+
+Each running instance archives under the path its event store names; see it with
+`kubectl -n dci-<instance> get clusters.postgresql.cnpg.io dc-tsdb -o yaml` (the `serverName`
+under `spec.plugins`). Remove only paths no running instance uses and nobody will restore from.
 
 If a step fails or is interrupted — including a namespace that is still terminating when the
 wait runs out — destroy exits with an error and keeps the local state. Running the same

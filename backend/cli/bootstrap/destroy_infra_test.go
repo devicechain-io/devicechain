@@ -320,14 +320,14 @@ func TestTheDryRunDescribesTheInstanceRootDestroy(t *testing.T) {
 
 // 🔴 A DESTROY THAT SKIPPED tofu destroy DOES NOT CLOSE GREEN, and says what it skipped.
 func TestTheWithoutStateClosingLineSaysTofuDestroyWasSkipped(t *testing.T) {
-	line := destroyedLine("acme", "c", "", true)
+	line := destroyedLine("acme", "c", "", "", true)
 	if !strings.Contains(line, "WITHOUT tofu destroy") || strings.Contains(line, "destroyed;") {
 		t.Errorf("closing line = %q", line)
 	}
-	if want := destroyedLine("acme", "c", "", false); line == want {
+	if want := destroyedLine("acme", "c", "", "", false); line == want {
 		t.Error("the override's closing line is the complete destroy's")
 	}
-	if l := destroyedLine("acme", "c", "not installed", true); !strings.Contains(l, "LEFT on the shared relational store: not installed") {
+	if l := destroyedLine("acme", "c", "not installed", "", true); !strings.Contains(l, "LEFT on the shared relational store: not installed") {
 		t.Errorf("the override's line drops the database note: %q", l)
 	}
 }

@@ -444,6 +444,30 @@ comparte su dominio de fallo, así que no puede constituir recuperación ante de
 Consulta [Recuperación ante desastres](./disaster-recovery.md) y el `backup_destination` de la
 configuración de OpenTofu.
 
+El almacén predeterminado está dimensionado para una instancia tranquila, no para una ingesta
+sostenida. Guarda un respaldo base completo de cada base de datos por cada día de la ventana de
+recuperación de siete días, más el log de escritura anticipada archivado entre ellos. Mientras una
+instancia está tranquila, ese log no cuesta casi nada. Con ingesta sostenida crece al ritmo de las
+escrituras, y cuesta aproximadamente lo mismo que los datos que registra: en una prueba de
+rendimiento de v0.18.0, el archivo creció aproximadamente 1 KB por evento ingerido, respaldos base
+incluidos. A unos pocos miles de eventos por segundo, los 20 GiB predeterminados se llenan en
+horas. Cuando está lleno, el archivado se detiene para todas las instancias del clúster, y cada
+base de datos conserva el log sin enviar en su propio volumen hasta que también se llena y la base
+de datos se detiene.
+
+Así que, para una instancia con ingesta continua, haz una de estas cosas:
+
+- envía los respaldos a un almacén de objetos que gestiones tú (`--backup-credentials-file`), que
+  es de todos modos la configuración de producción recomendada;
+- o amplía el almacén interno (`backup_object_store_storage`) según tu tasa de ingesta
+  multiplicada por la ventana de recuperación.
+
+Acortar la ventana de recuperación (`backup_retention`) no resuelve la ingesta: guarda menos
+historial pero sigue guardando un día completo de log, y renuncia a alcance de recuperación para
+ganar espacio. Las alertas descritas en
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving) avisan antes de que se
+llene el almacén o un volumen de base de datos.
+
 ## Prerrequisitos {#prerequisites}
 
 - **Un clúster de Kubernetes, versión 1.29 o más reciente**, y un kube-context que apunte a él.
@@ -955,11 +979,63 @@ dcctl destroy local my-instance
 4. Su namespace, si sigue ahí. Un arranque que se detuvo antes de que Helm instalara nada deja
    un namespace sin release que desinstalar. Destroy espera a ver desaparecer el namespace por
    completo.
-5. Comprueba que lo que eliminó ya no existe y, solo entonces, elimina su estado local en
+5. Los respaldos de su almacén de eventos, cuando están en el almacén de objetos propio del
+   clúster (el [destino predeterminado](#default-backup-destination)): se borra todo lo que hay
+   bajo la ruta a la que archivaba el almacén de eventos de la instancia —su archivo del log de
+   escritura anticipada y sus respaldos base—, y destroy comprueba después que la ruta ha
+   quedado vacía.
+6. Comprueba que lo que eliminó ya no existe y, solo entonces, elimina su estado local en
    `~/.devicechain/instances/<instance>/`.
 
 El artefacto de depósito de la clave raíz se conserva; consulta
 [Recuperación ante desastres](./disaster-recovery.md#after-destroy).
+
+### Qué pasa con los respaldos de la instancia {#destroy-backups}
+
+Destroy lee a qué ruta archiva el almacén de eventos de la instancia antes de cambiar nada, la
+muestra, y solo elimina esa ruta cuando el namespace de la instancia ya no existe, de modo que
+nada sigue escribiendo en ella. Elimina esa única ruta y nada más: ni los respaldos de la base de
+datos relacional compartida, ni los de otra instancia, ni un archivo anterior que haya quedado con
+el mismo nombre de instancia.
+
+- **Los respaldos en un almacén de objetos que tú proporcionaste**
+  (`dcctl install --backup-credentials-file`) no se borran nunca. Son la copia que sobrevive al
+  clúster. Destroy indica dónde están; bórralos tú cuando ya no los necesites.
+- **`--keep-backups`** conserva también los respaldos del almacén interno. Úsalo cuando vayas a
+  reconstruir la instancia a partir de ellos con `dcctl bootstrap --restore-tsdb-from` en el
+  mismo clúster: un destroy sin esa opción borra precisamente el archivo que lee esa
+  restauración. `dcctl destroy --all` acepta `--keep-backups` y lo aplica a todas las instancias.
+- **Si no se puede acceder al almacén de objetos**, o destroy no puede saber qué ruta es la de la
+  instancia, el destroy termina igualmente. Indica qué dejó, y su línea final no da la instancia
+  por destruida del todo.
+
+Un destroy que se interrumpe después de que el almacén de eventos haya desaparecido, incluido uno
+interrumpido mientras elimina los respaldos, recuerda la ruta que leyó, así que ejecutarlo de nuevo
+sigue eliminándolos.
+
+Las versiones anteriores a esta dejaban los respaldos de una instancia destruida en el almacén
+interno, donde nada los elimina nunca. Después de eliminar los respaldos de la propia instancia,
+destroy enumera las rutas del bucket que parecen archivos anteriores del mismo nombre de
+instancia, y las deja. No enumera nada cuando deja en su sitio los respaldos de la propia
+instancia: con `--keep-backups`, en un almacén externo, o cuando no pudo acceder al almacén o
+borrar en él. Para encontrar y eliminar esos archivos a
+mano, accede al almacén mediante un port-forward y usa cualquier cliente S3, por ejemplo la CLI
+de AWS:
+
+```bash
+kubectl -n dc-system port-forward svc/dc-object-store 9000:9000 &
+export AWS_ACCESS_KEY_ID="$(kubectl -n dc-system get secret dc-object-store-credentials \
+  -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d)"
+export AWS_SECRET_ACCESS_KEY="$(kubectl -n dc-system get secret dc-object-store-credentials \
+  -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d)"
+aws s3 ls s3://devicechain-tsdb/ --endpoint-url http://127.0.0.1:9000
+aws s3 rm --recursive s3://devicechain-tsdb/<path>/ --endpoint-url http://127.0.0.1:9000
+```
+
+Cada instancia en marcha archiva bajo la ruta que nombra su almacén de eventos; puedes verla con
+`kubectl -n dci-<instance> get clusters.postgresql.cnpg.io dc-tsdb -o yaml` (el `serverName`
+bajo `spec.plugins`). Elimina solo rutas que no use ninguna instancia en marcha y de las que nadie
+vaya a restaurar.
 
 Si un paso falla o se interrumpe —incluido un namespace que sigue terminando cuando se agota
 la espera—, destroy termina con un error y conserva el estado local. Ejecutar de nuevo el mismo

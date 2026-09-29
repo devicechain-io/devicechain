@@ -192,10 +192,20 @@ func TestADestroyInterruptedDuringTheUninstallStopsAfterItAsAnInterrupt(t *testi
 // belongs — in wantTeardownOrder and
 // TestTheMarkerIsWrittenBeforeTheFirstDeletionAndWithoutReachingTheCluster — so filtering
 // it out here hides nothing.
+//
+// Also minus the install-record READS made before the marker: destroy reads the record
+// before its first change, to settle which event-store archive is the instance's (see
+// readArchivePlan), and a read before anything began is not a step that "ran". Only
+// reads, and only before the marker — a deletion recorded there is still reported.
 func (r *teardownRig) teardownCalls() []string {
 	var out []string
+	began := false
 	for _, c := range r.calls {
-		if !strings.HasPrefix(c, "mark destroying ") {
+		switch {
+		case strings.HasPrefix(c, "mark destroying "):
+			began = true
+		case !began && c == "read install record":
+		default:
 			out = append(out, c)
 		}
 	}

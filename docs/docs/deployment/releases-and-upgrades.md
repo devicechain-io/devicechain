@@ -1492,6 +1492,31 @@ exercised against a real cluster on every release.
 Once you are on a release that records a declaration, ordinary in-place upgrades resume.
 `dcctl instances list` shows what is declared, and in which cluster.
 
+### Next release {#next-upgrade}
+
+#### `dcctl destroy` removes an instance's in-cluster backups, and new alerts warn before archiving stops a database
+
+**`dcctl destroy` now removes an instance's backups from the cluster's own object store.** Once
+the instance's namespace is gone, destroy deletes everything under the path its event store was
+archiving to, and checks that the path is empty. It reads that path before it changes anything,
+and prints it. Backups in an object store you supplied are never deleted: destroy prints where
+they are. Pass `--keep-backups` to keep the in-cluster backups as well — and do pass it before
+you rebuild an instance from its own backups in the same cluster with `--restore-tsdb-from`,
+because a destroy without it deletes the archive that restore reads. If the object store cannot
+be reached, destroy still finishes, and says what it left. Archives left behind by destroys run
+with an earlier release stay where they are: after removing the instance's own backups, destroy
+lists the ones under the same instance name, and [What happens to the instance's backups](./bootstrap.md#destroy-backups) shows how to remove
+them.
+
+**New alerts warn before archiving takes a database down.** `PostgresWALArchiveBacklog` fires
+when a database is holding write-ahead log it has not shipped, including when the archiver is slow
+or hung rather than failing. `BackupDestinationFillingFast` and `DatabaseVolumeFillingFast` fire
+on how fast the backup store or an event-store volume is filling, not only on a fixed threshold.
+The backup sizing guidance is corrected too: under sustained ingest, the archived log costs about
+as much as the data, so the default in-cluster store fills in hours rather than days. Size it for
+your ingest rate, or send backups to an object store you run. See
+[Backups that stop shipping](./observability.md#backup-archiving).
+
 ### v0.18.0 — what failed silently now says so, and ingest keeps up with its ceiling {#v0180-upgrade}
 
 `v0.18.0` is an in-place upgrade from `v0.17.0`: `dcctl install` for the cluster, then `dcctl

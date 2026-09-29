@@ -208,6 +208,11 @@ func RestoredArchivePath(source string, now time.Time) string {
 type clusterArchiveState struct {
 	Exists bool
 	Path   string
+	// ObjectStore is the barman ObjectStore the archiver writes through, in the
+	// Cluster's namespace — the live answer to WHICH store and bucket Path is in. Read
+	// by destroy, which must delete from the store this Cluster really wrote to rather
+	// than the one the cluster's install record describes today.
+	ObjectStore string
 }
 
 // liveArchiveState is what resolveCredentials is told about the database Clusters a
@@ -336,7 +341,11 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 		if err != nil {
 			return unreadable(fmt.Sprintf("spec.plugins[%d].parameters.serverName", i), err)
 		}
-		out.Path = path
+		store, _, err := unstructured.NestedString(plug, "parameters", "barmanObjectName")
+		if err != nil {
+			return unreadable(fmt.Sprintf("spec.plugins[%d].parameters.barmanObjectName", i), err)
+		}
+		out.Path, out.ObjectStore = path, store
 		return out, nil
 	}
 	return out, nil
@@ -349,8 +358,10 @@ func clusterArchivePath(ctx context.Context, dyn dynamic.Interface, namespace, n
 // shared bucket, and CloudNativePG refuses to start a new Cluster over a path that
 // already holds an archive — it waits in "Setting up primary" on "Expected empty
 // archive", with nothing failing. The instance id keeps two instances apart; the
-// declaration's UID keeps a rebuilt instance off the archive its previous generation
-// left behind, which outlives a destroy on purpose.
+// declaration's UID keeps a rebuilt instance off an archive its previous generation
+// left behind: one kept with `dcctl destroy --keep-backups` (so a rebuild can recover
+// from it), one in an object store the operator owns, which destroy never deletes from,
+// or one left by a dcctl that predates destroy removing the in-cluster archive.
 //
 // A dry run has no declaration to read a UID from, and deploys nothing, so it shows
 // the id half alone.
@@ -555,4 +566,18 @@ var readRdbArchiveState = func(ctx context.Context, kubeContext string) (cluster
 		return clusterArchiveState{}, err
 	}
 	return clusterArchivePath(ctx, dyn, infraNamespace, RdbClusterName)
+}
+
+// alreadyLiveRestoreNote is what a bootstrap says about an event-store restore aimed at a
+// store that is already there.
+//
+// 🔴 IT NAMES --keep-backups, BECAUSE THE REMEDY IT GIVES IS A DESTROY. The recovery is
+// destroy-then-rebuild, and a destroy without --keep-backups deletes the in-cluster archive
+// the rebuild would restore from — so this sentence, followed literally, would otherwise
+// be the step that loses the data it is trying to recover.
+func alreadyLiveRestoreNote(name string) string {
+	return fmt.Sprintf("Cluster %s already exists, so its restore will NOT run: CloudNativePG reads "+
+		"spec.bootstrap only when it creates a cluster. To actually recover, destroy the instance with "+
+		"--keep-backups — without it, destroy deletes the in-cluster archive this restore reads — and "+
+		"rebuild it with the same flags.", name)
 }

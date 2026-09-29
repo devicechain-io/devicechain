@@ -114,9 +114,18 @@ tests:
         values: "16000000000+0x120"
       - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
         values: "21474836480+0x120"
+      # An archiver that keeps up: a couple of segments waiting at any moment.
+      - series: 'cnpg_collector_pg_wal_archive_status{namespace="dc-system", pod="dc-rdb-1", value="ready"}'
+        values: "2+0x120"
     alert_rule_test:
       - eval_time: 90m
         alertname: PostgresWALArchivingNotConfigured
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: PostgresWALArchiveBacklog
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: BackupDestinationFillingFast
         exp_alerts: []
       - eval_time: 90m
         alertname: PostgresWALArchivingFailing
@@ -372,7 +381,8 @@ tests:
                 and failed archiving does not stall commits, it accumulates WAL on the DATABASES'
                 volumes until those fill and PostgreSQL stops. So this ends as a database outage
                 whose cause points nowhere near a database. Grow the volume, shorten
-                backup_retention, or move to an external destination.
+                backup_retention, remove archives left behind by instances that no longer exist,
+                or move to an external destination.
 
   # -------------------------------------------------------------------------
   # A PVC in some other namespace must not be attributed to this instance. The
@@ -388,4 +398,196 @@ tests:
     alert_rule_test:
       - eval_time: 30m
         alertname: BackupDestinationAlmostFull
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE ARCHIVER THAT HANGS. Nothing fails: last_failed_time stays -1 and
+  # archived_count simply stops rising, so PostgresWALArchivingFailing — which
+  # compares the failure time against the success time — is silent by
+  # construction, and PostgresHasNeverArchivedWAL is silent because this primary
+  # HAS archived before. Meanwhile segments pile up in pg_wal waiting to ship, on
+  # the primary's own volume, 20 a minute. Only the backlog rule sees it.
+  # -------------------------------------------------------------------------
+  - name: a hung archiver that records no failure fires on its backlog
+    interval: 1m
+    input_series:
+      - series: 'cnpg_pg_stat_archiver_archived_count{namespace="dci-devicechain", pod="dc-tsdb-1"}'
+        values: "500+0x20"
+      - series: 'cnpg_pg_stat_archiver_seconds_since_last_archival{namespace="dci-devicechain", pod="dc-tsdb-1"}'
+        values: "30+60x20"
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="dci-devicechain", pod="dc-tsdb-1"}'
+        values: "1780000000+0x20"
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="dci-devicechain", pod="dc-tsdb-1"}'
+        values: "-1+0x20"
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="dci-devicechain", pod="dc-tsdb-1"}'
+        values: "0+0x20"
+      - series: 'cnpg_collector_pg_wal_archive_status{namespace="dci-devicechain", pod="dc-tsdb-1", value="ready"}'
+        values: "0+20x20"
+      # A standby marks what it receives done, so it holds no backlog of its own.
+      - series: 'cnpg_collector_pg_wal_archive_status{namespace="dci-devicechain", pod="dc-tsdb-2", value="ready"}'
+        values: "0+0x20"
+    alert_rule_test:
+      # Past the threshold since 2m, and the `for` still running.
+      - eval_time: 6m
+        alertname: PostgresWALArchiveBacklog
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: PostgresWALArchiveBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              pod: dc-tsdb-1
+              value: ready
+            exp_annotations:
+              summary: "PostgreSQL is holding WAL it has not shipped to the backup destination"
+              description: >-
+                dc-tsdb-1 has 160 WAL segments (16 MiB each) waiting to be archived. They stay on
+                this database's own volume until they ship — the replicas do not help, because a
+                standby does not keep the primary's unshipped WAL — and when the volume fills,
+                PostgreSQL stops and does not fail over. If the WAL archiving failing alert is also
+                firing, the destination is refusing writes: check that the object store is
+                reachable and has space. If it is not, the archiver is slow or hung, or ingest is
+                producing WAL faster than it ships: check the backup sidecar's logs and the object
+                store's free space, and grow the database volume if the backlog keeps rising.
+      # The gap this rule closes: the failure rule cannot see a hang.
+      - eval_time: 8m
+        alertname: PostgresWALArchivingFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: PostgresHasNeverArchivedWAL
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # NEGATIVE CONTROLS for the backlog. A primary that keeps up holds a handful of
+  # ready segments; one catching up after its store came back holds a burst that
+  # drains inside the `for`; another instance's primary is not this instance's.
+  # -------------------------------------------------------------------------
+  - name: a keeping-up archiver, a catch-up burst and another namespace's backlog do not fire
+    interval: 1m
+    input_series:
+      - series: 'cnpg_collector_pg_wal_archive_status{namespace="dc-system", pod="dc-rdb-1", value="ready"}'
+        values: "3+0x60"
+      # 100 ready for four minutes — a reconnect catching up — then drained.
+      - series: 'cnpg_collector_pg_wal_archive_status{namespace="dci-devicechain", pod="dc-tsdb-1", value="ready"}'
+        values: "0+0x10 100+0x3 0+0x46"
+      # The `done` series of the same metric is never the backlog.
+      - series: 'cnpg_collector_pg_wal_archive_status{namespace="dci-devicechain", pod="dc-tsdb-1", value="done"}'
+        values: "500+0x60"
+      - series: 'cnpg_collector_pg_wal_archive_status{namespace="dci-some-other-instance", pod="dc-tsdb-1", value="ready"}'
+        values: "500+0x60"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PostgresWALArchiveBacklog
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PostgresWALArchiveBacklog
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE MEASURED CASE FOR THE STORE. On a v0.18.0 benchmark cluster the 20 GiB
+  # default store began a sustained-ingest run with about 6 GB free — the rest held
+  # by a destroyed instance's archive — and the run's WAL took it to full within
+  # minutes. Replayed here as 500 MB a minute from 6 GB free: full at 12m.
+  #
+  # BackupDestinationAlmostFull is still PENDING at 7m (under 15 % only since ~5.6m,
+  # and it holds for 15m) and would fire only after the store is full. The rate
+  # rule fires at 7m, five minutes before. Then the volume is doubled, and the rate
+  # alert clears on its own.
+  # -------------------------------------------------------------------------
+  - name: a backup destination filling in minutes fires before it is full, and clears when grown
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "6000000000-500000000x7 23474836480-500000000x12"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x7 42949672960+0x12"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: BackupDestinationFillingFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dc-system
+              persistentvolumeclaim: dc-object-store-data
+            exp_annotations:
+              summary: "The backup destination will be full within the hour at its current rate"
+              description: >-
+                dc-object-store-data is more than 65% full and filling fast enough to run out of
+                space within the hour. When it is full, WAL archiving fails for EVERY database
+                archiving into it, and each primary keeps its unshipped WAL on its own volume until
+                that fills and PostgreSQL stops. Likely causes, in order: an instance ingesting
+                faster than the store was sized for; archives left in the store by instances that
+                no longer exist (list the bucket and compare with the instances that are running);
+                a scheduled base backup that stopped, so nothing is being pruned. Grow the volume,
+                remove what no running instance owns, or move backups to an object store you run
+                yourself.
+      - eval_time: 7m
+        alertname: BackupDestinationAlmostFull
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # 🔴 THE CASE THE FREE-SPACE GATE IS FOR, and the only one that reaches it. A long
+  # base backup on a store with room: 200 MB a minute for 15 minutes from 12.5 GB free
+  # of 20 GiB. The 10m slope projects the store empty within the hour from about 3m
+  # on, and stays that steep past the 5m `for` — so without the gate this fires at 8m.
+  # It ends at 9.5 GB free, 44% of the store, never under the 35% gate. (The short
+  # burst in the next group flattens before the `for` completes, so the `for` alone
+  # quiets it; it proves nothing about the gate.)
+  # -------------------------------------------------------------------------
+  - name: a long base backup on a store with room is not filling fast
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "12500000000-200000000x15 9500000000+0x30"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x45"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # NEGATIVE CONTROLS for the store's rate rule. A small base backup lands
+  # gigabytes in minutes and then stops — on a store with room, that is not a page.
+  # A store creeping up over days is AlmostFull's to report, not this rule's. And
+  # another namespace's store, however fast it falls, is not this instance's.
+  # -------------------------------------------------------------------------
+  - name: a base backup burst, a slow creep and another namespace's store do not fire as filling fast
+    interval: 1m
+    input_series:
+      # Half free, then 2 GB in four minutes (a base backup), then flat.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "10737418240+0x30 10237418240-500000000x3 8737418240+0x60"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x94"
+      # 20 % free, creeping by a megabyte a minute.
+      - series: 'kubelet_volume_stats_available_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data-2"}'
+        values: "4294967296-1000000x94"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="dc-system", persistentvolumeclaim="dc-object-store-data-2"}'
+        values: "21474836480+0x94"
+      - series: 'kubelet_volume_stats_available_bytes{namespace="somebody-else", persistentvolumeclaim="dc-object-store-data"}'
+        values: "6000000000-500000000x11"
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="somebody-else", persistentvolumeclaim="dc-object-store-data"}'
+        values: "21474836480+0x11"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: BackupDestinationFillingFast
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: BackupDestinationFillingFast
         exp_alerts: []
