@@ -307,8 +307,9 @@ func applyPoolSizing(db *gorm.DB, cfg config.MicroserviceDatastoreConfiguration,
 const (
 	// defaultMaxOpenConnections is the per-pod cap on open database connections
 	// when the service does not configure one. It is intentionally larger than
-	// the historical value (5) so a service's writers (5 by default) and the GraphQL
-	// server do not contend for the same handles.
+	// the historical value (5) so a service's writers (event-management's 10 and
+	// device-state's 5 by default, each below this pool) and the GraphQL server do not
+	// contend for the same handles.
 	defaultMaxOpenConnections = 20
 	// minMaxIdleConnections floors the idle pool so a brief lull does not tear
 	// down every connection only to immediately reopen them (connection thrash).
@@ -331,10 +332,15 @@ func EffectiveMaxOpenConnections(cfg config.MicroserviceDatastoreConfiguration) 
 //
 // Below the pool, not at most half of it. At the pool size the writers can hold every
 // connection and a read then waits for a whole transaction to commit, which is wrong at any
-// load. Anything below it already ran before writer counts were configurable (they were a
-// fixed 5 on any pool), so refusing it would stop an upgraded service over a document
-// nobody changed. More than half the pool is allowed and logged, because reads then compete
-// with the writers for what is left.
+// load. More than half the pool is allowed and logged, because reads then compete with the
+// writers for what is left, but it runs.
+//
+// It fails closed, including for a count nobody wrote: a pool set without setting the
+// writers is checked against the service's DEFAULT writer count, so raising a default can
+// stop an upgraded service whose pool used to start (event-management's persistence.writers
+// going from 5 to 10 refuses pools of 10 or fewer, as device-management's resolution.workers
+// of 10 did before it). The release notes of any release that raises one say so; this check
+// does not guess a smaller count from the pool.
 //
 // It names no way to raise the bound, deliberately: the platform's connection budgets —
 // the relational role limit dcctl computes and the event store's reserved connections —
@@ -356,9 +362,27 @@ func CheckWriterCount(key string, writers int, cfg config.MicroserviceDatastoreC
 	return nil
 }
 
-// MaxWriterBatch caps the messages one batching writer commits in one transaction. Past the
-// knee a bigger batch buys little, and it lengthens how long the erasure fence's first answer
-// is remembered for and how much a batch that cannot commit has to replay.
+// MaxWriterBatch caps the messages one batching writer commits in one transaction.
+//
+// It is NOT a statement-size bound, and PostgreSQL's 65535-parameter limit is not what caps
+// it. event-management runs each message's own statements one after another inside the
+// batch's transaction, so a statement's parameters are bounded by one message; device-state
+// merges a batch into multi-row upserts chunked at a fixed row count, so its statements are
+// bounded by that chunk (and its lock by the batch's distinct devices, at most this cap).
+// Neither comes near the limit at any batch size this cap allows.
+//
+// What it bounds is how long a writing transaction can be, and that has two costs:
+//   - the erasure fence's first answer is remembered for the whole transaction
+//     (tenant_fence.go), so a longer one widens the window its argument accounts for;
+//   - a batch that does not commit is written again: the rest of the batch re-runs once
+//     for each message refused inside it, and a failure no message caused writes every one
+//     of them again on its own.
+//
+// And nothing measured has shown a larger cap would help. On a three-node cloud cluster,
+// event-management at 10 writers stopped rising near 6,000 events a second with batches
+// averaging 21 to 30, under this cap. device-state's batches did reach it (60 to 63, with a
+// 25 ms linger) in the same run; a larger cap is a change to make from a measurement of
+// that, not ahead of one.
 const MaxWriterBatch = 64
 
 // MaxWriterLingerMillis caps how long a batching writer may wait for its batch to fill.

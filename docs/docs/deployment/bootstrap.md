@@ -809,8 +809,10 @@ limits stay as above. The console is sized separately.
 
 These four services do the per-event work: receiving, resolving and storing every event, and
 merging it into each device's live state. Their limits are sized for live device traffic at a
-tenant's default ingest ceiling of 1000 messages per second, one reading per message, and for the
-rate a default installation sustains (see [Measured throughput](#measured-throughput)).
+tenant's default ingest ceiling of 1000 messages per second, one reading per message, and for
+about 4,000 events per second, the rate a default installation sustained before
+`event-management`'s persistence defaults were raised (see [Measured
+throughput](#measured-throughput)).
 
 - **Requests are what each service uses at a tenant's default ceiling.** A request is the CPU
   the scheduler sets aside for a pod on its node. Each one above is what that service was measured
@@ -832,8 +834,8 @@ rate a default installation sustains (see [Measured throughput](#measured-throug
   at 4000 events per second, and its slower responses capped the rate devices could send at about
   4,300 events per second; `device-state` merged live state at no more than about 2,300 events per
   second, so the live device view fell minutes behind. Measured without a limit in the way, they
-  use 0.14 and 0.37 millicores per event, so at the rate a default installation sustains they need
-  about half a core and one and a half cores.
+  use 0.14 and 0.37 millicores per event, so at 4,000 events per second they need about half a
+  core and one and a half cores.
 - **The busiest services avoid the event store's primary.** `device-management`,
   `event-management` and `event-sources` prefer a node that is not running the instance's
   event-store primary (on installations using CloudNativePG, the default), which is the busiest
@@ -882,16 +884,33 @@ The metric that shows a service held back by its limit is
 | --- | --- | --- | --- | --- |
 | v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-8 (8 vCPU each), SSD persistent disks, `--ha` | the defaults v0.18.0 shipped, before the sizing above | about 3,800 events/s | Two 10-minute runs at 4,000 events/s offered each stored all 2,399,000 accepted events, with none lost and none duplicated. The slowest stage kept 96.5% of the offered rate in one run (resolution, 3,858 per second) and 98% in the other. Live device state kept up only to about 2,300 events per second, at `device-state`'s then 500m limit. |
 | v0.18.0 | the same | tuned: see below | about 5,600 events/s | 180-second runs. At 5,600 offered, every stage kept at least 98.9% of the offered rate, the backlog drained in 3 seconds, and every accepted event was stored exactly once. Live device state kept up. |
+| after v0.18.0, before its persistence defaults | the same | the sizing above, with `event-management` at `persistence.writers: 5` and `persistence.maxBatch: 32` | about 3,900 events/s | Two 10-minute runs at 4,000 events/s offered each stored all 2,400,000 accepted events, with none lost and none duplicated. Storing was the slowest stage, at 96.7% and 95.7% of the offered rate. Live device state stayed within about 40 seconds. |
+| after v0.18.0 | the same | tuned: `event-management` at `persistence.writers: 10` and `persistence.maxBatch: 64`; see below | about 6,000 events/s | 180-second runs. At 6,000 offered, every stage kept at least 98% of the offered rate, the backlog drained in 5 seconds, and every accepted event was stored exactly once. Held for 5 minutes at 6,000, storing kept 96%, so about 5,800 to 6,000 is the sustained figure. |
 
-Both rows were measured on v0.18.0, with the load generator on a separate node. At the default
-settings, what held the rate was `device-management`'s pool of resolvers, and past it the CPU
-limits of `event-sources` and `device-state` that the sizing above raises. The tuned row
-used `device-management` at 2 replicas with `resolution.workers: 32` and
+The v0.18.0 rows were measured on v0.18.0 and the others on the development build that followed
+it, all with the load generator on a separate node and a replicated (`--ha`) event store. At
+v0.18.0's defaults, what held the rate was `device-management`'s pool of resolvers, and past it the
+CPU limits of `event-sources` and `device-state` that the sizing above raises. With those raised,
+storing events became the limit: 5 writers committing up to 32 events each filled every batch from
+4,400 events per second, and each commit took about 38 milliseconds, so storing stopped near 4,200
+per second. That is why `event-management` now defaults to 10 writers and batches of up to 64 (see
+[Event persistence](./observability.md#event-persistence)).
+
+The v0.18.0 tuned row used `device-management` at 2 replicas with `resolution.workers: 32` and
 `rdbConfiguration.maxOpenConnections: 48`; `event-sources` at 2 replicas; `event-management` with
 `persistence.writers: 10` and `persistence.maxBatch: 64`, on a node without the event-store
 primary; `device-state` with `projection.writers: 5`, `projection.maxBatch: 64` and
 `projection.lingerMillis: 25`; CPU limits of 4 cores (2 for `event-processing`); and memory limits
-of 1Gi.
+of 1Gi. The later tuned row kept `device-management` at its defaults and one replica, and otherwise
+used the same `event-management` and `device-state` settings, with CPU limits of 4 cores and memory
+limits of 1Gi for `device-management`, `event-sources`, `event-management` and `device-state`.
+There, `event-management` used about 1.7 cores on average; it was not measured under its default
+limit of 2. Its batches averaged below 32 in every run, so the measurement does not show a batch
+of 64 helping over 32. A default installation with the new persistence settings has not been
+measured end to end, so no sustained rate is given for it here. Past about 6,000 events per second, storing stopped rising with batches averaging 28 to
+30, below the limit, while two of the three nodes, one of them the event store's, were at 86 to 95%
+CPU. Which of those held the rate was not isolated, but more throughput on that cluster needs more
+nodes before more per-service tuning.
 
 #### Event store volume {#event-store-volume}
 

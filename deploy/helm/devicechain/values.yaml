@@ -1286,13 +1286,20 @@ functionalAreas:
     # Event persistence (defaults shown). Events are written in batches: each writer
     # commits the events already waiting for it, up to maxBatch, in one transaction,
     # which is what lets the event store keep up when every commit waits for a standby.
+    # Measured on GKE (3 x n2-standard-8, SSD persistent disks, --ha): 5 writers x 32
+    # filled every batch from 4,400 events/s and stored at most ~4,200/s (5 x 32 per
+    # ~38 ms commit); 10 x 64 kept up to ~6,000/s with batches averaging 21-30. That
+    # run raised this service's CPU limit to 4 and it used ~1.7 cores on average; it
+    # was not measured under the default limit of 2. More writers are not better on
+    # their own: they split the stream into smaller batches, and every commit costs
+    # the event store CPU.
     #   config:
     #     persistence:
-    #       writers: 5        # parallel writers, each holding one pooled connection
+    #       writers: 10       # parallel writers, each holding one pooled connection
     #                         # while it writes. Must be below the service's
     #                         # connection pool (tsdbConfiguration.maxOpenConnections,
     #                         # 20 unless set); above half of it is logged.
-    #       maxBatch: 32      # events per transaction, 1 to 64. 1 turns batching off.
+    #       maxBatch: 64      # events per transaction, 1 to 64. 1 turns batching off.
     #       lingerMillis: 0   # how long a writer waits for a batch to fill, up to
     #                         # 1000. 0 commits only what is already waiting, which
     #                         # adds no latency.

@@ -21,20 +21,38 @@ const (
 
 // Event persistence sizing. See PersistenceConfiguration.
 const (
-	// DefaultPersistenceWriters is the number of writers when none is configured. It is
-	// the count that was fixed in code before it was configurable, kept because batching,
-	// not more writers, is what carries capacity on a replicated event store. Measured
-	// in-process (BenchmarkPersistBatch) with a synchronous standby: 5 writers committing up
-	// to 32 events per transaction stored about 1400 events a second against about 160 at
-	// one event per transaction, while doubling the writers at one event per transaction
-	// reached about 290. And every writer holds a pooled connection for the whole of its
-	// transaction.
-	DefaultPersistenceWriters = 5
+	// DefaultPersistenceWriters is the number of writers when none is configured.
+	//
+	// Measured on a three-node cloud cluster with a replicated event store (a synchronous
+	// standby) and the other per-event services sized to keep up: at 5 writers committing
+	// up to 32 events each, every batch was full from 4,400 events a second and each commit
+	// took about 38 ms, so storing stopped near 5 x 32 / 38 ms, about 4,200 a second, while
+	// the service itself was well inside its CPU limit. At 10 writers and batches of up to
+	// 64, storing kept up to about 6,000 a second. There the service used about 1.7 cores
+	// on average with its CPU limit raised to 4; it was not measured under its default limit
+	// of 2. Past about 6,000, batches averaged 28 to 30 events, below the cap, while two of
+	// the three nodes, one of them the event store's, were at 86 to 95% CPU; which of those
+	// held the rate was not isolated.
+	//
+	// It is half the default connection pool, the most that rdb.CheckWriterCount accepts
+	// without logging that reads compete with the writers. More is not better on its own:
+	// every writer splits the same stream into smaller batches, and every commit costs the
+	// event store CPU. In an earlier measurement, with a pool of 30, two replicas of 20
+	// writers each cut batches to about 3 events, the event store's database used over 4
+	// cores and its node saturated, and the whole pipeline slowed, storing less than 10
+	// writers did.
+	DefaultPersistenceWriters = 10
 	// DefaultPersistenceMaxBatch is the most events one writer commits in one transaction.
-	// 32 is the measured knee: going to 64 bought little or nothing more at 5 writers
-	// (about 1400 events a second either way with a synchronous standby), for twice the
-	// transaction length.
-	DefaultPersistenceMaxBatch = 32
+	// It is rdb.MaxWriterBatch, the largest accepted.
+	//
+	// The cloud measurement above changed it together with the writer count, and batches
+	// there averaged below 32, so it does not show 64 helping over 32. Measured in-process
+	// (BenchmarkPersistBatch) with a synchronous standby, 64 bought little or nothing more
+	// than 32 at 5 writers (about 1,400 events a second either way), for twice the longest
+	// transaction. It is 64 so that a writer that finds a deep backlog can take more of it
+	// in one commit. With lingerMillis at 0 a writer never waits for a batch to fill, so
+	// at low rates it still commits the one event it finds.
+	DefaultPersistenceMaxBatch = 64
 )
 
 type EventManagementConfiguration struct {

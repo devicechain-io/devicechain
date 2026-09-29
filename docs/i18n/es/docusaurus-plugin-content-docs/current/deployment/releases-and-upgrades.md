@@ -3803,6 +3803,40 @@ preferencia de ubicación. Pero una preferencia solo se aplica cuando se planifi
 primario del almacén de eventos cambia después a otro nodo, un pod que ya se ejecuta allí se queda
 hasta que se vuelva a planificar.
 
+#### event-management almacena los eventos con 10 escritores y lotes de hasta 64 {#next-persistence-defaults}
+
+Con los demás servicios por evento dimensionados para seguir el ritmo, almacenar los eventos pasó a
+ser el primer límite de una instalación predeterminada: 5 escritores que confirmaban hasta 32
+eventos cada uno llenaban todos los lotes desde unos 4400 eventos por segundo y no almacenaban más
+de unos 4200. `persistence.writers` pasa a valer `10` por defecto y `persistence.maxBatch` `64`.
+Eran los ajustes de una ejecución ajustada que siguió el ritmo hasta unos 6000 eventos por segundo
+con los límites de CPU de los demás servicios aumentados; sus lotes quedaron por debajo de 32 de
+media, así que no muestra que el lote más grande ayude. Ver [Rendimiento
+medido](./bootstrap.md#measured-throughput).
+
+**Antes de actualizar:** si fijó `tsdbConfiguration.maxOpenConnections` de `event-management` en
+`10` o menos y no fijó `persistence.writers`, el nuevo pod de `event-management` no arranca, y su
+error nombra `persistence.writers` y el tamaño del pool. La actualización progresiva mantiene el
+pod anterior en marcha almacenando eventos, y `dcctl upgrade` falla tras esperar, con la instancia
+actualizada a medias. Fije `persistence.writers` por debajo de su pool (su valor por defecto
+anterior era `5`), o quite el ajuste del pool para usar el valor por defecto de 20, y vuelva a
+ejecutar la actualización. Los pools de 11 a 19 arrancan, y registran al arrancar que más de la
+mitad del pool se da a los escritores; fije `persistence.writers` en la mitad de su pool para
+evitarlo.
+
+- Una instalación que fija `persistence.writers` o `persistence.maxBatch` conserva sus valores.
+- A ritmos en los que un escritor encuentra un evento cada vez, no cambia nada: lo confirma solo,
+  como antes.
+- Con cola acumulada, confirman a la vez hasta 10 escritores en lugar de 5, del mismo pool de 20.
+  El techo del pool no cambia, así que las conexiones que el almacén de eventos reserva para
+  `event-management` siguen cubriéndolo.
+- `maxBatch` sigue aceptando de `1` a `64`.
+- Las instalaciones con `--compact` reciben los mismos valores por defecto; sus solicitudes,
+  límites y volúmenes no cambian.
+- Todas las mediciones en que se basan los nuevos valores se hicieron con un almacén de eventos
+  replicado (`--ha`), en el que cada confirmación espera a una réplica. Una instalación con una
+  sola instancia del almacén de eventos no se ha medido con ellos.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

@@ -21,7 +21,7 @@ func TestPersistenceSettingsLoad(t *testing.T) {
 
 	cfg = &EventManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
-	assert.Equal(t, PersistenceConfiguration{Writers: 5, MaxBatch: 32, LingerMillis: 0}, cfg.Persistence)
+	assert.Equal(t, PersistenceConfiguration{Writers: 10, MaxBatch: 64, LingerMillis: 0}, cfg.Persistence)
 }
 
 // Out-of-range settings stop the service at startup, naming the setting; the edges of each
@@ -38,13 +38,18 @@ func TestPersistenceSettingsAreBounded(t *testing.T) {
 		{"writers at a configured pool", `{"tsdbConfiguration":{"maxOpenConnections":30},"persistence":{"writers":30}}`,
 			"persistence.writers is 30, but the connection pool holds 30"},
 		{"writers below a configured pool", `{"tsdbConfiguration":{"maxOpenConnections":30},"persistence":{"writers":25}}`, ""},
-		// An instance that set a small pool before the setting existed ran 5 writers on it,
-		// and keeps starting: the default only stops a service whose pool is 5 or smaller.
-		{"default writers on a small pool", `{"tsdbConfiguration":{"maxOpenConnections":8}}`, ""},
-		{"default writers on a pool of 5", `{"tsdbConfiguration":{"maxOpenConnections":5}}`,
-			"persistence.writers is 5, but the connection pool holds 5"},
+		// A pool set without setting writers runs the default writers on it. The default of 10
+		// stops a service whose pool is 10 or smaller, naming the writers and the pool; before
+		// the default was raised from 5, pools of 6 to 10 started, and the release notes say so.
+		{"default writers on a pool of 11", `{"tsdbConfiguration":{"maxOpenConnections":11}}`, ""},
+		{"default writers on a pool of 10", `{"tsdbConfiguration":{"maxOpenConnections":10}}`,
+			"persistence.writers is 10, but the connection pool holds 10"},
+		{"default writers on a small pool", `{"tsdbConfiguration":{"maxOpenConnections":8}}`,
+			"persistence.writers is 10, but the connection pool holds 8"},
 		{"negative maxBatch", `{"persistence":{"maxBatch":-1}}`, "persistence.maxBatch must be between 1 and 64, got -1"},
 		{"maxBatch above the cap", `{"persistence":{"maxBatch":65}}`, "persistence.maxBatch must be between 1 and 64, got 65"},
+		// The cap is not a statement-size bound, and was kept at 64 on purpose: see rdb.MaxWriterBatch.
+		{"maxBatch of 128", `{"persistence":{"maxBatch":128}}`, "persistence.maxBatch must be between 1 and 64, got 128"},
 		{"maxBatch at the cap", `{"persistence":{"maxBatch":64}}`, ""},
 		{"maxBatch of one", `{"persistence":{"maxBatch":1}}`, ""},
 		{"negative lingerMillis", `{"persistence":{"lingerMillis":-1}}`, "persistence.lingerMillis must be between 0 and 1000, got -1"},

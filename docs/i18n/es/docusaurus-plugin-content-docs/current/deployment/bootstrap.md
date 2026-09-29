@@ -869,8 +869,9 @@ límites quedan como arriba. La consola se dimensiona por separado.
 Estos cuatro servicios hacen el trabajo por evento: recibir, resolver y almacenar cada evento, y
 fusionarlo en el estado en vivo de cada dispositivo. Sus límites están dimensionados para el
 tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
-mensajes por segundo con una lectura por mensaje, y para el ritmo que sostiene una instalación
-predeterminada (consulta [Rendimiento medido](#measured-throughput)).
+mensajes por segundo con una lectura por mensaje, y para unos 4000 eventos por segundo, el ritmo
+que sostenía una instalación predeterminada antes de que se aumentaran los valores de persistencia
+de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
 
 - **Las solicitudes son lo que cada servicio usa al techo predeterminado de un inquilino.** Una
   solicitud es la CPU que el planificador reserva para un pod en su nodo. Cada una de las de
@@ -896,8 +897,7 @@ predeterminada (consulta [Rendimiento medido](#measured-throughput)).
   dispositivos a unos 4300 eventos por segundo; `device-state` fusionaba el estado en vivo a no
   más de unos 2300 eventos por segundo, así que la vista en vivo de los dispositivos se retrasaba
   minutos. Medidos sin un límite que los frenara, usan 0,14 y 0,37 milinúcleos por evento, así que
-  al ritmo que sostiene una instalación predeterminada necesitan alrededor de medio núcleo y de
-  núcleo y medio.
+  a 4000 eventos por segundo necesitan alrededor de medio núcleo y de núcleo y medio.
 - **Los servicios más ocupados evitan el primario del almacén de eventos.** `device-management`,
   `event-management` y `event-sources` prefieren un nodo que no ejecute el primario del almacén
   de eventos de la instancia (en las instalaciones que usan CloudNativePG, la opción
@@ -949,16 +949,37 @@ La métrica que muestra un servicio frenado por su límite es
 | --- | --- | --- | --- | --- |
 | v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-8 (8 vCPU cada uno), discos persistentes SSD, `--ha` | los valores predeterminados de v0.18.0, anteriores al dimensionamiento de arriba | unos 3800 eventos/s | Dos ejecuciones de 10 minutos a 4000 eventos/s ofrecidos almacenaron cada una los 2 399 000 eventos aceptados, sin perder ni duplicar ninguno. La etapa más lenta mantuvo el 96,5% del ritmo ofrecido en una ejecución (la resolución, 3858 por segundo) y el 98% en la otra. El estado en vivo de los dispositivos solo siguió el ritmo hasta unos 2300 eventos por segundo, con el límite de 500m que tenía entonces `device-state`. |
 | v0.18.0 | el mismo | ajustada: ver abajo | unos 5600 eventos/s | Ejecuciones de 180 segundos. A 5600 ofrecidos, cada etapa mantuvo al menos el 98,9% del ritmo ofrecido, la cola se vació en 3 segundos y cada evento aceptado se almacenó exactamente una vez. El estado en vivo siguió el ritmo. |
+| después de v0.18.0, antes de sus valores de persistencia | el mismo | el dimensionamiento de arriba, con `event-management` en `persistence.writers: 5` y `persistence.maxBatch: 32` | unos 3900 eventos/s | Dos ejecuciones de 10 minutos a 4000 eventos/s ofrecidos almacenaron cada una los 2 400 000 eventos aceptados, sin perder ni duplicar ninguno. El almacenamiento fue la etapa más lenta, con el 96,7% y el 95,7% del ritmo ofrecido. El estado en vivo de los dispositivos se mantuvo a unos 40 segundos. |
+| después de v0.18.0 | el mismo | ajustada: `event-management` con `persistence.writers: 10` y `persistence.maxBatch: 64`; ver abajo | unos 6000 eventos/s | Ejecuciones de 180 segundos. A 6000 ofrecidos, cada etapa mantuvo al menos el 98% del ritmo ofrecido, la cola se vació en 5 segundos y cada evento aceptado se almacenó exactamente una vez. Mantenido 5 minutos a 6000, el almacenamiento conservó el 96%, así que la cifra sostenida es de unos 5800 a 6000. |
 
-Ambas filas se midieron en v0.18.0, con el generador de carga en un nodo aparte. Con la
-configuración predeterminada, lo que frenó el ritmo fue el grupo de resolutores de
-`device-management` y, más allá de él, los límites de CPU de `event-sources` y `device-state` que
-el dimensionamiento de arriba aumenta. La fila ajustada usó `device-management` con 2 réplicas,
-`resolution.workers: 32` y `rdbConfiguration.maxOpenConnections: 48`; `event-sources` con 2
-réplicas; `event-management` con `persistence.writers: 10` y `persistence.maxBatch: 64`, en un
-nodo sin el primario del almacén de eventos; `device-state` con `projection.writers: 5`,
-`projection.maxBatch: 64` y `projection.lingerMillis: 25`; límites de CPU de 4 núcleos (2 para
-`event-processing`); y límites de memoria de 1Gi.
+Las filas de v0.18.0 se midieron en v0.18.0 y las demás en la versión de desarrollo que la
+siguió, todas con el generador de carga en un nodo aparte y un almacén de eventos replicado
+(`--ha`). Con la configuración predeterminada de v0.18.0, lo que frenó el ritmo fue el grupo de
+resolutores de `device-management` y, más allá de él, los límites de CPU de `event-sources` y
+`device-state` que el dimensionamiento de arriba aumenta. Con ellos aumentados, el límite pasó a
+ser el almacenamiento de eventos: 5 escritores que confirmaban hasta 32 eventos cada uno llenaban
+todos los lotes desde 4400 eventos por segundo, y cada confirmación tardaba unos 38 milisegundos,
+así que el almacenamiento se detenía cerca de 4200 por segundo. Por eso `event-management` usa
+ahora por defecto 10 escritores y lotes de hasta 64 (ver [Persistencia de
+eventos](./observability.md#event-persistence)).
+
+La fila ajustada de v0.18.0 usó `device-management` con 2 réplicas, `resolution.workers: 32` y
+`rdbConfiguration.maxOpenConnections: 48`; `event-sources` con 2 réplicas; `event-management` con
+`persistence.writers: 10` y `persistence.maxBatch: 64`, en un nodo sin el primario del almacén de
+eventos; `device-state` con `projection.writers: 5`, `projection.maxBatch: 64` y
+`projection.lingerMillis: 25`; límites de CPU de 4 núcleos (2 para `event-processing`); y límites
+de memoria de 1Gi. La fila ajustada posterior dejó `device-management` con sus valores por defecto
+y una réplica, y por lo demás usó los mismos ajustes de `event-management` y `device-state`, con
+límites de CPU de 4 núcleos y de memoria de 1Gi para `device-management`, `event-sources`,
+`event-management` y `device-state`. En ella, `event-management` usó de media unos 1,7 núcleos; no
+se midió con su límite por defecto de 2. Sus lotes quedaron por debajo de 32 de media en todas las
+ejecuciones, así que la medición no muestra que un lote de 64 ayude más que uno de 32. Una
+instalación predeterminada con los nuevos valores de persistencia no se ha medido de extremo a
+extremo, así que aquí no se da un ritmo sostenido para ella. Por encima de unos 6000 eventos por segundo, el almacenamiento dejó de crecer
+con lotes de 28 a 30 eventos de media, por debajo del límite, mientras dos de los tres nodos, uno
+de ellos el del almacén de eventos, estaban al 86-95% de CPU. No se aisló cuál de esas dos cosas
+limitó el ritmo, pero para más rendimiento en ese clúster hacen falta más nodos antes que más
+ajustes por servicio.
 
 #### Volumen del almacén de eventos {#event-store-volume}
 

@@ -844,7 +844,7 @@ func TestTheWritersRunTheConfiguredSettings(t *testing.T) {
 	}{
 		{"configured", []ProcessorOption{WithPersistence(emconfig.PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: 7})},
 			emconfig.PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: 7}},
-		{"defaults", nil, emconfig.PersistenceConfiguration{Writers: 5, MaxBatch: 32}},
+		{"defaults", nil, emconfig.PersistenceConfiguration{Writers: 10, MaxBatch: 64}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-management"}
