@@ -1288,6 +1288,58 @@ expression. A failure here means a rule fires when it should not, or -- far wors
 done
 
 # ---------------------------------------------------------------------------
+# VOLUME-SNAPSHOT BASE BACKUPS. Everything above runs against the DEFAULT render,
+# where metrics.databaseBackupSnapshots is false -- so the snapshot rules are not in
+# it, and PostgresNoRecentBaseBackup carries its daily threshold. Both have to be
+# checked from a second render with the value on, or the snapshot rules ship having
+# been parsed, tested and guarded by nothing.
+# ---------------------------------------------------------------------------
+say "rendering the chart with volume-snapshot base backups"
+snapwork="$work/snapshots"
+mkdir -p "$snapwork"
+chmod 755 "$snapwork"
+helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=$root_key" \
+  --set metrics.databaseBackupSnapshots=true >"$snapwork/rendered.yaml" 2>"$snapwork/render.err" ||
+  fail "rendering the chart with metrics.databaseBackupSnapshots=true failed:$(printf '\n%s' "$(cat "$snapwork/render.err")")"
+extract_rules "$snapwork/rendered.yaml" "$snapwork" database-backup database-snapshot-backup >/dev/null ||
+  fail "the snapshot render did not render the snapshot-backup PrometheusRule"
+# Opt-in, both ways: the default render must not carry it.
+[ ! -e "$work/rule-database-snapshot-backup.yaml" ] ||
+  fail "the DEFAULT render carries the snapshot-backup rules; they are for clusters installed with --backup-snapshot-class only"
+snap_rules="$snapwork/rule-database-snapshot-backup.yaml"
+chmod 644 "$snapwork"/rule-*.yaml
+run_promtool "$snap_rules" || fail "promtool rejected the snapshot-backup rule group"
+check_always_firing 3 "$snap_rules" || fail "a snapshot-backup alert can never return nothing, or the check could not run"
+status=0
+run_rule_tests database-snapshot-backup "$snapwork/t" "$snap_rules" \
+  "$repo_root/hack/testdata/prometheus-rules-snapshot-tests.yaml" || status=$?
+[ "$status" -eq 3 ] &&
+  fail "the snapshot-backup rule unit tests do not cover every alert both ways, or do not load the rendered rules"
+[ "$status" -eq 0 ] || fail "a snapshot-backup alerting rule does not behave as specified"
+note "the snapshot-backup rules fire on the states they claim to"
+
+# PostgresNoRecentBaseBackup reads the barman plugin's series, which only the
+# object-store base backup moves -- weekly when snapshots take the daily slot. Its
+# threshold is read out of each render: 36h by default, 8.5 days with snapshots.
+base_backup_threshold() { # <rule-file> -> the threshold in seconds, or nothing
+  python3 - "$1" <<'PY'
+import re, sys, yaml
+for g in yaml.safe_load(open(sys.argv[1]))["groups"]:
+    for r in g.get("rules", []):
+        if r.get("alert") == "PostgresNoRecentBaseBackup":
+            m = re.search(r">\s*(\d+)\s*$", r["expr"].strip())
+            print(m.group(1) if m else "")
+PY
+}
+got="$(base_backup_threshold "$work/rule-database-backup.yaml")"
+[ "$got" = "129600" ] ||
+  fail "PostgresNoRecentBaseBackup's default threshold is '${got}', not 129600 (36h against a daily base backup)"
+got="$(base_backup_threshold "$snapwork/rule-database-backup.yaml")"
+[ "$got" = "734400" ] ||
+  fail "with volume-snapshot base backups PostgresNoRecentBaseBackup's threshold is '${got}', not 734400 (8.5 days against the weekly object-store base backup); at 36h it fires six days a week"
+note "the base-backup threshold follows the object-store schedule: 36h daily, 8.5 days weekly"
+
+# ---------------------------------------------------------------------------
 # A VALUE THE UNIT TESTS CANNOT REACH. They run against the DEFAULT render, and
 # TenantPurgeStalled's threshold is derived from a value (twice the tenant-purge
 # token hold) whose "0 means use the default" reading lives in the service. An

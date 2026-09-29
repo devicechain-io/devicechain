@@ -558,6 +558,19 @@ metrics:
   # Ignored when metrics.enabled or metrics.alerts is false.
   databaseBackups: true
 
+  # databaseBackupSnapshots says the databases take their daily base backup as a
+  # CSI volume snapshot (`dcctl install --backup-snapshot-class`), with a WEEKLY base
+  # backup still going to the backup store. It renders the snapshot rules
+  # (prometheusrule-database-snapshot-backup.yaml) and moves PostgresNoRecentBaseBackup
+  # from 36 hours to 8.5 days, since the object-store backup it reads is then weekly.
+  #
+  # Like databaseBackups it must track what the infrastructure ACTUALLY does: dcctl
+  # sets it from the event store's `database_backup_snapshot_class` output, and an
+  # upgrade carries it from the release it replaces. Wrong in one direction, the
+  # base-backup alert fires six days a week; in the other, a snapshot schedule that
+  # stops or pruning that stops says nothing. Ignored unless databaseBackups is on.
+  databaseBackupSnapshots: false
+
   # The namespace the CloudNativePG Clusters run in, i.e. where
   # cnpg_pg_stat_archiver_* and barman_cloud_cloudnative_pg_io_* are exported, and
   # where the kubelet reports the databases' own PersistentVolumeClaims.

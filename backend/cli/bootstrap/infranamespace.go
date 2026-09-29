@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	tfjson "github.com/hashicorp/terraform-json"
 	corev1 "k8s.io/api/core/v1"
@@ -37,8 +38,10 @@ const (
 	infraNamespaceStateAddress = "module.namespace.kubernetes_namespace_v1.this[0]"
 	tofuManagedByLabel         = "app.kubernetes.io/managed-by"
 	tofuManagedByValue         = "opentofu"
-	tofuComponentLabel         = "devicechain.io/component"
-	tofuComponentValue         = "infrastructure"
+	// Named in the operator's API package, because the operator reads them too: they
+	// are how it tells this namespace is DeviceChain's before it prunes a snapshot in it.
+	tofuComponentLabel = dcv1beta1.ComponentLabel
+	tofuComponentValue = dcv1beta1.InfrastructureComponent
 )
 
 // stateLister and stateImporter are the two halves of terraform-exec this file

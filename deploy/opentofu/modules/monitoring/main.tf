@@ -79,6 +79,13 @@ variable "cnpg_cluster_metrics" {
     Cardinality is negligible: one series per Cluster per condition type, five
     conditions, two Clusters on a stock instance.
 
+    It also exports each CloudNativePG Backup's finish time
+    (`kube_cnpg_backup_stopped_at`) and when the DeviceChain operator last pruned
+    each ScheduledBackup's volume snapshots
+    (`kube_cnpg_scheduledbackup_snapshot_retention_checked_at`), which the
+    volume-snapshot backup alerts read. One series per Backup, which each store's
+    recovery window bounds, and one per ScheduledBackup.
+
     🔴 SET THIS FROM WHETHER CLOUDNATIVEPG IS INSTALLED, not from taste — the root
     passes enable_cnpg. With no CNPG CRDs in the cluster, kube-state-metrics has
     nothing to watch: it does not fail, but it exports no series, and the alerting
@@ -403,7 +410,7 @@ locals {
       rbac = {
         extraRules = [{
           apiGroups = ["postgresql.cnpg.io"]
-          resources = ["clusters"]
+          resources = ["clusters", "backups", "scheduledbackups"]
           verbs     = ["get", "list", "watch"]
         }]
       }
@@ -445,6 +452,73 @@ locals {
                   }
                 }
               }]
+              },
+              # 🔑 THE VOLUME-SNAPSHOT BASE BACKUPS, read from the objects rather than
+              # from CloudNativePG's own collector. Its "last available backup"
+              # gauge is deprecated upstream, is SET only on the primary (every
+              # standby exports 0, so a per-pod rule fires for ever on an HA
+              # store), and is not moved by the backup plugin. A Backup's own
+              # stoppedAt is per Backup, carries no pod, and says which method
+              # took it.
+              #
+              # Yields kube_cnpg_backup_stopped_at{namespace,backup,cluster,method,
+              # phase}: the time a Backup finished, as a unix timestamp (0 while it
+              # has not). One series per Backup, which the retention windows bound.
+              {
+                groupVersionKind = {
+                  group   = "postgresql.cnpg.io"
+                  kind    = "Backup"
+                  version = "v1"
+                }
+                metricNamePrefix = "kube_cnpg"
+                labelsFromPath = {
+                  namespace = ["metadata", "namespace"]
+                  backup    = ["metadata", "name"]
+                  cluster   = ["spec", "cluster", "name"]
+                  method    = ["spec", "method"]
+                  phase     = ["status", "phase"]
+                }
+                metrics = [{
+                  name = "backup_stopped_at"
+                  help = "When a CloudNativePG Backup finished, as a unix timestamp; 0 while it has not."
+                  each = {
+                    type = "Gauge"
+                    gauge = {
+                      path      = ["status", "stoppedAt"]
+                      nilIsZero = true
+                    }
+                  }
+                }]
+              },
+              # Yields kube_cnpg_scheduledbackup_snapshot_retention_checked_at
+              # {namespace,scheduledbackup,cluster,method}: when the DeviceChain
+              # operator last finished pruning this schedule's snapshots, 0 if it
+              # never has. It is the only evidence that pruning is still running --
+              # CloudNativePG does none -- so its age is what the alert reads.
+              {
+                groupVersionKind = {
+                  group   = "postgresql.cnpg.io"
+                  kind    = "ScheduledBackup"
+                  version = "v1"
+                }
+                metricNamePrefix = "kube_cnpg"
+                labelsFromPath = {
+                  namespace       = ["metadata", "namespace"]
+                  scheduledbackup = ["metadata", "name"]
+                  cluster         = ["spec", "cluster", "name"]
+                  method          = ["spec", "method"]
+                }
+                metrics = [{
+                  name = "scheduledbackup_snapshot_retention_checked_at"
+                  help = "When the DeviceChain operator last finished pruning this schedule's volume snapshots, as a unix timestamp; 0 if it never has."
+                  each = {
+                    type = "Gauge"
+                    gauge = {
+                      path      = ["metadata", "annotations", "devicechain.io/snapshot-retention-checked-at"]
+                      nilIsZero = true
+                    }
+                  }
+                }]
             }]
           }
         }

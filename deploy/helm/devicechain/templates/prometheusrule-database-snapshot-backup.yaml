@@ -1,0 +1,142 @@
+{{/*
+Alerting rules for VOLUME-SNAPSHOT base backups (metrics.databaseBackupSnapshots).
+
+Rendered only when the cluster takes its databases' daily base backups as CSI volume
+snapshots (`dcctl install --backup-snapshot-class`); dcctl sets the value from the
+event store's own apply, and an upgrade carries it from the release it replaces.
+The object-store base backup is then weekly, and PostgresNoRecentBaseBackup in
+prometheusrule-database-backup.yaml waits for it accordingly. These rules cover what
+that one cannot see: whether the snapshots are being taken, and whether they are
+being pruned.
+
+🔴 NEITHER SERIES COMES FROM CloudNativePG's COLLECTOR, and that is deliberate. Its
+"last available backup" gauge (cnpg_collector_last_available_backup_timestamp) is
+deprecated upstream, and it is SET only on the primary: every standby exports 0, so
+a per-pod staleness rule over it fires for ever on every HA store. Both series here
+are exported by kube-state-metrics from the objects themselves (the monitoring
+module's cnpg_cluster_metrics), so they carry a Cluster and no pod:
+
+  - kube_cnpg_backup_stopped_at{namespace,backup,cluster,method,phase}: when each
+    Backup finished, 0 while it has not.
+  - kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace,
+    scheduledbackup,cluster,method}: when the DeviceChain operator last finished
+    pruning that schedule's snapshots, 0 if it never has.
+
+🔴 CloudNativePG DOES NOT PRUNE SNAPSHOTS; the DeviceChain operator does. A retention
+window enforced by something whose failure is silent is a plausible value, not a
+guarantee: every snapshot is a full copy of the database as of its day, including
+rows a tenant deletion has since erased. So pruning that STOPS -- the operator down,
+from an older release, or refusing a window it cannot read -- is an alert of its own.
+
+🔴 AND THE INSTRUMENT'S ABSENCE IS ONE TOO. A rule with no series neither fires nor
+complains, and these series exist only while kube-state-metrics is configured to
+read these kinds. DatabaseSnapshotBackupsUnobserved fires on that absence.
+
+Unit-tested against synthetic series in
+hack/testdata/prometheus-rules-snapshot-tests.yaml, from a render with
+metrics.databaseBackupSnapshots=true; hack/check-prometheus-rules.sh makes it.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.databaseBackups .Values.metrics.databaseBackupSnapshots }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+{{- $dbns := .Values.metrics.databaseNamespace }}
+{{- /* Both stores, and only both: the relational store in the shared namespace, this
+instance's event store in its own. Another instance's store never raises this
+instance's alerts. */}}
+{{- $dbsel := printf "%s|%s" $dbns $ns }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: database-snapshot-backup
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.database-snapshot-backup
+      rules:
+        # No completed snapshot in 36 hours, per Cluster, against a daily schedule --
+        # or a snapshot schedule that has never completed one. The second half is the
+        # case the first cannot see: max() over no completed Backup is no series, and
+        # "no series" is not "old".
+        #
+        # 1h: the schedule takes one immediately when it is created, and a hot
+        # snapshot waits for a spread checkpoint and for its closing WAL segment to be
+        # archived before it completes.
+        - alert: PostgresNoRecentSnapshotBackup
+          expr: |
+            (
+              time()
+              -
+              max by (namespace, cluster) (
+                kube_cnpg_backup_stopped_at{namespace=~"{{ $dbsel }}", method="volumeSnapshot", phase="completed"}
+              )
+            ) > 129600
+            or
+            (
+              group by (namespace, cluster) (
+                kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace=~"{{ $dbsel }}", method="volumeSnapshot"}
+              )
+              unless on (namespace, cluster)
+              group by (namespace, cluster) (
+                kube_cnpg_backup_stopped_at{namespace=~"{{ $dbsel }}", method="volumeSnapshot", phase="completed"}
+              )
+            )
+          for: 1h
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "No database snapshot backup has completed in 36 hours"
+            description: >-
+              The {{ "{{ $labels.cluster }}" }} database in {{ "{{ $labels.namespace }}" }} has
+              completed no volume-snapshot base backup in 36 hours against a daily schedule, or has
+              never completed one. Point-in-time recovery still works from the weekly base backup in
+              the backup store and the log since, so nothing is lost yet. Check the events on the
+              ScheduledBackup {{ "{{ $labels.cluster }}" }}-snapshot and on its latest Backups: a
+              VolumeSnapshotClass that was deleted, or that belongs to a different storage driver
+              from the database volumes, fails every snapshot.
+        # The operator has not finished a pruning pass over a snapshot schedule in an
+        # hour. It runs every ten minutes, so an hour is five missed passes; `for`
+        # covers an operator restart. 0 -- never stamped -- is as stale as it gets, so
+        # a schedule the operator has never finished with fires too.
+        - alert: DatabaseSnapshotPruningStalled
+          expr: |
+            (
+              time()
+              -
+              kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace=~"{{ $dbsel }}", method="volumeSnapshot"}
+            ) > 3600
+          for: 30m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Database snapshot backups are not being pruned"
+            description: >-
+              The DeviceChain operator has not finished pruning the volume snapshots of ScheduledBackup
+              {{ "{{ $labels.scheduledbackup }}" }} in {{ "{{ $labels.namespace }}" }} for over an
+              hour. CloudNativePG does not delete old snapshots, so while this lasts every daily
+              snapshot is kept: each one a full copy of the database, including data a tenant deletion
+              has since removed, and each costing storage at the cloud provider. Check that the
+              operator is running and is the release the cluster was installed with, and read the
+              ScheduledBackup's events: a retention window it cannot read is refused there by name.
+        # The instrument itself. Snapshot backups are on, so there is at least one
+        # snapshot ScheduledBackup and kube-state-metrics should be exporting it. No
+        # series at all means it is not, and then neither rule above can ever fire.
+        - alert: DatabaseSnapshotBackupsUnobserved
+          expr: |
+            absent(kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace=~"{{ $dbsel }}", method="volumeSnapshot"})
+          for: 1h
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Database snapshot backups are on, but nothing is reporting on them"
+            description: >-
+              This instance's databases take their daily base backups as volume snapshots, but no
+              snapshot ScheduledBackup is visible to monitoring, so the alerts for a snapshot that
+              failed or for pruning that stopped cannot fire. Check that the snapshot ScheduledBackups
+              exist in the database namespaces, and that kube-state-metrics in the monitoring stack
+              is configured to read CloudNativePG Backups and ScheduledBackups.
+{{- end }}

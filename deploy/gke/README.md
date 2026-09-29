@@ -128,6 +128,52 @@ kubectl patch storageclass premium-rwo \
 kubectl get storageclass                 # premium-rwo should be marked (default)
 ```
 
+### Volume-snapshot base backups (optional)
+
+By default each database's daily base backup is a full copy in the backup store.
+`--backup-snapshot-class` takes it as a persistent-disk snapshot instead, which GKE
+takes incrementally and keeps as a project resource; a full copy still goes to the
+backup store weekly, and every restore still reads the backup store. See
+[Volume-snapshot base backups](https://docs.devicechain.io/deployment/bootstrap#snapshot-base-backups)
+for what it trades.
+
+GKE's persistent-disk driver (`pd.csi.storage.gke.io`) provisions both `premium-rwo`
+and `standard-rwo`, and GKE runs the snapshot controller. Look for a class for that
+driver; if there is none, create one. It must delete the disk snapshot when its
+VolumeSnapshot is deleted, or pruning frees nothing:
+
+```bash
+kubectl get volumesnapshotclass
+kubectl apply -f - <<'EOF'
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: pd-snapshots
+driver: pd.csi.storage.gke.io
+deletionPolicy: Delete
+EOF
+```
+
+Then add the flag to the install below. `dcctl install` refuses a class that does not
+exist, keeps its snapshots (`deletionPolicy: Retain`), or belongs to another driver.
+
+```bash
+dcctl install local --kube-context "$CTX" --ha --backup-snapshot-class pd-snapshots
+```
+
+To see them:
+
+```bash
+kubectl get scheduledbackup -A           # dc-rdb-snapshot, dc-tsdb-snapshot: volumeSnapshot
+kubectl get volumesnapshot -A
+gcloud compute snapshots list
+```
+
+The DeviceChain operator deletes snapshots outside each database's recovery window,
+keeping the newest one before it. Deleting the GKE cluster without first destroying the instances leaves their
+disk snapshots in the project, holding the databases' contents: delete them with
+`gcloud compute snapshots delete`.
+
 ## Install DeviceChain
 
 ```bash

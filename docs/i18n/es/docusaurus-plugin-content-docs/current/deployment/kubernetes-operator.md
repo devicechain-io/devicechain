@@ -21,8 +21,11 @@ registros de base de datos del plano de control (consulta
 :::note Estado
 Disponible: el chart de Helm renderiza las cargas de trabajo y la configuración por servicio, y
 `dcctl bootstrap` y `dcctl upgrade` gestionan el ciclo de vida de una instancia. El operador
-observa el recurso `Instance` y no actúa sobre nada. Planificado, sin empezar: la agregación
-del estado de la instancia y los overlays de Kustomize por entorno.
+observa el recurso `Instance` y no actúa sobre nada ahí. Su otra única tarea es en un clúster
+instalado con [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups): cada diez
+minutos borra los respaldos base como instantáneas de volumen de las bases de datos que han
+salido de su ventana de recuperación, cosa que CloudNativePG no hace. Planificado, sin empezar:
+la agregación del estado de la instancia y los overlays de Kustomize por entorno.
 :::
 
 La agregación de estado llegará sobre el bucle de observación del operador. Hasta entonces, el
@@ -281,7 +284,7 @@ DeviceChain asigna deliberadamente cada capa a una sola herramienta:
 |---|---|---|
 | Infraestructura | **OpenTofu** | NATS, TimescaleDB, namespaces, ingress, TLS |
 | Cargas de trabajo | **Chart de Helm** | Deployments, Services y los ConfigMaps de configuración por área |
-| Ciclo de vida | **Operador** | observa el recurso `Instance`; hoy no actúa sobre nada (la agregación de estado está planificada) |
+| Ciclo de vida | **Operador** | observa el recurso `Instance` y hoy no actúa sobre nada ahí (la agregación de estado está planificada); poda los respaldos base como instantáneas de volumen a su ventana de recuperación |
 | Identidad y configuración de instancia | **`dcctl`** | escribe la declaración `Instance` y el Secret de configuración de instancia que montan las cargas de trabajo |
 | Configuración de negocio | API de administración de la instancia / consola `/admin`, y la API / consola propia de cada inquilino | los inquilinos y los ajustes propios de cada inquilino (como la marca) |
 

@@ -14,6 +14,9 @@ package bootstrap
 //
 //   - metrics.databaseBackups gates the WAL-archiving alerts. False renders no rules
 //     at all, which looks exactly like an instance that does not archive.
+//   - metrics.databaseBackupSnapshots says the base backups are volume snapshots with
+//     a weekly object-store copy. False drops the snapshot alerts and puts the
+//     base-backup alert back on a daily threshold, where it fires six days a week.
 //   - metrics.databaseNamespace scopes those rules to where the database Clusters
 //     actually run. Wrong, and every rule selects no series and never fires.
 //   - metrics.cnpgNamespace gates the database operator's PodMonitor and the
@@ -36,6 +39,9 @@ func carryForwardFromRelease(st *State, previous map[string]interface{}) {
 	metrics, _ := previous["metrics"].(map[string]interface{})
 	if enabled, ok := metrics["databaseBackups"].(bool); ok && enabled {
 		st.Values[databaseBackupsKey] = "true"
+	}
+	if on, ok := metrics["databaseBackupSnapshots"].(bool); ok && on {
+		st.Values[databaseBackupSnapshotsKey] = "true"
 	}
 	if ns, ok := metrics["databaseNamespace"].(string); ok && ns != "" {
 		st.Values[databaseNamespaceKey] = ns

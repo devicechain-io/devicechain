@@ -234,6 +234,14 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 			wouldDo(fmt.Sprintf("check whether namespace %q is this instance's to build in — the "+
 				"read failed (%v), and a real run would stop here", InstanceNamespace(st.Instance), err))
 		}
+		// Best-effort, like the reads above: a refusal and a failed read both stop a real
+		// run, and the rehearsal says which it met without calling either a verdict.
+		if class := backupSnapshotClass(st); class != "" {
+			if err := precheckSnapshotClass(ctx, st); err != nil {
+				wouldDo(fmt.Sprintf("check VolumeSnapshotClass %s for this instance's event store -- the "+
+					"check did not pass (%v), and a real run would stop here", class, err))
+			}
+		}
 		// 🔴 THE STORE IS NOT REHEARSED, AND THAT IS SAID RATHER THAN LEFT OUT. Reaching it
 		// means creating the provisioner inside the primary pod and port-forwarding to it —
 		// writes, on a cluster a rehearsal may be aimed at before it exists. So the budget
@@ -260,6 +268,13 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	// after the monitoring namespace got that far having already written the secret-store
 	// root key, a TLS private key and four database credentials into it.
 	if err := precheckInstanceNamespace(ctx, st); err != nil {
+		return err
+	}
+	// The VolumeSnapshotClass the cluster was installed with, checked again for THIS
+	// instance's event store: the class may have been deleted or changed since the
+	// install, and a bootstrap that found out at the apply would leave a declared,
+	// half-built instance behind. Here nothing has been written.
+	if err := precheckSnapshotClass(ctx, st); err != nil {
 		return err
 	}
 	// 🔴 AND THE SHARED RELATIONAL STORE, FOR THE SAME REASON, TWICE OVER.

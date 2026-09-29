@@ -75,8 +75,8 @@ Re-running `install` against the same cluster converges it: what is already in p
 as it is, and what is missing is added. That includes the backup store's volume, which keeps the
 size it has; see [Backup store size](#backup-store-size).
 
-**Changing its settings** — `--ha`, `--compact`, monitoring, backups — is refused while any
-instance exists on the cluster. Every instance was built to the settings in place when it was
+**Changing its settings** — `--ha`, `--compact`, monitoring, backups,
+`--backup-snapshot-class` — is refused while any instance exists on the cluster. Every instance was built to the settings in place when it was
 bootstrapped, and none is rebuilt when they change. That includes the off-site archive: a
 `--backup-credentials-file` naming a different endpoint or event-store bucket is refused too,
 because every instance's event store keeps archiving to the one it was built with.
@@ -488,6 +488,45 @@ history but still a full day of log, and it gives up recovery range to buy space
 described under [Backups that stop shipping](./observability.md#backup-archiving) warn before
 the store or a database volume fills.
 
+#### Volume-snapshot base backups {#snapshot-base-backups}
+
+On a cluster whose storage driver takes CSI volume snapshots, `dcctl install
+--backup-snapshot-class <class>` takes each database's daily base backup as a volume snapshot
+of its disks instead of a full copy in the backup store. Nothing changes without the flag.
+
+- **What stays the same.** Every database still archives its write-ahead log to the backup
+  store, continuously. A full base backup still goes to the backup store once a week (Sunday
+  04:00): the store prunes old log only against the base backups it holds, so without one it
+  would keep every segment until it was full, and every restore reads the store.
+- **The class.** It must exist, have `deletionPolicy: Delete`, and belong to the storage driver
+  that provisions the database volumes (normally the default StorageClass's). `dcctl install`
+  checks all three before it changes anything, and so does each `dcctl bootstrap`, so a class
+  deleted since the install is caught before an instance is built. The cluster needs a CSI
+  snapshot controller: Google Kubernetes Engine and Azure AKS include one with their disk
+  drivers; on Amazon EKS, install the snapshot controller add-on first.
+- **Retention.** CloudNativePG does not delete old snapshots. The DeviceChain operator does,
+  every ten minutes: it keeps every snapshot inside the database's
+  [recovery window](#backup-retention) and the newest one before it, and deletes the rest,
+  which deletes the provider's copy too. `DatabaseSnapshotPruningStalled` fires when it stops.
+- **What it does not do.** No restore reads a snapshot. A restore (`--restore-rdb-from`,
+  `--restore-tsdb-from`) reads the backup store: the newest weekly base backup and the log
+  since, so it can replay up to a week of log. An instance's snapshots are deleted with its
+  namespace when it is destroyed. Snapshots taken at your cloud provider outlive a cluster
+  deleted without destroying its instances first, and they hold the databases' contents,
+  including data a tenant deletion has removed, until you delete them there.
+- **What it does to the backup store.** The store now keeps up to a week more log for each
+  database: log back to the newest weekly base backup before each window. It holds fewer full
+  copies, but where log is most of what it holds, it fills sooner. With the default windows
+  and store, and the relational share measured above, volume-snapshot base backups fill the
+  store at about 60 events per second sustained, not about 100; and at about 29 if the
+  relational database's log were all of it. The alerts above are the warning, as they are
+  without snapshots.
+- **It belongs to the cluster.** Every instance follows it, and changing it is refused while
+  instances run on the cluster, like the other [install settings](#re-running-install).
+
+The alerts for snapshots are described under
+[Backups that stop shipping](./observability.md#backup-archiving).
+
 ## Prerequisites {#prerequisites}
 
 - **A Kubernetes cluster, version 1.29 or newer**, and a kube-context pointing at it. The
@@ -596,6 +635,7 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--no-monitoring` | Skip the monitoring stack (Prometheus and Grafana). |
 | `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the install fails without this. |
 | `--backup-credentials-file <path>` | Send database backups to an object store you already own, described by a JSON file, instead of the in-cluster one. See [Disaster Recovery](./disaster-recovery.md). |
+| `--backup-snapshot-class <class>` | Take each database's daily base backup as a CSI volume snapshot with this VolumeSnapshotClass instead of a full copy in the backup store; a full copy still goes to the store weekly, and restores still read the store. The class must exist, use `deletionPolicy: Delete`, and belong to the driver that provisions the database volumes. Refused with `--no-cnpg` or `--compact --no-tls`, which leave no backups. See [Volume-snapshot base backups](#snapshot-base-backups). |
 | `--restore-rdb-from <archive>` | Disaster recovery: recover the shared relational store from this archive path inside the backup bucket (`dc-rdb` for a store that has never been restored) instead of initialising an empty one. It takes effect only when the store is **created** — against a cluster whose store already exists it moves no data — so it is a rebuild lever, not a repair. Needs the backup plugin, so it is refused on a cluster installed with `--no-cnpg` or `--compact --no-tls`. See [Recovering an instance](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Stop that recovery at a point in time instead of replaying the whole archive — for data destroyed *correctly*, by a bad migration or a mistaken delete; pick a moment strictly before the damage. Needs `--restore-rdb-from`, and an RFC 3339 timestamp with an explicit offset (`2026-07-27T13:59:00Z`): without one PostgreSQL reads it in the recovering server's own timezone and stops at a different moment than you named. |
 | `--max-connections <n>` | The relational database's connection budget (default `600` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
@@ -1097,6 +1137,9 @@ instance name.
   instance from them with `dcctl bootstrap --restore-tsdb-from` in the same cluster: a destroy
   without it deletes exactly the archive that restore reads. `dcctl destroy --all` accepts
   `--keep-backups`, and applies it to every instance.
+- **Volume-snapshot base backups** (`dcctl install --backup-snapshot-class`) of the instance's
+  event store are in its namespace, and are deleted with it, `--keep-backups` or not. No restore
+  reads them: `--restore-tsdb-from` reads the backup store, which `--keep-backups` keeps.
 - **If the object store cannot be reached**, or destroy cannot tell which path is the
   instance's, the destroy still finishes. It says what it left, and its closing line does not
   report the instance as fully destroyed.

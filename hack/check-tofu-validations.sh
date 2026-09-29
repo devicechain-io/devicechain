@@ -794,6 +794,28 @@ run_assertions() {
   for v in 7d 2w 1m ""; do accepts backup_retention_tsdb "$v"; done
   for v in 7 0d 7days "7 d" 1y 1h 30min d 07d; do rejects backup_retention_tsdb "$v"; done
 
+  # --- volume-snapshot base backups ----------------------------------------------
+  # Off by default, in both roots: the class each store's chart is handed reads back
+  # null. Set, it reaches BOTH stores' charts -- each root declares the variable, so
+  # an instance whose root dropped it would take daily full copies while the
+  # relational store took snapshots. With backups off there are no base backups to
+  # take as snapshots, so the class must not reach a chart at all.
+  evaluates 'tostring(null)' 'module.cnpg_rdb.backup_snapshot_class'
+  evaluates 'tostring(null)' 'module.cnpg_tsdb.backup_snapshot_class'
+  evaluates '"pd-snapshots"' 'module.cnpg_rdb.backup_snapshot_class' -var backup_snapshot_class=pd-snapshots
+  evaluates '"pd-snapshots"' 'module.cnpg_tsdb.backup_snapshot_class' -var backup_snapshot_class=pd-snapshots
+  evaluates 'tostring(null)' 'module.cnpg_rdb.backup_snapshot_class' -var backup_snapshot_class=pd-snapshots \
+    -var enable_database_backups=false
+  evaluates 'tostring(null)' 'module.cnpg_tsdb.backup_snapshot_class' -var backup_snapshot_class=pd-snapshots \
+    -var enable_database_backups=false
+  # A Kubernetes object name, or empty.
+  for v in "" pd-snapshots csi.snapclass-1 a; do accepts backup_snapshot_class "$v"; done
+  for v in Pd-Snapshots "pd snapshots" -pd pd- pd_snapshots; do rejects backup_snapshot_class "$v"; done
+  # SIX fields, as every CloudNativePG schedule: a five-field one is accepted by the
+  # API and never runs, and this one is what keeps the WAL archive pruned.
+  for v in "0 0 4 * * 0" "0 30 2 * * 6"; do accepts backup_object_store_schedule "$v"; done
+  for v in "0 4 * * 0" "" "0 0 4 * * 0 2026"; do rejects backup_object_store_schedule "$v"; done
+
   # The object store is provisioned only where it is used. An external destination
   # must not stand one up — that would be a MinIO pod and a volume nobody writes to,
   # on the configuration whose whole point is that storage lives elsewhere.

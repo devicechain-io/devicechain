@@ -1,0 +1,272 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the volume-snapshot base-backup alerting rules
+# (templates/prometheusrule-database-snapshot-backup.yaml), against a render with
+# metrics.databaseBackupSnapshots=true -- hack/check-prometheus-rules.sh makes it.
+#
+# 🔴 THE SERIES ARE THE SPEC. Both come from kube-state-metrics' custom-resource reader
+# as the monitoring module configures it (modules/monitoring, cnpg_cluster_metrics):
+#   - kube_cnpg_backup_stopped_at{namespace,backup,cluster,method,phase}: a Backup's
+#     status.stoppedAt as a unix timestamp, 0 while it has none.
+#   - kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace,
+#     scheduledbackup,cluster,method}: the DeviceChain operator's last finished pruning
+#     pass over that schedule, 0 if it never finished one.
+# kube-state-metrics also adds customresource_group/kind/version labels; they are
+# left out here because no rule selects on them and they pass through untouched.
+#
+# promtool's clock starts at 0, so time() at an eval_time of 40h is 144000.
+
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # -------------------------------------------------------------------------
+  # Healthy, on an HA install. A daily snapshot finished an hour ago on each
+  # store, a snapshot is being taken right now (stoppedAt 0, running), older
+  # snapshots are still inside the window, and the operator stamps every pass.
+  # Nothing may fire -- and in particular not for the running backup's 0, which a
+  # rule reading min() or a per-backup age would take for a 50-year-old snapshot.
+  # -------------------------------------------------------------------------
+  - name: a store taking and pruning its snapshots raises nothing
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dc-system", cluster="dc-rdb", backup="dc-rdb-snapshot-1", method="volumeSnapshot", phase="completed"}'
+        values: "10800+0x300"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dc-system", cluster="dc-rdb", backup="dc-rdb-snapshot-0", method="volumeSnapshot", phase="completed"}'
+        values: "600+0x300"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dc-system", cluster="dc-rdb", backup="dc-rdb-snapshot-2", method="volumeSnapshot", phase="running"}'
+        values: "0+0x300"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dci-devicechain", cluster="dc-tsdb", backup="dc-tsdb-snapshot-1", method="volumeSnapshot", phase="completed"}'
+        values: "10800+0x300"
+      # The weekly object-store backup is also a Backup; it is not a snapshot.
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dc-system", cluster="dc-rdb", backup="dc-rdb-backup-1", method="plugin", phase="completed"}'
+        values: "600+0x300"
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dc-system", cluster="dc-rdb", scheduledbackup="dc-rdb-snapshot", method="volumeSnapshot"}'
+        values: "0+60x300"
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dci-devicechain", cluster="dc-tsdb", scheduledbackup="dc-tsdb-snapshot", method="volumeSnapshot"}'
+        values: "0+60x300"
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: DatabaseSnapshotPruningStalled
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: DatabaseSnapshotBackupsUnobserved
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The snapshots stopped. The event store's newest completed snapshot is 38.6
+  # hours old at 40h; the relational store's is fresh and must stay quiet, and so
+  # must ANOTHER instance's event store, however old, because it is not this
+  # instance's to report.
+  # -------------------------------------------------------------------------
+  - name: a store whose snapshots stopped fires, per Cluster
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dci-devicechain", cluster="dc-tsdb", backup="dc-tsdb-snapshot-1", method="volumeSnapshot", phase="completed"}'
+        values: "5000+0x2500"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dci-devicechain", cluster="dc-tsdb", backup="dc-tsdb-snapshot-2", method="volumeSnapshot", phase="failed"}'
+        values: "0+0x2500"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dc-system", cluster="dc-rdb", backup="dc-rdb-snapshot-9", method="volumeSnapshot", phase="completed"}'
+        values: "100000+0x2500"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dci-other", cluster="dc-tsdb", backup="dc-tsdb-snapshot-1", method="volumeSnapshot", phase="completed"}'
+        values: "1+0x2500"
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dci-devicechain", cluster="dc-tsdb", scheduledbackup="dc-tsdb-snapshot", method="volumeSnapshot"}'
+        values: "0+60x2500"
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dc-system", cluster="dc-rdb", scheduledbackup="dc-rdb-snapshot", method="volumeSnapshot"}'
+        values: "0+60x2500"
+    alert_rule_test:
+      # 36h + 1h of `for`, from a snapshot at 5000s: not yet at 37h.
+      - eval_time: 37h
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts: []
+      - eval_time: 40h
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              cluster: dc-tsdb
+            exp_annotations:
+              summary: "No database snapshot backup has completed in 36 hours"
+              description: >-
+                The dc-tsdb database in dci-devicechain has completed no volume-snapshot base
+                backup in 36 hours against a daily schedule, or has never completed one.
+                Point-in-time recovery still works from the weekly base backup in the backup
+                store and the log since, so nothing is lost yet. Check the events on the
+                ScheduledBackup dc-tsdb-snapshot and on its latest Backups: a VolumeSnapshotClass
+                that was deleted, or that belongs to a different storage driver from the database
+                volumes, fails every snapshot.
+      - eval_time: 40h
+        alertname: DatabaseSnapshotPruningStalled
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # A snapshot schedule that has never completed a snapshot: max() over no
+  # completed Backup is no series at all, which a staleness comparison alone
+  # reads as fine. Only failed attempts exist.
+  # -------------------------------------------------------------------------
+  - name: a snapshot schedule that never completed one fires
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dc-system", cluster="dc-rdb", backup="dc-rdb-snapshot-1", method="volumeSnapshot", phase="failed"}'
+        values: "0+0x180"
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dc-system", cluster="dc-rdb", scheduledbackup="dc-rdb-snapshot", method="volumeSnapshot"}'
+        values: "0+60x180"
+    alert_rule_test:
+      # Inside the hour a first immediate snapshot is allowed to take.
+      - eval_time: 50m
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dc-system
+              cluster: dc-rdb
+            exp_annotations:
+              summary: "No database snapshot backup has completed in 36 hours"
+              description: >-
+                The dc-rdb database in dc-system has completed no volume-snapshot base backup in
+                36 hours against a daily schedule, or has never completed one. Point-in-time
+                recovery still works from the weekly base backup in the backup store and the log
+                since, so nothing is lost yet. Check the events on the ScheduledBackup
+                dc-rdb-snapshot and on its latest Backups: a VolumeSnapshotClass that was deleted,
+                or that belongs to a different storage driver from the database volumes, fails
+                every snapshot.
+      - eval_time: 2h
+        alertname: DatabaseSnapshotPruningStalled
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: DatabaseSnapshotBackupsUnobserved
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # Pruning stopped. The relational store's schedule was last stamped at 10
+  # minutes and never again (the operator is down); the event store's has never
+  # been stamped at all (0: an operator from before pruning existed). Both fire.
+  # Snapshots themselves are fine, so the snapshot rule stays quiet.
+  # -------------------------------------------------------------------------
+  - name: a schedule the operator has stopped pruning fires
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dc-system", cluster="dc-rdb", scheduledbackup="dc-rdb-snapshot", method="volumeSnapshot"}'
+        values: "600+0x240"
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dci-devicechain", cluster="dc-tsdb", scheduledbackup="dc-tsdb-snapshot", method="volumeSnapshot"}'
+        values: "0+0x240"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dc-system", cluster="dc-rdb", backup="dc-rdb-snapshot-1", method="volumeSnapshot", phase="completed"}'
+        values: "60+0x240"
+      - series: 'kube_cnpg_backup_stopped_at{namespace="dci-devicechain", cluster="dc-tsdb", backup="dc-tsdb-snapshot-1", method="volumeSnapshot", phase="completed"}'
+        values: "60+0x240"
+    alert_rule_test:
+      # The relational store's stamp is an hour old at 70m; with 30m of `for`, it
+      # is still quiet at 95m. The event store's 0 is an hour old at 60m, and fires
+      # once its `for` has run.
+      - eval_time: 95m
+        alertname: DatabaseSnapshotPruningStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              cluster: dc-tsdb
+              scheduledbackup: dc-tsdb-snapshot
+              method: volumeSnapshot
+            exp_annotations:
+              summary: "Database snapshot backups are not being pruned"
+              description: >-
+                The DeviceChain operator has not finished pruning the volume snapshots of
+                ScheduledBackup dc-tsdb-snapshot in dci-devicechain for over an hour. CloudNativePG
+                does not delete old snapshots, so while this lasts every daily snapshot is kept:
+                each one a full copy of the database, including data a tenant deletion has since
+                removed, and each costing storage at the cloud provider. Check that the operator
+                is running and is the release the cluster was installed with, and read the
+                ScheduledBackup's events: a retention window it cannot read is refused there by
+                name.
+      - eval_time: 3h
+        alertname: DatabaseSnapshotPruningStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dc-system
+              cluster: dc-rdb
+              scheduledbackup: dc-rdb-snapshot
+              method: volumeSnapshot
+            exp_annotations:
+              summary: "Database snapshot backups are not being pruned"
+              description: >-
+                The DeviceChain operator has not finished pruning the volume snapshots of
+                ScheduledBackup dc-rdb-snapshot in dc-system for over an hour. CloudNativePG does
+                not delete old snapshots, so while this lasts every daily snapshot is kept: each
+                one a full copy of the database, including data a tenant deletion has since
+                removed, and each costing storage at the cloud provider. Check that the operator
+                is running and is the release the cluster was installed with, and read the
+                ScheduledBackup's events: a retention window it cannot read is refused there by
+                name.
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              cluster: dc-tsdb
+              scheduledbackup: dc-tsdb-snapshot
+              method: volumeSnapshot
+            exp_annotations:
+              summary: "Database snapshot backups are not being pruned"
+              description: >-
+                The DeviceChain operator has not finished pruning the volume snapshots of
+                ScheduledBackup dc-tsdb-snapshot in dci-devicechain for over an hour. CloudNativePG
+                does not delete old snapshots, so while this lasts every daily snapshot is kept:
+                each one a full copy of the database, including data a tenant deletion has since
+                removed, and each costing storage at the cloud provider. Check that the operator
+                is running and is the release the cluster was installed with, and read the
+                ScheduledBackup's events: a retention window it cannot read is refused there by
+                name.
+      - eval_time: 3h
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # The instrument is missing: snapshot backups are on, and kube-state-metrics
+  # exports nothing about them. Neither rule above can fire, so this one does.
+  # (Another instance's schedule is visible; it is not this instance's.)
+  # -------------------------------------------------------------------------
+  - name: snapshot backups nothing reports on fire
+    interval: 1m
+    input_series:
+      - series: 'kube_cnpg_scheduledbackup_snapshot_retention_checked_at{namespace="dci-other", cluster="dc-tsdb", scheduledbackup="dc-tsdb-snapshot", method="volumeSnapshot"}'
+        values: "0+60x120"
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: DatabaseSnapshotBackupsUnobserved
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: DatabaseSnapshotBackupsUnobserved
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              method: volumeSnapshot
+            exp_annotations:
+              summary: "Database snapshot backups are on, but nothing is reporting on them"
+              description: >-
+                This instance's databases take their daily base backups as volume snapshots, but
+                no snapshot ScheduledBackup is visible to monitoring, so the alerts for a snapshot
+                that failed or for pruning that stopped cannot fire. Check that the snapshot
+                ScheduledBackups exist in the database namespaces, and that kube-state-metrics in
+                the monitoring stack is configured to read CloudNativePG Backups and
+                ScheduledBackups.
+      - eval_time: 90m
+        alertname: PostgresNoRecentSnapshotBackup
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: DatabaseSnapshotPruningStalled
+        exp_alerts: []

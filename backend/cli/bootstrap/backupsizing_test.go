@@ -329,3 +329,103 @@ func TestSteadyStateRateIsTheOnePublished(t *testing.T) {
 		}
 	}
 }
+
+// objectStoreIntervalDays is how many days the default object-store schedule used
+// with volume-snapshot base backups leaves between base backups: 7 for a weekly one.
+// Anything but a plain weekly or daily six-field schedule fails, rather than guessing.
+func objectStoreIntervalDays(t *testing.T, schedule string) int64 {
+	t.Helper()
+	f := strings.Fields(schedule)
+	switch {
+	case len(f) == 6 && f[3] == "*" && f[4] == "*" && regexp.MustCompile(`^[0-6]$`).MatchString(f[5]):
+		return 7
+	case len(f) == 6 && f[3] == "*" && f[4] == "*" && f[5] == "*":
+		return 1
+	}
+	t.Fatalf("object-store schedule %q is neither weekly nor daily; this test does not guess its interval",
+		schedule)
+	return 0
+}
+
+// With volume-snapshot base backups the object-store base backup is weekly, and barman
+// keeps the newest base before each window and every segment since: up to one interval
+// MORE log for each database. The steady-state figures published for that mode are the
+// ones the shipped defaults give with each window lengthened by that interval.
+func TestSnapshotModeSteadyStateRateIsTheOnePublished(t *testing.T) {
+	instanceTF, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading the embedded instance variables.tf: %v", err)
+	}
+	clusterTF, err := fs.ReadFile(assets.OpenTofuCluster(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading the embedded cluster variables.tf: %v", err)
+	}
+	extra := objectStoreIntervalDays(t, tofuDefault(t, clusterTF, "backup_object_store_schedule"))
+	if got := objectStoreIntervalDays(t, tofuDefault(t, instanceTF, "backup_object_store_schedule")); got != extra {
+		t.Fatalf("the two roots' object-store schedules leave %d and %d days between base backups; "+
+			"the published figure assumes one", extra, got)
+	}
+	relationalDays := windowDays(t, tofuDefault(t, clusterTF, "backup_retention_rdb")) + extra
+	eventDays := windowDays(t, tofuDefault(t, instanceTF, "backup_retention_tsdb")) + extra
+	store := tofuDefault(t, clusterTF, "backup_object_store_storage")
+
+	measured := steadyStateEventsPerSecond(t, store, relationalArchiveShare, relationalDays, eventDays)
+	allRelational := steadyStateEventsPerSecond(t, store, 1, relationalDays, eventDays)
+	daily := steadyStateEventsPerSecond(t, store, relationalArchiveShare, relationalDays-extra, eventDays-extra)
+	t.Logf("%s store with volume-snapshot base backups (%dd relational / %dd event log): %.1f events/s at "+
+		"share %.2f, %.1f at share 1; %.1f with daily object-store base backups", store, relationalDays,
+		eventDays, measured, relationalArchiveShare, allRelational, daily)
+	// The control: the trade this publishes is real -- snapshots cost store room.
+	if measured >= daily {
+		t.Fatalf("with snapshots the store fills at %.1f events/s, not below the %.1f of daily base backups; "+
+			"the arithmetic no longer says what the docs claim", measured, daily)
+	}
+
+	near := func(published, computed float64) bool { return math.Abs(published-computed) <= 0.1*computed }
+	docs := filepath.Join("..", "..", "..", "docs")
+	readDoc := func(rel string) string {
+		b, err := os.ReadFile(filepath.Join(docs, rel))
+		if err != nil {
+			t.Fatalf("reading %s: %v", rel, err)
+		}
+		return string(b)
+	}
+	enBootstrap := readDoc(filepath.Join("docs", "deployment", "bootstrap.md"))
+	esBootstrap := readDoc(filepath.Join("i18n", "es", "docusaurus-plugin-content-docs", "current",
+		"deployment", "bootstrap.md"))
+	enRelease := readDoc(filepath.Join("docs", "deployment", "releases-and-upgrades.md"))
+	esRelease := readDoc(filepath.Join("i18n", "es", "docusaurus-plugin-content-docs", "current",
+		"deployment", "releases-and-upgrades.md"))
+
+	for _, tc := range []struct {
+		what, text, pattern string
+		computed            float64
+	}{
+		{"backup_object_store_storage's description", string(clusterTF),
+			`fills at about (\d+) events/s sustained with snapshots`, measured},
+		{"backup_object_store_storage's description", string(clusterTF),
+			`and at about (\d+) if the relational store's log were all of it`, allRelational},
+		{"bootstrap.md#snapshot-base-backups", enBootstrap,
+			`volume-snapshot base backups fill the store at about (\d+) events per second sustained`, measured},
+		{"bootstrap.md#snapshot-base-backups", enBootstrap,
+			`and at about (\d+) if the relational database's log were all of it`, allRelational},
+		{"the es bootstrap.md#snapshot-base-backups", esBootstrap,
+			`las copias base como instantáneas de volumen llenan el almacén a unos (\d+) eventos por segundo sostenidos`, measured},
+		{"the es bootstrap.md#snapshot-base-backups", esBootstrap,
+			`y a unos (\d+) si todo fuera registro de la base de datos relacional`, allRelational},
+		{"the release note", enRelease,
+			`at about (\d+) events per second of sustained ingest rather than about`, measured},
+		{"the es release note", esRelease,
+			`a unos (\d+) eventos por segundo de ingesta sostenida en lugar de unos`, measured},
+	} {
+		pattern := regexp.MustCompile(strings.ReplaceAll(tc.pattern, " ", `\s+`))
+		for _, published := range publishedFigures(t, tc.what, tc.text, pattern) {
+			if !near(published, tc.computed) {
+				t.Errorf("%s says about %.0f events/s with volume-snapshot base backups; the shipped defaults "+
+					"(%s store, %dd relational and %dd event-store log) give %.1f. Change the prose with the "+
+					"defaults, in both locales and the variable description.", tc.what, published, store,
+					relationalDays, eventDays, tc.computed)
+			}
+		}
+	}
+}

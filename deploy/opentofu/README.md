@@ -125,6 +125,17 @@ the API and then never runs — the object exists, `kubectl get scheduledbackup`
 and no backup is ever taken. The chart counts the fields and refuses at render time; the
 default is `0 0 3 * * *`, daily at 03:00.
 
+**Volume-snapshot base backups** (`backup_snapshot_class`, both roots, default empty) take
+each store's scheduled base backup as a CSI volume snapshot with that VolumeSnapshotClass
+instead of a full copy in the object store. WAL archiving is unchanged, and a base backup
+still goes to the object store on `backup_object_store_schedule` (default `0 0 4 * * 0`,
+Sunday 04:00): barman prunes archived WAL only against base backups in the object store,
+and every restore reads the object store — restore from a snapshot is not wired. So the
+store keeps up to a week more WAL than with daily object-store backups, and a restore
+replays up to a week more. The class must exist and have `deletionPolicy: Delete`; both
+roots refuse anything else at plan time. CloudNativePG does not prune snapshots: the
+DeviceChain operator does, to each store's window, and keeps the newest one before it.
+
 🔴 **Sizing `backup_object_store_storage` is not the same question as sizing a database
 volume.** It holds a base backup plus every WAL segment since it, for the retention
 window of *each* store (`backup_retention_rdb`, `backup_retention_tsdb`) — and WAL

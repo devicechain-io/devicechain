@@ -199,6 +199,11 @@ type State struct {
 	// BackupDestination is an off-site archive the operator already owns, read from
 	// --backup-credentials-file. Nil means the in-cluster object store.
 	BackupDestination *BackupDestination
+	// BackupSnapshotClass is the VolumeSnapshotClass `dcctl install
+	// --backup-snapshot-class` asked for. Empty keeps object-store base backups. Read it
+	// through backupSnapshotClass, never directly: a bootstrap follows the install
+	// record, and backups that are off take no snapshots whatever this says.
+	BackupSnapshotClass string
 	// Install is the cluster's install record, which a bootstrap FOLLOWS: the cluster's
 	// shape (HA, sizing, monitoring, backups) and what the cluster apply built. Nil for
 	// the install itself, which writes it, and for an upgrade.

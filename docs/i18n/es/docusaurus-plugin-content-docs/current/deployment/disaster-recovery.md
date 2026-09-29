@@ -183,6 +183,15 @@ hay un paso de «restaurar sobre la instancia en marcha»: restaurar por debajo 
 han creado sus propios esquemas implica eliminar tablas que tienen abiertas y competir con sus
 migraciones. Recupera reconstruyendo.
 
+:::note En un clúster que toma respaldos base como instantáneas de volumen
+Con [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups), los dos pasos siguientes
+siguen recuperando desde el almacén de respaldos, nunca desde una instantánea: desde el respaldo
+base semanal más reciente y el log archivado desde entonces. Así que cada uno puede reproducir
+hasta una semana de log, y tarda más de lo que tardaría con respaldos base diarios. Las
+instantáneas pertenecen al clúster que se sustituye, y una reconstrucción no tiene ningún paso que
+las lea.
+:::
+
 Recuperas las dos bases de datos con dos comandos, en este orden, porque los dos almacenes
 pertenecen a cosas distintas:
 
@@ -480,7 +489,9 @@ seguridad, siguen donde están. Lo que destroy sí elimina de ese almacén son l
 del almacén de eventos de la instancia destruida, cuando están en el almacén propio del clúster.
 Las copias en un almacén de objetos que tú proporcionaste no se borran nunca, y `--keep-backups`
 conserva también las del almacén interno; consulta
-[Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups).
+[Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups). En un clúster que
+toma [respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups), las
+instantáneas de la instancia se van con su namespace en cualquier caso.
 
 Conserva el artefacto de depósito mientras conserves cualquier copia de seguridad de las bases de
 datos de esa instancia. Es lo único que todavía puede leerlas. Elimínalo cuando esas copias hayan

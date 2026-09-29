@@ -5,6 +5,12 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+- apiGroups:
   - core.devicechain.io
   resources:
   - instances
@@ -30,3 +36,26 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - postgresql.cnpg.io
+  resources:
+  - backups
+  verbs:
+  - delete
+  - get
+  - list
+- apiGroups:
+  - postgresql.cnpg.io
+  resources:
+  - scheduledbackups
+  verbs:
+  - get
+  - list
+  - patch

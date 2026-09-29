@@ -819,6 +819,24 @@ antes que cualquier almacén de eventos, y estas alertas son el aviso.
 Para saber qué tamaño necesita el almacén interno, consulta
 [Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size).
 
+### Respaldos base como instantáneas de volumen {#snapshot-backup-alerts}
+
+En un clúster instalado con
+[`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups), el respaldo base diario es una
+instantánea de volumen y el del almacén de respaldos es semanal. `PostgresNoRecentBaseBackup`, que
+vigila los respaldos base del almacén de respaldos, espera entonces 8,5 días en lugar de 36 horas,
+y se generan tres alertas más:
+
+| Alerta | Se dispara cuando | Qué hacer |
+| --- | --- | --- |
+| `PostgresNoRecentSnapshotBackup` | Una base de datos no ha completado ninguna instantánea en 36 horas, o su programación de instantáneas no ha completado nunca ninguna, durante una hora. | Lee los eventos del ScheduledBackup `<cluster>-snapshot` y de sus Backups más recientes. Una VolumeSnapshotClass que se borró, o que pertenece a otro controlador de almacenamiento distinto del de los volúmenes de las bases de datos, hace fallar todas las instantáneas. Mientras tanto, la recuperación a un punto en el tiempo sigue funcionando desde el respaldo base semanal. |
+| `DatabaseSnapshotPruningStalled` | El operador de DeviceChain lleva más de una hora sin terminar de podar una programación de instantáneas, durante 30 minutos. | Comprueba que el operador está en marcha, en la versión con la que se instaló el clúster, y lee los eventos del ScheduledBackup. Hasta que vuelva a funcionar, se conservan todas las instantáneas, cada una una copia completa de la base de datos. |
+| `DatabaseSnapshotBackupsUnobserved` | Los respaldos como instantáneas están activados, pero la monitorización no ve ninguna programación de instantáneas, durante una hora. | Comprueba que existen los ScheduledBackup de instantáneas, y que el kube-state-metrics de la pila de monitorización lee los Backups y ScheduledBackups de CloudNativePG. Hasta entonces, ninguna de las dos alertas anteriores puede dispararse. |
+
+Estas alertas leen los objetos Backup y ScheduledBackup a través de kube-state-metrics, no el
+indicador de respaldos del propio CloudNativePG, que solo se establece en el primario de cada base
+de datos.
+
 ## Perfilar un servicio {#profiling}
 
 Las métricas muestran cuánto trabajo hace un servicio y cuánto tarda. No muestran en qué se va el

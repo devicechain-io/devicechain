@@ -76,6 +76,11 @@ output "database_backups_enabled" {
   value       = local.backups_on
 }
 
+output "database_backup_snapshot_class" {
+  description = "The VolumeSnapshotClass the relational store's base backups are taken with, or null when they go to the object store or it has no backups. Read back from what the store's chart was handed; dcctl records it in the install record, whose settings must agree with it."
+  value       = module.cnpg_rdb.backup_snapshot_class
+}
+
 output "database_backup_destination" {
   description = <<-EOT
     Where the relational store's backups actually land, or null when it has none.

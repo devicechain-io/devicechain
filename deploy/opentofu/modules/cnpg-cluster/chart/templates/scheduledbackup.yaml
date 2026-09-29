@@ -18,31 +18,58 @@ restore anything.
 The retention policy on the ObjectStore then depends on this in turn -- obsolete
 backups are pruned only after a NEW backup completes, so a cluster that has
 stopped taking base backups also silently stops pruning.
+
+VOLUME-SNAPSHOT BASE BACKUPS (backup.snapshotClass)
+
+Opt-in, for a cluster whose storage driver takes CSI volume snapshots. When it is
+set, the base backup on `backup.schedule` is a snapshot of the database's volumes
+(the `<name>-snapshot` document at the end of this file), and the object-store base
+backup moves to `backup.objectStoreSchedule`. WAL archiving does not change.
+
+🔴 THE OBJECT-STORE BASE BACKUP STAYS, and not as a courtesy. Barman prunes archived
+WAL only against the base backups in its own catalog, which is the object store:
+with no base backup there nothing ever becomes obsolete, and the WAL archive grows
+until the store is full -- which is how archiving stops, and then how the
+database's own volume fills. Every restore path also reads the object store, so
+with no base backup there no restore finds one.
+
+🔴 CloudNativePG DOES NOT PRUNE VOLUME-SNAPSHOT BACKUPS. The retention policy on the
+ObjectStore reaches only what is in the object store. The DeviceChain operator
+prunes them instead, to the window in the `devicechain.io/snapshot-retention` label
+below. Two ownership links make its deletion complete:
+
+  - `snapshotOwnerReference: backup` on the Cluster: each VolumeSnapshot is owned by
+    its Backup, so deleting the Backup deletes the snapshot (and, under a class with
+    deletionPolicy Delete, the provider's copy).
+  - `backupOwnerReference: self` here: each Backup is owned by this ScheduledBackup,
+    so turning snapshots OFF -- which removes this document -- garbage-collects
+    every snapshot it took. With `none` they would outlive the one object that leads
+    the operator to them, and be kept for ever.
 */ -}}
 
-{{- if and .Values.backup.enabled .Values.backup.schedule }}
-{{- $name := required "cnpg-cluster: .Values.name is required" .Values.name -}}
-
-{{- /*
-🔴 SIX FIELDS, NOT FIVE. CloudNativePG's schedule is NOT the Kubernetes CronJob
-format: it carries a leading SECONDS field. This is the single easiest mistake to
-make here and its failure mode is the quiet one -- a five-field entry is a
-malformed schedule, so the operator never computes a next run. `tofu apply`
-succeeds, the ScheduledBackup object exists, `kubectl get scheduledbackup` shows
-it, and no backup is ever taken. The error lives in the object's status, which is
-not a thing anyone reads on a cluster that looks healthy.
-
-Worse, a five-field entry is not obviously wrong to a reader: "0 3 * * *" means
-3am to every operator alive. Read as six fields it would mean something else
-entirely. So this refuses at render time, where the message can say which format
-it wanted.
-*/ -}}
-{{- $fields := splitList " " (trim .Values.backup.schedule) -}}
-{{- $count := 0 -}}
-{{- range $fields }}{{- if . }}{{- $count = add1 $count }}{{- end }}{{- end }}
-{{- if ne $count 6 }}
-  {{- fail (printf "cnpg-cluster %q: backup.schedule is %q, which has %d fields. CloudNativePG schedules take SIX -- the leading field is SECONDS, unlike a Kubernetes CronJob. A five-field schedule is not rejected by the API: the object is created, no next run is ever computed, and no backup is ever taken. Daily at 03:00 is \"0 0 3 * * *\"." $name .Values.backup.schedule $count) -}}
+{{- $snapClass := .Values.backup.snapshotClass | default "" -}}
+{{- if and $snapClass (not .Values.backup.enabled) }}
+  {{- fail (printf "cnpg-cluster %q: backup.snapshotClass is %q but backup.enabled is false. Volume-snapshot base backups need WAL archiving to restore to any point, so they are part of backups, not a replacement for them. Enable backups or drop snapshotClass." .Values.name $snapClass) -}}
 {{- end }}
+{{- /* Every operand is a bool, so the result is one: `and` returns an operand, and
+`ternary` below refuses anything but a bool. */ -}}
+{{- $snap := and .Values.backup.enabled (ne $snapClass "") -}}
+{{- if $snap }}
+  {{- if not .Values.backup.schedule }}
+    {{- fail (printf "cnpg-cluster %q: backup.schedule is empty with snapshotClass %q set, so no snapshot is ever taken. Drop snapshotClass to keep object-store base backups, or set a schedule." .Values.name $snapClass) -}}
+  {{- end }}
+  {{- if not .Values.backup.objectStoreSchedule }}
+    {{- fail (printf "cnpg-cluster %q: backup.objectStoreSchedule is empty with snapshotClass %q set. Barman prunes archived WAL only against base backups in the object store, so with none there the WAL archive grows until the store is full, and no restore finds a base backup. Set a six-field schedule (weekly is \"0 0 4 * * 0\")." .Values.name $snapClass) -}}
+  {{- end }}
+{{- end }}
+{{- /* The object-store base backup's schedule: backup.schedule by default, the
+weekly one while snapshots take the daily slot. */ -}}
+{{- $storeField := ternary "backup.objectStoreSchedule" "backup.schedule" $snap -}}
+{{- $storeSchedule := ternary .Values.backup.objectStoreSchedule .Values.backup.schedule $snap -}}
+
+{{- if and .Values.backup.enabled $storeSchedule }}
+{{- $name := required "cnpg-cluster: .Values.name is required" .Values.name -}}
+{{- include "cnpg-cluster.requireSixFields" (dict "name" $name "field" $storeField "value" $storeSchedule) }}
 
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
@@ -56,7 +83,7 @@ metadata:
 spec:
   cluster:
     name: {{ $name }}
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ $storeSchedule | quote }}
 
   # 🔑 Take one NOW, on creation, rather than waiting for the first scheduled
   # slot. Two reasons and both are about evidence rather than convenience:
@@ -87,5 +114,41 @@ spec:
   # backup runs on the primary. That is correct and is why this is not gated on
   # the instance count. It is stated because "backups run on a standby" would
   # otherwise become a thing people believe about every install.
+  target: prefer-standby
+{{- end }}
+{{- if $snap }}
+{{- $name := required "cnpg-cluster: .Values.name is required" .Values.name -}}
+{{- include "cnpg-cluster.requireSixFields" (dict "name" $name "field" "backup.schedule" "value" .Values.backup.schedule) }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $name }}-snapshot
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    # 🔑 The operator prunes only a ScheduledBackup carrying THIS component and the
+    # managed-by label below, in a namespace DeviceChain owns. A retention label
+    # alone, which anyone can copy, does not make it delete a Backup.
+    app.kubernetes.io/component: database-snapshot-backup
+    app.kubernetes.io/managed-by: opentofu
+    # The recovery window the operator prunes this schedule's snapshots to, in the
+    # ObjectStore's retentionPolicy grammar. Rendered even when empty: empty keeps
+    # every snapshot, as an empty retentionPolicy keeps every object-store backup,
+    # and the operator still records that it looked, which is what the alert on a
+    # stalled pruner reads.
+    devicechain.io/snapshot-retention: {{ .Values.backup.retentionPolicy | default "" | quote }}
+spec:
+  cluster:
+    name: {{ $name }}
+  schedule: {{ .Values.backup.schedule | quote }}
+  # One now, for the reason the object-store backup takes one: a snapshot schedule
+  # that first runs tomorrow cannot be checked today. CloudNativePG runs one backup
+  # per Cluster at a time and requeues the other, so the two immediate ones do not
+  # collide.
+  immediate: true
+  method: volumeSnapshot
+  # See the header: the Backups are this object's, so removing it removes them.
+  backupOwnerReference: self
   target: prefer-standby
 {{- end }}

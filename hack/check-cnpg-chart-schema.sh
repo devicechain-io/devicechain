@@ -249,6 +249,16 @@ rendered+=("$(render_case backup-ha "${base[@]}" --set instances=3 --set synchro
   --set sharedPreloadLibraries[0]=timescaledb --set parameters.timescaledb\\.telemetry_level=off \
   --set backup.endpointCASecret.name=dc-ca --set backup.endpointCASecret.key=ca.crt)")
 
+# VOLUME-SNAPSHOT base backups. Each case renders the Cluster's spec.backup block,
+# which no other case does, and a second ScheduledBackup of a different method, so
+# both are validated against the CRDs only here. The HA case carries a WAL volume
+# (which the class snapshots too) and a serverName, as a restored or HA store does.
+rendered+=("$(render_case backup-snapshot-single "${base[@]}" --set instances=1 "${backup[@]}" \
+  --set backup.snapshotClass=pd-snapshots)")
+rendered+=("$(render_case backup-snapshot-ha "${base[@]}" --set instances=3 --set synchronous.enabled=true "${backup[@]}" \
+  --set backup.snapshotClass=pd-snapshots --set backup.retentionPolicy=7d \
+  --set backup.serverName=dc-store-restored --set walStorage.enabled=true --set walStorage.size=2Gi)")
+
 # The RESTORE shape (A2.5c). A separate case rather than a variation, because
 # recovery replaces the whole bootstrap block: every field under
 # `bootstrap.initdb` disappears and a differently-shaped `bootstrap.recovery`
@@ -334,6 +344,26 @@ refuses backup-without-destination "fails every archive attempt" \
 # next run, and takes no backup — on a cluster that reads healthy.
 refuses five-field-schedule "CloudNativePG schedules take SIX" \
   "${base[@]}" --set instances=1 "${backup[@]}" --set backup.schedule='0 3 * * *'
+
+# VOLUME-SNAPSHOT BASE BACKUPS. Each of these renders a store that looks configured
+# for backup and is not: snapshots with no WAL archive restore to nothing but their
+# own moment; no snapshot schedule takes none; no object-store schedule leaves the
+# WAL archive unpruned and every restore without a base backup; and a five-field
+# object-store schedule is accepted by the API and never runs.
+refuses snapshot-without-backups "but backup.enabled is false" \
+  "${base[@]}" --set instances=1 --set backup.snapshotClass=pd-snapshots
+refuses snapshot-without-schedule "so no snapshot is ever taken" \
+  "${base[@]}" --set instances=1 "${backup[@]}" --set backup.snapshotClass=pd-snapshots \
+  --set backup.schedule=
+refuses snapshot-without-object-store-schedule "backup.objectStoreSchedule is empty" \
+  "${base[@]}" --set instances=1 "${backup[@]}" --set backup.snapshotClass=pd-snapshots \
+  --set backup.objectStoreSchedule=
+refuses snapshot-five-field-object-store-schedule 'backup.objectStoreSchedule is "0 4 * * 0", which has 5 fields' \
+  "${base[@]}" --set instances=1 "${backup[@]}" --set backup.snapshotClass=pd-snapshots \
+  --set backup.objectStoreSchedule='0 4 * * 0'
+refuses snapshot-five-field-schedule 'backup.schedule is "0 3 * * *", which has 5 fields' \
+  "${base[@]}" --set instances=1 "${backup[@]}" --set backup.snapshotClass=pd-snapshots \
+  --set backup.schedule='0 3 * * *'
 
 # The connection budget for the read-only SQL/BI roles. Both halves are refusals of
 # a configuration that applies cleanly and starves the platform at runtime, and the
@@ -719,6 +749,95 @@ def check_restore_wiring(docs, case, failures):
     return seen
 
 
+def check_snapshot_wiring(docs, case, failures):
+    """Volume-snapshot base backups, by value: the things no schema can say.
+
+    Every field below exists in the CRD whichever value it holds, so the walk above
+    passes all of them. What each one is FOR is retention and recovery, and getting
+    one wrong renders a green apply:
+
+      - `snapshotOwnerReference: backup` on the Cluster. CloudNativePG does not
+        prune snapshots; the DeviceChain operator deletes the Backup, and only an
+        owned VolumeSnapshot goes with it. Anything else keeps every snapshot.
+      - `backupOwnerReference: self` on the snapshot schedule. Turning snapshots
+        off removes the schedule, and only owned Backups go with it.
+      - the component, managed-by and retention labels, which are what the
+        operator selects on; and the retention label must be the ObjectStore's
+        own window, or snapshots are kept to a different one.
+      - exactly one object-store base backup beside it, on a schedule that is not
+        the snapshot's. Barman prunes WAL only against base backups in the object
+        store, and every restore reads it.
+
+    And the other direction: a Cluster that renders no snapshot schedule must not
+    carry snapshot configuration, and no case without snapshotClass may render a
+    volumeSnapshot backup -- that would be the opt-in leaking into every install.
+    """
+    clusters = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Cluster"}
+    scheds = [d for d in docs if d.get("kind") == "ScheduledBackup"]
+    stores = [d for d in docs if d.get("kind") == "ObjectStore"]
+    snaps = [d for d in scheds if (d.get("spec") or {}).get("method") == "volumeSnapshot"]
+    snapshot_case = case.startswith("backup-snapshot")
+
+    if not snaps:
+        if snapshot_case:
+            failures.append("%s: rendered no volumeSnapshot ScheduledBackup -- the snapshot "
+                            "cases no longer exercise the snapshot path" % case)
+        for name, c in clusters.items():
+            if dig(c, ("spec", "backup")) is not None:
+                failures.append("%s: Cluster/%s carries spec.backup with no snapshot "
+                                "schedule beside it" % (case, name))
+        return 0
+    if not snapshot_case:
+        failures.append("%s: rendered a volumeSnapshot ScheduledBackup without asking for "
+                        "one -- volume-snapshot base backups are opt-in" % case)
+
+    for s in snaps:
+        sname = s["metadata"]["name"]
+        spec = s.get("spec") or {}
+        where = "%s: ScheduledBackup/%s" % (case, sname)
+        cname = (spec.get("cluster") or {}).get("name")
+        cluster = clusters.get(cname)
+        if cluster is None:
+            failures.append("%s names Cluster %r, which this chart does not render" % (where, cname))
+            continue
+        vs = dig(cluster, ("spec", "backup", "volumeSnapshot")) or {}
+        if not vs.get("className"):
+            failures.append("%s takes volume snapshots of a Cluster with no VolumeSnapshotClass: "
+                            "every backup fails" % where)
+        if vs.get("snapshotOwnerReference") != "backup":
+            failures.append("%s: Cluster/%s snapshotOwnerReference is %r, not 'backup' -- pruning "
+                            "deletes the Backup and every VolumeSnapshot stays"
+                            % (where, cname, vs.get("snapshotOwnerReference")))
+        if spec.get("backupOwnerReference") != "self":
+            failures.append("%s backupOwnerReference is %r, not 'self' -- turning snapshots off "
+                            "would leave every snapshot behind with nothing to prune it"
+                            % (where, spec.get("backupOwnerReference")))
+        labels = (s.get("metadata") or {}).get("labels") or {}
+        for key, want in (("app.kubernetes.io/component", "database-snapshot-backup"),
+                          ("app.kubernetes.io/managed-by", "opentofu")):
+            if labels.get(key) != want:
+                failures.append("%s label %s is %r, not %r -- the operator prunes only what "
+                                "carries it" % (where, key, labels.get(key), want))
+        windows = {(o.get("spec") or {}).get("retentionPolicy") for o in stores}
+        window = labels.get("devicechain.io/snapshot-retention")
+        if window is None or {window} != windows:
+            failures.append("%s snapshot-retention label is %r but the ObjectStore keeps %s -- "
+                            "the snapshots would be pruned to a different window"
+                            % (where, window, sorted(w for w in windows if w is not None)))
+        store_backups = [d for d in scheds
+                         if (d.get("spec") or {}).get("method") == "plugin"
+                         and ((d.get("spec") or {}).get("cluster") or {}).get("name") == cname]
+        if len(store_backups) != 1:
+            failures.append("%s has %d object-store base backups beside it, want 1 -- barman "
+                            "prunes WAL only against those, and every restore reads one"
+                            % (where, len(store_backups)))
+        elif store_backups[0]["spec"].get("schedule") == spec.get("schedule"):
+            failures.append("%s and the object-store base backup share schedule %r -- the "
+                            "object-store one should have moved to objectStoreSchedule"
+                            % (where, spec.get("schedule")))
+    return len(snaps)
+
+
 # Optional blocks that render only when their value is set, each with what it
 # costs to ship one unvalidated. Every one of these sits behind a `{{- with }}`,
 # and a template action that never fires validates nothing -- so the check would
@@ -742,6 +861,10 @@ OPTIONAL_BRANCHES = [
      "every database the platform creates inherits it. It renders as a LIST "
      "through toYaml, and it runs exactly once per cluster -- at initdb, on a "
      "path a restore never takes"),
+    (("spec", "backup", "volumeSnapshot"),
+     "how a volume-snapshot base backup is taken -- rendered only when "
+     "backup.snapshotClass is set, and the ownership field in it is what lets "
+     "pruning delete a snapshot at all"),
 ]
 
 
@@ -760,6 +883,7 @@ checked = 0
 kinds_seen = set()
 restores_checked = 0
 archivers_checked = 0
+snapshots_checked = 0
 branch_coverage = {p: 0 for p, _ in OPTIONAL_BRANCHES}
 
 for path in rendered_paths:
@@ -786,6 +910,7 @@ for path in rendered_paths:
 
     archivers_checked += check_plugin_wiring(docs, case, failures)
     restores_checked += check_restore_wiring(docs, case, failures)
+    snapshots_checked += check_snapshot_wiring(docs, case, failures)
 
 # 🔴 THE POSITIVE CONTROL. Everything above is a loop over whatever happened to
 # render, so a chart that emitted nothing -- or a schema map that failed to match
@@ -810,6 +935,13 @@ if restores_checked == 0:
         "no rendered Cluster carried a recovery bootstrap, so every restore\n"
         "  assertion was skipped. Either the restore cases stopped rendering it or\n"
         "  the chart no longer emits it -- both make this check vacuous."
+    )
+
+if snapshots_checked == 0:
+    sys.exit(
+        "no rendered case carried a volume-snapshot ScheduledBackup, so every snapshot\n"
+        "  assertion was skipped. Either the snapshot cases stopped rendering it or the\n"
+        "  chart no longer emits it -- both make this check vacuous."
     )
 
 uncovered = [(p, why) for p, why in OPTIONAL_BRANCHES if branch_coverage[p] == 0]
@@ -872,6 +1004,7 @@ print("    %d WAL archiver(s) checked for backup wiring" % archivers_checked)
 print("    %d value(s) checked against a CRD pattern; recovery-window units: %s" % (
     len(patterns_checked), ", ".join(sorted(window_units))))
 print("    %d recovery bootstrap(s) checked for restore wiring" % restores_checked)
+print("    %d volume-snapshot schedule(s) checked for retention and ownership wiring" % snapshots_checked)
 print("    %d optional block(s) exercised: %s" % (
     len(OPTIONAL_BRANCHES),
     ", ".join("spec.%s x%d" % (".".join(p[1:]), branch_coverage[p]) for p, _ in OPTIONAL_BRANCHES)))

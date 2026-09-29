@@ -202,6 +202,9 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		notes = append(notes, fmt.Sprintf(
 			"event store recovering from archive %q, and will archive under %q",
 			st.Restore.TsdbFrom, paths.Tsdb))
+		if backupSnapshotClass(st) != "" {
+			notes = append(notes, snapshotRestoreNote("event store"))
+		}
 	}
 	// 🔴 A restore aimed at a store that already exists does NOTHING — CloudNativePG
 	// reads `spec.bootstrap` when it CREATES a Cluster. The apply is green, the

@@ -1,0 +1,53 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The two CloudNativePG kinds snapshot retention reads and writes, as the smallest
+# CRDs a real API server will serve: the group, version, kinds, plural names and
+# scope are CloudNativePG's (postgresql.cnpg.io/v1, namespaced), and the schema
+# keeps whatever it is given. The pruner reads these as unstructured objects, so
+# what it depends on is those names and the API server's own behaviour -- label
+# selection, a delete conditional on a UID, a merge patch -- not the field schema.
+#
+# No status subresource, so a test can create a Backup already `completed`; the
+# pruner only reads status.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: backups.postgresql.cnpg.io
+spec:
+  group: postgresql.cnpg.io
+  names:
+    kind: Backup
+    listKind: BackupList
+    plural: backups
+    singular: backup
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: scheduledbackups.postgresql.cnpg.io
+spec:
+  group: postgresql.cnpg.io
+  names:
+    kind: ScheduledBackup
+    listKind: ScheduledBackupList
+    plural: scheduledbackups
+    singular: scheduledbackup
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
