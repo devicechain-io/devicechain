@@ -38,11 +38,12 @@ type EventManagementApi interface {
 	CreateMeasurementEvent(ctx context.Context, request *MeasurementEventCreateRequest) (*MeasurementEvent, error)
 	CreateAlertEvent(ctx context.Context, request *AlertEventCreateRequest) (*AlertEvent, error)
 
-	// Batch creates persist all of a message's events of one type in a single
-	// multi-row INSERT (ADR-022 E5). They run on the *gorm.DB they are handed so
-	// that a caller can supply a transaction-bound handle (see PersistInTx); the
-	// tenant-scope create callback fires on the batch destination, stamping the
-	// tenant onto every row.
+	// Batch creates persist all of a message's events of one type in multi-row
+	// INSERTs (ADR-022 E5), as few as the driver's parameter limit allows — one for
+	// any message short of thousands of rows (rdb.CreateChunked). They run on the
+	// *gorm.DB they are handed so that a caller can supply a transaction-bound handle
+	// (see PersistInTx); the tenant-scope create callback fires on every statement,
+	// stamping the tenant onto every row.
 	CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*LocationEventCreateRequest) ([]*LocationEvent, error)
 	CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error)
 	CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error)
@@ -168,6 +169,9 @@ func canonicalPayloadEntry(v any) ([]byte, error) {
 // database enforces. (It also sidesteps GORM's implicit belongs-to upsert, which on
 // a composite-primary-key hypertable emitted an `ON CONFLICT DO UPDATE` with no
 // inference target — invalid SQL, SQLSTATE 42601.)
+//
+// The insert is split by rdb.CreateChunked, so no number of events can make one statement
+// bind more parameters than the database driver accepts.
 func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error {
 	if len(events) == 0 {
 		return nil
@@ -191,10 +195,10 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 	// let one tenant's parent event suppress another tenant's identical-key event.
 	// tenant_id is stamped onto each row by the tenant-scope create callback before
 	// the insert, so the value is present when the conflict is evaluated.
-	return db.WithContext(ctx).Clauses(clause.OnConflict{
+	return rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"}},
 		DoNothing: true,
-	}).Create(distinct).Error
+	}), distinct).Error
 }
 
 // ErrZeroEntryTime is the fail-closed rejection for a payload create request whose own
@@ -249,8 +253,9 @@ func (api *Api) CreateAlertEvent(ctx context.Context, request *AlertEventCreateR
 	return created[0], nil
 }
 
-// Create a batch of location events in a single multi-row INSERT on the given
-// db handle (which may be a transaction). The per-row request->row mapping is
+// Create a batch of location events in multi-row INSERTs of at most rdb.RowsPerInsert
+// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
+// transaction). The per-row request->row mapping is
 // identical to CreateLocationEvent; tenant scoping is applied by the global
 // tenant-scope create callback, which stamps the tenant onto every slice entry.
 func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*LocationEventCreateRequest) ([]*LocationEvent, error) {
@@ -297,18 +302,19 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
 	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
 	// envelope owning N copies of its own rows.
-	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+	result := rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
 		DoNothing: true,
-	}).Create(&created)
+	}), &created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return created, nil
 }
 
-// Create a batch of measurement events in a single multi-row INSERT on the given
-// db handle (which may be a transaction). The per-row request->row mapping is
+// Create a batch of measurement events in multi-row INSERTs of at most rdb.RowsPerInsert
+// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
+// transaction). The per-row request->row mapping is
 // identical to CreateMeasurementEvent; tenant scoping is applied by the global
 // tenant-scope create callback.
 func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error) {
@@ -349,18 +355,19 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
 	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
 	// envelope owning N copies of its own rows.
-	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+	result := rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
 		DoNothing: true,
-	}).Create(&created)
+	}), &created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return created, nil
 }
 
-// Create a batch of alert events in a single multi-row INSERT on the given db
-// handle (which may be a transaction). The per-row request->row mapping is
+// Create a batch of alert events in multi-row INSERTs of at most rdb.RowsPerInsert
+// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
+// transaction). The per-row request->row mapping is
 // identical to CreateAlertEvent; tenant scoping is applied by the global
 // tenant-scope create callback.
 func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error) {
@@ -400,10 +407,10 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
 	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
 	// envelope owning N copies of its own rows.
-	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+	result := rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
 		DoNothing: true,
-	}).Create(&created)
+	}), &created)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -419,8 +426,9 @@ func (api *Api) CreateStateChangeEvent(ctx context.Context, request *StateChange
 	return created[0], nil
 }
 
-// Create a batch of state change events in a single multi-row INSERT on the given db
-// handle (which may be a transaction). Unlike the other event tables the child rows
+// Create a batch of state change events in multi-row INSERTs of at most
+// rdb.RowsPerInsert rows each (rdb.CreateChunked), all or nothing on the given db handle
+// (which may be a transaction). Unlike the other event tables the child rows
 // are inserted ON CONFLICT DO NOTHING against the idempotency unique index
 // (tenant_id, device_token, occurred_time, state, session_id): a StateChange carries
 // no AltId, so the base-event dedup does not engage, and a persist-commit-then-crash-
@@ -430,8 +438,9 @@ func (api *Api) CreateStateChangeEvent(ctx context.Context, request *StateChange
 // reason by design — a producer MUST make each distinct transition distinct in
 // (occurred_time, state, session_id); two rows colliding there are the same edge.
 //
-// Returns the rows and the RowsAffected count: 0 means the batch fully deduped (the
-// caller then skips anchor persistence, which has no idempotency of its own).
+// Returns the rows and the RowsAffected count, summed over the statements: 0 means the
+// batch fully deduped (the caller then skips anchor persistence, which has no idempotency
+// of its own).
 func (api *Api) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, requests []*StateChangeEventCreateRequest) ([]*StateChangeEvent, int64, error) {
 	if len(requests) == 0 {
 		return []*StateChangeEvent{}, 0, nil
@@ -453,10 +462,10 @@ func (api *Api) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, reques
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, 0, err
 	}
-	result := db.WithContext(ctx).Clauses(clause.OnConflict{
+	result := rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "occurred_time"}, {Name: "state"}, {Name: "session_id"}},
 		DoNothing: true,
-	}).Create(&created)
+	}), &created)
 	if result.Error != nil {
 		return nil, 0, result.Error
 	}
@@ -473,6 +482,9 @@ func (api *Api) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, reques
 // re-persisted event re-presented its whole anchor set. The "plain insert" claim
 // outlived the change that falsified it — the same way the sibling claim in
 // EventPersistenceResults.Deduped did.
+//
+// The insert is split by rdb.CreateChunked, so no number of anchors can make one statement
+// bind more parameters than the database driver accepts.
 func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*EventAnchor) error {
 	if len(anchors) == 0 {
 		return nil
@@ -488,13 +500,13 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 	// no unique index to stop it. The in-tree comment on that skip already warned "a plain
 	// re-insert would duplicate the anchor set"; it was right, and it only guarded one of
 	// the four paths that reach here.
-	return db.WithContext(ctx).Clauses(clause.OnConflict{
+	return rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"},
 			{Name: "anchor_type"}, {Name: "anchor_token"},
 		},
 		DoNothing: true,
-	}).Create(anchors).Error
+	}), anchors).Error
 }
 
 // DeleteAnchorsForEntity removes event_anchors rows referencing a deleted entity

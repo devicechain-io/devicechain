@@ -117,6 +117,14 @@ var ErrDeterministic = errors.New("deterministic persistence failure")
 // on retry once a concurrent writer commits, and misfiling a transient failure as
 // deterministic discards data rather than merely delaying it. When in doubt this
 // stays on the retry path, because that error is recoverable and the other is not.
+//
+// The one refusal it reclassifies that is not a PgError is the driver's own for a
+// statement binding more parameters than the protocol allows (rdb.IsStatementTooLarge),
+// which pgx raises before anything is sent. The driver's other client-side refusals —
+// an argument it cannot encode, or a count that does not match the statement — cannot
+// arise from these inserts: every bound column is a string, bytes, an integer, a time,
+// or a pointer or sql.Null wrapper of one, and a value the column cannot hold (an
+// infinity into a numeric, say) is refused by the server as class 22, covered above.
 func classifyPersistFailure(err error) error {
 	if err == nil || errors.Is(err, ErrDeterministic) {
 		return err
@@ -127,6 +135,14 @@ func classifyPersistFailure(err error) error {
 	// content is the problem.
 	if errors.Is(err, model.ErrZeroEntryTime) {
 		return fmt.Errorf("%w: %w", ErrDeterministic, err)
+	}
+	// A statement over the driver's parameter limit is refused before it is sent, and the
+	// same message builds the same statement on every delivery. The event store's inserts
+	// are split so this cannot happen on their path (rdb.CreateChunked); this is the
+	// backstop for a statement that is not, so it is given up on at once instead of being
+	// retried until it is filed as a downstream failure.
+	if rdb.IsStatementTooLarge(err) {
+		return fmt.Errorf("%w: statement exceeds the database driver's parameter limit: %w", ErrDeterministic, err)
 	}
 	var pgerr *pgconn.PgError
 	if errors.As(err, &pgerr) && strings.HasPrefix(pgerr.Code, "22") {

@@ -15,10 +15,11 @@ package writerbatch
 //
 // It is NOT a statement-size bound, and PostgreSQL's 65535-parameter limit is not what caps
 // it. event-management runs each message's own statements one after another inside the
-// batch's transaction, so a statement's parameters are bounded by one message; device-state
-// merges a batch into multi-row upserts chunked at a fixed row count, so its statements are
-// bounded by that chunk (and its lock by the batch's distinct devices, at most this cap).
-// Neither comes near the limit at any batch size this cap allows.
+// batch's transaction, and splits every multi-row insert so that no statement binds more
+// than that limit however many rows one message carries (core/rdb's CreateChunked, sized by
+// RowsPerInsert from the row's own columns); device-state merges a batch into multi-row
+// upserts chunked at a fixed row count, so its statements are bounded by that chunk (and its
+// lock by the batch's distinct devices, at most this cap).
 //
 // What it bounds is how long a writing transaction can be, and that has two costs:
 //   - the erasure fence's first answer is remembered for the whole transaction

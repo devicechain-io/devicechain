@@ -128,8 +128,9 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 					_, err = ep.writeEvent(p.ctx, tx, pevent, *p.event)
 				}
 				if err != nil {
-					// Stop here: on Postgres the transaction is already aborted, and
-					// carrying on would commit the messages around a half-written one.
+					// Stop here: on Postgres the transaction is aborted, or rolled back
+					// to the savepoint a split insert ran under, and carrying on would
+					// commit the messages around a half-written one.
 					failedAt = i
 					return err
 				}
