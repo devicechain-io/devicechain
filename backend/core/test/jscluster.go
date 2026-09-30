@@ -48,11 +48,7 @@ func StartJetStreamCluster(tb testing.TB, size int) []*natsserver.Server {
 	if err != nil {
 		tb.Fatalf("could not start a %d-node JetStream cluster (%d construction(s)): %v", size, constructions, err)
 	}
-	tb.Cleanup(func() {
-		for _, s := range servers {
-			s.Shutdown()
-		}
-	})
+	tb.Cleanup(func() { shutdownServers(servers) })
 	// Registered after the shutdown, so it runs before it: cleanups run last in, first out.
 	reportServerLogsOnFailure(tb, logs)
 	return servers
@@ -171,16 +167,9 @@ func tryStartJetStreamCluster(tb testing.TB, size int, h clusterHooks, within ti
 	}
 	routes = routes[:len(routes)-1]
 
-	servers := make([]*natsserver.Server, 0, size)
-	logs := make([]*serverLog, 0, size)
-	fail := func(err error) ([]*natsserver.Server, []*serverLog, error) {
-		for _, s := range servers {
-			s.Shutdown()
-		}
-		return nil, nil, withServerLogs(err, logs)
-	}
-	for i := 0; i < size; i++ {
-		srv, err := natsserver.NewServer(&natsserver.Options{
+	opts := make([]*natsserver.Options, size)
+	for i := range opts {
+		opts[i] = &natsserver.Options{
 			Host:       "127.0.0.1",
 			Port:       -1,
 			ServerName: fmt.Sprintf("n%d", i+1),
@@ -192,22 +181,52 @@ func tryStartJetStreamCluster(tb testing.TB, size int, h clusterHooks, within ti
 				Port: ports[i],
 			},
 			Routes: natsserver.RoutesFromStr(routes),
-		})
-		if err != nil {
-			return fail(fmt.Errorf("new clustered nats server %d: %w", i, err))
 		}
-		// Before Start: a listener that cannot bind is reported from inside Start.
-		logs = append(logs, attachLog(srv))
-		servers = append(servers, srv)
-		h.start(srv)
 	}
-	if err := awaitListening(servers, logs, min(h.listenWithin, time.Until(deadline))); err != nil {
+	servers, logs, err := startListening(opts, h, deadline)
+	fail := func(err error) ([]*natsserver.Server, []*serverLog, error) {
+		shutdownServers(servers)
+		return nil, nil, withServerLogs(err, logs)
+	}
+	if err != nil {
 		return fail(err)
 	}
 	if err := awaitJetStreamClusterFormed(servers, min(clusterFormBudget, time.Until(deadline))); err != nil {
 		return fail(err)
 	}
 	return servers, logs, nil
+}
+
+// startListening creates a server for each of opts, gives each a serverLog before it
+// starts, starts each through h.start, and waits (awaitListening) until every one is
+// listening, for the smaller of h.listenWithin and what is left before deadline. Both
+// cluster fixtures start their servers through it, so they share one way of starting and
+// one way of telling a slow server from a port that could not be bound.
+//
+// It returns the servers and logs it made even with an error, so the caller can shut the
+// servers down and quote the logs along with whatever else it has to tear down.
+func startListening(opts []*natsserver.Options, h clusterHooks, deadline time.Time) (
+	[]*natsserver.Server, []*serverLog, error) {
+	servers := make([]*natsserver.Server, 0, len(opts))
+	logs := make([]*serverLog, 0, len(opts))
+	for i, o := range opts {
+		srv, err := natsserver.NewServer(o)
+		if err != nil {
+			return servers, logs, fmt.Errorf("new clustered nats server %d: %w", i, err)
+		}
+		// Before Start: a listener that cannot bind is reported from inside Start, and this
+		// log is the only place that report goes.
+		logs = append(logs, attachLog(srv))
+		servers = append(servers, srv)
+		h.start(srv)
+	}
+	return servers, logs, awaitListening(servers, logs, min(h.listenWithin, time.Until(deadline)))
+}
+
+func shutdownServers(servers []*natsserver.Server) {
+	for _, s := range servers {
+		s.Shutdown()
+	}
 }
 
 // awaitListening waits until every server has bound its client and route listeners. A

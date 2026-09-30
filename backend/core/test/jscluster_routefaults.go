@@ -133,14 +133,7 @@ func (f *RouteFaults) close() {
 // and each server's warnings and errors are printed if the test fails.
 func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserver.Server, *RouteFaults) {
 	tb.Helper()
-	var servers []*natsserver.Server
-	var faults *RouteFaults
-	var logs []*serverLog
-	constructions, err := retryOnBindFailure(tb, "route-fault cluster", clusterStartBudget, func(within time.Duration) error {
-		var err error
-		servers, faults, logs, err = tryStartJetStreamClusterWithRouteFaults(tb, size, within)
-		return err
-	})
+	servers, faults, logs, constructions, err := startJetStreamClusterWithRouteFaults(tb, size, defaultClusterHooks(), clusterStartBudget)
 	// A route around the proxies is the fixture failing at its one job, not a port race,
 	// and a fresh construction that happens to mesh before the bypass forms would hide
 	// it. So it is not retried, and it is reported as what it is.
@@ -151,9 +144,7 @@ func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserve
 		tb.Fatalf("could not start a %d-node route-fault JetStream cluster (%d construction(s)): %v", size, constructions, err)
 	}
 	tb.Cleanup(func() {
-		for _, s := range servers {
-			s.Shutdown()
-		}
+		shutdownServers(servers)
 		faults.close()
 	})
 	// Registered after the shutdown, so it runs before it: cleanups run last in, first out.
@@ -161,14 +152,32 @@ func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserve
 	return servers, faults
 }
 
+// startJetStreamClusterWithRouteFaults is startJetStreamCluster for the route-fault
+// fixture: it makes constructions until one forms, and returns how many it made.
+func startJetStreamClusterWithRouteFaults(tb testing.TB, size int, h clusterHooks, budget time.Duration) (
+	[]*natsserver.Server, *RouteFaults, []*serverLog, int, error) {
+	var servers []*natsserver.Server
+	var faults *RouteFaults
+	var logs []*serverLog
+	n, err := retryOnBindFailure(tb, "route-fault cluster", budget, func(within time.Duration) error {
+		var err error
+		servers, faults, logs, err = tryStartJetStreamClusterWithRouteFaults(tb, size, h, within)
+		return err
+	})
+	if err != nil {
+		return nil, nil, nil, n, err
+	}
+	return servers, faults, logs, n, nil
+}
+
 // tryStartJetStreamClusterWithRouteFaults makes one construction within the budget it is
 // given. On an error it has shut everything down, and the error carries the last lines
 // each server logged.
-func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int, within time.Duration) (
+func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int, h clusterHooks, within time.Duration) (
 	[]*natsserver.Server, *RouteFaults, []*serverLog, error) {
 	deadline := time.Now().Add(within)
 	// size cluster ports, plus size closed ports each server advertises instead of its own.
-	ports, err := reservePorts(2 * size)
+	ports, err := h.ports(2 * size)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -200,23 +209,15 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int, within tim
 		}
 	}
 
-	servers := make([]*natsserver.Server, 0, size)
-	logs := make([]*serverLog, 0, size)
-	fail := func(err error) ([]*natsserver.Server, *RouteFaults, []*serverLog, error) {
-		for _, s := range servers {
-			s.Shutdown()
-		}
-		faults.close()
-		return nil, nil, nil, withServerLogs(err, logs)
-	}
-	for i := 0; i < size; i++ {
+	opts := make([]*natsserver.Options, size)
+	for i := range opts {
 		routes := ""
 		for j := 0; j < size; j++ {
 			if j != i {
 				routes += "nats-route://" + proxyTo[i][j] + ","
 			}
 		}
-		srv, err := natsserver.NewServer(&natsserver.Options{
+		opts[i] = &natsserver.Options{
 			Host:       "127.0.0.1",
 			Port:       -1,
 			ServerName: fmt.Sprintf("n%d", i+1),
@@ -229,16 +230,15 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int, within tim
 				Advertise: fmt.Sprintf("127.0.0.1:%d", advertised[i]),
 			},
 			Routes: natsserver.RoutesFromStr(routes[:len(routes)-1]),
-		})
-		if err != nil {
-			return fail(fmt.Errorf("new clustered nats server %d: %w", i, err))
 		}
-		// Before Start: a listener that cannot bind is reported from inside Start.
-		logs = append(logs, attachLog(srv))
-		servers = append(servers, srv)
-		go srv.Start()
 	}
-	if err := awaitListening(servers, logs, min(clusterListenBudget, time.Until(deadline))); err != nil {
+	servers, logs, err := startListening(opts, h, deadline)
+	fail := func(err error) ([]*natsserver.Server, *RouteFaults, []*serverLog, error) {
+		shutdownServers(servers)
+		faults.close()
+		return nil, nil, nil, withServerLogs(err, logs)
+	}
+	if err != nil {
 		return fail(err)
 	}
 	if err := awaitJetStreamClusterFormed(servers, min(clusterFormBudget, time.Until(deadline))); err != nil {
