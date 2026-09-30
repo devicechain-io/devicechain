@@ -53,5 +53,9 @@ var (
 		// its views name those three columns in their frozen projections, so on a
 		// fresh install the table has to carry them by the time the views are built.
 		NewAnalyticsSurfaceSchema(),
+		// Drops the twelve event-store indexes no query needs (see its doc comment).
+		// DROP-only on purpose: an index BUILD over live chunks would hold a SHARE lock
+		// against ingest for the whole build and could outlast the startup probe.
+		NewIndexTrimSchema(),
 	}
 )

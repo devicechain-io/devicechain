@@ -4067,6 +4067,47 @@ de estado cuyo identificador de sesión es demasiado grande para la columna de 6
 la base de datos; ese evento se registra ahora como inválido en su primera entrega. No hay que
 hacer nada.
 
+#### El almacén de eventos actualiza menos índices por cada evento {#next-event-store-indexes}
+
+`event-management` elimina doce índices del almacén de eventos. Cada uno repetía lo que otro
+índice ya ofrecía a las mismas consultas, o ninguna consulta de la plataforma lo leía. Cada fila
+almacenada actualiza ahora menos índices: una fila de evento base, tres en lugar de cinco (cuatro
+en lugar de seis si lleva un id alternativo); una fila de medición, cuatro en lugar de cinco; una
+fila de ubicación, de alerta o de anclaje de relación, dos en lugar de cuatro; y una fila de
+cambio de presencia, uno en lugar de cuatro. Un evento de medición con una lectura y sin anclajes,
+por ejemplo, actualiza siete índices en lugar de diez.
+
+- Los índices que impiden almacenar un evento dos veces no cambian, y toda lectura que sirve
+  `event-management` sigue usando un índice.
+- **La lista de eventos de un dispositivo trabaja más sobre los datos recientes.** El total que
+  acompaña a la lista de eventos de un dispositivo, y una lista de los eventos de un dispositivo
+  filtrada por tipo de evento, recorren ahora todas las filas del dispositivo que aún no están
+  comprimidas (la última semana de datos, por defecto) en lugar de solo las filas que cuentan o
+  devuelven. Eso incluye las filas de un dispositivo con el mismo token en cualquier otro
+  inquilino, así que un dispositivo muy activo llamado `gateway-1` en un inquilino también
+  ralentiza el total de `gateway-1` en otro. Los datos comprimidos se leen por dispositivo e
+  inquilino, como antes. Donde más se nota es en un
+  dispositivo que envía eventos a un ritmo alto.
+- **Acceso por SQL y BI.** Una consulta sobre `analytics.event_anchors` o
+  `analytics.state_change_events` que filtra solo por tiempo lee ahora todas las filas de tu
+  inquilino en cada fragmento aún sin comprimir que toca el rango (un día de datos por fragmento,
+  por defecto), en lugar de solo las filas del rango. Si añades un filtro por anclaje
+  (`anchor_type` y `anchor_token`) o por dispositivo (`device_token`), usa un índice como antes.
+  Las demás vistas no cambian.
+- **Durante la actualización.** La primera vez que arranca el nuevo `event-management`, elimina
+  los índices uno a uno. Eliminar uno necesita un momento en que ninguna otra transacción use esa
+  tabla, y mientras espera, las lecturas y escrituras de esa tabla esperan con él. Cada intento
+  desiste como máximo a los 5 segundos, y una tabla ocupada se reintenta cada 2 segundos durante
+  un minuto como máximo. Si una consulta larga, el borrado de un inquilino o el propio trabajo de
+  compresión o de retención de la base de datos la mantiene ocupada más tiempo, `event-management` se detiene con un error que nombra la tabla y el índice, y
+  continúa desde ahí al reiniciarse; mientras tanto, el `event-management` anterior sigue
+  almacenando eventos. El error incluye además una consulta que lista las sesiones que retienen la
+  tabla o cualquiera de sus fragmentos. Si se sigue deteniendo, busca consultas SQL o de BI de larga duración sobre
+  el almacén de eventos. Eliminar un índice también bloquea cada fragmento de su tabla; si la base
+  de datos se queda sin espacio para bloqueos, el error lo indica y nombra el ajuste que hay que
+  aumentar.
+- Volver a `v0.18.0` deja los índices eliminados, y `v0.18.0` funciona sin ellos.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

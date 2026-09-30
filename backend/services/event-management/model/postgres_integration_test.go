@@ -40,6 +40,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	gormigrate "github.com/go-gormigrate/gormigrate/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -75,6 +77,13 @@ func newPostgresApi(t *testing.T, instance string) *Api {
 // subject is the storage layer rather than the Api over it.
 func newPostgresManager(t *testing.T, instance string) *rdb.RdbManager {
 	t.Helper()
+	return newPostgresManagerWith(t, instance, Migrations)
+}
+
+// newPostgresManagerWith runs the given migration chain — a PREFIX of Migrations, for a
+// test whose subject is what one appended migration does to a database that predates it.
+func newPostgresManagerWith(t *testing.T, instance string, migrations []*gormigrate.Migration) *rdb.RdbManager {
+	t.Helper()
 	port, err := strconv.Atoi(envOr("DC_IT_PGPORT", "5432"))
 	require.NoError(t, err, "DC_IT_PGPORT must be numeric")
 
@@ -85,7 +94,7 @@ func newPostgresManager(t *testing.T, instance string) *rdb.RdbManager {
 		"create the instance database")
 	mgr := &rdb.RdbManager{
 		Microservice: &core.Microservice{InstanceId: instance, FunctionalArea: "event-management"},
-		Migrations:   Migrations,
+		Migrations:   migrations,
 		InstanceConfig: config.DatastoreConfiguration{
 			Type: "timescaledb",
 			Configuration: map[string]interface{}{
@@ -104,6 +113,34 @@ func newPostgresManager(t *testing.T, instance string) *rdb.RdbManager {
 		}
 	})
 	return mgr
+}
+
+// freshInstance returns an instance id no earlier run has used, and drops its database
+// when the test ends. A test that migrates an OLD schema and then applies a newer
+// migration needs this: on a server that has run the suite before, a fixed instance
+// already carries the newer migration and the "upgrade" would be a no-op.
+//
+// Call it BEFORE building a manager on the instance: cleanups run last-registered-first,
+// so the drop then runs after the manager's pool has closed.
+func freshInstance(t *testing.T, prefix string) string {
+	t.Helper()
+	name := prefix + strconv.FormatInt(time.Now().UnixNano(), 36)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, fmt.Sprintf("postgres://%s:%s@%s:%s/postgres",
+			envOr("DC_IT_PGUSER", "postgres"), envOr("DC_IT_PGPASSWORD", "devicechain"),
+			envOr("DC_IT_PGHOST", "localhost"), envOr("DC_IT_PGPORT", "5432")))
+		if err != nil {
+			t.Logf("drop %s: connect: %v", name, err)
+			return
+		}
+		defer conn.Close(context.Background())
+		if _, err := conn.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)"); err != nil {
+			t.Logf("drop %s: %v", name, err)
+		}
+	})
+	return name
 }
 
 func envOr(key, fallback string) string {

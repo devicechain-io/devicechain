@@ -26,6 +26,10 @@ import (
 // unprotected; only measurement_events was safe, and only incidentally, because creating
 // the continuous aggregate over a plain table errors out.
 //
+// Since event-management's index trim, only measurement_events still carries its
+// `<table>_occurred_time_idx` in the schema, so for the other five hypertables the
+// catalog probe below is now the ONLY witness in the golden that they are hypertables.
+//
 // The consequence is not abstract. Losing Timescale's machinery on a real instance was
 // measured during the ADR-028 event-store restore drill: the cluster reported healthy,
 // the extension was still listed, the API answered, and every row in a compressed chunk

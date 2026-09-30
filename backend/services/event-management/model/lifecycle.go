@@ -140,8 +140,8 @@ var compressSegmentBy = map[string]string{
 	// above at any interval a real deployment uses (a 24h chunk needs one row every
 	// ~20 minutes). They are read through commonEventFilters, whose only non-time
 	// predicate is device_token (event_type is a coarse IN-list, too low-cardinality
-	// to be worth a segment of its own). events additionally carries an index leading
-	// with exactly these two columns.
+	// to be worth a segment of its own). events additionally carries a
+	// (device_token, occurred_time DESC) index for the per-device read.
 	"events":          "tenant_id, device_token",
 	"location_events": "tenant_id, device_token",
 	// measurement_events is read both directly and, for bucketed aggregation, on the
@@ -163,10 +163,12 @@ var compressSegmentBy = map[string]string{
 	// What that costs, stated rather than glossed: alert_events IS read by device
 	// (through commonEventFilters), so this key gives up the batch selectivity there
 	// and accepts the read amplification, on the asymmetry above. state_change_events
-	// gives up nothing today — it has NO reader at all, being the write-only presence
-	// history; its (tenant_id, device_token, occurred_time DESC) index anticipates a
-	// presence-timeline reader that does not exist yet, and when it arrives THAT is
-	// the moment to re-measure this table's write density rather than assume it.
+	// gives up nothing today — no platform code reads it (the tenant purge and the
+	// SQL/BI view aside), being the write-only presence history, and it carries no read
+	// index of its own: its idempotency index (tenant_id, device_token, occurred_time,
+	// state, session_id) already leads with a device's timeline, which is what a
+	// presence-timeline reader would need. When one arrives, THAT is the moment to
+	// re-measure this table's write density rather than assume it.
 	//
 	// Do NOT "make these consistent" with the three above without a measurement that
 	// moves the curve; TestSparseTablesAreNotSegmentedPerDevice is what such an edit
