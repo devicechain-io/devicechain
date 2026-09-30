@@ -37,6 +37,32 @@ func TestIsRetryableDropFailure(t *testing.T) {
 	assert.False(t, isLockTableFull(pg("55P03")))
 }
 
+// TestDropFailureError pins what one failed attempt ends the migration with: a busy
+// table is retried (nil), a full lock table names the setting to raise, and anything
+// else fails with the index and table named.
+func TestDropFailureError(t *testing.T) {
+	idx := trimmedIndex{"idx_x", "alert_events"}
+	pg := func(code string) error { return &pgconn.PgError{Code: code} }
+
+	for _, code := range []string{"55P03", "40P01", "57014"} {
+		assert.NoError(t, dropFailureError(idx, fmt.Errorf("w: %w", pg(code))), code)
+	}
+
+	full := dropFailureError(idx, fmt.Errorf("w: %w", pg("53200")))
+	if assert.Error(t, full) {
+		assert.Contains(t, full.Error(), "max_locks_per_transaction")
+		assert.Contains(t, full.Error(), `idx_x on "event-management".alert_events`)
+		var pgErr *pgconn.PgError
+		assert.True(t, errors.As(full, &pgErr), "the server error must stay wrapped")
+	}
+
+	other := dropFailureError(idx, pg("0A000"))
+	if assert.Error(t, other) {
+		assert.Contains(t, other.Error(), `idx_x on "event-management".alert_events`)
+		assert.NotContains(t, other.Error(), "max_locks_per_transaction")
+	}
+}
+
 // TestIndexTrimSnapshot pins the migration's own snapshot by value: twelve distinct
 // indexes, none of them one a query needs. The integration suite proves the resulting
 // schema; this catches a list edit without a server.

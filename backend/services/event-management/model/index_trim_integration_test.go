@@ -9,8 +9,11 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +24,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -321,9 +325,17 @@ func waitForLockWaiter(t *testing.T, conn *pgx.Conn, within time.Duration) {
 // dropped exactly the indexes before the busy table; writes to the busy table wait only
 // one bounded attempt; the next run resumes and finishes; and no timeout outlives its
 // transaction on the connection that ran it.
+//
+// The timing is chosen so each property has its own measurable consequence. The holder
+// takes the hypertable itself, so every attempt ends at lockTimeout (55P03), well before
+// statementTimeout: removing the lock_timeout makes the last error a 57014 and a write
+// wait the whole statementTimeout. statementTimeout is half the budget, so the budget
+// check's lookahead (pause + statementTimeout) ends the run far before the deadline;
+// without it the run ends only after the deadline. And pause is twice lockTimeout, so a
+// retry without the pause makes about twice the attempts the pause allows.
 func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
-	timing := indexTrimTiming{lockTimeout: 500 * time.Millisecond, statementTimeout: 800 * time.Millisecond,
-		pause: 200 * time.Millisecond, budget: 3 * time.Second}
+	timing := indexTrimTiming{lockTimeout: 200 * time.Millisecond, statementTimeout: 2 * time.Second,
+		pause: 400 * time.Millisecond, budget: 4 * time.Second}
 
 	// Negative control: with nothing holding a lock, the same migration on the same
 	// shape of database finishes at once — so it is the lock, not the harness, that makes
@@ -351,6 +363,7 @@ func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 	observer := connectInstance(t, inst)
 	_, err = holder.Exec(context.Background(), `BEGIN; LOCK TABLE "event-management".state_change_events IN ACCESS SHARE MODE`)
 	require.NoError(t, err)
+	holderPID := holder.PgConn().PID()
 
 	done := make(chan error, 1)
 	start := time.Now()
@@ -366,24 +379,53 @@ func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 		VALUES ('acme', '\x01', 'dev-9', 4, '2026-08-02T00:00:00Z', 'ONLINE', 99)`)
 	cancel()
 	require.NoError(t, err, "a write to the busy table must complete while the migration retries")
-	assert.Less(t, time.Since(wstart), timing.statementTimeout+400*time.Millisecond,
-		"a write must wait at most one bounded attempt")
+	assert.Less(t, time.Since(wstart), timing.lockTimeout+400*time.Millisecond,
+		"a write must wait at most one lock_timeout")
 
 	var migErr error
 	select {
 	case migErr = <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(timing.budget + 3*time.Second):
 		_, _ = holder.Exec(context.Background(), `ROLLBACK`)
-		t.Fatal("the migration did not return within 5 s: the retry is not bounded")
+		t.Fatal("the migration did not return within its budget: the retry is not bounded")
 	}
 	elapsed := time.Since(start)
 	require.Error(t, migErr, "a table busy past the budget must fail the migration")
-	assert.Less(t, elapsed, timing.budget+time.Second)
 	msg := migErr.Error()
 	assert.Contains(t, msg, "idx_event-management_state_change_events_tenant_id")
 	assert.Contains(t, msg, `"event-management".state_change_events`)
-	assert.Contains(t, msg, "pg_stat_activity")
 	assert.Contains(t, msg, "continues from here on the next start")
+
+	// Each attempt ended at lock_timeout, not at the statement bound.
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(migErr, &pgErr), "the last server error must stay wrapped: %v", migErr)
+	assert.Equal(t, "55P03", pgErr.Code, "an attempt against a held table must end at lock_timeout")
+
+	// The budget check looks ahead: a new attempt starts only if it can end, even at
+	// statementTimeout, by the deadline. The last attempt then started no later than
+	// budget - pause - statementTimeout and ended at lockTimeout, so the run is over by
+	// budget + lockTimeout - statementTimeout (2.2 s here, plus overheads) — never past
+	// the budget. A check against the deadline alone ends only after it.
+	assert.Less(t, elapsed, timing.budget, "the run must end within its budget, not after it")
+
+	// Attempts are spaced by the pause. Attempt k fails no earlier than
+	// k·lockTimeout + (k-1)·pause after the start, and attempt k+1 starts only if attempt
+	// k failed by budget - pause - statementTimeout; so N attempts need
+	// (N-1)·(lockTimeout+pause) <= budget - statementTimeout. Without the pause the same
+	// budget admits about twice as many, each queueing ACCESS EXCLUSIVE on the table
+	// back to back.
+	m := regexp.MustCompile(`\((\d+) attempts,`).FindStringSubmatch(msg)
+	require.Len(t, m, 2, "the busy error must report its attempts: %s", msg)
+	attempts, err := strconv.Atoi(m[1])
+	require.NoError(t, err)
+	maxAttempts := int((timing.budget-timing.statementTimeout)/(timing.lockTimeout+timing.pause)) + 1
+	assert.GreaterOrEqual(t, attempts, 2, "a busy table must be retried")
+	assert.LessOrEqual(t, attempts, maxAttempts, "attempts must be spaced by the pause")
+
+	// The query the error hands the operator finds the holder.
+	assert.Contains(t, msg, indexTrimHolderQuery("state_change_events"))
+	assert.Equal(t, []uint32{holderPID}, holderPIDs(t, observer, indexTrimHolderQuery("state_change_events")),
+		"the busy error's query must find the session holding the table")
 
 	// By value: everything before the busy table's first index is gone, it and
 	// everything after it is still there.
@@ -415,6 +457,23 @@ func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 	}
 }
 
+// holderPIDs runs a holder query (indexTrimHolderQuery) and returns the pids it finds.
+func holderPIDs(t *testing.T, conn *pgx.Conn, query string) []uint32 {
+	t.Helper()
+	rows, err := conn.Query(context.Background(), query)
+	require.NoError(t, err)
+	defer rows.Close()
+	var pids []uint32
+	for rows.Next() {
+		vals, err := rows.Values()
+		require.NoError(t, err)
+		pids = append(pids, uint32(vals[0].(int32)))
+	}
+	require.NoError(t, rows.Err())
+	sort.Slice(pids, func(i, j int) bool { return pids[i] < pids[j] })
+	return pids
+}
+
 // TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld covers the case lock_timeout
 // alone does not: other sessions hold CHUNKS (not the hypertable) and each lets go just
 // before lock_timeout would fire. Each single wait is then under lock_timeout, but a
@@ -439,10 +498,12 @@ func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
 	// Three holders, one per chunk, releasing 400 ms apart: every single wait is under
 	// lock_timeout, and together they span 1.2 s.
 	var wg sync.WaitGroup
+	var holders []uint32
 	for i := 0; i < 3; i++ {
 		conn := connectInstance(t, inst)
 		_, err := conn.Exec(context.Background(), `BEGIN; LOCK TABLE `+chunks[i]+` IN ACCESS SHARE MODE`)
 		require.NoError(t, err)
+		holders = append(holders, conn.PgConn().PID())
 		wg.Add(1)
 		go func(i int, conn *pgx.Conn) {
 			defer wg.Done()
@@ -454,6 +515,17 @@ func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
 
 	writer := connectInstance(t, inst)
 	observer := connectInstance(t, inst)
+
+	// The busy error's holder query must find sessions that hold only chunks — they
+	// never lock the hypertable's own oid, which a query on that oid alone would miss
+	// (the control below).
+	sort.Slice(holders, func(i, j int) bool { return holders[i] < holders[j] })
+	assert.Equal(t, holders, holderPIDs(t, observer, indexTrimHolderQuery("alert_events")),
+		"the holder query must find holders of chunks alone")
+	assert.Empty(t, holderPIDs(t, observer, `SELECT pid FROM pg_locks
+		WHERE granted AND relation = '"event-management".alert_events'::regclass`),
+		"control: no holder locks the hypertable itself")
+
 	idx := indexTrimDropped[0]
 	require.Equal(t, "alert_events", idx.table)
 
@@ -486,6 +558,29 @@ func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
 	assert.Less(t, r.elapsed, timing.statementTimeout+300*time.Millisecond, "one attempt must be bounded")
 	assert.Less(t, writeDone, timing.statementTimeout+400*time.Millisecond,
 		"a write to the table must wait at most one bounded attempt")
+}
+
+// TestIntegrationIndexTrimFailsAtOnceOnAnythingButABusyTable proves the retry loop
+// retries only a busy table: a DROP the server refuses for another reason (here, an
+// index a constraint needs) ends the migration on its first attempt, with a budget
+// that would otherwise allow many.
+func TestIntegrationIndexTrimFailsAtOnceOnAnythingButABusyTable(t *testing.T) {
+	timing := indexTrimTiming{lockTimeout: 200 * time.Millisecond, statementTimeout: 500 * time.Millisecond,
+		pause: 500 * time.Millisecond, budget: 10 * time.Second}
+	mgr := newPostgresManagerWith(t, freshInstance(t, "ittrimrefuse"), Migrations[:len(Migrations)-1])
+	sys := systemDB(mgr)
+
+	start := time.Now()
+	err := dropIndexBounded(sys, trimmedIndex{"events_pkey", "events"}, timing, start.Add(timing.budget))
+	elapsed := time.Since(start)
+	require.Error(t, err, "dropping the primary key's index must be refused")
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr), "the server error must stay wrapped: %v", err)
+	assert.False(t, isRetryableDropFailure(err), "the refusal must not be a busy table: %s", pgErr.Code)
+	assert.NotContains(t, err.Error(), "stayed busy", "a refusal is not reported as a busy table")
+	assert.Contains(t, err.Error(), `events_pkey on "event-management".events`)
+	assert.Less(t, elapsed, timing.pause, "a refusal must not be retried")
+	assert.Contains(t, hypertableIndexes(t, sys, "events"), "events_pkey")
 }
 
 // explainScans EXPLAINs one statement with sequential and bitmap scans disabled — so the

@@ -3802,7 +3802,9 @@ ten.
 - **A device's event list does more work on recent data.** The total shown with a device's
   event list, and a list of a device's events filtered by event type, now visit every one of the
   device's rows that is not yet compressed (the last week of data, by default) instead of only
-  the rows they count or return. Compressed data is read per device, as before. A device that
+  the rows they count or return. That includes the rows of a device with the same token in any
+  other tenant, so a busy device named `gateway-1` in one tenant also slows the total for
+  `gateway-1` in another. Compressed data is read per device and tenant, as before. A device that
   sends events at a high rate shows this most.
 - **SQL and BI access.** A query on `analytics.event_anchors` or `analytics.state_change_events`
   that filters on time alone now reads all of your tenant's rows in each not-yet-compressed chunk
@@ -3813,9 +3815,11 @@ ten.
   one at a time. Removing one needs a moment when no other transaction is using that table, and
   while it waits, reads and writes of that table wait with it. Each attempt gives up after at
   most 5 seconds, and a busy table is retried every 2 seconds for up to a minute. If a long
-  query or a tenant erasure keeps a table busy longer, `event-management` stops with an error
+  query, a tenant erasure, or the database's own compression or retention job keeps a table busy
+  longer, `event-management` stops with an error
   that names the table and the index, and continues from there when it restarts; the previous
-  `event-management` keeps storing events meanwhile. If it keeps stopping, look for
+  `event-management` keeps storing events meanwhile. The error also carries a query that lists
+  the sessions holding the table or any of its chunks. If it keeps stopping, look for
   long-running SQL or BI queries against the event store. Removing an index also locks every
   chunk of its table; if the database runs out of lock slots, the error says so and names the
   setting to raise.

@@ -60,8 +60,10 @@ type Event struct {
 // tenant's reuse of a token; the event_id tiebreak sorts within one timestamp. What that
 // index does NOT give is an index-only answer: it carries no tenant_id, so the COUNT that
 // ListOf issues before the page, and a device read filtered to a rare event type, visit
-// each of the device's rows in the uncompressed (recent) chunks — compressed chunks are
-// segmented by (tenant_id, device_token) and read per device either way. Neither column
+// every row with that token in the uncompressed (recent) chunks — every tenant's device
+// of that token, not only this one, so a busy "gateway-1" in one tenant slows another
+// tenant's "gateway-1" total. Compressed chunks are segmented by (tenant_id,
+// device_token) and read per device and tenant either way. Neither column
 // is nullable, so no NULLS placement is needed.
 func (Event) DefaultOrder() string {
 	return "events.occurred_time DESC, events.event_id DESC"

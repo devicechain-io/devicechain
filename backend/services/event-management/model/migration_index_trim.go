@@ -89,13 +89,24 @@ var indexTrimDefaultTiming = indexTrimTiming{
 
 // indexTrimBusyMessage is the error a busy table ends the migration with. It is
 // written for the operator who reads it in the pod's log: what happened, that nothing
-// is half-applied, and how to find the holder.
+// is half-applied, and how to find the holder (indexTrimHolderQuery).
 const indexTrimBusyMessage = "could not drop index %s on \"event-management\".%s: the table stayed busy on every attempt " +
 	"(%d attempts, each bounded to %s, within %s). Nothing is half-applied: indexes already dropped stay dropped, " +
 	"and this migration continues from here on the next start. The previous event-management keeps storing events " +
-	"meanwhile. Find the transaction holding the table with: SELECT pid, state, xact_start, left(query, 200) " +
-	"FROM pg_stat_activity WHERE pid IN (SELECT pid FROM pg_locks WHERE relation = '\"event-management\".%s'::regclass); " +
-	"last error: %w"
+	"meanwhile. Find the transaction holding the table with: %s; last error: %w"
+
+// indexTrimHolderQuery is the query the busy error hands the operator: every session
+// holding a lock on the table OR on any of its chunks. A holder of chunks alone — a
+// direct chunk reader, the compression or retention job — never locks the hypertable's
+// own oid, so matching that oid alone would find nothing for exactly the case
+// TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld builds.
+func indexTrimHolderQuery(table string) string {
+	return "SELECT pid, state, xact_start, left(query, 200) FROM pg_stat_activity WHERE pid IN " +
+		"(SELECT pid FROM pg_locks WHERE granted AND (relation = '\"event-management\"." + table + "'::regclass " +
+		"OR relation IN (SELECT format('%I.%I', chunk_schema, chunk_name)::regclass " +
+		"FROM timescaledb_information.chunks WHERE hypertable_schema = 'event-management' " +
+		"AND hypertable_name = '" + table + "')))"
+}
 
 // indexTrimLockTableFullMessage names the one non-retryable failure an operator can fix
 // with a setting: one DROP locks the hypertable and every one of its chunks, so an
@@ -201,21 +212,35 @@ func dropIndexBounded(db *gorm.DB, idx trimmedIndex, timing indexTrimTiming, dea
 			// The migration's own context ended; a cancel it caused is not a busy table.
 			return fmt.Errorf("drop index %s on \"event-management\".%s: %w", idx.name, idx.table, ctx.Err())
 		}
-		if isLockTableFull(err) {
-			return fmt.Errorf(indexTrimLockTableFullMessage, idx.name, idx.table, err)
+		if final := dropFailureError(idx, err); final != nil {
+			return final
 		}
-		if !isRetryableDropFailure(err) {
-			return fmt.Errorf("drop index %s on \"event-management\".%s: %w", idx.name, idx.table, err)
-		}
+		// Start another attempt only if it can end, in the worst case, by the deadline.
 		if time.Now().Add(timing.pause + timing.statementTimeout).After(deadline) {
 			return fmt.Errorf(indexTrimBusyMessage, idx.name, idx.table, attempt, timing.statementTimeout,
-				timing.budget, idx.table, err)
+				timing.budget, indexTrimHolderQuery(idx.table), err)
 		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("drop index %s on \"event-management\".%s: %w", idx.name, idx.table, ctx.Err())
 		case <-time.After(timing.pause):
 		}
+	}
+}
+
+// dropFailureError decides what one failed attempt means: nil for a busy table, which
+// the caller retries, or the error that ends the migration. The lock table filling up
+// gets its own message, because it is the one failure the operator fixes with a setting.
+// The loop returns whatever this returns, so TestDropFailureError pins the message the
+// operator sees for each failure, not only the helpers that classify it.
+func dropFailureError(idx trimmedIndex, err error) error {
+	switch {
+	case isLockTableFull(err):
+		return fmt.Errorf(indexTrimLockTableFullMessage, idx.name, idx.table, err)
+	case isRetryableDropFailure(err):
+		return nil
+	default:
+		return fmt.Errorf("drop index %s on \"event-management\".%s: %w", idx.name, idx.table, err)
 	}
 }
 
