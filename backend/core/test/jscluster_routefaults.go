@@ -126,39 +126,60 @@ func (f *RouteFaults) close() {
 // address is refused, and the only routes that can form are the configured ones through
 // the proxies. And readiness is not taken on trust: every route connection every server
 // reports must be matched by a proxied connection, or the fixture fails the test rather
-// than retrying into an attempt where the bypass has not formed yet.
+// than starting a new construction where the bypass has not formed yet.
+//
+// It starts the way StartJetStreamCluster does: servers slow to start are waited for, a
+// new construction is made only when a route port could not be bound (retryOnBindFailure),
+// and each server's warnings and errors are printed if the test fails.
 func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserver.Server, *RouteFaults) {
 	tb.Helper()
-	const attempts = 3
-	for attempt := 1; ; attempt++ {
-		servers, faults, err := tryStartJetStreamClusterWithRouteFaults(tb, size)
-		if err == nil {
-			tb.Cleanup(func() {
-				for _, s := range servers {
-					s.Shutdown()
-				}
-				faults.close()
-			})
-			return servers, faults
-		}
-		// A route around the proxies is the fixture failing at its one job, not a port
-		// race, and a fresh attempt that happens to mesh before the bypass forms would
-		// hide it. So it is not retried.
-		if errors.Is(err, errRoutesBypassProxies) {
-			tb.Fatalf("the route-fault cluster cannot fault its routes: %v", err)
-		}
-		if attempt == attempts {
-			tb.Fatalf("could not start a %d-node route-fault JetStream cluster in %d attempts: %v", size, attempts, err)
-		}
-		tb.Logf("route-fault cluster attempt %d/%d failed (%v); retrying on fresh ports", attempt, attempts, err)
+	servers, faults, logs, constructions, err := startJetStreamClusterWithRouteFaults(tb, size, defaultClusterHooks(), clusterStartBudget)
+	// A route around the proxies is the fixture failing at its one job, not a port race,
+	// and a fresh construction that happens to mesh before the bypass forms would hide
+	// it. So it is not retried, and it is reported as what it is.
+	if errors.Is(err, errRoutesBypassProxies) {
+		tb.Fatalf("the route-fault cluster cannot fault its routes: %v", err)
 	}
+	if err != nil {
+		tb.Fatalf("could not start a %d-node route-fault JetStream cluster (%d construction(s)): %v", size, constructions, err)
+	}
+	tb.Cleanup(func() {
+		shutdownServers(servers)
+		faults.close()
+	})
+	// Registered after the shutdown, so it runs before it: cleanups run last in, first out.
+	reportServerLogsOnFailure(tb, logs)
+	return servers, faults
 }
 
-func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserver.Server, *RouteFaults, error) {
-	// size cluster ports, plus size closed ports each server advertises instead of its own.
-	ports, err := reservePorts(2 * size)
+// startJetStreamClusterWithRouteFaults is startJetStreamCluster for the route-fault
+// fixture: it makes constructions until one forms, and returns how many it made.
+func startJetStreamClusterWithRouteFaults(tb testing.TB, size int, h clusterHooks, budget time.Duration) (
+	[]*natsserver.Server, *RouteFaults, []*serverLog, int, error) {
+	var servers []*natsserver.Server
+	var faults *RouteFaults
+	var logs []*serverLog
+	n, err := retryOnBindFailure(tb, "route-fault cluster", budget, func(within time.Duration) error {
+		var err error
+		servers, faults, logs, err = tryStartJetStreamClusterWithRouteFaults(tb, size, h, within)
+		return err
+	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, n, err
+	}
+	return servers, faults, logs, n, nil
+}
+
+// tryStartJetStreamClusterWithRouteFaults makes one construction within the budget it is
+// given. On an error it has shut everything down, and the error carries the last lines
+// each server logged.
+func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int, h clusterHooks, within time.Duration) (
+	[]*natsserver.Server, *RouteFaults, []*serverLog, error) {
+	deadline := time.Now().Add(within)
+	// size cluster ports, plus size closed ports each server advertises instead of its own.
+	ports, err := h.ports(2 * size)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	clusterPorts, advertised := ports[:size], ports[size:]
 
@@ -180,7 +201,7 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsse
 			l, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				faults.close()
-				return nil, nil, fmt.Errorf("proxy listener: %w", err)
+				return nil, nil, nil, fmt.Errorf("proxy listener: %w", err)
 			}
 			faults.listeners = append(faults.listeners, l)
 			proxyTo[i][j] = l.Addr().String()
@@ -188,21 +209,15 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsse
 		}
 	}
 
-	servers := make([]*natsserver.Server, 0, size)
-	shutdown := func() {
-		for _, s := range servers {
-			s.Shutdown()
-		}
-		faults.close()
-	}
-	for i := 0; i < size; i++ {
+	opts := make([]*natsserver.Options, size)
+	for i := range opts {
 		routes := ""
 		for j := 0; j < size; j++ {
 			if j != i {
 				routes += "nats-route://" + proxyTo[i][j] + ","
 			}
 		}
-		srv, err := natsserver.NewServer(&natsserver.Options{
+		opts[i] = &natsserver.Options{
 			Host:       "127.0.0.1",
 			Port:       -1,
 			ServerName: fmt.Sprintf("n%d", i+1),
@@ -215,29 +230,24 @@ func tryStartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsse
 				Advertise: fmt.Sprintf("127.0.0.1:%d", advertised[i]),
 			},
 			Routes: natsserver.RoutesFromStr(routes[:len(routes)-1]),
-		})
-		if err != nil {
-			shutdown()
-			return nil, nil, fmt.Errorf("new clustered nats server %d: %w", i, err)
-		}
-		go srv.Start()
-		servers = append(servers, srv)
-	}
-	for i, srv := range servers {
-		if !srv.ReadyForConnections(15 * time.Second) {
-			shutdown()
-			return nil, nil, fmt.Errorf("clustered nats server %d not ready", i)
 		}
 	}
-	if err := awaitJetStreamClusterFormed(servers, clusterFormBudget); err != nil {
-		shutdown()
-		return nil, nil, err
+	servers, logs, err := startListening(opts, h, deadline)
+	fail := func(err error) ([]*natsserver.Server, *RouteFaults, []*serverLog, error) {
+		shutdownServers(servers)
+		faults.close()
+		return nil, nil, nil, withServerLogs(err, logs)
 	}
-	if err := faults.awaitAllRoutesProxied(servers, 15*time.Second); err != nil {
-		shutdown()
-		return nil, nil, err
+	if err != nil {
+		return fail(err)
 	}
-	return servers, faults, nil
+	if err := awaitJetStreamClusterFormed(servers, min(clusterFormBudget, time.Until(deadline))); err != nil {
+		return fail(err)
+	}
+	if err := faults.awaitAllRoutesProxied(servers, min(15*time.Second, time.Until(deadline))); err != nil {
+		return fail(err)
+	}
+	return servers, faults, logs, nil
 }
 
 // errRoutesBypassProxies marks a cluster whose servers hold more route connections than

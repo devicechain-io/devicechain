@@ -29,8 +29,8 @@ import (
 // a manual drill is a check that runs once.
 //
 // The cluster is the shared fixture's, so it is formed by the one definition of
-// formed (see dctest.StartJetStreamCluster), which also retries a construction that
-// lost the race for an ephemeral port.
+// formed (see dctest.StartJetStreamCluster), which waits for a server slow to start and
+// makes a new construction only when a server's route port was taken before it bound it.
 func newTestCluster(t *testing.T) (*NatsManager, func()) {
 	t.Helper()
 	servers := dctest.StartJetStreamCluster(t, 3)
