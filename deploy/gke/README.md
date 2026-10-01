@@ -182,6 +182,14 @@ anything still installed on top. That is over a new project's quota. Recreate th
 cluster instead: take it down as [Tearing it down](#tearing-it-down) describes,
 then `tofu apply` and install again.
 
+Before that apply, move your settings to the new variable names.
+`node_machine_type`, `node_count`, `node_disk_type` and `node_disk_size_gb` are
+replaced by `database_*`, `services_*` and `loadgen_*` variables for each pool, and
+OpenTofu only warns about an old name left in `terraform.tfvars` and ignores its
+value. A `node_disk_type = "pd-standard"` chosen to stay inside the SSD quota would
+be dropped, putting the boot disks back on `pd-balanced`, and a `node_machine_type`
+choice would be dropped the same way.
+
 ### Put the databases on SSD
 
 GKE's default StorageClass, `standard-rwo`, is a balanced persistent disk. Postgres
@@ -262,7 +270,11 @@ The `database` pool is tainted, so only a pod that tolerates
 `dedicated=database:NoSchedule` runs there, and `dcctl install` does not yet
 place the databases on it. Until it does, the databases and NATS run on the
 `services` pool with everything else, and no DeviceChain pod runs on the
-`database` nodes.
+`database` nodes. The databases then share the `services` pool's nodes
+with everything else and get little of the page cache the `database` pool is
+sized for, so do not take a load-test result from this shape until `dcctl` places
+them on the `database` pool.
+
 `tofu output database_node_selector` and `tofu output database_taint` print what
 an install needs to place them.
 

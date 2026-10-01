@@ -4032,6 +4032,13 @@ the old one removes its node pool and creates the two new ones in no guaranteed 
 need more vCPU and SSD quota than the project has. Recreate the cluster instead: take it down as the
 guide describes, then create it again and install.
 
+The variables `node_machine_type`, `node_count`, `node_disk_type` and `node_disk_size_gb` are gone,
+replaced by `database_*`, `services_*` and `loadgen_*` variables for each pool. OpenTofu only warns
+about an old name left in a `terraform.tfvars` and ignores its value, so a cluster recreated from an
+unchanged file is built with the defaults: a `node_disk_type = "pd-standard"` chosen to stay inside
+the SSD quota is dropped, and the boot disks go back to `pd-balanced`. Move each setting to the new
+names before you apply.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

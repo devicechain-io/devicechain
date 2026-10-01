@@ -167,3 +167,34 @@ run "one_node_pools_are_accepted" {
     error_message = "One-node database and services pools should be accepted."
   }
 }
+
+# A node count is a whole number: a fraction is refused, not rounded by the provider.
+run "the_database_pool_size_is_a_whole_number" {
+  command = plan
+
+  variables {
+    database_node_count = 2.5
+  }
+
+  expect_failures = [var.database_node_count]
+}
+
+run "the_services_pool_size_is_a_whole_number" {
+  command = plan
+
+  variables {
+    services_node_count = 2.5
+  }
+
+  expect_failures = [var.services_node_count]
+}
+
+run "the_loadgen_pool_size_is_a_whole_number" {
+  command = plan
+
+  variables {
+    loadgen_node_count = 1.5
+  }
+
+  expect_failures = [var.loadgen_node_count]
+}

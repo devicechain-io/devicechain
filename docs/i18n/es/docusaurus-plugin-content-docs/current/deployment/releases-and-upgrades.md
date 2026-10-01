@@ -4335,6 +4335,13 @@ la anterior elimina su grupo de nodos y crea los dos nuevos sin un orden garanti
 necesitar más cuota de vCPU y de SSD de la que tiene el proyecto. Vuelve a crear el clúster en su
 lugar: desmóntalo como indica la guía, créalo de nuevo e instala.
 
+Las variables `node_machine_type`, `node_count`, `node_disk_type` y `node_disk_size_gb` ya no
+existen: las sustituyen las variables `database_*`, `services_*` y `loadgen_*` de cada grupo. OpenTofu
+solo avisa de un nombre antiguo que quede en un `terraform.tfvars` e ignora su valor, así que un
+clúster recreado con ese archivo sin cambios se crea con los valores predeterminados: un
+`node_disk_type = "pd-standard"` elegido para no superar la cuota de SSD se descarta, y los discos de
+arranque vuelven a ser `pd-balanced`. Pasa cada ajuste a los nombres nuevos antes de aplicar.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
