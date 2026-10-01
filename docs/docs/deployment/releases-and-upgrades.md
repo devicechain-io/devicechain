@@ -4148,6 +4148,9 @@ instance id; the database is the instance id on its own):
 kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
 ```
 
+The count only reads, so any of the event store's pods will do, the primary or a replica. If
+`dc-tsdb-1` is not there, `kubectl -n dci-<instance-id> get pods` lists the other `dc-tsdb-` pods.
+
 Then run the same count the upgrade makes. It reads every row that is not yet compressed, so on a
 large store it takes a while:
 
@@ -4199,7 +4202,12 @@ that keeps an instance over the line across this release.
   it restarts, as for [the index removal above](#next-event-store-indexes). The error carries a
   query that lists the sessions holding the table. Rebuilding a table also locks every chunk of it;
   if the database runs out of lock slots, the error says so and names the setting to raise.
-- Going back to `v0.18.0` keeps the new keys, and `v0.18.0` works with them.
+- Going back to `v0.18.0` keeps the new keys, and `v0.18.0` stores and reads events with them.
+  One read is slower there: `v0.18.0` lists the events recorded against a relationship anchor by
+  looking each one up by its digest alone, which the new base-event key cannot do directly, so that
+  list reads through the tenant's events in the time range asked for, compressed ones included.
+  The same applies while the previous `event-management` keeps running because a rebuild stopped
+  after the base events table was already rebuilt. The new release reads that list on the key.
 
 ### The one-time durable-ingest cutover
 

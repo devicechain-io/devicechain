@@ -246,10 +246,12 @@ type rekeyPlan struct {
 //     touches them (measured: two locks per compressed chunk), so they are locked in the
 //     same statement. A failure while locking is a busy table: retried every pause within
 //     the budget, then a resumable error naming the holder query. Once locked, a 57014
-//     can only mean the build itself was slow.
-//  5. **"Too slow" is decided once, and sticks.** A swap that used its whole tableBuild
-//     allowance and still timed out leaves a marker comment on the key's index and
-//     ends the migration with the recreate remedy; the next start reads the marker and
+//     means the build itself was slow, or someone cancelled it (pg_cancel_backend), and
+//     only a statement that ran for its whole statement_timeout is taken as the first.
+//  5. **"Too slow" is decided once, and sticks.** A swap that was given its whole
+//     tableBuild allowance and ran out of it (a cancel is not a verdict) leaves a marker
+//     comment on the key's index and ends the migration with the recreate remedy; a
+//     cancelled swap is retried on the next start. The next start reads the marker and
 //     refuses at once, without locking anything, rather than stall ingest for another
 //     40 s on every restart. A swap that timed out with LESS than tableBuild (because
 //     earlier tables spent the budget) is not a verdict: the next start gives it the whole
@@ -437,13 +439,30 @@ func timeoutSetting(d time.Duration) (string, error) {
 
 // buildAllowance is the time a swap is given: tableBuild, or what is left of the budget if
 // that is less. full reports whether it is the whole tableBuild — only a swap that timed
-// out with the whole allowance is too slow.
-func buildAllowance(timing timeLeadingKeysTiming, deadline, now time.Time) (allowance time.Duration, full bool) {
+// out with the whole allowance is too slow. Less than minBuild left is errRekeyOutOfTime:
+// a swap is never started on a remainder that could round its statement_timeout to 0.
+func buildAllowance(timing timeLeadingKeysTiming, deadline, now time.Time) (allowance time.Duration, full bool, err error) {
 	left := deadline.Sub(now)
 	if left >= timing.tableBuild {
-		return timing.tableBuild, true
+		return timing.tableBuild, true, nil
 	}
-	return left, false
+	if left < timing.minBuild {
+		return 0, false, fmt.Errorf("%w: %s left for the swap, under the %s it is ever started with",
+			errRekeyOutOfTime, left, timing.minBuild)
+	}
+	return left, false, nil
+}
+
+// rekeyAttempt is what one failed attempt at a table reports about itself.
+type rekeyAttempt struct {
+	// phase is where it failed: locking, or building once locked.
+	phase rekeyPhase
+	// full: the swap was given the whole tableBuild, not a remainder of the budget.
+	full bool
+	// ranOut: the statement that failed had run for at least its whole statement_timeout.
+	// A 57014 is also what pg_cancel_backend raises, and an operator cancelling a long
+	// rebuild has not shown that the store is too slow for it.
+	ranOut bool
 }
 
 // rekeyWithRetry re-keys plans[i], retrying a busy table until the deadline.
@@ -457,14 +476,14 @@ func rekeyWithRetry(ctx context.Context, db *gorm.DB, plans []rekeyPlan, i int,
 			return fmt.Errorf(timeLeadingKeysOutOfTimeMessage, k.table, "budget of "+timing.budget.String(),
 				rekeyProgress(plans))
 		}
-		phase, full, err := rekeyTable(db, plans[i], timing, deadline)
+		failed, err := rekeyTable(db, plans[i], timing, deadline)
 		if err == nil {
 			return nil
 		}
 		if ctx.Err() != nil {
 			return fmt.Errorf("rebuild the key %s of \"event-management\".%s: %w", k.name, k.table, ctx.Err())
 		}
-		final, tooSlow := timeLeadingKeysFailureError(k, phase, full, err, timing, rekeyProgress(plans))
+		final, tooSlow := timeLeadingKeysFailureError(k, failed, err, timing, rekeyProgress(plans))
 		if tooSlow {
 			if markErr := markTooSlow(db, k, timing); markErr != nil {
 				return fmt.Errorf("%w (and the marker that would refuse the next start could not be written: %v)",
@@ -488,18 +507,21 @@ func rekeyWithRetry(ctx context.Context, db *gorm.DB, plans []rekeyPlan, i int,
 
 // rekeyTable re-keys one table inside ONE transaction: lock the table, every chunk and
 // their compressed relations, then swap the key under its own name and drop the index its
-// prefix makes redundant. It reports the phase it failed in, and whether the swap had its
-// whole tableBuild allowance.
-func rekeyTable(db *gorm.DB, p rekeyPlan, timing timeLeadingKeysTiming, deadline time.Time) (rekeyPhase, bool, error) {
+// prefix makes redundant. It reports, on failure, what the attempt got to (rekeyAttempt).
+func rekeyTable(db *gorm.DB, p rekeyPlan, timing timeLeadingKeysTiming, deadline time.Time) (rekeyAttempt, error) {
 	k := p.key
-	phase, full := rekeyLocking, false
+	attempt := rekeyAttempt{phase: rekeyLocking}
 	err := db.Transaction(func(t *gorm.DB) error {
 		lockAttempt, err := timeoutSetting(timing.lockAttempt)
 		if err != nil {
 			return err
 		}
+		lockTimeout, err := timeoutSetting(timing.lockTimeout)
+		if err != nil {
+			return err
+		}
 		for _, s := range []string{
-			fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, timing.lockTimeout.Milliseconds()),
+			`SET LOCAL lock_timeout = '` + lockTimeout + `'`,
 			`SET LOCAL statement_timeout = '` + lockAttempt + `'`,
 			`SET LOCAL maintenance_work_mem = '` + timing.buildMemory + `'`,
 		} {
@@ -525,12 +547,12 @@ func rekeyTable(db *gorm.DB, p rekeyPlan, timing timeLeadingKeysTiming, deadline
 			return err
 		}
 
-		phase = rekeyBuilding
-		var allowance time.Duration
-		allowance, full = buildAllowance(timing, deadline, time.Now())
-		if allowance < timing.minBuild {
-			return errRekeyOutOfTime
+		attempt.phase = rekeyBuilding
+		allowance, full, err := buildAllowance(timing, deadline, time.Now())
+		if err != nil {
+			return err
 		}
+		attempt.full = full
 		build, err := timeoutSetting(allowance)
 		if err != nil {
 			return err
@@ -554,13 +576,17 @@ func rekeyTable(db *gorm.DB, p rekeyPlan, timing timeLeadingKeysTiming, deadline
 			stmts = append(stmts, fmt.Sprintf(`DROP INDEX IF EXISTS "event-management".%s`, k.dropped))
 		}
 		for _, s := range stmts {
+			// statement_timeout bounds each statement; the server's clock starts after
+			// this one, so an elapsed time here under the allowance cannot be its timeout.
+			began := time.Now()
 			if err := t.Exec(s).Error; err != nil {
+				attempt.ranOut = time.Since(began) >= allowance
 				return err
 			}
 		}
 		return nil
 	})
-	return phase, full, err
+	return attempt, err
 }
 
 // timeLeadingKeysFailureError decides what one failed attempt means: nil for a busy table,
@@ -572,11 +598,12 @@ func rekeyTable(db *gorm.DB, p rekeyPlan, timing timeLeadingKeysTiming, deadline
 //	any       53200 (lock table full)  stop; names max_locks_per_transaction
 //	locking   55P03, 40P01, 57014      retry: another session holds the table, a chunk or a compressed relation
 //	building  55P03, 40P01             retry: an internal relation was busy
-//	building  57014, whole allowance   stop for good: too slow (sticky, names the recreate)
-//	building  57014, less than that    stop; resumes: this start's budget was spent
+//	building  57014, ran out, whole    stop for good: too slow (sticky, names the recreate)
+//	building  57014, ran out, less     stop; resumes: this start's budget was spent
+//	building  57014, did not run out   a cancel (pg_cancel_backend): as anything else, below
 //	any       errRekeyOutOfTime        stop; resumes
 //	any       anything else            stop; retried next start, names the recreate if it repeats
-func timeLeadingKeysFailureError(k timeLeadingKey, phase rekeyPhase, full bool, err error,
+func timeLeadingKeysFailureError(k timeLeadingKey, attempt rekeyAttempt, err error,
 	timing timeLeadingKeysTiming, progress string) (final error, tooSlow bool) {
 	var pgErr *pgconn.PgError
 	isPg := errors.As(err, &pgErr)
@@ -587,11 +614,11 @@ func timeLeadingKeysFailureError(k timeLeadingKey, phase rekeyPhase, full bool, 
 		return fmt.Errorf(timeLeadingKeysOutOfTimeMessage, k.table, "budget of "+timing.budget.String(), progress), false
 	case isPg && (pgErr.Code == "55P03" || pgErr.Code == "40P01"):
 		return nil, false
-	case isPg && pgErr.Code == "57014" && phase == rekeyLocking:
+	case isPg && pgErr.Code == "57014" && attempt.phase == rekeyLocking:
 		return nil, false
-	case isPg && pgErr.Code == "57014" && full:
+	case isPg && pgErr.Code == "57014" && attempt.ranOut && attempt.full:
 		return fmt.Errorf(timeLeadingKeysTooSlowMessage, k.name, k.table, timing.tableBuild, progress, k.name, err), true
-	case isPg && pgErr.Code == "57014":
+	case isPg && pgErr.Code == "57014" && attempt.ranOut:
 		return fmt.Errorf(timeLeadingKeysOutOfTimeMessage, k.table, "budget of "+timing.budget.String(), progress), false
 	default:
 		return fmt.Errorf(timeLeadingKeysFailedMessage, k.name, k.table, progress, err), false
@@ -606,8 +633,12 @@ func markTooSlow(db *gorm.DB, k timeLeadingKey, timing timeLeadingKeysTiming) er
 	note := fmt.Sprintf("%s: rebuilding this key to lead with time did not finish within %s on %s; "+
 		"event-management refuses to retry it. Clear this comment to try again.",
 		timeLeadingKeysRefusedMarker, timing.tableBuild, time.Now().UTC().Format(time.RFC3339))
+	lockTimeout, err := timeoutSetting(timing.lockTimeout)
+	if err != nil {
+		return err
+	}
 	return db.Transaction(func(t *gorm.DB) error {
-		if err := t.Exec(fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, timing.lockTimeout.Milliseconds())).Error; err != nil {
+		if err := t.Exec(`SET LOCAL lock_timeout = '` + lockTimeout + `'`).Error; err != nil {
 			return err
 		}
 		return t.Exec(fmt.Sprintf(`COMMENT ON INDEX "event-management".%s IS '%s'`, k.name,

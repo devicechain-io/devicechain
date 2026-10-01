@@ -87,26 +87,35 @@ func TestTimeoutSetting(t *testing.T) {
 }
 
 // TestBuildAllowance: a swap gets the whole tableBuild while the budget has it, and what is
-// left otherwise — reported as not full, so its timeout is never the too-slow verdict.
+// left otherwise — reported as not full, so its timeout is never the too-slow verdict — and
+// none at all, out of time, once less than minBuild is left.
 func TestBuildAllowance(t *testing.T) {
 	timing := timeLeadingKeysDefaultTiming
 	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
-	got, full := buildAllowance(timing, now.Add(55*time.Second), now)
-	assert.Equal(t, 40*time.Second, got)
-	assert.True(t, full)
-
-	got, full = buildAllowance(timing, now.Add(40*time.Second), now)
-	assert.Equal(t, 40*time.Second, got)
-	assert.True(t, full, "exactly tableBuild left is the whole allowance")
-
-	got, full = buildAllowance(timing, now.Add(12*time.Second), now)
-	assert.Equal(t, 12*time.Second, got)
-	assert.False(t, full)
-
-	got, full = buildAllowance(timing, now.Add(-time.Second), now)
-	assert.Equal(t, -time.Second, got)
-	assert.False(t, full)
+	for _, tc := range []struct {
+		left time.Duration
+		want time.Duration
+		full bool
+	}{
+		{55 * time.Second, 40 * time.Second, true},
+		{40 * time.Second, 40 * time.Second, true}, // exactly tableBuild left is the whole allowance
+		{12 * time.Second, 12 * time.Second, false},
+		{time.Second, time.Second, false}, // exactly minBuild left is still a swap
+	} {
+		got, full, err := buildAllowance(timing, now.Add(tc.left), now)
+		require.NoError(t, err, tc.left)
+		assert.Equal(t, tc.want, got, tc.left)
+		assert.Equal(t, tc.full, full, tc.left)
+	}
+	// Under minBuild — including the 1 ms that timeoutSetting alone would still render —
+	// no swap is started.
+	for _, left := range []time.Duration{time.Second - time.Nanosecond, 5 * time.Millisecond, 0, -time.Second} {
+		got, full, err := buildAllowance(timing, now.Add(left), now)
+		assert.ErrorIsf(t, err, errRekeyOutOfTime, "%s left", left)
+		assert.Zero(t, got, left)
+		assert.False(t, full, left)
+	}
 }
 
 // TestTimeLeadingKeysFailureError pins what each failed attempt means and the message the
@@ -127,15 +136,15 @@ func TestTimeLeadingKeysFailureError(t *testing.T) {
 		{rekeyBuilding, "55P03"}, {rekeyBuilding, "40P01"},
 	}
 	for _, tc := range retried {
-		for _, full := range []bool{true, false} {
-			final, tooSlow := timeLeadingKeysFailureError(k, tc.phase, full, pg(tc.code), timing, progress)
+		for _, a := range []rekeyAttempt{{tc.phase, true, true}, {tc.phase, false, true}, {tc.phase, true, false}} {
+			final, tooSlow := timeLeadingKeysFailureError(k, a, pg(tc.code), timing, progress)
 			assert.NoErrorf(t, final, "phase %d %s is a busy table", tc.phase, tc.code)
 			assert.False(t, tooSlow)
 		}
 	}
 
 	// The verdict: the swap had the whole allowance and still ran out.
-	final, tooSlow := timeLeadingKeysFailureError(k, rekeyBuilding, true, pg("57014"), timing, progress)
+	final, tooSlow := timeLeadingKeysFailureError(k, rekeyAttempt{rekeyBuilding, true, true}, pg("57014"), timing, progress)
 	require.Error(t, final)
 	assert.True(t, tooSlow, "the too-slow verdict must stick")
 	for _, want := range []string{`"event-management".measurement_events`, "uq_measurement_events_idem",
@@ -148,21 +157,21 @@ func TestTimeLeadingKeysFailureError(t *testing.T) {
 
 	// The same timeout with LESS than the whole allowance is this start running out of
 	// budget, not a verdict: it resumes, and never names the recreate.
-	final, tooSlow = timeLeadingKeysFailureError(k, rekeyBuilding, false, pg("57014"), timing, progress)
+	final, tooSlow = timeLeadingKeysFailureError(k, rekeyAttempt{rekeyBuilding, false, true}, pg("57014"), timing, progress)
 	require.Error(t, final)
 	assert.False(t, tooSlow)
 	assert.Contains(t, final.Error(), "continues from here on the next start")
 	assert.Contains(t, final.Error(), progress)
 	assert.NotContains(t, final.Error(), "dcctl destroy")
 
-	final, tooSlow = timeLeadingKeysFailureError(k, rekeyBuilding, true, fmt.Errorf("w: %w", errRekeyOutOfTime), timing, progress)
+	final, tooSlow = timeLeadingKeysFailureError(k, rekeyAttempt{rekeyBuilding, true, true}, fmt.Errorf("w: %w", errRekeyOutOfTime), timing, progress)
 	require.Error(t, final)
 	assert.False(t, tooSlow)
 	assert.Contains(t, final.Error(), "continues from here on the next start")
 	assert.NotContains(t, final.Error(), "dcctl destroy")
 
 	for _, phase := range []rekeyPhase{rekeyLocking, rekeyBuilding} {
-		final, tooSlow = timeLeadingKeysFailureError(k, phase, true, pg("53200"), timing, progress)
+		final, tooSlow = timeLeadingKeysFailureError(k, rekeyAttempt{phase, true, true}, pg("53200"), timing, progress)
 		require.Error(t, final)
 		assert.False(t, tooSlow)
 		assert.Contains(t, final.Error(), "max_locks_per_transaction")
@@ -170,10 +179,21 @@ func TestTimeLeadingKeysFailureError(t *testing.T) {
 		assert.NotContains(t, final.Error(), "dcctl destroy")
 	}
 
-	// Anything else — Timescale refusing the DDL, a lost connection — is retried on the
-	// next start, and names the recreate only for a failure that repeats.
-	for _, err := range []error{pg("0A000"), errors.New("connection reset")} {
-		final, tooSlow = timeLeadingKeysFailureError(k, rekeyBuilding, true, err, timing, progress)
+	// Anything else — Timescale refusing the DDL, a lost connection, or a 57014 from a
+	// statement that had NOT run for its whole timeout (an operator's pg_cancel_backend,
+	// with or without the whole allowance) — is retried on the next start, and names the
+	// recreate only for a failure that repeats. Never the sticky too-slow verdict.
+	for _, tc := range []struct {
+		attempt rekeyAttempt
+		err     error
+	}{
+		{rekeyAttempt{rekeyBuilding, true, true}, pg("0A000")},
+		{rekeyAttempt{rekeyBuilding, true, true}, errors.New("connection reset")},
+		{rekeyAttempt{rekeyBuilding, true, false}, pg("57014")},
+		{rekeyAttempt{rekeyBuilding, false, false}, pg("57014")},
+	} {
+		err := tc.err
+		final, tooSlow = timeLeadingKeysFailureError(k, tc.attempt, err, timing, progress)
 		require.Error(t, final)
 		assert.False(t, tooSlow)
 		for _, want := range []string{"uq_measurement_events_idem", "previous key", "The next start tries again",

@@ -348,6 +348,113 @@ func TestIntegrationTimeLeadingKeysWaitBoundedlyForALockAndResume(t *testing.T) 
 	assert.NotEqual(t, "77MB", mem, "maintenance_work_mem leaked out of the re-key's transaction")
 }
 
+// TestIntegrationTimeLeadingKeysStartNoAttemptTheBudgetCannotHold: the budget is checked
+// before every attempt, the first included. Another session holds events for part of the
+// budget and measurement_events for all of it. events waits, gets its lock and is re-keyed;
+// what is left then cannot hold a lock wait and the least swap, so measurement_events is
+// not attempted at all: no ACCESS EXCLUSIVE queued on it (which would hold its ingest for
+// a lock wait to no purpose), the run ends inside its budget with no slack, and the error
+// is this start's budget being spent, not a busy table.
+func TestIntegrationTimeLeadingKeysStartNoAttemptTheBudgetCannotHold(t *testing.T) {
+	const holdFirst = 500 * time.Millisecond
+	timing := timeLeadingKeysTiming{lockTimeout: time.Second, lockAttempt: time.Second,
+		pause: 100 * time.Millisecond, tableBuild: 30 * time.Second, minBuild: 10 * time.Millisecond,
+		// Room for events' first attempt to start (a lock wait and the least swap, plus
+		// 390 ms for the catalog reads and the row count), but not for a second table once
+		// events has waited holdFirst.
+		budget: 1400 * time.Millisecond, countTimeout: 10 * time.Second, maxRows: 1_000_000, buildMemory: "64MB"}
+
+	inst := freshInstance(t, "itrekeybudget")
+	mgr := newPostgresManagerWith(t, inst, migrationsBefore(t, rekeyID()))
+	sys := systemDB(mgr)
+	twoChunkSeed(t, sys)
+
+	first := connectInstance(t, inst)
+	_, err := first.Exec(context.Background(), `BEGIN; LOCK TABLE "event-management".events IN ACCESS SHARE MODE`)
+	require.NoError(t, err)
+	second := connectInstance(t, inst)
+	_, err = second.Exec(context.Background(), `BEGIN; LOCK TABLE "event-management".measurement_events IN ACCESS SHARE MODE`)
+	require.NoError(t, err)
+	defer func() { _, _ = second.Exec(context.Background(), `ROLLBACK`) }()
+
+	released := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		time.Sleep(holdFirst)
+		_, err := first.Exec(context.Background(), `ROLLBACK`)
+		released <- err
+	}()
+	err = newTimeLeadingKeysSchema(timing).Migrate(sys)
+	elapsed := time.Since(start)
+	require.NoError(t, <-released)
+
+	require.Error(t, err, "a budget spent before the second table must fail the migration")
+	msg := err.Error()
+	for _, want := range []string{`"event-management".measurement_events`, "budget of 1.4s was spent",
+		"already re-keyed: events", "continues from here on the next start"} {
+		assert.Contains(t, msg, want)
+	}
+	assert.NotContains(t, msg, "stayed busy", "the second table was never tried, so it was never busy")
+	assert.NotContains(t, msg, "dcctl destroy")
+	assert.GreaterOrEqual(t, elapsed, holdFirst, "events must have waited for its holder")
+	assert.Less(t, elapsed, timing.budget, "the run must end inside its budget, with no slack")
+	assert.Less(t, elapsed-holdFirst, timing.lockAttempt/2,
+		"after events, nothing may wait on measurement_events' lock")
+
+	assert.Equal(t, eventStoreIndexes["events"], hypertableIndexes(t, sys, "events"))
+	for _, table := range []string{"measurement_events", "location_events", "alert_events", "event_anchors"} {
+		assert.Equalf(t, afterTrimIndexes[table], hypertableIndexes(t, sys, table), "%s after the spent run", table)
+	}
+}
+
+// TestIntegrationTimeLeadingKeysACancelledSwapIsNotTooSlow: an operator cancelling the
+// swap (pg_cancel_backend raises the same 57014 a statement_timeout does) while it has its
+// whole allowance is not the too-slow verdict. No marker is left, the error is the one
+// retried on the next start, and the next start re-keys.
+func TestIntegrationTimeLeadingKeysACancelledSwapIsNotTooSlow(t *testing.T) {
+	inst := freshInstance(t, "itrekeycancel")
+	mgr := newPostgresManagerWith(t, inst, migrationsBefore(t, rekeyID()))
+	sys := systemDB(mgr)
+	// 200,000 rows a table, sorted in the least memory the server allows: a build long
+	// enough to be caught running.
+	seedEventStore(t, sys, []string{"acme"}, 200, 1000, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Minute)
+	timing := testRekeyTiming
+	timing.buildMemory = "1MB"
+
+	done := make(chan error, 1)
+	go func() { done <- newTimeLeadingKeysSchema(timing).Migrate(sys) }()
+
+	observer := connectInstance(t, inst)
+	cancelled := false
+	for deadline := time.Now().Add(10 * time.Second); !cancelled && time.Now().Before(deadline); {
+		var ok bool
+		err := observer.QueryRow(context.Background(), `SELECT coalesce(bool_or(pg_cancel_backend(pid)), false)
+			FROM pg_stat_activity WHERE state = 'active'
+			AND query LIKE 'ALTER TABLE "event-management".events DROP CONSTRAINT events_pkey%'`).Scan(&ok)
+		require.NoError(t, err)
+		cancelled = ok
+		if !cancelled {
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	err := <-done
+	require.True(t, cancelled, "the swap was never caught running; the migration returned %v", err)
+
+	require.Error(t, err)
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(err, &pgErr), "the server error stays wrapped: %v", err)
+	assert.Equal(t, "57014", pgErr.Code)
+	assert.Contains(t, err.Error(), "The next start tries again")
+	assert.NotContains(t, err.Error(), "did not finish within", "a cancel is not the too-slow verdict")
+	assert.Equal(t, "PRIMARY KEY (tenant_id, event_id, occurred_time)", pkeyDef(t, sys))
+	var note *string
+	require.NoError(t, sys.Raw(`SELECT obj_description('"event-management".events_pkey'::regclass, 'pg_class')`).Scan(&note).Error)
+	assert.Nil(t, note, "no too-slow marker for a cancelled swap")
+
+	require.NoError(t, newTimeLeadingKeysSchema(testRekeyTiming).Migrate(sys), "the next start re-keys")
+	assertFinalIndexes(t, sys, 1)
+}
+
 // TestIntegrationTimeLeadingKeysLockChunksAndCompressedRelationsFirst holds, from another
 // session, first one CHUNK of events and then one COMPRESSED relation of it — neither is
 // the hypertable itself. Locking them up front makes either holder a busy table, retried

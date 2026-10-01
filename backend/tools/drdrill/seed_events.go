@@ -358,8 +358,8 @@ const (
 		ON CONFLICT DO NOTHING`
 
 	// DO NOTHING here for the same reason the parent has it, and it is no longer
-	// merely defensive: payload_id backs a unique index
-	// (tenant_id, payload_id, occurred_time), so an interrupted seed that is re-run
+	// merely defensive: payload_id is in a unique index
+	// (tenant_id, occurred_time, payload_id), so an interrupted seed that is re-run
 	// would now converge rather than duplicate. The `existing > 0` guard upstream
 	// refuses that case first; this is what makes the statement itself honest about it.
 	insertMeasurementSQL = `

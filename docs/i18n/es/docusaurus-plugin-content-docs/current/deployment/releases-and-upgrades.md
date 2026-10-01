@@ -4463,6 +4463,10 @@ Cuenta las tuyas antes de actualizar. Abre `psql` en el almacén de eventos (el 
 kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
 ```
 
+El recuento solo lee, así que sirve cualquiera de los pods del almacén de eventos, el primario o
+una réplica. Si `dc-tsdb-1` no existe, `kubectl -n dci-<instance-id> get pods` lista los demás pods
+`dc-tsdb-`.
+
 Después ejecuta el mismo recuento que hace la actualización. Lee todas las filas aún sin comprimir,
 así que en un almacén grande tarda un rato:
 
@@ -4518,7 +4522,13 @@ límite.
   incluye una consulta que lista las sesiones que retienen la tabla. Reconstruir una tabla también
   bloquea cada uno de sus fragmentos; si la base de datos se queda sin espacio para bloqueos, el
   error lo indica y nombra el ajuste que hay que aumentar.
-- Volver a `v0.18.0` mantiene las claves nuevas, y `v0.18.0` funciona con ellas.
+- Volver a `v0.18.0` mantiene las claves nuevas, y `v0.18.0` guarda y lee eventos con ellas. Una
+  lectura es más lenta allí: `v0.18.0` lista los eventos registrados contra un anclaje de relación
+  buscando cada uno solo por su resumen, algo que la nueva clave de los eventos base no permite
+  directamente, así que esa lista recorre los eventos del tenant en el rango de tiempo pedido,
+  comprimidos incluidos. Lo mismo ocurre mientras el `event-management` anterior sigue en marcha
+  porque una reconstrucción se detuvo después de reconstruir ya la tabla de eventos base. La nueva
+  versión lee esa lista sobre la clave.
 
 ### La transición única a la ingesta duradera
 
