@@ -84,33 +84,45 @@ func TestABatchWritesEveryExistingDeviceStateInOneStatement(t *testing.T) {
 }
 
 // Save stamped updated_at on every write, and the GraphQL updatedAt shows it. A Create stamps
-// it only when it is zero, which a row read back never is — so the write-back must stamp it.
+// it only when it is zero, which a row read back never is — so the write-back must stamp it,
+// on EVERY row it writes. Three devices in each of two tenants, so each tenant's write-back
+// carries rows after its first: a stamp on rows[0] alone would leave four rows behind.
 func TestABatchAdvancesUpdatedAtOnTheRowsItWritesBack(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
-	if err := mergeOneAtATime(api, data("acme", "u-1", t0)); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
 	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
 	sys := api.RDB.DB(core.WithSystemContext(context.Background()))
-	if err := sys.Exec(`UPDATE device_states SET updated_at = ? WHERE device_token = ?`, old, "u-1").Error; err != nil {
+	var updates []ProjectionUpdate
+	for _, tenant := range []string{"acme", "beta"} {
+		for _, tok := range []string{"u-1", "u-2", "u-3"} {
+			if err := mergeOneAtATime(api, data(tenant, tok, t0)); err != nil {
+				t.Fatalf("seed %s/%s: %v", tenant, tok, err)
+			}
+			updates = append(updates, data(tenant, tok, t1))
+		}
+	}
+	if err := sys.Exec(`UPDATE device_states SET updated_at = ?`, old).Error; err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
-	// Precondition: the read below can see the old stamp.
-	if got := loadRow(t, api, "acme", "u-1").UpdatedAt; !got.Equal(old) {
-		t.Fatalf("precondition: updated_at = %v after backdating; want %v", got, old)
+	// Precondition: the read below can see the old stamp, on every row.
+	for _, u := range updates {
+		if got := loadRow(t, api, u.Tenant, u.DeviceToken).UpdatedAt; !got.Equal(old) {
+			t.Fatalf("precondition: %s/%s updated_at = %v after backdating; want %v", u.Tenant, u.DeviceToken, got, old)
+		}
 	}
 
-	if err := api.MergeProjectionBatch(context.Background(), []ProjectionUpdate{data("acme", "u-1", t1)}); err != nil {
+	if err := api.MergeProjectionBatch(context.Background(), updates); err != nil {
 		t.Fatalf("batch: %v", err)
 	}
-	ds := loadRow(t, api, "acme", "u-1")
-	if !ds.UpdatedAt.After(old.AddDate(0, 0, 1)) {
-		t.Errorf("updated_at = %v after the batch wrote the row; want the write time", ds.UpdatedAt)
-	}
-	if !ds.LastActivityTime.Time.Equal(t1) {
-		t.Errorf("last activity = %v; want %v", ds.LastActivityTime.Time, t1)
+	for _, u := range updates {
+		ds := loadRow(t, api, u.Tenant, u.DeviceToken)
+		if !ds.UpdatedAt.After(old.AddDate(0, 0, 1)) {
+			t.Errorf("%s/%s updated_at = %v after the batch wrote the row; want the write time", u.Tenant, u.DeviceToken, ds.UpdatedAt)
+		}
+		if !ds.LastActivityTime.Time.Equal(t1) {
+			t.Errorf("%s/%s last activity = %v; want %v", u.Tenant, u.DeviceToken, ds.LastActivityTime.Time, t1)
+		}
 	}
 }
 

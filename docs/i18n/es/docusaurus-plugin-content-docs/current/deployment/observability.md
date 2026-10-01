@@ -554,15 +554,16 @@ lecturas y última posición) a partir del mismo flujo de eventos, y los fusiona
 cada escritor toma los eventos que ya lo esperan, hasta un límite, y los fusiona en una sola
 transacción. Dentro de esa transacción, el estado de todos los dispositivos que ya tienen uno se
 escribe en una sola sentencia por cada inquilino del lote, en lugar de una sentencia por
-dispositivo; un dispositivo que aparece por primera vez se crea por separado. Un evento se reconoce solo después de que esa transacción se confirme. Varios eventos
-de un mismo dispositivo en un lote dejan exactamente lo que dejaría fusionarlos de uno en uno. Una
-lectura o una posición sustituye a la almacenada solo si es estrictamente más reciente, así que una
-más antigua o igual de antigua nunca la sobrescribe; las horas se comparan tal como las guarda la
-base de datos, al microsegundo. Si se rechaza la parte de un lote que corresponde a un inquilino,
-los eventos de ese inquilino se vuelven a fusionar de uno en uno, de modo que solo se reintenta un
-evento que es rechazado por sí mismo, y los eventos de los demás inquilinos se confirman juntos sin
-ellos. Si la transacción falla por una causa que no se debe a ningún inquilino, como una conexión
-perdida con la base de datos, cada uno de sus eventos se vuelve a fusionar por separado.
+dispositivo; un dispositivo que aparece por primera vez se crea por separado. Un evento se reconoce
+solo después de que esa transacción se confirme. Varios eventos de un mismo dispositivo en un lote
+dejan exactamente lo que dejaría fusionarlos de uno en uno. Una lectura o una posición sustituye a
+la almacenada solo si es estrictamente más reciente, así que una más antigua o igual de antigua
+nunca la sobrescribe; las horas se comparan tal como las guarda la base de datos, al microsegundo.
+Si se rechaza la parte de un lote que corresponde a un inquilino, los eventos de ese inquilino se
+vuelven a fusionar de uno en uno, de modo que solo se reintenta un evento que es rechazado por sí
+mismo, y los eventos de los demás inquilinos se confirman juntos sin ellos. Si la transacción falla
+por una causa que no se debe a ningún inquilino, como una conexión perdida con la base de datos,
+cada uno de sus eventos se vuelve a fusionar por separado.
 
 | Métrica | Qué indica |
 | --- | --- |
