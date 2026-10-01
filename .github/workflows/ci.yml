@@ -1665,10 +1665,14 @@ jobs:
           renders "spread switched off for one area" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set functionalAreas.event-sources.eventPathSpread=false
-          # event-processing takes its CPU limit from the top level, so a top-level
-          # limit below its measured request is refused, naming the measured request.
-          refuses "top-level limit below event-processing's measured request" \
+          # event-processing has its own CPU limit, so an operator's own limit below
+          # its measured request is refused, naming the measured request; a top-level
+          # limit no longer reaches it, so the same value set there renders.
+          refuses "event-processing's own limit below its measured request" \
             "functionalAreas.event-processing.measuredRequests.cpu" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.event-processing.resources.limits.cpu=300m
+          renders "top-level limit below event-processing's measured request" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set resources.limits.cpu=300m
           renders "measured requests off, area limit lowered" \
