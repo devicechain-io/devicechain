@@ -51,22 +51,7 @@ func TestEachStoreKeepsItsOwnRecoveryWindow(t *testing.T) {
 // returning "" to match nothing.
 func retentionVariableWiredInto(t *testing.T, root, local string) string {
 	t.Helper()
-
-	src, ok := rootSources(t, "main.tf")[root]
-	if !ok {
-		t.Fatalf("the %s root has no main.tf", root)
-	}
-	// `tofu fmt` realigns `=` whenever a neighbouring argument's name changes
-	// length, so the match is on the assignment, not on its column.
-	src = regexp.MustCompile(`[ \t]+`).ReplaceAllString(src, " ")
-
-	block := regexp.MustCompile(`(?s)\n ` + regexp.QuoteMeta(local) +
-		` = local\.backups_on \? \{\n(.*?)\n \} : null`).FindStringSubmatch(src)
-	if block == nil {
-		t.Fatalf("the %s root's main.tf has no `%s = local.backups_on ? { ... } : null` block",
-			root, local)
-	}
-	line := regexp.MustCompile(`\n retention_policy = var\.([a-z0-9_]+)\n`).FindStringSubmatch("\n" + block[1] + "\n")
+	line := regexp.MustCompile(`\n retention_policy = var\.([a-z0-9_]+)\n`).FindStringSubmatch(backupLocalBody(t, root, local))
 	if line == nil {
 		t.Fatalf("local.%s in the %s root does not set retention_policy from a variable",
 			local, root)
@@ -92,4 +77,28 @@ func TestEachRootDeclaresOnlyItsOwnStoresWindow(t *testing.T) {
 			t.Errorf("variable %q is declared in %v; want %v", tc.variable, got, tc.want)
 		}
 	}
+}
+
+// backupLocalBody returns the body of `<local> = local.backups_on ? { ... } : null`
+// in root's main.tf, with runs of blanks squashed to one space and a newline added
+// at each end so every line can be matched as `\n <line>\n`. It fails when the
+// block is missing, never returning "" to match nothing.
+func backupLocalBody(t *testing.T, root, local string) string {
+	t.Helper()
+
+	src, ok := rootSources(t, "main.tf")[root]
+	if !ok {
+		t.Fatalf("the %s root has no main.tf", root)
+	}
+	// `tofu fmt` realigns `=` whenever a neighbouring argument's name changes
+	// length, so the match is on the assignment, not on its column.
+	src = regexp.MustCompile(`[ \t]+`).ReplaceAllString(src, " ")
+
+	block := regexp.MustCompile(`(?s)\n ` + regexp.QuoteMeta(local) +
+		` = local\.backups_on \? \{\n(.*?)\n \} : null`).FindStringSubmatch(src)
+	if block == nil {
+		t.Fatalf("the %s root's main.tf has no `%s = local.backups_on ? { ... } : null` block",
+			root, local)
+	}
+	return "\n" + block[1] + "\n"
 }
