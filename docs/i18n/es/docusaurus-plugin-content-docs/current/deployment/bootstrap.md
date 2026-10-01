@@ -602,7 +602,7 @@ Las alertas de las instantáneas se describen en
   usar en su lugar un clúster que ya tengas (kind / minikube / k3d / docker-desktop).
 - **Disco para los volúmenes persistentes**, en la StorageClass predeterminada del clúster. En un
   clúster que no es local (ni kind, ni minikube, ni k3d, ni docker-desktop, ni rancher-desktop), con
-  los ajustes de install predeterminados (sin `--compact`, `--no-monitoring` ni
+  los ajustes de install predeterminados (sin `--compact`, `--no-cnpg`, `--no-monitoring` ni
   `--backup-credentials-file`), `dcctl install --ha` reclama 204 GiB para el clúster: tres
   volúmenes de la base de datos relacional, el [almacén de respaldos](#backup-store-size)
   (160 GiB) y el Prometheus de la pila de monitorización. Cada instancia reclama 144 GiB más, tres

@@ -551,8 +551,8 @@ The alerts for snapshots are described under
   (kind / minikube / k3d / docker-desktop).
 - **Disk for the persistent volumes**, on the cluster's default StorageClass. On a cluster that
   is not local (not kind, minikube, k3d, docker-desktop or rancher-desktop), with the default
-  install settings (no `--compact`, `--no-monitoring` or `--backup-credentials-file`),
-  `dcctl install --ha` claims 204 GiB for the cluster: three relational-database volumes, the
+  install settings (no `--compact`, `--no-cnpg`, `--no-monitoring` or
+  `--backup-credentials-file`), `dcctl install --ha` claims 204 GiB for the cluster: three relational-database volumes, the
   [backup store](#backup-store-size) (160 GiB) and the monitoring stack's Prometheus. Each
   instance claims 144 GiB more, three event-store and three message-broker volumes: 348 GiB for
   a cluster with one instance. Without `--ha`, the cluster claims 188 GiB and each instance 48 GiB.

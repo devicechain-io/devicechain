@@ -129,11 +129,105 @@ func defaultDiskInputs(t *testing.T, dbReplicas, natsReplicas int64) diskInputs 
 	return diskInputs{
 		dbReplicas:   dbReplicas,
 		natsReplicas: natsReplicas,
-		relational:   wholeGiB(t, tofuDefault(t, clusterTF, "postgres_storage")),
-		backupStore:  wholeGiB(t, tofuDefault(t, clusterTF, "backup_object_store_storage")),
-		prometheus:   wholeGiB(t, tofuDefault(t, clusterTF, "monitoring_prometheus_storage")),
-		eventStore:   wholeGiB(t, tofuDefault(t, instanceTF, "timescale_storage")),
-		jetStream:    wholeGiB(t, tofuDefault(t, instanceTF, "nats_jetstream_storage")),
+		relational:   wholeGiB(t, tofuDefault(t, clusterTF, relationalVolumeVar)),
+		backupStore:  wholeGiB(t, tofuDefault(t, clusterTF, backupStoreVolumeVar)),
+		prometheus:   wholeGiB(t, tofuDefault(t, clusterTF, prometheusVolumeVar)),
+		eventStore:   wholeGiB(t, tofuDefault(t, instanceTF, eventStoreVolumeVar)),
+		jetStream:    wholeGiB(t, tofuDefault(t, instanceTF, jetStreamVolumeVar)),
+	}
+}
+
+// The root variables the budget counts, one per volume. TestDiskBudgetCountsEveryVolume
+// holds this list to what the roots actually size, so the list cannot quietly be
+// shorter than the install.
+const (
+	relationalVolumeVar  = "postgres_storage"
+	backupStoreVolumeVar = "backup_object_store_storage"
+	prometheusVolumeVar  = "monitoring_prometheus_storage"
+	eventStoreVolumeVar  = "timescale_storage"
+	jetStreamVolumeVar   = "nats_jetstream_storage"
+)
+
+// The budget is a fixed list of volumes, so a volume the list does not know about
+// would leave every published figure passing TestPublishedDiskBudgetIsTheDefaults
+// while the install claims more: a dedicated WAL volume on either database (the
+// cnpg-cluster module already offers one) is the obvious case. A volume is sized
+// in exactly two places -- a root passing a *storage attribute to a module, or a
+// module's own *storage default that no root overrides -- and this checks both.
+func TestDiskBudgetCountsEveryVolume(t *testing.T) {
+	tree := assets.OpenTofu()
+	sizeAttr := regexp.MustCompile(`(?m)^\s*([a-z_]*storage)\s*=\s*(\S.*?)\s*(?:#.*)?$`)
+	moduleBlock := regexp.MustCompile(`(?ms)^module\s+"[^"]+"\s*\{\s*$(.*?)^\}`)
+	moduleSource := regexp.MustCompile(`(?m)^\s*source\s*=\s*"\.\./modules/([^"]+)"`)
+
+	counted := map[string]bool{"var." + relationalVolumeVar: true, "var." + backupStoreVolumeVar: true,
+		"var." + prometheusVolumeVar: true, "var." + eventStoreVolumeVar: true, "var." + jetStreamVolumeVar: true}
+	seen := map[string]int{}
+	// passed[module] = the *storage attributes some root sets on it.
+	passed := map[string]map[string]bool{}
+	for _, root := range []string{"cluster", "instance"} {
+		b, err := fs.ReadFile(tree, root+"/main.tf")
+		if err != nil {
+			t.Fatalf("reading the embedded %s main.tf: %v", root, err)
+		}
+		for _, blk := range moduleBlock.FindAllSubmatch(b, -1) {
+			src := moduleSource.FindSubmatch(blk[1])
+			if src == nil {
+				continue
+			}
+			mod := string(src[1])
+			if passed[mod] == nil {
+				passed[mod] = map[string]bool{}
+			}
+			for _, a := range sizeAttr.FindAllSubmatch(blk[1], -1) {
+				attr, value := string(a[1]), string(a[2])
+				passed[mod][attr] = true
+				if !counted[value] {
+					t.Errorf("the %s root sizes a volume on module %s with %s = %s, which the published disk "+
+						"budget does not count. Add it to diskInputs and to the prose in both locales and "+
+						"the GKE README, or do not size it here", root, mod, attr, value)
+					continue
+				}
+				seen[value]++
+			}
+		}
+	}
+	for v := range counted {
+		if seen[v] != 1 {
+			t.Errorf("%s sizes %d module volumes across the roots; the budget counts it once", v, seen[v])
+		}
+	}
+	if len(passed) == 0 {
+		t.Fatal("found no module calls in the roots; point this test at the new shape")
+	}
+
+	variableBlock := regexp.MustCompile(`(?ms)^variable\s+"([a-z_]*storage)"\s*\{\s*$(.*?)^\}`)
+	defaultLine := regexp.MustCompile(`(?m)^\s*default\s*=\s*(\S.*?)\s*$`)
+	for mod := range passed {
+		files, err := fs.Glob(tree, "modules/"+mod+"/*.tf")
+		if err != nil || len(files) == 0 {
+			t.Fatalf("module %s has no embedded .tf files (%v)", mod, err)
+		}
+		for _, f := range files {
+			b, err := fs.ReadFile(tree, f)
+			if err != nil {
+				t.Fatalf("reading %s: %v", f, err)
+			}
+			for _, v := range variableBlock.FindAllSubmatch(b, -1) {
+				name := string(v[1])
+				if passed[mod][name] {
+					continue
+				}
+				def := "none"
+				if d := defaultLine.FindSubmatch(v[2]); d != nil {
+					def = string(d[1])
+				}
+				if def != `""` {
+					t.Errorf("module %s sizes a volume with %s (default %s) that no root sets, so every "+
+						"install claims it and the published disk budget does not count it", mod, name, def)
+				}
+			}
+		}
 	}
 }
 
@@ -270,16 +364,18 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 	}
 
 	// The figures hold only on the path they are published for. On a local
-	// cluster the monitoring stack keeps no volume, and --compact, --no-monitoring
-	// and --backup-credentials-file each change a term; a reword that drops the
+	// cluster the monitoring stack keeps no volume, and --compact, --no-cnpg,
+	// --no-monitoring and --backup-credentials-file each change a term (--no-cnpg
+	// turns database backups off, so no in-cluster backup store is claimed; --no-tls
+	// does only together with --compact, which is already named); a reword that drops the
 	// scope would leave every number above true of a narrower case than it claims.
 	for _, tc := range []struct{ what, text, pattern string }{
 		{"bootstrap.md#prerequisites", enBootstrap,
 			"On a cluster that is not local \\(not kind, minikube, k3d, docker-desktop or rancher-desktop\\), with the default " +
-				"install settings \\(no `--compact`, `--no-monitoring` or `--backup-credentials-file`\\)"},
+				"install settings \\(no `--compact`, `--no-cnpg`, `--no-monitoring` or `--backup-credentials-file`\\)"},
 		{"the es bootstrap.md#prerequisites", esBootstrap,
 			"En un clúster que no es local \\(ni kind, ni minikube, ni k3d, ni docker-desktop, ni rancher-desktop\\), con los ajustes " +
-				"de install predeterminados \\(sin `--compact`, `--no-monitoring` ni `--backup-credentials-file`\\)"},
+				"de install predeterminados \\(sin `--compact`, `--no-cnpg`, `--no-monitoring` ni `--backup-credentials-file`\\)"},
 	} {
 		if !regexp.MustCompile(strings.ReplaceAll(tc.pattern, " ", `\s+`)).MatchString(tc.text) {
 			t.Errorf("%s no longer scopes the disk budget to a non-local cluster with the default install "+
