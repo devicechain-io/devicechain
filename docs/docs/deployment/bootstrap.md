@@ -1023,6 +1023,14 @@ includes re-running `install` without the flags on a cluster installed with them
 first install: a database's volumes stay where they were created, and storage bound to one node or
 one zone cannot follow an instance to a node elsewhere.
 
+With no instance running, nothing refuses the change, and it can still take the relational store
+down. The relational store outlives every instance, so a re-run with different placement moves its
+pods onto the newly selected nodes. If its volumes are bound to a node (local-path storage, as on
+kind) or to a zone outside the new selection, those pods stay `Pending` and the store does not come
+back. `dcctl` counts the nodes that match; it does not check where existing volumes live. Change
+placement only where the store's storage can follow it, or where you can afford to recreate the
+store.
+
 ### Service sizing {#service-sizing}
 
 Every backend service requests 128Mi of memory and is limited to 256Mi. CPU is sized per service

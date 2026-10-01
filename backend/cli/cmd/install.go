@@ -57,7 +57,8 @@ func installRestoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
 }
 
 // installPlacementFromArgv settles --database-node-selector and --database-toleration.
-// Its own function so the step RunE takes can be exercised with the flags parsed.
+// RunE calls it to refuse bad syntax before touching the cluster, and installOptions
+// calls it again to build what the install engine is handed, so both read one parser.
 func installPlacementFromArgv() (bootstrap.DatabasePlacement, error) {
 	return bootstrap.ParseDatabasePlacement(installDBNodeSelector, installDBTolerations)
 }
@@ -145,8 +146,18 @@ func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) com
 // the wrong field. That failure is silent in the worst direction: `dcctl install
 // --restore-rdb-from` would report a perfectly ordinary, perfectly green install of an
 // EMPTY relational store, during the recovery it was run for.
+//
+// The placement flags are read HERE, not handed in: a parsed placement passed as an
+// argument is one more value RunE can drop between parsing it and building this
+// literal, and a dropped placement installs the databases wherever the scheduler puts
+// them, with an install record saying "none". Reading the flags where the literal is
+// built leaves no such hand-off.
 func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
-	img bootstrap.ImageSource, placement bootstrap.DatabasePlacement) bootstrap.InstallOptions {
+	img bootstrap.ImageSource) (bootstrap.InstallOptions, error) {
+	placement, err := installPlacementFromArgv()
+	if err != nil {
+		return bootstrap.InstallOptions{}, err
+	}
 	return bootstrap.InstallOptions{
 		Options: bootstrap.Options{
 			KubeContext:          installKubeContext,
@@ -167,13 +178,13 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		// Checked from argv by ValidateBackupSnapshotClass, and against the cluster by
 		// the install itself before anything is written.
 		BackupSnapshotClass: installBackupSnapClass,
-		// Parsed from argv by ParseDatabasePlacement, and checked against the cluster's
+		// Parsed from argv above by ParseDatabasePlacement, and checked against the cluster's
 		// nodes by the install itself before anything is written.
 		DatabasePlacement: placement,
 		MaxConnections:    installMaxConnections,
 		Restore:           restore,
 		DcctlVersion:      Version,
-	}
+	}, nil
 }
 
 // installCmd prepares a cluster for DeviceChain instances.
@@ -273,8 +284,9 @@ the cluster, with one exception: the connection budget may be raised.`,
 		// Placement: the syntax, and a toleration with nothing to place, are knowable from
 		// argv. Whether the nodes can take the databases needs the cluster, and the
 		// install asks it before writing anything.
-		placement, err := installPlacementFromArgv()
-		if err != nil {
+		// installOptions reads the same flags again when it builds the engine's options;
+		// this call only moves the refusal ahead of the cluster checks below.
+		if _, err := installPlacementFromArgv(); err != nil {
 			return err
 		}
 
@@ -307,7 +319,11 @@ the cluster, with one exception: the connection budget may be raised.`,
 			}
 		}
 
-		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan, imageSource, placement))
+		opts, err := installOptions(backupDestination, restorePlan, imageSource)
+		if err != nil {
+			return err
+		}
+		return bootstrap.Install(cmd.Context(), provider, opts)
 	},
 	SilenceUsage: true,
 }

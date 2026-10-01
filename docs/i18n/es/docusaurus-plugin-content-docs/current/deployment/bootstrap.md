@@ -1108,6 +1108,14 @@ flags en un clúster instalado con ellos. Elígela en la primera instalación: l
 de datos se quedan donde se crearon, y un almacenamiento ligado a un nodo o a una zona no puede seguir
 a una instancia a un nodo en otro lugar.
 
+Sin ninguna instancia en marcha, nada rechaza el cambio, y aun así puede dejar fuera de servicio la
+base de datos relacional. La base relacional sobrevive a todas las instancias, así que volver a
+ejecutar con otra ubicación mueve sus pods a los nodos recién seleccionados. Si sus volúmenes están
+ligados a un nodo (almacenamiento local-path, como en kind) o a una zona fuera de la nueva selección,
+esos pods se quedan en `Pending` y la base no vuelve. `dcctl` cuenta los nodos que coinciden; no
+comprueba dónde están los volúmenes existentes. Cambia la ubicación solo donde el almacenamiento de la
+base pueda seguirla, o donde puedas permitirte recrear la base.
+
 ### Dimensionamiento de los servicios {#service-sizing}
 
 Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi. La CPU se

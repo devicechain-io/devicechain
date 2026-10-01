@@ -4358,7 +4358,9 @@ vuelve a ejecutar `dcctl install` con esta versión antes de cualquier bootstrap
 como ya exige
 [Los respaldos base de las bases de datos pueden ser instantáneas de volumen](#next-snapshot-backups).
 Añadir una ubicación a un clúster que ya ejecuta instancias se rechaza, como cualquier otro cambio en
-sus ajustes.
+sus ajustes. Sin ninguna instancia en marcha no se rechaza, pero mueve el almacén relacional, cuyos
+volúmenes quizá no puedan seguirlo: consulta
+[Ubicación de las bases de datos](./bootstrap.md#database-placement) antes de cambiarla.
 
 ### La transición única a la ingesta duradera
 

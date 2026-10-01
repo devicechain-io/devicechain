@@ -128,6 +128,8 @@
 
 # Database placement (dcctl install --database-node-selector / --database-toleration).
 # Both roots declare these; dcctl passes them to both, so the relational store and
-# every instance's event store land on the same nodes.
+# every instance's event store land on the same nodes. These lines apply only when you
+# run the roots with tofu yourself: dcctl passes both as -var on every run (empty
+# included), and a -var overrides this file, so under dcctl use the install flags.
 # database_node_selector = { "devicechain.io/pool" = "database" }
 # database_tolerations   = [{ key = "dedicated", value = "database", effect = "NoSchedule" }]

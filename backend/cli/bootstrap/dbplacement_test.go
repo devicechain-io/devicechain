@@ -324,8 +324,12 @@ func TestTheClusterApplysPlacementIsRecorded(t *testing.T) {
 	for _, missing := range []string{"database_node_selector", "database_tolerations"} {
 		outputs := base()
 		delete(outputs, missing)
-		if _, err := clusterOutputs(outputs); err == nil || !strings.Contains(err.Error(), missing) {
-			t.Errorf("an apply that did not export %s decoded: %v", missing, err)
+		// "did not export", not merely the output's name: an absent output also fails
+		// to decode as JSON, and that error names it too, so only this pins the check
+		// that an absent output is refused for being absent.
+		if _, err := clusterOutputs(outputs); err == nil ||
+			!strings.Contains(err.Error(), "did not export \""+missing+"\"") {
+			t.Errorf("an apply that did not export %s: %v, want a refusal saying it was not exported", missing, err)
 		}
 	}
 

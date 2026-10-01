@@ -4054,7 +4054,9 @@ Nothing changes on a cluster installed without these flags. The install record c
 re-run `dcctl install` with this release before any bootstrap, upgrade or destroy, as
 [Database base backups can be volume snapshots](#next-snapshot-backups) already requires. Adding a
 placement to a cluster that already runs instances is refused, like any other change to its
-settings.
+settings. With no instance running it is not refused, but it moves the relational store, whose
+volumes may not be able to follow: see
+[Database placement](./bootstrap.md#database-placement) before you change it.
 
 ### The one-time durable-ingest cutover
 
