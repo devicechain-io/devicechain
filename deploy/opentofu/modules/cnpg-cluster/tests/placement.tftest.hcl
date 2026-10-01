@@ -9,6 +9,35 @@
 # a selector supplies them with override_data: they are the input the counting
 # rule decides on, and a mocked provider would otherwise invent them.
 #
+# 🔴 Every node is written in the shape the provider RETURNS, not the shape a
+# manifest is written in. kubernetes_resources types a Node from the API schema,
+# so a field the cluster did not set is present and null. Read through the
+# pinned kubernetes provider (3.2.1) from a Kubernetes 1.36 node, a plain node's
+# spec came back as
+#
+#   { configSource = {...}, externalID = null, podCIDR = "10.244.0.0/24",
+#     podCIDRs = [...], providerID = "kind://...", taints = null, unschedulable = null }
+#
+# and, once tainted and cordoned, with unschedulable = true and taints such as
+#
+#   { key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }
+#   { key = "novalue", value = null, effect = "NoExecute", timeAdded = null }
+#
+# The nodes below carry the fields the counting rule reads -- unschedulable,
+# taints, and each taint's key, value and effect, with timeAdded beside them as
+# the provider returns it -- in exactly that shape; the spec fields nothing
+# reads are left out. `spec = {}`, with the fields absent, is a shape the
+# provider never produces, and the counting rule once passed every run written
+# that way and failed the first install on a real cluster. A run that departs
+# from the provider's shape says so and why.
+#
+# One limit of the mock: within a run, every node's taints are either all null
+# or all lists. The provider's list is typed, so a real read that mixes a
+# tainted node with an untainted one converts cleanly (checked against a live
+# cluster), but a mock value is untyped, and an untyped null beside a list in
+# the node list fails the module's conversion of it with "Inconsistent
+# conditional result types" -- an artefact of the mock, not the module.
+#
 # Runs against mocked providers, so no cluster is needed. Run it with
 # hack/check-tofu-module-tests.sh, which tests a COPY of the module.
 
@@ -62,9 +91,9 @@ run "placement_reaches_the_chart" {
     target = data.kubernetes_resources.placement_nodes
     values = {
       objects = [
-        { metadata = { name = "db-a" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
-        { metadata = { name = "db-b" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
-        { metadata = { name = "db-c" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
       ]
     }
   }
@@ -88,8 +117,8 @@ run "placement_reaches_the_chart" {
     error_message = "the tolerations output does not report what the chart was handed"
   }
   assert {
-    condition     = length(local.placement_usable) == 3
-    error_message = "three tolerated, schedulable nodes did not all count as usable"
+    condition     = jsonencode(local.placement_usable) == jsonencode(["db-a", "db-b", "db-c"])
+    error_message = "three tolerated nodes the cluster reports as never cordoned (unschedulable null) did not all count as usable"
   }
 }
 
@@ -105,8 +134,8 @@ run "too_few_usable_nodes" {
     target = data.kubernetes_resources.placement_nodes
     values = {
       objects = [
-        { metadata = { name = "db-a" }, spec = {} },
-        { metadata = { name = "db-b" }, spec = {} },
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = null } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = null } },
       ]
     }
   }
@@ -126,9 +155,9 @@ run "untolerated_taint" {
     target = data.kubernetes_resources.placement_nodes
     values = {
       objects = [
-        { metadata = { name = "db-a" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
-        { metadata = { name = "db-b" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
-        { metadata = { name = "db-c" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
       ]
     }
   }
@@ -149,9 +178,80 @@ run "wrong_value_is_not_tolerated" {
     target = data.kubernetes_resources.placement_nodes
     values = {
       objects = [
-        { metadata = { name = "db-a" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
-        { metadata = { name = "db-b" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
-        { metadata = { name = "db-c" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "NoSchedule" }] } },
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+      ]
+    }
+  }
+
+  expect_failures = [helm_release.cluster]
+}
+
+# A toleration for another key does not cover the taint, even when its value and
+# effect match: refused.
+run "other_key_is_not_tolerated" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+    tolerations   = [{ key = "other", value = "database", effect = "NoSchedule" }]
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+      ]
+    }
+  }
+
+  expect_failures = [helm_release.cluster]
+}
+
+# A toleration that names an effect covers only that effect: one for NoExecute,
+# with the right key and value, does not cover a NoSchedule taint. Refused.
+run "other_effect_is_not_tolerated" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+    tolerations   = [{ key = "dedicated", value = "database", effect = "NoExecute" }]
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+      ]
+    }
+  }
+
+  expect_failures = [helm_release.cluster]
+}
+
+# A NoExecute taint keeps a pod off as surely as NoSchedule does: the nodes carry
+# one and nothing tolerates it. Refused.
+run "untolerated_no_execute_taint" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoExecute", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoExecute", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoExecute", timeAdded = null }] } },
       ]
     }
   }
@@ -173,20 +273,21 @@ run "exists_toleration_any_value" {
     target = data.kubernetes_resources.placement_nodes
     values = {
       objects = [
-        { metadata = { name = "db-a" }, spec = { taints = [{ key = "dedicated", value = "x", effect = "NoSchedule" }] } },
-        { metadata = { name = "db-b" }, spec = { taints = [{ key = "dedicated", value = "y", effect = "NoExecute" }] } },
-        { metadata = { name = "db-c" }, spec = { taints = [{ key = "dedicated", effect = "NoSchedule" }] } },
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "x", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "y", effect = "NoExecute", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = null, effect = "NoSchedule", timeAdded = null }] } },
       ]
     }
   }
 
   assert {
-    condition     = length(local.placement_usable) == 3
+    condition     = jsonencode(local.placement_usable) == jsonencode(["db-a", "db-b", "db-c"])
     error_message = "an Exists toleration with no effect did not cover the taint on every node"
   }
 }
 
-# A PreferNoSchedule taint keeps no pod off, so an untolerated one still counts.
+# A PreferNoSchedule taint keeps no pod off, so an untolerated one still counts:
+# every node carries one and nothing tolerates it, and all three count.
 run "prefer_no_schedule_does_not_exclude" {
   command = plan
 
@@ -198,20 +299,25 @@ run "prefer_no_schedule_does_not_exclude" {
     target = data.kubernetes_resources.placement_nodes
     values = {
       objects = [
-        { metadata = { name = "db-a" }, spec = { taints = [{ key = "dedicated", value = "database", effect = "PreferNoSchedule" }] } },
-        { metadata = { name = "db-b" }, spec = {} },
-        { metadata = { name = "db-c" }, spec = {} },
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "PreferNoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "PreferNoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = null, effect = "PreferNoSchedule", timeAdded = null }] } },
       ]
     }
   }
 
   assert {
-    condition     = length(local.placement_usable) == 3
+    condition     = jsonencode(local.placement_usable) == jsonencode(["db-a", "db-b", "db-c"])
     error_message = "a PreferNoSchedule taint kept a node from counting"
   }
 }
 
 # A cordoned node cannot take an instance: three labelled, one cordoned, refused.
+#
+# The cordoned node's taints are null here although the cluster soon adds a
+# node.kubernetes.io/unschedulable taint to a cordoned node: until it does, the
+# cordon is the only thing keeping a pod off, and leaving the taint out makes
+# this run depend on the unschedulable check alone.
 run "cordoned_node_does_not_count" {
   command = plan
 
@@ -223,14 +329,128 @@ run "cordoned_node_does_not_count" {
     target = data.kubernetes_resources.placement_nodes
     values = {
       objects = [
-        { metadata = { name = "db-a" }, spec = { unschedulable = true } },
-        { metadata = { name = "db-b" }, spec = {} },
-        { metadata = { name = "db-c" }, spec = {} },
+        { metadata = { name = "db-a" }, spec = { unschedulable = true, taints = null } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = null } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = null } },
       ]
     }
   }
 
   expect_failures = [helm_release.cluster]
+}
+
+# The refusal above cannot say which nodes were counted, so this is the same
+# shape by value: with two instances the plan goes through, and the cordoned
+# node is the one left out.
+run "cordoned_node_is_left_out_by_value" {
+  command = plan
+
+  variables {
+    instances     = 2
+    node_selector = { "devicechain.io/pool" = "database" }
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = true, taints = null } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = null } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = null } },
+      ]
+    }
+  }
+
+  assert {
+    condition     = jsonencode(local.placement_usable) == jsonencode(["db-b", "db-c"])
+    error_message = "the cordoned node was counted, or a node never cordoned was not"
+  }
+}
+
+# An untainted node reports spec.taints as null. unschedulable is false here,
+# which the cluster never reports (it leaves the field out, so it reads back
+# null): that keeps this run about the taints alone. Three usable nodes.
+run "untainted_node_reports_taints_as_null" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = false, taints = null } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = false, taints = null } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = false, taints = null } },
+      ]
+    }
+  }
+
+  assert {
+    condition     = jsonencode(local.placement_usable) == jsonencode(["db-a", "db-b", "db-c"])
+    error_message = "untainted nodes (taints null) did not all count as usable"
+  }
+}
+
+# A label-only placement on an ordinary node pool, nodes as the cluster reports
+# them: never cordoned, no taint, both fields null. Three usable nodes, and the
+# selector reaches the chart with no toleration beside it.
+run "label_only_placement_on_plain_nodes" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = null } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = null } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = null } },
+      ]
+    }
+  }
+
+  assert {
+    condition     = jsonencode(local.placement_usable) == jsonencode(["db-a", "db-b", "db-c"])
+    error_message = "plain nodes, as the cluster reports them, did not all count as usable"
+  }
+  assert {
+    condition     = yamldecode(helm_release.cluster.values[0]).nodeSelector == { "devicechain.io/pool" = "database" }
+    error_message = "a label-only placement did not reach the chart"
+  }
+  assert {
+    condition     = length(yamldecode(helm_release.cluster.values[0]).tolerations) == 0
+    error_message = "a label-only placement handed the chart a toleration"
+  }
+}
+
+# Defensive, not a shape the provider returns (a Node always has a spec): a
+# node with no spec at all still counts, rather than failing the plan. This is
+# what keeps the try() around each field read.
+run "node_without_spec_still_counts" {
+  command = plan
+
+  variables {
+    instances     = 1
+    node_selector = { "devicechain.io/pool" = "database" }
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [{ metadata = { name = "db-a" }, spec = null }]
+    }
+  }
+
+  assert {
+    condition     = jsonencode(local.placement_usable) == jsonencode(["db-a"])
+    error_message = "a node with no spec did not count as usable"
+  }
 }
 
 # One instance needs one node.
@@ -245,7 +465,7 @@ run "single_instance_one_node" {
   override_data {
     target = data.kubernetes_resources.placement_nodes
     values = {
-      objects = [{ metadata = { name = "db-a" }, spec = {} }]
+      objects = [{ metadata = { name = "db-a" }, spec = { unschedulable = null, taints = null } }]
     }
   }
 

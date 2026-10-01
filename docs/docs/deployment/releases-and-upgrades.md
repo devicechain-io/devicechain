@@ -4058,6 +4058,11 @@ settings. With no instance running it is not refused, but it moves the relationa
 volumes may not be able to follow: see
 [Database placement](./bootstrap.md#database-placement) before you change it.
 
+If you built `dcctl` from source after these flags were added, `dcctl install` with a placement could
+fail in its OpenTofu step with `argument must not be null`, because the placement check read a node
+that had never been cordoned, or carried no taint, as an error. This release counts those nodes. The
+failed run created or changed no database: re-run the install with this release.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

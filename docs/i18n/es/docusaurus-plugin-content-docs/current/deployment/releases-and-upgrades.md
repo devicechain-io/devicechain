@@ -4362,6 +4362,12 @@ sus ajustes. Sin ninguna instancia en marcha no se rechaza, pero mueve el almac�
 volúmenes quizá no puedan seguirlo: consulta
 [Ubicación de las bases de datos](./bootstrap.md#database-placement) antes de cambiarla.
 
+Si compilaste `dcctl` desde el código fuente después de que se añadieran estos flags, `dcctl install`
+con una ubicación podía fallar en su paso de OpenTofu con `argument must not be null`, porque la
+comprobación de ubicación trataba como un error un nodo que nunca se había acordonado o que no tenía
+ningún taint. Esta versión cuenta esos nodos. La ejecución fallida no creó ni cambió ninguna base de
+datos: vuelve a ejecutar la instalación con esta versión.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
