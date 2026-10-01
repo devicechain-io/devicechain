@@ -86,11 +86,38 @@ spec:
         name: {{ $backup.credentialsSecret }}
         key: {{ $backup.secretAccessKeyKey }}
     wal:
-      # gzip rather than none. WAL is highly compressible and the archive is the
-      # thing that grows without bound between base backups, so this is the
-      # single biggest lever on how long the destination lasts. It costs CPU in
-      # the sidecar, not in the Postgres backend, so it does not touch commit
-      # latency.
+      # zstd, at barman-cloud's default level for it. WAL is highly compressible
+      # and the archive is the thing that grows without bound between base
+      # backups, so compression is the biggest lever on how long the destination
+      # lasts. Measured with the sidecar's own barman-cloud on write-ahead log
+      # shaped like the event store's (lz4 page images, 7% to 78% of the bytes in
+      # full-page images): against gzip, 29-39% less CPU per segment end to end.
+      # On that log and on uncompressed log like the relational store's, zstd's
+      # output was 2-16% smaller than gzip's. A segment closed early by
+      # archive_timeout is about 16 KiB (gzip: 32 KiB).
+      #
+      # 🔴 NOT "none" and NOT snappy, although both cost less CPU: an idle
+      # database archives a 16 MiB segment every archive_timeout, and
+      # uncompressed that is 4.5 GiB a day per database (snappy: about 220 MiB).
+      # NOT "lz4" either: barman's default level for it is LZ4-HC, slower than
+      # gzip at its fastest level and larger than gzip. Each of the three also
+      # makes a larger archive than gzip, and the backup-store sizing
+      # (archiveBytesPerEventHigh in backend/cli/bootstrap/backupsizing_test.go)
+      # was measured with gzip and bounds only an archive that is no larger.
+      #
+      # This costs CPU in the sidecar, not in a Postgres backend, so it does not
+      # touch commit latency -- but the sidecar runs in the primary's pod, on the
+      # primary's node, and under sustained ingest the gzip archiver used about
+      # as much CPU as Postgres itself. Each segment is one
+      # barman-cloud-wal-archive process, and starting that process is a large
+      # share of the cost whatever the compression.
+      #
+      # Restore and retention read every compression: barman-cloud names each
+      # archived segment by its suffix (.gz, .zst) and decompresses, lists and
+      # prunes it by that suffix, so an archive that changed compression part-way
+      # restores and expires as before. The plugin re-reads this object for each
+      # archive call, so an edit here applies to the next segment without a
+      # restart.
       compression: {{ $backup.walCompression }}
       # 🔴 Parallel archiving is the difference between an archiver that keeps up
       # under ingest load and one that falls permanently behind. The event store

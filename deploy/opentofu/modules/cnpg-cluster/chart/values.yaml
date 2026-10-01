@@ -327,7 +327,12 @@ backup:
   # prometheusrule-database-backup.yaml with it.
   archiveTimeout: 5min
 
-  walCompression: gzip
+  # The archive's compression per WAL segment: zstd, see templates/objectstore.yaml.
+  # The module always sets this; the default matches it so a bare render archives
+  # the same way.
+  walCompression: zstd
+  # Base backups. The pinned plugin's data.compression accepts bzip2, gzip, lz4
+  # and snappy only -- no zstd.
   dataCompression: gzip
 
   # Parallelism for WAL archiving. The event store produces WAL at telemetry
@@ -343,7 +348,7 @@ backup:
   # of the process taking the backup.
   #
   # 🔴 256Mi rather than the 128Mi first shipped, and the reason is about the
-  # DATABASE pod rather than about the sidecar. This container gzips and uploads
+  # DATABASE pod rather than about the sidecar. This container compresses and uploads
   # with `jobs` / `maxParallel` concurrency, inside the PostgreSQL pod, and the
   # kubelet ranks a pod for eviction by its total usage above its total requests.
   # So an under-requested backup sidecar does not get itself evicted — it drags

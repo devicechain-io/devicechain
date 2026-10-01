@@ -64,11 +64,27 @@ const (
 	// round 2 cumulative over 19M events: ≈ 1,290 B. This is the TOP of the
 	// highest interval. It was measured at 4,000 events/s; at much lower rates the
 	// full-page images after each checkpoint may cost more per event, which is
-	// not measured. It was also measured with PostgreSQL's wal_compression off.
-	// Turning that on shrinks the WAL written, so it should make this an
-	// overestimate, but the archive gzips each segment as well (walCompression)
-	// and the two savings do not simply multiply. Lower it only from a run that
-	// reads the bucket with wal_compression on.
+	// not measured. It was also measured with PostgreSQL's wal_compression off
+	// and the archive compressing each segment with gzip.
+	//
+	// Two changes since, neither of which makes the archive larger:
+	//   - The event store turned wal_compression on (lz4). That shrinks the WAL
+	//     written, though the archive then has less left to remove and the two
+	//     savings do not simply multiply. Round 4 on GKE, which ran lz4 with a
+	//     gzip archive, read about 1.3 KB per event as an upper bound for the
+	//     event store's archive (40 GiB over about 31M events, base backups
+	//     included) beside a 3.7 GiB relational archive: under this constant.
+	//   - The archive moved from gzip to zstd (walCompression in the
+	//     cnpg-cluster module). On the same segments zstd's output was 2-16%
+	//     smaller than gzip's: five corpora, event-store WAL with lz4 page images
+	//     from 7% to 78% full-page-image bytes, and uncompressed WAL shaped like
+	//     each database's, compressed by the barman-cloud in the pinned plugin
+	//     sidecar at its default levels. None, snappy and barman's default lz4
+	//     level were LARGER than gzip, which is why
+	//     TestTheArchiveCompressesTheWriteAheadLogWithZstd points here.
+	//
+	// So this still bounds what ships. Lower it only from a run that reads the
+	// bucket with both as shipped.
 	archiveBytesPerEventHigh int64 = 1880
 
 	// The fraction of the store still free when the event store is full. 35% is

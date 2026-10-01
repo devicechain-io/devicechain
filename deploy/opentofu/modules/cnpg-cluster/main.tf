@@ -622,11 +622,19 @@ locals {
       retentionPolicy     = var.backup.retention_policy
       snapshotClass       = var.backup.snapshot_class
       objectStoreSchedule = var.backup.object_store_schedule
-      walCompression      = "gzip"
-      dataCompression     = "gzip"
-      walMaxParallel      = var.backup.wal_max_parallel
-      dataJobs            = var.backup.data_jobs
-      endpointCASecret    = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
+      # zstd, not gzip: on write-ahead log shaped like the event store's it took
+      # 29-39% less archiver CPU per segment end to end, and on every log measured
+      # (both databases' shapes) its output was 2-16% smaller. The reasons, and
+      # why not none, snappy or lz4, are in the chart's objectstore.yaml. Before
+      # changing it, re-derive archiveBytesPerEventHigh in
+      # backend/cli/bootstrap/backupsizing_test.go: the backup-store sizing was
+      # measured with gzip and bounds only an archive that is no larger. Base
+      # backups stay gzip: the pinned plugin's data.compression has no zstd.
+      walCompression   = "zstd"
+      dataCompression  = "gzip"
+      walMaxParallel   = var.backup.wal_max_parallel
+      dataJobs         = var.backup.data_jobs
+      endpointCASecret = var.backup.endpoint_ca == null ? {} : var.backup.endpoint_ca
       sidecarResources = {
         requests = {
           cpu    = var.backup.sidecar_resources.cpu

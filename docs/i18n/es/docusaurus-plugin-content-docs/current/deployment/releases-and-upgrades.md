@@ -4530,6 +4530,35 @@ límite.
   porque una reconstrucción se detuvo después de reconstruir ya la tabla de eventos base. La nueva
   versión lee esa lista sobre la clave.
 
+#### El registro de escritura anticipada archivado se comprime con zstd {#next-archive-zstd}
+
+Las dos bases de datos comprimen ahora con zstd, en lugar de gzip, el registro de escritura
+anticipada que archivan. Con una ingesta sostenida, el archivador se ejecuta junto a la primaria
+del almacén de eventos, y usaba aproximadamente tanta CPU como la propia base de datos. En una
+prueba local sobre un registro con la forma del del almacén de eventos, zstd usó entre un 29 % y
+un 39 % menos de CPU del archivador por segmento archivado, de principio a fin. Sobre ese registro,
+y sobre un registro sin comprimir con la forma del del almacén relacional, su salida fue entre un
+2 % y un 16 % menor que la de gzip. Los respaldos base se siguen comprimiendo con gzip, y el
+[tamaño del almacén de respaldos](./bootstrap.md#backup-store-size) no cambia.
+
+Las restauraciones leen ambos formatos. Cada segmento archivado lleva en el nombre su compresión
+(`.gz` o `.zst`) y se descomprime según ese nombre, así que un archivo que cambia de compresión a
+mitad se restaura como antes. La caducidad de los respaldos antiguos los lee igual.
+
+Volver a ejecutar `dcctl install` con esta versión cambia el almacén relacional. `dcctl upgrade` no
+ejecuta la aplicación de la infraestructura, así que el almacén de eventos de una instancia
+existente sigue archivando con gzip. Es correcto, solo más costoso. Para cambiarlo, modifica su
+destino de respaldo:
+
+```bash
+kubectl -n dci-<instance> patch objectstores.barmancloud.cnpg.io dc-tsdb-backup --type merge \
+  -p '{"spec":{"configuration":{"wal":{"compression":"zstd"}}}}'
+```
+
+El plugin de respaldo vuelve a leer el destino para cada segmento que archiva, así que los
+segmentos archivados a partir de ese momento se comprimen con zstd, y ninguna base de datos se
+reinicia. Los segmentos que ya están en el archivo se quedan como están.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

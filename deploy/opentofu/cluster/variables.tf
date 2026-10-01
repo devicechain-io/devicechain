@@ -629,7 +629,8 @@ variable "backup_object_store_storage" {
     with 35% of it still free, what has landed here by the time one default
     event store (the instance root's timescale_storage, 32Gi) is FULL: up to
     about 1.9 KB of archived WAL per event for both databases (measured on GKE,
-    v0.18.x, against about 1 KB per event of stored data), plus one full base
+    v0.18.x, with the archive gzip-compressed -- zstd's, shipped since, is no
+    larger -- against about 1 KB per event of stored data), plus one full base
     backup of each database, bounded by its volume. That is about 98 GiB; 35% free is BackupDestinationFillingFast's gate,
     so neither backup-store alert fires before the event store's own alerts do.
     backend/cli/bootstrap/backupsizing_test.go holds this default to that rule.
