@@ -30,18 +30,25 @@ var Rules = []Rule{
 		},
 		Forbidden: Initialize,
 		Expect:    Start,
-		// 🔴 A FLOOR WITH ROOM UNDER IT, NOT TODAY'S COUNT. Four servers are built on
-		// the start path: the GraphQL manager's, core/service's probes-only server, the
-		// opt-in profiling listener (core.Microservice's own ExecuteStart, through
-		// NewHttpServerAt) and event-sources' device-ingest listener — three in core and
-		// one in event-sources — all reached through a component's ExecuteStart. Two leaves room for merging a listener or retiring
-		// the ingest transport without a failure that says nothing about the rule — and
-		// a floor people edit to make green is a floor that stops meaning anything.
+		// 🔴 A FLOOR WITH ROOM UNDER IT, NOT TODAY'S COUNT. The servers built on the start
+		// path are the GraphQL manager's, core/service's probes-only server, the opt-in
+		// profiling listener (core.Microservice's own ExecuteStart, through
+		// NewHttpServerAt) and event-sources' device-ingest listener, each reached through
+		// a component's ExecuteStart, plus the edge agent's metrics endpoint (also through
+		// NewHttpServerAt). That last one is built once per Agent.Run, but the analysis
+		// reaches it a different way: through an interface call, from event-sources'
+		// presence reconcile loop, whose runner interface Agent also satisfies. Running
+		// with -show-expected lists each site and the path it was found on. Two leaves
+		// room for merging a listener or retiring the ingest transport without a failure
+		// that says nothing about the rule — and a floor people edit to make green is a
+		// floor that stops meaning anything.
 		//
 		// There were five until the services with no GraphQL plane moved onto
 		// core/service, and the floor used to argue that its sites spanned BOTH entry
 		// shapes, so neither going blind could clear it. That is no longer true here:
-		// every site is behind ExecuteStart. The Starter-callback door is still watched,
+		// every site but the edge agent's is behind ExecuteStart, and that one comes in
+		// through event-sources' start callback only by the interface over-approximation
+		// above, which is not a door to rely on. The Starter-callback door is still watched,
 		// by the rules that have sites behind it — metrics-registered-once, where almost
 		// every site is an Initializer-callback site, and start-stop-symmetry, which reads
 		// nothing but callbacks. A door gone blind still fails the run, under those names.

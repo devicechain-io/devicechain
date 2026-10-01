@@ -18,9 +18,8 @@ import (
 // closely that the serve loop has not begun: start and an immediate stop, through the real
 // start, and a rebind of the same port, many times over. Whether a round lands in that
 // window is up to the scheduler, so this is not the gate for it. The endpoint runs on
-// core's HttpServer, and the window is held deterministically by that type's own tests
-// (TestHttpServerShutdownReleasesAListenerServeHasNotTaken and
-// TestHttpServerStopWaitsForAListenerCloseServeHasBegun); this one is here because it goes
+// core's HttpServer, and the window is held deterministically by that type's own test
+// (TestHttpServerStopWaitsForAListenerCloseServeHasBegun); this one is here because it goes
 // through start and stop the way Run does. The rebind is never retried: a retry is
 // exactly what passes a port released late.
 func TestEdgeMetricsStartThenImmediateStopReleasesThePort(t *testing.T) {
