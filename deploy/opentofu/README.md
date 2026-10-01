@@ -145,8 +145,11 @@ the *databases'* volumes until those fill and Postgres stops. An undersized buck
 the instance down by a route that points nowhere near the bucket, which is what the
 archive-lag alert exists to catch first. The default (160Gi) is sized so that one default
 event store fills before it does under sustained ingest; the variable's description says
-what that does not cover. The size is read only when the volume is created: a later
-apply leaves an existing store's volume alone, so grow one with `kubectl patch`.
+what that does not cover. Volume-snapshot base backups do not change it: a full base
+backup still lands in the store at creation and weekly, and the rule counts one base
+backup and the WAL of every event whatever the schedule. The size is read only when the
+volume is created: a later apply leaves an existing store's volume alone, so grow one
+with `kubectl patch`.
 
 The ingress controller and cert-manager are the TLS/ingress *capability*; the
 per-instance **Ingress resource + cert Issuer** that route to the app Services are

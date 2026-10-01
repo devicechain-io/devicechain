@@ -61,6 +61,30 @@ and a Google Cloud project with billing linked.
    regions** and **500 GB of SSD per region**. The default cluster uses 24 vCPUs,
    and 28 with a load-generator node.
 
+   **A default `--ha` install leaves almost none of a new project's 500 GB of
+   SSD spare.** With one instance, DeviceChain claims 348 GB of persistent
+   volumes, 160 GB of it the backup store; the
+   [prerequisites](https://docs.devicechain.io/deployment/bootstrap#prerequisites)
+   list them. Both of GKE's disk classes, `standard-rwo` (balanced) and
+   `premium-rwo` (SSD), count against the `SSD_TOTAL_GB` quota, and so do the
+   nodes' balanced boot disks: the default three nodes' boot disks add 150 GB,
+   498 GB in all, and the next disk takes it past 500. A load-generator node and the
+   extra node GKE adds to a pool while it
+   [upgrades it](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pool-upgrade-strategies#surge),
+   add 50 GB each; each further instance claims 144 GB more, and one that
+   ingests continuously also wants about 160 GB more backup store. A regional
+   cluster (`location` set to a region) triples the boot disks.
+
+   Request an `SSD_TOTAL_GB` quota of at least 600 GB for one instance on a
+   zonal cluster before you install. Without it, a volume that does not fit
+   stays `Pending` with `QUOTA_EXCEEDED` in its events, and a node-pool upgrade
+   cannot add its extra node.
+
+   Standard boot disks count against a different quota. To use them, set
+   `node_disk_type = "pd-standard"` in `terraform.tfvars` before the first
+   `tofu apply`, because changing it later replaces the node pool. They are
+   slower, and we have not measured DeviceChain on them.
+
    ```bash
    gcloud compute project-info describe --format=json \
      | jq '.quotas[] | select(.metric=="CPUS_ALL_REGIONS")'
@@ -68,7 +92,7 @@ and a Google Cloud project with billing linked.
      | jq '.quotas[] | select(.metric=="CPUS" or .metric=="SSD_TOTAL_GB")'
    ```
 
-   Ask for more under **IAM & Admin → Quotas** if you need it.
+   Ask for more under **IAM & Admin → Quotas**.
 
 ## Create the cluster
 

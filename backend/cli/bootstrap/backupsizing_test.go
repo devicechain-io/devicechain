@@ -64,7 +64,11 @@ const (
 	// round 2 cumulative over 19M events: ≈ 1,290 B. This is the TOP of the
 	// highest interval. It was measured at 4,000 events/s; at much lower rates the
 	// full-page images after each checkpoint may cost more per event, which is
-	// not measured.
+	// not measured. It was also measured with PostgreSQL's wal_compression off.
+	// Turning that on shrinks the WAL written, so it should make this an
+	// overestimate, but the archive gzips each segment as well (walCompression)
+	// and the two savings do not simply multiply. Lower it only from a run that
+	// reads the bucket with wal_compression on.
 	archiveBytesPerEventHigh int64 = 1880
 
 	// The fraction of the store still free when the event store is full. 35% is

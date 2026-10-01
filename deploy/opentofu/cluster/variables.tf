@@ -640,6 +640,11 @@ variable "backup_object_store_storage" {
         default then fills at about 60 events/s sustained with snapshots, and at
         about 29 if the relational store's log were all of it. The same test
         derives both.
+        Snapshots do not change this default either: the rule above counts one
+        full base backup of each database and the WAL of every event a full
+        event store holds, whatever the base-backup schedule, and the
+        object-store base backup still lands here at creation and weekly, so the
+        rule gives the same size in both modes.
       - several instances ingesting into this one store: it is the CLUSTER's. Add
         about this much again per instance that ingests continuously, or use an
         external destination.

@@ -3931,6 +3931,19 @@ state is written. A device seen for the first time is still created on its own. 
 doing: there is no schema change, and the previous `device-state` can run beside the new one
 during the upgrade.
 
+#### Check the disk quota before a new `--ha` install on a cloud provider {#next-disk-quota}
+
+With the larger [backup store](#next-backup-store-size), a default `dcctl install --ha` and one
+instance claim more persistent volume than a new Google Cloud project's regional SSD quota
+comfortably holds once the nodes' boot disks are counted too: in testing on Google Kubernetes
+Engine, an event-store volume stayed `Pending` with `QUOTA_EXCEEDED`. Before a new install on a
+cloud provider, check the disk quota. [Prerequisites](./bootstrap.md#prerequisites) gives the
+volume sizes, and the Google Kubernetes Engine guide in `deploy/gke` gives the quota to request.
+Taking base backups as [volume snapshots](./bootstrap.md#snapshot-base-backups) does not change
+the backup store's default size.
+
+Nothing to do at upgrade: an existing cluster keeps the volumes it has.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

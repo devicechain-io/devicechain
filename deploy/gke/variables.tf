@@ -47,7 +47,7 @@ variable "node_count" {
 }
 
 variable "node_disk_type" {
-  description = "Boot disk type for every node. The databases and NATS do NOT use it — they write to their own persistent volumes, whose class is chosen by the cluster's default StorageClass (see the README) — so the balanced disk is enough here and keeps the regional SSD quota for those volumes."
+  description = "Boot disk type for every node. The databases and NATS do NOT use it — they write to their own persistent volumes, whose class is chosen by the cluster's default StorageClass (see the README). pd-balanced and pd-ssd both count against the region's SSD_TOTAL_GB quota, which those volumes also draw on; pd-standard counts against a different quota but is slower, and is unmeasured for DeviceChain. Changing it replaces the node pool. The README's quota step gives the budget."
   type        = string
   default     = "pd-balanced"
 }
