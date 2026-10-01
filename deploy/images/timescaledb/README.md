@@ -44,7 +44,7 @@ about ten lines, and makes both pins ours.
 | `versions.conf` | The pins. Single source of truth — the Dockerfile, both CI workflows and `hack/migration-diff.sh` all read it. |
 | `Dockerfile` | CNPG `standard` base + the pinned TimescaleDB packages. Asserts its own contents. |
 | `build.sh` | Build for the local architecture from `versions.conf`. |
-| `smoke.sh` / `smoke.sql` | The functional gate: starts a server and asserts the TSL features ADR-026 depends on. |
+| `smoke.sh` / `smoke.sql` | The functional gate: starts a server and asserts the TSL features ADR-026 depends on, and that the WAL compression the event store sets (`lz4`) is built in and actually compresses page images. |
 | `verify-compat.sh` | The rolling-update gate. `--self-test` proves it can fail. |
 | `standalone.sh` | Runs the image as a plain throwaway server. **Test harness only.** |
 

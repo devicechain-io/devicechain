@@ -1096,6 +1096,17 @@ Each event-store instance has a 32Gi volume, so three of them under `--ha` (4Gi 
 about 1.1 GB more while backups keep up with it, so 32Gi holds about 27 million events: about
 seven hours of one tenant sending at its full default ceiling.
 
+The event store compresses the page images in its write-ahead log (`wal_compression = lz4`).
+After each checkpoint, the first change to a page writes the whole page into the log, and on this
+store most of those pages are index pages. In one comparison on a development build after v0.18.0,
+on a cluster of the same shape as in [Measured throughput](#measured-throughput), with tuning
+that differs from the rows there, at 5,200 events per second offered, compression cut the log written per
+stored event from about 3.0 KB to about 1.7 KB, and the checkpoints forced by the log's size fell
+by about the same proportion (from 5.8 to 3.2 per million events stored). It does not change what
+this volume holds: the log on it still takes about 1.1 GB while backups keep up with it, so the
+figure above stands. The [backup store sizing](#backup-store-size) was measured without
+compression and has not been re-measured with it. The relational store does not compress its log.
+
 With the [default backup store](#backup-store-size) and one instance, this volume is what fills
 first under sustained ingest, and `DatabaseVolumeFillingFast` warns before it does. If the backup
 store fills first (several instances on it, a smaller store, or an event store grown past its

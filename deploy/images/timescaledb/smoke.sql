@@ -197,4 +197,51 @@ END $$;
 CREATE TABLE inherited_check (t timestamptz NOT NULL, v int);
 SELECT create_hypertable('inherited_check', 't');
 
+-- 8. WAL compression. -----------------------------------------------------------
+-- The event store's Cluster sets wal_compression = lz4
+-- (deploy/opentofu/instance/main.tf). Postgres accepts only the methods it was
+-- BUILT with, and an invalid value in postgresql.conf stops the server from
+-- starting at all. So a base image without lz4 does not degrade: it makes every
+-- instance of the store refuse to start. Assert the method is built in, then that
+-- a page image really is written compressed with it.
+DO $$
+DECLARE vals text[];
+BEGIN
+  SELECT enumvals INTO vals FROM pg_settings WHERE name = 'wal_compression';
+  IF vals IS NULL OR NOT ('lz4' = ANY (vals)) THEN
+    RAISE EXCEPTION 'wal_compression cannot be lz4 on this build (it accepts %); the event store sets lz4 and would not start',
+      COALESCE(vals::text, '<no such setting>');
+  END IF;
+END $$;
+
+SET wal_compression = lz4;
+
+-- Behaviour, not just vocabulary: the first change to a page after a checkpoint
+-- writes a full-page image, and pg_walinspect reports how that image was stored.
+CREATE EXTENSION IF NOT EXISTS pg_walinspect;
+CREATE TABLE smoke_walc (id int PRIMARY KEY, pad text NOT NULL);
+INSERT INTO smoke_walc SELECT i, repeat('x', 200) FROM generate_series(1, 200) AS i;
+CHECKPOINT;
+SELECT set_config('dc.walc_start', pg_current_wal_insert_lsn()::text, false);
+UPDATE smoke_walc SET pad = pad || 'y' WHERE id = 1;
+SELECT set_config('dc.walc_end', pg_current_wal_insert_lsn()::text, false);
+
+DO $$
+DECLARE images int; lz4 int;
+BEGIN
+  SELECT count(*) FILTER (WHERE block_fpi_length IS NOT NULL AND block_fpi_length > 0),
+         count(*) FILTER (WHERE 'COMPRESS_LZ4' = ANY (block_fpi_info))
+    INTO images, lz4
+    FROM pg_get_wal_block_info(current_setting('dc.walc_start')::pg_lsn,
+                               current_setting('dc.walc_end')::pg_lsn);
+  -- This check's own positive control: a run that wrote no page image would
+  -- otherwise pass the lz4 check below having proved nothing.
+  IF images < 1 THEN
+    RAISE EXCEPTION 'no full-page image was written after the checkpoint, so this check proved nothing';
+  END IF;
+  IF lz4 < 1 THEN
+    RAISE EXCEPTION '% full-page image(s) written, none compressed with lz4', images;
+  END IF;
+END $$;
+
 \echo 'operand image smoke: PASS'

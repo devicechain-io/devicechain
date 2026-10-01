@@ -401,8 +401,8 @@ module "cnpg_tsdb" {
 
   # 🔑 NO max_connections OVERRIDE HERE — the relational store carries one and this
   # store deliberately does not. (This block DOES set `parameters`, further down,
-  # for timescaledb.telemetry_level; add to that map rather than starting a second
-  # one.)
+  # for timescaledb.telemetry_level and wal_compression; add to that map rather than
+  # starting a second one.)
   #
   # Exactly ONE service holds a pool against this store: event-management, the
   # only caller passing Persistence.Tsdb. That is 1 x 20 = 20 against 97 usable,
@@ -480,6 +480,32 @@ module "cnpg_tsdb" {
     # default; this is the half that stops it reporting, and the delete_job above
     # is the half that stops it confusing the oracle.
     "timescaledb.telemetry_level" = "off"
+
+    # Compress the full-page images in the write-ahead log. The first change to a
+    # page after each checkpoint logs the whole 8 KB page, and on this store most of
+    # those pages are leaves of the indexes keyed by a content digest, where every
+    # insert lands on a random leaf. At ten-minute soak scale the images were about
+    # half the log. Measured on a three-node GKE cluster at 5,200 events/s, same
+    # configuration back to back: WAL per event 3,042 -> 1,673 bytes, and checkpoints
+    # forced by max_wal_size 5.8 -> 3.2 per million events stored (the two windows
+    # differed in length, so the raw counts do not compare). Postgres applies it on
+    # reload; no instance restarts.
+    #
+    # 🔴 lz4 must be compiled into the operand image, or Postgres refuses to START
+    # with this file (and on a reload keeps the old value, so the failure waits for
+    # the next restart). The operand image's smoke test asserts it
+    # (deploy/images/timescaledb/smoke.sql, section 8): move one and move the other.
+    #
+    # max_wal_size is deliberately left alone: PostgresWALArchiveBacklog's threshold
+    # is derived from it (prometheusrule-database-backup.yaml).
+    #
+    # The relational store does NOT set this; the reason is on its parameters in the
+    # cluster root.
+    #
+    # backend/cli/bootstrap/walcompression_test.go reads this map and checks the
+    # rendered Cluster by value. It reads string literals only, and refuses any
+    # other line here rather than skip it.
+    "wal_compression" = "lz4"
   }
 
   # 🔑 NO depends_on, for the same reason as the broker above: both the namespace

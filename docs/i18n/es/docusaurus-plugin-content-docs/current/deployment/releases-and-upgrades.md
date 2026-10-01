@@ -4239,6 +4239,55 @@ predeterminado del almacén de respaldos.
 
 No hay nada que hacer en la actualización: un clúster existente conserva los volúmenes que tiene.
 
+#### Los almacenes de eventos nuevos comprimen su registro de escritura anticipada {#next-wal-compression}
+
+Un almacén de eventos creado con esta versión comprime las imágenes de página de su registro de
+escritura anticipada (`wal_compression = lz4`). En una comparación en una versión de desarrollo, a
+5200 eventos por segundo ofrecidos, eso redujo el registro escrito por evento almacenado de unos
+3,0 KB a unos 1,7 KB. Menos registro significa menos puntos de control forzados por su tamaño,
+menos que reproducir en las réplicas en espera y menos que comprimir y enviar al archivado.
+Consulta [Volumen del almacén de eventos](./bootstrap.md#event-store-volume). El almacén
+relacional no cambia.
+
+`dcctl upgrade` no ejecuta la aplicación de la infraestructura, así que el almacén de eventos de
+una instancia existente sigue escribiendo un registro sin comprimir. Es correcto, solo que más
+grande. Para activar la compresión en uno, comprueba primero que su imagen de base de datos puede
+usar `lz4`. En una imagen que no puede, el cambio no se aplica cuando la base de datos recarga su
+configuración, y la próxima vez que una instancia se reinicia puede no arrancar. Los comandos
+siguientes ejecutan `psql` en los pods de base de datos del almacén, donde no necesita contraseña.
+
+```bash
+pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
+for p in $pods; do
+  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc \
+    "SELECT 'lz4' = ANY (enumvals) FROM pg_settings WHERE name = 'wal_compression'"
+done
+```
+
+Continúa solo si cada línea imprime `t`. Después:
+
+```bash
+kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
+  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":"lz4"}}}}'
+```
+
+La base de datos recarga su configuración, y ninguna instancia se reinicia. Cuando el operador la
+ha aplicado, cada instancia del almacén devuelve `lz4`:
+
+```bash
+for p in $pods; do
+  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc 'SHOW wal_compression'
+done
+```
+
+Si alguna instancia sigue devolviendo `off`, quita la configuración de inmediato, antes de que
+nada se reinicie:
+
+```bash
+kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
+  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":null}}}}'
+```
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

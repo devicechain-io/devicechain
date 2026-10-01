@@ -3944,6 +3944,51 @@ the backup store's default size.
 
 Nothing to do at upgrade: an existing cluster keeps the volumes it has.
 
+#### New event stores compress their write-ahead log {#next-wal-compression}
+
+An event store created with this release compresses the page images in its write-ahead log
+(`wal_compression = lz4`). In one comparison on a development build, at 5,200 events per second
+offered, that cut the log written per stored event from about 3.0 KB to about 1.7 KB. Less log means fewer checkpoints forced by its
+size, less for the standbys to replay, and less for the archiver to compress and ship. See
+[Event store volume](./bootstrap.md#event-store-volume). The relational store is unchanged.
+
+`dcctl upgrade` does not run the infrastructure apply, so an existing instance's event store keeps
+writing an uncompressed log. That is correct, only larger. To turn compression on for one, first
+check that its database image can use `lz4`. On an image that cannot, the change is not applied
+when the database reloads, and the next time an instance restarts it may not start. The
+commands below run `psql` in the store's database pods, where it needs no password.
+
+```bash
+pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
+for p in $pods; do
+  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc \
+    "SELECT 'lz4' = ANY (enumvals) FROM pg_settings WHERE name = 'wal_compression'"
+done
+```
+
+Go on only if every line prints `t`. Then:
+
+```bash
+kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
+  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":"lz4"}}}}'
+```
+
+The database reloads its configuration, and no instance restarts. Once the operator has applied
+it, every instance of the store reports `lz4`:
+
+```bash
+for p in $pods; do
+  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc 'SHOW wal_compression'
+done
+```
+
+If any instance still reports `off`, remove the setting at once, before anything restarts:
+
+```bash
+kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
+  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":null}}}}'
+```
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
