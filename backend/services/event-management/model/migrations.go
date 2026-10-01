@@ -19,8 +19,11 @@ import (
 // CHANGING THE SCHEMA: append a migration here. Never edit the baseline — it builds from its own
 // frozen snapshot types precisely so it does not track the live models (see baseline_snapshot.go
 // and .agent-os/product/data-modeling.md). Anything appended must be individually re-runnable:
-// this area's DDL is non-transactional (Timescale forbids it), so a half-applied migration is
-// never rolled back and replays from the top on the next boot.
+// some of this area's DDL is non-transactional (Timescale refuses create_hypertable and the
+// policy calls inside a transaction block), so a half-applied migration is never rolled back
+// and replays from the top on the next boot. Index and key changes on a hypertable DO run in a
+// transaction, and the two migrations that make them (NewIndexTrimSchema,
+// NewTimeLeadingKeysSchema) depend on that; their doc comments say how.
 //
 // 🔴 THE BASELINE WAS RE-CUT ONCE AFTER THE SQUASH, and this is the record of it: the base event
 // gained event_id and its primary key moved from the natural key to (tenant_id, event_id,
@@ -43,6 +46,12 @@ import (
 // byte-identical on both Postgres majors, so no golden moved and no instance was recreated. The
 // paragraph above is about a re-cut that CHANGES what a fresh install builds, and that one still
 // costs a recreate and still needs a defect of that size to justify it. See CLAUDE.md.
+//
+// Measured since, on TimescaleDB 2.28.3: altering the primary key of a hypertable with
+// compressed chunks is NOT refused. NewTimeLeadingKeysSchema rebuilds events_pkey that way,
+// and its integration test runs it over compressed chunks. The digest that could not be
+// recomputed in SQL was the binding reason for the first re-cut; the record above is left as
+// it was written.
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
@@ -57,5 +66,10 @@ var (
 		// DROP-only on purpose: an index BUILD over live chunks would hold a SHARE lock
 		// against ingest for the whole build and could outlast the startup probe.
 		NewIndexTrimSchema(),
+		// Rebuilds the five identity keys to lead with time, and drops the four tenant-time
+		// indexes that makes redundant (see its doc comment). It BUILDS, unlike the trim, so
+		// it gates on how much uncompressed history a build must cover and refuses, changing
+		// nothing, past what fits the startup window.
+		NewTimeLeadingKeysSchema(),
 	}
 )

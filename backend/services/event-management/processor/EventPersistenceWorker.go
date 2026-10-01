@@ -51,7 +51,7 @@ type EventPersistenceResults struct {
 	// only the StateChange path sets it (its idempotency unique index absorbs a
 	// JetStream redelivery). When true the caller skips anchor persistence, which is
 	// now an optimization rather than the correctness guard it originally was:
-	// uq_event_anchors_idem (tenant_id, event_id, occurred_time, anchor_type,
+	// uq_event_anchors_idem (tenant_id, occurred_time, event_id, anchor_type,
 	// anchor_token) has since made the anchor set idempotent on its own, and
 	// CreateEventAnchors upserts against exactly those columns. The older comment here
 	// claimed event_anchors carried no unique index; that stopped being true when the
@@ -535,6 +535,12 @@ func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *g
 
 // anchorRows is an event's anchor set as event_anchors rows: one per resolved anchor,
 // each under the event's id, device, type and instant.
+//
+// 🔴 The instant MUST be the event's own, the one its base row is stored at. The
+// anchor-filtered event read (model.Api.Events, through anchorEventKeySubquery) matches an
+// anchor to its event on (occurred_time, event_id), so an anchor stamped at any other
+// instant — a reading's, or the time it was written — would make its event vanish from
+// that read. TestAnAnchorFilteredEventIsFoundThroughTheWriter pins it.
 func anchorRows(eventId []byte, event dmmodel.ResolvedEvent) []*model.EventAnchor {
 	anchors := make([]*model.EventAnchor, 0, len(event.Anchors))
 	for _, a := range event.Anchors {

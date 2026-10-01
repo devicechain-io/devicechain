@@ -18,7 +18,7 @@ import (
 )
 
 // newPayloadIdentityTestApi carries the production keys for the base event AND for the
-// payload tables: each child dedups on (tenant_id, payload_id, occurred_time), which is
+// payload tables: each child dedups on (tenant_id, occurred_time, payload_id), which is
 // what makes a redelivery a no-op for the rows the base-event key cannot cover.
 func newPayloadIdentityTestApi(t *testing.T) *Api {
 	t.Helper()
@@ -28,11 +28,11 @@ func newPayloadIdentityTestApi(t *testing.T) *Api {
 	require.NoError(t, db.AutoMigrate(
 		&Event{}, &LocationEvent{}, &MeasurementEvent{}, &AlertEvent{}), "migrate")
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_events_identity `+
-		`ON events (tenant_id, event_id, occurred_time);`).Error, "event identity key")
+		`ON events (tenant_id, occurred_time, event_id);`).Error, "event identity key")
 	for _, table := range []string{"location_events", "measurement_events", "alert_events"} {
 		require.NoError(t, db.Exec(
 			`CREATE UNIQUE INDEX uq_`+table+`_idem ON `+table+
-				` (tenant_id, payload_id, occurred_time);`).Error, "payload identity key on "+table)
+				` (tenant_id, occurred_time, payload_id);`).Error, "payload identity key on "+table)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})
 }

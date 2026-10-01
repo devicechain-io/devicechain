@@ -326,6 +326,16 @@ suponiendo que cada una de esas conexiones puede estar ejecutando una consulta l
 
 ## Notas prácticas {#practical-notes}
 
+- **Filtra por tiempo, y une los anclajes de un evento por su clave completa.** Las filas de
+  `analytics.events`, `analytics.measurement_events`, `analytics.location_events`,
+  `analytics.alert_events` y `analytics.event_anchors` están indexadas por inquilino y después por
+  tiempo, así que un rango de tiempo es el filtro más barato que puedes añadirles.
+  `analytics.state_change_events` está indexada por inquilino, dispositivo y después tiempo: dale un
+  filtro por dispositivo. Una fila de lectura, ubicación o alerta lleva su propio instante, que puede
+  ser anterior al de su evento, así que únelas con `analytics.events` por `event_id` con un rango de
+  tiempo en ambos lados. Un anclaje lleva el instante de su evento, así que une
+  `analytics.event_anchors` con `analytics.events` por `event_id` **y** `occurred_time`: solo por
+  `event_id`, la base de datos no puede localizar cada evento directamente.
 - **Consulta la agregación, no la tabla en bruto, para cualquier rango largo.** Es una agregación
   continua: el trabajo ya está hecho. Recorrer un mes de ella es barato; recorrer un mes de mediciones
   en bruto no lo es.

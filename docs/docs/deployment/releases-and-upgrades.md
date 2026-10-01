@@ -3790,10 +3790,11 @@ stored row now updates fewer indexes: a base event row three instead of five (fo
 when it carries an alternate id), a measurement row four instead of five, a location, alert or
 relationship-anchor row two instead of four, and a presence-change row one instead of four. A
 measurement event with one reading and no anchors, for example, updates seven indexes instead of
-ten.
+ten. [The event store's keys lead with time](#next-time-leading-keys), also in this release, lowers
+these counts again and gives the totals.
 
-- The indexes that stop an event being stored twice are unchanged, and every read
-  `event-management` serves is still served by an index.
+- Every read `event-management` serves is still served by an index. The indexes that stop an
+  event being stored twice are rebuilt by [that change](#next-time-leading-keys).
 - **A device's event list does more work on recent data.** The total shown with a device's
   event list, and a list of a device's events filtered by event type, now visit every one of the
   device's rows that is not yet compressed (the last week of data, by default) instead of only
@@ -3801,10 +3802,9 @@ ten.
   other tenant, so a busy device named `gateway-1` in one tenant also slows the total for
   `gateway-1` in another. Compressed data is read per device and tenant, as before. A device that
   sends events at a high rate shows this most.
-- **SQL and BI access.** A query on `analytics.event_anchors` or `analytics.state_change_events`
-  that filters on time alone now reads all of your tenant's rows in each not-yet-compressed chunk
-  the range touches (a day of data per chunk, by default), rather than only the rows in the
-  range. Add an anchor filter (`anchor_type` and `anchor_token`) or a device filter
+- **SQL and BI access.** A query on `analytics.state_change_events` that filters on time alone
+  now reads all of your tenant's rows in each not-yet-compressed chunk the range touches (a day of
+  data per chunk, by default), rather than only the rows in the range. Add a device filter
   (`device_token`) and it is served by an index as before. The other views are unaffected.
 - **At the upgrade.** The first time the new `event-management` starts, it removes the indexes
   one at a time. Removing one needs a moment when no other transaction is using that table, and
@@ -4100,6 +4100,114 @@ recreated.
   service's own request, or set `useMeasuredRequests: false`.
 - A new key, `eventPathSpread`, is on for the five services. A values file that sets it on another
   service spreads that service with them.
+
+#### The event store's keys lead with time {#next-time-leading-keys}
+
+The keys that stop an event being stored twice now start with the tenant and the event's time,
+instead of the tenant and a digest of the event. A new event's key then lands next to the previous
+one instead of at a random place in the index, so the database rewrites far fewer index pages. With
+the time first, the same keys also answer every read of a tenant's events by time, so four more
+indexes are removed: the tenant-and-time index of base events, measurements, locations and alerts.
+
+Together with [the indexes removed above](#next-event-store-indexes), each row stored by this
+release updates fewer indexes than in `v0.18.0`: a base event row two instead of five (three instead
+of six when it carries an alternate id), a measurement row three instead of five, a location or
+alert row one instead of four, a relationship-anchor row two instead of four, and a presence-change
+row one instead of four. A measurement event with one reading and no anchors updates five indexes
+instead of ten. In one comparison on a development build at 6,000 events per second, which rebuilt
+the base event and measurement keys and removed their two tenant-and-time indexes, the write-ahead
+log per stored event fell from about 2.3 KB to about 1.3 KB, and the slowest 1% of the event
+store's write batches took about 50 ms instead of about 170 ms.
+
+- Events are still stored once, and every read `event-management` serves is still served by an
+  index.
+- **A device's event list, when the event store holds few devices.** When there are few distinct
+  device tokens across all tenants (in our tests, 40 rather than 100), the database may now read a
+  device's newest events by walking its tenant's newest events until it has a page of them. That is
+  quick while the device is active. For a device that has been quiet while the others kept sending,
+  the first page can take noticeably longer than before. The total shown with the list is not
+  affected.
+- **SQL and BI access.** A query on a tenant's events, readings, locations, alerts or anchors that
+  filters on time alone is served by an index. To join `analytics.event_anchors` to
+  `analytics.events`, join on both `event_id` and `occurred_time`: on `event_id` alone the database
+  can no longer look each event up directly. See [Practical notes](../guides/sql-and-bi-access.md#practical-notes).
+
+##### Check before you upgrade {#next-time-leading-keys-check}
+
+The first start of the new `event-management` rebuilds the keys over every row of the five tables
+that is not yet compressed: by default, the last week or so. **An instance with more than 4,000,000
+such rows cannot be upgraded in place.** A base event is one row, plus one row for each reading,
+location or alert it carries, plus one for each relationship anchor. At one reading and one anchor
+an event, 4 million rows is a week at an average of about 2 events per second, so most instances
+with real traffic are over the line.
+
+Count yours before you upgrade. Open `psql` on the event store (the namespace is `dci-` plus the
+instance id; the database is the instance id on its own):
+
+```bash
+kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
+```
+
+The count only reads, so any of the event store's pods will do, the primary or a replica. If
+`dc-tsdb-1` is not there, `kubectl -n dci-<instance-id> get pods` lists the other `dc-tsdb-` pods.
+
+Then run the same count the upgrade makes. It reads every row that is not yet compressed, so on a
+large store it takes a while:
+
+```sql
+DO $$
+DECLARE c record; n bigint := 0; k bigint;
+BEGIN
+  FOR c IN SELECT format('%I.%I', chunk_schema, chunk_name) AS chunk
+           FROM timescaledb_information.chunks
+           WHERE hypertable_schema = 'event-management'
+             AND hypertable_name IN ('events', 'measurement_events', 'location_events',
+                                     'alert_events', 'event_anchors')
+  LOOP
+    EXECUTE 'SELECT count(*) FROM ONLY ' || c.chunk INTO k;
+    n := n + k;
+  END LOOP;
+  RAISE NOTICE 'rows to rebuild: %', n;
+END $$;
+```
+
+If it prints more than `4000000`, do not upgrade this instance in place: export what you need,
+then recreate it with `dcctl destroy` and `dcctl bootstrap` on the new release.
+
+:::caution Export first — recreation discards your data
+`dcctl destroy` removes the instance's databases: every tenant, device, device definition,
+dashboard and user, and all of its events, not only the event history. There is no in-place path
+that keeps an instance over the line across this release.
+:::
+
+##### During the upgrade {#next-time-leading-keys-during}
+
+- The new `event-management` rebuilds the keys one table at a time. While it rebuilds a table,
+  reads and writes of that table wait: a few seconds in the expected case, and at most 45 seconds
+  for each table (up to 5 seconds to lock it, then up to 40 to rebuild). The previous
+  `event-management` keeps receiving events; a batch it was writing waits with the table, and a
+  batch held long enough is delivered again and stored once. The whole rebuild stops after a
+  minute and continues on the next start.
+- **If there is too much to rebuild,** the new `event-management` stops before changing anything,
+  and its log says why. `dcctl upgrade` then reports that it did not finish rolling out: every
+  other service runs the new release, and the previous `event-management` keeps storing events
+  until you recreate the instance, as above.
+- **If one table's rebuild takes longer than 40 seconds** once the table is locked, it is undone,
+  the table keeps its previous key, and `event-management` stops with an error that says so. From
+  then on it stops at once on every start without touching the table, so ingest does not stall
+  again on each restart. Recreate the instance, or, to try once more (for example after moving the
+  event store to faster storage), run the `COMMENT ON INDEX` statement the error gives.
+- If another session keeps a table busy, or the minute runs out, `event-management` stops with an
+  error that names the table and lists the tables already rebuilt, and continues from there when
+  it restarts, as for [the index removal above](#next-event-store-indexes). The error carries a
+  query that lists the sessions holding the table. Rebuilding a table also locks every chunk of it;
+  if the database runs out of lock slots, the error says so and names the setting to raise.
+- Going back to `v0.18.0` keeps the new keys, and `v0.18.0` stores and reads events with them.
+  One read is slower there: `v0.18.0` lists the events recorded against a relationship anchor by
+  looking each one up by its digest alone, which the new base-event key cannot do directly, so that
+  list reads through the tenant's events in the time range asked for, compressed ones included.
+  The same applies while the previous `event-management` keeps running because a rebuild stopped
+  after the base events table was already rebuilt. The new release reads that list on the key.
 
 ### The one-time durable-ingest cutover
 

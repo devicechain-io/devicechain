@@ -115,6 +115,31 @@ func newPostgresManagerWith(t *testing.T, instance string, migrations []*gormigr
 	return mgr
 }
 
+// migrationsThrough returns Migrations up to and including id; migrationsBefore, up to but
+// not including it. Both fail the test if id is not in the chain. A test of one appended
+// migration names it by id rather than by position, so appending the next one does not
+// silently change which schema the test starts from.
+func migrationsThrough(t *testing.T, id string) []*gormigrate.Migration {
+	t.Helper()
+	return Migrations[:migrationIndex(t, id)+1]
+}
+
+func migrationsBefore(t *testing.T, id string) []*gormigrate.Migration {
+	t.Helper()
+	return Migrations[:migrationIndex(t, id)]
+}
+
+func migrationIndex(t *testing.T, id string) int {
+	t.Helper()
+	for i, m := range Migrations {
+		if m.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("migration %s is not in the chain", id)
+	return -1
+}
+
 // freshInstance returns an instance id no earlier run has used, and drops its database
 // when the test ends. A test that migrates an OLD schema and then applies a newer
 // migration needs this: on a server that has run the suite before, a fixed instance

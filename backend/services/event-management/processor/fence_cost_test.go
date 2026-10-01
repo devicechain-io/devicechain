@@ -80,13 +80,13 @@ func newFencedPersistenceWorker(t *testing.T) (*EventPersistenceWorker, *gorm.DB
 	// alternate id and instant, which PostgreSQL refuses (23505), and the persistence
 	// writer's alternate-id skip could be removed with nothing turning red.
 	for _, stmt := range []string{
-		`CREATE UNIQUE INDEX idx_events_identity ON events (tenant_id, event_id, occurred_time);`,
+		`CREATE UNIQUE INDEX idx_events_identity ON events (tenant_id, occurred_time, event_id);`,
 		`CREATE UNIQUE INDEX idx_events_tenant_alt_id ON events (tenant_id, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`,
-		`CREATE UNIQUE INDEX uq_measurement_events_idem ON measurement_events (tenant_id, payload_id, occurred_time);`,
-		`CREATE UNIQUE INDEX uq_location_events_idem ON location_events (tenant_id, payload_id, occurred_time);`,
-		`CREATE UNIQUE INDEX uq_alert_events_idem ON alert_events (tenant_id, payload_id, occurred_time);`,
+		`CREATE UNIQUE INDEX uq_measurement_events_idem ON measurement_events (tenant_id, occurred_time, payload_id);`,
+		`CREATE UNIQUE INDEX uq_location_events_idem ON location_events (tenant_id, occurred_time, payload_id);`,
+		`CREATE UNIQUE INDEX uq_alert_events_idem ON alert_events (tenant_id, occurred_time, payload_id);`,
 		`CREATE UNIQUE INDEX uq_state_change_events_idem ON state_change_events (tenant_id, device_token, occurred_time, state, session_id);`,
-		`CREATE UNIQUE INDEX uq_event_anchors_idem ON event_anchors (tenant_id, event_id, occurred_time, anchor_type, anchor_token);`,
+		`CREATE UNIQUE INDEX uq_event_anchors_idem ON event_anchors (tenant_id, occurred_time, event_id, anchor_type, anchor_token);`,
 	} {
 		if err := db.Exec(stmt).Error; err != nil {
 			t.Fatalf("create index: %v", err)

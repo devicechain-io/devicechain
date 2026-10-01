@@ -269,6 +269,11 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 	// let one tenant's parent event suppress another tenant's identical-key event.
 	// tenant_id is stamped onto each row by the tenant-scope create callback before
 	// the insert, so the value is present when the conflict is evaluated.
+	//
+	// ON CONFLICT infers the key by its column SET, so this list need not follow the
+	// key's (tenant_id, occurred_time, event_id) order. A pod still running the previous
+	// release, whose list is the same set, infers the rebuilt key the same way, which is
+	// what keeps a rolling upgrade writing (NewTimeLeadingKeysSchema).
 	return rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"}},
 		DoNothing: true,
@@ -333,6 +338,9 @@ func (api *Api) CreateAlertEvent(ctx context.Context, request *AlertEventCreateR
 // base-event key cannot cover payload rows, so a redelivery of an event carrying no
 // alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
 // envelope owning N copies of its own rows.
+//
+// The key is (tenant_id, occurred_time, payload_id); ON CONFLICT infers it by the column
+// SET, so this list's order is not the key's, and need not be (NewTimeLeadingKeysSchema).
 var payloadConflict = clause.OnConflict{
 	Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
 	DoNothing: true,
@@ -629,6 +637,9 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 	// no unique index to stop it. The in-tree comment on that skip already warned "a plain
 	// re-insert would duplicate the anchor set"; it was right, and it only guarded one of
 	// the four paths that reach here.
+	//
+	// The key is (tenant_id, occurred_time, event_id, anchor_type, anchor_token); ON
+	// CONFLICT infers it by the column SET, so this list's order need not match it.
 	return rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"},

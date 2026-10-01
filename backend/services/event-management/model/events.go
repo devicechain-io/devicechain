@@ -45,8 +45,10 @@ type Event struct {
 
 // DefaultOrder implements rdb.Sortable. The event tables are the exception to the
 // registry default: there is no id and no created_at here at all — the base event's
-// primary key is the composite (tenant_id, event_id, occurred_time) — so the order is
-// time-then-identity rather than created_at-then-id.
+// primary key is the composite (tenant_id, occurred_time, event_id) — so the order is
+// time-then-identity rather than created_at-then-id. It is that key read backward, so a
+// tenant-wide page needs no sort; the payload tables' unique keys
+// (tenant_id, occurred_time, payload_id) do the same for their DefaultOrder.
 //
 // occurred_time alone is NOT total. A device that samples two sensors and publishes
 // each as its own message under one shared timestamp produces rows that tie, and a tie
