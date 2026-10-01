@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -256,15 +258,18 @@ func TestHttpServerLifecycleOverARealListener(t *testing.T) {
 //
 // http.Server.Shutdown closes only the listeners Serve has already registered. Start binds
 // synchronously but hands the listener to Serve in a goroutine, so a Shutdown that wins
-// that race used to leave the socket bound: Serve later saw the server shutting down and
-// closed it on its way out, after Shutdown had already reported a clean stop. A restart on
-// the same port, which is what a production restart does, then failed with "address
-// already in use". Each round here is start, immediate stop, and a rebind of the same
-// port. The window is a scheduling race, so this is a probabilistic check rather than a
-// deterministic one, and a weak one: with the fix removed it fails only rarely and can
-// pass many runs in a row. The deterministic form of this check is
-// TestHttpServerShutdownReleasesAListenerServeHasNotTaken; this one stays because it goes
-// through Start and Serve as a service does.
+// that race finds nothing to close: Serve later sees the server shutting down and closes
+// the listener on its way out. Unless Shutdown waits for that, it reports a clean stop
+// over a bound socket, and a restart on the same port, which is what a production restart
+// does, fails with "address already in use". Each round here is start, immediate stop,
+// and a rebind of the same port. The window is a scheduling race, so this is a
+// probabilistic check rather than a deterministic one, and a weak one: with the wait
+// removed it fails only rarely and can pass many runs in a row. The window is held
+// deterministically by TestHttpServerStopWaitsForAListenerCloseServeHasBegun. This one
+// stays because it goes through Start and Serve as a service does.
+//
+// The rebind is strict and is never retried. Every way this test has to fail is the port
+// being released LATE, and a retry is exactly what passes a late release.
 func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
 	ms := &Microservice{FunctionalArea: "immediate-stop"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
@@ -274,9 +279,21 @@ func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
 		if err := srv.Start(); err != nil {
 			t.Fatalf("round %d: Start: %v", i, err)
 		}
+		srv.mu.Lock()
+		bound := srv.ln
+		srv.mu.Unlock()
 		addr := srv.Addr()
 		if err := srv.Shutdown(context.Background()); err != nil {
 			t.Fatalf("round %d: Shutdown: %v", i, err)
+		}
+		// The listener Start bound has been CLOSED by the time Shutdown returns. This
+		// sees the close having begun, not the socket having been released (a close
+		// another goroutine started but has not finished already reads as closed here),
+		// so the release itself is checked by the rebind below and, deterministically, by
+		// TestHttpServerStopWaitsForAListenerCloseServeHasBegun.
+		if err := listenerControl(bound); !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("round %d: the listener Start bound on %s was not closed when Shutdown "+
+				"returned: control = %v, want %v", i, addr, err, net.ErrClosed)
 		}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -286,57 +303,238 @@ func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
 	}
 }
 
-// The deterministic form of the test above. That test reaches the window by racing
-// Start's serve goroutine and wins the race only in some runs, so a regression that drops
-// Shutdown's own listener close passes it in the runs it loses. This one CONSTRUCTS the
-// window instead: the listener is bound and recorded, exactly as Start leaves it on the
-// line before its goroutine is scheduled, and Serve has never been given it. Deleting the
-// close then fails here on every run.
-//
-// It sets the field directly because that is the only way to hold a server in that state
-// without adding a seam to production code. It differs from the real window in one
-// respect: Serve never runs here, whereas in the real window Serve runs later, finds the
-// server shutting down, returns ErrServerClosed and closes the listener a second time on
-// its way out. That later close is harmless, and the end-to-end test above covers it.
-func TestHttpServerShutdownReleasesAListenerServeHasNotTaken(t *testing.T) {
-	srv := NewHttpServerForHandler(0, http.NotFoundHandler())
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+// listenerControl runs a no-op against the listener's socket, which fails with
+// net.ErrClosed once anyone has begun closing it.
+func listenerControl(ln net.Listener) error {
+	sc, ok := ln.(syscall.Conn)
+	if !ok {
+		return errors.New("listener does not expose its socket")
+	}
+	rc, err := sc.SyscallConn()
 	if err != nil {
-		t.Fatalf("binding: %v", err)
+		return err
 	}
-	t.Cleanup(func() { _ = ln.Close() })
-	srv.mu.Lock()
-	srv.ln = ln
-	srv.mu.Unlock()
-	addr := ln.Addr().String()
+	return rc.Control(func(uintptr) {})
+}
 
-	// Positive control: the port really is held. Without it, a successful rebind below
-	// could mean the fixture never held the port rather than that Shutdown released it.
-	if probe, err := net.Listen("tcp", addr); err == nil {
-		probe.Close()
-		t.Fatalf("rebinding %s succeeded BEFORE Shutdown; the fixture does not hold the port", addr)
+// stallingListener stands in for a TCP listener whose close another goroutine has begun but
+// not finished. It mirrors how the runtime closes a socket two goroutines close at once:
+// the FIRST Close performs the release and does not return until it is done; any other
+// Close returns net.ErrClosed immediately, without waiting. Here the first close is held
+// open until the test opens gate, which stands in for that goroutine being descheduled
+// mid-close.
+type stallingListener struct {
+	net.Listener // a real listener on 127.0.0.1:0; Addr and Accept delegate to it
+
+	first      atomic.Bool
+	closeBegun chan struct{} // closed when the first Close starts
+	laterClose chan struct{} // closed when any later Close is called
+	laterOnce  sync.Once
+	gate       chan struct{} // the first Close releases the socket only after this closes
+	released   atomic.Bool   // set once the real socket has been closed
+}
+
+func (l *stallingListener) Close() error {
+	if !l.first.CompareAndSwap(false, true) {
+		l.laterOnce.Do(func() { close(l.laterClose) })
+		return net.ErrClosed
 	}
+	close(l.closeBegun)
+	<-l.gate
+	err := l.Listener.Close()
+	l.released.Store(true)
+	return err
+}
 
-	if err := srv.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown = %v, want nil", err)
+// Shutdown and Close must not return while a close of the listener that the serve loop
+// began is still in progress.
+//
+// When a stop lands before Serve has registered the listener, net/http's shutdown has
+// nothing to close, and Serve returns at once and closes the listener on its way out. A
+// stop that does not wait for that close to finish reports success over a bound port.
+// This test builds that state deterministically: net/http's shutdown is latched before
+// Start, so Serve takes the early return, and its close is held open while the stop has
+// every chance to return.
+//
+// The wait must not be bounded by the stop's deadline either, which the expired-deadline
+// case pins: a stop that gave up waiting would return over the same bound port.
+//
+// And the stop must not close the listener itself. The serve loop is the one closer, and a
+// second one is how the port came to be released late in the first place: of two
+// concurrent closes, only the first waits for the socket to be released, so a stop that
+// closed it too and returned on its own close's word would be back to reporting success
+// over a bound port the moment the wait went. This fixture counts the closes, so a stop
+// that adds its own fails here even with the wait in place.
+func TestHttpServerStopWaitsForAListenerCloseServeHasBegun(t *testing.T) {
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, stop := range []struct {
+		name string
+		call func(*HttpServer) error
+		// okErr reports whether the error the stop returned is acceptable. Only the
+		// expired-deadline case may see one: whether net/http reports the deadline when
+		// there is nothing left to drain depends on the order it checks things in, which
+		// is not what this test is about.
+		okErr func(error) bool
+	}{
+		{"Shutdown", func(s *HttpServer) error { return s.Shutdown(context.Background()) },
+			func(err error) bool { return err == nil }},
+		{"Close", func(s *HttpServer) error { return s.Close() },
+			func(err error) bool { return err == nil }},
+		{"Shutdown with an expired deadline", func(s *HttpServer) error { return s.Shutdown(expired) },
+			func(err error) bool { return err == nil || errors.Is(err, context.Canceled) }},
+	} {
+		t.Run(stop.name, func(t *testing.T) {
+			inner, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("binding: %v", err)
+			}
+			fake := &stallingListener{
+				Listener:   inner,
+				closeBegun: make(chan struct{}),
+				laterClose: make(chan struct{}),
+				gate:       make(chan struct{}),
+			}
+			var gateOnce sync.Once
+			openGate := func() { gateOnce.Do(func() { close(fake.gate) }) }
+			// A failed assertion must not leave Serve's close blocked on the gate.
+			t.Cleanup(func() {
+				openGate()
+				_ = inner.Close()
+			})
+
+			srv := NewHttpServerForHandler(0, http.NotFoundHandler())
+			srv.listen = func(string, string) (net.Listener, error) { return fake, nil }
+
+			// Latch net/http's shutdown before Start. This is the state a stop that beat
+			// the serve goroutine leaves behind: Serve refuses to register the listener,
+			// returns ErrServerClosed, and closes the listener itself on its way out.
+			_ = srv.server.Shutdown(context.Background())
+
+			if err := srv.Start(); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			// Positive control: without it, a stop that waits for nothing would pass
+			// below simply because the fixture never reached the window.
+			select {
+			case <-fake.closeBegun:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Serve never began closing the listener; the fixture did not reach the window")
+			}
+
+			type result struct {
+				err              error
+				releasedAtReturn bool
+			}
+			results := make(chan result, 1)
+			go func() {
+				err := stop.call(srv)
+				results <- result{err: err, releasedAtReturn: fake.released.Load()}
+			}()
+
+			select {
+			case r := <-results:
+				madeOwnClose := false
+				select {
+				case <-fake.laterClose:
+					madeOwnClose = true
+				default:
+				}
+				t.Fatalf("%s returned (err=%v) while the close Serve began was still in progress: "+
+					"released=%v at return, want true (the stop made its own close: %v); a restart "+
+					"on this port would fail with \"address already in use\"",
+					stop.name, r.err, r.releasedAtReturn, madeOwnClose)
+			case <-time.After(250 * time.Millisecond):
+				// Still waiting, which is right: the socket has not been released.
+			}
+
+			openGate()
+			var r result
+			select {
+			case r = <-results:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s did not return after Serve's close of the listener finished", stop.name)
+			}
+			if !stop.okErr(r.err) {
+				t.Errorf("%s = %v, want a clean stop", stop.name, r.err)
+			}
+			if !r.releasedAtReturn {
+				t.Errorf("%s returned before the listener's socket was released", stop.name)
+			}
+			select {
+			case <-fake.laterClose:
+				t.Errorf("%s closed the listener itself as well as the serve loop; the serve "+
+					"loop must be its only closer, because a concurrent second close returns "+
+					"before the socket is released", stop.name)
+			default:
+			}
+			// The kernel agrees: the port is free.
+			rebound, err := net.Listen("tcp", fake.Addr().String())
+			if err != nil {
+				t.Fatalf("rebinding %s after %s returned: %v", fake.Addr(), stop.name, err)
+			}
+			rebound.Close()
+		})
+	}
+}
+
+// Close on its own must stop a server whose serve loop has registered the listener, and
+// release the port before it returns.
+//
+// Every caller in the tree reaches Close only after a Shutdown, by which time the serve
+// loop has exited and Close's wait is already satisfied. That hides the order Close's two
+// steps must run in: the serve loop exits only once net/http's Close has closed the
+// listener it registered, so a Close that waited for the serve loop FIRST would wait
+// forever. This is the case that can see it.
+func TestHttpServerCloseStopsAServingServer(t *testing.T) {
+	ms := &Microservice{FunctionalArea: "close-alone"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	gate := NewReadinessGate()
+	gate.MarkReadyWithoutAuthSurface()
+	ms.RegisterProbes(gate)
+
+	srv := ms.NewHttpServer(0)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	addr := srv.Addr()
+
+	// A served request proves Serve has registered the listener, so this is the path
+	// where net/http owns the close, not the pre-Serve window.
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	resp.Body.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- srv.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return on a serving server; it must close the listener " +
+			"before it waits for the serve loop that only that close ends")
 	}
 	rebound, err := net.Listen("tcp", addr)
 	if err != nil {
-		t.Fatalf("rebinding %s after Shutdown returned: %v; Shutdown left a listener it bound "+
-			"itself open because Serve had not yet taken it", addr, err)
+		t.Fatalf("rebinding %s after Close returned: %v", addr, err)
 	}
 	rebound.Close()
 }
 
-// Closing the listener must not cut off a request that is already being served, and must
-// not replace what Shutdown reports.
+// Shutdown must not cut off a request that is already being served, and must report
+// net/http's result.
 //
-// The scope of this test is narrower than it may look. It pins two things about the
-// listener close Shutdown performs after net/http's own Shutdown: that closing a LISTENER
-// does not sever a connection it already accepted, and that the error Shutdown returns is
-// net/http's (here, the expired deadline), not the result of the close. A forceful close
-// in its place (http.Server.Close) would get both wrong, and this is the test that says so.
+// The scope of this test is narrower than it may look. It pins two things about what
+// Shutdown does around net/http's own Shutdown: that releasing the LISTENER does not sever
+// a connection it already accepted, and that the error Shutdown returns is net/http's
+// (here, the expired deadline), not something of its own. A forceful close in its place
+// (http.Server.Close) would get both wrong, and this is the test that says so.
 //
 // It does NOT claim that a request outliving a Shutdown whose deadline has expired is
 // desirable. That is simply net/http's behaviour: Shutdown never closes active
@@ -400,7 +598,7 @@ func TestHttpServerShutdownLetsAnInFlightRequestFinish(t *testing.T) {
 	defer cancel()
 	if err := srv.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Shutdown with a request in flight past its deadline = %v, want %v; Shutdown "+
-			"must report net/http's result, not the listener close's", err, context.DeadlineExceeded)
+			"must report net/http's result", err, context.DeadlineExceeded)
 	}
 
 	// Shutdown has returned, and has closed the listener. The request is still running.
@@ -427,12 +625,11 @@ func TestHttpServerShutdownLetsAnInFlightRequestFinish(t *testing.T) {
 // Shutdown may be called from several goroutines at once, and every call must succeed.
 //
 // No caller in the tree does this today; the lifecycle stops are sequential. What this
-// test is for is the -race run: by the time any of these calls closes the listener,
-// net/http's Shutdown has already closed it and waited for Serve to return, so EVERY call
-// closes an already-closed listener, concurrently with the others. Under -race it checks
-// that none of that races; without -race it proves only that no call panics, that the
-// ignored error from the repeated close never surfaces as a failed stop, and that the port
-// ends up free.
+// test is for is the -race run: every call goes through net/http's Shutdown, which closes
+// the registered listener once, and then waits on the same served channel, concurrently
+// with the others. Under -race it checks that none of that races; without -race it proves
+// only that no call panics or hangs, that none of the stops reports a failure, and that
+// the port ends up free.
 func TestHttpServerShutdownIsSafeToCallConcurrently(t *testing.T) {
 	ms := &Microservice{FunctionalArea: "concurrent-stop"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())

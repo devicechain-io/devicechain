@@ -14,46 +14,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// stop must release the metrics port before it returns, even when the serve goroutine
-// start launched has not yet run.
-//
-// http.Server.Shutdown closes only the listeners Serve has already registered, and start
-// hands its listener to Serve in a goroutine. This test builds that window directly: the
-// endpoint holds a bound listener and a built server, exactly as start leaves them on the
-// line before its goroutine is scheduled, and Serve has never been given the listener.
-// Racing start for the window instead would catch a regression only in the runs that win
-// the race. The fields are set directly because that is the only way to hold the endpoint
-// in that state without adding a seam to production code.
-func TestEdgeMetricsStopReleasesAListenerServeHasNotTaken(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("binding: %v", err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	addr := ln.Addr().String()
-	m := &edgeMetrics{srv: &http.Server{Handler: http.NotFoundHandler()}, ln: ln, addr: addr}
-
-	// Positive control: the port really is held. Without it, a successful rebind below
-	// could mean the fixture never held the port rather than that stop released it.
-	if probe, err := net.Listen("tcp", addr); err == nil {
-		probe.Close()
-		t.Fatalf("rebinding %s succeeded BEFORE stop; the fixture does not hold the port", addr)
-	}
-
-	m.stop()
-
-	rebound, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("rebinding %s after stop returned: %v; stop left the metrics listener bound "+
-			"because Serve had not yet taken it, so a restart on the same port would fail", addr, err)
-	}
-	rebound.Close()
-}
-
-// The end-to-end companion of the test above: start and an immediate stop, through the
-// real start, and a rebind of the same port, many times over. Whether a round lands in
-// the pre-Serve window is up to the scheduler, so this cannot be the gate for that window;
-// it is here because it goes through start and Serve the way Run does.
+// stop must release the metrics port before it returns, even when it follows start so
+// closely that the serve loop has not begun: start and an immediate stop, through the real
+// start, and a rebind of the same port, many times over. Whether a round lands in that
+// window is up to the scheduler, so this is not the gate for it. The endpoint runs on
+// core's HttpServer, and the window is held deterministically by that type's own test
+// (TestHttpServerStopWaitsForAListenerCloseServeHasBegun); this one is here because it goes
+// through start and stop the way Run does. The rebind is never retried: a retry is
+// exactly what passes a port released late.
 func TestEdgeMetricsStartThenImmediateStopReleasesThePort(t *testing.T) {
 	healthz := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	for i := 0; i < 300; i++ {
@@ -73,7 +41,7 @@ func TestEdgeMetricsStartThenImmediateStopReleasesThePort(t *testing.T) {
 
 // stop is a GRACEFUL stop: it waits for a scrape already being served to finish, and the
 // scrape gets its answer. Closing the listener alone would also release the port, which
-// is all the tests above can see, so without this one the Shutdown in stop could be
+// is all the test above can see, so without this one the Shutdown in stop could be
 // deleted and every test would still pass while stop stopped draining: it would return
 // with the request still running, and an in-process restart would leave that connection
 // and its serve goroutine behind.

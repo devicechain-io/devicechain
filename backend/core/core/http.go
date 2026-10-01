@@ -126,12 +126,23 @@ func (ms *Microservice) RegisterProbes(gate *ReadinessGate) {
 type HttpServer struct {
 	server *http.Server
 
-	// mu guards ln and stopped. The lifecycle callers are sequential, so it is not
+	// listen binds the socket Start serves. The constructor always sets it to net.Listen;
+	// it is a field only so a test can hand Serve a listener whose close it controls,
+	// which is the one way to hold open the window Shutdown has to wait out (see
+	// Shutdown). There is deliberately no fallback for a nil one: a server built without
+	// the constructor panics in Start rather than binding through a second path.
+	listen func(network, address string) (net.Listener, error)
+
+	// mu guards ln, served and stopped. The lifecycle callers are sequential, so it is not
 	// there to order Start against Shutdown — it is there because Addr is the natural
 	// way for anything else to discover the bound port, and reading a field another
 	// goroutine writes is a data race whether or not the values ever disagree.
-	mu      sync.Mutex
-	ln      net.Listener
+	mu sync.Mutex
+	ln net.Listener
+	// served is closed when the goroutine Start launched has returned from Serve, and
+	// therefore after Serve's own deferred close of the listener has finished. Start
+	// sets it together with ln, so it is non-nil whenever ln is.
+	served  chan struct{}
 	stopped bool
 }
 
@@ -197,8 +208,9 @@ type HttpServerOptions struct {
 	// that serves ordinary bounded requests — device ingest — sets it.
 	ReadTimeout time.Duration
 	// ConnState, when non-nil, is net/http's per-connection state hook. It runs on the
-	// connection's own goroutine for every transition, so an implementation must be
-	// cheap and must not block.
+	// connection's own goroutine for every transition but the first — StateNew runs on
+	// the serve loop's goroutine, which Shutdown and Close wait for — so an
+	// implementation must be cheap and must not block.
 	//
 	// 🔴 IT CANNOT TELL YOU WHETHER A REQUEST WAS SERVED, which is the thing a caller
 	// reaches for it wanting to know. StateActive fires as soon as ONE BYTE of a
@@ -210,7 +222,9 @@ type HttpServerOptions struct {
 	// ConnContext, when non-nil, is net/http's per-connection context hook: whatever it
 	// returns becomes the base context of every request on that connection, which is
 	// how a handler learns which connection it is answering on. It must return a
-	// non-nil context — net/http panics otherwise.
+	// non-nil context — net/http panics otherwise. It runs on the serve loop's own
+	// goroutine, once per accepted connection, so it must be cheap and must not block:
+	// Shutdown and Close wait for that goroutine to exit.
 	ConnContext func(context.Context, net.Conn) context.Context
 }
 
@@ -223,9 +237,10 @@ func NewHttpServerForHandlerWithOptions(port int32, handler http.Handler, opts H
 }
 
 // NewHttpServerAt is NewHttpServerForHandlerWithOptions on an explicit listen ADDRESS,
-// host and port, rather than a port on every interface. It exists for the profiling
-// listener, whose default is the pod's loopback address alone. Everything else about the
-// server it returns is as NewHttpServerForHandler describes.
+// host and port, rather than a port on every interface. It exists for the listeners
+// whose address is configured whole: the profiling listener, whose default is the pod's
+// loopback address alone, and the edge agent's metrics endpoint. Everything else about
+// the server it returns is as NewHttpServerForHandler describes.
 func NewHttpServerAt(addr string, handler http.Handler, opts HttpServerOptions) *HttpServer {
 	readHeaderTimeout := opts.ReadHeaderTimeout
 	if readHeaderTimeout <= 0 {
@@ -241,7 +256,7 @@ func NewHttpServerAt(addr string, handler http.Handler, opts HttpServerOptions) 
 	if opts.ReadTimeout > 0 {
 		srv.ReadTimeout = opts.ReadTimeout
 	}
-	return &HttpServer{server: srv}
+	return &HttpServer{server: srv, listen: net.Listen}
 }
 
 // Start binds the listening socket and then serves in the background.
@@ -275,14 +290,19 @@ func (s *HttpServer) Start() error {
 	if s.ln != nil {
 		return fmt.Errorf("http server is already started on %s", s.ln.Addr())
 	}
-	ln, err := net.Listen("tcp", s.server.Addr)
+	ln, err := s.listen("tcp", s.server.Addr)
 	if err != nil {
 		return fmt.Errorf("binding http server to %s: %w", s.server.Addr, err)
 	}
-	s.ln = ln
+	served := make(chan struct{})
+	s.ln, s.served = ln, served
 	log.Info().Str("addr", ln.Addr().String()).Msg("Serving HTTP.")
 
 	go func() {
+		// Closed only once Serve has RETURNED, which is after Serve's deferred close of
+		// the listener has completed. Closing it any earlier reopens the window Shutdown
+		// waits on this channel to close.
+		defer close(served)
 		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("HTTP server stopped serving.")
 		}
@@ -324,8 +344,8 @@ func (s *HttpServer) Addr() string {
 // active responses, which Shutdown does wait on.
 func (s *HttpServer) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
-	ln := s.ln
-	started := ln != nil
+	served := s.served
+	started := served != nil
 	if started {
 		s.stopped = true
 	}
@@ -338,18 +358,34 @@ func (s *HttpServer) Shutdown(ctx context.Context) error {
 	}
 	err := s.server.Shutdown(ctx)
 
-	// 🔴 THE PORT IS RELEASED HERE, NOT BY net/http ALONE. http.Server.Shutdown closes
-	// only the listeners Serve has already registered, and Start hands the listener to
-	// Serve in a goroutine. A Shutdown that lands before that goroutine runs would
-	// otherwise return with the socket still bound; Serve would close it later, on its
-	// way out, and a restart on the same port in between fails with "address already
-	// in use". Closing it again after Serve did is harmless, and its error is ignored
-	// for that reason. It runs AFTER http.Server.Shutdown, and the order is load-bearing:
-	// Shutdown closes every listener Serve registered and returns the error of that close,
-	// so a listener already closed here would make a clean stop report "use of closed
-	// network connection". Closing it second also lets the serve loop see a server
-	// shutting down rather than an Accept error it would log as a failure.
-	_ = ln.Close()
+	// 🔴 THE PORT IS RELEASED BY THE SERVE LOOP, AND SHUTDOWN WAITS FOR IT. Serve closes
+	// its listener on its way out, whichever way it leaves, so the serve goroutine
+	// having returned is what proves the socket is free. http.Server.Shutdown alone does
+	// not prove it. It closes and waits on only the listeners Serve has already
+	// registered, and Start hands the listener to Serve in a goroutine. A Shutdown that
+	// lands before that goroutine runs finds nothing to close. Serve then sees the
+	// server shutting down, returns ErrServerClosed, and closes the listener itself,
+	// after Shutdown has returned unless something waits. A restart on the same port in
+	// that gap fails with "address already in use".
+	//
+	// 🔴 DO NOT ALSO CLOSE THE LISTENER HERE. This function used to, to cover that window.
+	// That made two goroutines close one socket at once, and of two concurrent closes
+	// only the one that gets there first waits for the descriptor to be released; the
+	// other returns at once. When Serve won, the close here returned over a port that
+	// was still bound. With the wait below, the serve loop is the ONE closer on every
+	// path. On the registered path net/http's own close and Serve's deferred one are a
+	// single close, because Serve wraps the listener so that only the first runs.
+	//
+	// The wait is not bounded by ctx, deliberately. On the path it exists for, Serve
+	// returns before accepting anything, so nothing a client does can delay it. On the
+	// path where Serve did register the listener, http.Server.Shutdown has already waited,
+	// without regard to ctx, for the serve loop to exit before it returned above, so the
+	// wait here adds nothing. Either way it holds only while the hooks Serve runs on its
+	// own goroutine — HttpServerOptions.ConnState and ConnContext — do not block, which
+	// is what their doc comments require. Bounding the wait would add a path on which
+	// Shutdown returns with the port possibly still held, which is the one thing this
+	// function promises against.
+	<-served
 	return err
 }
 
@@ -363,8 +399,8 @@ func (s *HttpServer) Shutdown(ctx context.Context) error {
 // Like Shutdown, it neither closes nor accounts for hijacked connections.
 func (s *HttpServer) Close() error {
 	s.mu.Lock()
-	ln := s.ln
-	started := ln != nil
+	served := s.served
+	started := served != nil
 	if started {
 		s.stopped = true
 	}
@@ -372,8 +408,11 @@ func (s *HttpServer) Close() error {
 	if !started {
 		return nil
 	}
+	// The serve loop releases the port, and Shutdown says why this waits for it, unbounded.
+	// net/http's Close goes FIRST: once Serve has registered the listener, that close is
+	// what ends the serve loop, so waiting before it would wait forever.
 	err := s.server.Close()
-	_ = ln.Close() // for the reason Shutdown gives
+	<-served
 	// A Shutdown that ran first has closed the listeners already; closing them again is
 	// what the error would report, and it is not a failure to stop.
 	if errors.Is(err, net.ErrClosed) {

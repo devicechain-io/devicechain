@@ -5,12 +5,11 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -41,10 +40,12 @@ type edgeMetrics struct {
 	spoolUsedMessages     prometheus.Gauge
 	spoolOldestAgeSeconds prometheus.Gauge
 
+	// srv is the endpoint's server, nil until start succeeds. It is core's HttpServer
+	// rather than a hand-built http.Server so the bind-then-serve and the release of the
+	// port on stop are the platform's one implementation, not a copy of it.
+	srv *core.HttpServer
 	// addr is the resolved bound address (populated once the listener is up); empty
 	// when metrics are disabled. Read by tests to scrape an ephemeral port.
-	srv  *http.Server
-	ln   net.Listener
 	addr string
 }
 
@@ -134,38 +135,29 @@ func newEdgeMetrics(a *Agent) *edgeMetrics {
 	return m
 }
 
-// start binds the loopback endpoint and serves /metrics + /healthz until ctx ends. A
+// start binds the loopback endpoint and serves /metrics + /healthz until stop. A
 // bind failure is fail-closed (returned as an error): a monitoring endpoint that
 // silently failed to start is invisible blindness, and the config posture is fail-loud.
 // listenAddr is 127.0.0.1:<port>; a test seam may pass 127.0.0.1:0 for an ephemeral
 // port, read back via addr after start returns.
 func (m *edgeMetrics) start(listenAddr string, healthz http.HandlerFunc) error {
-	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		return fmt.Errorf("bind metrics endpoint %q: %w", listenAddr, err)
-	}
-	m.ln = ln
-	m.addr = ln.Addr().String()
-
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", healthz)
-	m.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-
-	go func() {
-		// Serve returns ErrServerClosed on a clean Shutdown — not a fault.
-		if err := m.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			// The server goroutine can't return an error to Run; a mid-life serve
-			// failure on a loopback port is exotic (the bind already succeeded), so
-			// there is nothing to do but let the next scrape fail visibly.
-			_ = err
-		}
-	}()
+	srv := core.NewHttpServerAt(listenAddr, mux, core.HttpServerOptions{})
+	if err := srv.Start(); err != nil {
+		return fmt.Errorf("bind metrics endpoint %q: %w", listenAddr, err)
+	}
+	m.srv = srv
+	m.addr = srv.Addr()
 	return nil
 }
 
-// stop gracefully shuts the endpoint down, releasing the port before Run returns (a
-// restart on the same fixed port would otherwise hit EADDRINUSE).
+// stop gracefully shuts the endpoint down, letting a scrape in flight finish for up to
+// two seconds, and releases the port before it returns, so a restart on the same fixed
+// port does not hit "address already in use". That holds even when stop follows start
+// so closely that the serve loop has not begun, which is what Run's deferred stopMetrics
+// meets when Run returns straight after startMetrics; core's HttpServer.Shutdown says how.
 func (m *edgeMetrics) stop() {
 	if m.srv == nil {
 		return
@@ -173,16 +165,4 @@ func (m *edgeMetrics) stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = m.srv.Shutdown(ctx)
-
-	// 🔴 THE PORT IS RELEASED HERE, NOT BY net/http ALONE. http.Server.Shutdown closes
-	// only the listeners Serve has already registered, and start hands the listener to
-	// Serve in a goroutine. A stop that lands before that goroutine runs — Run returning
-	// straight after startMetrics, through its deferred stopMetrics — would otherwise
-	// leave the socket bound until Serve got round to closing it, and a restart on the
-	// same fixed port in between fails with "address already in use". Closing it again
-	// after Serve did is harmless, and its error is ignored for that reason. It runs after
-	// Shutdown to keep the order core's HttpServer uses, where it matters because Shutdown
-	// reports the error of closing its listeners; here both Serve's and Shutdown's errors
-	// are discarded, so the order has no observable effect.
-	_ = m.ln.Close()
 }
