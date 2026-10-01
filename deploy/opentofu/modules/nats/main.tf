@@ -305,7 +305,7 @@ variable "cpu_request" {
   description = <<-EOT
     CPU each NATS server requests. 500m by default; dcctl's --compact passes its own
     lowered request. Deliberately BELOW what a server uses under load: on GKE at
-    6,000 events/s each of three servers used 1.0 to 1.5 cores. Under ha on a pool
+    6,000 events/s each of three servers used about 1.1 to 1.65 cores. Under ha on a pool
     of exactly three nodes, every node runs one server (the required spread below)
     whatever it requests, so a larger request would move nothing and take about four
     cores from what the services can be placed on. What 500m buys there is the

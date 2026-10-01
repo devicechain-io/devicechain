@@ -624,10 +624,12 @@ Deployment revision, and the spread would separate nothing.
 ScheduleAnyway, never DoNotSchedule: on a cluster with fewer nodes than these pods (kind,
 one node, --compact) every pod still schedules. It is a score the scheduler weighs with
 others (free CPU, the anti-affinity above), so on three nodes it usually, not always,
-keeps them to two per node. Measured on GKE at shipped defaults with nothing keeping
-them apart, event-sources and event-processing shared a node with a NATS server and
-device-management shared one with device-state; at 6,000 events/s two service nodes ran
-at about 80% CPU and the third at 55%.
+keeps them to two per node: what it guards against is three or more of the five on one
+node. It does not explain or fix the placement measured on GKE at shipped defaults
+(event-sources + event-processing, event-management alone, device-management +
+device-state; two service nodes at about 80% CPU and the third at 55% at 6,000 events/s):
+that 2/1/2 split already satisfies maxSkew 1. It came from requests far below use, and
+the measured requests in values.yaml are what address it.
 
 Which NATS server leads a stream is NATS's choice, so no rule here can keep a service
 off the busiest broker's node. What this does is cap how many of these pods share one.

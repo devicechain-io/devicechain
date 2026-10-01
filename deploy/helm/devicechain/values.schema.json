@@ -156,7 +156,7 @@
     },
     "useMeasuredRequests": {
       "type": "boolean",
-      "description": "Apply each area's functionalAreas.<area>.measuredRequests (its CPU use at 6,000 events/s) over the top-level resources.requests. dcctl install --compact sets false, so the top-level requests reach every area."
+      "description": "Apply each area's functionalAreas.<area>.measuredRequests (its CPU use at 6,000 events/s; event-processing's at 6,800) over the top-level resources.requests. dcctl install --compact sets false, so the top-level requests reach every area."
     },
     "serviceAccount": {
       "type": "object",
@@ -358,7 +358,7 @@
           },
           "measuredRequests": {
             "type": "object",
-            "description": "CPU request: the area's measured use at 6,000 events/s, applied over the top-level resources.requests while useMeasuredRequests is true. The area's own resources.requests wins over it.",
+            "description": "CPU request: the area's measured use at 6,000 events/s (event-processing: at 6,800), applied over the top-level resources.requests while useMeasuredRequests is true. The area's own resources.requests wins over it.",
             "properties": {
               "cpu": { "type": ["string", "number"] }
             },

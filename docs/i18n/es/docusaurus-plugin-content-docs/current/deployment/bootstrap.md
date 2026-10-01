@@ -1147,8 +1147,9 @@ Con [`--compact`](#--compact), cada servicio de backend y cada servidor NATS sol
 
 Los cuatro primeros servicios hacen el trabajo por evento: recibir, resolver y almacenar cada
 evento, y fusionarlo en el estado en vivo de cada dispositivo. `event-processing` ejecuta la
-detección sobre cada evento. Sus límites están dimensionados para el
-tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
+detección sobre cada evento; su límite de 500m es el predeterminado de los demás servicios de
+backend, no uno dimensionado a partir de mediciones. Los límites de los cuatro primeros servicios
+están dimensionados para el tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
 mensajes por segundo con una lectura por mensaje, y para unos 4000 eventos por segundo, el ritmo
 que sostenía una instalación predeterminada antes de que se aumentaran los valores de persistencia
 de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
@@ -1263,8 +1264,8 @@ un nodo se quedaba sin memoria.
   no se midió un servidor que vuelve a unirse a su clúster ni que se pone al día con una cola
   grande tras perder un nodo. Si alguna vez un servidor se detiene por quedarse sin memoria
   (`OOMKilled` en `kubectl describe pod`), aumenta su límite.
-- **La CPU se solicita por debajo de lo que un servidor usa con carga**: de 1 a 1,5 núcleos cada
-  uno a 6000 eventos por segundo. Con `--ha` en tres nodos cada nodo ejecuta exactamente un
+- **La CPU se solicita por debajo de lo que un servidor usa con carga**: de 1,1 a 1,65 núcleos
+  aproximadamente cada uno a 6000 eventos por segundo. Con `--ha` en tres nodos cada nodo ejecuta exactamente un
   servidor, así que la solicitud no puede cambiar dónde se ejecuta. Lo que hace es mantener los
   servidores fuera de la clase que se desaloja primero y darles una parte de la CPU de un nodo
   ocupado. Solicitar todo su uso quitaría unos 4 núcleos a un clúster de tres nodos sin mover nada.
@@ -1278,7 +1279,9 @@ un nodo se quedaba sin memoria.
   `kubectl describe pod` sobre él indica por qué.
 - **Se aplica a las instancias creadas con esta versión.** `dcctl upgrade` no vuelve a aplicar el
   intermediario de una instancia, así que los servidores de una instancia existente siguen sin
-  solicitudes ni límites hasta que la instancia se vuelva a crear.
+  solicitudes ni límites hasta que `dcctl bootstrap` vuelva a aplicar la instancia: cuando se
+  vuelve a crear, o cuando bootstrap se vuelve a ejecutar sobre la instancia en marcha, como hace
+  una restauración, lo que también reinicia los servidores.
 - Para cambiarlos en una instancia nueva, establece `nats_cpu_request`, `nats_memory_request` o
   `nats_memory_limit` en la raíz de OpenTofu de la instancia. La memoria admite `Mi` o `Gi`.
 

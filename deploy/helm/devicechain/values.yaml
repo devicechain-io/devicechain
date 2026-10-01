@@ -1092,11 +1092,13 @@ functionalAreas:
     # device-management, event-management, device-state, event-sources and
     # event-processing. Preferred, never required: with fewer nodes than those five
     # they still schedule, and on three nodes it usually means at most two to a node,
-    # not always (it is one score among several). Measured on GKE at shipped defaults
-    # with nothing keeping them apart, the scheduler put event-sources and
-    # event-processing on one node with a NATS server and device-management with
-    # device-state on another: at 6,000 events/s two service nodes ran at about 80%
-    # CPU and the third at 55%, and from 8,400 the first reached 91-93%.
+    # not always (it is one score among several). What it guards against is three or
+    # more of the five on one node. It would NOT have changed the placement measured on
+    # GKE at shipped defaults (event-sources + event-processing on one node with a NATS
+    # server, event-management alone, device-management + device-state on the third):
+    # 2/1/2 already satisfies maxSkew 1. That placement, with two service nodes at about
+    # 80% CPU and the third at 55% at 6,000 events/s, came from requests far below use;
+    # the requests above are what address it.
     #
     # One trade: a pod that sets a spread of its own no longer gets the cluster's
     # DEFAULT spread, which keeps one Deployment's replicas on different nodes and

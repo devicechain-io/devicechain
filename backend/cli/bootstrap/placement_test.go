@@ -317,10 +317,10 @@ func spreadsWithTheEventPath(v spreadView, area, instance string) string {
 }
 
 // device-management, event-management, device-state, event-sources and
-// event-processing prefer nodes running fewer of the five. Measured on GKE at shipped
-// defaults with nothing keeping them apart, the scheduler put event-sources and
-// event-processing on one node with a NATS server and device-management with
-// device-state on another. Preferred, never required, so a small cluster still
+// event-processing prefer nodes running fewer of the five, which guards against three
+// or more of them on one node. (The 2/1/2 placement measured on GKE at shipped
+// defaults already satisfies maxSkew 1; the measured requests, not this spread, are
+// what address it.) Preferred, never required, so a small cluster still
 // schedules every pod; and targeted, so the other areas carry neither the label nor
 // a constraint.
 func TestEventPathPodsSpreadAcrossNodes(t *testing.T) {

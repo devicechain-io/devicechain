@@ -1061,11 +1061,12 @@ Under [`--compact`](#--compact) every backend service and every NATS server requ
 instead, and the limits stay as above. The console is sized separately.
 
 The first four services do the per-event work: receiving, resolving and storing every event, and
-merging it into each device's live state. `event-processing` runs detection on every event. Their limits are sized for live device traffic at a
-tenant's default ingest ceiling of 1000 messages per second, one reading per message, and for
-about 4,000 events per second, the rate a default installation sustained before
-`event-management`'s persistence defaults were raised (see [Measured
-throughput](#measured-throughput)).
+merging it into each device's live state. `event-processing` runs detection on every event; its
+500m limit is the default every other backend service has, not one sized from measurement. The
+first four services' limits are sized for live device traffic at a tenant's default ingest
+ceiling of 1000 messages per second, one reading per message, and for about 4,000 events per
+second, the rate a default installation sustained before `event-management`'s persistence
+defaults were raised (see [Measured throughput](#measured-throughput)).
 
 - **Requests are what each service used at 6,000 events per second.** A request is the CPU the
   scheduler sets aside for a pod on its node, and nothing else: it decides where the pod goes. Each
@@ -1167,9 +1168,9 @@ first in line for eviction when a node ran short of memory.
   events per second. Those runs were steady ingest: a server rejoining its cluster, or catching up
   a large backlog after a node is lost, was not measured. If a server is ever stopped for running
   out of memory (`OOMKilled` in `kubectl describe pod`), raise its limit.
-- **CPU is requested below what a server uses under load**: 1 to 1.5 cores each at 6,000 events
-  per second. Under `--ha` on three nodes each node runs exactly one server, so the request cannot
-  change where a server runs. What it does is keep the servers out of the class evicted first and
+- **CPU is requested below what a server uses under load**: about 1.1 to 1.65 cores each at
+  6,000 events per second. Under `--ha` on three nodes each node runs exactly one server, so the
+  request cannot change where a server runs. What it does is keep the servers out of the class evicted first and
   give them a share of a busy node's CPU. Requesting their full use would take about 4 cores from
   a three-node cluster without moving anything. Without `--ha`, one server carries every event
   and its use was not measured; 500m understates it. There is no CPU limit: every event passes
@@ -1180,7 +1181,8 @@ first in line for eviction when a node ran short of memory.
   shows the server `Pending`, and `kubectl describe pod` on it says why.
 - **It applies to instances bootstrapped with this release.** `dcctl upgrade` does not re-apply an
   instance's broker, so an existing instance's servers keep running with no requests or limits
-  until the instance is recreated.
+  until `dcctl bootstrap` applies the instance again: when it is recreated, or when bootstrap is
+  re-run over the running instance, as a restore does, which also restarts the servers.
 - To change them for a new instance, set `nats_cpu_request`, `nats_memory_request` or
   `nats_memory_limit` on the instance's OpenTofu root. Memory takes `Mi` or `Gi`.
 

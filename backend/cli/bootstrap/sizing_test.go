@@ -293,6 +293,20 @@ var gkeSplitPoolCores = map[string]float64{
 	"event-processing":  0.37,
 }
 
+// gkeMeasuredAtRate is the rate an area's gkeSplitPoolCores figure was read at, where
+// that is not requestSizingRate. Only event-processing's is: see above.
+var gkeMeasuredAtRate = map[string]int{
+	"event-processing": 6800,
+}
+
+// measuredAt is the rate area's gkeSplitPoolCores figure was read at.
+func measuredAt(area string) int {
+	if r, ok := gkeMeasuredAtRate[area]; ok {
+		return r
+	}
+	return requestSizingRate
+}
+
 // sizedRequest is the request a measured use of `cores` gets: rounded up to a
 // multiple of 50m, never below the chart's own floor.
 func sizedRequest(cores float64, floor int64) int64 {
@@ -320,6 +334,11 @@ func TestShippedCPURequestsAreTheMeasuredUseAtTheSizingRate(t *testing.T) {
 		t.Fatalf("%s did not render: there is no floor to read", plain)
 	}
 	floor := q(t, "cpu", c.requests["cpu"])
+	for area := range gkeMeasuredAtRate {
+		if _, ok := gkeSplitPoolCores[area]; !ok {
+			t.Errorf("gkeMeasuredAtRate names %s, which has no measurement", area)
+		}
+	}
 
 	for _, area := range slices.Sorted(maps.Keys(gkeSplitPoolCores)) {
 		c, ok := got[area]
@@ -331,7 +350,7 @@ func TestShippedCPURequestsAreTheMeasuredUseAtTheSizingRate(t *testing.T) {
 		if have := q(t, "cpu", c.requests["cpu"]); have != want {
 			t.Errorf("%s: requests.cpu %s (%dm), want %dm: %.2f cores measured at %d events/s, "+
 				"rounded up to 50m, at least the chart's %dm",
-				area, c.requests["cpu"], have, want, gkeSplitPoolCores[area], requestSizingRate, floor)
+				area, c.requests["cpu"], have, want, gkeSplitPoolCores[area], measuredAt(area), floor)
 		}
 	}
 	for area, c := range got {

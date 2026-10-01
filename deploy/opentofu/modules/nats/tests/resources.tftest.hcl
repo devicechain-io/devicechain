@@ -146,3 +146,13 @@ run "zero_request_is_refused" {
 
   expect_failures = [var.cpu_request]
 }
+
+run "memory_request_without_unit_is_refused" {
+  command = plan
+
+  variables {
+    memory_request = "768"
+  }
+
+  expect_failures = [var.memory_request]
+}
