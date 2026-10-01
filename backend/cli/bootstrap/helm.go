@@ -899,7 +899,13 @@ func instanceIDFromValues(vals map[string]interface{}, releaseName string) (stri
 // Helm chart (no disk extraction needed — the Helm loader accepts buffered
 // files keyed by their chart-relative path).
 func loadEmbeddedChart() (*chart.Chart, error) {
-	src := assets.HelmChart()
+	return loadChartFS(assets.HelmChart())
+}
+
+// loadChartFS materializes a chart held in an fs.FS, rooted at its Chart.yaml,
+// into an in-memory Helm chart. The instance chart goes through it, and so do
+// the tests that render the charts embedded under the OpenTofu tree.
+func loadChartFS(src fs.FS) (*chart.Chart, error) {
 	var files []*loader.BufferedFile
 	err := fs.WalkDir(src, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

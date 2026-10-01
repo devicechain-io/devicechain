@@ -590,6 +590,12 @@ module "cnpg_rdb" {
   # that, and the actual number of backends is bounded by the deployed pools
   # (500 worst case above), not by this value. Raising it does not raise
   # steady-state memory; it removes a cliff.
+  #
+  # wal_compression is left at off here ON PURPOSE. The event store compresses its
+  # log because its WAL was measured to be mostly full-page images of randomly
+  # placed index leaves. This store's WAL composition was never measured, and its
+  # write shape is different (updates to a bounded set of rows). Measure its
+  # full-page-image share (pg_waldump --stats) before turning it on.
   parameters = {
     max_connections = tostring(var.postgres_max_connections)
   }

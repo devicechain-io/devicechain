@@ -72,7 +72,9 @@ func renderChartClientSide(ctx context.Context, ch *chart.Chart, vals map[string
 	// reach for the release, this render stops matching the one that is installed, and
 	// validateRenderedInstanceConfig's whole claim (that it checks the bytes about to be
 	// written) goes with it. Hence a name that reads as a placeholder rather than one
-	// that reads as the truth.
+	// that reads as the truth. (A test also renders the cnpg-cluster chart through
+	// here; that chart does read .Release.Namespace, and walcompression_test.go says
+	// why the fields it reads do not depend on it.)
 	inst.ReleaseName = "render"
 	inst.Namespace = "default"
 	inst.DryRun = true

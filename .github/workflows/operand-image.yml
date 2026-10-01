@@ -40,7 +40,21 @@ on:
       # runs compat + smoke on them; only the publish attempt is dropped, and a
       # publish is meaningless when no image input changed. A real rebuild is a
       # versions.conf bump (which this path list does catch) or a manual dispatch.
-      - 'deploy/images/timescaledb/**'
+      #
+      # 🔴 The same holds for every file in deploy/images/timescaledb that is not
+      # an input to the published image, so the list names the image's inputs
+      # rather than the directory. `publish` builds from versions.conf (the
+      # build-args) and the Dockerfile, and from nothing else: it does not run
+      # build.sh, and the Dockerfile COPYs nothing from the directory. A push that
+      # touched only the smoke test or another harness file (smoke.sh, smoke.sql,
+      # standalone.sh, verify-compat.sh, build.sh, README.md) used to attempt a
+      # publish of an unchanged revision and leave the same meaningless red run.
+      # Those edits are still fully exercised: the pull_request trigger above
+      # keeps the whole directory, and `publish` re-smokes the image it pushes
+      # with the smoke test on main. If the Dockerfile ever COPYs a file from
+      # this directory, add that file here.
+      - 'deploy/images/timescaledb/versions.conf'
+      - 'deploy/images/timescaledb/Dockerfile'
   # Rebuild on demand — a base-image CVE fix lands in the CNPG base without any
   # change here, and the pins in versions.conf are what make that rebuild safe.
   workflow_dispatch:

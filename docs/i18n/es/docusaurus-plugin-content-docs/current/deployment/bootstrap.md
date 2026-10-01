@@ -1188,6 +1188,19 @@ escritura anticipada de la base de datos ocupa alrededor de 1,1 GB más mientras
 seguridad le siguen el ritmo, así que 32Gi contienen unos 27 millones de eventos: unas siete
 horas de un inquilino que envía a su techo predeterminado completo.
 
+El almacén de eventos comprime las imágenes de página de su registro de escritura anticipada
+(`wal_compression = lz4`). Tras cada punto de control, el primer cambio en una página escribe la
+página entera en el registro, y en este almacén la mayoría de esas páginas son páginas de índice.
+En una comparación en una versión de desarrollo posterior a v0.18.0, en un clúster de la misma
+forma que el de [Rendimiento medido](#measured-throughput) y con la configuración ajustada que allí
+se describe, a 5200 eventos por segundo ofrecidos, la compresión redujo el registro escrito por
+evento almacenado de unos 3,0 KB a unos 1,7 KB, y los puntos de control forzados por el tamaño del
+registro bajaron en una proporción parecida (de 5,8 a 3,2 por millón de eventos almacenados). No
+cambia lo que contiene este volumen: el registro sigue ocupando alrededor de 1,1 GB mientras las
+copias de seguridad le siguen el ritmo, así que la cifra anterior se mantiene. El
+[tamaño del almacén de respaldos](#backup-store-size) se midió sin compresión y no se ha vuelto a
+medir con ella. El almacén relacional no comprime su registro.
+
 Con el [almacén de respaldos predeterminado](#backup-store-size) y una sola instancia, este
 volumen es lo primero que se llena con una ingesta sostenida, y `DatabaseVolumeFillingFast` avisa
 antes. Si se llena primero el almacén de respaldos (varias instancias en él, un almacén más
