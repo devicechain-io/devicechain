@@ -3900,6 +3900,26 @@ pool, at about 5,200 events per second on three 8-vCPU nodes, logging in again t
   holds fewer connections on the database, at the cost of a new connection and login for every
   query that finds more than that many in use.
 
+#### event-management writes each batch with one statement per table {#next-grouped-writes}
+
+`event-management` stored a batch of events with separate statements for every event in it: one
+for the event, one for its readings, locations or alerts, and one for its relationship anchors,
+each a round trip to the event store while the batch's transaction stayed open. It now writes the
+batch with one statement per table for each tenant in it, inside the same single transaction, so a
+batch makes a few round trips instead of several per event. What is stored is unchanged, an event
+is still acknowledged only after its batch commits, and a redelivered event still adds nothing.
+
+- When the database refuses a row in one of those statements that carries several events, such
+  as a value too large for its column, it does not say which event the row belongs to. The batch is then written again in a new
+  transaction, one event at a time, to find the refused event, which is handled as before. That
+  event costs its batch one more transaction, and `persist_batch_fallbacks_total` counts both. An
+  event refused before anything is sent, such as a reading that is not a number, and the events of
+  a deleted tenant are still set aside at once.
+- Connect and disconnect events are still written one at a time within the batch.
+- Going back to `v0.18.0` needs nothing: it reads and writes the same rows.
+
+Nothing needs doing. See [Event persistence](./observability.md#event-persistence).
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

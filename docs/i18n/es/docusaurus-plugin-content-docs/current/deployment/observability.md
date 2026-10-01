@@ -499,12 +499,16 @@ error nombra el ajuste. El servicio registra el valor que usa al arrancar.
 ## Persistencia de eventos {#event-persistence}
 
 `event-management` escribe los eventos por lotes. Cada escritor toma los eventos que ya lo esperan,
-hasta un límite, y los confirma en una sola transacción. Un evento se reconoce solo después de que
-la transacción que lo contiene se haya confirmado. Si se rechaza un evento de un lote, no se
-conserva nada de esa transacción: el evento rechazado se vuelve a escribir por separado, y se
-reintenta o se notifica exactamente como sin lotes. El resto del lote se vuelve a confirmar sin él.
-Si la transacción falla por una causa que no se debe a ningún evento concreto, como una conexión
-perdida con la base de datos, cada uno de sus eventos se vuelve a escribir por separado.
+hasta un límite, y los confirma en una sola transacción, escribiendo cada tabla una vez por cada
+inquilino del lote en lugar de una vez por cada evento. Los eventos de conexión y desconexión se
+siguen escribiendo uno a uno dentro del lote. Un evento se reconoce solo después de que la
+transacción que lo contiene se haya confirmado. Si se rechaza un evento de un lote, no se conserva
+nada de esa transacción: el evento rechazado se vuelve a escribir por separado, y se reintenta o se
+notifica exactamente como sin lotes. El resto del lote se vuelve a confirmar sin él. Cuando la base
+de datos rechaza una fila de una sentencia que lleva varios eventos, no indica de qué evento venía,
+así que primero el lote se vuelve a escribir en una transacción nueva, evento a evento, para
+encontrarlo. Si la transacción falla por una causa que no se debe a ningún evento concreto, como una
+conexión perdida con la base de datos, cada uno de sus eventos se vuelve a escribir por separado.
 
 Con poco tráfico, un escritor encuentra un único evento esperando y lo confirma solo, así que el
 procesamiento por lotes no añade retraso. Los lotes crecen solo cuando los eventos llegan más rápido
@@ -515,7 +519,7 @@ esa espera una sola vez.
 | Métrica | Qué indica |
 | --- | --- |
 | `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. Lotes que crecen hacia el límite indican que los escritores están ocupados. Con 10 escritores compartiendo un mismo flujo, los lotes rara vez llegan al límite aunque el almacenamiento vaya retrasado, así que léala junto a la cola del consumidor. |
-| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada lote que contiene sus eventos cuesta una transacción adicional, por muchos que contenga. Esos eventos aparecen en `persist_messages_total` como `failed` o `retry`. |
+| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado, o dos cuando la base de datos rechazó una fila de una sentencia que llevaba varios eventos, porque encontrar el evento requiere un segundo intento. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada lote que contiene sus eventos cuesta una transacción adicional, por muchos que contenga. Esos eventos aparecen en `persist_messages_total` como `failed` o `retry`. |
 | `devicechain_eventmanagement_persist_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
 
 `persist_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se

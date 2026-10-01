@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,13 +47,19 @@ type txApi struct {
 	// report an error anyway, as a connection lost after the server committed does.
 	failCommit, ambiguousCommit atomic.Int32
 
-	// failAnchorsFor refuses the anchor insert of any message from this device with a
-	// class-22 error, i.e. AFTER that message's parent and payload rows were written.
+	// failAnchorsFor refuses any anchor insert that carries an anchor of this device with a
+	// class-22 error, i.e. AFTER that message's parent and payload rows were written. ANY
+	// anchor, not the first: a batch written grouped inserts every message's anchors in one
+	// statement, whose first anchor is some other message's.
 	failAnchorsFor string
 
 	// anchorErrFor, when failAnchorsFor is set, is the error its anchor insert returns on
 	// every attempt; nil means the class-22 refusal above.
 	anchorErrFor error
+
+	// beforeTx, when non-nil, runs as each transaction is opened — a test resets a
+	// statement counter there to count only the last transaction's statements.
+	beforeTx func()
 }
 
 func newTxApi(ep *EventPersistenceWorker) *txApi {
@@ -64,6 +71,9 @@ func (a *txApi) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) err
 		<-a.gate
 	}
 	a.txs.Add(1)
+	if a.beforeTx != nil {
+		a.beforeTx()
+	}
 	if a.failCommit.Load() > 0 {
 		a.failCommit.Add(-1)
 		err := a.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
@@ -86,7 +96,9 @@ func (a *txApi) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) err
 }
 
 func (a *txApi) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*model.EventAnchor) error {
-	if a.failAnchorsFor != "" && len(anchors) > 0 && anchors[0].DeviceToken == a.failAnchorsFor {
+	if a.failAnchorsFor != "" && slices.ContainsFunc(anchors, func(an *model.EventAnchor) bool {
+		return an.DeviceToken == a.failAnchorsFor
+	}) {
 		if a.anchorErrFor != nil {
 			return a.anchorErrFor
 		}

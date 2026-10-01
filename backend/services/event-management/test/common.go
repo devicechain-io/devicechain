@@ -120,6 +120,18 @@ func (api *MockApi) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId s
 	return false, nil
 }
 
+// EventsExistByAltId defaults to "none persisted", like EventExistsByAltId above.
+func (api *MockApi) EventsExistByAltId(ctx context.Context, db *gorm.DB, keys []emmodel.AltIdKey) ([]bool, error) {
+	return make([]bool, len(keys)), nil
+}
+
+// CreateEventRows is the persistence writer's grouped batch write; a test drives it with
+// an .On("CreateEventRows") expectation.
+func (api *MockApi) CreateEventRows(ctx context.Context, db *gorm.DB, rows *emmodel.EventRows) error {
+	args := api.Mock.Called()
+	return args.Error(0)
+}
+
 func (api *MockApi) Events(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.EventSearchResults, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*emmodel.EventSearchResults), args.Error(1)

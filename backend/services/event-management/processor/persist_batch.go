@@ -22,10 +22,14 @@ import (
 //
 // Each commit on a replicated event store waits for a standby, and that wait — not the
 // database's work — is what limited how fast one event per transaction could be stored. A
-// writer therefore commits the messages already waiting for it in ONE transaction, running
-// for each exactly the statements PersistEvent runs, under that message's own tenant
-// context. What does not change:
+// writer therefore commits the messages already waiting for it in ONE transaction. It
+// first writes them grouped (persist_grouped.go): each table once per tenant in the batch,
+// every statement bound to a message of its own tenant, rather than each message's
+// statements in turn. What does not change:
 //
+//   - What is stored: the grouped write keeps every ON CONFLICT arbiter and the
+//     alternate-id skip, and writes state changes one at a time, so it stores what writing
+//     each message with PersistEvent's statements stores.
 //   - A message is acknowledged only after the transaction holding it has committed.
 //   - Nothing a message writes commits without the rest of it: a message whose statement
 //     fails takes the whole transaction down, so a half-written message never commits
@@ -39,6 +43,18 @@ import (
 //     tenant goes the per-message path, since the fence refuses them all. Only a failure no
 //     message can be blamed for (BEGIN, COMMIT, a lost connection) sends every message
 //     down the per-message path.
+//   - What the grouped write adds: when the database refuses a statement that carried
+//     several messages' rows, it does not say which row, so no message can be blamed yet.
+//     The same batch is then written again in a NEW transaction one message at a time
+//     (writeEach, the statements PersistEvent runs), which blames the message exactly as
+//     above. Such a refusal costs its batch one more transaction, and counts twice in
+//     persist_batch_fallbacks_total. A new transaction rather than a savepoint, because a
+//     savepoint would cost every batch a round trip, put every event row in a
+//     subtransaction, and roll back the share lock of a fence read whose memoised answer
+//     would survive the rollback. A message whose rows cannot be built (a value that is not
+//     a number, say) is blamed before anything is sent — which also means that a
+//     redelivered event whose alternate id is already stored, and whose payload no longer
+//     builds, costs one fallback before the per-message path skips it.
 //   - Replaying is safe: every insert carries an ON CONFLICT arbiter and the event id is
 //     derived from the content, so a message written again after a rollback — or after a
 //     COMMIT whose outcome was lost — adds nothing twice.
@@ -110,32 +126,26 @@ func (ep *EventPersistenceWorker) collect(ctx context.Context) (batch []pendingE
 		func(msg messaging.Message) (pendingEvent, bool) { return ep.admit(ctx, msg) })
 }
 
-// persistBatch commits batch in one transaction and acknowledges it, or — when that
-// transaction does not commit — writes its messages again without the one to blame (see
-// the file comment).
+// persistBatch commits batch in one transaction, written grouped, and acknowledges it, or
+// — when that transaction does not commit — writes its messages again without the one to
+// blame, first finding it one message at a time when the grouped write could not name it
+// (see the file comment).
 //
 // ctx is the WORKER's context and carries no tenant, deliberately: every statement binds
-// its own message's context, and a statement that ever forgot to would fail closed with
-// ErrNoTenant rather than write under a batch-mate's tenant.
+// the context of a message of its own tenant, and a statement that ever forgot to would
+// fail closed with ErrNoTenant rather than write under a batch-mate's tenant.
 func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pendingEvent) {
+	grouped := true
 	for len(batch) > 1 {
 		failedAt := -1
 		err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
-			for i := range batch {
-				p := &batch[i]
-				pevent, err := ep.baseEvent(p.ctx, *p.event)
-				if err == nil {
-					_, err = ep.writeEvent(p.ctx, tx, pevent, *p.event)
-				}
-				if err != nil {
-					// Stop here: on Postgres the transaction is aborted, or rolled back
-					// to the savepoint a split insert ran under, and carrying on would
-					// commit the messages around a half-written one.
-					failedAt = i
-					return err
-				}
+			var err error
+			if grouped {
+				failedAt, err = ep.writeGrouped(tx, batch)
+			} else {
+				failedAt, err = ep.writeEach(tx, batch)
 			}
-			return nil
+			return err
 		})
 		if err == nil {
 			ep.metrics.committed(len(batch))
@@ -147,6 +157,14 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 			return
 		}
 		ep.metrics.fallback()
+		if grouped && errors.Is(err, errGroupUnattributed) {
+			// The database refused a statement carrying several events. Find which one by
+			// writing the same batch again, one event at a time, in a new transaction.
+			log.Warn().Err(err).Int("events", len(batch)).
+				Msg("A grouped event write was refused; writing the batch again one event at a time")
+			grouped = false
+			continue
+		}
 		if failedAt < 0 || rdb.IsConnectionFailure(err) {
 			// Nothing in the batch is to blame — the transaction could not begin or commit,
 			// or the connection went — so every message is written on its own, as it
@@ -178,6 +196,7 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 			rest = append(rest, p)
 		}
 		batch = rest
+		grouped = true
 	}
 	if len(batch) == 1 {
 		ep.persistOne(batch[0])

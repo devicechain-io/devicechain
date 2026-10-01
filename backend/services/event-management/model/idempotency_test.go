@@ -118,3 +118,61 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 		}
 	}
 }
+
+// EventsExistByAltId answers each key on its own instant, in one query. Stored: (a, t) and
+// (b, t+1s); asked [(a,t), (a,t+1s), (b,t+1s), (c,t)]: a key whose alternate id is stored at
+// ANOTHER instant in the window is not reported, so a probe that matched alternate ids alone
+// and bounded the instants only by the window would answer [true, true, true, false]. Under
+// another tenant every answer is false: the tenant predicate applies to the batch read too.
+func TestEventsExistByAltIdAnswersEachKeyOnItsOwnInstant(t *testing.T) {
+	api := newIdempotencyTestApi(t)
+	at := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	seedAltEvent(t, api, "A", "a", at)
+	seedAltEvent(t, api, "A", "b", at.Add(time.Second))
+	keys := []AltIdKey{
+		{AltId: "a", OccurredTime: at},
+		{AltId: "a", OccurredTime: at.Add(time.Second)},
+		{AltId: "b", OccurredTime: at.Add(time.Second)},
+		{AltId: "c", OccurredTime: at},
+	}
+	for _, tc := range []struct {
+		tenant string
+		want   []bool
+	}{
+		{"A", []bool{true, false, true, false}},
+		{"B", []bool{false, false, false, false}},
+	} {
+		t.Run("tenant "+tc.tenant, func(t *testing.T) {
+			ctx := core.WithTenant(context.Background(), tc.tenant)
+			got, err := api.EventsExistByAltId(ctx, api.RDB.Database, keys)
+			if err != nil {
+				t.Fatalf("EventsExistByAltId: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d answers for %d keys", len(got), len(keys))
+			}
+			for i := range keys {
+				if got[i] != tc.want[i] {
+					t.Errorf("key %d (%s at %s): got %v, want %v", i, keys[i].AltId,
+						keys[i].OccurredTime.Format(time.RFC3339), got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// Two instants that differ below a microsecond are one key to the event store, which keeps
+// microseconds; two a microsecond apart are two.
+func TestAnAlternateIdKeyMatchesAtMicrosecondResolution(t *testing.T) {
+	at := time.Date(2026, 6, 25, 12, 0, 0, 1000, time.UTC)
+	k := AltIdKey{AltId: "a", OccurredTime: at}
+	if k.Match() != (AltIdKey{AltId: "a", OccurredTime: at.Add(500 * time.Nanosecond)}).Match() {
+		t.Error("two instants 500ns apart within one microsecond are different keys; want the same")
+	}
+	if k.Match() == (AltIdKey{AltId: "a", OccurredTime: at.Add(time.Microsecond)}).Match() {
+		t.Error("two instants a microsecond apart are the same key; want different")
+	}
+	if k.Match() == (AltIdKey{AltId: "b", OccurredTime: at}).Match() {
+		t.Error("two alternate ids at one instant are the same key; want different")
+	}
+}

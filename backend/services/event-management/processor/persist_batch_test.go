@@ -527,7 +527,11 @@ func TestAPurgedTenantIsSetAsideFromItsBatchAllAtOnce(t *testing.T) {
 // redelivery. Setting it aside and re-batching the rest instead would, through an outage,
 // cost connection attempts on every re-batch of every batch. The control is a transient
 // refusal that is NOT a connection failure: the same message is set aside and the other
-// seven commit together, and it is left for redelivery just the same.
+// seven commit together, and it is left for redelivery just the same. The refused
+// statement carried all eight messages' anchors, so the control first writes the batch
+// again one message at a time to find dev-3 — one more transaction and one more fallback —
+// and the last transaction writes the seven grouped again (5 statements, not 7 x 4 + 1).
+// A connection failure is never sent down that path: it blames nobody, grouped or not.
 func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -544,19 +548,28 @@ func TestAConnectionFailureWritesEveryMessageAgainOnItsOwn(t *testing.T) {
 			r := newBatchRig(t, 8)
 			r.api.failAnchorsFor = "dev-3"
 			r.api.anchorErrFor = tc.err
+			// Count the statements of the LAST transaction only: the seven written again
+			// after dev-3 is set aside.
+			r.api.beforeTx = func() { r.counter.Reset() }
 			r.run(r.messages(t, 8, fenceCostTenant, true))
+			lastAll, _ := r.counter.Counts()
 
 			// The failed batch, then each message on its own; or, for the control, the
-			// failed batch, dev-3 on its own and the other seven together.
-			wantTxs := int64(3)
+			// failed grouped batch, the same batch one message at a time, dev-3 on its own
+			// and the other seven together.
+			wantTxs, wantFallbacks := int64(4), 2.0
 			if tc.connection {
-				wantTxs = 9
+				wantTxs, wantFallbacks = 9, 1
 			}
 			if got := r.api.txs.Load(); got != wantTxs {
 				t.Errorf("took %d transactions; want %d", got, wantTxs)
 			}
-			if got := r.metric(t, metricFallbacks, "", ""); got != 1 {
-				t.Errorf("fallbacks = %v; want 1", got)
+			if got := r.metric(t, metricFallbacks, "", ""); got != wantFallbacks {
+				t.Errorf("fallbacks = %v; want %v", got, wantFallbacks)
+			}
+			if !tc.connection && lastAll != 5 {
+				// probe, events, measurement_events, event_anchors, fence read
+				t.Errorf("the seven were written again with %d statements; want 5 (grouped)", lastAll)
 			}
 			if e, _, _ := rowCounts(t, r.db); e != 7 {
 				t.Errorf("stored %d events; want 7", e)
@@ -668,11 +681,13 @@ func TestReplayingMessagesWritesNothingTwice(t *testing.T) {
 			}
 			// What the replay actually executed — the proof the no-alternate-id row reached
 			// the arbiters rather than stopping at the probe. With an alternate id: one
-			// probe per message and nothing else. Without: the event, measurement and
-			// anchor inserts of all eight, and one fence read for the transaction.
-			wantAll, wantFence := int64(8), int64(0)
+			// probe for the batch's tenant, which finds all eight, and nothing else.
+			// Without: one events, one measurement_events and one event_anchors insert
+			// carrying all eight, and one fence read for the transaction. Written one
+			// message at a time these were 8 probes, or 8 x 3 inserts + 1 = 25.
+			wantAll, wantFence := int64(1), int64(0)
 			if !alt {
-				wantAll, wantFence = 25, 1
+				wantAll, wantFence = 4, 1
 			}
 			if all != wantAll || fence != wantFence {
 				t.Errorf("the replay made %d statements with %d fence reads; want %d with %d",
