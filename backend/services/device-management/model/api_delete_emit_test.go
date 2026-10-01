@@ -94,6 +94,14 @@ type captureEvictor struct {
 	// tests, which assert every fence mutation evicts exactly once — the fence-set version
 	// rides in the cached ProfileResolution, so a missed eviction keeps stamping the old one.
 	fenceSetEvicts int
+	// credentialEvicts records each EvictDeviceCredentials call: the tenant it named and
+	// the device ids, in call order.
+	credentialEvicts []credentialEvict
+}
+
+type credentialEvict struct {
+	tenant    string
+	deviceIds []uint
 }
 
 func (c *captureEvictor) EvictEntityDelete(_ context.Context, etype entity.Type, id uint, token string, sources []uint) {
@@ -114,6 +122,10 @@ func (c *captureEvictor) EvictScopedGroupsExist(_ context.Context) {
 
 func (c *captureEvictor) EvictFenceSetVersion(_ context.Context) {
 	c.fenceSetEvicts++
+}
+
+func (c *captureEvictor) EvictDeviceCredentials(_ context.Context, tenant string, deviceIds []uint) {
+	c.credentialEvicts = append(c.credentialEvicts, credentialEvict{tenant, append([]uint(nil), deviceIds...)})
 }
 
 // Deleting an entity evicts the hot-path caches (ADR-044 F2): the deleted device's

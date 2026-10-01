@@ -5,13 +5,16 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
+	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
 
 // These run the resolver over production's caches — the in-process tier ON — and count
@@ -56,13 +59,13 @@ func TestAWarmEventWithinTheLocalTtlAsksNoKeyValueStoreInARuleScopedTenant(t *te
 	}
 }
 
-// 🔑 THE DEFAULT AUTH MODE, WHICH IS WHAT PRODUCTION RUNS. A credentialed event reads its
-// credential from the database on every event — deliberately never cached, so a revoked
-// or deleted credential is refused on its very next event — and so never asks the
-// device-by-token cache. Its key-value reads are the other three (profile, tracked
-// relationships, the scoped-groups gate), and within the in-process TTL those are
-// answered from memory. The credential read is still made, every event.
-func TestAWarmCredentialedEventAsksNoKeyValueStoreButStillReadsItsCredential(t *testing.T) {
+// 🔑 THE DEFAULT AUTH MODE, WHICH IS WHAT PRODUCTION RUNS. A credentialed event takes its
+// device from the credential it presents, and so never asks the device-by-token cache. Its
+// key-value reads are the other three (profile, tracked relationships, the scoped-groups
+// gate), and within the in-process TTL those are answered from memory; and within the
+// credential cache's 5 s so is the credential, so a warm credentialed event asks nothing
+// at all. A revocation is still seen on the next event: the last step checks it.
+func TestAWarmCredentialedEventAsksNoKeyValueStoreAndNoDatabase(t *testing.T) {
 	rig := newCountingResolveRig(t, false, nil)
 	secret := "s3cret"
 	if _, err := rig.api.CreateDeviceCredential(rig.ctx, &model.DeviceCredentialCreateRequest{
@@ -102,9 +105,20 @@ func TestAWarmCredentialedEventAsksNoKeyValueStoreButStillReadsItsCredential(t *
 			credentialReads++
 		}
 	}
-	if credentialReads == 0 {
-		t.Errorf("the warm credentialed event did not read its credential from the database; it must, "+
-			"every event (statements: %v)", rig.statements())
+	if credentialReads != 0 {
+		t.Errorf("the warm credentialed event read its credential from the database %d times, want 0 "+
+			"(statements: %v)", credentialReads, rig.statements())
+	}
+
+	// Revoked through the plain Api, as the GraphQL mutation does: the next event is refused.
+	if _, err := rig.api.UpdateDeviceCredential(rig.ctx, "c-1",
+		&model.DeviceCredentialUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
+		t.Fatalf("disable the credential: %v", err)
+	}
+	if _, reason, err := rez.ResolveEvent(rig.ctx, event()); !errors.Is(err, model.ErrCredentialNotResolved) ||
+		reason != uint(dmproto.FailureReason_Unauthenticated) {
+		t.Fatalf("an event presenting the disabled credential: reason %d, err %v; want Unauthenticated, %v",
+			reason, err, model.ErrCredentialNotResolved)
 	}
 }
 

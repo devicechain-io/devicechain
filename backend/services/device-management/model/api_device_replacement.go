@@ -64,7 +64,9 @@ var ErrCredentialIdRequired = errors.New("credentialId is required for this cred
 // something. presentedCredentialStatement — the one statement both credential
 // finders run, DeviceCredentialByCredentialId (events, access-token connects) and
 // deviceCredentialForConnect (MQTT password connects) — matches `enabled = true`
-// only, so a retired credential authenticates nothing.
+// only, so a retired credential authenticates nothing. Its copy in any replica's credential
+// cache is evicted after the commit: on this replica before the call returns, on the others
+// by broadcast, and within 5 s on one the broadcast does not reach.
 //
 // 🔴 THAT STOPS RECONNECTION, NOT THE SESSION ALREADY IN FLIGHT, and the difference
 // matters to whoever is standing at the device. Nothing here evicts a connected
@@ -209,6 +211,9 @@ func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest
 	if err != nil {
 		return nil, err
 	}
+	// The retired credentials may be held in memory by any replica: drop them, after the
+	// commit, so the unit taken out of service stops authenticating on its next event.
+	api.evictDeviceCredentials(ctx, device.TenantId, device.ID)
 
 	// Attach the device the record points at, AFTER the transaction so no write can
 	// go through the association. The row is created with the association omitted —

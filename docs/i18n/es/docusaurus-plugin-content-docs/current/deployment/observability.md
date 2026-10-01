@@ -483,7 +483,7 @@ medida.
 
 | Ajuste (configuración de `device-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras autentica la credencial de un evento, lo que hace con cada evento que lleva una (todos los eventos, con la autenticación de dispositivos `required` por defecto). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. Las consultas de un resolvedor al almacén clave-valor se hacen a la vez, pero sus lecturas de la base de datos siguen haciéndose de una en una, así que nunca ocupa más de una conexión. |
+| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras lee de ella la credencial de un evento, lo que hace siempre que la credencial no se haya verificado en esa réplica en los últimos cinco segundos (consulte [Cachés que dejan de responder](#kv-caches)). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. Las consultas de un resolvedor al almacén clave-valor se hacen a la vez, pero sus lecturas de la base de datos siguen haciéndose de una en una, así que nunca ocupa más de una conexión. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | Cuántas entradas, como máximo, guarda cada réplica en memoria de cada una de las tres cachés que se guardan por dispositivo: un dispositivo por su token, sus relaciones seguidas y sus pertenencias a grupos. Consulte [Cachés que dejan de responder](#kv-caches). |
 | `inMemoryCache.perDeviceCacheMiB` | `24` | Cuánta memoria, en MiB, ocupa como máximo cada una de esas tres cachés en cada réplica. Suba con él el límite de memoria del servicio. Consulte [Cachés que dejan de responder](#kv-caches). |
 
@@ -685,8 +685,20 @@ réplicas hasta cinco segundos más tarde de lo que llegaría solo a través del
 entonces otra réplica puede, por ejemplo, seguir resolviendo un dispositivo borrado, o vuelto a
 crear con el mismo token, a través de su registro anterior, o evaluar una regla cuyo alcance de
 grupo acaba de cambiar con el alcance anterior. Los eventos que presentan una credencial de
-dispositivo no se ven afectados por un dispositivo borrado: las credenciales se comprueban contra
-la base de datos en cada evento.
+dispositivo toman su dispositivo de la copia de la credencial que describe el párrafo siguiente.
+
+**Credenciales de dispositivo.** Cada réplica guarda también en memoria una credencial de
+dispositivo que acaba de verificar, con su dispositivo, durante cinco segundos desde que la leyó.
+Nunca se guarda en un bucket de clave-valor, porque contiene la contraseña de la credencial. Cada
+réplica guarda hasta 65.536 credenciales o 16 MiB, que son fijos. Cada comprobación de una
+credencial guardada compara su contraseña y su expiración igual que la de la almacenada, y una
+credencial que no se pudo verificar nunca se guarda. Un cambio en una credencial o en su
+dispositivo descarta la copia en la réplica que lo hace, y un mensaje en NATS avisa a las demás
+réplicas para que descarten la suya. Así que una revocación, o un dispositivo borrado a través de
+otra réplica, normalmente surte efecto en el siguiente evento en todas, y en cinco segundos como
+máximo si ese mensaje se pierde. Las conexiones MQTT siempre leen la base de datos. Una flota que
+informa con menos frecuencia que cada cinco segundos lee su credencial de la base de datos en cada
+evento, como antes.
 
 **Flotas que informan con menos frecuencia que cada cinco segundos.** Un valor se guarda en memoria
 cinco segundos desde que se leyó, por grande que sea la caché. Así que un dispositivo que informa
@@ -702,7 +714,8 @@ eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por deb
 `kv_cache_local_evictions_total{reason="capacity"}` creciendo cerca del ritmo de eventos, con
 `kv_cache_local_entries` en `kv_cache_local_max_entries` o `kv_cache_local_bytes` en
 `kv_cache_local_max_bytes`. Entonces suba el límite, y con él el límite de memoria: con los valores
-por defecto las cinco cachés guardan como máximo 80 MiB, y sin `GOMEMLIMIT` el heap puede crecer
+por defecto las seis cachés en memoria, incluidos los 16 MiB fijos de las credenciales, guardan
+como máximo 96 MiB, y sin `GOMEMLIMIT` el heap puede crecer
 hasta aproximadamente el doble de lo que guarda antes de recolectarse.
 
 Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
@@ -740,6 +753,26 @@ réplicas que ya la tenían en memoria.
 
 Una caché creada sin la copia en memoria no tiene ninguna de las seis series `kv_cache_local_`.
 Hoy todas las cachés de `device-management` la tienen.
+
+La copia de las credenciales tiene series propias:
+
+- **`devicechain_devicemanagement_credential_cache_lookups_total{result}`**: comprobaciones de
+  credenciales respondidas desde memoria (`result="hit"`) o pasadas a la base de datos
+  (`result="miss"`).
+- **`devicechain_devicemanagement_credential_cache_evictions_total{reason}`**: credenciales
+  descartadas de la memoria porque tenían cinco segundos (`reason="expired"`), porque la copia
+  estaba llena (`reason="capacity"`) o porque la credencial o su dispositivo cambiaron, en esta
+  réplica o en otra (`reason="revoked"`).
+- **`devicechain_devicemanagement_credential_cache_entries`**,
+  **`devicechain_devicemanagement_credential_cache_bytes`**,
+  **`devicechain_devicemanagement_credential_cache_max_entries`** y
+  **`devicechain_devicemanagement_credential_cache_max_bytes`**: lo que guarda una réplica, y lo
+  máximo que guarda.
+- **`devicechain_devicemanagement_cache_eviction_broadcasts_total{cache, result}`**: los mensajes
+  que avisan a las demás réplicas para que descarten una copia, enviados (`result="published"`),
+  no enviados (`result="publish_failed"`), recibidos (`result="received"`) o recibidos y
+  descartados por ilegibles (`result="malformed"`). Un `publish_failed` constante significa que los
+  cambios llegan a las demás réplicas solo cuando caducan sus copias, en cinco segundos como máximo.
 
 Por otra parte, resolver un evento que tarda más de cinco segundos, por la razón que sea, se
 registra como advertencia (`Event resolution is slow`): la primera vez de inmediato y después como

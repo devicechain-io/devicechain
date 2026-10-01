@@ -40,12 +40,14 @@ import (
 // happened to match, today or after someone adds one, and would then be replayed to a
 // consumer as though it were a platform message. Rooting it at "$DC." puts it where no
 // stream looks, which is the same reasoning that keeps "$JS.API." and "$SYS.REQ." out of
-// the message space. Nothing else in the platform publishes under "$DC.".
+// the message space. The platform publishes two things under "$DC.": this request, and the
+// in-process cache evictions of cache_evict.go.
 
 const (
-	// detectPurgeSubjectRoot is the control-subject root: outside every stream's capture
+	// controlSubjectRoot is the control-subject root: outside every stream's capture
 	// space, and outside the "$JS"/"$SYS"/"$MQTT" trees nats-server reserves for itself.
-	detectPurgeSubjectRoot = "$DC."
+	// Every control subject is built on it, so they cannot drift onto different roots.
+	controlSubjectRoot = "$DC."
 
 	// detectPurgeSubjectLeaf names the operation. The instance id sits between the root
 	// and this, so one broker serving several instances (ADR-048) keeps their eviction
@@ -87,7 +89,7 @@ const (
 // Both sides derive it here so the responder cannot subscribe to a subject the caller
 // does not use — a mismatch that fails as silence, never as an error.
 func DetectPurgeSubject(instanceId string) string {
-	return detectPurgeSubjectRoot + instanceId + detectPurgeSubjectLeaf
+	return controlSubjectRoot + instanceId + detectPurgeSubjectLeaf
 }
 
 // DetectPurgeRequest asks the engine holding a partition to evict one tenant.

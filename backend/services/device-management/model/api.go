@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -80,11 +81,12 @@ type Api struct {
 	// may be nil (tests / pre-wiring), disabling emission.
 	EntityDeletedPublisher EntityEventPublisher
 
-	// CacheEvictor drops cached entries a delete invalidates (ADR-044 F2). Without
+	// CacheEvictor drops cached entries a write invalidates (ADR-044 F2). Without
 	// it, after a delete the ingest hot path keeps resolving the removed device and
 	// keeps a referencing device's tracked relationships cached for up to the TTL,
-	// re-creating the very event_anchors the reconciler just removed. Injected at
-	// wiring time (it holds the cache layer); nil in tests disables eviction.
+	// re-creating the very event_anchors the reconciler just removed; and a revoked or
+	// changed credential keeps authenticating events from memory until it expires.
+	// Injected at wiring time (it holds the cache layer); nil in tests disables eviction.
 	CacheEvictor CacheEvictor
 
 	// DetectionRuleValidator compiles a profile's draft detection rules against
@@ -177,6 +179,12 @@ type CacheEvictor interface {
 	// is stale but never incoherent: those events name a version whose snapshot is on
 	// record and describes the fences they were resolved against.
 	EvictFenceSetVersion(ctx context.Context)
+	// EvictDeviceCredentials drops the cached credentials of each given device of tenant,
+	// on every replica. It is called post-commit by every write that can change what a
+	// presented credential authenticates as: a credential updated (any field) or deleted,
+	// a device updated, replaced or deleted. tenant is the changed row's, never the
+	// context's.
+	EvictDeviceCredentials(ctx context.Context, tenant string, deviceIds []uint)
 }
 
 // Create a new API instance.
@@ -269,6 +277,24 @@ func (api *Api) evictEntityDelete(ctx context.Context, etype entity.Type, id uin
 	}
 }
 
+// evictDeviceCredentials drops the cached credentials of the given devices of tenant when
+// an evictor is wired. Zero ids are skipped and duplicates folded; nothing left is a no-op.
+// Called post-commit, with the tenant of the row that changed.
+func (api *Api) evictDeviceCredentials(ctx context.Context, tenant string, deviceIds ...uint) {
+	if api.CacheEvictor == nil {
+		return
+	}
+	ids := make([]uint, 0, len(deviceIds))
+	for _, id := range deviceIds {
+		if id != 0 && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) > 0 {
+		api.CacheEvictor.EvictDeviceCredentials(ctx, tenant, ids)
+	}
+}
+
 // evictRelationshipSources drops the cached tracked-relationship sets of the given
 // source devices when an evictor is wired (ADR-044 F2). No-op otherwise.
 func (api *Api) evictRelationshipSources(ctx context.Context, sourceDeviceIds []uint) {
@@ -333,6 +359,10 @@ type DeviceManagementApi interface {
 
 	// Device authentication (transport security, ADR-014).
 	AuthenticateDevice(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error)
+	// AuthenticateDeviceConnect is AuthenticateDevice for an access-token MQTT connect. It
+	// is never answered from memory: a connect is granted a session that outlives any
+	// cached copy, so it must see a revocation at once.
+	AuthenticateDeviceConnect(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error)
 	// ResolveDeviceCredential is AuthenticateDevice without the secret compare, for the
 	// MQTT auth callout, which compares through credential.Checker. What it returns is
 	// NOT authenticated until that compare succeeds, and the device carries only its

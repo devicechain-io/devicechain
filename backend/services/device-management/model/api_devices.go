@@ -662,6 +662,10 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	// A credentialed event takes its device from the credential cache, which holds the
+	// device as it was read: drop it so the next event sees the new type, external id and
+	// the rest.
+	api.evictDeviceCredentials(ctx, updated.TenantId, updated.ID)
 	// Re-roster POST-COMMIT only when the device was re-typed (ADR-051 slice 4c-2): a
 	// re-type may change the adopted profile, so the roster's device→profile binding must
 	// follow. Metadata-only updates leave the binding unchanged, so they emit nothing. The

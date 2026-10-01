@@ -39,7 +39,9 @@ type fakeAuthApi struct {
 	resolves *atomic.Int32
 }
 
-func (f fakeAuthApi) AuthenticateDevice(ctx context.Context, p *model.PresentedCredential, _ time.Time) (*model.Device, error) {
+// AuthenticateDeviceConnect is the only token check the fake answers: a responder that
+// called AuthenticateDevice instead would reach the embedded nil interface and panic.
+func (f fakeAuthApi) AuthenticateDeviceConnect(ctx context.Context, p *model.PresentedCredential, _ time.Time) (*model.Device, error) {
 	return f.authFn(ctx, p)
 }
 
@@ -289,7 +291,7 @@ func TestAuthorizeDeniesDeviceWithoutToken(t *testing.T) {
 }
 
 // Malformed usernames and failed authentication both deny with the same generic
-// message (no oracle), and a malformed username never reaches AuthenticateDevice.
+// message (no oracle), and a malformed username never reaches AuthenticateDeviceConnect.
 func TestAuthorizeDeny(t *testing.T) {
 	t.Run("malformed username short-circuits", func(t *testing.T) {
 		called := false
@@ -302,7 +304,7 @@ func TestAuthorizeDeny(t *testing.T) {
 			t.Errorf("expected generic denial, got jwt=%q err=%q", jwt, errMsg)
 		}
 		if called {
-			t.Error("AuthenticateDevice should not be called for a malformed username")
+			t.Error("AuthenticateDeviceConnect should not be called for a malformed username")
 		}
 	})
 
@@ -451,7 +453,7 @@ func TestAuthorizeGrantsTheDevicesOwnMqttClientIDs(t *testing.T) {
 }
 
 // The check cannot move earlier than it sits, and this pins the reason: the
-// required id is derived from the DEVICE TOKEN, which only AuthenticateDevice can
+// required id is derived from the DEVICE TOKEN, which only AuthenticateDeviceConnect can
 // produce. A future reordering that refuses a bad client id before touching the
 // credential store — tempting, because that is exactly what the ADR-077 deleted-
 // tenant gate does one step above — would have to compare against something it

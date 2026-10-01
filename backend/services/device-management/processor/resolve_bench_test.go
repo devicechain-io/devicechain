@@ -5,7 +5,13 @@ package processor
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/devicechain-io/dc-device-management/config"
+	"github.com/devicechain-io/dc-device-management/model"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -94,6 +100,73 @@ func BenchmarkWarmResolve(b *testing.B) {
 					b.ReportMetric(float64(rig.totalGets())/float64(b.N), "kvgets/op")
 				})
 			}
+		}
+	}
+}
+
+// BenchmarkWarmCredentialedResolve is the in-process cost of resolving one credentialed
+// event under required device authentication, the default, with every key-value lookup
+// warm, with the credential cache off (credcache=off: one credential statement per event,
+// as before the cache) and on. metadata= is the size of the device's metadata, which a hit
+// copies: 0, and 64 KiB to show what a large one costs. sqlstmts/op counts the database
+// statements per event. The database is an in-memory SQLite, so the off arm's statement
+// is far cheaper here than a PostgreSQL round trip; the ratio is a floor on the saving.
+//
+// 🔴 A RUN LONGER THAN THE CREDENTIAL CACHE'S 5 S re-reads the credential once per 5 s, so
+// a -benchtime above it reads a little over 0 sqlstmts/op on the on rows.
+func BenchmarkWarmCredentialedResolve(b *testing.B) {
+	for _, metadata := range []int{0, 64 << 10} {
+		for _, cached := range []bool{false, true} {
+			name := fmt.Sprintf("credcache=%s/metadata=%d", map[bool]string{false: "off", true: "on"}[cached], metadata)
+			b.Run(name, func(b *testing.B) {
+				rig := newBenchResolveRig(b, 0, nil)
+				if !cached {
+					rig.caches.Credentials = nil
+				}
+				secret := "s3cret"
+				if _, err := rig.api.CreateDeviceCredential(rig.ctx, &model.DeviceCredentialCreateRequest{
+					Token: "c-1", DeviceToken: "dev", CredentialType: string(model.CredentialMqttBasic),
+					CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,
+				}); err != nil {
+					b.Fatal(err)
+				}
+				if metadata > 0 {
+					meta := `{"blob":"` + strings.Repeat("x", metadata) + `"}`
+					if _, err := rig.api.UpdateDevice(rig.ctx, "dev",
+						&model.DeviceUpdateRequest{Metadata: dcgraphql.OptionalStringOf(meta)}); err != nil {
+						b.Fatal(err)
+					}
+				}
+				rez := NewEventResolver(1, rig.capi, config.AuthModeRequired, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+				event := func() *esmodel.UnresolvedEvent {
+					e := tempEvent("21")
+					ctype, cid := string(model.CredentialMqttBasic), "cred-1"
+					e.CredentialType, e.CredentialId, e.CredentialSecret = &ctype, &cid, &secret
+					return e
+				}
+				if _, _, err := rez.ResolveEvent(rig.ctx, event()); err != nil { // warm every cache
+					b.Fatal(err)
+				}
+				// The rig records every statement's text, which costs an allocation per
+				// statement and so would be charged to the off arm alone; count instead.
+				var stmts atomic.Int64
+				if err := rig.db.Callback().Query().Remove("test:count-sql"); err != nil {
+					b.Fatal(err)
+				}
+				if err := rig.db.Callback().Query().After("gorm:query").Register("bench:count-sql",
+					func(*gorm.DB) { stmts.Add(1) }); err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if _, _, err := rez.ResolveEvent(rig.ctx, event()); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(stmts.Load())/float64(b.N), "sqlstmts/op")
+			})
 		}
 	}
 }

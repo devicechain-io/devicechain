@@ -18,10 +18,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// These tests count the SQL statements a presented credential costs. The lookup runs on
-// every credential-bearing event and every MQTT connect, and it is deliberately uncached
-// (a disable, delete or expiry must take effect on the very next event), so its statement
-// count IS its cost.
+// These tests count the SQL statements a presented credential costs when it is read from
+// the database: every MQTT connect, and every credential-bearing event the credential
+// cache cannot answer. The fixture here has NO credential cache, so its statement count
+// IS that cost; the cache itself is tested in credential_cache_test.go.
 //
 // The refusal table is the other half, and it is the half that matters more: the lookup
 // fetches the owning device on a JOIN, which the tenant-scope callback does NOT qualify
@@ -128,8 +128,8 @@ func requireOneJoinedStatement(t *testing.T, f credFixture, what string) {
 	t.Logf("%s: %s", what, taken[0])
 }
 
-// Authenticating an access token is one statement, and stays one on a repeat: nothing
-// caches a credential, so the second call pays exactly what the first did.
+// Authenticating an access token is one statement, and stays one on a repeat: with no
+// credential cache, the second call pays exactly what the first did.
 func TestAuthenticatingACredentialIsOneStatement(t *testing.T) {
 	f := newSQLiteCredentialFixture(t)
 	now := time.Now()

@@ -51,6 +51,14 @@ La plataforma resuelve la credencial al dispositivo que la posee y la verifica. 
 
 Cuando una credencial autentica, el dispositivo al que se resuelve es autoritativo. Un evento cuyo token `device` nombra a un dispositivo *distinto* se rechaza, de modo que un dispositivo autenticado no puede suplantar a otro.
 
+### Cuánto tarda en aplicarse una revocación {#revocation-timing}
+
+Cada réplica de `device-management` guarda en memoria, durante hasta cinco segundos, una credencial que acaba de verificar, para comprobar los siguientes eventos del dispositivo sin volver a leer la base de datos. La copia se comprueba exactamente igual que la credencial almacenada: la contraseña de una credencial `MQTT_BASIC` se compara en cada evento, y una expiración surte efecto en su momento. Una credencial que no se pudo verificar nunca se guarda, así que una credencial corregida funciona en el siguiente evento del dispositivo.
+
+Cuando deshabilitas, borras o cambias una credencial, o reemplazas, editas o borras su dispositivo, la réplica que hace el cambio descarta su copia antes de responderte. Después avisa a las demás réplicas para que descarten la suya. Así que una revocación normalmente surte efecto en el siguiente evento del dispositivo. Si ese aviso se pierde, por ejemplo mientras una réplica se reconecta al broker o mientras algunas réplicas aún ejecutan la versión anterior durante una actualización, la credencial revocada todavía puede autenticar eventos en esa réplica durante hasta cinco segundos después del cambio.
+
+Las conexiones no se ven afectadas. Cada conexión MQTT, con contraseña o con token de acceso, se comprueba contra la base de datos, así que una credencial revocada no puede abrir una conexión nueva en ninguna réplica. Borrar un inquilino tampoco se ve afectado: sus dispositivos se rechazan antes de que se elimine ninguna credencial.
+
 ## Dos capas: la conexión y el evento
 
 La credencial del cuerpo del evento es la verificación **por evento**. Las **conexiones** MQTT y NATS también se autentican, en el propio broker:

@@ -3480,8 +3480,8 @@ Nothing needs doing at the upgrade.
   resolve**, on top of what the cache's time to live already allowed. A device deleted, or
   re-created under the same token, can still resolve through its old record on another replica
   for those seconds, and a rule whose group scope was just changed can be evaluated there against
-  the previous scope. Events that present a device credential are checked against the database
-  every time, as before, and an alarm edge for a device that was just deleted is still dropped at
+  the previous scope. Events that present a device credential are checked as
+  [the credential cache item](#next-credential-cache) describes, and an alarm edge for a device that was just deleted is still dropped at
   once on every replica.
 - **Four new metrics** count lookups answered from memory, entries dropped from it, and its size.
   `kv_cache_request_duration_seconds{op="get"}` now counts only the lookups memory could not
@@ -3988,6 +3988,34 @@ If any instance still reports `off`, remove the setting at once, before anything
 kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
   -p '{"spec":{"postgresql":{"parameters":{"wal_compression":null}}}}'
 ```
+
+#### device-management checks a repeated device credential from memory {#next-credential-cache}
+
+Nothing needs doing at the upgrade.
+
+- **Each `device-management` replica keeps a device credential it has just verified in memory
+  for up to five seconds**, and checks the device's next events against that copy instead of
+  reading the database. In a CPU profile of a loaded replica, that read was most of the service's
+  CPU. The copy is checked exactly as the stored credential is: an `MQTT_BASIC` password is still
+  compared on every event, and an expiry still takes effect at its time. A credential that failed
+  to verify is never kept.
+- **A revocation can now take up to five seconds on a replica that missed the news.** Each of
+  these drops the copy on the replica that made the change before it returns, and tells the other
+  replicas to drop theirs:
+  - disabling, deleting or re-pointing a credential, or changing anything else about it
+  - replacing, editing or deleting its device
+
+  If that message is lost, for example while a replica is reconnecting to NATS or while some
+  replicas still run the previous release during the upgrade, that replica's copy expires within
+  five seconds of the change. Until now a revocation took effect on the next event on every
+  replica. See [How quickly a revocation takes effect](../guides/device-credentials.md#revocation-timing).
+- **MQTT connects still read the database every time**, with a password or an access token, so a
+  revoked credential cannot open a new connection on any replica.
+- **Each replica keeps at most 65,536 credentials or 16 MiB.** The bound is fixed, and at the
+  defaults the service's in-memory caches now hold at most 96 MiB rather than 80. **New metrics**
+  count the checks answered from the copy, the credentials dropped from it, its size, and the
+  messages each replica sent and received to drop copies. See
+  [Caches that stop answering](./observability.md#kv-caches).
 
 ### The one-time durable-ingest cutover
 

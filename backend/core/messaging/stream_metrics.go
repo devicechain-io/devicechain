@@ -239,6 +239,10 @@ type streamMetrics struct {
 	// The bounds each in-process copy was built with, so its fill can be read against them.
 	cacheLocalMaxEntries *prometheus.GaugeVec
 	cacheLocalMaxBytes   *prometheus.GaugeVec
+
+	// cacheEvictBroadcasts counts the messages of each EvictionBroadcast (cache_evict.go),
+	// by cache and result.
+	cacheEvictBroadcasts *prometheus.CounterVec
 }
 
 // cacheBuckets spans a loopback KV answer to the Get/Set budget. Nothing lands above it
@@ -390,9 +394,30 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 			"The most bytes, counted as kv_cache_local_bytes counts them, that a key-value cache's in-process "+
 				"copy holds before it drops the least recently used.",
 			[]string{"cache"}),
+		cacheEvictBroadcasts: ms.NewCounterVec("cache_eviction_broadcasts_total",
+			"In-process cache eviction messages this replica broadcast (result=published, or publish_failed: "+
+				"other replicas then drop the entries only when they expire) or received from the broker "+
+				"(result=received, or malformed: dropped unread).",
+			[]string{"cache", "result"}),
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
+}
+
+// evictionBroadcastInit creates one EvictionBroadcast series at 0.
+func (m *streamMetrics) evictionBroadcastInit(cache, result string) {
+	if m == nil || m.cacheEvictBroadcasts == nil {
+		return
+	}
+	m.cacheEvictBroadcasts.WithLabelValues(cache, result).Add(0)
+}
+
+// evictionBroadcast counts one EvictionBroadcast message.
+func (m *streamMetrics) evictionBroadcast(cache, result string) {
+	if m == nil || m.cacheEvictBroadcasts == nil {
+		return
+	}
+	m.cacheEvictBroadcasts.WithLabelValues(cache, result).Inc()
 }
 
 // newEngagedCollector builds and registers the scrape-time engaged gauge, or returns nil for

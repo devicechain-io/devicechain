@@ -466,7 +466,7 @@ bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 
 | Setting (`device-management` config) | Default | What it does |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it authenticates an event's credential, which it does for every event that carries one (every event, under the default `required` device authentication). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. A resolver's lookups in the key-value store run at the same time, but its database reads still run one at a time, so it never holds more than one connection. |
+| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it reads an event's credential from the database, which it does whenever the credential was not verified on that replica in the last five seconds (see [Caches that stop answering](#kv-caches)). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. A resolver's lookups in the key-value store run at the same time, but its database reads still run one at a time, so it never holds more than one connection. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | The most entries each replica keeps in memory of each of the three caches kept per device: a device by its token, its tracked relationships, its group memberships. See [Caches that stop answering](#kv-caches). |
 | `inMemoryCache.perDeviceCacheMiB` | `24` | The most memory, in MiB, each of those three caches takes in each replica. Raise the service's memory limit with it. See [Caches that stop answering](#kv-caches). |
 
@@ -651,8 +651,18 @@ never kept. A change reaches the events that other replicas resolve up to five s
 than it would through the bucket alone. Until then another replica can, for example, still
 resolve a device deleted or re-created under the same token through its old record, or evaluate
 a rule whose group scope was just changed against the previous scope. Events that present a
-device credential are not affected by a deleted device: credentials are checked against the
-database on every event.
+device credential take their device from the credential copy the next paragraph describes.
+
+**Device credentials.** Each replica also keeps a device credential it has just verified, with
+its device, in memory for five seconds from when it read it. It is never stored in a key-value
+bucket, because it holds the credential's password. Each replica keeps up to 65,536 credentials or
+16 MiB, which is fixed. Every check of a kept credential compares its password and expiry as a
+check of the stored one does, and a credential that failed to verify is never kept. A change to a
+credential or its device drops the copy on the replica that made it, and a message on NATS tells
+the other replicas to drop theirs. So a revocation, or a device deleted through another replica,
+normally takes effect on the next event everywhere, and within five seconds if that message is
+lost. MQTT connects always read the database. A fleet that reports less often than every five
+seconds reads its credential from the database on every event, as before.
 
 **Fleets that report less often than every five seconds.** A value is kept in memory for five
 seconds from when it was read, however large the cache. So a device that reports less often than
@@ -666,7 +676,8 @@ rate, while `kv_cache_local_entries` for that cache stays well below `kv_cache_l
 A fleet too large for the cache instead shows `kv_cache_local_evictions_total{reason="capacity"}`
 rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
 or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`. Then raise the bound, and the memory
-limit with it: at the defaults the five caches hold at most 80 MiB, and with no `GOMEMLIMIT` set
+limit with it: at the defaults the six in-memory caches, the credentials' fixed 16 MiB included,
+hold at most 96 MiB, and with no `GOMEMLIMIT` set
 the heap can grow to about twice what it holds before it is collected.
 
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
@@ -704,6 +715,25 @@ already had it in memory.
 
 A cache built without the in-memory copy has none of the six `kv_cache_local_` series. Today
 every `device-management` cache has it.
+
+The credential copy has series of its own:
+
+- **`devicechain_devicemanagement_credential_cache_lookups_total{result}`**: credential checks
+  answered from memory (`result="hit"`) or passed on to the database (`result="miss"`).
+- **`devicechain_devicemanagement_credential_cache_evictions_total{reason}`**: credentials dropped
+  from memory because they were five seconds old (`reason="expired"`), because the copy was full
+  (`reason="capacity"`), or because the credential or its device changed, on this replica or
+  another (`reason="revoked"`).
+- **`devicechain_devicemanagement_credential_cache_entries`**,
+  **`devicechain_devicemanagement_credential_cache_bytes`**,
+  **`devicechain_devicemanagement_credential_cache_max_entries`** and
+  **`devicechain_devicemanagement_credential_cache_max_bytes`**: what a replica holds, and the most
+  it holds.
+- **`devicechain_devicemanagement_cache_eviction_broadcasts_total{cache, result}`**: the messages
+  that tell the other replicas to drop a copy, sent (`result="published"`), not sent
+  (`result="publish_failed"`), received (`result="received"`), or received and dropped as
+  unreadable (`result="malformed"`). A steady `publish_failed` means changes reach the other
+  replicas only when their copies expire, within five seconds.
 
 Separately, resolving an event that takes longer than five seconds for any reason is logged as a
 warning (`Event resolution is slow`): the first one at once, then at most one line every 30
