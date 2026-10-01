@@ -887,6 +887,54 @@ happens:
 Plan a node's return the way you plan its loss, and do not take a second node down until
 `dcctl ha verify` passes again.
 
+#### Where the database primaries run {#ha-database-primaries}
+
+Each database prefers a node that is not running another DeviceChain database's primary. In
+testing on three 8-vCPU nodes, with the relational and the event-store primary on the same node,
+that node ran at 94 to 98% CPU while the other two ran at 45 to 51%.
+
+- **It is a preference, not a requirement.** A cluster with fewer nodes still schedules every
+  database instance. The one exception is a `ResourceQuota` with the `CrossNamespacePodAffinity`
+  scope: it refuses pods whose placement looks at other namespaces, preferred or not, so it
+  refuses these database pods in a namespace where it forbids that. The API server's quota
+  admission configuration can impose the same limit on every namespace without a matching quota;
+  see the [release notes](./releases-and-upgrades.md#next-upgrade).
+- **It applies when a database pod is scheduled.** Under `--ha` on three nodes, each node already
+  runs one instance of each database, so in practice the preference decides one thing: when an
+  instance's event store is created, its first primary goes to a node that is not running the
+  relational primary. A [failover](#ha-database-failover), a switchover, or the switchover that
+  ends a rolling update of a database can still leave both primaries on one node, and the
+  preference does not move them back.
+- **An event store created before this preference was introduced does not take part.** Its pods
+  neither carry the label the other databases look for nor prefer anything, and nothing
+  re-applies it. On an installation that predates it, the preference applies only to instances
+  bootstrapped since.
+
+To see where the primaries are (this lists every database's primary, including one created
+before the preference was introduced):
+
+```bash
+kubectl get pods -A -l cnpg.io/instanceRole=primary -o wide
+```
+
+If two of them share a node, switch one database's primary to a standby on another node. With the
+CloudNativePG `kubectl` plugin:
+
+```bash
+kubectl cnpg promote dc-rdb dc-rdb-2 -n dc-system
+```
+
+or, without the plugin:
+
+```bash
+kubectl -n dc-system patch cluster dc-rdb --subresource=status --type=merge \
+  -p '{"status":{"targetPrimary":"dc-rdb-2"}}'
+```
+
+Pick a standby on a node that the first command shows has no primary. A switchover interrupts the
+database's writes briefly (see [When a database primary stops](#ha-database-failover)), and the
+services retry them. A single-instance installation has no standby to switch to.
+
 ### Service sizing {#service-sizing}
 
 Every backend service requests 128Mi of memory and is limited to 256Mi. CPU is sized per service
@@ -941,6 +989,11 @@ throughput](#measured-throughput)).
   moving `event-management` off that node raised the sustained rate from about 4,750 to about
   5,600 events per second; its effect at the default settings has not been measured. To turn it
   off for one service, set `functionalAreas.<service>.avoidEventStorePrimary: false`.
+- **The databases' primaries prefer different nodes.** In testing, a node running both the
+  relational and the event-store primary ran at 94 to 98% CPU while the others ran at about
+  half. See [Where the
+  database primaries run](#ha-database-primaries), including how to check after a failover or an
+  upgrade.
 - **More traffic needs more.** Several tenants each sending at their ceiling, messages that carry
   many readings, or a tenant that is [admitted above its
   ceiling](../concepts/governance.md#ingest-above-ceiling) while it catches up all need more

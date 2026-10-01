@@ -3825,6 +3825,53 @@ ten.
   setting to raise.
 - Going back to `v0.18.0` leaves the indexes removed, and `v0.18.0` works without them.
 
+#### The databases' primaries prefer different nodes {#next-primary-spread}
+
+Each database now prefers a node that is not running another DeviceChain database's primary. In
+testing on three 8-vCPU nodes, the relational and the event-store primary had been placed on the
+same node, which ran at 94 to 98% CPU while the other two ran at 45 to 51%.
+
+- It is a preference, not a requirement: a cluster with fewer nodes still schedules every
+  database instance.
+- It acts when a database pod is scheduled, which in practice means when an instance's event
+  store is created. A failover, a switchover, or the switchover that ends a rolling update can
+  still leave both primaries on one node. [Where the database primaries
+  run](./bootstrap.md#ha-database-primaries) shows how to check and how to move one.
+
+**Before you upgrade, check for a quota on cross-namespace placement.** The database pods now
+carry a placement preference that looks at other namespaces. A `ResourceQuota` with the
+`CrossNamespacePodAffinity` scope refuses such pods, preferred or not, in a namespace where it
+forbids them: the relational database's restarted instances in the cluster's namespace
+(`dc-system` by default), and a new instance's event store in its own namespace. Nothing
+DeviceChain installs creates one. To list any that exist:
+
+```bash
+kubectl get resourcequota -A \
+  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
+```
+
+An empty list does not settle it. The API server's quota admission configuration can name
+`CrossNamespacePodAffinity` under `limitedResources`, and then such pods are refused in every
+namespace that has **no** quota with that scope admitting them. That configuration lives in the
+control plane, not in a `kubectl` object, so ask whoever runs the cluster whether it is set; if it
+is, give `dc-system` and each instance's namespace a quota with that scope before upgrading.
+
+**At the upgrade.** The relational database takes the new setting the next time you run `dcctl
+install` with this release, and its instances restart once. Under `--ha` the standbys restart
+first and the primary role is then switched over to one of them, which is on another node. If
+the two primaries shared a node before the upgrade, that switchover moves them apart; if they did
+not, it can put them on one node, so check where they are afterwards. A single-instance
+installation restarts its only instance in place, and the relational database is unavailable
+until it has restarted; writes made meanwhile are retried.
+
+An existing instance's event store is not changed: `dcctl upgrade` does not re-apply it, and its
+instances are already placed. It does not carry the label the other databases look for, so
+neither the relational database nor a new instance's event store avoids its primary, and on an
+installation whose instances all predate this release the relational database restarts for a
+preference that has nothing to act on until an instance is bootstrapped. Instances bootstrapped
+with this release take part. Run `dcctl install` before you bootstrap a new instance, so that the
+relational database's pods carry the label the new event store looks for.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
