@@ -579,7 +579,12 @@ Sin la opción no cambia nada.
   llena antes. Con las ventanas y el almacén predeterminados, y la proporción relacional medida
   más arriba, las copias base como instantáneas de volumen llenan el almacén a unos 60 eventos por
   segundo sostenidos, no a unos 100; y a unos 29 si todo fuera registro de la base de datos
-  relacional. Las alertas de arriba son el aviso, igual que sin instantáneas.
+  relacional. Las alertas de arriba son el aviso, igual que sin instantáneas. No cambia el tamaño
+  predeterminado del almacén: la regla de dimensionamiento de [más arriba](#backup-store-size)
+  cuenta un respaldo base completo de cada base de datos y el log de cada evento que guarda un
+  almacén de eventos lleno, sea cual sea la programación de los respaldos base, y un respaldo base
+  completo sigue llegando al almacén al crearse cada base de datos y luego cada semana, así que la
+  regla da los mismos 160 GiB con o sin instantáneas.
 - **Pertenece al clúster.** Todas las instancias lo siguen, y cambiarlo se rechaza mientras haya
   instancias en el clúster, como los demás [ajustes de install](#re-running-install).
 
@@ -595,6 +600,23 @@ Las alertas de las instantáneas se describen en
   raíz. Para el proveedor `local` esto es un clúster de kind, que `dcctl install local` crea
   por ti (`--cluster <name>`, por defecto `devicechain`). Pasa `--kube-context <name>` para
   usar en su lugar un clúster que ya tengas (kind / minikube / k3d / docker-desktop).
+- **Disco para los volúmenes persistentes**, en la StorageClass predeterminada del clúster. En un
+  clúster que no es local (ni kind, ni minikube, ni k3d, ni docker-desktop, ni rancher-desktop), con
+  los ajustes de install predeterminados (sin `--compact`, `--no-cnpg`, `--no-monitoring` ni
+  `--backup-credentials-file`), `dcctl install --ha` reclama 204 GiB para el clúster: tres
+  volúmenes de la base de datos relacional, el [almacén de respaldos](#backup-store-size)
+  (160 GiB) y el Prometheus de la pila de monitorización. Cada instancia reclama 144 GiB más, tres
+  volúmenes del almacén de eventos y tres del broker de mensajes: 348 GiB para un clúster con una
+  instancia. Sin `--ha`, el clúster reclama 188 GiB y cada instancia 48 GiB. Cada instancia
+  adicional que ingiere de forma continua obliga además a ampliar el almacén de respaldos en unos
+  160 GiB, como explica [Tamaño del almacén](#backup-store-size). En un proveedor de nube,
+  comprueba antes la cuota de disco. Un proyecto nuevo de Google Cloud permite 500 GB de SSD por
+  región, y cuenta cada GiB de volumen como un GB; las dos clases de disco de Google Kubernetes
+  Engine y los discos de arranque de los nodos cuentan para ella, así que una instalación `--ha`
+  predeterminada apenas deja margen: la
+  [guía de Google Kubernetes Engine](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)
+  indica la cuota que hay que solicitar. En un clúster local la pila de monitorización no guarda
+  ningún volumen, y en kind los tamaños no se aplican.
 - **OpenTofu** (el binario `tofu`; `terraform` también funciona) en tu `PATH`. `dcctl` lo
   ejecuta para aprovisionar infraestructura. Instálalo desde
   [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar esto y

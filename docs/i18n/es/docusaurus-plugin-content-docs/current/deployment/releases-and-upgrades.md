@@ -4224,6 +4224,21 @@ dispositivo sigue avanzando cada vez que se escribe su estado. Un dispositivo qu
 primera vez se sigue creando por separado. No hay que hacer nada: no hay cambio de esquema, y el
 `device-state` anterior puede funcionar junto al nuevo durante la actualización.
 
+#### Comprueba la cuota de disco antes de una instalación `--ha` nueva en un proveedor de nube {#next-disk-quota}
+
+Con el [almacén de respaldos](#next-backup-store-size) más grande, un `dcctl install --ha`
+predeterminado y una instancia reclaman más volumen persistente del que cabe con holgura en la
+cuota regional de SSD de un proyecto nuevo de Google Cloud una vez que se cuentan también los
+discos de arranque de los nodos: en las pruebas en Google Kubernetes Engine, un volumen del
+almacén de eventos se quedó en `Pending` con `QUOTA_EXCEEDED`. Antes de una instalación nueva en un
+proveedor de nube, comprueba la cuota de disco. [Prerrequisitos](./bootstrap.md#prerequisites)
+indica los tamaños de los volúmenes, y la guía de Google Kubernetes Engine en `deploy/gke` indica
+la cuota que hay que solicitar. Tomar los respaldos base como
+[instantáneas de volumen](./bootstrap.md#snapshot-base-backups) no cambia el tamaño
+predeterminado del almacén de respaldos.
+
+No hay nada que hacer en la actualización: un clúster existente conserva los volúmenes que tiene.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

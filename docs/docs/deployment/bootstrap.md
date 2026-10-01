@@ -529,7 +529,11 @@ of its disks instead of a full copy in the backup store. Nothing changes without
   and store, and the relational share measured above, volume-snapshot base backups fill the
   store at about 60 events per second sustained, not about 100; and at about 29 if the
   relational database's log were all of it. The alerts above are the warning, as they are
-  without snapshots.
+  without snapshots. It does not change the store's default size: the sizing rule
+  [above](#backup-store-size) counts one full base backup of each database and the log of every
+  event a full event store holds, whatever the base-backup schedule, and a full base backup
+  still lands in the store when each database is created and then weekly, so the rule gives the
+  same 160 GiB with or without snapshots.
 - **It belongs to the cluster.** Every instance follows it, and changing it is refused while
   instances run on the cluster, like the other [install settings](#re-running-install).
 
@@ -545,6 +549,21 @@ The alerts for snapshots are described under
   is a kind cluster, which `dcctl install local` creates for you (`--cluster <name>`, default
   `devicechain`). Pass `--kube-context <name>` to use a cluster you already have instead
   (kind / minikube / k3d / docker-desktop).
+- **Disk for the persistent volumes**, on the cluster's default StorageClass. On a cluster that
+  is not local (not kind, minikube, k3d, docker-desktop or rancher-desktop), with the default
+  install settings (no `--compact`, `--no-cnpg`, `--no-monitoring` or
+  `--backup-credentials-file`), `dcctl install --ha` claims 204 GiB for the cluster: three relational-database volumes, the
+  [backup store](#backup-store-size) (160 GiB) and the monitoring stack's Prometheus. Each
+  instance claims 144 GiB more, three event-store and three message-broker volumes: 348 GiB for
+  a cluster with one instance. Without `--ha`, the cluster claims 188 GiB and each instance 48 GiB.
+  Each further instance that ingests continuously also needs the backup store grown by about
+  160 GiB, as [Backup store size](#backup-store-size) explains. On a cloud provider, check the
+  disk quota first. A new Google Cloud project allows 500 GB of SSD per region, counting each GiB
+  of volume as one GB, and both of Google Kubernetes Engine's disk classes and the nodes' boot
+  disks count against it, so a default `--ha` install leaves almost none of it spare: the
+  [Google Kubernetes Engine guide](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)
+  gives the quota to request. On a local cluster the monitoring stack keeps no volume, and on
+  kind the sizes are not enforced.
 - **OpenTofu** (the `tofu` binary; `terraform` also works) on your `PATH`. `dcctl` drives it
   to provision infrastructure. Install it from [opentofu.org](https://opentofu.org). Run
   `dcctl preflight local` to check this and the rest of your environment up front.
