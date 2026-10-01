@@ -423,6 +423,29 @@ func TestAConnectRowIsNeverCached(t *testing.T) {
 	require.Equal(t, 1, reads)
 }
 
+// fill refuses a row that is not enabled, or that carries no device. The per-event finder
+// matches enabled rows with their device only, so through it neither can arrive today: this
+// pins the refusal itself, so a finder that one day returns either cannot fill the cache. The
+// enabled row with its device is the control, held by the same call.
+func TestFillRefusesADisabledOrDevicelessRow(t *testing.T) {
+	c := NewCredentialCache(16, 1<<20)
+	disabled := synthCred("acme", 1, 0)
+	disabled.Enabled = false
+	fillSynth(c, "acme", "disabled", disabled)
+	entries, _ := c.len()
+	require.Zero(t, entries, "a disabled row was held")
+
+	deviceless := synthCred("acme", 2, 0)
+	deviceless.Device = nil
+	fillSynth(c, "acme", "deviceless", deviceless)
+	entries, _ = c.len()
+	require.Zero(t, entries, "a row with no device was held")
+
+	fillSynth(c, "acme", "enabled", synthCred("acme", 3, 0))
+	entries, _ = c.len()
+	require.Equal(t, 1, entries, "the control: an enabled row with its device is held")
+}
+
 // What a hit returns is the caller's own: changing it does not change the next hit.
 func TestAHitHandsBackADeviceTheCallerCannotChangeInTheCache(t *testing.T) {
 	f := newCredentialCacheFixture(t)

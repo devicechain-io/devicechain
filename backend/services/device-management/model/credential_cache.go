@@ -211,7 +211,8 @@ func (c *CredentialCache) readStarted() (gen uint64, at time.Time) {
 //     carries an EMPTY type, and evaluateCredential would then skip the secret compare on
 //     every hit. That refusal makes the danger unreachable, not merely unused;
 //   - it is not enabled, or carries no device: no row the per-event lookup returns is
-//     either, so a row that is was not read by it;
+//     either, so a row that is was not read by it. Nothing reaches this refusal today; it
+//     is belt-and-braces against a finder that one day does, and a test pins it;
 //   - it has already outlived the TTL counted from readAt;
 //   - it is larger than the byte bound on its own, in which case the entry it would have
 //     replaced goes too, so an older copy is never left in its place.

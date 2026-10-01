@@ -57,7 +57,7 @@ Each `device-management` replica keeps a credential it has just verified in memo
 
 When you disable, delete or change a credential, or replace, edit or delete its device, the replica that makes the change drops its copy before it answers you. It then tells the other replicas to drop theirs. So a revocation normally takes effect on the device's next event. If that message is lost, for example while a replica is reconnecting to the broker or while some replicas still run the previous release during an upgrade, the revoked credential can still authenticate events on that replica for up to five seconds after the change.
 
-Connections are not affected. Every MQTT connect, with a password or an access token, is checked against the database, so a revoked credential cannot open a new connection on any replica. Deleting a tenant is not affected either: its devices are refused before any credential is removed.
+Connections are not affected. Every MQTT connect, with a password or an access token, is checked against the database, so a revoked credential cannot open a new connection on any replica. Deleting a tenant does not clear these copies. Events already queued for the tenant when its credentials are removed can still be authenticated from memory for up to five seconds afterwards.
 
 ## Two layers: the connection and the event
 

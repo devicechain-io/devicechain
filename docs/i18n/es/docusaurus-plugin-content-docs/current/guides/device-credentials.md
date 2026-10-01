@@ -57,7 +57,7 @@ Cada réplica de `device-management` guarda en memoria, durante hasta cinco segu
 
 Cuando deshabilitas, borras o cambias una credencial, o reemplazas, editas o borras su dispositivo, la réplica que hace el cambio descarta su copia antes de responderte. Después avisa a las demás réplicas para que descarten la suya. Así que una revocación normalmente surte efecto en el siguiente evento del dispositivo. Si ese aviso se pierde, por ejemplo mientras una réplica se reconecta al broker o mientras algunas réplicas aún ejecutan la versión anterior durante una actualización, la credencial revocada todavía puede autenticar eventos en esa réplica durante hasta cinco segundos después del cambio.
 
-Las conexiones no se ven afectadas. Cada conexión MQTT, con contraseña o con token de acceso, se comprueba contra la base de datos, así que una credencial revocada no puede abrir una conexión nueva en ninguna réplica. Borrar un inquilino tampoco se ve afectado: sus dispositivos se rechazan antes de que se elimine ninguna credencial.
+Las conexiones no se ven afectadas. Cada conexión MQTT, con contraseña o con token de acceso, se comprueba contra la base de datos, así que una credencial revocada no puede abrir una conexión nueva en ninguna réplica. Borrar un inquilino no descarta estas copias. Los eventos que ya estaban en cola para el inquilino cuando se eliminan sus credenciales todavía pueden autenticarse desde la memoria durante hasta cinco segundos después.
 
 ## Dos capas: la conexión y el evento
 
