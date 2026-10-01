@@ -4202,11 +4202,12 @@ que se almacena no cambia, un evento se sigue reconociendo solo después de que 
 y un evento reentregado sigue sin añadir nada.
 
 - Cuando la base de datos rechaza una fila de una de esas sentencias que lleva varios eventos, por
-  ejemplo un valor demasiado grande para su columna, no indica a qué evento pertenece. El lote se vuelve a escribir entonces en
-  una transacción nueva, evento a evento, para encontrar el evento rechazado, que se trata como
-  antes. Ese evento le cuesta a su lote una transacción más, y `persist_batch_fallbacks_total`
-  cuenta las dos. Un evento rechazado antes de enviar nada, como una lectura que no es un número, y
-  los eventos de un inquilino eliminado se siguen apartando de inmediato.
+  ejemplo un valor demasiado grande para su columna, no indica a qué evento pertenece. El lote se
+  vuelve a escribir entonces en una transacción nueva, evento a evento, para encontrar el evento
+  rechazado, que se trata como antes. Ese evento le cuesta a su lote una transacción más, y
+  `persist_batch_fallbacks_total` cuenta las dos. Un evento rechazado antes de enviar nada, como
+  una lectura que no es un número, y los eventos de un inquilino eliminado se siguen apartando de
+  inmediato.
 - Los eventos de conexión y desconexión se siguen escribiendo uno a uno dentro del lote.
 - Volver a `v0.18.0` no requiere nada: lee y escribe las mismas filas.
 

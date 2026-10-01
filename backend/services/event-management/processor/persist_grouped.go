@@ -33,8 +33,9 @@ import (
 //     message, and every row of the group is stamped with that tenant before the insert,
 //     so a row filed under the wrong group is refused by the tenant-scope callback
 //     (rdb.ErrTenantMismatch) instead of being written under another tenant.
-//   - The erasure fence: the first statement of each group reads it, once per tenant per
-//     transaction, as before.
+//   - The erasure fence: the first WRITE of each group reads it — the events INSERT; the
+//     alternate-id probe before it is a read, which the fence does not check — once per
+//     tenant per transaction, as before.
 //   - The alternate-id skip: one probe per group, plus an in-batch rule that reproduces
 //     what the per-message probe saw of the messages before it in the same transaction —
 //     an events row. A later message with the same key (AltIdMatch) as an earlier one is

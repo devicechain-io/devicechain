@@ -260,8 +260,9 @@ func TestTheSameEventTwiceInOneStatementOnPostgres(t *testing.T) {
 }
 
 // A purged tenant's grouped write stores nothing, even when its group carries an event too
-// large for one statement, and its batch-mates are stored. The group's first statement is
-// its events insert, which reads the fence and is refused before the 6,000-reading insert
+// large for one statement, and its batch-mates are stored. The group's first write is its
+// events insert (the alternate-id probe before it is a read, which the fence does not
+// check), which reads the fence and is refused before the 6,000-reading insert
 // is sent, so this does NOT exercise the fence on a split statement (that is
 // TestCreateChunkedRefusesAPurgedTenant); it pins the grouped path's whole-tenant set-aside
 // on the real server: one failed batch, each of the purged tenant's four alone, the live

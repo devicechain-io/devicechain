@@ -135,35 +135,27 @@ func (ep *EventPersistenceWorker) collect(ctx context.Context) (batch []pendingE
 // the context of a message of its own tenant, and a statement that ever forgot to would
 // fail closed with ErrNoTenant rather than write under a batch-mate's tenant.
 func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pendingEvent) {
-	grouped := true
+	// Each pass either returns or sets at least one message aside, so the loop ends: the
+	// one-message-at-a-time write that finds an unattributed refusal is part of the same
+	// pass, not a pass of its own.
 	for len(batch) > 1 {
-		failedAt := -1
-		err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
-			var err error
-			if grouped {
-				failedAt, err = ep.writeGrouped(tx, batch)
-			} else {
-				failedAt, err = ep.writeEach(tx, batch)
-			}
-			return err
-		})
+		failedAt, err := ep.writeBatch(ctx, batch, ep.writeGrouped)
 		if err == nil {
-			ep.metrics.committed(len(batch))
-			// After COMMIT, never inside the transaction.
-			for _, p := range batch {
-				p.msg.Ack()
-				p.done(core.ResultOK)
-			}
+			ep.acknowledge(batch)
 			return
 		}
 		ep.metrics.fallback()
-		if grouped && errors.Is(err, errGroupUnattributed) {
+		if errors.Is(err, errGroupUnattributed) {
 			// The database refused a statement carrying several events. Find which one by
 			// writing the same batch again, one event at a time, in a new transaction.
 			log.Warn().Err(err).Int("events", len(batch)).
 				Msg("A grouped event write was refused; writing the batch again one event at a time")
-			grouped = false
-			continue
+			failedAt, err = ep.writeBatch(ctx, batch, ep.writeEach)
+			if err == nil {
+				ep.acknowledge(batch)
+				return
+			}
+			ep.metrics.fallback()
 		}
 		if failedAt < 0 || rdb.IsConnectionFailure(err) {
 			// Nothing in the batch is to blame — the transaction could not begin or commit,
@@ -196,10 +188,32 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 			rest = append(rest, p)
 		}
 		batch = rest
-		grouped = true
 	}
 	if len(batch) == 1 {
 		ep.persistOne(batch[0])
+	}
+}
+
+// writeBatch writes batch with write in one transaction, returning the index of the
+// message write blamed (or -1) with the transaction's error.
+func (ep *EventPersistenceWorker) writeBatch(ctx context.Context, batch []pendingEvent,
+	write func(*gorm.DB, []pendingEvent) (int, error)) (int, error) {
+	failedAt := -1
+	err := ep.Api.PersistInTx(ctx, func(tx *gorm.DB) error {
+		var err error
+		failedAt, err = write(tx, batch)
+		return err
+	})
+	return failedAt, err
+}
+
+// acknowledge acknowledges every message of a batch whose transaction committed — after
+// COMMIT, never inside the transaction.
+func (ep *EventPersistenceWorker) acknowledge(batch []pendingEvent) {
+	ep.metrics.committed(len(batch))
+	for _, p := range batch {
+		p.msg.Ack()
+		p.done(core.ResultOK)
 	}
 }
 

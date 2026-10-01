@@ -406,6 +406,72 @@ func TestARefusalInAOneEventGroupNeedsNoSecondPass(t *testing.T) {
 	}
 }
 
+// The anchor statement names only the messages that hold anchors, not every message that
+// wrote rows. In "one anchor holder", eight messages of one tenant write rows but only dev-3
+// carries anchors, so its refused anchor insert carried one message's anchors and names
+// dev-3 at once: the batch, dev-3 alone, the other seven — 3 transactions, 1 fallback.
+// Blaming the eight row writers instead would cost a pass one message at a time to find it
+// (4, 2). In "one row writer", dev-0 is the only message with rows and holds no anchors,
+// while dev-3 and dev-5 send empty payloads with anchors: the anchor insert carried two
+// messages, so the batch is written one message at a time to find dev-3 — 4 transactions,
+// 2 fallbacks. Blaming the one row writer would set dev-0 aside first, wrongly, and take
+// two more transactions (6, 3).
+func TestTheAnchorStatementBlamesOnlyTheMessagesHoldingAnchors(t *testing.T) {
+	at := func(i int) time.Time { return batchT0.Add(time.Duration(i) * time.Millisecond) }
+	oneHolder := func() []sent {
+		var batch []sent
+		for i := 0; i < 8; i++ {
+			ev := batchEvent(i, true, batchT0)
+			if i != 3 {
+				ev.Anchors = nil
+			}
+			batch = append(batch, sent{fenceCostTenant, ev})
+		}
+		return batch
+	}
+	oneRowWriter := func() []sent {
+		return []sent{
+			{fenceCostTenant, measurementOf("dev-0", at(0), "", 0, "1.5")},
+			{fenceCostTenant, measurementOf("dev-3", at(3), "", 2)},
+			{fenceCostTenant, measurementOf("dev-5", at(5), "", 2)},
+		}
+	}
+	for _, tc := range []struct {
+		name          string
+		batch         func() []sent
+		wantTxs       int64
+		wantFallbacks float64
+		wantEvents    int64
+	}{
+		{"one anchor holder", oneHolder, 3, 1, 7},
+		{"one row writer", oneRowWriter, 4, 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := tc.batch()
+			r := newBatchRig(t, len(batch))
+			r.api.failAnchorsFor = "dev-3"
+			r.run(r.consume(t, batch))
+
+			if got := r.api.txs.Load(); got != tc.wantTxs {
+				t.Errorf("took %d transactions; want %d", got, tc.wantTxs)
+			}
+			if got := r.metric(t, metricFallbacks, "", ""); got != tc.wantFallbacks {
+				t.Errorf("fallbacks = %v; want %v", got, tc.wantFallbacks)
+			}
+			if got := r.reported(); len(got) != 1 || got[0].device != "dev-3" ||
+				got[0].reason != uint(dmproto.FailureReason_Invalid) {
+				t.Errorf("reported %+v; want dev-3 as invalid", got)
+			}
+			if e, _, _ := rowCounts(t, r.db); e != tc.wantEvents {
+				t.Errorf("stored %d events; want %d", e, tc.wantEvents)
+			}
+			if got := len(r.acks.acked()); got != len(batch) {
+				t.Errorf("%d messages acknowledged; want %d", got, len(batch))
+			}
+		})
+	}
+}
+
 // oracleBatch is one deterministic batch over three tenants that holds every case the
 // grouped write treats specially, and seed what is stored before it.
 func oracleBatch() (seed, batch []sent) {
