@@ -28,12 +28,31 @@ run "the_default_cluster_has_a_database_and_a_services_pool" {
     error_message = "The database pool should default to 3 nodes."
   }
   assert {
-    condition     = google_container_node_pool.this["services"].node_config[0].machine_type == "n2-highcpu-4"
-    error_message = "The services pool should default to n2-highcpu-4."
+    condition     = google_container_node_pool.this["services"].node_config[0].machine_type == "n2-custom-4-8192"
+    error_message = "The services pool should default to n2-custom-4-8192 (4 vCPU, 8 GB)."
   }
   assert {
     condition     = google_container_node_pool.this["services"].node_count == 3
     error_message = "The services pool should default to 3 nodes."
+  }
+}
+
+# Boot disks stay out of SSD_TOTAL_GB, which the install's volumes need: every
+# pool, the optional load generator included, boots from a 100 GB pd-standard
+# disk by default. A standard disk's speed grows with its size, hence not 50.
+run "every_pool_boots_from_a_standard_disk_by_default" {
+  command = plan
+
+  variables {
+    loadgen_node_count = 1
+  }
+
+  assert {
+    condition = join(",", [
+      for name in ["database", "services", "loadgen"] :
+      "${name}=${google_container_node_pool.this[name].node_config[0].disk_type}/${google_container_node_pool.this[name].node_config[0].disk_size_gb}"
+    ]) == "database=pd-standard/100,services=pd-standard/100,loadgen=pd-standard/100"
+    error_message = "Every pool's boot disk should default to a 100 GB pd-standard disk."
   }
 }
 
@@ -96,11 +115,11 @@ run "each_pool_takes_its_own_settings" {
     database_disk_size_gb = 61
     services_machine_type = "n2-highcpu-8"
     services_node_count   = 4
-    services_disk_type    = "pd-standard"
+    services_disk_type    = "pd-balanced"
     services_disk_size_gb = 41
-    loadgen_machine_type  = "e2-standard-2"
+    loadgen_machine_type  = "n4-standard-2" # N4 boots only from hyperdisk-balanced
     loadgen_node_count    = 2
-    loadgen_disk_type     = "pd-balanced"
+    loadgen_disk_type     = "hyperdisk-balanced"
     loadgen_disk_size_gb  = 31
   }
 
@@ -119,7 +138,7 @@ run "each_pool_takes_its_own_settings" {
       google_container_node_pool.this["services"].node_count,
       google_container_node_pool.this["services"].node_config[0].disk_type,
       google_container_node_pool.this["services"].node_config[0].disk_size_gb,
-    ]) == "n2-highcpu-8/4/pd-standard/41"
+    ]) == "n2-highcpu-8/4/pd-balanced/41"
     error_message = "The services pool should take the services_* settings."
   }
   assert {
@@ -128,7 +147,7 @@ run "each_pool_takes_its_own_settings" {
       google_container_node_pool.this["loadgen"].node_count,
       google_container_node_pool.this["loadgen"].node_config[0].disk_type,
       google_container_node_pool.this["loadgen"].node_config[0].disk_size_gb,
-    ]) == "e2-standard-2/2/pd-balanced/31"
+    ]) == "n4-standard-2/2/hyperdisk-balanced/31"
     error_message = "The loadgen pool should take the loadgen_* settings."
   }
 }
