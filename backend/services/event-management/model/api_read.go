@@ -54,10 +54,12 @@ func hasAnchor(criteria EventSearchCriteria) bool {
 //     for the same reason: two distinct events sharing that tuple made the join return the
 //     UNION of both, with nothing in the result saying which was which.
 //
-// occurred_time is deliberately NOT in the subquery. It is the hypertable partition
-// column, so dropping it costs chunk pruning on this join — but the caller's own
-// occurred-time range (commonEventFilters) still prunes, and a fast wrong answer is not
-// the trade to make here.
+// occurred_time is deliberately NOT in the subquery for the PAYLOAD tables. It is the
+// hypertable partition column, so dropping it costs chunk pruning on this join — but the
+// caller's own occurred-time range (commonEventFilters) still prunes, and a fast wrong
+// answer is not the trade to make here. The BASE event table is the exception, and uses
+// anchorEventKeySubquery: an anchor row carries its event's own instant, so there the pair
+// is the event's exact key rather than a guess at it.
 func (api *Api) anchorKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
 	return api.RDB.DB(ctx).Model(&EventAnchor{}).
 		Select("event_id").
@@ -72,6 +74,25 @@ func (api *Api) anchorFilter(ctx context.Context, criteria EventSearchCriteria, 
 			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
 	}
 	return result
+}
+
+// anchorEventKeySubquery is anchorKeySubquery for the BASE event table: it selects the
+// base event's own key, (occurred_time, event_id). The event store's keys lead with
+// (tenant_id, occurred_time), so an event_id alone is not a prefix that can be sought; the
+// pair is, and the anchor-filtered read then probes events_pkey per anchored event instead
+// of walking the tenant's range.
+//
+// 🔴 IT IS CORRECT ONLY BECAUSE AN ANCHOR ROW IS WRITTEN WITH ITS EVENT'S INSTANT. The one
+// constructor of anchor rows (the persistence worker's anchorRows, which the grouped writer
+// reuses) stamps event.OccurredTime, as the base row is stamped; AnchorsForEvent relies on
+// the same fact. An anchor written at any other instant would make this filter return
+// NOTHING for its event: TestAnAnchorFilteredEventIsFoundThroughTheWriter writes through
+// the worker and reads through this filter so that cannot happen silently. The payload
+// tables must keep anchorKeySubquery: a payload row carries its reading's instant.
+func (api *Api) anchorEventKeySubquery(ctx context.Context, anchorType string, anchorToken string) *gorm.DB {
+	return api.RDB.DB(ctx).Model(&EventAnchor{}).
+		Select("occurred_time, event_id").
+		Where("anchor_type = ? AND anchor_token = ?", anchorType, anchorToken)
 }
 
 // AnchorsForEvent returns the anchor set of one event, addressed by its EVENT ID.
@@ -108,12 +129,17 @@ func (api *Api) AnchorsForEvent(ctx context.Context, eventId []byte,
 // made "where is this device now" silently wrong rather than slow.
 
 // Search for base events that meet criteria. The anchor filter joins through the
-// event_anchors set table (the base event no longer carries a single anchor).
+// event_anchors set table (the base event no longer carries a single anchor), on the base
+// event's full key (anchorEventKeySubquery).
 func (api *Api) Events(ctx context.Context, criteria EventSearchCriteria) (*EventSearchResults, error) {
 	results := make([]Event, 0)
 	db, pag := api.RDB.ListOf(ctx, &Event{}, func(result *gorm.DB) *gorm.DB {
 		result = commonEventFilters(criteria)(result)
-		return api.anchorFilter(ctx, criteria, result)
+		if hasAnchor(criteria) {
+			result = result.Where("(occurred_time, event_id) IN (?)",
+				api.anchorEventKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
+		}
+		return result
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
@@ -198,7 +224,7 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 // measurement_events hypertable per time_bucket. It runs through DB(ctx) with the
 // MeasurementEvent model, so the fail-closed tenant-scope callback injects the
 // tenant predicate (ADR-015) just as it does for the paginated reads. The optional
-// anchor filter reuses the same tenant-scoped event_id subquery as the typed reads.
+// anchor filter reuses the same tenant-scoped event_id subquery as the typed payload reads.
 func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
 	results := make([]MeasurementBucket, 0)
 	db := api.RDB.DB(ctx).Model(&MeasurementEvent{}).

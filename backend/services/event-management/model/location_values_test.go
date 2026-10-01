@@ -43,11 +43,11 @@ func newEventTablesApi(t *testing.T) *Api {
 	// them were left unpinned in the first place.
 	require.NoError(t, db.AutoMigrate(&Event{}, &LocationEvent{}, &MeasurementEvent{}, &AlertEvent{}), "migrate")
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_events_identity `+
-		`ON events (tenant_id, event_id, occurred_time);`).Error, "event identity key")
+		`ON events (tenant_id, occurred_time, event_id);`).Error, "event identity key")
 	for _, table := range []string{"location_events", "measurement_events", "alert_events"} {
 		require.NoError(t, db.Exec(
 			`CREATE UNIQUE INDEX uq_`+table+`_idem ON `+table+
-				` (tenant_id, payload_id, occurred_time);`).Error, "payload identity key on "+table)
+				` (tenant_id, occurred_time, payload_id);`).Error, "payload identity key on "+table)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})
 }
@@ -188,7 +188,7 @@ func locationPayloadIdOf(t *testing.T, api *Api, ctx context.Context, req *Locat
 // left out of the canonical tuple.
 //
 // 🔴 The consequence of an omission is silent DATA LOSS, not a cosmetic hash defect.
-// The payload rows are inserted ON CONFLICT (tenant_id, payload_id, occurred_time)
+// The payload rows are inserted ON CONFLICT (tenant_id, occurred_time, payload_id)
 // DO NOTHING, so two genuinely different readings that hash alike are not two rows —
 // the second is swallowed, no error, nothing logged. A device that reports the same
 // coordinates with a new heading (a machine slewing on the spot) would keep only the

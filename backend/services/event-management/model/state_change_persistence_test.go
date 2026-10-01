@@ -37,7 +37,7 @@ func newStateChangeTestApi(t *testing.T) *Api {
 	// the event's own derived identity — the natural key it replaced could not tell two
 	// distinct events apart.
 	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_identity ` +
-		`ON events (tenant_id, event_id, occurred_time);`).Error; err != nil {
+		`ON events (tenant_id, occurred_time, event_id);`).Error; err != nil {
 		t.Fatalf("failed to create events identity index: %v", err)
 	}
 	if err := db.AutoMigrate(&StateChangeEvent{}); err != nil {

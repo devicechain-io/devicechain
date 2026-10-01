@@ -312,6 +312,15 @@ assumption that every one of those connections may be running a long query.
 
 ## Practical notes {#practical-notes}
 
+- **Filter on time, and join an event's anchors on its full key.** The rows of `analytics.events`,
+  `analytics.measurement_events`, `analytics.location_events`, `analytics.alert_events` and
+  `analytics.event_anchors` are indexed by tenant and then time, so a time range is the cheapest
+  filter you can add to them. `analytics.state_change_events` is indexed by tenant, device and then
+  time: give it a device filter. A reading, location or alert row carries its own instant, which can
+  be earlier than its event's, so join those to `analytics.events` on `event_id` with a time range on
+  both sides. An anchor carries its event's instant, so join `analytics.event_anchors` to
+  `analytics.events` on `event_id` **and** `occurred_time`: on `event_id` alone the database cannot
+  look each event up directly.
 - **Query the rollup, not the raw table, for anything over a long range.** It is a continuous
   aggregate: the work is already done. Scanning a month of it is cheap; scanning a month of raw
   measurements is not.

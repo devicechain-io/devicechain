@@ -33,7 +33,9 @@ type trimmedIndex struct {
 //   - Timescale's default <table>_occurred_time_idx on every table except
 //     measurement_events. Every application read passes the fail-closed tenant
 //     callback, so it is served by the table's (tenant_id, occurred_time DESC) index,
-//     or by the anchor lookup index on event_anchors. measurement_events keeps its own
+//     or by the anchor lookup index on event_anchors. (NewTimeLeadingKeysSchema later
+//     drops those tenant-time indexes, whose readers the time-leading identity keys
+//     serve; this records what the trim relied on.) measurement_events keeps its own
 //     because the measurement_rollups refresh reads that table by time across tenants.
 //   - idx_state_change_events_lookup, whose three columns are the leading three of
 //     uq_state_change_events_idem.

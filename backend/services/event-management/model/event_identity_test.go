@@ -21,7 +21,7 @@ import (
 )
 
 // newIdentityTestApi builds an in-memory sqlite Api carrying the SAME keys production
-// gets from the migration: the base event's (tenant_id, event_id, occurred_time) primary
+// gets from the migration: the base event's (tenant_id, occurred_time, event_id) primary
 // key and the (tenant_id, alt_id, occurred_time) partial unique index. It deliberately
 // does NOT restate a unique index on the old natural key — that index is what this change
 // removes, and leaving it here would keep the collision alive in the test while the
@@ -33,11 +33,11 @@ func newIdentityTestApi(t *testing.T) *Api {
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, db.AutoMigrate(&Event{}, &MeasurementEvent{}, &EventAnchor{}), "migrate")
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_events_identity `+
-		`ON events (tenant_id, event_id, occurred_time);`).Error, "identity key")
+		`ON events (tenant_id, occurred_time, event_id);`).Error, "identity key")
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX uq_measurement_events_idem `+
-		`ON measurement_events (tenant_id, payload_id, occurred_time);`).Error, "payload key")
+		`ON measurement_events (tenant_id, occurred_time, payload_id);`).Error, "payload key")
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX uq_event_anchors_idem `+
-		`ON event_anchors (tenant_id, event_id, occurred_time, anchor_type, anchor_token);`).Error, "anchor key")
+		`ON event_anchors (tenant_id, occurred_time, event_id, anchor_type, anchor_token);`).Error, "anchor key")
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_events_tenant_alt_id `+
 		`ON events (tenant_id, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`).Error, "dedup index")
 	return NewApi(&rdb.RdbManager{Database: db})

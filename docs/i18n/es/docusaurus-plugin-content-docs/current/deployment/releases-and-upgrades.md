@@ -4071,9 +4071,11 @@ en lugar de seis si lleva un id alternativo); una fila de medición, cuatro en l
 fila de ubicación, de alerta o de anclaje de relación, dos en lugar de cuatro; y una fila de
 cambio de presencia, uno en lugar de cuatro. Un evento de medición con una lectura y sin anclajes,
 por ejemplo, actualiza siete índices en lugar de diez.
+[Las claves del almacén de eventos empiezan por el tiempo](#next-time-leading-keys), también en esta
+versión, reduce de nuevo estas cifras y da los totales.
 
-- Los índices que impiden almacenar un evento dos veces no cambian, y toda lectura que sirve
-  `event-management` sigue usando un índice.
+- Toda lectura que sirve `event-management` sigue usando un índice. Los índices que impiden
+  almacenar un evento dos veces los reconstruye [ese cambio](#next-time-leading-keys).
 - **La lista de eventos de un dispositivo trabaja más sobre los datos recientes.** El total que
   acompaña a la lista de eventos de un dispositivo, y una lista de los eventos de un dispositivo
   filtrada por tipo de evento, recorren ahora todas las filas del dispositivo que aún no están
@@ -4083,12 +4085,11 @@ por ejemplo, actualiza siete índices en lugar de diez.
   ralentiza el total de `gateway-1` en otro. Los datos comprimidos se leen por dispositivo e
   inquilino, como antes. Donde más se nota es en un
   dispositivo que envía eventos a un ritmo alto.
-- **Acceso por SQL y BI.** Una consulta sobre `analytics.event_anchors` o
-  `analytics.state_change_events` que filtra solo por tiempo lee ahora todas las filas de tu
-  inquilino en cada fragmento aún sin comprimir que toca el rango (un día de datos por fragmento,
-  por defecto), en lugar de solo las filas del rango. Si añades un filtro por anclaje
-  (`anchor_type` y `anchor_token`) o por dispositivo (`device_token`), usa un índice como antes.
-  Las demás vistas no cambian.
+- **Acceso por SQL y BI.** Una consulta sobre `analytics.state_change_events` que filtra solo por
+  tiempo lee ahora todas las filas de tu inquilino en cada fragmento aún sin comprimir que toca el
+  rango (un día de datos por fragmento, por defecto), en lugar de solo las filas del rango. Si
+  añades un filtro por dispositivo (`device_token`), usa un índice como antes. Las demás vistas no
+  cambian.
 - **Durante la actualización.** La primera vez que arranca el nuevo `event-management`, elimina
   los índices uno a uno. Eliminar uno necesita un momento en que ninguna otra transacción use esa
   tabla, y mientras espera, las lecturas y escrituras de esa tabla esperan con él. Cada intento
@@ -4409,6 +4410,115 @@ que la instancia se vuelva a crear.
   `useMeasuredRequests: false`.
 - Una clave nueva, `eventPathSpread`, está activada en los cinco servicios. Un archivo de valores
   que la active en otro servicio lo reparte junto con ellos.
+
+#### Las claves del almacén de eventos empiezan por el tiempo {#next-time-leading-keys}
+
+Las claves que impiden almacenar un evento dos veces empiezan ahora por el inquilino y el instante
+del evento, en lugar del inquilino y un resumen criptográfico del evento. La clave de un evento nuevo
+queda así junto a la anterior, en lugar de en un lugar al azar del índice, y la base de datos
+reescribe muchas menos páginas de índice. Con el tiempo en primer lugar, esas mismas claves
+responden también a toda lectura por tiempo de los eventos de un inquilino, así que se eliminan
+cuatro índices más: el índice por inquilino y tiempo de los eventos base, las mediciones, las
+ubicaciones y las alertas.
+
+Junto con [los índices eliminados más arriba](#next-event-store-indexes), cada fila que almacena
+esta versión actualiza menos índices que en `v0.18.0`: una fila de evento base, dos en lugar de
+cinco (tres en lugar de seis si lleva un id alternativo); una fila de medición, tres en lugar de
+cinco; una fila de ubicación o de alerta, uno en lugar de cuatro; una fila de anclaje de relación,
+dos en lugar de cuatro; y una fila de cambio de presencia, uno en lugar de cuatro. Un evento de
+medición con una lectura y sin anclajes actualiza cinco índices en lugar de diez. En una comparación
+sobre una compilación de desarrollo a 6.000 eventos por segundo, que reconstruyó las claves de los
+eventos base y de las mediciones y eliminó sus dos índices por inquilino y tiempo, el registro de
+escritura anticipada por evento almacenado bajó de unos 2,3 KB a unos 1,3 KB, y el 1 % más lento de
+los lotes de escritura del almacén de eventos tardó unos 50 ms en lugar de unos 170 ms.
+
+- Los eventos se siguen almacenando una sola vez, y toda lectura que sirve `event-management`
+  sigue usando un índice.
+- **La lista de eventos de un dispositivo, cuando el almacén de eventos tiene pocos
+  dispositivos.** Cuando hay pocos tokens de dispositivo distintos entre todos los inquilinos (en
+  nuestras pruebas, 40 en lugar de 100), la base de datos puede leer ahora los eventos más recientes
+  de un dispositivo recorriendo los eventos más recientes de su inquilino hasta reunir una página.
+  Eso es rápido mientras el dispositivo está activo. Para un dispositivo que lleva un tiempo en
+  silencio mientras los demás siguen enviando, la primera página puede tardar bastante más que
+  antes. El total que acompaña a la lista no cambia.
+- **Acceso por SQL y BI.** Una consulta sobre los eventos, lecturas, ubicaciones, alertas o
+  anclajes de un inquilino que filtra solo por tiempo usa un índice. Para unir
+  `analytics.event_anchors` con `analytics.events`, une por `event_id` y por `occurred_time`: solo
+  por `event_id`, la base de datos ya no puede localizar cada evento directamente. Consulta
+  [Notas prácticas](../guides/sql-and-bi-access.md#practical-notes).
+
+##### Comprueba antes de actualizar {#next-time-leading-keys-check}
+
+El primer arranque del nuevo `event-management` reconstruye las claves sobre todas las filas de las
+cinco tablas que aún no están comprimidas: por defecto, más o menos la última semana. **Una
+instancia con más de 4.000.000 de esas filas no se puede actualizar en su sitio.** Un evento base es
+una fila, más una fila por cada lectura, ubicación o alerta que lleva, más una por cada anclaje de
+relación. Con una lectura y un anclaje por evento, 4 millones de filas son una semana a una media de
+unos 2 eventos por segundo, así que la mayoría de las instancias con tráfico real superan el límite.
+
+Cuenta las tuyas antes de actualizar. Abre `psql` en el almacén de eventos (el espacio de nombres es
+`dci-` más el id de la instancia; la base de datos es el id de la instancia solo):
+
+```bash
+kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
+```
+
+Después ejecuta el mismo recuento que hace la actualización. Lee todas las filas aún sin comprimir,
+así que en un almacén grande tarda un rato:
+
+```sql
+DO $$
+DECLARE c record; n bigint := 0; k bigint;
+BEGIN
+  FOR c IN SELECT format('%I.%I', chunk_schema, chunk_name) AS chunk
+           FROM timescaledb_information.chunks
+           WHERE hypertable_schema = 'event-management'
+             AND hypertable_name IN ('events', 'measurement_events', 'location_events',
+                                     'alert_events', 'event_anchors')
+  LOOP
+    EXECUTE 'SELECT count(*) FROM ONLY ' || c.chunk INTO k;
+    n := n + k;
+  END LOOP;
+  RAISE NOTICE 'rows to rebuild: %', n;
+END $$;
+```
+
+Si imprime más de `4000000`, no actualices esta instancia en su sitio: exporta lo que necesites y
+después recréala con `dcctl destroy` y `dcctl bootstrap` en la nueva versión.
+
+:::caution Exporta primero: recrear descarta tus datos
+`dcctl destroy` elimina las bases de datos de la instancia: todos los inquilinos, dispositivos,
+definiciones de dispositivo, paneles y usuarios, y todos sus eventos, no solo el historial de
+eventos. No hay un camino en su sitio que conserve en esta versión una instancia que supere el
+límite.
+:::
+
+##### Durante la actualización {#next-time-leading-keys-during}
+
+- El nuevo `event-management` reconstruye las claves tabla a tabla. Mientras reconstruye una
+  tabla, las lecturas y escrituras de esa tabla esperan: unos segundos en el caso habitual, y como
+  máximo 45 segundos por tabla (hasta 5 segundos para bloquearla y después hasta 40 para
+  reconstruirla). El `event-management` anterior sigue recibiendo eventos; un lote que estaba
+  escribiendo espera con la tabla, y un lote retenido el tiempo suficiente se entrega de nuevo y se
+  almacena una sola vez. La reconstrucción completa se detiene al cabo de un minuto y continúa en
+  el siguiente arranque.
+- **Si hay demasiado que reconstruir,** el nuevo `event-management` se detiene antes de cambiar
+  nada, y su registro explica el motivo. `dcctl upgrade` informa entonces de que no terminó de
+  desplegarse: todos los demás servicios ejecutan la nueva versión, y el `event-management`
+  anterior sigue almacenando eventos hasta que recrees la instancia, como se indica arriba.
+- **Si la reconstrucción de una tabla tarda más de 40 segundos** una vez bloqueada la tabla, se
+  deshace, la tabla conserva su clave anterior, y `event-management` se detiene con un error que lo
+  indica. A partir de entonces se detiene de inmediato en cada arranque sin tocar la tabla, así que
+  la ingesta no vuelve a detenerse en cada reinicio. Recrea la instancia o, para intentarlo una vez
+  más (por ejemplo, tras mover el almacén de eventos a un almacenamiento más rápido), ejecuta la
+  sentencia `COMMENT ON INDEX` que da el error.
+- Si otra sesión mantiene ocupada una tabla, o se agota el minuto, `event-management` se detiene
+  con un error que nombra la tabla y lista las tablas ya reconstruidas, y continúa desde ahí al
+  reiniciarse, como en [la eliminación de índices anterior](#next-event-store-indexes). El error
+  incluye una consulta que lista las sesiones que retienen la tabla. Reconstruir una tabla también
+  bloquea cada uno de sus fragmentos; si la base de datos se queda sin espacio para bloqueos, el
+  error lo indica y nombra el ajuste que hay que aumentar.
+- Volver a `v0.18.0` mantiene las claves nuevas, y `v0.18.0` funciona con ellas.
 
 ### La transición única a la ingesta duradera
 
