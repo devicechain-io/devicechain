@@ -45,7 +45,8 @@ resource "google_container_cluster" "this" {
 # database: memory, because Postgres keeps a small buffer cache of its own and
 #   leans on the node's page cache for the rest. Tainted, so only a pod that
 #   tolerates `dedicated=database:NoSchedule` runs there.
-# services: CPU, for everything else. The services use little memory.
+# services: everything else. CPU first, then memory: on 4 GB nodes NATS and the
+#   services left too little page cache, hence a custom 4 vCPU, 8 GB shape.
 # loadgen:  optional, tainted, so a load test does not take CPU from what it measures.
 locals {
   pools = {
@@ -91,6 +92,8 @@ resource "google_container_node_pool" "this" {
   location   = var.location
   node_count = each.value.node_count
 
+  # Every pool boots from pd-standard by default, so the boot disks stay out of
+  # SSD_TOTAL_GB, which the install's volumes need (see the README).
   node_config {
     machine_type = each.value.machine_type
     disk_type    = each.value.disk_type

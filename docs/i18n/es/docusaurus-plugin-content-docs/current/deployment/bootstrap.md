@@ -612,10 +612,12 @@ Las alertas de las instantáneas se describen en
   160 GiB, como explica [Tamaño del almacén](#backup-store-size). En un proveedor de nube,
   comprueba antes la cuota de disco. Un proyecto nuevo de Google Cloud permite 500 GB de SSD por
   región, y cuenta cada GiB de volumen como un GB; las dos clases de disco de Google Kubernetes
-  Engine y los discos de arranque de los nodos cuentan para ella, así que una instalación `--ha`
-  predeterminada con una instancia no cabe en el clúster que crea la
-  [guía de Google Kubernetes Engine](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start):
-  la guía indica la cuota que hay que solicitar. En un clúster local la pila de monitorización no guarda
+  Engine cuentan para ella, así que una instalación `--ha` predeterminada con una instancia cabe en
+  el clúster que crea la
+  [guía de Google Kubernetes Engine](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start),
+  cuyos nodos arrancan desde discos estándar que cuentan para otra cuota. Unos discos de arranque
+  equilibrados o SSD también contarían para la cuota de SSD. La guía indica la cuota que hay que
+  solicitar para más instancias. En un clúster local la pila de monitorización no guarda
   ningún volumen, y en kind los tamaños no se aplican.
 - **OpenTofu** (el binario `tofu`; `terraform` también funciona) en tu `PATH`. `dcctl` lo
   ejecuta para aprovisionar infraestructura. Instálalo desde

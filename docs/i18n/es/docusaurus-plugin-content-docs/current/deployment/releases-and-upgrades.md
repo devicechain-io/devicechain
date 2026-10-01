@@ -4323,25 +4323,26 @@ No hay que hacer nada en la actualización.
 
 La configuración de `deploy/gke` creaba un único grupo de tres nodos de 8 vCPU y 32 GB. Ahora crea
 un grupo `database` de tres nodos de 4 vCPU y 16 GB y un grupo `services` de tres nodos de 4 vCPU y
-4 GB, las mismas 24 vCPU en total. El grupo `database` tiene un taint, así que ningún pod de
+8 GB, las mismas 24 vCPU en total. El grupo `database` tiene un taint, así que ningún pod de
 DeviceChain se ejecuta en él si no se coloca allí; `dcctl install --database-node-selector` y
 `--database-toleration` colocan allí las bases de datos (consulta
-[Las bases de datos pueden ejecutarse en los nodos que elijas](#next-database-placement)). El clúster
-tiene seis discos de arranque en lugar de tres, así que una instalación `--ha` predeterminada con
-una instancia necesita más cuota regional de SSD de la que permite un proyecto nuevo de Google
-Cloud: la guía indica la cuota que hay que solicitar.
+[Las bases de datos pueden ejecutarse en los nodos que elijas](#next-database-placement)). Cada nodo
+arranca desde un disco persistente estándar de 100 GB, que cuenta para la cuota regional
+`DISKS_TOTAL_GB` y no para `SSD_TOTAL_GB`, así que una instalación `--ha` predeterminada con una
+instancia cabe en la cuota de SSD de un proyecto nuevo de Google Cloud; la guía indica la cuota que
+hay que solicitar para más instancias.
 
 No cambia nada para una instancia instalada. Aplicar la configuración nueva a un clúster creado con
 la anterior elimina su grupo de nodos y crea los dos nuevos sin un orden garantizado, lo que puede
-necesitar más cuota de vCPU y de SSD de la que tiene el proyecto. Vuelve a crear el clúster en su
+necesitar más cuota de vCPU de la que tiene el proyecto. Vuelve a crear el clúster en su
 lugar: desmóntalo como indica la guía, créalo de nuevo e instala.
 
 Las variables `node_machine_type`, `node_count`, `node_disk_type` y `node_disk_size_gb` ya no
 existen: las sustituyen las variables `database_*`, `services_*` y `loadgen_*` de cada grupo. OpenTofu
 solo avisa de un nombre antiguo que quede en un `terraform.tfvars` e ignora su valor, así que un
-clúster recreado con ese archivo sin cambios se crea con los valores predeterminados: un
-`node_disk_type = "pd-standard"` elegido para no superar la cuota de SSD se descarta, y los discos de
-arranque vuelven a ser `pd-balanced`. Pasa cada ajuste a los nombres nuevos antes de aplicar.
+clúster recreado con ese archivo sin cambios se crea con los valores predeterminados: se descarta lo
+elegido en `node_machine_type` o `node_disk_type`. Pasa cada ajuste a los nombres nuevos antes de
+aplicar.
 
 #### Las bases de datos pueden ejecutarse en los nodos que elijas {#next-database-placement}
 

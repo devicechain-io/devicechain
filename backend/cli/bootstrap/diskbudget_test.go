@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,7 +18,8 @@ import (
 
 // The disk a default install claims is published in three places: the
 // prerequisites (both locales), and the Google Kubernetes Engine guide, which turns
-// it into the SSD quota to request before installing. Every figure there is a SUM of
+// it into whether one instance fits a new project's SSD quota and the quota to
+// request before a second. Every figure there is a SUM of
 // shipped defaults, not an estimate, so it is held to the defaults by exact
 // equality: a default that moves without the prose fails here.
 //
@@ -264,13 +266,18 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 	}
 	gkeTF := []byte(read("deploy", "gke", "variables.tf"))
 	// The README prices every further node (a load generator, an upgrade's surge
-	// node) at one boot-disk size, so the pools must agree on it.
+	// node) at one boot-disk size, so the pools must agree on it. It also says every
+	// node boots from a standard persistent disk, which counts against DISKS_TOTAL_GB
+	// and leaves SSD_TOTAL_GB to the volumes. pd-balanced and pd-ssd boot disks draw
+	// on SSD_TOTAL_GB, and any other type is one this test does not know the quota of,
+	// so both fail rather than leave the guide's quota step describing the wrong disks.
 	boot := tofuNumberDefault(t, gkeTF, "loadgen_disk_size_gb")
 	var nodes, bootTotal int64
 	for _, pool := range []string{"database", "services", "loadgen"} {
-		if diskType := tofuDefault(t, gkeTF, pool+"_disk_type"); diskType != "pd-balanced" && diskType != "pd-ssd" {
-			t.Fatalf("the GKE %s pool's boot disks default to %s; the guide counts them against SSD_TOTAL_GB, "+
-				"which a pd-standard disk does not draw on. Rewrite its quota step", pool, diskType)
+		if diskType := tofuDefault(t, gkeTF, pool+"_disk_type"); diskType != "pd-standard" {
+			t.Fatalf("the GKE %s pool's boot disks default to %s; the guide says every node boots from a "+
+				"pd-standard disk, which does not count against SSD_TOTAL_GB. Rewrite its quota step, both "+
+				"bootstrap.md prerequisites and this test", pool, diskType)
 		}
 		size := tofuNumberDefault(t, gkeTF, pool+"_disk_size_gb")
 		if size != boot {
@@ -285,12 +292,13 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 		bootTotal += n * size
 	}
 
+	// The boot disks are off the SSD quota (above), so the volumes are all of it.
 	oneInstance := ha.clusterGiB() + ha.perInstanceGiB()
-	withBoot := oneInstance + bootTotal
-	// One load-generator node and the one surge node GKE adds while it upgrades a pool.
-	floor := oneInstance + bootTotal + 2*boot
-	t.Logf("GKE: %d nodes, %d GB of boot disk; one instance %d, with boot disks %d, floor to request %d",
-		nodes, bootTotal, oneInstance, withBoot, floor)
+	// The quota the README asks for before a second instance, one that ingests
+	// continuously and so also wants the backup store grown.
+	floor := oneInstance + ha.perInstanceGiB() + ha.backupStore
+	t.Logf("GKE: %d nodes, %d GB of standard boot disk; one instance %d GB of SSD, floor to request for two %d",
+		nodes, bootTotal, oneInstance, floor)
 
 	readme := read("deploy", "gke", "README.md")
 	enBootstrap := read("docs", "docs", "deployment", "bootstrap.md")
@@ -308,25 +316,29 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 	}
 
 	// The new-project quota the guide names, and the claim it makes about it: a
-	// default install on the guide's cluster does not fit. That fails here the day
-	// the defaults make it fit, so the guide cannot keep telling people to ask for
-	// quota they do not need.
+	// default install with one instance fits on the guide's cluster. The volumes
+	// are all that draw on it (the boot disks are held to pd-standard above), and
+	// the day they outgrow it this fails, so the guide cannot keep saying it fits.
 	quotas := figures("the GKE README's new-project quota", readme, `\*\*(\d+) GB of SSD per region\*\*`)
 	quota := quotas[0]
-	if withBoot <= quota {
-		t.Fatalf("a default --ha install with one instance on the GKE guide's cluster needs %d GB, within "+
-			"the %d GB of a new project; the README says it does not fit", withBoot, quota)
+	if oneInstance > quota {
+		t.Fatalf("a default --ha install with one instance claims %d GB of SSD, over the %d GB of a new project; "+
+			"the GKE README and both bootstrap.md prerequisites say it fits. Rewrite them and this test",
+			oneInstance, quota)
+	}
+	const standardBoot = "standard persistent disks, which count against `DISKS_TOTAL_GB`"
+	if !regexp.MustCompile(strings.ReplaceAll(regexp.QuoteMeta(standardBoot), " ", `\s+`)).MatchString(readme) {
+		t.Errorf("the GKE README no longer says the boot disks are %q; the fit claim rests on it", standardBoot)
 	}
 
 	exact := []struct {
 		what, text, pattern string
 		want                int64
 	}{
-		{"the GKE README", readme, `does not fit a new project's (\d+) GB`, quota},
+		{"the GKE README", readme, `fits a new project's (\d+) GB`, quota},
 		{"the GKE README", readme, `With one instance, DeviceChain claims (\d+) GB`, oneInstance},
 		{"the GKE README", readme, `(\d+) GB of it the backup store`, ha.backupStore},
-		{"the GKE README", readme, `boot disks add (\d+) GB`, bootTotal},
-		{"the GKE README", readme, `(\d+) GB in all`, withBoot},
+		{"the GKE README", readme, `boot disks use (\d+) GB`, bootTotal},
 		{"the GKE README", readme, `add (\d+) GB each`, boot},
 		{"the GKE README", readme, `each further instance claims (\d+) GB more`, ha.perInstanceGiB()},
 		{"the GKE README", readme, `about (\d+) GB more backup store`, ha.backupStore},
@@ -369,8 +381,8 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 	// cover rather than to the floor itself.
 	for _, published := range figures("the GKE README", readme, `quota of at least (\d+) GB`) {
 		if published < floor {
-			t.Errorf("the GKE README asks for an SSD quota of %d GB; one instance, a load-generator node and "+
-				"the surge node of an upgrade need %d", published, floor)
+			t.Errorf("the GKE README asks for an SSD quota of %d GB before a second instance; two instances, "+
+				"the second ingesting continuously, need %d", published, floor)
 		}
 	}
 
@@ -394,25 +406,21 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 		}
 	}
 
-	// The quota claim the prerequisites make is about the GKE guide's cluster, whose
-	// boot disks are what push it over, not about any cluster: the volumes alone
-	// (oneInstance, above) fit a new project's quota. The scope is held here, since
-	// the check above only proves the guide's cluster does not fit.
+	// The fit claim the prerequisites make is about the GKE guide's cluster, whose
+	// nodes boot from standard disks, not about any cluster: a cluster whose boot
+	// disks draw on the SSD quota can be over it. The scope is held here; that the
+	// claim is true is held above (oneInstance against quota). The Spanish pattern
+	// includes "una instancia" so that "una instancia no cabe" cannot match it.
 	for _, tc := range []struct{ what, text, pattern string }{
 		{"bootstrap.md#prerequisites", enBootstrap,
-			"a default `--ha` install with one instance does not fit on the cluster the \\[Google Kubernetes Engine guide\\]"},
+			"a default `--ha` install with one instance fits on the cluster the \\[Google Kubernetes Engine guide\\]"},
 		{"the es bootstrap.md#prerequisites", esBootstrap,
-			"una instalación `--ha` predeterminada con una instancia no cabe en el clúster que crea la \\[guía de Google Kubernetes Engine\\]"},
+			"una instalación `--ha` predeterminada con una instancia cabe en el clúster que crea la \\[guía de Google Kubernetes Engine\\]"},
 	} {
 		if !regexp.MustCompile(strings.ReplaceAll(tc.pattern, " ", `\s+`)).MatchString(tc.text) {
-			t.Errorf("%s no longer says the default install does not fit on the cluster the GKE guide creates; "+
-				"%d GiB of volumes alone fit a new project's %d GB, so the claim is true only with that scope",
-				tc.what, oneInstance, quota)
+			t.Errorf("%s no longer says a default install with one instance fits on the cluster the GKE guide "+
+				"creates (%d GiB of volumes against a new project's %d GB of SSD)", tc.what, oneInstance, quota)
 		}
-	}
-	if oneInstance > quota {
-		t.Fatalf("the volumes of a default --ha install with one instance (%d GiB) no longer fit a new project's "+
-			"%d GB; the prerequisites scope the claim to the GKE guide's cluster, and it is now true of any", oneInstance, quota)
 	}
 }
 
@@ -429,6 +437,71 @@ func numberWord(t *testing.T, w string) int64 {
 	}
 	t.Fatalf("%q is not a number word this test reads; extend numberWord", w)
 	return 0
+}
+
+var n2Machine = regexp.MustCompile(`^n2-(?:(standard|highcpu|highmem)-([0-9]+)|custom-([0-9]+)-([0-9]+))$`)
+
+// n2Shape sizes an N2 machine type the way the GKE guide prints it: vCPUs and
+// whole GB, where Google's GB is 2^30 bytes. A predefined type is named
+// family-class-vCPUs, and its class fixes the memory per vCPU; a custom type is
+// n2-custom-<vCPUs>-<MiB>. Anything else, extended memory included, and a custom
+// memory that is not a whole number of GB, is an error rather than a guess.
+func n2Shape(mt string) (vcpu, gb int64, err error) {
+	m := n2Machine.FindStringSubmatch(mt)
+	if m == nil {
+		return 0, 0, fmt.Errorf("%s is not an N2 type this test can size; extend n2Shape", mt)
+	}
+	if m[1] != "" {
+		vcpu, err = strconv.ParseInt(m[2], 10, 64)
+		if err != nil {
+			return 0, 0, err
+		}
+		gbPerVCPU := map[string]int64{"highcpu": 1, "standard": 4, "highmem": 8}
+		return vcpu, vcpu * gbPerVCPU[m[1]], nil
+	}
+	vcpu, err = strconv.ParseInt(m[3], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	mib, err := strconv.ParseInt(m[4], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	if mib%1024 != 0 {
+		return 0, 0, fmt.Errorf("%s has %d MiB, which is not a whole number of GB", mt, mib)
+	}
+	return vcpu, mib / 1024, nil
+}
+
+// The literals tell the conversions apart: 65536 MiB is 64 GB, where dividing by
+// 1000 would give 65, and 6400 MiB is not a whole number of GB.
+func TestN2Shape(t *testing.T) {
+	for _, tc := range []struct {
+		mt        string
+		vcpu, gb  int64
+		wantError bool
+	}{
+		{mt: "n2-highcpu-4", vcpu: 4, gb: 4},
+		{mt: "n2-standard-4", vcpu: 4, gb: 16},
+		{mt: "n2-highmem-8", vcpu: 8, gb: 64},
+		{mt: "n2-custom-4-8192", vcpu: 4, gb: 8},
+		{mt: "n2-custom-8-65536", vcpu: 8, gb: 64},
+		{mt: "n2-custom-4-6400", wantError: true},
+		{mt: "n2-custom-4-8192-ext", wantError: true},
+		{mt: "n2d-standard-4", wantError: true},
+		{mt: "e2-standard-4", wantError: true},
+		{mt: "n2-ultracpu-4", wantError: true},
+	} {
+		vcpu, gb, err := n2Shape(tc.mt)
+		switch {
+		case tc.wantError && err == nil:
+			t.Errorf("n2Shape(%s) = %d vCPU, %d GB; want an error", tc.mt, vcpu, gb)
+		case !tc.wantError && err != nil:
+			t.Errorf("n2Shape(%s): %v", tc.mt, err)
+		case !tc.wantError && (vcpu != tc.vcpu || gb != tc.gb):
+			t.Errorf("n2Shape(%s) = %d vCPU, %d GB; want %d, %d", tc.mt, vcpu, gb, tc.vcpu, tc.gb)
+		}
+	}
 }
 
 // The GKE guide describes the cluster its configuration creates: each pool's
@@ -450,21 +523,13 @@ func TestGKEGuideShapeIsTheDefaults(t *testing.T) {
 	gkeTF := []byte(read("deploy", "gke", "variables.tf"))
 	readme := read("deploy", "gke", "README.md")
 
-	// A predefined N2 type is named family-class-vCPUs, and its class fixes the
-	// memory per vCPU. Anything else fails rather than being guessed at.
-	machine := regexp.MustCompile(`^n2-(standard|highcpu|highmem)-([0-9]+)$`)
-	gbPerVCPU := map[string]int64{"highcpu": 1, "standard": 4, "highmem": 8}
 	shape := func(pool string) (mt string, vcpu, gb int64) {
 		mt = tofuDefault(t, gkeTF, pool+"_machine_type")
-		m := machine.FindStringSubmatch(mt)
-		if m == nil {
-			t.Fatalf("the GKE %s pool defaults to %s, which this test cannot size; extend it", pool, mt)
-		}
-		vcpu, err := strconv.ParseInt(m[2], 10, 64)
+		vcpu, gb, err := n2Shape(mt)
 		if err != nil {
-			t.Fatalf("%s: %v", mt, err)
+			t.Fatalf("the GKE %s pool defaults to %s: %v", pool, mt, err)
 		}
-		return mt, vcpu, vcpu * gbPerVCPU[m[1]]
+		return mt, vcpu, gb
 	}
 
 	figures := func(what, pattern string) [][]string {

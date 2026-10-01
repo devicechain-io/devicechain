@@ -47,21 +47,21 @@ variable "database_node_count" {
 }
 
 variable "database_disk_type" {
-  description = "Boot disk type for the database pool's nodes. The databases do NOT use it — they write to their own persistent volumes, whose class is chosen by the cluster's default StorageClass (see the README). pd-balanced and pd-ssd both count against the region's SSD_TOTAL_GB quota, which those volumes also draw on; pd-standard counts against a different quota but is slower, and is unmeasured for DeviceChain. Changing it recreates this pool's nodes. The README's quota step gives the budget."
+  description = "Boot disk type for the database pool's nodes. The databases do NOT use it — they write to their own persistent volumes, whose class is chosen by the cluster's default StorageClass (see the README). pd-standard counts against the region's DISKS_TOTAL_GB quota, which leaves SSD_TOTAL_GB to those volumes; pd-balanced and pd-ssd would draw on SSD_TOTAL_GB too. Changing it recreates this pool's nodes. The README's quota step gives the budget."
   type        = string
-  default     = "pd-balanced"
+  default     = "pd-standard"
 }
 
 variable "database_disk_size_gb" {
-  description = "Boot disk size for the database pool's nodes, in GB."
+  description = "Boot disk size for the database pool's nodes, in GB. A standard disk's speed grows with its size (see the README), so it is not set smaller to save quota."
   type        = number
-  default     = 50
+  default     = 100
 }
 
 variable "services_machine_type" {
-  description = "Machine type for the services pool, where everything but the databases runs. Choose CPU: the services use little memory. See the README."
+  description = "Machine type for the services pool, where everything but the databases runs. CPU binds first, then memory: on 4 GB nodes NATS and the services left too little page cache. The default is a custom N2 shape, 4 vCPU and 8 GB. See the README."
   type        = string
-  default     = "n2-highcpu-4"
+  default     = "n2-custom-4-8192"
 }
 
 variable "services_node_count" {
@@ -76,15 +76,15 @@ variable "services_node_count" {
 }
 
 variable "services_disk_type" {
-  description = "Boot disk type for the services pool's nodes. NATS does NOT use it — it writes to its own persistent volumes, whose class is chosen by the cluster's default StorageClass (see the README). pd-balanced and pd-ssd both count against the region's SSD_TOTAL_GB quota, which those volumes also draw on; pd-standard counts against a different quota but is slower, and is unmeasured for DeviceChain. Changing it recreates this pool's nodes. The README's quota step gives the budget."
+  description = "Boot disk type for the services pool's nodes. NATS does NOT use it — it writes to its own persistent volumes, whose class is chosen by the cluster's default StorageClass (see the README). pd-standard counts against the region's DISKS_TOTAL_GB quota, which leaves SSD_TOTAL_GB to those volumes; pd-balanced and pd-ssd would draw on SSD_TOTAL_GB too. Changing it recreates this pool's nodes. The README's quota step gives the budget."
   type        = string
-  default     = "pd-balanced"
+  default     = "pd-standard"
 }
 
 variable "services_disk_size_gb" {
-  description = "Boot disk size for the services pool's nodes, in GB."
+  description = "Boot disk size for the services pool's nodes, in GB. A standard disk's speed grows with its size (see the README), so it is not set smaller to save quota."
   type        = number
-  default     = 50
+  default     = 100
 }
 
 variable "loadgen_node_count" {
@@ -105,15 +105,15 @@ variable "loadgen_machine_type" {
 }
 
 variable "loadgen_disk_type" {
-  description = "Boot disk type for the load-generator pool's nodes. pd-balanced and pd-ssd count against the region's SSD_TOTAL_GB quota; pd-standard counts against a different one. Changing it recreates this pool's nodes."
+  description = "Boot disk type for the load-generator pool's nodes. pd-standard counts against the region's DISKS_TOTAL_GB quota; pd-balanced and pd-ssd count against SSD_TOTAL_GB, which the install's volumes need. Changing it recreates this pool's nodes."
   type        = string
-  default     = "pd-balanced"
+  default     = "pd-standard"
 }
 
 variable "loadgen_disk_size_gb" {
-  description = "Boot disk size for the load-generator pool's nodes, in GB."
+  description = "Boot disk size for the load-generator pool's nodes, in GB. A standard disk's speed grows with its size (see the README), so it is not set smaller to save quota."
   type        = number
-  default     = 50
+  default     = 100
 }
 
 variable "labels" {

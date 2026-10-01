@@ -13,7 +13,8 @@ and `dcctl` neither reads it nor ships it.
 | --- | --- |
 | A zonal GKE cluster on the `REGULAR` release channel | `devicechain` in `us-east4-b` |
 | A `database` node pool, tainted so only pods placed there run there | 3 × `n2-standard-4` (4 vCPU, 16 GB) |
-| A `services` node pool for everything else | 3 × `n2-highcpu-4` (4 vCPU, 4 GB) |
+| A `services` node pool for everything else | 3 × `n2-custom-4-8192` (4 vCPU, 8 GB) |
+| Every node's boot disk | 100 GB `pd-standard` |
 | An optional `loadgen` node pool, tainted so only a load generator runs there | none; set `loadgen_node_count = 1` |
 
 `dcctl install --ha` needs at least three nodes in each pool. NATS puts each of its
@@ -21,16 +22,24 @@ three servers on a different `services` node, and the relational store and the
 event store, placed on the `database` pool, each put their three instances on
 different `database` nodes. See [Install DeviceChain](#install-devicechain).
 
-At on-demand prices the default cluster costs roughly $1.05 an hour, plus its disks.
-**It bills until you destroy it.** See [Tearing it down](#tearing-it-down).
+Check the price of the six nodes and their disks with Google's
+[pricing calculator](https://cloud.google.com/products/calculator) before you apply:
+a custom machine type's vCPUs and memory are priced separately from the predefined
+types'. **It bills until you destroy it.** See [Tearing it down](#tearing-it-down).
 
 ## Choosing the machine types
 
-The two pools want different machines. The services are CPU-bound and use little
-memory. The databases are the reverse: Postgres keeps a small buffer cache of its
-own and leans on the node's page cache for the rest, so memory on a database node
-buys speed. That is why the `database` pool has 16 GB nodes and the `services`
-pool 4 GB ones, with the same 4 vCPU each.
+The two pools want different machines. The services are CPU-bound first: in our
+runs on 4 GB services nodes the busiest ran at 80 to 93% CPU. Memory came second,
+with 1.2 to 2.0 GB left available and pages read back from disk several times a
+second; NATS alone used about 0.7 GB per server. The databases want memory:
+Postgres keeps a small buffer cache of its own and leans on the node's page cache
+for the rest, so memory on a database node buys speed. That is why the `database`
+pool has 16 GB nodes and the `services` pool 8 GB ones, with the same 4 vCPU each.
+The services shape is a custom one, `n2-custom-4-8192`, because no predefined N2
+type has 4 vCPU and 8 GB. For more throughput, `n2-highcpu-8` adds CPU, which is
+what binds first. It needs 12 more vCPUs, which takes the cluster past a new
+project's 32 (see below).
 
 The busiest pod is the event store's primary together with its write-ahead-log
 archiver. When a database pod is scheduled it prefers a node without the other
@@ -48,7 +57,8 @@ The defaults use 24 vCPUs, and 28 with a load-generator node. The extra node GKE
 adds to a pool while it upgrades it takes 4 more, which reaches 32. A larger shape
 needs a larger `CPUS_ALL_REGIONS` quota and the region's `CPUS` quota (the commands
 are in step 4 of [Before you start](#before-you-start)). Changing a pool's machine
-type or disk recreates that pool's nodes, which evicts everything running on them.
+type, boot disk type or boot disk size recreates that pool's nodes, which evicts
+everything running on them.
 
 ## Before you start
 
@@ -91,36 +101,38 @@ or Terraform 1.8 or newer.
    regions** and **500 GB of SSD per region**. The default cluster uses 24 vCPUs,
    and 28 with a load-generator node.
 
-   **A default `--ha` install on this cluster does not fit a new project's 500 GB
-   of SSD.** With one instance, DeviceChain claims 348 GB of persistent
-   volumes, 160 GB of it the backup store; the
+   **A default `--ha` install with one instance fits a new project's 500 GB of
+   SSD.** With one instance, DeviceChain claims 348 GB of persistent volumes,
+   160 GB of it the backup store; the
    [prerequisites](https://docs.devicechain.io/deployment/bootstrap#prerequisites)
    list them. Both of GKE's disk classes, `standard-rwo` (balanced) and
-   `premium-rwo` (SSD), count against the `SSD_TOTAL_GB` quota, and so do the
-   nodes' balanced boot disks: the default six nodes' boot disks add 300 GB,
-   648 GB in all. A load-generator node and the extra node GKE adds to a pool
-   while it
-   [upgrades it](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pool-upgrade-strategies#surge),
-   add 50 GB each; each further instance claims 144 GB more, and one that
-   ingests continuously also wants about 160 GB more backup store. A regional
-   cluster (`location` set to a region) triples the boot disks.
+   `premium-rwo` (SSD), count against the `SSD_TOTAL_GB` quota. The nodes' boot
+   disks do not: they are standard persistent disks, which count against
+   `DISKS_TOTAL_GB`, and the default six nodes' boot disks use 600 GB of it. A
+   load-generator node and the extra node GKE adds to a pool while it
+   [upgrades it](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pool-upgrade-strategies#surge)
+   add 100 GB each, and a regional cluster (`location` set to a region) triples
+   the boot disks, so check `DISKS_TOTAL_GB` too. A standard disk's speed grows
+   with its size, which is why the boot disks are not smaller. We have not
+   measured DeviceChain's nodes on standard boot disks, including how long a new
+   node takes to pull its images.
 
-   Request an `SSD_TOTAL_GB` quota of at least 750 GB for one instance on a
-   zonal cluster before you install. Without it, a volume that does not fit
-   stays `Pending` with `QUOTA_EXCEEDED` in its events, and a node-pool upgrade
-   cannot add its extra node.
+   A second instance needs more SSD: each further instance claims 144 GB more,
+   and one that ingests continuously also wants about 160 GB more backup store.
+   Request an `SSD_TOTAL_GB` quota of at least 700 GB before you install a second
+   instance. Without it, a volume that does not fit stays `Pending` with
+   `QUOTA_EXCEEDED` in its events.
 
-   Standard boot disks count against a different quota. To use them, set
-   `database_disk_type`, `services_disk_type` and `loadgen_disk_type` to
-   `"pd-standard"` in `terraform.tfvars` before the first `tofu apply`, because
-   changing one later recreates that pool's nodes. They are slower, and we have
-   not measured DeviceChain on them.
+   Setting a `*_disk_type` to `pd-balanced` or `pd-ssd` puts that pool's boot
+   disks back on the SSD quota, 100 GB a node. Set it in `terraform.tfvars`
+   before the first `tofu apply`, because changing it later recreates that pool's
+   nodes.
 
    ```bash
    gcloud compute project-info describe --format=json \
      | jq '.quotas[] | select(.metric=="CPUS_ALL_REGIONS")'
    gcloud compute regions describe us-east4 --format=json \
-     | jq '.quotas[] | select(.metric=="CPUS" or .metric=="SSD_TOTAL_GB")'
+     | jq '.quotas[] | select(.metric=="CPUS" or .metric=="SSD_TOTAL_GB" or .metric=="DISKS_TOTAL_GB")'
    ```
 
    Ask for more under **IAM & Admin → Quotas**.
@@ -151,7 +163,7 @@ gcloud compute instances create cap-probe-db --zone us-east4-b \
   --machine-type n2-standard-4 --image-family debian-12 --image-project debian-cloud \
   --boot-disk-size 10 --no-address
 gcloud compute instances create cap-probe-svc --zone us-east4-b \
-  --machine-type n2-highcpu-4 --image-family debian-12 --image-project debian-cloud \
+  --machine-type n2-custom-4-8192 --image-family debian-12 --image-project debian-cloud \
   --boot-disk-size 10 --no-address
 gcloud compute instances delete cap-probe-db cap-probe-svc --zone us-east4-b --quiet
 ```
@@ -163,6 +175,41 @@ A node pool that is still trying blocks the cluster: GKE refuses to delete it, a
 OpenTofu's refresh waits on the pool, until the pool gives up (about 35 minutes)
 and goes to `ERROR`. After that, `tofu apply` with the new `location` replaces the
 cluster.
+
+### If an apply fails part-way
+
+A transient error from the Google Cloud API while the cluster is created, such as
+a timeout or a server error, can leave OpenTofu marking the cluster *tainted*. The
+next plan then says `google_container_cluster.this` "is tainted, so must be
+replaced": the apply would destroy and recreate it, which takes another 10 to 15
+minutes and loses anything installed on it. If the cluster itself came up
+(`gcloud container clusters list` shows it `RUNNING`) and the plan shows the
+cluster as the only thing to replace, clear the mark instead:
+
+```bash
+tofu untaint google_container_cluster.this
+gcloud container node-pools list --cluster devicechain --location us-east4-b
+```
+
+Use your own `cluster_name` and `location`. The cluster is created with a
+temporary pool called `default-pool`, which the same step deletes once the cluster
+exists, so a failure there can leave it behind, and no later apply removes it. It
+has no taint, so the services can land on it, and its boot disk draws on the SSD
+quota. If the list shows it, delete it:
+
+```bash
+gcloud container node-pools delete default-pool --cluster devicechain --location us-east4-b --quiet
+```
+
+Then finish the apply:
+
+```bash
+tofu plan     # should only create node pools: nothing destroyed or replaced
+tofu apply
+```
+
+With Terraform, use `terraform untaint` the same way. A tainted node pool, rather
+than the cluster, is quicker to let the apply replace.
 
 Once it is up, add it to your kubeconfig. The exact command is in the outputs:
 
@@ -177,7 +224,7 @@ A cluster created by an earlier version of this configuration has one `platform`
 pool. Applying this version removes that pool and creates the `database` and
 `services` pools, in no guaranteed order, so for a while the project may need both
 shapes at once: up to 48 vCPUs and the boot disks of nine nodes, with the volumes of
-anything still installed on top. That is over a new project's quota. Recreate the
+anything still installed on top. That is over a new project's vCPU quota. Recreate the
 cluster instead: take it down as [Tearing it down](#tearing-it-down) describes,
 then `tofu apply` and install again.
 
@@ -185,9 +232,8 @@ Before that apply, move your settings to the new variable names.
 `node_machine_type`, `node_count`, `node_disk_type` and `node_disk_size_gb` are
 replaced by `database_*`, `services_*` and `loadgen_*` variables for each pool, and
 OpenTofu only warns about an old name left in `terraform.tfvars` and ignores its
-value. A `node_disk_type = "pd-standard"` chosen to stay inside the SSD quota would
-be dropped, putting the boot disks back on `pd-balanced`, and a `node_machine_type`
-choice would be dropped the same way.
+value, so a `node_machine_type` or `node_disk_type` choice would be dropped and the
+pools built with the defaults.
 
 ### Put the databases on SSD
 
