@@ -291,7 +291,7 @@ func (c *CredentialCache) EvictDevices(tenant string, deviceIds []uint) {
 func (c *CredentialCache) ApplyEviction(e messaging.CacheEviction) {
 	ids := make([]uint, 0, len(e.Keys))
 	for _, k := range e.Keys {
-		id, err := strconv.ParseUint(k, 10, 64)
+		id, err := strconv.ParseUint(k, 10, strconv.IntSize)
 		if err != nil || id == 0 {
 			log.Warn().Str("cache", CredentialCacheName).Str("tenant", e.Tenant).
 				Msg("A credential cache eviction named a device that is not a row id; it was skipped.")
