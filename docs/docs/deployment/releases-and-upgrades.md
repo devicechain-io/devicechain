@@ -4243,12 +4243,17 @@ cluster at 6,000 to 7,600 events per second.
 
 - **`device-state` runs 10 projection writers instead of 5** (`projection.writers`). With 5, live
   device state kept 95.7% of an offered 6,800 events per second over three minutes and fell
-  further behind above it. With 10, and the service's CPU request raised to what it uses (as this
-  release ships it), it kept pace at 7,600. The two changes were made together, so their shares
-  were not separated. In the same run `event-management`, sharing a node with `device-state`,
-  stored fewer events than with the earlier defaults (6,280 against 6,796 per second at 6,800
-  offered); that was not separated from the other changes either. `projection.maxBatch` stays
-  `32`: batches averaged about 15 events, below it.
+  further behind above it. With 10, the service's CPU request raised to what it uses (as this
+  release ships it) and `projection.maxBatch` raised to 64, it kept pace at 7,600. The three
+  changes were made together, so their shares were not separated, and this release ships
+  `projection.maxBatch` at `32`, not 64: batches in that run averaged about 15 events, so the cap
+  of 32 did not bind on average, but an average does not show that it never would. In the same
+  runs `event-management`, sharing a node with `device-state`, stored fewer events than with the
+  earlier defaults: 6,280 against 6,796 per second at 6,800 offered, 5,252 against 7,463 at
+  7,600, and 5,624 over a five-minute hold at 6,800. That was not separated from the other changes
+  either, and those runs followed the deletion of about 10 million stored events, so new inserts
+  refilled freed space and wrote more to the write-ahead log than usual, which understates what
+  persistence can store.
 - **`event-management` waits up to 10 milliseconds to fill a batch** (`persistence.lingerMillis`,
   previously `0`). In the same benchmark, 59% of its transactions stored a single event, each with
   its own commit and its own wait for the standby. A writer that finds fewer events than a full

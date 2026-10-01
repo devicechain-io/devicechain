@@ -595,9 +595,11 @@ En una base de datos replicada, lo que sostiene el rendimiento son los lotes. La
 mismo dispositivo se esperan entre sí, así que en una flota pequeña cuyos dispositivos envían por
 turnos, más escritores pueden significar más lotes esperando a los mismos dispositivos. En un
 clúster en la nube de tres nodos con unos 1700 a 1900 dispositivos, 5 escritores se quedaron atrás a
-partir de unos 6800 eventos por segundo, y 10, con la solicitud de CPU del servicio aumentada,
-mantuvieron el ritmo a 7600; los dos cambios se hicieron a la vez. El valor por defecto es 10, la
-mitad del pool de conexiones por defecto. Auméntelo más solo si los lotes van llenos y la base de
+partir de unos 6800 eventos por segundo, y 10, con la solicitud de CPU del servicio aumentada y
+`projection.maxBatch` en 64, mantuvieron el ritmo a 7600; los tres cambios se hicieron a la vez.
+El número de escritores por defecto es 10, la mitad del pool de conexiones por defecto, y
+`projection.maxBatch` sigue en 32 por defecto: en esa ejecución los lotes promediaron unos 15, así
+que 32 no limitó en promedio. Auméntelo más solo si los lotes van llenos y la base de
 datos tiene margen. El servicio registra los valores que usa al arrancar. Si el
 estado en vivo sigue quedándose atrás, `JetStreamDurableFallingBehind` salta para el consumidor de
 `device-state` (consulte [Un consumidor que se queda atrás](#consumer-backlog)).

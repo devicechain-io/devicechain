@@ -4566,13 +4566,19 @@ clúster en la nube de tres nodos, a entre 6000 y 7600 eventos por segundo.
 
 - **`device-state` ejecuta 10 escritores de proyección en lugar de 5** (`projection.writers`). Con
   5, el estado en vivo de los dispositivos mantuvo el 95,7% de 6800 eventos por segundo ofrecidos
-  durante tres minutos y se retrasó más por encima de ese ritmo. Con 10, y la solicitud de CPU del
-  servicio elevada a lo que usa (como la incluye esta versión), mantuvo el ritmo a 7600. Los dos
-  cambios se hicieron a la vez, así que no se separó la parte de cada uno. En la misma ejecución,
+  durante tres minutos y se retrasó más por encima de ese ritmo. Con 10, la solicitud de CPU del
+  servicio elevada a lo que usa (como la incluye esta versión) y `projection.maxBatch` elevado a
+  64, mantuvo el ritmo a 7600. Los tres cambios se hicieron a la vez, así que no se separó la
+  parte de cada uno, y esta versión incluye `projection.maxBatch` en `32`, no en 64: en esa
+  ejecución los lotes promediaron unos 15 eventos, así que el tope de 32 no limitó en promedio,
+  pero un promedio no demuestra que nunca vaya a limitar. En las mismas ejecuciones,
   `event-management`, que compartía nodo con `device-state`, almacenó menos eventos que con los
-  valores anteriores (6280 frente a 6796 por segundo con 6800 ofrecidos); tampoco eso se separó de
-  los demás cambios. `projection.maxBatch` sigue en `32`: los lotes promediaron unos 15 eventos,
-  por debajo.
+  valores anteriores: 6280 frente a 6796 por segundo con 6800 ofrecidos, 5252 frente a 7463 con
+  7600, y 5624 durante una prueba sostenida de cinco minutos a 6800. Tampoco eso se separó de los
+  demás cambios, y esas ejecuciones siguieron al borrado de unos 10 millones de eventos
+  almacenados, así que las nuevas inserciones rellenaron espacio liberado y escribieron en el
+  registro de escritura anticipada más de lo habitual, lo que subestima lo que la persistencia
+  puede almacenar.
 - **`event-management` espera hasta 10 milisegundos para llenar un lote**
   (`persistence.lingerMillis`, antes `0`). En la misma prueba, el 59% de sus transacciones
   almacenaba un único evento, cada una con su propia confirmación y su propia espera a la réplica.

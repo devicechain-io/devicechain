@@ -57,13 +57,16 @@ type ProjectionConfiguration struct {
 	// On a three-node cloud cluster with a replicated relational store and about 1,700 to
 	// 1,900 devices each sending every 250 ms, 5 writers kept 95.7% of an offered 6,800
 	// events a second over three minutes and fell further behind above it, with batches
-	// averaging 17 to 19. 10 writers, with the service's CPU request raised to its use in
-	// the same run, kept pace at 7,600 with batches averaging about 15. The two changes were
-	// shown only together, and the request is what the chart now ships. In that run the
-	// relational primary used about 12% more CPU per merged event, and event-management,
-	// sharing a node with this service, stored fewer events than with the earlier defaults
-	// (6,280 against 6,796 a second at 6,800 offered); neither was separated from the other
-	// changes made at the same time. Every writer holds a connection from a pool the
+	// averaging 17 to 19. 10 writers, with the service's CPU request raised to its use and
+	// MaxBatch raised to 64 in the same run, kept pace at 7,600 with batches averaging about
+	// 15. The three changes were shown only together; the chart now ships the request, and
+	// MaxBatch stays at its default of 32 (see MaxBatch). In those runs the relational
+	// primary used about 12% more CPU per merged event, and event-management, sharing a node
+	// with this service, stored fewer events than with the earlier defaults (6,280 against
+	// 6,796 a second at 6,800 offered, 5,252 against 7,463 at 7,600, 5,624 over a five-minute
+	// hold at 6,800); none of it was separated from the other changes made at the same time,
+	// and the runs followed a delete of about 10 million events, so inserts refilled freed
+	// space and wrote more WAL than usual. Every writer holds a connection from a pool the
 	// platform's connection budget sizes at 20, which is why the default is half of it.
 	Writers int
 
@@ -79,7 +82,8 @@ type ProjectionConfiguration struct {
 	// share more devices and wait on each other's rows. A fleet where every event is its own
 	// device, which no batch ever waits on, did gain from 64 (about 4700 against 3750), which
 	// is why the realistic fleet decides. On the cloud cluster described on Writers, batches
-	// averaged 15 to 19, below 32, so the cap did not bind.
+	// averaged 15 to 19 (with the cap at 32, and at 64 in the 10-writer run), so 32 did not
+	// bind on average; an average does not show that it never did.
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more

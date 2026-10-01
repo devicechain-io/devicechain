@@ -570,9 +570,10 @@ it is merged again on its own.
 Batching is what carries throughput on a replicated database. Merges for one device wait for each
 other, so on a small fleet whose devices send in turn, more writers can mean more batches waiting on
 the same devices. On a three-node cloud cluster with about 1,700 to 1,900 devices, 5 writers fell
-behind from about 6,800 events per second, and 10 writers, with the service's CPU request raised,
-kept pace at 7,600; the two were changed together. The default is 10, half the default connection
-pool. Raise it further only when the batches are full and the database has room to spare. The
+behind from about 6,800 events per second, and 10 writers, with the service's CPU request raised
+and `projection.maxBatch` at 64, kept pace at 7,600; the three were changed together. The default
+writer count is 10, half the default connection pool, and the default `projection.maxBatch` stays
+32: batches in that run averaged about 15, so 32 did not bind on average. Raise it further only when the batches are full and the database has room to spare. The
 service logs the values it is using when it starts. If the live state still falls behind, `JetStreamDurableFallingBehind` fires for the
 `device-state` consumer (see [A consumer that stays behind](#consumer-backlog)).
 

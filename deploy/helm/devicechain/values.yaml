@@ -1369,8 +1369,8 @@ functionalAreas:
     # against the relational store, which device-management's credential reads share.
     # On GKE at 6,800-7,600 events/s that store's primary used 1.27-1.38 cores, about 12%
     # more per merged event than with 5 writers (not separated from the requests raised
-    # in the same run). If it binds, projection.lingerMillis trades a little latency for
-    # fewer commits.
+    # and the projection.maxBatch of 64 set in the same run). If it binds,
+    # projection.lingerMillis trades a little latency for fewer commits.
     resources:
       limits:
         cpu: "2"

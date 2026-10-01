@@ -1069,8 +1069,9 @@ The first four services do the per-event work: receiving, resolving and storing 
 merging it into each device's live state. `event-processing` runs detection on every event; its
 limit is twice what it was measured to use (see below). The first four services' limits are
 sized for live device traffic at a tenant's default ingest ceiling of 1000 messages per second,
-one reading per message, and for about 4,000 events per second, the rate a default installation sustained before `event-management`'s persistence
-defaults were raised (see [Measured throughput](#measured-throughput)).
+one reading per message, and for about 4,000 events per second, the rate a default installation
+sustained before `event-management`'s persistence defaults were raised (see
+[Measured throughput](#measured-throughput)).
 
 - **Requests are what each service used at 6,000 events per second.** A request is the CPU the
   scheduler sets aside for a pod on its node, and nothing else: it decides where the pod goes. Each
