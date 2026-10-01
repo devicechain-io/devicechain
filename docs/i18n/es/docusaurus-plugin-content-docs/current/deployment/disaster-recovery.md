@@ -268,8 +268,22 @@ estilo relacional y no estará allí.
 Para recuperar el almacén de eventos de una instancia dentro del clúster en el que se ejecuta —por
 ejemplo, hasta un momento anterior a un borrado por error—, destruye la instancia con
 `dcctl destroy --keep-backups` y luego vuelve a arrancarla con `--restore-tsdb-from` (y
-`--restore-tsdb-at`). Cuando sus copias de seguridad están en el almacén de objetos propio del
-clúster, un destroy sin `--keep-backups` borra justo el archivo que lee la restauración.
+`--restore-tsdb-at`), **sin `--restore-root-key`**.
+
+Esto reconstruye la instancia con un plano de control vacío. El destroy también elimina la base de
+datos de la instancia en el almacén relacional compartido, así que sus inquilinos, dispositivos,
+usuarios y secretos almacenados se borran y no se restauran; solo vuelve su historial de eventos.
+Para recuperar ambos, recupera el clúster completo como se describe arriba.
+
+Como esa base de datos ya no existe, no hay nada que una clave depositada pueda abrir, así que el
+arranque inicial rechaza `--restore-root-key` en este caso y la instancia reconstruida genera una
+clave raíz nueva. Aparta antes el artefacto de depósito antiguo de la instancia, porque el arranque
+inicial no sobrescribe ninguno (consulta [`--restore-root-key`](./bootstrap.md#useful-flags)), y
+consérvalo: sigue siendo la única clave de las copias de seguridad relacionales tomadas antes del
+destroy (consulta [Después de `dcctl destroy`](#after-destroy)).
+
+Cuando las copias de seguridad de la instancia están en el almacén de objetos propio del clúster, un
+destroy sin `--keep-backups` borra justo el archivo que lee la restauración.
 :::
 
 Una restauración es una de las pocas cosas que sí pueden ejecutarse contra una instancia que ya

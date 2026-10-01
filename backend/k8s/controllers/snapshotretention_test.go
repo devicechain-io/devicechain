@@ -28,7 +28,7 @@ import (
 // Snapshot retention against a REAL API server: label selection, a delete
 // conditional on the UID that was read, and the merge patch that records a pass are
 // the API server's behaviour, and a fake client would be testing its own idea of
-// them. CloudNativePG's two kinds are served from minimal CRDs (testdata/cnpg-crds).
+// them. CloudNativePG's kinds are served from minimal CRDs (testdata/cnpg-crds).
 
 var (
 	backupGVK          = schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Backup"}
@@ -36,9 +36,17 @@ var (
 )
 
 // apiServer starts an API server with the DeviceChain CRDs, and CloudNativePG's
-// backup kinds when withCNPG. Like withAPIServer, it fails rather than skips when
-// the envtest binaries are absent.
+// kinds when withCNPG. Like withAPIServer, it fails rather than skips when the
+// envtest binaries are absent.
 func apiServer(t *testing.T, withCNPG bool) client.Client {
+	t.Helper()
+	c, _ := startAPIServer(t, withCNPG)
+	return c
+}
+
+// startAPIServer is apiServer, also returning the environment, for a test that
+// needs to reach the server as something other than this client (Helm does).
+func startAPIServer(t *testing.T, withCNPG bool) (client.Client, *envtest.Environment) {
 	t.Helper()
 	dirs := []string{filepath.Join("..", "config", "crd", "bases")}
 	if withCNPG {
@@ -58,7 +66,7 @@ func apiServer(t *testing.T, withCNPG bool) client.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return c, env
 }
 
 func mkNamespace(t *testing.T, c client.Client, name string, labels map[string]string) {
@@ -69,8 +77,12 @@ func mkNamespace(t *testing.T, c client.Client, name string, labels map[string]s
 	}
 }
 
-// snapshotSchedule is the ScheduledBackup the cnpg-cluster chart renders with
-// volume-snapshot base backups on, labels and all.
+// snapshotSchedule is a ScheduledBackup with the labels the cnpg-cluster chart
+// renders on its volume-snapshot schedule; labels overrides them, an empty value
+// deleting one. What Helm adds when it applies the chart is
+// TestSnapshotRetentionSelectsWhatHelmApplies's job, not this fixture's: a
+// hand-written copy of Helm's behaviour is a model of Helm, and a model is what let
+// an earlier selector on a label Helm rewrites pass every test here.
 func snapshotSchedule(t *testing.T, c client.Client, ns, name, cluster, window string, labels map[string]string) {
 	t.Helper()
 	u := &unstructured.Unstructured{Object: map[string]any{
@@ -85,7 +97,6 @@ func snapshotSchedule(t *testing.T, c client.Client, ns, name, cluster, window s
 	u.SetName(name)
 	l := map[string]string{
 		"app.kubernetes.io/component":      "database-snapshot-backup",
-		"app.kubernetes.io/managed-by":     "opentofu",
 		controllers.SnapshotRetentionLabel: window,
 	}
 	for k, v := range labels {
@@ -98,6 +109,23 @@ func snapshotSchedule(t *testing.T, c client.Client, ns, name, cluster, window s
 	u.SetLabels(l)
 	if err := c.Create(context.Background(), u); err != nil {
 		t.Fatalf("creating ScheduledBackup %s/%s: %v", ns, name, err)
+	}
+}
+
+// setScheduleMethod rewrites a ScheduledBackup's spec.method, for a schedule that
+// carries the snapshot labels but does not take snapshots.
+func setScheduleMethod(t *testing.T, c client.Client, ns, name, method string) {
+	t.Helper()
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(scheduledBackupGVK)
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, u); err != nil {
+		t.Fatalf("reading ScheduledBackup %s/%s: %v", ns, name, err)
+	}
+	if err := unstructured.SetNestedField(u.Object, method, "spec", "method"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Update(context.Background(), u); err != nil {
+		t.Fatalf("setting the method of ScheduledBackup %s/%s: %v", ns, name, err)
 	}
 }
 
@@ -177,8 +205,11 @@ func TestSnapshotRetentionPrunesOnlyItsOwnSnapshotsToTheWindow(t *testing.T) {
 	mkNamespace(t, c, "dci-acme", map[string]string{dcv1beta1.InstanceNamespaceLabel: "acme"})
 	mkNamespace(t, c, "someone-else", nil)
 
-	// The relational store's schedule, 7 days.
-	snapshotSchedule(t, c, "dc-system", "dc-rdb-snapshot", "dc-rdb", "7d", nil)
+	// The relational store's schedule, 7 days -- carrying the managed-by label as Helm
+	// applies it, while the event store's below carries none, as the chart renders
+	// it. Which schedules are pruned depends on neither.
+	snapshotSchedule(t, c, "dc-system", "dc-rdb-snapshot", "dc-rdb", "7d",
+		map[string]string{"app.kubernetes.io/managed-by": "Helm"})
 	for name, stopped := range map[string]time.Duration{"rdb-d1": day, "rdb-d6": 6 * day, "rdb-d8": 8 * day,
 		"rdb-d9": 9 * day, "rdb-d20": 20 * day} {
 		backup(t, c, "dc-system", name, "dc-rdb-snapshot", "dc-rdb", "volumeSnapshot", "completed", ago(stopped))
@@ -212,6 +243,19 @@ func TestSnapshotRetentionPrunesOnlyItsOwnSnapshotsToTheWindow(t *testing.T) {
 	backup(t, c, "dci-acme", "not-the-charts-old", "not-the-charts", "dc-tsdb", "volumeSnapshot", "completed", ago(20*day))
 	backup(t, c, "dci-acme", "not-the-charts-older", "not-the-charts", "dc-tsdb", "volumeSnapshot", "completed", ago(21*day))
 
+	// The chart's component label but no retention label: not a schedule the pruner
+	// was told a window for, so it is not one it has finished. Read as an empty
+	// window it would delete nothing, but its stamp would silence the alert.
+	snapshotSchedule(t, c, "dci-acme", "no-window", "dc-tsdb", "",
+		map[string]string{controllers.SnapshotRetentionLabel: ""})
+
+	// Both labels, but a schedule of object-store backups: the window means nothing
+	// to it, so it is reported and never stamped -- a stamp would say a pass pruned
+	// it. Its old Backup is of its own method, and stays.
+	snapshotSchedule(t, c, "dci-acme", "plugin-schedule", "dc-tsdb", "1d", nil)
+	setScheduleMethod(t, c, "dci-acme", "plugin-schedule", "plugin")
+	backup(t, c, "dci-acme", "plugin-schedule-old", "plugin-schedule", "dc-tsdb", "plugin", "completed", ago(20*day))
+
 	rec := events.NewFakeRecorder(100)
 	p := &controllers.SnapshotRetention{Reader: c, Writer: c, Recorder: rec, Now: func() time.Time { return now }}
 	if err := p.Pass(context.Background()); err != nil {
@@ -226,7 +270,8 @@ func TestSnapshotRetentionPrunesOnlyItsOwnSnapshotsToTheWindow(t *testing.T) {
 		// month old to the pass; the running one is never touched.
 		{"dc-system", []string{"by-hand-old", "other-cluster-old", "rdb-d1", "rdb-d6", "rdb-d8",
 			"rdb-plugin-old", "rdb-running-old"}},
-		{"dci-acme", []string{"not-the-charts-old", "not-the-charts-older", "tsdb-d13", "tsdb-d15"}},
+		{"dci-acme", []string{"not-the-charts-old", "not-the-charts-older", "plugin-schedule-old", "tsdb-d13",
+			"tsdb-d15"}},
 		{"someone-else", []string{"theirs-old", "theirs-older"}},
 	} {
 		if got := backupNames(t, c, tc.ns); strings.Join(got, ",") != strings.Join(tc.want, ",") {
@@ -242,21 +287,29 @@ func TestSnapshotRetentionPrunesOnlyItsOwnSnapshotsToTheWindow(t *testing.T) {
 			t.Errorf("ScheduledBackup %s/%s records a pass at %q, want %q", sb[0], sb[1], got, want)
 		}
 	}
-	for _, sb := range [][2]string{{"someone-else", "their-snapshot"}, {"dci-acme", "not-the-charts"}} {
+	for _, sb := range [][2]string{{"someone-else", "their-snapshot"}, {"dci-acme", "not-the-charts"},
+		{"dci-acme", "no-window"}, {"dci-acme", "plugin-schedule"}} {
 		if got := checkedAt(t, c, sb[0], sb[1]); got != "" {
-			t.Errorf("ScheduledBackup %s/%s is not DeviceChain's, but records a pass at %q", sb[0], sb[1], got)
+			t.Errorf("ScheduledBackup %s/%s is not a snapshot schedule the pass pruned, but records a pass at %q",
+				sb[0], sb[1], got)
 		}
 	}
 
-	var pruned []string
+	var pruned, ignored []string
 	for _, e := range drain(rec) {
-		if strings.Contains(e, "SnapshotBackupPruned") {
+		switch {
+		case strings.Contains(e, "SnapshotBackupPruned"):
 			pruned = append(pruned, e)
+		case strings.Contains(e, "SnapshotRetentionIgnored"):
+			ignored = append(ignored, e)
 		}
 	}
 	if len(pruned) != 4 {
 		t.Errorf("%d SnapshotBackupPruned events, want 4 (rdb-d9, rdb-d20, rdb-failed-old, tsdb-d16): %v",
 			len(pruned), pruned)
+	}
+	if len(ignored) != 1 || !strings.Contains(ignored[0], `"plugin"`) {
+		t.Errorf("SnapshotRetentionIgnored events %v, want exactly one, for plugin-schedule's method", ignored)
 	}
 
 	// A second pass over what is left deletes nothing more.

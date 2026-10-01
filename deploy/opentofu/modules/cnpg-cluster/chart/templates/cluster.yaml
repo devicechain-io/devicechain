@@ -290,7 +290,6 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ $name }}
     app.kubernetes.io/component: database
-    app.kubernetes.io/managed-by: opentofu
 spec:
   instances: {{ $instances }}
   imageName: {{ required "cnpg-cluster: .Values.imageName is required" .Values.imageName }}

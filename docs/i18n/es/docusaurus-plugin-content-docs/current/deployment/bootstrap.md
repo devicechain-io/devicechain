@@ -556,7 +556,8 @@ Sin la opción no cambia nada.
   DeviceChain, cada diez minutos: conserva todas las instantáneas dentro de la
   [ventana de recuperación](#backup-retention) de la base de datos y la más reciente anterior a
   ella, y borra el resto, lo que borra también la copia del proveedor.
-  `DatabaseSnapshotPruningStalled` se dispara cuando deja de hacerlo.
+  `DatabaseSnapshotPruningStalled` se dispara cuando deja de hacerlo. Cada pasada registra su
+  hora en la programación, en la anotación `devicechain.io/snapshot-retention-checked-at`.
 - **Lo que no hace.** Ninguna restauración lee una instantánea. Una restauración
   (`--restore-rdb-from`, `--restore-tsdb-from`) lee el almacén de respaldos: el respaldo base
   semanal más reciente y el log desde entonces, así que puede reproducir hasta una semana de log.

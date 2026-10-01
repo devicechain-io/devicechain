@@ -63,7 +63,6 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ $name }}
     app.kubernetes.io/component: database-backup
-    app.kubernetes.io/managed-by: opentofu
 spec:
   configuration:
     # One bucket per store. The trailing slash matters to barman-cloud's path

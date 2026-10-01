@@ -174,6 +174,19 @@ keeping the newest one before it. Deleting the GKE cluster without first destroy
 disk snapshots in the project, holding the databases' contents: delete them with
 `gcloud compute snapshots delete`.
 
+To check pruning is running, look for a recent pass time on each snapshot schedule.
+The operator makes a pass every ten minutes:
+
+```bash
+kubectl get scheduledbackup -A -l app.kubernetes.io/component=database-snapshot-backup \
+  -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,CHECKED:.metadata.annotations.devicechain\.io/snapshot-retention-checked-at'
+```
+
+An empty `CHECKED` column more than ten minutes after a schedule appears means the
+operator is not pruning that schedule, and `DatabaseSnapshotPruningStalled` fires
+within about half an hour after that. (An instance's `dc-tsdb-snapshot` appears when
+the instance is bootstrapped, not at install.)
+
 ## Install DeviceChain
 
 ```bash
@@ -224,6 +237,44 @@ your organization requires periodic re-authentication. Every `kubectl` and
 `dcctl` command against the cluster then fails until you run `gcloud auth login`
 and `gcloud auth application-default login` again. Don't leave a cluster running
 unattended past that point: nothing can tear it down until someone signs in.
+
+## Restoring an instance's event store
+
+No restore reads a snapshot; a restore reads the backup store. To rebuild one
+instance's event store from it, for example to a moment before a mistaken delete,
+first read the path its event store archives under, while the instance still exists:
+
+```bash
+kubectl --context "$CTX" -n dci-my-instance get cluster dc-tsdb \
+  -o jsonpath='{.spec.plugins[*].parameters.serverName}'
+```
+
+**This rebuilds the instance with an empty control plane.** The destroy also drops
+the instance's database on the shared relational store, so its tenants, devices,
+users and stored secrets are deleted and are not restored; only its event history
+comes back. To bring both back, rebuild the cluster and recover both databases
+instead, following [the full recovery procedure](https://docs.devicechain.io/deployment/disaster-recovery#recover).
+
+Move the instance's escrow artifact aside, because bootstrap will not overwrite it,
+and keep it: it is still the only key to the relational backups taken before the
+destroy. Then destroy the instance, keeping its backups, and bootstrap it again from
+the archive with the same options you built it with:
+
+```bash
+mv ~/.devicechain/escrow/my-instance-rootkey.escrow ~/my-instance-rootkey.before-restore.escrow
+
+dcctl destroy local my-instance --kube-context "$CTX" --keep-backups --yes
+dcctl bootstrap local my-instance --kube-context "$CTX" --host "$IP.nip.io" \
+  --restore-tsdb-from <archive-path> --restore-tsdb-at <RFC3339 time before the damage>
+```
+
+Leave out `--restore-tsdb-at` to replay the whole archive, and add `--registry` and
+`--version` if you built the instance from your own images. Do not pass
+`--restore-root-key`: bootstrap refuses it here, because the destroy removed the
+instance's data from the relational store and there is nothing for that key to
+open; the rebuilt instance mints a new one. `--keep-backups` keeps the backup
+store's archive, which is what the restore reads; the instance's VolumeSnapshots and
+their disk snapshots are deleted with its namespace either way.
 
 ## Tearing it down
 

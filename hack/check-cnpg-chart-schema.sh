@@ -765,9 +765,13 @@ def check_snapshot_wiring(docs, case, failures):
         owned VolumeSnapshot goes with it. Anything else keeps every snapshot.
       - `backupOwnerReference: self` on the snapshot schedule. Turning snapshots
         off removes the schedule, and only owned Backups go with it.
-      - the component, managed-by and retention labels, which are what the
-        operator selects on; and the retention label must be the ObjectStore's
-        own window, or snapshots are kept to a different one.
+      - the retention label, which must be the ObjectStore's own window, or
+        snapshots are kept to a different one. (Which labels the operator
+        SELECTS on is not checked here: a `helm template` render cannot see what
+        Helm rewrites at apply time, and an earlier check of the rendered
+        managed-by label passed over exactly that defect. backend/k8s
+        TestSnapshotRetentionSelectsWhatHelmApplies checks it against an applied
+        object.)
       - exactly one object-store base backup beside it, on a schedule that is not
         the snapshot's. Barman prunes WAL only against base backups in the object
         store, and every restore reads it.
@@ -832,11 +836,6 @@ def check_snapshot_wiring(docs, case, failures):
                             "would leave every snapshot behind with nothing to prune it"
                             % (where, spec.get("backupOwnerReference")))
         labels = (s.get("metadata") or {}).get("labels") or {}
-        for key, want in (("app.kubernetes.io/component", "database-snapshot-backup"),
-                          ("app.kubernetes.io/managed-by", "opentofu")):
-            if labels.get(key) != want:
-                failures.append("%s label %s is %r, not %r -- the operator prunes only what "
-                                "carries it" % (where, key, labels.get(key), want))
         windows = {(o.get("spec") or {}).get("retentionPolicy") for o in stores}
         window = labels.get("devicechain.io/snapshot-retention")
         if window is None or {window} != windows:
