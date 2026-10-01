@@ -178,6 +178,13 @@ That check runs **before anything of the instance is written** — no namespace,
 login — so a refused bootstrap leaves nothing to clean up. A cluster meant to hold many
 instances, or instances with many areas enabled, needs a larger budget.
 
+Each service keeps every connection its pool has opened, up to the pool size (20 unless
+`maxOpenConnections` is set), open between uses, and closes each one an hour after it was
+opened. The reservation allows each area one pod with a full pool of the default size, plus one
+more pod during a rollout, so at the defaults every pool fits within it. A service run at `replicas`
+above 1, or with a raised `maxOpenConnections`, can hold more than that after a busy period, so
+check those settings against the instance's connection limit.
+
 The budget is the one install setting that can change under running instances, and only
 upwards: re-run `dcctl install` with a larger `--max-connections`. It is not free. Changing
 the database's connection limit restarts its database instances one at a time. On a cluster

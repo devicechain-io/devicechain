@@ -15,6 +15,11 @@ package config
 // zero/unset value here is treated as "use the default" at the point of use in
 // the rdb package (see rdb.initializePostgres), not as a literal 0 (which the
 // database/sql pool would interpret as unlimited/closed).
+//
+// MaxIdleConnections defaults to MaxOpenConnections: a pool keeps every connection it
+// has opened, up to its size, open between uses. Set it lower only to hold fewer
+// connections on the database, at the cost of a new connection and login for every
+// query that finds more than that many in use.
 type MicroserviceDatastoreConfiguration struct {
 	SqlDebug bool
 
