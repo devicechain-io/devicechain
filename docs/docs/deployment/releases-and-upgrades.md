@@ -3720,7 +3720,9 @@ instead of a full copy in the backup store. Nothing changes unless you pass the 
   namespaces; `get`, `list` and `delete` on CloudNativePG Backups; `get`, `list` and `patch` on
   CloudNativePG ScheduledBackups, to record each pass; and `create` and `patch` on
   `events.k8s.io` Events, to report what it pruned. It acts only in namespaces DeviceChain
-  created, on the ScheduledBackups its own configuration renders.
+  created, on the ScheduledBackups its own configuration renders. Each pass records its time on
+  the schedule as the `devicechain.io/snapshot-retention-checked-at` annotation, so
+  `kubectl get scheduledbackup -A -o yaml` shows when pruning last ran.
 - A restore (`--restore-rdb-from`, `--restore-tsdb-from`) still reads the backup store, not the
   snapshots: the newest weekly base backup and the log since, so it can replay up to a week of
   log. An instance's snapshots are deleted with it.

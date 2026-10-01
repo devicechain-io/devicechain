@@ -246,9 +246,22 @@ archive rather than guessing. `dc-tsdb` alone is the relational-style name and w
 :::warning Recovering an instance in a cluster that is still running
 To recover one instance's event store inside the cluster it runs in — for example to a moment
 before a mistaken delete — destroy the instance with `dcctl destroy --keep-backups`, then
-bootstrap it again with `--restore-tsdb-from` (and `--restore-tsdb-at`). When its backups are in
-the cluster's own object store, a destroy without `--keep-backups` deletes the very archive the
-restore reads.
+bootstrap it again with `--restore-tsdb-from` (and `--restore-tsdb-at`), **without
+`--restore-root-key`**.
+
+This rebuilds the instance with an empty control plane. The destroy also drops the instance's
+database on the shared relational store, so its tenants, devices, users and stored secrets are
+deleted and are not restored; only its event history comes back. To bring both back, recover the
+whole cluster as described above.
+
+Because that database is gone, there is nothing for an escrowed key to open, so bootstrap refuses
+`--restore-root-key` here and the rebuilt instance mints a new root key. Move the instance's old
+escrow artifact aside first, since bootstrap will not overwrite one (see
+[`--restore-root-key`](./bootstrap.md#useful-flags)), and keep it: it is still the only key to the
+relational backups taken before the destroy (see [After `dcctl destroy`](#after-destroy)).
+
+When the instance's backups are in the cluster's own object store, a destroy without
+`--keep-backups` deletes the very archive the restore reads.
 :::
 
 A restore is one of the few things allowed to run against an instance that already exists.

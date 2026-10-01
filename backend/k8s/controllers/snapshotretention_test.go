@@ -28,7 +28,7 @@ import (
 // Snapshot retention against a REAL API server: label selection, a delete
 // conditional on the UID that was read, and the merge patch that records a pass are
 // the API server's behaviour, and a fake client would be testing its own idea of
-// them. CloudNativePG's two kinds are served from minimal CRDs (testdata/cnpg-crds).
+// them. CloudNativePG's kinds are served from minimal CRDs (testdata/cnpg-crds).
 
 var (
 	backupGVK          = schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Backup"}
@@ -36,9 +36,17 @@ var (
 )
 
 // apiServer starts an API server with the DeviceChain CRDs, and CloudNativePG's
-// backup kinds when withCNPG. Like withAPIServer, it fails rather than skips when
-// the envtest binaries are absent.
+// kinds when withCNPG. Like withAPIServer, it fails rather than skips when the
+// envtest binaries are absent.
 func apiServer(t *testing.T, withCNPG bool) client.Client {
+	t.Helper()
+	c, _ := startAPIServer(t, withCNPG)
+	return c
+}
+
+// startAPIServer is apiServer, also returning the environment, for a test that
+// needs to reach the server as something other than this client (Helm does).
+func startAPIServer(t *testing.T, withCNPG bool) (client.Client, *envtest.Environment) {
 	t.Helper()
 	dirs := []string{filepath.Join("..", "config", "crd", "bases")}
 	if withCNPG {
@@ -58,7 +66,7 @@ func apiServer(t *testing.T, withCNPG bool) client.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return c, env
 }
 
 func mkNamespace(t *testing.T, c client.Client, name string, labels map[string]string) {
@@ -69,8 +77,12 @@ func mkNamespace(t *testing.T, c client.Client, name string, labels map[string]s
 	}
 }
 
-// snapshotSchedule is the ScheduledBackup the cnpg-cluster chart renders with
-// volume-snapshot base backups on, labels and all.
+// snapshotSchedule is a ScheduledBackup with the labels the cnpg-cluster chart
+// renders on its volume-snapshot schedule; labels overrides them, an empty value
+// deleting one. What Helm adds when it applies the chart is
+// TestSnapshotRetentionSelectsWhatHelmApplies's job, not this fixture's: a
+// hand-written copy of Helm's behaviour is a model of Helm, and a model is what let
+// an earlier selector on a label Helm rewrites pass every test here.
 func snapshotSchedule(t *testing.T, c client.Client, ns, name, cluster, window string, labels map[string]string) {
 	t.Helper()
 	u := &unstructured.Unstructured{Object: map[string]any{
@@ -85,7 +97,6 @@ func snapshotSchedule(t *testing.T, c client.Client, ns, name, cluster, window s
 	u.SetName(name)
 	l := map[string]string{
 		"app.kubernetes.io/component":      "database-snapshot-backup",
-		"app.kubernetes.io/managed-by":     "opentofu",
 		controllers.SnapshotRetentionLabel: window,
 	}
 	for k, v := range labels {
@@ -177,8 +188,11 @@ func TestSnapshotRetentionPrunesOnlyItsOwnSnapshotsToTheWindow(t *testing.T) {
 	mkNamespace(t, c, "dci-acme", map[string]string{dcv1beta1.InstanceNamespaceLabel: "acme"})
 	mkNamespace(t, c, "someone-else", nil)
 
-	// The relational store's schedule, 7 days.
-	snapshotSchedule(t, c, "dc-system", "dc-rdb-snapshot", "dc-rdb", "7d", nil)
+	// The relational store's schedule, 7 days -- carrying the managed-by label as Helm
+	// applies it, while the event store's below carries none, as the chart renders
+	// it. Which schedules are pruned depends on neither.
+	snapshotSchedule(t, c, "dc-system", "dc-rdb-snapshot", "dc-rdb", "7d",
+		map[string]string{"app.kubernetes.io/managed-by": "Helm"})
 	for name, stopped := range map[string]time.Duration{"rdb-d1": day, "rdb-d6": 6 * day, "rdb-d8": 8 * day,
 		"rdb-d9": 9 * day, "rdb-d20": 20 * day} {
 		backup(t, c, "dc-system", name, "dc-rdb-snapshot", "dc-rdb", "volumeSnapshot", "completed", ago(stopped))

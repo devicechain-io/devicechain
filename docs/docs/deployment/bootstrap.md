@@ -508,6 +508,8 @@ of its disks instead of a full copy in the backup store. Nothing changes without
   every ten minutes: it keeps every snapshot inside the database's
   [recovery window](#backup-retention) and the newest one before it, and deletes the rest,
   which deletes the provider's copy too. `DatabaseSnapshotPruningStalled` fires when it stops.
+  Each pass records its time on the schedule as the
+  `devicechain.io/snapshot-retention-checked-at` annotation.
 - **What it does not do.** No restore reads a snapshot. A restore (`--restore-rdb-from`,
   `--restore-tsdb-from`) reads the backup store: the newest weekly base backup and the log
   since, so it can replay up to a week of log. An instance's snapshots are deleted with its

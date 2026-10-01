@@ -79,7 +79,6 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ $name }}
     app.kubernetes.io/component: database-backup
-    app.kubernetes.io/managed-by: opentofu
 spec:
   cluster:
     name: {{ $name }}
@@ -127,11 +126,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ $name }}
-    # 🔑 The operator prunes only a ScheduledBackup carrying THIS component and the
-    # managed-by label below, in a namespace DeviceChain owns. A retention label
-    # alone, which anyone can copy, does not make it delete a Backup.
+    # 🔑 The operator prunes only a ScheduledBackup carrying THIS component label and
+    # the retention label below, in a namespace DeviceChain owns. There is
+    # deliberately no managed-by label: Helm stamps app.kubernetes.io/managed-by: Helm
+    # on everything it applies, so any value written here never reaches the cluster,
+    # and nothing may select on it.
     app.kubernetes.io/component: database-snapshot-backup
-    app.kubernetes.io/managed-by: opentofu
     # The recovery window the operator prunes this schedule's snapshots to, in the
     # ObjectStore's retentionPolicy grammar. Rendered even when empty: empty keeps
     # every snapshot, as an empty retentionPolicy keeps every object-store backup,

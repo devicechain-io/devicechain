@@ -74,13 +74,20 @@ const (
 	// stalled-pruning alert reads.
 	SnapshotRetentionCheckedAnnotation = "devicechain.io/snapshot-retention-checked-at"
 
-	// The chart's own labels on the snapshot ScheduledBackup. All three, and a
-	// DeviceChain namespace, are required before anything is deleted: the retention
-	// label alone is one anyone can copy onto their own schedule.
+	// The chart's component label on the snapshot ScheduledBackup. It, the retention
+	// label and a DeviceChain namespace are all required before anything is deleted;
+	// of the three, only the namespace is a fence, because labelling a namespace
+	// takes cluster-scoped rights (see api/v1beta1/labels.go) while anyone who can
+	// edit a ScheduledBackup can copy its labels.
+	//
+	// 🔴 NOTHING HERE READS app.kubernetes.io/managed-by. Helm owns that label: it
+	// overwrites it with "Helm" on every object it installs or upgrades, whatever the
+	// template rendered, so a selector on a rendered value matches nothing on a real
+	// install -- which is exactly how an earlier version of this pruner never pruned.
+	// Select only on keys Helm does not write (TestSnapshotRetentionSelectsWhatHelmApplies
+	// applies the real chart with Helm and runs a pass over what it left).
 	componentLabel          = "app.kubernetes.io/component"
 	snapshotBackupComponent = "database-snapshot-backup"
-	managedByLabel          = "app.kubernetes.io/managed-by"
-	managedByOpenTofu       = "opentofu"
 
 	// CloudNativePG's label on every Backup a ScheduledBackup creates, naming it
 	// (pkg/utils/labels_annotations.go, ParentScheduledBackupLabelName, v1.30.0).
@@ -144,7 +151,7 @@ func (p *SnapshotRetention) Pass(ctx context.Context) error {
 	schedules.SetGroupVersionKind(scheduledBackupListGVK)
 	err := p.Reader.List(ctx, schedules,
 		client.HasLabels{SnapshotRetentionLabel},
-		client.MatchingLabels{componentLabel: snapshotBackupComponent, managedByLabel: managedByOpenTofu})
+		client.MatchingLabels{componentLabel: snapshotBackupComponent})
 	switch {
 	case meta.IsNoMatchError(err):
 		logger.V(1).Info("CloudNativePG is not installed; nothing to prune")

@@ -1,0 +1,51 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The two other kinds the cnpg-cluster chart renders -- CloudNativePG's Cluster and
+# the barman-cloud plugin's ObjectStore -- as the smallest CRDs a real API server
+# will serve. They exist only so Helm can apply the WHOLE chart in
+# TestSnapshotRetentionSelectsWhatHelmApplies: a release is all of its objects or
+# none of them. Nothing reads their fields; the group, version, kind, plural and
+# scope are what Helm needs to map them, and those are the projects' own
+# (postgresql.cnpg.io/v1 and barmancloud.cnpg.io/v1, both namespaced).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clusters.postgresql.cnpg.io
+spec:
+  group: postgresql.cnpg.io
+  names:
+    kind: Cluster
+    listKind: ClusterList
+    plural: clusters
+    singular: cluster
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: objectstores.barmancloud.cnpg.io
+spec:
+  group: barmancloud.cnpg.io
+  names:
+    kind: ObjectStore
+    listKind: ObjectStoreList
+    plural: objectstores
+    singular: objectstore
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
