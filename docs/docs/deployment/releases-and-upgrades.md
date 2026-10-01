@@ -3850,6 +3850,12 @@ kubectl get resourcequota -A \
   -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
 ```
 
+An empty list does not settle it. The API server's quota admission configuration can name
+`CrossNamespacePodAffinity` under `limitedResources`, and then such pods are refused in every
+namespace that has **no** quota with that scope admitting them. That configuration lives in the
+control plane, not in a `kubectl` object, so ask whoever runs the cluster whether it is set; if it
+is, give `dc-system` and each instance's namespace a quota with that scope before upgrading.
+
 **At the upgrade.** The relational database takes the new setting the next time you run `dcctl
 install` with this release, and its instances restart once. Under `--ha` the standbys restart
 first and the primary role is then switched over to one of them, which is on another node. If

@@ -1278,7 +1278,10 @@ other = store_labels(clusters(other_path)[0])
 everything = [(p, c) for p in rendered for c in clusters(p)]
 
 # Self-tests. Each planted Cluster is a REAL render with one thing changed, so the
-# check is shown to fail on the defect and not on an unrelated difference.
+# check is shown to fail on the defect and not on an unrelated difference. Each
+# names the reason it must produce: a planted case that fails for some OTHER reason
+# would leave the arm it was written for free to stop working unseen. One case per
+# arm of problems(); an arm with no case here is one nothing shows can fail.
 good = everything[0][1]
 first = problems(good, other)
 if first:
@@ -1287,15 +1290,49 @@ if first:
     sys.exit("the first rendered Cluster fails the placement check before anything is planted (reasons above)")
 def planted(mutate):
     c = copy.deepcopy(good); mutate(c["spec"]); return c
-term = lambda s: s["affinity"]["additionalPodAntiAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"][0]["podAffinityTerm"]
-for label, c in [
-    ("no cross-store term (the shape before this rule)", planted(lambda s: s["affinity"].pop("additionalPodAntiAffinity"))),
-    ("an empty namespaceSelector", planted(lambda s: term(s).__setitem__("namespaceSelector", {}))),
-    ("no primary-role selector", planted(lambda s: term(s)["labelSelector"].pop("matchLabels"))),
-    ("no store label on its pods", planted(lambda s: s.pop("inheritedMetadata"))),
+anti = lambda s: s["affinity"]["additionalPodAntiAffinity"]
+term = lambda s: anti(s)["preferredDuringSchedulingIgnoredDuringExecution"][0]["podAffinityTerm"]
+def to_required(s):
+    a = anti(s); a["requiredDuringSchedulingIgnoredDuringExecution"] = [term(s)]
+    a.pop("preferredDuringSchedulingIgnoredDuringExecution")
+def store_expr_dropped(s):
+    sel = term(s)["labelSelector"]
+    sel["matchExpressions"] = [e for e in sel.get("matchExpressions") or [] if not e.get("key", "").startswith("devicechain.io/")]
+for label, c, want in [
+    ("no cross-store term (the shape before this rule)",
+     planted(lambda s: s["affinity"].pop("additionalPodAntiAffinity")), "preferred cross-store terms"),
+    ("an empty namespaceSelector",
+     planted(lambda s: term(s).__setitem__("namespaceSelector", {})), "namespaceSelector is absent or empty"),
+    ("a namespaceSelector reaching only dc-system",
+     planted(lambda s: term(s).__setitem__("namespaceSelector", {"matchExpressions": [
+         {"key": "kubernetes.io/metadata.name", "operator": "In", "values": ["dc-system"]}]})),
+     "does not reach namespace dci-acme"),
+    ("a term listing namespaces",
+     planted(lambda s: term(s).__setitem__("namespaces", ["dc-system"])), "names namespaces"),
+    ("no primary-role selector",
+     planted(lambda s: term(s)["labelSelector"].pop("matchLabels")), "STANDBYS too"),
+    ("the replica role in place of primary",
+     planted(lambda s: term(s)["labelSelector"]["matchLabels"].__setitem__("cnpg.io/instanceRole", "replica")),
+     "does not match the other store's PRIMARY"),
+    ("no store-label expression in the selector",
+     planted(store_expr_dropped), "not a DeviceChain store"),
+    ("no store label on its pods",
+     planted(lambda s: s.pop("inheritedMetadata")), "no devicechain.io/ store label"),
+    ("weight 50",
+     planted(lambda s: anti(s)["preferredDuringSchedulingIgnoredDuringExecution"][0].__setitem__("weight", 50)),
+     "weight is 50"),
+    ("a zone topologyKey",
+     planted(lambda s: term(s).__setitem__("topologyKey", "topology.kubernetes.io/zone")), "topologyKey is"),
+    ("the term moved to required",
+     planted(to_required), "REQUIRED cross-store term"),
+    ("an additionalPodAffinity",
+     planted(lambda s: s["affinity"].__setitem__("additionalPodAffinity", {"preferredDuringSchedulingIgnoredDuringExecution": []})),
+     "additionalPodAffinity"),
 ]:
-    if not problems(c, other):
-        sys.exit("planted Cluster with %s PASSED the placement check; this check cannot fail" % label)
+    got = problems(c, other)
+    if not any(want in v for v in got):
+        sys.exit("planted Cluster with %s did not report %r (it reported %s); that arm of the placement check cannot fail"
+                 % (label, want, got or "nothing"))
 
 # The problems and the set they were computed over come from ONE loop, so the
 # coverage control below watches what was actually checked.

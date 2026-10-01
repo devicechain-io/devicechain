@@ -972,7 +972,9 @@ eventos en el mismo nodo, ese nodo funcionó al 94-98 % de CPU mientras los otro
   las instancias de base de datos. La única excepción es un `ResourceQuota` con el ámbito
   `CrossNamespacePodAffinity`: rechaza los pods cuya ubicación tiene en cuenta otros espacios de
   nombres, sea preferencia o no, así que rechaza estos pods de base de datos en un espacio de
-  nombres donde lo prohíba.
+  nombres donde lo prohíba. La configuración de admisión de cuotas del servidor de API puede
+  imponer el mismo límite a todo espacio de nombres sin una cuota que lo admita; consulta las
+  [notas de versión](./releases-and-upgrades.md#next-upgrade).
 - **Se aplica cuando se planifica un pod de base de datos.** Con `--ha` en tres nodos, cada nodo
   ya ejecuta una instancia de cada base de datos, así que en la práctica la preferencia decide una
   sola cosa: cuando se crea el almacén de eventos de una instancia, su primera primaria va a un

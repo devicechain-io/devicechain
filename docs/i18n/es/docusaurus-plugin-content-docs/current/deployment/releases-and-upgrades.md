@@ -4136,6 +4136,13 @@ kubectl get resourcequota -A \
   -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
 ```
 
+Una lista vacía no lo zanja. La configuración de admisión de cuotas del servidor de API puede
+nombrar `CrossNamespacePodAffinity` en `limitedResources`, y entonces esos pods se rechazan en todo
+espacio de nombres que **no** tenga una cuota con ese ámbito que los admita. Esa configuración vive
+en el plano de control, no en un objeto de `kubectl`, así que pregunta a quien administre el clúster
+si está activa; si lo está, da a `dc-system` y al espacio de nombres de cada instancia una cuota con
+ese ámbito antes de actualizar.
+
 **En la actualización.** La base de datos relacional adopta la nueva configuración la próxima vez
 que ejecutes `dcctl install` con esta versión, y sus instancias se reinician una vez. Con `--ha`
 primero se reinician las réplicas en espera y después el papel de primaria se traspasa a una de

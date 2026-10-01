@@ -896,7 +896,9 @@ that node ran at 94 to 98% CPU while the other two ran at 45 to 51%.
 - **It is a preference, not a requirement.** A cluster with fewer nodes still schedules every
   database instance. The one exception is a `ResourceQuota` with the `CrossNamespacePodAffinity`
   scope: it refuses pods whose placement looks at other namespaces, preferred or not, so it
-  refuses these database pods in a namespace where it forbids that.
+  refuses these database pods in a namespace where it forbids that. The API server's quota
+  admission configuration can impose the same limit on every namespace without a matching quota;
+  see the [release notes](./releases-and-upgrades.md#next-upgrade).
 - **It applies when a database pod is scheduled.** Under `--ha` on three nodes, each node already
   runs one instance of each database, so in practice the preference decides one thing: when an
   instance's event store is created, its first primary goes to a node that is not running the
