@@ -263,19 +263,34 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 		return string(b)
 	}
 	gkeTF := []byte(read("deploy", "gke", "variables.tf"))
-	nodes := tofuNumberDefault(t, gkeTF, "node_count")
-	boot := tofuNumberDefault(t, gkeTF, "node_disk_size_gb")
-	if diskType := tofuDefault(t, gkeTF, "node_disk_type"); diskType != "pd-balanced" && diskType != "pd-ssd" {
-		t.Fatalf("the GKE boot disks default to %s; the guide counts them against SSD_TOTAL_GB, which a "+
-			"pd-standard disk does not draw on. Rewrite its quota step", diskType)
+	// The README prices every further node (a load generator, an upgrade's surge
+	// node) at one boot-disk size, so the pools must agree on it.
+	boot := tofuNumberDefault(t, gkeTF, "loadgen_disk_size_gb")
+	var nodes, bootTotal int64
+	for _, pool := range []string{"database", "services", "loadgen"} {
+		if diskType := tofuDefault(t, gkeTF, pool+"_disk_type"); diskType != "pd-balanced" && diskType != "pd-ssd" {
+			t.Fatalf("the GKE %s pool's boot disks default to %s; the guide counts them against SSD_TOTAL_GB, "+
+				"which a pd-standard disk does not draw on. Rewrite its quota step", pool, diskType)
+		}
+		size := tofuNumberDefault(t, gkeTF, pool+"_disk_size_gb")
+		if size != boot {
+			t.Fatalf("the GKE %s pool's boot disks default to %d GB and the load generator's to %d; the README "+
+				"prices every node at one size", pool, size, boot)
+		}
+		if pool == "loadgen" {
+			continue // optional, priced below as an extra node
+		}
+		n := tofuNumberDefault(t, gkeTF, pool+"_node_count")
+		nodes += n
+		bootTotal += n * size
 	}
 
 	oneInstance := ha.clusterGiB() + ha.perInstanceGiB()
-	withBoot := oneInstance + nodes*boot
+	withBoot := oneInstance + bootTotal
 	// One load-generator node and the one surge node GKE adds while it upgrades a pool.
-	floor := oneInstance + (nodes+2)*boot
-	t.Logf("GKE: %d nodes × %d GB boot; one instance %d, with boot disks %d, floor to request %d",
-		nodes, boot, oneInstance, withBoot, floor)
+	floor := oneInstance + bootTotal + 2*boot
+	t.Logf("GKE: %d nodes, %d GB of boot disk; one instance %d, with boot disks %d, floor to request %d",
+		nodes, bootTotal, oneInstance, withBoot, floor)
 
 	readme := read("deploy", "gke", "README.md")
 	enBootstrap := read("docs", "docs", "deployment", "bootstrap.md")
@@ -293,28 +308,24 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 	}
 
 	// The new-project quota the guide names, and the claim it makes about it: a
-	// default install fits with almost nothing to spare, and the next 50 GB disk
-	// does not fit. Both halves are checked, so the guide's "leaves almost none"
-	// fails here the day the defaults make it false either way.
+	// default install on the guide's cluster does not fit. That fails here the day
+	// the defaults make it fit, so the guide cannot keep telling people to ask for
+	// quota they do not need.
 	quotas := figures("the GKE README's new-project quota", readme, `\*\*(\d+) GB of SSD per region\*\*`)
 	quota := quotas[0]
-	if withBoot > quota {
-		t.Fatalf("a default --ha install with one instance needs %d GB, over the %d GB of a new project; "+
-			"the README says it fits with almost none to spare", withBoot, quota)
-	}
-	if withBoot+boot <= quota {
-		t.Fatalf("a default --ha install with one instance and one more node needs %d GB, within the %d GB "+
-			"of a new project; the README says the next node takes it over", withBoot+boot, quota)
+	if withBoot <= quota {
+		t.Fatalf("a default --ha install with one instance on the GKE guide's cluster needs %d GB, within "+
+			"the %d GB of a new project; the README says it does not fit", withBoot, quota)
 	}
 
 	exact := []struct {
 		what, text, pattern string
 		want                int64
 	}{
-		{"the GKE README", readme, `leaves almost none of a new project's (\d+) GB`, quota},
+		{"the GKE README", readme, `does not fit a new project's (\d+) GB`, quota},
 		{"the GKE README", readme, `With one instance, DeviceChain claims (\d+) GB`, oneInstance},
 		{"the GKE README", readme, `(\d+) GB of it the backup store`, ha.backupStore},
-		{"the GKE README", readme, `boot disks add (\d+) GB`, nodes * boot},
+		{"the GKE README", readme, `boot disks add (\d+) GB`, bootTotal},
 		{"the GKE README", readme, `(\d+) GB in all`, withBoot},
 		{"the GKE README", readme, `add (\d+) GB each`, boot},
 		{"the GKE README", readme, `each further instance claims (\d+) GB more`, ha.perInstanceGiB()},
@@ -346,10 +357,10 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 		for _, published := range figures(tc.what, tc.text, tc.pattern) {
 			if published != tc.want {
 				t.Errorf("%s says %d (%q); the shipped defaults (%d database and %d NATS replicas; %d/%d/%d GiB "+
-					"cluster, %d/%d GiB per instance; %d × %d GB boot) give %d. Change the prose with the "+
-					"defaults, in both locales and the GKE README.", tc.what, published, tc.pattern,
+					"cluster, %d/%d GiB per instance; %d nodes, %d GB of boot disk) give %d. Change the prose "+
+					"with the defaults, in both locales and the GKE README.", tc.what, published, tc.pattern,
 					ha.dbReplicas, ha.natsReplicas, ha.relational, ha.backupStore, ha.prometheus,
-					ha.eventStore, ha.jetStream, nodes, boot, tc.want)
+					ha.eventStore, ha.jetStream, nodes, bootTotal, tc.want)
 			}
 		}
 	}

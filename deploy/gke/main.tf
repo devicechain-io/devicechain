@@ -37,18 +37,75 @@ resource "google_container_cluster" "this" {
   resource_labels = var.labels
 }
 
-resource "google_container_node_pool" "platform" {
-  name       = "platform"
+# Three pools, one definition. GKE labels every node of a pool with
+# cloud.google.com/gke-nodepool=<name>, and that label is what selects a pool: the
+# outputs derive the database pool's selector from its name, so there is no second
+# label for the same set of nodes to disagree with it.
+#
+# database: memory, because Postgres keeps a small buffer cache of its own and
+#   leans on the node's page cache for the rest. Tainted, so only a pod that
+#   tolerates `dedicated=database:NoSchedule` runs there.
+# services: CPU, for everything else. The services use little memory.
+# loadgen:  optional, tainted, so a load test does not take CPU from what it measures.
+locals {
+  pools = {
+    database = {
+      machine_type = var.database_machine_type
+      node_count   = var.database_node_count
+      disk_type    = var.database_disk_type
+      disk_size_gb = var.database_disk_size_gb
+      taints       = [{ key = "dedicated", value = "database", effect = "NO_SCHEDULE" }]
+    }
+    services = {
+      machine_type = var.services_machine_type
+      node_count   = var.services_node_count
+      disk_type    = var.services_disk_type
+      disk_size_gb = var.services_disk_size_gb
+      taints       = []
+    }
+    loadgen = {
+      machine_type = var.loadgen_machine_type
+      node_count   = var.loadgen_node_count
+      disk_type    = var.loadgen_disk_type
+      disk_size_gb = var.loadgen_disk_size_gb
+      taints       = [{ key = "dedicated", value = "loadgen", effect = "NO_SCHEDULE" }]
+    }
+  }
+
+  # The GKE API and Kubernetes spell a taint's effect differently. No default on
+  # the lookup: an effect missing here fails the plan instead of printing a taint
+  # no pod can tolerate.
+  kubernetes_taint_effect = {
+    NO_SCHEDULE        = "NoSchedule"
+    PREFER_NO_SCHEDULE = "PreferNoSchedule"
+    NO_EXECUTE         = "NoExecute"
+  }
+}
+
+resource "google_container_node_pool" "this" {
+  # database and services are validated to at least one node; loadgen is optional.
+  for_each = { for name, pool in local.pools : name => pool if pool.node_count > 0 }
+
+  name       = each.key
   cluster    = google_container_cluster.this.id
   location   = var.location
-  node_count = var.node_count
+  node_count = each.value.node_count
 
   node_config {
-    machine_type = var.node_machine_type
-    disk_type    = var.node_disk_type
-    disk_size_gb = var.node_disk_size_gb
+    machine_type = each.value.machine_type
+    disk_type    = each.value.disk_type
+    disk_size_gb = each.value.disk_size_gb
     labels       = var.labels
     oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    dynamic "taint" {
+      for_each = each.value.taints
+      content {
+        key    = taint.value.key
+        value  = taint.value.value
+        effect = taint.value.effect
+      }
+    }
   }
 
   # A release channel requires node auto-upgrade, so it cannot be turned off here.
@@ -59,31 +116,9 @@ resource "google_container_node_pool" "platform" {
   }
 }
 
-resource "google_container_node_pool" "loadgen" {
-  count = var.loadgen_node_count > 0 ? 1 : 0
-
-  name       = "loadgen"
-  cluster    = google_container_cluster.this.id
-  location   = var.location
-  node_count = var.loadgen_node_count
-
-  node_config {
-    machine_type = var.loadgen_machine_type
-    disk_type    = var.node_disk_type
-    disk_size_gb = var.node_disk_size_gb
-    labels       = merge(var.labels, { role = "loadgen" })
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-
-    # Only a pod that tolerates this lands here, so no DeviceChain service does.
-    taint {
-      key    = "dedicated"
-      value  = "loadgen"
-      effect = "NO_SCHEDULE"
-    }
-  }
-
-  management {
-    auto_repair  = true
-    auto_upgrade = true
-  }
+# The load-generator pool was its own resource before the pools shared one
+# definition. Same name, so a cluster that has one keeps it rather than replacing it.
+moved {
+  from = google_container_node_pool.loadgen[0]
+  to   = google_container_node_pool.this["loadgen"]
 }

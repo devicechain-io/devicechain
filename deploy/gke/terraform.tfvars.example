@@ -1,9 +1,12 @@
 # Copy to terraform.tfvars (which git ignores) and fill in.
 project_id = "my-project"
 
-# location           = "us-east4-b"
-# cluster_name       = "devicechain"
-# node_machine_type  = "n2-standard-8"
-# node_count         = 3
-# node_disk_type     = "pd-balanced"   # counts against SSD_TOTAL_GB; set before the first apply
-# loadgen_node_count = 1
+# location              = "us-east4-b"
+# cluster_name          = "devicechain"
+# database_machine_type = "n2-standard-4"  # memory: Postgres leans on the page cache
+# database_node_count   = 3
+# services_machine_type = "n2-highcpu-4"   # CPU: the services use little memory
+# services_node_count   = 3
+# database_disk_type    = "pd-balanced"    # boot disks count against SSD_TOTAL_GB;
+# services_disk_type    = "pd-balanced"    # set them before the first apply
+# loadgen_node_count    = 1

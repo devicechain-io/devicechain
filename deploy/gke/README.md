@@ -12,19 +12,50 @@ and `dcctl` neither reads it nor ships it.
 | Resource | Default |
 | --- | --- |
 | A zonal GKE cluster on the `REGULAR` release channel | `devicechain` in `us-east4-b` |
-| A `platform` node pool for DeviceChain | 3 × `n2-standard-8` (8 vCPU, 32 GB) |
+| A `database` node pool, tainted so only pods placed there run there | 3 × `n2-standard-4` (4 vCPU, 16 GB) |
+| A `services` node pool for everything else | 3 × `n2-highcpu-4` (4 vCPU, 4 GB) |
 | An optional `loadgen` node pool, tainted so only a load generator runs there | none; set `loadgen_node_count = 1` |
 
-Three nodes is the smallest cluster `dcctl install --ha` accepts: the relational
-store, NATS and the event store each put one replica on every node.
+`dcctl install --ha` needs at least three `services` nodes: NATS puts each of its
+three servers on a different node, and until `dcctl` can place the databases on
+the `database` pool, so do the relational store and the event store with their
+three instances each. See
+[Install DeviceChain](#install-devicechain).
 
-At on-demand prices the default cluster costs roughly $1.20 an hour, plus its disks.
+At on-demand prices the default cluster costs roughly $1.05 an hour, plus its disks.
 **It bills until you destroy it.** See [Tearing it down](#tearing-it-down).
+
+## Choosing the machine types
+
+The two pools want different machines. The services are CPU-bound and use little
+memory. The databases are the reverse: Postgres keeps a small buffer cache of its
+own and leans on the node's page cache for the rest, so memory on a database node
+buys speed. That is why the `database` pool has 16 GB nodes and the `services`
+pool 4 GB ones, with the same 4 vCPU each.
+
+The busiest pod is the event store's primary together with its write-ahead-log
+archiver. When a database pod is scheduled it prefers a node without the other
+database's primary, but that is a preference, and a failover, or the switchover
+that a node upgrade causes, can put both primaries on one node. In our runs on
+8-vCPU nodes the two primaries together used about five cores at 4,000 events a
+second, which is more than a 4-vCPU node has. See
+[Where the database primaries run](https://docs.devicechain.io/deployment/bootstrap#ha-database-primaries)
+for how to check, and how to move one.
+
+We have not measured DeviceChain's throughput on this shape. The published
+throughput figures were measured on three 8-vCPU nodes.
+
+The defaults use 24 vCPUs, and 28 with a load-generator node. The extra node GKE
+adds to a pool while it upgrades it takes 4 more, which reaches 32. A larger shape
+needs a larger `CPUS_ALL_REGIONS` quota and the region's `CPUS` quota (the commands
+are in step 4 of [Before you start](#before-you-start)). Changing a pool's machine
+type or disk recreates that pool's nodes, which evicts everything running on them.
 
 ## Before you start
 
 You need `gcloud`, `kubectl`, `tofu` (or `terraform`) and `dcctl` on your `PATH`,
-and a Google Cloud project with billing linked.
+and a Google Cloud project with billing linked. The configuration needs OpenTofu
+or Terraform 1.8 or newer.
 
 1. Sign in. The first command is for `gcloud` itself, and the second gives
    OpenTofu credentials:
@@ -61,29 +92,30 @@ and a Google Cloud project with billing linked.
    regions** and **500 GB of SSD per region**. The default cluster uses 24 vCPUs,
    and 28 with a load-generator node.
 
-   **A default `--ha` install leaves almost none of a new project's 500 GB of
-   SSD spare.** With one instance, DeviceChain claims 348 GB of persistent
+   **A default `--ha` install on this cluster does not fit a new project's 500 GB
+   of SSD.** With one instance, DeviceChain claims 348 GB of persistent
    volumes, 160 GB of it the backup store; the
    [prerequisites](https://docs.devicechain.io/deployment/bootstrap#prerequisites)
    list them. Both of GKE's disk classes, `standard-rwo` (balanced) and
    `premium-rwo` (SSD), count against the `SSD_TOTAL_GB` quota, and so do the
-   nodes' balanced boot disks: the default three nodes' boot disks add 150 GB,
-   498 GB in all, and the next disk takes it past 500. A load-generator node and the
-   extra node GKE adds to a pool while it
+   nodes' balanced boot disks: the default six nodes' boot disks add 300 GB,
+   648 GB in all. A load-generator node and the extra node GKE adds to a pool
+   while it
    [upgrades it](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pool-upgrade-strategies#surge),
    add 50 GB each; each further instance claims 144 GB more, and one that
    ingests continuously also wants about 160 GB more backup store. A regional
    cluster (`location` set to a region) triples the boot disks.
 
-   Request an `SSD_TOTAL_GB` quota of at least 600 GB for one instance on a
+   Request an `SSD_TOTAL_GB` quota of at least 750 GB for one instance on a
    zonal cluster before you install. Without it, a volume that does not fit
    stays `Pending` with `QUOTA_EXCEEDED` in its events, and a node-pool upgrade
    cannot add its extra node.
 
    Standard boot disks count against a different quota. To use them, set
-   `node_disk_type = "pd-standard"` in `terraform.tfvars` before the first
-   `tofu apply`, because changing it later replaces the node pool. They are
-   slower, and we have not measured DeviceChain on them.
+   `database_disk_type`, `services_disk_type` and `loadgen_disk_type` to
+   `"pd-standard"` in `terraform.tfvars` before the first `tofu apply`, because
+   changing one later recreates that pool's nodes. They are slower, and we have
+   not measured DeviceChain on them.
 
    ```bash
    gcloud compute project-info describe --format=json \
@@ -112,17 +144,20 @@ Creating the cluster takes 10 to 15 minutes. If a node pool sits in `PROVISIONIN
 and then fails with `does not have enough resources available`, the zone has run
 out of that machine type. Nothing is wrong with your configuration, and a
 neighbouring zone in the same region is often out too. Before moving the cluster,
-which rebuilds it, check that a zone has capacity by starting one VM of the same
-type and deleting it:
+which rebuilds it, check that a zone has capacity by starting one VM of each
+type and deleting them:
 
 ```bash
-gcloud compute instances create cap-probe --zone us-east4-b \
-  --machine-type n2-standard-8 --image-family debian-12 --image-project debian-cloud \
+gcloud compute instances create cap-probe-db --zone us-east4-b \
+  --machine-type n2-standard-4 --image-family debian-12 --image-project debian-cloud \
   --boot-disk-size 10 --no-address
-gcloud compute instances delete cap-probe --zone us-east4-b --quiet
+gcloud compute instances create cap-probe-svc --zone us-east4-b \
+  --machine-type n2-highcpu-4 --image-family debian-12 --image-project debian-cloud \
+  --boot-disk-size 10 --no-address
+gcloud compute instances delete cap-probe-db cap-probe-svc --zone us-east4-b --quiet
 ```
 
-If it reaches `RUNNING`, set `location` to that zone and apply again, which
+If both reach `RUNNING`, set `location` to that zone and apply again, which
 replaces the cluster.
 
 A node pool that is still trying blocks the cluster: GKE refuses to delete it, and
@@ -136,6 +171,16 @@ Once it is up, add it to your kubeconfig. The exact command is in the outputs:
 $(tofu output -raw get_credentials_command)
 kubectl config current-context        # gke_<project>_<location>_<cluster>
 ```
+
+### Changing an existing cluster
+
+A cluster created by an earlier version of this configuration has one `platform`
+pool. Applying this version removes that pool and creates the `database` and
+`services` pools, in no guaranteed order, so for a while the project may need both
+shapes at once: up to 48 vCPUs and the boot disks of nine nodes, with the volumes of
+anything still installed on top. That is over a new project's quota. Recreate the
+cluster instead: take it down as [Tearing it down](#tearing-it-down) describes,
+then `tofu apply` and install again.
 
 ### Put the databases on SSD
 
@@ -212,6 +257,14 @@ within about half an hour after that. (An instance's `dc-tsdb-snapshot` appears 
 the instance is bootstrapped, not at install.)
 
 ## Install DeviceChain
+
+The `database` pool is tainted, so only a pod that tolerates
+`dedicated=database:NoSchedule` runs there, and `dcctl install` does not yet
+place the databases on it. Until it does, the databases and NATS run on the
+`services` pool with everything else, and no DeviceChain pod runs on the
+`database` nodes.
+`tofu output database_node_selector` and `tofu output database_taint` print what
+an install needs to place them.
 
 ```bash
 CTX=$(tofu output -raw kube_context)
