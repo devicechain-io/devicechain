@@ -3872,6 +3872,32 @@ preference that has nothing to act on until an instance is bootstrapped. Instanc
 with this release take part. Run `dcctl install` before you bootstrap a new instance, so that the
 relational database's pods carry the label the new event store looks for.
 
+#### Services keep their database connections open between uses {#next-warm-pool}
+
+A service's connection pool used to keep only half of its connections open between uses: 10 of
+the default 20. Whenever more than half the pool was in use at once, every connection over that
+half was closed when it was released and opened again for the next query, which costs the service
+and the database a new login each time. `device-management` reaches that point when
+`resolution.workers` is raised above 10, since its resolvers share the pool with its GraphQL API,
+its MQTT connect checks and its alarm consumer. In a CPU profile with 16 resolvers on the default
+pool, at about 5,200 events per second on three 8-vCPU nodes, logging in again took 14–15% of
+`device-management`'s CPU, against 0.2% with the default 10 resolvers.
+
+- **Every connection a pool opens now stays open between uses**, up to the pool size. A
+  connection is still closed an hour after it was opened, as before, and opened again when it is
+  next needed. Raising `resolution.workers`, `persistence.writers` or `projection.writers` towards
+  the pool size no longer makes a service reconnect.
+- **The database can show more idle connections from each service after a busy period**: up to
+  the size of its pool. At the default configuration nothing needs doing: an instance's
+  [connection budget](./bootstrap.md#connection-budget) allows each area one pod with a full pool
+  of the default size, plus one more pod during a rollout. If you run a service at `replicas`
+  above 1, or have raised its `maxOpenConnections`, its pods now keep those connections after a
+  busy period instead of giving back all but half of them, so check that the instance's connection
+  limit still covers them.
+- `maxIdleConnections` is still honoured when set, up to `maxOpenConnections`. Setting it lower
+  holds fewer connections on the database, at the cost of a new connection and login for every
+  query that finds more than that many in use.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

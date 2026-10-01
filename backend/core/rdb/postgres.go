@@ -283,6 +283,9 @@ func ownedGormConfig(functionalArea string) *gorm.Config {
 // against EffectiveMaxOpenConnections — the value this function applies — rather than
 // this shared package knowing about any service's workers.
 //
+// Every connection the pool opens is kept open between uses, up to the pool size, unless
+// an idle count is configured below it; see poolSizing.
+//
 // Values come from the per-microservice config (MaxOpen/MaxIdle). The legacy
 // instance-level PostgresConfig.MaxConnections (default 5) is subsumed by this and no
 // longer drives the pool; it is left on the struct for any other reader.
@@ -298,7 +301,7 @@ func applyPoolSizing(db *gorm.DB, cfg config.MicroserviceDatastoreConfiguration,
 	maxOpen, maxIdle := poolSizing(cfg.MaxOpenConnections, cfg.MaxIdleConnections)
 	sqldb.SetMaxOpenConns(maxOpen)
 	sqldb.SetMaxIdleConns(maxIdle)
-	sqldb.SetConnMaxLifetime(time.Hour)
+	sqldb.SetConnMaxLifetime(connMaxLifetime)
 	event.Int("max_open_connections", maxOpen).
 		Int("max_idle_connections", maxIdle).
 		Msg("Created connection pool.")
@@ -312,9 +315,12 @@ const (
 	// device-state's 5 by default, each below this pool) and the GraphQL server do not
 	// contend for the same handles.
 	defaultMaxOpenConnections = 20
-	// minMaxIdleConnections floors the idle pool so a brief lull does not tear
-	// down every connection only to immediately reopen them (connection thrash).
-	minMaxIdleConnections = 2
+
+	// connMaxLifetime closes a connection this long after it was opened, at its next
+	// release or, when it sits idle, by database/sql's connection cleaner. It is what
+	// returns the connections a burst opened, now that the pool keeps every connection it
+	// is allowed (see poolSizing).
+	connMaxLifetime = time.Hour
 )
 
 // EffectiveMaxOpenConnections is the pool size a service actually gets for cfg: the
@@ -378,29 +384,26 @@ func CheckWriterBatch(prefix string, maxBatch, lingerMillis int) error {
 }
 
 // poolSizing resolves the configured open/idle connection counts into the values
-// actually applied to the pool, substituting defaults for unset (zero/negative)
-// values. A zero/unset value falls back to a default rather than being passed
-// through to database/sql, where 0 open means unlimited and 0 idle means "no
-// idle connections" — both of which we want to avoid. MaxIdle is kept close to
-// MaxOpen (not <<) so idle connections are not constantly closed and reopened,
-// and is clamped to never exceed MaxOpen.
+// actually applied to the pool. An unset (zero or negative) value is never passed to
+// database/sql, where 0 open means unlimited and 0 idle means none.
+//
+// Unset idle is the open count: a pool allowed N connections keeps all N open between
+// uses. database/sql CLOSES a released connection when its idle pool is already full, and
+// the next query opens a new one, which costs a TLS handshake and a SCRAM login on both
+// the service and the database. A pool that kept half its connections therefore
+// reconnected on every query that found more than half in use: at 16 device-management
+// resolvers on the default pool of 20 that was about 15% of the service's CPU in a
+// profile. Idle connections are still returned, after connMaxLifetime, by the
+// connection cleaner.
+//
+// An explicit idle count is honoured, up to the open count.
 func poolSizing(cfgOpen, cfgIdle int) (open, idle int) {
 	open = cfgOpen
 	if open <= 0 {
 		open = defaultMaxOpenConnections
 	}
-
 	idle = cfgIdle
-	if idle <= 0 {
-		// Default idle to half of open (floored) so it tracks open without
-		// pinning the full pool open, but never below a small floor.
-		idle = open / 2
-		if idle < minMaxIdleConnections {
-			idle = minMaxIdleConnections
-		}
-	}
-	// Idle can never exceed open; database/sql would silently clamp it anyway.
-	if idle > open {
+	if idle <= 0 || idle > open {
 		idle = open
 	}
 	return open, idle

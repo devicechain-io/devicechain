@@ -4161,6 +4161,34 @@ se crea una instancia. Las instancias creadas con esta versión participan. Ejec
 antes de crear una instancia nueva, para que los pods de la base de datos relacional lleven la
 etiqueta que busca el nuevo almacén de eventos.
 
+#### Los servicios mantienen abiertas sus conexiones a la base de datos entre usos {#next-warm-pool}
+
+El pool de conexiones de un servicio solo mantenía abiertas entre usos la mitad de sus
+conexiones: 10 de las 20 predeterminadas. Cada vez que había más de la mitad del pool en uso a la
+vez, cada conexión por encima de esa mitad se cerraba al liberarse y se volvía a abrir para la
+siguiente consulta, lo que cuesta al servicio y a la base de datos un nuevo inicio de sesión cada
+vez. `device-management` llega a ese punto cuando se sube `resolution.workers` por encima de 10,
+porque sus resolvedores comparten el pool con su API GraphQL, sus comprobaciones de conexión MQTT
+y su consumidor de alarmas. En un perfil de CPU con 16 resolvedores sobre el pool predeterminado,
+a unos 5.200 eventos por segundo en tres nodos de 8 vCPU, volver a iniciar sesión se llevaba el
+14–15% de la CPU de `device-management`, frente al 0,2% con los 10 resolvedores predeterminados.
+
+- **Cada conexión que abre un pool sigue abierta entre usos**, hasta el tamaño del pool. Una
+  conexión se sigue cerrando una hora después de abrirse, como antes, y se vuelve a abrir cuando
+  se necesita. Subir `resolution.workers`, `persistence.writers` o `projection.writers` hacia el
+  tamaño del pool ya no hace que un servicio se reconecte.
+- **La base de datos puede mostrar más conexiones inactivas de cada servicio después de un
+  periodo de mucha carga**: hasta el tamaño de su pool. Con la configuración predeterminada no hay
+  que hacer nada: el [presupuesto de conexiones](./bootstrap.md#connection-budget) de una
+  instancia permite a cada área un pod con un pool completo del tamaño predeterminado, más otro
+  pod durante un despliegue. Si ejecutas un servicio con `replicas` por encima de 1, o has subido
+  su `maxOpenConnections`, sus pods mantienen ahora esas conexiones después de un periodo de mucha
+  carga en lugar de devolver todas menos la mitad, así que comprueba que el límite de conexiones
+  de la instancia todavía las cubre.
+- `maxIdleConnections` se sigue respetando cuando se fija, hasta `maxOpenConnections`. Fijarlo más
+  bajo mantiene menos conexiones en la base de datos, a costa de una conexión e inicio de sesión
+  nuevos para cada consulta que encuentra más que esas en uso.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

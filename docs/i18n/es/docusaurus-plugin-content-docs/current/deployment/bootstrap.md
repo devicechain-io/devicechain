@@ -188,6 +188,14 @@ datos, ni login—, así que un arranque rechazado no deja nada que limpiar. Un 
 para alojar muchas instancias, o instancias con muchas áreas habilitadas, necesita un
 presupuesto mayor.
 
+Cada servicio mantiene abiertas entre usos todas las conexiones que ha abierto su pool, hasta el
+tamaño del pool (20 si no se fija `maxOpenConnections`), y sustituye cada una una hora después de
+abrirla. La reserva permite a cada área un pod con un pool completo del tamaño predeterminado, más
+otro pod durante un despliegue, así que con los valores predeterminados todos los pools caben en ella. Un
+servicio con `replicas` por encima de 1, o con un `maxOpenConnections` mayor, puede mantener más
+que eso después de un periodo de mucha carga, así que comprueba esos ajustes frente al límite de
+conexiones de la instancia.
+
 El presupuesto es el único ajuste de instalación que puede cambiar con instancias en marcha, y
 solo hacia arriba: vuelve a ejecutar `dcctl install` con un `--max-connections` mayor. No sale
 gratis. Cambiar el límite de conexiones de la base de datos reinicia sus instancias de base de
