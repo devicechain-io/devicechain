@@ -188,6 +188,77 @@ run "wrong_value_is_not_tolerated" {
   expect_failures = [helm_release.cluster]
 }
 
+# A toleration for another key does not cover the taint, even when its value and
+# effect match: refused.
+run "other_key_is_not_tolerated" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+    tolerations   = [{ key = "other", value = "database", effect = "NoSchedule" }]
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+      ]
+    }
+  }
+
+  expect_failures = [helm_release.cluster]
+}
+
+# A toleration that names an effect covers only that effect: one for NoExecute,
+# with the right key and value, does not cover a NoSchedule taint. Refused.
+run "other_effect_is_not_tolerated" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+    tolerations   = [{ key = "dedicated", value = "database", effect = "NoExecute" }]
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoSchedule", timeAdded = null }] } },
+      ]
+    }
+  }
+
+  expect_failures = [helm_release.cluster]
+}
+
+# A NoExecute taint keeps a pod off as surely as NoSchedule does: the nodes carry
+# one and nothing tolerates it. Refused.
+run "untolerated_no_execute_taint" {
+  command = plan
+
+  variables {
+    node_selector = { "devicechain.io/pool" = "database" }
+  }
+
+  override_data {
+    target = data.kubernetes_resources.placement_nodes
+    values = {
+      objects = [
+        { metadata = { name = "db-a" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoExecute", timeAdded = null }] } },
+        { metadata = { name = "db-b" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoExecute", timeAdded = null }] } },
+        { metadata = { name = "db-c" }, spec = { unschedulable = null, taints = [{ key = "dedicated", value = "database", effect = "NoExecute", timeAdded = null }] } },
+      ]
+    }
+  }
+
+  expect_failures = [helm_release.cluster]
+}
+
 # Exists tolerates the taint whatever its value, and an empty effect matches every
 # effect: three usable nodes.
 run "exists_toleration_any_value" {

@@ -4058,11 +4058,10 @@ settings. With no instance running it is not refused, but it moves the relationa
 volumes may not be able to follow: see
 [Database placement](./bootstrap.md#database-placement) before you change it.
 
-If you built `dcctl` from source after these flags were added, `dcctl install` with a placement, and
-every `dcctl bootstrap` on a cluster installed with one, could fail in its OpenTofu step with
-`argument must not be null`, because the placement check read a node that had never been cordoned,
-or carried no taint, as an error. This release counts those nodes. The failed run created or changed
-no database: re-run the command with this release.
+If you built `dcctl` from source after these flags were added, `dcctl install` with a placement could
+fail in its OpenTofu step with `argument must not be null`, because the placement check read a node
+that had never been cordoned, or carried no taint, as an error. This release counts those nodes. The
+failed run created or changed no database: re-run the install with this release.
 
 ### The one-time durable-ingest cutover
 
