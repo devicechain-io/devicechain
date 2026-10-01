@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -127,5 +128,77 @@ func TestABatchOverAnUnreadableFenceMergesNothing(t *testing.T) {
 	}
 	for _, d := range devices {
 		assertProjectedAt(t, sp, d, t0)
+	}
+}
+
+// A batch that carries NO readings and NO positions writes nothing but device rows, so the
+// write-back of those rows is the only statement in it that can meet the fence. Presence
+// events for devices already seen are exactly that batch: the fenced tenant's are refused and
+// left for redelivery, and its rows do not move, while the other tenant's commit.
+func TestABatchOfPresenceOnlyEventsForSeenDevicesIsRefusedUnderAFence(t *testing.T) {
+	sp, db, _ := newFencedStateProcessor(t)
+	reg := stateRegistry(sp)
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	fenced := []string{"bpf-a", "bpf-b", "bpf-c", "bpf-d"}
+	live := []string{"bpl-a", "bpl-b", "bpl-c", "bpl-d"}
+	for _, d := range fenced {
+		seed(t, sp, threeMetrics(t, d, t0))
+	}
+	for _, d := range live {
+		seed(t, sp, forTenant(threeMetrics(t, d, t0), otherTenant))
+	}
+	plantFence(t, db, fenceTenant)
+
+	connect := func(d string) messaging.Message { return stateChangeMessage(t, d, t1, "CONNECTED", 7) }
+	var msgs []messaging.Message
+	for i := range fenced {
+		msgs = append(msgs, connect(fenced[i]), forTenant(connect(live[i]), otherTenant))
+	}
+	for i, n := range ackCounts(drainQueue(sp, msgs)) {
+		want := int32(i % 2) // live messages sit at odd positions
+		if n != want {
+			t.Errorf("message %d acknowledged %d times; want %d", i, n, want)
+		}
+	}
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry); v != 4 {
+		t.Errorf("state_messages_total{result=retry} = %v; want the fenced tenant's 4", v)
+	}
+	fencedCtx := core.WithTenant(context.Background(), fenceTenant)
+	for _, d := range fenced {
+		ds := loadState(t, sp, fencedCtx, d)
+		if !ds.LastActivityTime.Time.Equal(t0) || ds.PresenceSource != model.PresenceSourceInferred ||
+			ds.PresenceTime.Valid || ds.SessionId != 0 {
+			t.Errorf("fenced %s moved: activity %v, source %q, presence time %v, session %d; want t0, "+
+				"INFERRED, none, 0", d, ds.LastActivityTime.Time, ds.PresenceSource, ds.PresenceTime, ds.SessionId)
+		}
+	}
+	liveCtx := core.WithTenant(context.Background(), otherTenant)
+	for _, d := range live {
+		ds := loadState(t, sp, liveCtx, d)
+		if !ds.LastActivityTime.Time.Equal(t1) || ds.PresenceSource != model.PresenceSourceAsserted || ds.SessionId != 7 {
+			t.Errorf("live %s: activity %v, source %q, session %d; want t1, ASSERTED, 7",
+				d, ds.LastActivityTime.Time, ds.PresenceSource, ds.SessionId)
+		}
+	}
+
+	// Negative control: with the fence lifted, the SAME events land and the SAME reads see
+	// them — so the assertions above could have seen a write had one happened.
+	liftFence(t, db, fenceTenant)
+	var again []messaging.Message
+	for _, d := range fenced {
+		again = append(again, connect(d))
+	}
+	for i, n := range ackCounts(drainQueue(sp, again)) {
+		if n != 1 {
+			t.Errorf("after the lift, message %d acknowledged %d times; want 1", i, n)
+		}
+	}
+	for _, d := range fenced {
+		ds := loadState(t, sp, fencedCtx, d)
+		if !ds.LastActivityTime.Time.Equal(t1) || ds.PresenceSource != model.PresenceSourceAsserted || ds.SessionId != 7 {
+			t.Errorf("after the lift, %s: activity %v, source %q, session %d; want t1, ASSERTED, 7",
+				d, ds.LastActivityTime.Time, ds.PresenceSource, ds.SessionId)
+		}
 	}
 }

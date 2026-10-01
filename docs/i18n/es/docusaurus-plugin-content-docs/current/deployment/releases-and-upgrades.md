@@ -4213,6 +4213,17 @@ y un evento reentregado sigue sin añadir nada.
 
 No hay que hacer nada. Consulte [Persistencia de eventos](./observability.md#event-persistence).
 
+#### device-state escribe el estado de los dispositivos de un lote en una sola sentencia por inquilino {#next-state-batch-writes}
+
+`device-state` fusiona en una sola transacción los eventos que esperan a cada escritor. Escribía
+el estado de cada dispositivo del lote con una sentencia propia; en un clúster de tres nodos en
+la nube, a unos 4.400 eventos por segundo, esas sentencias eran cerca de la mitad de la CPU de
+`device-state`. Ahora escribe el estado de todos los dispositivos que ya tienen uno en una sola
+sentencia por cada inquilino del lote. Lo que deja un lote no cambia, y el `updatedAt` de un
+dispositivo sigue avanzando cada vez que se escribe su estado. Un dispositivo que aparece por
+primera vez se sigue creando por separado. No hay que hacer nada: no hay cambio de esquema, y el
+`device-state` anterior puede funcionar junto al nuevo durante la actualización.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

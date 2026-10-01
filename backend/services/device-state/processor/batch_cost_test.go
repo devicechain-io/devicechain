@@ -94,9 +94,11 @@ func gathered(t *testing.T, reg *prometheus.Registry, name, result string) (valu
 }
 
 // A queue of 32 measurement events for 32 devices of one tenant is merged in ONE
-// transaction: one lock read, one fence read, one statement per device's state, one upsert
-// for all 96 latest values — where merging them one at a time made 320 statements and 64
-// fence reads in 64 transactions.
+// transaction: one lock read, one fence read, the devices' states, one upsert for all 96
+// latest values — where merging them one at a time made 320 statements and 64 fence reads in
+// 64 transactions. A device seen for the first time is inserted on its own (that is how a
+// lost first-sight race is told apart); the states of devices that already have one are
+// written back together, one statement for the tenant.
 func TestAQueueOfEventsIsMergedInOneTransaction(t *testing.T) {
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
@@ -109,12 +111,12 @@ func TestAQueueOfEventsIsMergedInOneTransaction(t *testing.T) {
 		// seeded devices already have a row (merged at t0, one at a time) before the queue.
 		seeded bool
 		at     time.Time
-		// A device's state: its INSERT at first sight, its UPDATE once it exists — plus the
-		// lock read, the fence read and the latest-value upsert.
+		// The devices' states: one INSERT per device at first sight, one write-back for all of
+		// them once they exist — plus the lock read, the fence read and the latest-value upsert.
 		wantAll, wantFence int64
 	}{
 		{"first sight", false, t0, 1 + 1 + 32 + 1, 1},
-		{"every device seen before", true, t1, 1 + 1 + 32 + 1, 1},
+		{"every device seen before", true, t1, 1 + 1 + 1 + 1, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp, _, counter := newFencedStateProcessor(t)

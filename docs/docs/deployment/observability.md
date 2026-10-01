@@ -529,12 +529,14 @@ error names the setting. The service logs the values it is using when it starts.
 ### Live device state {#live-state-projection}
 
 `device-state` keeps each device's live state (connectivity, activity, latest readings and last
-position) from the same stream of events, and merges them the same way: each writer takes the
-events already waiting for it, up to a limit, and merges them in one transaction. An event is
-acknowledged only after that transaction commits. Several events for one device in the same batch
-leave exactly what merging them one at a time would. A reading or a position replaces the stored
-one only when it is strictly newer, so an older or equally old one never overwrites it; times are
-compared as the database stores them, to the microsecond. If one tenant's part of a batch is
+position) from the same stream of events, and merges them the same way: each writer takes the events
+already waiting for it, up to a limit, and merges them in one transaction. Within that transaction,
+the state of every device that already has one is written in one statement for each tenant in the
+batch, rather than one statement per device; a device seen for the first time is created on its own.
+An event is acknowledged only after that transaction commits. Several events for one device in the
+same batch leave exactly what merging them one at a time would. A reading or a position replaces the
+stored one only when it is strictly newer, so an older or equally old one never overwrites it; times
+are compared as the database stores them, to the microsecond. If one tenant's part of a batch is
 refused, that tenant's events are merged again one at a time, so only an event that is itself
 refused is retried, and the other tenants' events are committed together without them. If the
 transaction fails for a reason no tenant caused, such as a lost database connection, every event in

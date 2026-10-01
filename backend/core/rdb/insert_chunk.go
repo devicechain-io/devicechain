@@ -12,6 +12,7 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 // MaxBindParameters is the most parameters one statement can bind on the PostgreSQL wire
@@ -45,6 +46,13 @@ var gormValuerType = reflect.TypeOf((*gorm.Valuer)(nil)).Elem()
 // an expression that can bind any number of parameters, so counting the column as one would
 // be a guess, and a guess here is a statement the driver refuses on every retry. The event
 // store's models have no such column.
+//
+// 🔴 An ON CONFLICT … UpdateAll on a model with an update-time column (gorm's autoUpdateTime,
+// which includes UpdatedAt) is refused the same way: gorm expands UpdateAll into a bound
+// assignment of that column to the statement's time when the statement runs, after this count
+// is taken, so a full chunk binds one parameter more than counted. Name the columns with
+// DoUpdates instead; for a model with no update-time column UpdateAll binds nothing and is
+// counted exactly.
 func RowsPerInsert(db *gorm.DB, rows any) (int, error) {
 	stmt := &gorm.Statement{DB: db}
 	if err := stmt.Parse(rows); err != nil {
@@ -64,6 +72,11 @@ func RowsPerInsert(db *gorm.DB, rows any) (int, error) {
 	if cols == 0 {
 		return 0, fmt.Errorf("%w: %s has no insertable columns", ErrRowWidthUnknown, stmt.Schema.Name)
 	}
+	if updateAllBindsTime(db, stmt.Schema) {
+		return 0, fmt.Errorf("%w: %s has an update-time column, and ON CONFLICT with UpdateAll binds its value "+
+			"after the statement's parameters are counted; name the columns with DoUpdates", ErrRowWidthUnknown,
+			stmt.Schema.Name)
+	}
 	fixed := onConflictVars(db)
 	if fixed >= MaxBindParameters-cols {
 		return 0, fmt.Errorf("%w: %s's ON CONFLICT clause binds %d parameters, leaving no room for a row",
@@ -80,6 +93,24 @@ func RowsPerInsert(db *gorm.DB, rows any) (int, error) {
 // only in a column declared as the pointer — which is t here, and is caught.
 func bindsExpression(t reflect.Type) bool {
 	return t.Implements(gormValuerType)
+}
+
+// updateAllBindsTime reports whether db's ON CONFLICT clause is an UpdateAll that gorm will
+// extend, when the statement runs, with a bound assignment of the model's update-time column.
+func updateAllBindsTime(db *gorm.DB, s *schema.Schema) bool {
+	c, ok := db.Statement.Clauses["ON CONFLICT"]
+	if !ok {
+		return false
+	}
+	if oc, _ := c.Expression.(clause.OnConflict); !oc.UpdateAll {
+		return false
+	}
+	for _, f := range s.Fields {
+		if f.DBName != "" && f.AutoUpdateTime > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // onConflictVars is how many parameters db's ON CONFLICT clause binds, counted by building it

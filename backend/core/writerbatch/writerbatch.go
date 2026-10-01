@@ -18,8 +18,9 @@ package writerbatch
 // batch's transaction, and splits every multi-row insert so that no statement binds more
 // than that limit however many rows one message carries (core/rdb's CreateChunked, sized by
 // RowsPerInsert from the row's own columns); device-state merges a batch into multi-row
-// upserts chunked at a fixed row count, so its statements are bounded by that chunk (and its
-// lock by the batch's distinct devices, at most this cap).
+// statements — its device rows through CreateChunked, its latest values in upserts chunked at
+// a fixed row count — so its statements are bounded either way (and its lock by the batch's
+// distinct devices, at most this cap).
 //
 // What it bounds is how long a writing transaction can be, and that has two costs:
 //   - the erasure fence's first answer is remembered for the whole transaction
