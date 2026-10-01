@@ -687,8 +687,9 @@ blobStorage:
 # blast radius. requests are mandatory (values.schema.json enforces non-empty
 # resources) so pods land in the Burstable/Guaranteed QoS class, not BestEffort.
 #
-# The memory request stays 128Mi for every area: on GKE (v0.18.0) no event-path
-# pod's working set passed 40Mi in any kubectl top sample, up to 4800 events/s.
+# The memory request stays 128Mi for every area: on GKE, in every run of the
+# development build after v0.18.0 up to 9,200 events/s, no event-path pod's working
+# set passed 51Mi in any kubectl top sample.
 resources:
   requests:
     cpu: 100m
@@ -697,21 +698,25 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-# Per-area CPU REQUESTS sized from measurement (functionalAreas.<area>.measuredRequests).
+# Per-area CPU REQUESTS: what each event-path area used at 6,000 events/s on GKE
+# (functionalAreas.<area>.measuredRequests).
 # true (the default) applies each area's measuredRequests over the top-level
 # resources.requests above; an area's own functionalAreas.<area>.resources.requests
 # still wins over both. So with this on, a top-level requests.cpu does NOT reach an
 # area that has a measured request: set that area's own resources.requests instead.
 #
 # `dcctl install --compact` sets this to false, so its lowered top-level requests reach
-# every area: a small node is the one place a request sized for the default ingest
-# ceiling is the wrong answer. It is one top-level switch rather than per-area values
+# every area: a small node is the one place a request sized for 6,000 events/s is the
+# wrong answer. It is one top-level switch rather than per-area values
 # written by dcctl so that dcctl keeps not knowing which areas the chart sizes.
 #
 # Requests decide where the scheduler places a pod and nothing else. With every area
 # at the same 100m the scheduler could not tell a service that resolves every event
 # from one that is idle, and on a three-node GKE cluster it put the busiest services
 # on the node running the event store's primary.
+#
+# Together the five event-path areas request 4.05 cores. A non-compact install on a
+# cluster that cannot spare them leaves pods Pending; use --compact there.
 useMeasuredRequests: true
 
 # GOMEMLIMIT, as a percentage of each container's own memory LIMIT.
@@ -1060,15 +1065,20 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
-    # CPU REQUEST at the default 1000 messages/s tenant ceiling, applied while
+    # CPU REQUEST: what this service used at 6,000 events/s, applied while
     # useMeasuredRequests is on (not under --compact). Measured on GKE (3 x
-    # n2-standard-8, SSD persistent disks, --ha, v0.18.0): 0.38 cores at 800 events/s
-    # and 0.72 at 1600, so at most 0.475 millicores per event: 475m, rounded up to
-    # 500m. That is about half the kind figure above; the kind figure holds the
-    # limit, and the production-shaped cluster sizes the request, which only places
-    # the pod. backend/cli/bootstrap/sizing_test.go holds both.
+    # n2-standard-4 database nodes and 3 x n2-highcpu-4 service nodes, SSD persistent
+    # disks, --ha, the development build after v0.18.0, shipped defaults): 0.75 cores
+    # over a 180 s run and 0.76 over each of two 10-minute runs, rounded up to 800m.
+    # 6,000 events/s is the rate a default --ha install sustained there for 10
+    # minutes, twice, with resolution, storage and live state each keeping at least
+    # 99.7% of it (detection fell behind; see event-processing below). A request only
+    # places the pod: sized at the default tenant ceiling instead, the five event-path
+    # services requested between 15% (event-sources) and 66% (this one) of what they
+    # used at that rate, and the scheduler stacked them. The kind figure above holds the
+    # LIMIT. backend/cli/bootstrap/sizing_test.go holds both.
     measuredRequests:
-      cpu: 500m
+      cpu: 800m
     # Prefer a node that is not running this instance's event-store primary
     # (templates/_helpers.tpl devicechain.eventStorePrimaryAntiAffinity). Preferred,
     # never required: on a cluster with fewer nodes than busy services the pod still
@@ -1077,6 +1087,23 @@ functionalAreas:
     # ~4.75k to ~5.6k events/s; the node carrying the primary ran at 87-97% CPU in
     # every tuned rung.
     avoidEventStorePrimary: true
+    # Spread among the event-path services (templates/_helpers.tpl
+    # devicechain.eventPathSpread): this pod prefers a node running fewer of
+    # device-management, event-management, device-state, event-sources and
+    # event-processing. Preferred, never required: with fewer nodes than those five
+    # they still schedule, and on three nodes it usually means at most two to a node,
+    # not always (it is one score among several). Measured on GKE at shipped defaults
+    # with nothing keeping them apart, the scheduler put event-sources and
+    # event-processing on one node with a NATS server and device-management with
+    # device-state on another: at 6,000 events/s two service nodes ran at about 80%
+    # CPU and the third at 55%, and from 8,400 the first reached 91-93%.
+    #
+    # One trade: a pod that sets a spread of its own no longer gets the cluster's
+    # DEFAULT spread, which keeps one Deployment's replicas on different nodes and
+    # zones. At replicas: 1 there is nothing to spread. Above 1, this constraint still
+    # counts the replicas (they carry the same label), but no longer prefers
+    # different zones for them.
+    eventPathSpread: true
     # Profiling listener: Go runtime profiles (CPU, heap, goroutines, execution
     # trace) served by this service on a port of its own. OFF, here and in every
     # area. Any area takes the same block. Turning it on restarts this area's pods
@@ -1137,12 +1164,13 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
-    # 0.10 cores at 800 events/s (0.125 millicores per event), 0.138 unthrottled at
-    # 4000: 138m at the default ceiling, rounded up to 150m.
+    # CPU REQUEST (as device-management above): 0.97 cores over a 180 s run and 0.98
+    # over each of two 10-minute runs at 6,000 events/s, rounded up to 1 core.
     measuredRequests:
-      cpu: 150m
+      cpu: "1"
     # See device-management above.
     avoidEventStorePrimary: true
+    eventPathSpread: true  # See device-management above.
     config: {}
     # The readings one event may carry are a fixed platform limit of 256 on every
     # transport, not a setting (the old maxReadingsPerMessage key is retired: it is
@@ -1249,14 +1277,14 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
-    # GKE (as device-management): 0.29 cores at 800 events/s and 0.56 at 1600, at most
-    # 0.3625 millicores per stored event: 363m at the default ceiling, rounded up to
-    # 400m.
+    # CPU REQUEST (as device-management above): 0.87 cores over a 180 s run and 0.78
+    # and 0.79 over two 10-minute runs at 6,000 events/s, rounded up to 900m.
     measuredRequests:
-      cpu: 400m
+      cpu: 900m
     # See device-management above. This is the service the tuned GKE measurement
     # moved.
     avoidEventStorePrimary: true
+    eventPathSpread: true  # See device-management above.
     config: {}
     # anchorSweepIntervalSeconds: 3600  # ADR-044 decision 3 reconciliation-sweep
     # cadence. Unset defaults to hourly; a negative value disables the sweep (the
@@ -1337,12 +1365,13 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
-    # Every rung at the old limit was throttled and under-reads, so the request uses
-    # the unthrottled 0.374 millicores per event: 374m at the default ceiling, rounded
-    # up to 400m. (No avoidEventStorePrimary: its store is the relational one, which
-    # does not run in the instance namespace.)
+    # CPU REQUEST (as device-management above): 0.83 cores over a 180 s run and 0.91
+    # over each of two 10-minute runs at 6,000 events/s, rounded up to 950m. (No
+    # avoidEventStorePrimary: its store is the relational one, which does not run in
+    # the instance namespace.)
     measuredRequests:
-      cpu: 400m
+      cpu: 950m
+    eventPathSpread: true  # See device-management above.
     config: {}
     # Live-state projection (defaults shown). Each writer merges the events already
     # waiting for it, up to maxBatch, in one transaction, which is what lets the
@@ -1433,6 +1462,15 @@ functionalAreas:
     # both are read as a MAX across pods precisely because a standby reports 0 for each.
     replicas: 1
     strategy: Recreate
+    # CPU REQUEST (as device-management above), from its one UNTHROTTLED reading: 0.37
+    # cores at 6,800 events/s with a 1-core limit, rounded up to 400m. At 6,000 under
+    # its 500m limit it used 0.33-0.34, but it was throttled in about 5% of periods and
+    # falling behind (its backlog peaked at about 93,000 events in a 10-minute run),
+    # so that reading is what it did, not what it was offered. It also fell behind
+    # unthrottled, so 400m is a floor for keeping up, not a measure of it.
+    measuredRequests:
+      cpu: 400m
+    eventPathSpread: true  # See device-management above.
     # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
     # checkpointIntervalSeconds: 10   # commits (whichever comes first). The engine
     # acks the resolved-events durable only after the snapshot containing an event's

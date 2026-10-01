@@ -156,7 +156,7 @@
     },
     "useMeasuredRequests": {
       "type": "boolean",
-      "description": "Apply each area's functionalAreas.<area>.measuredRequests over the top-level resources.requests. dcctl install --compact sets false, so the top-level requests reach every area."
+      "description": "Apply each area's functionalAreas.<area>.measuredRequests (its CPU use at 6,000 events/s) over the top-level resources.requests. dcctl install --compact sets false, so the top-level requests reach every area."
     },
     "serviceAccount": {
       "type": "object",
@@ -358,7 +358,7 @@
           },
           "measuredRequests": {
             "type": "object",
-            "description": "CPU request sized from measurement, applied over the top-level resources.requests while useMeasuredRequests is true. The area's own resources.requests wins over it.",
+            "description": "CPU request: the area's measured use at 6,000 events/s, applied over the top-level resources.requests while useMeasuredRequests is true. The area's own resources.requests wins over it.",
             "properties": {
               "cpu": { "type": ["string", "number"] }
             },
@@ -367,6 +367,10 @@
           "avoidEventStorePrimary": {
             "type": "boolean",
             "description": "Prefer (never require) a node that is not running this instance's event-store primary."
+          },
+          "eventPathSpread": {
+            "type": "boolean",
+            "description": "Prefer (never require) a node running fewer of this instance's event-path services: every area with this set counts. Shipped on device-management, event-management, device-state, event-sources and event-processing."
           },
           "profiler": {
             "type": "object",

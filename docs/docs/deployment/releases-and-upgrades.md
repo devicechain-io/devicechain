@@ -3493,23 +3493,16 @@ Nothing needs doing at the upgrade.
 `event-management`. At 500m, `event-sources`' slower responses capped the rate devices could send,
 and `device-state` let the live device view fall minutes behind at rates the rest of an
 installation handled. The four services also **request** CPU sized from measurement instead of
-100m each: `device-management` 500m, `event-management` 400m, `device-state` 400m,
-`event-sources` 150m. `device-management`, `event-management` and `event-sources` prefer a node
+100m each; [the event-path requests item](#next-event-path-requests) gives the values.
+`device-management`, `event-management` and `event-sources` prefer a node
 that is not running the event store's primary. A new instance's event store gets a 32Gi volume
 instead of 8Gi. See [Service sizing](./bootstrap.md#service-sizing), which also records the
 measured throughput.
 
 **Before you upgrade an instance installed without `--compact`:**
 
-- **Check there is room for the larger requests.** Once upgraded, the instance requests about
-  1 CPU more than before. During the rolling update each service runs its new pod beside the old
-  one, so the nodes need the new requests free as well: about 1.5 CPU for these four services.
-  Compare the nodes' free allocatable CPU (`kubectl describe nodes`, "Allocated resources") with
-  the table in Service sizing. If a new pod cannot be placed, it stays `Pending` and the upgrade
-  fails after waiting, with the instance partly upgraded: services whose new pods started are on
-  the new release, and the rest are still on the old one. Make room and run `dcctl upgrade` again
-  to finish. An instance built with `dcctl` has no way to keep the old requests; the remedy is
-  capacity.
+- **Check there is room for the larger requests**, as
+  [the event-path requests item](#next-event-path-requests) describes.
 - **A `ResourceQuota` or `LimitRange` on the instance's namespace** can refuse the new 2-core limit
   of `event-sources` and `device-state`, or the larger requests, as it could for
   `device-management` and `event-management` in v0.18.0.
@@ -4062,6 +4055,51 @@ If you built `dcctl` from source after these flags were added, `dcctl install` w
 fail in its OpenTofu step with `argument must not be null`, because the placement check read a node
 that had never been cordoned, or carried no taint, as an error. This release counts those nodes. The
 failed run created or changed no database: re-run the install with this release.
+
+#### The event-path services request what they use at 6,000 events per second, and spread across nodes {#next-event-path-requests}
+
+The five services that handle every event now **request** the CPU they were measured to use at
+6,000 events per second: `device-management` 800m, `event-management` 900m, `device-state` 950m,
+`event-sources` 1 core and `event-processing` 400m. Sized for a tenant's default ceiling of 1,000
+events per second, they requested between 15% and 66% of what they used at the rate a default
+`--ha` installation sustains, and the scheduler, which places pods by their requests, put the
+busiest of them together. They also prefer to run on different nodes; on three nodes they usually
+run no more than two to a node. `functionalAreas.<service>.eventPathSpread: false` turns that off
+for one service. A new instance's NATS servers request 500m of CPU and 768Mi of memory and are
+limited to 2Gi of memory; before, they requested nothing, which made them the first pods evicted
+when a node ran short of memory. See [Service sizing](./bootstrap.md#service-sizing) and
+[The message broker](./bootstrap.md#broker-sizing).
+
+**Before you upgrade an instance installed without `--compact`:**
+
+- **Check there is room for the larger requests.** Once upgraded, the five services request about
+  3.6 CPU more than in v0.18.0. During the rolling update four of them run their new pod beside the
+  old one (`event-processing` stops its old pod first), so the nodes need about 3.65 CPU free for
+  the new pods, and each new pod needs up to one core free on a single node. Compare the nodes'
+  free allocatable CPU (`kubectl describe nodes`, "Allocated resources") with the table in Service
+  sizing. A kind cluster on a laptop is the most likely not to have it. If a new pod cannot be
+  placed, it stays `Pending` and the upgrade fails after waiting, with the instance partly
+  upgraded: services whose new pods started are on the new release, and the rest are still on the
+  old one. Make room and run `dcctl upgrade` again to finish. An instance built with `dcctl` has no
+  way to keep the old requests; the remedy is capacity, or recreating it with `--compact`.
+
+Instances installed with `--compact` keep their 25m and 64Mi requests, and a new compact
+instance's NATS servers request the same.
+
+**The NATS servers of an existing instance are not changed:** `dcctl upgrade` does not re-apply an
+instance's broker, so its servers keep running with no requests or limits until the instance is
+recreated.
+
+**If you install the chart yourself, with your own values:**
+
+- `event-processing` now has a measured request, so a top-level `resources.requests.cpu` no longer
+  reaches it either. Set its own under `functionalAreas.event-processing.resources.requests`, or
+  set `useMeasuredRequests: false`.
+- `event-processing` takes its CPU limit from the top-level `resources.limits.cpu`, so a top-level
+  limit below 400m now refuses to render, naming `measuredRequests`. Raise the limit, set the
+  service's own request, or set `useMeasuredRequests: false`.
+- A new key, `eventPathSpread`, is on for the five services. A values file that sets it on another
+  service spreads that service with them.
 
 ### The one-time durable-ingest cutover
 

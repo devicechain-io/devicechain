@@ -595,6 +595,61 @@ affinity:
 {{- end }}
 {{- end -}}
 
+{{/*
+devicechain.eventPathLabel: the pod label the event-path spread counts, for an area
+whose values set eventPathSpread. Rendered into the pod TEMPLATE's labels only, never
+into the Deployment selector: a selector is immutable, so adding a key to it would make
+every upgrade of an existing instance fail.
+devicechain.eventPathSpread builds its selector by calling this helper, so the label a
+pod carries and the label the constraint counts cannot be spelled two ways.
+Parameters: areaCfg.
+*/}}
+{{- define "devicechain.eventPathLabel" -}}
+{{- if get .areaCfg "eventPathSpread" -}}
+devicechain.io/event-path: "true"
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.eventPathSpread: a PREFERRED topology spread over nodes among this
+instance's event-path pods (every area whose values set eventPathSpread).
+
+The pods belong to different Deployments, so the selector is a label they share rather
+than any one Deployment's own labels. No instance label: a topology spread counts only
+pods in the pod's own namespace, which is the instance namespace, so the namespace makes
+the distinction (as for devicechain.eventStorePrimaryAntiAffinity above). No
+matchLabelKeys: pod-template-hash there would narrow the count to the pod's own
+Deployment revision, and the spread would separate nothing.
+
+ScheduleAnyway, never DoNotSchedule: on a cluster with fewer nodes than these pods (kind,
+one node, --compact) every pod still schedules. It is a score the scheduler weighs with
+others (free CPU, the anti-affinity above), so on three nodes it usually, not always,
+keeps them to two per node. Measured on GKE at shipped defaults with nothing keeping
+them apart, event-sources and event-processing shared a node with a NATS server and
+device-management shared one with device-state; at 6,000 events/s two service nodes ran
+at about 80% CPU and the third at 55%.
+
+Which NATS server leads a stream is NATS's choice, so no rule here can keep a service
+off the busiest broker's node. What this does is cap how many of these pods share one.
+
+A pod that sets a spread of its own loses the scheduler's DEFAULT spread (one
+Deployment's replicas across nodes and zones). At replicas: 1 that costs nothing; above
+it, the replicas still count here (they carry the label) but no longer prefer different
+zones. values.yaml (device-management) says so where the switch is.
+Parameters: areaCfg.
+*/}}
+{{- define "devicechain.eventPathSpread" -}}
+{{- with include "devicechain.eventPathLabel" (dict "areaCfg" .areaCfg) -}}
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        {{- . | nindent 8 }}
+{{- end }}
+{{- end -}}
+
 {{/* Identifying labels for an instance-scoped resource (namespace, ConfigMaps). */}}
 {{- define "devicechain.instanceLabels" -}}
 devicechain.io/instance: {{ .Values.instance.id }}
@@ -644,8 +699,8 @@ devicechain.areaResources renders one area's container resources from three
 layers, each merged over the one before it KEY BY KEY:
 
   1. the top-level `resources` map;
-  2. the area's `functionalAreas.<area>.measuredRequests` (CPU requests sized from
-     measurement, values.yaml), over the requests only, and only while
+  2. the area's `functionalAreas.<area>.measuredRequests` (CPU requests: each
+     area's use at 6,000 events/s, values.yaml), over the requests only, and only while
      `useMeasuredRequests` is true;
   3. the area's own `functionalAreas.<area>.resources`, which wins over both.
 

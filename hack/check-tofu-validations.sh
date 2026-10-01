@@ -395,6 +395,18 @@ run_assertions() {
   for v in 0 1 3 5; do accepts nats_cluster_replicas "$v"; done
   for v in 2 4 6 7 -1; do rejects nats_cluster_replicas "$v"; done
 
+  # --- each NATS server's requests and memory limit ----------------------------
+  # A bare number is cores, as Kubernetes reads it, so "1" is accepted on purpose.
+  # Zero is refused in every spelling: a zero request is the BestEffort broker these
+  # variables exist to end. Memory is binary units only, because GOMEMLIMIT is
+  # derived from the limit's number.
+  for v in 500m 25m 1 1.5 0.5; do accepts nats_cpu_request "$v"; done
+  for v in "" m 1c 0.5m 500M 0 0m 0.0; do rejects nats_cpu_request "$v"; done
+  for v in 768Mi 1Gi 64Mi; do accepts nats_memory_request "$v"; done
+  for v in 768M 1G 0.75Gi 768 0Mi; do rejects nats_memory_request "$v"; done
+  for v in 2Gi 1536Mi; do accepts nats_memory_limit "$v"; done
+  for v in 2G 2gi 1.5Gi "" 0Gi; do rejects nats_memory_limit "$v"; done
+
   # evaluates <expected> <expr> [-var k=v ...] — the expression must evaluate to
   # exactly <expected> under those variables.
   evaluates() {
@@ -464,6 +476,15 @@ run_assertions() {
   evaluates '"DoNotSchedule"' 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].whenUnsatisfiable' -var ha=true
   evaluates 1 'module.nats.ha_topology.spread_constraints["kubernetes.io/hostname"].maxSkew' -var ha=true
   evaluates '{}' 'module.nats.ha_topology.spread_constraints' -var ha=false
+  # Each server's resources, through the ROOT: a module test cannot see a root that
+  # forgets to pass one of these variables on, which would leave the module default
+  # in place while the operator's value went nowhere.
+  evaluates '"500m"' 'module.nats.ha_topology.resources.requests.cpu' -var ha=true
+  evaluates '"768Mi"' 'module.nats.ha_topology.resources.requests.memory'
+  evaluates '"25m"' 'module.nats.ha_topology.resources.requests.cpu' -var nats_cpu_request=25m
+  evaluates '"64Mi"' 'module.nats.ha_topology.resources.requests.memory' -var nats_memory_request=64Mi
+  evaluates '"1Gi"' 'module.nats.ha_topology.resources.limits.memory' -var nats_memory_limit=1Gi
+  evaluates '"819MiB"' 'module.nats.ha_topology.go_mem_limit' -var nats_memory_limit=1Gi
   # Whether a NATS config change is ADOPTED by the running broker at all. nats-server
   # refuses to hot-reload the auth_callout block — and the refusal is wholesale, so
   # every other change in the same apply goes with it — which means without the pod

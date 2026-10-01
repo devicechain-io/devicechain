@@ -21,6 +21,9 @@ module "nats" {
   service_password_bcrypt  = var.nats_service_password_bcrypt
   sys_password_bcrypt      = var.nats_sys_password_bcrypt
   mqtt_node_port           = var.nats_mqtt_node_port
+  cpu_request              = var.nats_cpu_request
+  memory_request           = var.nats_memory_request
+  memory_limit             = var.nats_memory_limit
 
   # 🔑 NO depends_on ON THE NAMESPACE, BECAUSE THIS ROOT NO LONGER OWNS IT. The
   # namespace is a cluster prerequisite now — created by the cluster root, and by

@@ -22,6 +22,19 @@
 # the 1883 MQTT gateway. Server-auth only in v1 (no tls.verify) — clients verify
 # the broker; device authentication is the separate auth-callout half of ADR-025.
 
+# Named so hack/check-tofu-module-tests.sh pins them to the versions the roots run
+# (it pins only the providers a module declares); the roots pin the versions.
+terraform {
+  required_providers {
+    helm = {
+      source = "hashicorp/helm"
+    }
+    kubernetes = {
+      source = "hashicorp/kubernetes"
+    }
+  }
+}
+
 variable "namespace" {
   type = string
 }
@@ -282,6 +295,67 @@ variable "mqtt_node_port" {
   }
 }
 
+# --- Each server's resources ---------------------------------------------------
+#
+# The chart's default is no requests and no limits, which makes every server a
+# BestEffort pod: the first the kubelet evicts when a node runs short of memory, and
+# the lowest CPU weight on a busy node, for the process every event crosses.
+
+variable "cpu_request" {
+  description = <<-EOT
+    CPU each NATS server requests. 500m by default; dcctl's --compact passes its own
+    lowered request. Deliberately BELOW what a server uses under load: on GKE at
+    6,000 events/s each of three servers used 1.0 to 1.5 cores. Under ha on a pool
+    of exactly three nodes, every node runs one server (the required spread below)
+    whatever it requests, so a larger request would move nothing and take about four
+    cores from what the services can be placed on. What 500m buys there is the
+    Burstable QoS class instead of BestEffort and a CPU weight beside the services.
+    On a larger pool, or without ha (one server, which then carries every event and
+    was not measured), the request also steers where the scheduler puts other pods,
+    and 500m understates the server's use. No CPU LIMIT is set: a limit would
+    throttle the process every event crosses.
+  EOT
+  type        = string
+  default     = "500m"
+
+  validation {
+    condition     = can(regex("^([0-9]+m|[0-9]+(\\.[0-9]+)?)$", var.cpu_request)) && !can(regex("^[0.]+m?$", var.cpu_request))
+    error_message = "cpu_request must be a nonzero number of millicores (\"500m\") or cores (\"1\", \"1.5\")."
+  }
+}
+
+variable "memory_request" {
+  description = "Memory each NATS server requests, in Mi or Gi. 768Mi by default: the highest resident memory any server reached in any GKE run up to 9,200 events/s was 749 MiB, rounded up. A server using more than it requests is among the first the kubelet evicts under node memory pressure."
+  type        = string
+  default     = "768Mi"
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*(Mi|Gi)$", var.memory_request))
+    error_message = "memory_request must be a nonzero whole number of Mi or Gi (e.g. \"768Mi\")."
+  }
+}
+
+variable "memory_limit" {
+  description = <<-EOT
+    Memory limit of each NATS server, in Mi or Gi. GOMEMLIMIT is set to 80% of it, as
+    the nats chart recommends, so the Go runtime collects harder before the kernel
+    kills the server. 2Gi by default: 2.7 times the highest resident memory measured
+    (749 MiB), and above the highest working set (1,166 MiB, mostly page cache the
+    kernel reclaims first). Those were steady-ingest runs: a server rejoining its
+    cluster or catching up a large backlog after a node loss was not measured, so
+    raise this if a server is ever OOM-killed. Binary units only: GOMEMLIMIT is
+    derived from the number, and a decimal unit would make it off by the factor
+    between G and Gi.
+  EOT
+  type        = string
+  default     = "2Gi"
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*(Mi|Gi)$", var.memory_limit))
+    error_message = "memory_limit must be a nonzero whole number of Mi or Gi (e.g. \"2Gi\")."
+  }
+}
+
 locals {
   # Service name the internal services present (see natsauth.ServiceUser). Kept in
   # sync with the Go constant; a mismatch would lock every service out.
@@ -303,6 +377,14 @@ locals {
   js_size_magnitude = tonumber(regex("^[0-9.]+", var.jetstream_storage))
   js_size_unit      = regex("[A-Za-z]+$", var.jetstream_storage)
   js_max_file_store = var.jetstream_max_file_store != "" ? var.jetstream_max_file_store : "${floor(local.js_size_magnitude * 0.9)}${local.js_size_unit}"
+
+  # Memory in MiB, from values the validations above hold to Mi or Gi. Converted
+  # BEFORE the 80% is taken: 80% of the magnitude of "2Gi" floors to 1, a 1 GiB soft
+  # limit under a 2 GiB hard one (the magnitude trap js_max_file_store's comment
+  # describes, which flooring there costs only headroom).
+  memory_request_mib = tonumber(regex("^[0-9]+", var.memory_request)) * (endswith(var.memory_request, "Gi") ? 1024 : 1)
+  memory_limit_mib   = tonumber(regex("^[0-9]+", var.memory_limit)) * (endswith(var.memory_limit, "Gi") ? 1024 : 1)
+  go_mem_limit       = "${floor(local.memory_limit_mib * 0.8)}MiB"
 
   # The server count. var.cluster_replicas wins when set; var.ha is the shorthand.
   cluster_replicas = var.cluster_replicas > 0 ? var.cluster_replicas : (var.ha ? 3 : 1)
@@ -769,6 +851,20 @@ locals {
     promExporter = {
       enabled = var.enable_prom_exporter
     }
+    # The server container's resources and environment. Chart 2.14.4 renders
+    # .Values.container.resources and .Values.container.env (a name -> value map)
+    # into the nats container (files/stateful-set/nats-container.yaml). Not under
+    # podTemplate: that map has no resources key, and the chart has no values schema,
+    # so a key under the wrong parent would be accepted and do nothing.
+    # ha_topology reads this path back out (see reported below), and
+    # tests/resources.tftest.hcl reads it out of the values Helm is handed.
+    container = {
+      resources = {
+        requests = { cpu = var.cpu_request, memory = var.memory_request }
+        limits   = { memory = var.memory_limit }
+      }
+      env = { GOMEMLIMIT = local.go_mem_limit }
+    }
   }
 
   # The rendered Helm values. The auth toggle is applied at the STRING level
@@ -819,6 +915,10 @@ locals {
     # ("This object does not have an attribute named ..."), with no cluster, no
     # network and no plan.
     config_checksum_annotation = local.chart_values.podTemplate.configChecksumAnnotation
+    # Each server's resources, read back for the same reason: a resources map moved
+    # to the wrong parent is accepted by the chart in silence.
+    resources    = local.chart_values.container.resources
+    go_mem_limit = local.chart_values.container.env.GOMEMLIMIT
     route_tls_verified = (local.chart_values.config.cluster.enabled
       && local.chart_values.config.cluster.tls.enabled
     && local.chart_values.config.cluster.tls.merge.verify)
@@ -943,6 +1043,13 @@ resource "helm_release" "nats" {
       condition     = !local.contradictory
       error_message = "nats ha=true with cluster_replicas=1 is contradictory: ha asks for the ADR-020 3-node RAFT topology and cluster_replicas pins a single server. Drop cluster_replicas to let ha choose (0 = derive), or set ha=false if a single server is what you want."
     }
+
+    # Kubernetes refuses a pod whose memory request is above its limit, and the
+    # StatefulSet would wait out the 900 s timeout before the apply said anything.
+    precondition {
+      condition     = local.memory_request_mib <= local.memory_limit_mib
+      error_message = "nats memory_request (${var.memory_request}) is above memory_limit (${var.memory_limit}); Kubernetes refuses such a pod. Raise the limit or lower the request."
+    }
   }
 }
 
@@ -1030,7 +1137,7 @@ output "ca_pem" {
 #
 # Deliberately carries no secret material, so it is safe to print.
 output "ha_topology" {
-  description = "The resolved HA topology: server count, whether clustering is on, the MQTT gateway's replica factor, whether route TLS is mutually verified, and the pod spread constraints. Verified in CI; safe to print."
+  description = "The resolved HA topology: server count, whether clustering is on, the MQTT gateway's replica factor, whether route TLS is mutually verified, the pod spread constraints, and each server's resources. Verified in CI; safe to print."
   value = {
     cluster_replicas     = local.reported.cluster_replicas
     clustered            = local.reported.clustered
@@ -1041,6 +1148,9 @@ output "ha_topology" {
     # rather than applied, reported successful, and silently ignored. Asserted in
     # CI alongside the rest.
     config_checksum_annotation = local.reported.config_checksum_annotation
+    # Each server's requests and limits, and the GOMEMLIMIT derived from the limit.
+    resources    = local.reported.resources
+    go_mem_limit = local.reported.go_mem_limit
     # The ONE field here that is not a read-back, because it has no chart value
     # to read: it reports a contradiction in what was ASKED for, which the
     # precondition below refuses. Shared with that precondition through
