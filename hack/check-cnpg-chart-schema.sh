@@ -1157,3 +1157,165 @@ if bad:
              "ConsumerAckWaitSeconds = %ds abandons events after their last delivery." % (len(bad), budget))
 print("    shutdown timing inside the %ds redelivery budget in %d render(s)" % (budget, len(rendered)))
 PY
+
+# --- the two databases' primaries, against each other --------------------------
+#
+# THE RELATIONAL AND THE EVENT-STORE PRIMARY PREFER DIFFERENT NODES.
+#
+# Measured on three 8-vCPU nodes with both primaries (and both WAL archivers) on
+# one node: that node ran at 94-98% CPU while the other two sat at 45-51%. Each
+# store's own anti-affinity spreads only its OWN instances, and the two stores live
+# in different namespaces (the relational one in the cluster's shared namespace,
+# each event store in its instance's), so nothing related them.
+#
+# Asserted by MEANING, not shape: each rendered Cluster's selector is evaluated
+# against the labels ANOTHER store's primary actually carries -- taken from a second
+# render under a different name, so the key the selector looks for and the key the
+# other store stamps on its pods are compared as the chart produced them. A rule
+# that matches nothing is a preferred term the scheduler ignores, and every pod
+# still schedules, so nothing else in the repo can see it go inert.
+#
+# The other-store render is not added to `rendered`: the case counts and controls
+# above stay what they were.
+say "checking that each database store avoids the other store's primary"
+other_store="$(render_case other-store "${base[@]}" --set instances=1 \
+  --set name=dc-other --set aliasServiceName=dc-other-alias \
+  --set bootstrap.secretName=dc-other-app-credentials)"
+
+python3 - "$other_store" "${rendered[@]}" <<'PY'
+import copy, sys, yaml
+
+other_path, rendered = sys.argv[1], sys.argv[2:]
+ROLE = "cnpg.io/instanceRole"
+HOSTNAME = "kubernetes.io/hostname"
+NS_LABEL = "kubernetes.io/metadata.name"
+# The two kinds of namespace the stores really live in: the cluster's shared one
+# and an instance's. A term that reaches only one of them cannot see the other store.
+NAMESPACES = ("dc-system", "dci-acme")
+
+def clusters(path):
+    cs = [d for d in yaml.safe_load_all(open(path)) if d and d.get("kind") == "Cluster"]
+    if not cs:
+        sys.exit("%s rendered no Cluster; the placement check would pass over nothing" % path)
+    return cs
+
+def matches(sel, labels):
+    """Kubernetes LabelSelector semantics. None matches nothing (a podAffinityTerm's
+    null labelSelector selects no pods); an operator this does not know is an error,
+    never a guess."""
+    if sel is None:
+        return False
+    for k, v in (sel.get("matchLabels") or {}).items():
+        if labels.get(k) != v:
+            return False
+    for e in sel.get("matchExpressions") or []:
+        op, k, vals = e.get("operator"), e.get("key"), e.get("values") or []
+        if op == "In":
+            ok = k in labels and labels[k] in vals
+        elif op == "NotIn":
+            ok = k not in labels or labels[k] not in vals
+        elif op == "Exists":
+            ok = k in labels
+        elif op == "DoesNotExist":
+            ok = k not in labels
+        else:
+            sys.exit("selector operator %r is not one this check can evaluate" % op)
+        if not ok:
+            return False
+    return True
+
+def store_labels(cluster):
+    return dict(((cluster.get("spec") or {}).get("inheritedMetadata") or {}).get("labels") or {})
+
+def problems(cluster, other):
+    """What is wrong with one Cluster's rule, given the labels the OTHER store stamps."""
+    spec = cluster.get("spec") or {}
+    name = (cluster.get("metadata") or {}).get("name")
+    out = []
+    own = store_labels(cluster)
+    if not any(k.startswith("devicechain.io/") and v == name for k, v in own.items()):
+        out.append("its pods carry no devicechain.io/ store label naming %r, so the other store cannot find this one's primary" % name)
+    aff = spec.get("affinity") or {}
+    if aff.get("additionalPodAffinity"):
+        out.append("renders an additionalPodAffinity: this rule only ever pushes stores apart")
+    anti = aff.get("additionalPodAntiAffinity") or {}
+    if anti.get("requiredDuringSchedulingIgnoredDuringExecution"):
+        out.append("renders a REQUIRED cross-store term: a cluster with fewer nodes would leave an instance Pending")
+    pref = anti.get("preferredDuringSchedulingIgnoredDuringExecution") or []
+    if len(pref) != 1:
+        out.append("renders %d preferred cross-store terms, want exactly 1" % len(pref))
+        return out
+    if pref[0].get("weight") != 100:
+        out.append("the preferred term's weight is %r, not 100" % pref[0].get("weight"))
+    term = pref[0].get("podAffinityTerm") or {}
+    # The same unit the store's own spread uses, and that unit is the hostname: a
+    # zone key would let both primaries share a node in a zone with several nodes.
+    if term.get("topologyKey") != HOSTNAME or term.get("topologyKey") != aff.get("topologyKey"):
+        out.append("topologyKey is %r (the store's own spread uses %r), not %s"
+                   % (term.get("topologyKey"), aff.get("topologyKey"), HOSTNAME))
+    if term.get("namespaces"):
+        out.append("the term names namespaces: the event store's is per instance and cannot be listed here")
+    ns = term.get("namespaceSelector")
+    if not ns:
+        out.append("namespaceSelector is absent or empty: absent means this namespace only, and the two stores never share one; empty is one pruning step from absent")
+    else:
+        for n in NAMESPACES:
+            if not matches(ns, {NS_LABEL: n}):
+                out.append("namespaceSelector does not reach namespace %s" % n)
+    sel = term.get("labelSelector")
+    primary = dict(other, **{"cnpg.io/cluster": "dc-other", ROLE: "primary"})
+    standby = dict(primary, **{ROLE: "replica"})
+    foreign = {"cnpg.io/cluster": "dc-other", ROLE: "primary"}
+    if not matches(sel, primary):
+        out.append("the selector does not match the other store's PRIMARY (labels %s)" % sorted(primary.items()))
+    if matches(sel, standby):
+        out.append("the selector matches the other store's STANDBYS too: it must avoid only the primary")
+    if matches(sel, foreign):
+        out.append("the selector matches a primary that is not a DeviceChain store")
+    return out
+
+other = store_labels(clusters(other_path)[0])
+everything = [(p, c) for p in rendered for c in clusters(p)]
+
+# Self-tests. Each planted Cluster is a REAL render with one thing changed, so the
+# check is shown to fail on the defect and not on an unrelated difference.
+good = everything[0][1]
+first = problems(good, other)
+if first:
+    for v in first:
+        sys.stderr.write("PRIMARY PLACEMENT: %s: %s\n" % (everything[0][0].rsplit("/", 1)[-1], v))
+    sys.exit("the first rendered Cluster fails the placement check before anything is planted (reasons above)")
+def planted(mutate):
+    c = copy.deepcopy(good); mutate(c["spec"]); return c
+term = lambda s: s["affinity"]["additionalPodAntiAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"][0]["podAffinityTerm"]
+for label, c in [
+    ("no cross-store term (the shape before this rule)", planted(lambda s: s["affinity"].pop("additionalPodAntiAffinity"))),
+    ("an empty namespaceSelector", planted(lambda s: term(s).__setitem__("namespaceSelector", {}))),
+    ("no primary-role selector", planted(lambda s: term(s)["labelSelector"].pop("matchLabels"))),
+    ("no store label on its pods", planted(lambda s: s.pop("inheritedMetadata"))),
+]:
+    if not problems(c, other):
+        sys.exit("planted Cluster with %s PASSED the placement check; this check cannot fail" % label)
+
+# The problems and the set they were computed over come from ONE loop, so the
+# coverage control below watches what was actually checked.
+checked, bad = [], []
+for p in rendered:
+    for c in clusters(p):
+        checked.append(c)
+        bad += [(p, v) for v in problems(c, other)]
+for p, v in bad:
+    sys.stderr.write("PRIMARY PLACEMENT: %s: %s\n" % (p.rsplit("/", 1)[-1], v))
+if bad:
+    sys.exit("%d placement problem(s). Without this rule both database primaries can be bootstrapped on one node, "
+             "which measured 94-98%% CPU there while the other nodes sat near half." % len(bad))
+
+# Positive control: every rendered Cluster was checked, and both topologies were
+# among them -- the rule must hold at one instance as well as at three.
+if len(checked) != len(everything):
+    sys.exit("the placement check saw %d Clusters of %d rendered" % (len(checked), len(everything)))
+shapes = {int((c.get("spec") or {}).get("instances", 1)) > 1 for c in checked}
+if shapes != {False, True}:
+    sys.exit("the placement check saw multi-instance=%s only; it must cover a single-instance and a multi-instance Cluster" % sorted(shapes))
+print("    every rendered Cluster avoids another store's primary (%d Clusters)" % len(checked))
+PY
