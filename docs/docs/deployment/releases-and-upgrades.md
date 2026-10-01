@@ -3955,7 +3955,7 @@ size, less for the standbys to replay, and less for the archiver to compress and
 `dcctl upgrade` does not run the infrastructure apply, so an existing instance's event store keeps
 writing an uncompressed log. That is correct, only larger. To turn compression on for one, first
 check that its database image can use `lz4`. On an image that cannot, the change is not applied
-when the database reloads, and the next time an instance restarts it does not start at all. The
+when the database reloads, and the next time an instance restarts it may not start. The
 commands below run `psql` in the store's database pods, where it needs no password.
 
 ```bash

@@ -32,6 +32,9 @@ func tfStringMapAttr(t *testing.T, body, name string) map[string]string {
 		t.Fatalf("found %d `%s = {` attributes, want exactly 1", len(loc), name)
 	}
 	rest := body[loc[0][1]:]
+	// The closing brace is found by its two-space indent, which tofu fmt keeps
+	// stable. A wrong match fails closed: the line loop below Fatals on any line
+	// it cannot read, and the caller requires the value it is looking for.
 	end := strings.Index(rest, "\n  }")
 	if end < 0 {
 		t.Fatalf("the %s map is never closed", name)

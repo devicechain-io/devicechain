@@ -1192,8 +1192,8 @@ El almacén de eventos comprime las imágenes de página de su registro de escri
 (`wal_compression = lz4`). Tras cada punto de control, el primer cambio en una página escribe la
 página entera en el registro, y en este almacén la mayoría de esas páginas son páginas de índice.
 En una comparación en una versión de desarrollo posterior a v0.18.0, en un clúster de la misma
-forma que el de [Rendimiento medido](#measured-throughput) y con la configuración ajustada que allí
-se describe, a 5200 eventos por segundo ofrecidos, la compresión redujo el registro escrito por
+forma que el de [Rendimiento medido](#measured-throughput), con un ajuste distinto del de las filas
+de esa tabla, a 5200 eventos por segundo ofrecidos, la compresión redujo el registro escrito por
 evento almacenado de unos 3,0 KB a unos 1,7 KB, y los puntos de control forzados por el tamaño del
 registro bajaron en una proporción parecida (de 5,8 a 3,2 por millón de eventos almacenados). No
 cambia lo que contiene este volumen: el registro sigue ocupando alrededor de 1,1 GB mientras las

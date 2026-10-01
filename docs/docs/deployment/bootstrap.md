@@ -1099,8 +1099,8 @@ seven hours of one tenant sending at its full default ceiling.
 The event store compresses the page images in its write-ahead log (`wal_compression = lz4`).
 After each checkpoint, the first change to a page writes the whole page into the log, and on this
 store most of those pages are index pages. In one comparison on a development build after v0.18.0,
-on a cluster of the same shape as in [Measured throughput](#measured-throughput) with the tuned
-settings described there, at 5,200 events per second offered, compression cut the log written per
+on a cluster of the same shape as in [Measured throughput](#measured-throughput), with tuning
+that differs from the rows there, at 5,200 events per second offered, compression cut the log written per
 stored event from about 3.0 KB to about 1.7 KB, and the checkpoints forced by the log's size fell
 by about the same proportion (from 5.8 to 3.2 per million events stored). It does not change what
 this volume holds: the log on it still takes about 1.1 GB while backups keep up with it, so the

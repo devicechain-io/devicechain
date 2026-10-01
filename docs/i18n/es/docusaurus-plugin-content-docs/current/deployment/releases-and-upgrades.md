@@ -4253,7 +4253,7 @@ relacional no cambia.
 una instancia existente sigue escribiendo un registro sin comprimir. Es correcto, solo que más
 grande. Para activar la compresión en uno, comprueba primero que su imagen de base de datos puede
 usar `lz4`. En una imagen que no puede, el cambio no se aplica cuando la base de datos recarga su
-configuración, y la próxima vez que una instancia se reinicia no llega a arrancar. Los comandos
+configuración, y la próxima vez que una instancia se reinicia puede no arrancar. Los comandos
 siguientes ejecutan `psql` en los pods de base de datos del almacén, donde no necesita contraseña.
 
 ```bash
