@@ -81,6 +81,16 @@ output "database_backup_snapshot_class" {
   value       = module.cnpg_rdb.backup_snapshot_class
 }
 
+output "database_node_selector" {
+  description = "The node labels the relational store's instances are confined to, read back from what its chart was handed; {} when none. dcctl records it in the install record, whose settings must agree with it, and every instance's event store is placed by those settings."
+  value       = module.cnpg_rdb.node_selector
+}
+
+output "database_tolerations" {
+  description = "The database tolerations the relational store's chart was handed (the node-loss pair is not among them); [] when none. Recorded and checked like database_node_selector."
+  value       = module.cnpg_rdb.tolerations
+}
+
 output "database_backup_destination" {
   description = <<-EOT
     Where the relational store's backups actually land, or null when it has none.

@@ -79,7 +79,7 @@ respaldo, que conserva el tamaño que tiene; consulta
 [Tamaño del almacén de objetos de respaldo](#backup-store-size).
 
 **Cambiar sus ajustes** —`--ha`, `--compact`, la monitorización, los respaldos,
-`--backup-snapshot-class`— se rechaza mientras exista alguna instancia en el clúster. Cada instancia se construyó con los ajustes
+`--backup-snapshot-class`, la ubicación de las bases de datos— se rechaza mientras exista alguna instancia en el clúster. Cada instancia se construyó con los ajustes
 vigentes cuando se arrancó, y ninguna se reconstruye cuando cambian. Eso incluye el archivo
 externo: un `--backup-credentials-file` que nombre otro endpoint u otro bucket del almacén de
 eventos también se rechaza, porque el almacén de eventos de cada instancia sigue archivando en
@@ -719,6 +719,8 @@ arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
 | `--no-cnpg` | Omite el operador CloudNativePG y el plugin de respaldo de base de datos. Para un clúster que **ya ejecuta CloudNativePG**: Helm no puede adoptar objetos creados por otro instalador, así que sin este flag la instalación falla. |
 | `--backup-credentials-file <path>` | Envía los respaldos de base de datos a un almacén de objetos que ya tengas, descrito por un archivo JSON, en lugar del que hay dentro del clúster. Consulta [Recuperación ante desastres](./disaster-recovery.md). |
 | `--backup-snapshot-class <class>` | Toma el respaldo base diario de cada base de datos como una instantánea de volumen CSI con esta VolumeSnapshotClass, en lugar de una copia completa en el almacén de respaldos; una copia completa sigue yendo al almacén cada semana, y las restauraciones siguen leyendo el almacén. La clase tiene que existir, usar `deletionPolicy: Delete` y pertenecer al controlador que aprovisiona los volúmenes de las bases de datos. Se rechaza con `--no-cnpg` o `--compact --no-tls`, que no dejan respaldos. Consulta [Respaldos base como instantáneas de volumen](#snapshot-base-backups). |
+| `--database-node-selector <clave>=<valor>` | Ejecuta las bases de datos solo en nodos con esta etiqueta (repetible). Se aplica al almacén relacional compartido y al almacén de eventos de cada instancia arrancada en el clúster. Consulta [Ubicación de las bases de datos](#database-placement). |
+| `--database-toleration <clave>[=<valor>][:<efecto>]` | Permite que las bases de datos se ejecuten en nodos con este taint, escrito como lo escribe `kubectl taint` (repetible). Necesita `--database-node-selector`. |
 | `--restore-rdb-from <archive>` | Recuperación ante desastres: recupera el almacén relacional compartido desde esta ruta de archivo dentro del bucket de respaldos (`dc-rdb` para un almacén que nunca se ha restaurado) en lugar de inicializar uno vacío. Solo surte efecto cuando el almacén se **crea** —contra un clúster cuyo almacén ya existe no mueve ningún dato—, así que es una palanca de reconstrucción, no de reparación. Necesita el plugin de respaldo, así que se rechaza en un clúster instalado con `--no-cnpg` o con `--compact --no-tls`. Consulta [Recuperar una instancia](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Detiene esa recuperación en un instante en lugar de reproducir todo el archivo, para datos destruidos *correctamente*, por una migración defectuosa o un borrado por error; elige un momento estrictamente anterior al daño. Necesita `--restore-rdb-from`, y una marca de tiempo RFC 3339 con desfase explícito (`2026-07-27T13:59:00Z`): sin él, PostgreSQL la interpreta en la zona horaria del propio servidor en recuperación y se detiene en un momento distinto del que nombraste. |
 | `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `600` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual); consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
@@ -1043,6 +1045,76 @@ Elige una réplica en un nodo que, según el primer comando, no tenga ninguna pr
 interrumpe brevemente las escrituras de la base de datos (consulta
 [Cuando se detiene la primaria de una base de datos](#ha-database-failover)), y los servicios las
 reintentan. Una instalación de una sola instancia no tiene ninguna réplica a la que traspasar.
+
+### Ubicación de las bases de datos {#database-placement}
+
+Por defecto, las bases de datos se ejecutan en los nodos que elija Kubernetes. Si tu clúster tiene
+nodos reservados para bases de datos, `dcctl install` puede colocarlas en ellos:
+
+```bash
+dcctl install local --kube-context "$CTX" --ha \
+  --database-node-selector example.com/role=database \
+  --database-toleration dedicated=database:NoSchedule
+```
+
+- `--database-node-selector clave=valor` ejecuta las bases de datos solo en los nodos que llevan la
+  etiqueta. Repítelo para exigir varias etiquetas.
+- `--database-toleration` les permite entrar en nodos con un taint, escrito como lo escribe
+  `kubectl taint`: `dedicated=database:NoSchedule` tolera ese taint con ese valor, y
+  `dedicated:NoSchedule` lo tolera con cualquier valor. Necesita `--database-node-selector`, porque
+  una tolerancia solo permite un nodo; no lo elige.
+
+Una etiqueta por sí sola limita dónde se ejecutan las bases de datos, pero no impide que otras cargas
+se ejecuten en esos nodos. Solo un taint lo impide, y por eso un grupo de nodos reservado para bases
+de datos suele llevar ambos.
+
+**Qué coloca.** El almacén relacional compartido y el almacén de eventos de cada instancia arrancada
+en el clúster. `dcctl bootstrap` no tiene flags de ubicación: sigue a la instalación. NATS, el
+almacén de objetos de respaldo, la pila de monitorización y los servicios no se colocan. NATS no
+declara tolerancias, así que en un clúster cuyos nodos de bases de datos tienen un taint se ejecuta
+en los demás nodos. Es deliberado: un servidor NATS usa más de un núcleo de CPU bajo carga, y con
+`--ha` sus tres servidores se ejecutan en tres nodos distintos, de modo que en un grupo de tres nodos
+de bases de datos uno de ellos compartiría nodo con la primaria del almacén de eventos, el pod de base
+de datos más cargado.
+
+**Qué se comprueba.**
+
+- Antes de instalar nada, `install` rechaza una ubicación que los nodos no pueden aceptar: cada base
+  de datos ejecuta una instancia por nodo, así que necesita tantos nodos utilizables como instancias
+  tiene (tres con `--ha`, una en otro caso). Un nodo es utilizable cuando lleva todas las etiquetas,
+  no está acordonado y cada taint `NoSchedule` o `NoExecute` que tiene está tolerado. El mensaje
+  enumera los nodos que encontró y qué dejó fuera a cada uno. `bootstrap` vuelve a comprobarlo para
+  cada instancia, porque los nodos pueden vaciarse, reetiquetarse o recibir taints después de la
+  instalación.
+- El apply comprueba el mismo recuento contra el número de instancias que ejecuta realmente cada base
+  de datos, y lo rechaza antes de crear o cambiar esa base de datos.
+- Un nodo acordonado por mantenimiento, o que no está listo, no cuenta. Mientras una actualización de
+  nodos tiene fuera uno de los nodos de bases de datos, se rechaza volver a ejecutar `install` o un
+  `bootstrap` nuevo; termina la actualización y vuelve a ejecutarlo.
+- Las primarias de las dos bases de datos siguen
+  [prefiriendo nodos distintos](#ha-database-primaries), entre los nodos que elegiste. Si la
+  selección es un solo nodo, lo comparten.
+
+Para ver dónde se ejecutan las bases de datos:
+
+```bash
+kubectl get pods -A -l cnpg.io/cluster -o wide
+```
+
+**Cambiarla.** La ubicación es un ajuste de la instalación, así que cambiarla se rechaza mientras
+alguna instancia se ejecute en el clúster, como los demás ajustes (consulta
+[Volver a ejecutar install](#re-running-install)). Eso incluye volver a ejecutar `install` sin los
+flags en un clúster instalado con ellos. Elígela en la primera instalación: los volúmenes de una base
+de datos se quedan donde se crearon, y un almacenamiento ligado a un nodo o a una zona no puede seguir
+a una instancia a un nodo en otro lugar.
+
+Sin ninguna instancia en marcha, nada rechaza el cambio, y aun así puede dejar fuera de servicio la
+base de datos relacional. La base relacional sobrevive a todas las instancias, así que volver a
+ejecutar con otra ubicación mueve sus pods a los nodos recién seleccionados. Si sus volúmenes están
+ligados a un nodo (almacenamiento local-path, como en kind) o a una zona fuera de la nueva selección,
+esos pods se quedan en `Pending` y la base no vuelve. `dcctl` cuenta los nodos que coinciden; no
+comprueba dónde están los volúmenes existentes. Cambia la ubicación solo donde el almacenamiento de la
+base pueda seguirla, o donde puedas permitirte recrear la base.
 
 ### Dimensionamiento de los servicios {#service-sizing}
 

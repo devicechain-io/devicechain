@@ -76,7 +76,7 @@ as it is, and what is missing is added. That includes the backup store's volume,
 size it has; see [Backup store size](#backup-store-size).
 
 **Changing its settings** — `--ha`, `--compact`, monitoring, backups,
-`--backup-snapshot-class` — is refused while any instance exists on the cluster. Every instance was built to the settings in place when it was
+`--backup-snapshot-class`, database placement — is refused while any instance exists on the cluster. Every instance was built to the settings in place when it was
 bootstrapped, and none is rebuilt when they change. That includes the off-site archive: a
 `--backup-credentials-file` naming a different endpoint or event-store bucket is refused too,
 because every instance's event store keeps archiving to the one it was built with.
@@ -665,6 +665,8 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--no-cnpg` | Skip the CloudNativePG operator and the database backup plugin. For a cluster that **already runs CloudNativePG**: Helm cannot adopt objects another installer created, so the install fails without this. |
 | `--backup-credentials-file <path>` | Send database backups to an object store you already own, described by a JSON file, instead of the in-cluster one. See [Disaster Recovery](./disaster-recovery.md). |
 | `--backup-snapshot-class <class>` | Take each database's daily base backup as a CSI volume snapshot with this VolumeSnapshotClass instead of a full copy in the backup store; a full copy still goes to the store weekly, and restores still read the store. The class must exist, use `deletionPolicy: Delete`, and belong to the driver that provisions the database volumes. Refused with `--no-cnpg` or `--compact --no-tls`, which leave no backups. See [Volume-snapshot base backups](#snapshot-base-backups). |
+| `--database-node-selector <key>=<value>` | Run the databases only on nodes with this label (repeatable). Applies to the shared relational store and to the event store of every instance bootstrapped on the cluster. See [Database placement](#database-placement). |
+| `--database-toleration <key>[=<value>][:<effect>]` | Let the databases run on nodes with this taint, written as `kubectl taint` writes it (repeatable). Needs `--database-node-selector`. |
 | `--restore-rdb-from <archive>` | Disaster recovery: recover the shared relational store from this archive path inside the backup bucket (`dc-rdb` for a store that has never been restored) instead of initialising an empty one. It takes effect only when the store is **created** — against a cluster whose store already exists it moves no data — so it is a rebuild lever, not a repair. Needs the backup plugin, so it is refused on a cluster installed with `--no-cnpg` or `--compact --no-tls`. See [Recovering an instance](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Stop that recovery at a point in time instead of replaying the whole archive — for data destroyed *correctly*, by a bad migration or a mistaken delete; pick a moment strictly before the damage. Needs `--restore-rdb-from`, and an RFC 3339 timestamp with an explicit offset (`2026-07-27T13:59:00Z`): without one PostgreSQL reads it in the recovering server's own timezone and stops at a different moment than you named. |
 | `--max-connections <n>` | The relational database's connection budget (default `600` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
@@ -963,6 +965,71 @@ kubectl -n dc-system patch cluster dc-rdb --subresource=status --type=merge \
 Pick a standby on a node that the first command shows has no primary. A switchover interrupts the
 database's writes briefly (see [When a database primary stops](#ha-database-failover)), and the
 services retry them. A single-instance installation has no standby to switch to.
+
+### Database placement {#database-placement}
+
+By default the databases run on whichever nodes Kubernetes picks. If your cluster has nodes set aside
+for databases, `dcctl install` can put them there:
+
+```bash
+dcctl install local --kube-context "$CTX" --ha \
+  --database-node-selector example.com/role=database \
+  --database-toleration dedicated=database:NoSchedule
+```
+
+- `--database-node-selector key=value` runs the databases only on nodes that carry the label.
+  Repeat it to require several labels.
+- `--database-toleration` lets them onto nodes with a taint, written as `kubectl taint` writes it:
+  `dedicated=database:NoSchedule` tolerates that taint with that value, and `dedicated:NoSchedule`
+  tolerates it with any value. It needs `--database-node-selector`, because a toleration only allows
+  a node; it does not choose one.
+
+A label alone confines the databases but does not keep anything else off those nodes. Only a taint
+does that, which is why a pool set aside for databases usually carries both.
+
+**What it places.** The shared relational store, and the event store of every instance bootstrapped
+on the cluster. `dcctl bootstrap` has no placement flags: it follows the install. NATS, the backup
+object store, the monitoring stack and the services are not placed. NATS sets no tolerations, so on
+a cluster whose database nodes are tainted it runs on the other nodes. That is deliberate: a NATS
+server uses more than a CPU core under load, and under `--ha` its three servers run on three
+different nodes, so on a three-node database pool one of them would share a node with the event
+store's primary, the busiest database pod.
+
+**What is checked.**
+
+- Before it installs anything, `install` refuses a placement the nodes cannot take: each database
+  runs one instance per node, so it needs as many usable nodes as it has instances (three under
+  `--ha`, one otherwise). A node is usable when it carries every label, is not cordoned, and every
+  `NoSchedule` or `NoExecute` taint on it is tolerated. The message lists the nodes it found and
+  what kept each one out. `bootstrap` checks again for each instance, because nodes can be drained,
+  relabelled or tainted after the install.
+- The apply checks the same count against the number of instances each database actually runs, and
+  refuses before it creates or changes that database.
+- A node that is cordoned for maintenance, or not ready, does not count. While a node upgrade has
+  one of the database nodes out, a re-run of `install` or a new `bootstrap` is refused; finish the
+  upgrade, then re-run.
+- The two databases' primaries still [prefer different nodes](#ha-database-primaries), among the
+  nodes you chose. If the selection is a single node, they share it.
+
+To see where the databases run:
+
+```bash
+kubectl get pods -A -l cnpg.io/cluster -o wide
+```
+
+**Changing it.** Placement is an install setting, so changing it is refused while any instance runs
+on the cluster, like the other settings (see [Re-running install](#re-running-install)). That
+includes re-running `install` without the flags on a cluster installed with them. Choose it at the
+first install: a database's volumes stay where they were created, and storage bound to one node or
+one zone cannot follow an instance to a node elsewhere.
+
+With no instance running, nothing refuses the change, and it can still take the relational store
+down. The relational store outlives every instance, so a re-run with different placement moves its
+pods onto the newly selected nodes. If its volumes are bound to a node (local-path storage, as on
+kind) or to a zone outside the new selection, those pods stay `Pending` and the store does not come
+back. `dcctl` counts the nodes that match; it does not check where existing volumes live. Change
+placement only where the store's storage can follow it, or where you can afford to recreate the
+store.
 
 ### Service sizing {#service-sizing}
 

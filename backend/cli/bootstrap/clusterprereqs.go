@@ -266,6 +266,11 @@ func clusterOutputs(outputs map[string]tfexec.OutputMeta) (InstallOutputs, error
 	if meta, ok := outputs["database_backup_snapshot_class"]; ok {
 		out.BackupSnapshotClass = optionalStringOutput(meta)
 	}
+	// Where the relational store's chart was told to run its instances; validate holds
+	// it to the setting every instance's event store is placed by.
+	if out.DatabasePlacement, err = placementFromOutputs(outputs); err != nil {
+		return InstallOutputs{}, err
+	}
 	return out, nil
 }
 

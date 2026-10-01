@@ -510,6 +510,10 @@ func infraVars(st *State) []string {
 	if class := backupSnapshotClass(st); class != "" {
 		vars = append(vars, "backup_snapshot_class="+class)
 	}
+	// Database placement, from the one reading: both roots declare the two variables,
+	// so splitVars hands them to each, and a bootstrap follows the install record.
+	// Emitted on every run, empty included -- see DatabasePlacement.infraVars.
+	vars = append(vars, databasePlacement(st).infraVars()...)
 	if st.MaxConnections > 0 {
 		vars = append(vars, fmt.Sprintf("postgres_max_connections=%d", st.MaxConnections))
 	}

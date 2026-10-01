@@ -16,11 +16,10 @@ and `dcctl` neither reads it nor ships it.
 | A `services` node pool for everything else | 3 × `n2-highcpu-4` (4 vCPU, 4 GB) |
 | An optional `loadgen` node pool, tainted so only a load generator runs there | none; set `loadgen_node_count = 1` |
 
-`dcctl install --ha` needs at least three `services` nodes: NATS puts each of its
-three servers on a different node, and until `dcctl` can place the databases on
-the `database` pool, so do the relational store and the event store with their
-three instances each. See
-[Install DeviceChain](#install-devicechain).
+`dcctl install --ha` needs at least three nodes in each pool. NATS puts each of its
+three servers on a different `services` node, and the relational store and the
+event store, placed on the `database` pool, each put their three instances on
+different `database` nodes. See [Install DeviceChain](#install-devicechain).
 
 At on-demand prices the default cluster costs roughly $1.05 an hour, plus its disks.
 **It bills until you destroy it.** See [Tearing it down](#tearing-it-down).
@@ -231,12 +230,9 @@ deletionPolicy: Delete
 EOF
 ```
 
-Then add the flag to the install below. `dcctl install` refuses a class that does not
-exist, keeps its snapshots (`deletionPolicy: Retain`), or belongs to another driver.
-
-```bash
-dcctl install local --kube-context "$CTX" --ha --backup-snapshot-class pd-snapshots
-```
+Then add `--backup-snapshot-class pd-snapshots` to the install command below.
+`dcctl install` refuses a class that does not exist, keeps its snapshots
+(`deletionPolicy: Retain`), or belongs to another driver.
 
 To see them:
 
@@ -266,22 +262,31 @@ the instance is bootstrapped, not at install.)
 
 ## Install DeviceChain
 
-The `database` pool is tainted, so only a pod that tolerates
-`dedicated=database:NoSchedule` runs there, and `dcctl install` does not yet
-place the databases on it. Until it does, the databases and NATS run on the
-`services` pool with everything else, and no DeviceChain pod runs on the
-`database` nodes. The databases then share the `services` pool's nodes
-with everything else and get little of the page cache the `database` pool is
-sized for, so do not take a load-test result from this shape until `dcctl` places
-them on the `database` pool.
-
-`tofu output database_node_selector` and `tofu output database_taint` print what
-an install needs to place them.
+The `database` pool carries GKE's own pool label,
+`cloud.google.com/gke-nodepool=database`, and the taint
+`dedicated=database:NoSchedule`, so only a pod that tolerates the taint runs there.
+`--database-node-selector` and `--database-toleration` put the databases there:
+the relational store now, and the event store of every instance you bootstrap later.
+`tofu output database_node_selector` and `tofu output database_taint` print the two
+values. Add any other install flags, such as `--backup-snapshot-class`, to this one
+command, and set the placement at the first install: changing it later is refused
+while any instance runs. See
+[Database placement](https://docs.devicechain.io/deployment/bootstrap#database-placement).
 
 ```bash
 CTX=$(tofu output -raw kube_context)
 
-dcctl install local --kube-context "$CTX" --ha
+dcctl install local --kube-context "$CTX" --ha \
+  --database-node-selector "$(tofu output -raw database_node_selector)" \
+  --database-toleration "$(tofu output -raw database_taint)"
+```
+
+`dcctl bootstrap` needs nothing extra: every instance's event store follows the
+install. NATS and the services carry no toleration, so they run on the `services`
+pool. To check where the databases landed:
+
+```bash
+kubectl --context "$CTX" get pods -A -l cnpg.io/cluster -o wide
 ```
 
 The ingress controller gets a Google Cloud load balancer with a public IP. Wait for

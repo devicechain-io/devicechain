@@ -204,6 +204,10 @@ type State struct {
 	// through backupSnapshotClass, never directly: a bootstrap follows the install
 	// record, and backups that are off take no snapshots whatever this says.
 	BackupSnapshotClass string
+	// DatabasePlacement is where `dcctl install --database-node-selector` /
+	// `--database-toleration` put the databases. Read it through databasePlacement,
+	// never directly: a bootstrap follows the install record.
+	DatabasePlacement DatabasePlacement
 	// Install is the cluster's install record, which a bootstrap FOLLOWS: the cluster's
 	// shape (HA, sizing, monitoring, backups) and what the cluster apply built. Nil for
 	// the install itself, which writes it, and for an upgrade.

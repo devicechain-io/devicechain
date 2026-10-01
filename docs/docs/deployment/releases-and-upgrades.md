@@ -4022,8 +4022,9 @@ Nothing needs doing at the upgrade.
 The configuration in `deploy/gke` used to create one pool of three 8-vCPU, 32 GB nodes. It now
 creates a `database` pool of three 4-vCPU, 16 GB nodes and a `services` pool of three 4-vCPU,
 4 GB nodes, the same 24 vCPUs in all. The `database` pool is tainted, so no DeviceChain pod runs
-there unless it is placed there, and `dcctl install` does not yet place the databases there: until
-it does, they run on the `services` pool with everything else. The cluster has six boot disks
+there unless it is placed there; `dcctl install --database-node-selector` and
+`--database-toleration` place the databases there (see
+[The databases can run on nodes you choose](#next-database-placement)). The cluster has six boot disks
 instead of three, so a default `--ha` install with one instance needs more of the regional SSD
 quota than a new Google Cloud project allows: the guide gives the quota to request.
 
@@ -4038,6 +4039,24 @@ about an old name left in a `terraform.tfvars` and ignores its value, so a clust
 unchanged file is built with the defaults: a `node_disk_type = "pd-standard"` chosen to stay inside
 the SSD quota is dropped, and the boot disks go back to `pd-balanced`. Move each setting to the new
 names before you apply.
+
+#### The databases can run on nodes you choose {#next-database-placement}
+
+`dcctl install` takes `--database-node-selector` and `--database-toleration`. They place the shared
+relational store, and the event store of every instance bootstrapped on the cluster, on the nodes
+that carry a label, including nodes tainted to keep other workloads off. `dcctl bootstrap` has no
+such flags: every instance follows the install. Install refuses, before it installs anything, a
+placement with fewer usable nodes than a database has instances, and each bootstrap checks again.
+NATS, the services and the backup object store are not placed. See
+[Database placement](./bootstrap.md#database-placement).
+
+Nothing changes on a cluster installed without these flags. The install record changes again:
+re-run `dcctl install` with this release before any bootstrap, upgrade or destroy, as
+[Database base backups can be volume snapshots](#next-snapshot-backups) already requires. Adding a
+placement to a cluster that already runs instances is refused, like any other change to its
+settings. With no instance running it is not refused, but it moves the relational store, whose
+volumes may not be able to follow: see
+[Database placement](./bootstrap.md#database-placement) before you change it.
 
 ### The one-time durable-ingest cutover
 

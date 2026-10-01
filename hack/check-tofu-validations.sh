@@ -816,6 +816,35 @@ run_assertions() {
   for v in "0 0 4 * * 0" "0 30 2 * * 6"; do accepts backup_object_store_schedule "$v"; done
   for v in "0 4 * * 0" "" "0 0 4 * * 0 2026"; do rejects backup_object_store_schedule "$v"; done
 
+  # --- database placement ----------------------------------------------------------
+  # Unplaced by default, in both roots. Set, the pair reaches BOTH stores' charts:
+  # each root declares the variables and passes them to its store, so a root that
+  # dropped the line would leave that store wherever the scheduler put it. The -var
+  # strings are byte for byte what dcctl's infraVars emits (JSON, which is an HCL
+  # expression), so these also prove that encoding is read as the map and list it
+  # means. jsonencode() because `tofu console` prints a map over several lines and
+  # `evaluates` reads the last.
+  placed=(-var 'database_node_selector={"devicechain.io/pool":"database"}'
+    -var 'database_tolerations=[{"key":"dedicated","operator":"Equal","value":"database","effect":"NoSchedule"}]')
+  evaluates '"{}"' 'jsonencode(module.cnpg_rdb.node_selector)'
+  evaluates '"{}"' 'jsonencode(module.cnpg_tsdb.node_selector)'
+  evaluates '"[]"' 'jsonencode(module.cnpg_rdb.tolerations)'
+  evaluates '"[]"' 'jsonencode(module.cnpg_tsdb.tolerations)'
+  evaluates '"{\"devicechain.io/pool\":\"database\"}"' 'jsonencode(module.cnpg_rdb.node_selector)' "${placed[@]}"
+  evaluates '"{\"devicechain.io/pool\":\"database\"}"' 'jsonencode(module.cnpg_tsdb.node_selector)' "${placed[@]}"
+  evaluates '"[{\"effect\":\"NoSchedule\",\"key\":\"dedicated\",\"operator\":\"Equal\",\"value\":\"database\"}]"' \
+    'jsonencode(module.cnpg_rdb.tolerations)' "${placed[@]}"
+  evaluates '"[{\"effect\":\"NoSchedule\",\"key\":\"dedicated\",\"operator\":\"Equal\",\"value\":\"database\"}]"' \
+    'jsonencode(module.cnpg_tsdb.tolerations)' "${placed[@]}"
+  # ...and what dcctl emits for an UNPLACED cluster, which it states on every run
+  # rather than leaving to the default: the empty JSON object and list must read as
+  # the empty map and list, not as an error or a null.
+  unplaced=(-var 'database_node_selector={}' -var 'database_tolerations=[]')
+  evaluates '"{}"' 'jsonencode(module.cnpg_rdb.node_selector)' "${unplaced[@]}"
+  evaluates '"{}"' 'jsonencode(module.cnpg_tsdb.node_selector)' "${unplaced[@]}"
+  evaluates '"[]"' 'jsonencode(module.cnpg_rdb.tolerations)' "${unplaced[@]}"
+  evaluates '"[]"' 'jsonencode(module.cnpg_tsdb.tolerations)' "${unplaced[@]}"
+
   # The object store is provisioned only where it is used. An external destination
   # must not stand one up — that would be a MinIO pod and a volume nobody writes to,
   # on the configuration whose whole point is that storage lives elsewhere.

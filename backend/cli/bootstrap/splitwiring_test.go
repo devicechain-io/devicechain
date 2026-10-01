@@ -109,6 +109,7 @@ func TestEveryOutputDcctlReadsIsDeclaredByTheRootItIsReadFrom(t *testing.T) {
 		{"tofu.go", "applyInstanceInfra", "instance", assets.OpenTofuInstance(), 4},
 		{"clusterprereqs.go", "clusterOutputs", "cluster", assets.OpenTofuCluster(), 4},
 		{"clusterprereqs.go", "objectStoreFromOutputs", "cluster", assets.OpenTofuCluster(), 1},
+		{"dbplacement.go", "placementFromOutputs", "cluster", assets.OpenTofuCluster(), 2},
 	} {
 		t.Run(tc.fn, func(t *testing.T) {
 			declared := rootDeclaredOutputs(t, tc.root, tc.rootName)
@@ -153,6 +154,8 @@ func TestTheClusterRootsMonitoringAndReportOutputsReachTheRecord(t *testing.T) {
 		"namespace":                             {Value: []byte(`"dc-system"`)},
 		"postgres_cluster_name":                 {Value: []byte(`"dc-rdb"`)},
 		"postgres_max_connections":              {Value: []byte(`600`)},
+		"database_node_selector":                {Value: []byte(`{}`)},
+		"database_tolerations":                  {Value: []byte(`[]`)},
 		"cnpg_namespace":                        {Value: []byte(`"cnpg-system"`)},
 		"grafana_service":                       {Value: []byte(`"kube-prometheus-stack-grafana"`)},
 		"grafana_namespace":                     {Value: []byte(`"monitoring"`)},

@@ -219,7 +219,7 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 	}
 	nodes, err := listNodes(ctx, st.KubeContext)
 	if err != nil {
-		return unreachable(err)
+		return unreachable(fmt.Errorf("verifying the cluster can host the --ha topology: %w", err))
 	}
 	// 🔴 OUTSIDE unreachable(), AND A TEST HOLDS THAT LINE. The dry-run softening
 	// above applies to being unable to LOOK, never to what was seen: a cluster
@@ -231,19 +231,21 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 	return schedulableShortfall(ha, nodes)
 }
 
-// listNodes reads the cluster's nodes. A variable rather than an inline call so
-// the counting rule above can be reached without a cluster: the seam is the same
+// listNodes reads the cluster's nodes, for this guard and for the database placement
+// guard (checkDatabasePlacement); each caller says what it was reading them for. A
+// variable rather than an inline call so the counting rules can be reached without a
+// cluster: the seam is the same
 // one lookupDeployedInstance and readLiveArchiveState already use, and it exists
 // for the same reason — the branch on the far side of the API call is the one
 // worth testing.
 var listNodes = func(ctx context.Context, kubeContext string) ([]corev1.Node, error) {
 	_, _, typed, err := kubeClients(kubeContext)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to the cluster to verify it can host the --ha topology: %w", err)
+		return nil, fmt.Errorf("connecting to the cluster to read its nodes: %w", err)
 	}
 	nodes, err := typed.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("listing nodes to verify the cluster can host the --ha topology: %w", err)
+		return nil, fmt.Errorf("listing the cluster's nodes: %w", err)
 	}
 	return nodes.Items, nil
 }

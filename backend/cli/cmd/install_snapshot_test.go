@@ -28,7 +28,10 @@ func TestTheSnapshotClassFlagReachesTheInstallEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts := installOptions(nil, bootstrap.RestorePlan{}, bootstrap.ImageSource{})
+	opts, err := installOptions(nil, bootstrap.RestorePlan{}, bootstrap.ImageSource{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if opts.BackupSnapshotClass != "pd-snapshots" {
 		t.Errorf("the install engine was handed class %q, not the flag's %q", opts.BackupSnapshotClass, "pd-snapshots")
 	}

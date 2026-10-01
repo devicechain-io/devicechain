@@ -302,6 +302,19 @@ rendered+=("$(render_case analytics-roles "${base[@]}" --set instances=1 \
 rendered+=("$(render_case fast-phase-floor "${base[@]}" --set instances=3 --set synchronous.enabled=true \
   --set smartShutdownTimeout=5 --set stopDelay=20)")
 
+# Database placement, on the HA shape and WITH the node-loss fuse, because that is
+# the one combination where the database toleration has to share a list with the
+# fuse's two. Validated against the CRD like every case, and the cross-store primary
+# check further down runs over this Cluster too -- which is the proof placement
+# composes with that preference rather than replacing it. The python below asserts
+# the three tolerations by value: the tolerations BRANCH is reached by every fuse
+# case, so its coverage alone could not see the database entry go missing.
+rendered+=("$(render_case placement-ha "${base[@]}" --set instances=3 --set synchronous.enabled=true \
+  --set nodeLossTolerationSeconds=30 \
+  --set 'nodeSelector.devicechain\.io/pool=database' \
+  --set 'tolerations[0].key=dedicated' --set 'tolerations[0].operator=Equal' \
+  --set 'tolerations[0].value=database' --set 'tolerations[0].effect=NoSchedule')")
+
 # --- the configurations the chart must REFUSE ---------------------------------
 say "checking the render-time guards"
 
@@ -410,6 +423,19 @@ refuses switchover-delay-zero "switchoverDelay must be at least 1 second" \
 refuses shutdown-fast-phase-too-short "seconds for the fast shutdown" \
   "${base[@]}" --set instances=3 --set synchronous.enabled=true \
   --set smartShutdownTimeout=5 --set stopDelay=19
+
+# Placement tolerations that would cancel the node-loss fuse, or that Kubernetes
+# refuses on a pod so no instance is ever created.
+refuses toleration-without-key "has no key" \
+  "${base[@]}" --set instances=1 --set 'nodeSelector.pool=db' \
+  --set 'tolerations[0].operator=Exists'
+refuses toleration-of-node-loss-taint "names a taint Kubernetes itself puts on failing nodes" \
+  "${base[@]}" --set instances=1 --set 'nodeSelector.pool=db' \
+  --set 'tolerations[0].key=node.kubernetes.io/unreachable' --set 'tolerations[0].operator=Exists'
+refuses exists-toleration-with-value "has operator Exists and value" \
+  "${base[@]}" --set instances=1 --set 'nodeSelector.pool=db' \
+  --set 'tolerations[0].key=dedicated' --set 'tolerations[0].operator=Exists' \
+  --set 'tolerations[0].value=database'
 
 # COVERAGE: every `fail` in the templates must have been tripped by a case above.
 # A guard nothing exercises is indistinguishable from one that has stopped firing,
@@ -883,6 +909,9 @@ OPTIONAL_BRANCHES = [
      "how a volume-snapshot base backup is taken -- rendered only when "
      "backup.snapshotClass is set, and the ownership field in it is what lets "
      "pruning delete a snapshot at all"),
+    (("spec", "affinity", "nodeSelector"),
+     "the nodes a placed store's instances are confined to -- rendered only "
+     "when database placement is asked for"),
 ]
 
 
@@ -902,6 +931,7 @@ kinds_seen = set()
 restores_checked = 0
 archivers_checked = 0
 snapshots_checked = 0
+placements_checked = 0
 branch_coverage = {p: 0 for p, _ in OPTIONAL_BRANCHES}
 
 for path in rendered_paths:
@@ -925,6 +955,24 @@ for path in rendered_paths:
             for path, _ in OPTIONAL_BRANCHES:
                 if dig(doc, path) is not None:
                     branch_coverage[path] += 1
+            if case == "placement-ha.yaml":
+                placements_checked += 1
+                aff = doc["spec"].get("affinity", {})
+                want_tols = [
+                    {"key": "node.kubernetes.io/not-ready", "operator": "Exists",
+                     "effect": "NoExecute", "tolerationSeconds": 30},
+                    {"key": "node.kubernetes.io/unreachable", "operator": "Exists",
+                     "effect": "NoExecute", "tolerationSeconds": 30},
+                    {"key": "dedicated", "operator": "Equal", "value": "database",
+                     "effect": "NoSchedule"},
+                ]
+                if aff.get("nodeSelector") != {"devicechain.io/pool": "database"}:
+                    failures.append("%s: spec.affinity.nodeSelector is %r, not the label asked for"
+                                    % (case, aff.get("nodeSelector")))
+                if aff.get("tolerations") != want_tols:
+                    failures.append("%s: spec.affinity.tolerations is %r; want the node-loss pair "
+                                    "AND the database toleration, in one list: %r"
+                                    % (case, aff.get("tolerations"), want_tols))
 
     archivers_checked += check_plugin_wiring(docs, case, failures)
     restores_checked += check_restore_wiring(docs, case, failures)
@@ -953,6 +1001,13 @@ if restores_checked == 0:
         "no rendered Cluster carried a recovery bootstrap, so every restore\n"
         "  assertion was skipped. Either the restore cases stopped rendering it or\n"
         "  the chart no longer emits it -- both make this check vacuous."
+    )
+
+if placements_checked != 1:
+    sys.exit(
+        "the placement-ha case's Cluster was checked %d time(s), not once, so the\n"
+        "  assertion that its tolerations carry both the node-loss pair and the\n"
+        "  database toleration said nothing." % placements_checked
     )
 
 if snapshots_checked == 0:

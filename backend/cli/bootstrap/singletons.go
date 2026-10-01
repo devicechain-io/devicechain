@@ -236,6 +236,12 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		}
 		// Best-effort, like the reads above: a refusal and a failed read both stop a real
 		// run, and the rehearsal says which it met without calling either a verdict.
+		if p := databasePlacement(st); !p.IsZero() {
+			if err := checkDatabasePlacement(ctx, st); err != nil {
+				wouldDo(fmt.Sprintf("check that the nodes labelled %s can still take this instance's event "+
+					"store -- the check did not pass (%v), and a real run would stop here", p.NodeSelector, err))
+			}
+		}
 		if class := backupSnapshotClass(st); class != "" {
 			if err := precheckSnapshotClass(ctx, st); err != nil {
 				wouldDo(fmt.Sprintf("check VolumeSnapshotClass %s for this instance's event store -- the "+
@@ -275,6 +281,12 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	// install, and a bootstrap that found out at the apply would leave a declared,
 	// half-built instance behind. Here nothing has been written.
 	if err := precheckSnapshotClass(ctx, st); err != nil {
+		return err
+	}
+	// The placement the cluster was installed with, checked again for THIS instance's
+	// event store, for the same reason: the nodes it names may have been drained,
+	// relabelled or retainted since. Here nothing has been written.
+	if err := checkDatabasePlacement(ctx, st); err != nil {
 		return err
 	}
 	// 🔴 AND THE SHARED RELATIONAL STORE, FOR THE SAME REASON, TWICE OVER.

@@ -281,6 +281,70 @@ variable "node_loss_toleration_seconds" {
   }
 }
 
+variable "node_selector" {
+  description = "Node labels every instance of this store must run on (the Cluster's spec.affinity.nodeSelector). Empty places nothing: the scheduler chooses, as before this existed."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+
+  validation {
+    condition = alltrue([for k, v in var.node_selector :
+      can(regex("^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$", k)) &&
+      can(regex("^(([A-Za-z0-9][-A-Za-z0-9_.]{0,61})?[A-Za-z0-9])?$", v))
+    ])
+    error_message = "node_selector keys must be Kubernetes label keys and values label values (63 characters at most, alphanumeric at both ends)."
+  }
+}
+
+variable "tolerations" {
+  description = <<-EOT
+    Taints this store's pods tolerate, so they may run on nodes reserved for
+    databases. Merged with the node-loss tolerations, never replacing them. Needs
+    node_selector: a toleration permits a node, it does not choose one.
+
+    operator is Equal (the default), which needs a value, or Exists, which takes
+    none and tolerates any value -- the same two spellings dcctl's
+    --database-toleration accepts (key=value:Effect and key:Effect). An empty
+    effect tolerates the taint whatever its effect.
+  EOT
+  type = list(object({
+    key      = string
+    operator = optional(string, "Equal")
+    value    = optional(string, "")
+    effect   = optional(string, "")
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    condition     = alltrue([for t in var.tolerations : t.key != "" && !startswith(t.key, "node.kubernetes.io/")])
+    error_message = "Every toleration needs a key, and none may name a node.kubernetes.io/ taint: an empty key tolerates every taint, and those taints are the node-loss fuse's, which node_loss_toleration_seconds sets."
+  }
+  validation {
+    condition     = alltrue([for t in var.tolerations : contains(["Equal", "Exists"], t.operator)])
+    error_message = "A toleration's operator is Equal or Exists."
+  }
+  validation {
+    condition     = alltrue([for t in var.tolerations : t.operator != "Exists" || t.value == ""])
+    error_message = "A toleration with operator Exists has no value; Kubernetes refuses the pod otherwise."
+  }
+  validation {
+    # An Equal toleration with no value tolerates only a taint whose value is empty,
+    # which is not what `{ key = "dedicated" }` reads as. dcctl spells "any value" as
+    # key:Effect (Exists) and refuses key=, so this refuses the same thing here.
+    condition     = alltrue([for t in var.tolerations : t.operator != "Equal" || t.value != ""])
+    error_message = "A toleration with operator Equal needs a value. To tolerate the taint whatever its value, use operator Exists."
+  }
+  validation {
+    condition     = alltrue([for t in var.tolerations : can(regex("^(([A-Za-z0-9][-A-Za-z0-9_.]{0,61})?[A-Za-z0-9])?$", t.value))])
+    error_message = "A toleration's value must be a Kubernetes label value (63 characters at most, alphanumeric at both ends)."
+  }
+  validation {
+    condition     = alltrue([for t in var.tolerations : contains(["", "NoSchedule", "PreferNoSchedule", "NoExecute"], t.effect)])
+    error_message = "A toleration's effect is NoSchedule, PreferNoSchedule, NoExecute, or empty for all three."
+  }
+}
+
 variable "backup" {
   description = <<-EOT
     WAL archiving + scheduled base backups for this store, via the Barman Cloud
@@ -489,6 +553,13 @@ locals {
 
     nodeLossTolerationSeconds = var.node_loss_toleration_seconds
 
+    # Where the instances may run. The chart renders neither key when both are
+    # empty, so an unplaced store's Cluster is the one it always was.
+    nodeSelector = var.node_selector
+    tolerations = [for t in var.tolerations : {
+      key = t.key, operator = t.operator, value = t.value, effect = t.effect
+    }]
+
     # Camel-cased on the way in because the chart is the Cluster spec verbatim
     # (see chart/templates/cluster.yaml); the snake_case ends at this boundary.
     extraRoles = [for r in var.extra_roles : {
@@ -622,7 +693,61 @@ locals {
     backup_snapshot_class = tostring(local.backup_values == null ? null : (
       local.backup_values.backup.snapshotClass == "" ? null : local.backup_values.backup.snapshotClass
     ))
+    # Where the instances may run, as Helm is handed it, read back like the lines
+    # above so the install record says what the chart was given.
+    node_selector = local.base_values.nodeSelector
+    tolerations   = local.base_values.tolerations
   }
+}
+
+# --- Placement: refused before the store is created or changed ---------------
+#
+# Above one instance the store's own anti-affinity is `required` on the hostname, so
+# a placement needs one USABLE node per instance; a selection with fewer leaves the
+# surplus Pending behind a green apply (`wait` does not wait for the database, see
+# helm_release below). "Usable" is what the scheduler would accept: carrying the
+# labels, not cordoned, and every NoSchedule/NoExecute taint tolerated.
+#
+# 🔴 THE PRECONDITIONS LIVE ON helm_release.cluster ITSELF, NOT ON A SEPARATE GUARD
+# RESOURCE. In the cluster root this module is called with `depends_on` on the CNPG
+# operator, and a module-level depends_on defers every data source inside the module
+# to APPLY whenever that dependency has a change -- which a first install always
+# does. A deferred read makes the precondition unknown at plan, so it is checked at
+# apply; a guard resource with no edge to the release would then race it, and the
+# Cluster could be created before the refusal. A precondition on the release itself
+# is evaluated before that release is created or updated, whenever its inputs become
+# known: at plan when they can be read then, at apply otherwise, and before the
+# Cluster either way.
+#
+# dcctl refuses the same shortfall before it writes anything (checkDatabasePlacement),
+# counting the default instance count for the cluster's --ha setting. This is the
+# count against the store's real instances, and the refusal for anyone who applies
+# these configurations directly.
+data "kubernetes_resources" "placement_nodes" {
+  count = length(var.node_selector) > 0 ? 1 : 0
+
+  api_version    = "v1"
+  kind           = "Node"
+  label_selector = join(",", [for k in sort(keys(var.node_selector)) : "${k}=${var.node_selector[k]}"])
+}
+
+locals {
+  placement_nodes = length(var.node_selector) > 0 ? data.kubernetes_resources.placement_nodes[0].objects : []
+  # Kubernetes' toleration rule, restricted to the two operators the variable admits:
+  # same key; Exists, or Equal with the same value; an empty effect matches every
+  # effect. A PreferNoSchedule taint never keeps a pod off, so it is not counted.
+  placement_usable = [
+    for n in local.placement_nodes : n.metadata.name
+    if !try(n.spec.unschedulable, false) && alltrue([
+      for taint in try(n.spec.taints, []) :
+      !contains(["NoSchedule", "NoExecute"], taint.effect) || anytrue([
+        for t in var.tolerations :
+        t.key == taint.key &&
+        (t.operator == "Exists" || t.value == try(taint.value, "")) &&
+        (t.effect == "" || t.effect == taint.effect)
+      ])
+    ])
+  ]
 }
 
 resource "helm_release" "cluster" {
@@ -702,6 +827,25 @@ resource "helm_release" "cluster" {
   # in the root, and the reason it had to exist.
   lifecycle {
     prevent_destroy = true
+
+    # Placement, see placement_nodes above for why these sit here.
+    precondition {
+      condition     = length(var.tolerations) == 0 || length(var.node_selector) > 0
+      error_message = "${var.name}: tolerations are set with no node_selector. A toleration lets a pod onto a tainted node; it does not put it there. Set node_selector to the label your database nodes carry (dcctl install --database-node-selector)."
+    }
+    precondition {
+      condition     = length(var.node_selector) == 0 || length(local.placement_usable) >= var.instances
+      error_message = <<-EOT
+        ${var.name} runs ${var.instances} instance(s), one per node, and the nodes labelled
+        ${jsonencode(var.node_selector)} give it ${length(local.placement_usable)} it can use
+        (${length(local.placement_nodes)} carry the labels; cordoned nodes, and nodes with a
+        NoSchedule or NoExecute taint the tolerations do not cover, cannot take an instance).
+        Usable: ${jsonencode(local.placement_usable)}.
+
+        Add nodes to that selection, tolerate the taint they carry
+        (dcctl install --database-toleration key=value:Effect), or choose other labels.
+      EOT
+    }
   }
 }
 
@@ -743,6 +887,16 @@ output "synchronous_enforced" {
 output "node_loss_toleration_seconds" {
   description = "The eviction fuse this store's pods actually carry, as a string, or \"tostring(null)\" when Kubernetes' 300s default is left in force. Worth reporting because it is invisible everywhere else: an unset value is not absent from the pod, it is 300 injected by an admission plugin, and nothing else in the apply says so."
   value       = local.reported.node_loss_toleration_seconds
+}
+
+output "node_selector" {
+  description = "The node labels this store's instances are confined to, as handed to its chart; {} when none. Read back from the release values, not the variable."
+  value       = local.reported.node_selector
+}
+
+output "tolerations" {
+  description = "The database tolerations handed to this store's chart (the node-loss pair is reported separately); [] when none. Read back from the release values."
+  value       = local.reported.tolerations
 }
 
 output "chart_digest" {
