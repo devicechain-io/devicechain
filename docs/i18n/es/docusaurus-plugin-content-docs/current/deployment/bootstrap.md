@@ -1142,7 +1142,7 @@ dimensiona por servicio a partir de mediciones:
 | `event-management` | 900m | 2 núcleos |
 | `device-state` | 950m | 2 núcleos |
 | `event-sources` | 1 núcleo | 2 núcleos |
-| `event-processing` | 400m | 500m |
+| `event-processing` | 400m | 1 núcleo |
 | cualquier otro servicio de backend | 100m | 500m |
 
 Cada servidor NATS solicita 500m de CPU y 768Mi de memoria, con un límite de 2Gi de memoria y sin
@@ -1153,8 +1153,8 @@ Con [`--compact`](#--compact), cada servicio de backend y cada servidor NATS sol
 
 Los cuatro primeros servicios hacen el trabajo por evento: recibir, resolver y almacenar cada
 evento, y fusionarlo en el estado en vivo de cada dispositivo. `event-processing` ejecuta la
-detección sobre cada evento; su límite de 500m es el predeterminado de los demás servicios de
-backend, no uno dimensionado a partir de mediciones. Los límites de los cuatro primeros servicios
+detección sobre cada evento; su límite es el doble de lo que se midió que usaba (consulta más
+abajo). Los límites de los cuatro primeros servicios
 están dimensionados para el tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
 mensajes por segundo con una lectura por mensaje, y para unos 4000 eventos por segundo, el ritmo
 que sostenía una instalación predeterminada antes de que se aumentaran los valores de persistencia
@@ -1167,8 +1167,8 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
   nodos de base de datos y tres nodos de servicios de 4 vCPU, con la resolución, el almacenamiento
   y el estado en vivo de los dispositivos siguiendo el ritmo (consulta
   [Rendimiento medido](#measured-throughput)). `event-processing` es la excepción: a ese ritmo lo
-  frenaba su límite de 500m y se quedaba atrás, así que su solicitud es lo que usó con un límite de
-  1 núcleo a 6800 eventos por segundo, donde también se quedó atrás; es un mínimo, no una medida de
+  frenaba su límite de entonces, 500m, y se quedaba atrás, así que su solicitud es lo que usó con
+  un límite de 1 núcleo a 6800 eventos por segundo, donde también se quedó atrás; es un mínimo, no una medida de
   lo que le permite seguir el ritmo. Dimensionados para el techo predeterminado de un inquilino,
   1000, estos servicios solicitaban entre el 15% y el 66% de lo que usaban a ese ritmo, y el
   planificador juntaba a los más ocupados: a 6000 eventos por segundo dos nodos de servicios
@@ -1194,6 +1194,15 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
   más de unos 2300 eventos por segundo, así que la vista en vivo de los dispositivos se retrasaba
   minutos. Medidos sin un límite que los frenara, usan 0,14 y 0,37 milinúcleos por evento, así que
   a 4000 eventos por segundo necesitan alrededor de medio núcleo y de núcleo y medio.
+- **La detección dispone de hasta un núcleo.** `event-processing` comprueba cada evento contra las
+  reglas de detección, en una sola partición. En un clúster en la nube de tres nodos, con 500m, usó
+  un tercio de núcleo a 6000 eventos por segundo y su límite lo frenó en un 5% de los periodos de
+  planificación; en dos ejecuciones de 10 minutos a ese ritmo su cola llegó a unos 41 000 y 93 000
+  eventos, y en tres minutos a 6800 a unos 181 000. Con solo un límite de 1 núcleo, en un nodo más
+  ocupado, la cola a 6800 fue mayor; con un límite de 1 núcleo, una solicitud mayor y otra
+  ubicación fue de unos 64 000, usando 0,37 núcleos. No se aisló qué causó el retraso, y no se
+  afirma que la detección mantenga el ritmo a estos niveles. Su límite es de 1 núcleo, el doble de
+  esos 0,37.
 - **Los servicios más ocupados evitan el primario del almacén de eventos.** `device-management`,
   `event-management` y `event-sources` prefieren un nodo que no ejecute el primario del almacén
   de eventos de la instancia (en las instalaciones que usan CloudNativePG, la opción
@@ -1246,10 +1255,9 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
 
   Los límites y las solicitudes de CPU propios de los servicios de la ruta de eventos se definen
   de la misma forma, así que los `resources` de nivel superior no los sustituyen: un límite de
-  nivel superior de 4 núcleos da 4 núcleos a los demás servicios de backend y deja en 2 los cuatro
-  que tienen un límite propio, y un `requests.cpu` de nivel superior no llega a ninguno de los
-  cinco. Un límite de nivel superior por debajo de 400m se rechaza, porque dejaría el límite de
-  `event-processing` por debajo de su solicitud. Define los suyos en `functionalAreas`, como
+  nivel superior de 4 núcleos da 4 núcleos a los demás servicios de backend y deja a los cinco en
+  sus propios límites (2 núcleos, y 1 para `event-processing`), y un `requests.cpu` de nivel
+  superior no llega a ninguno de los cinco. Define los suyos en `functionalAreas`, como
   arriba. En una instalación solo con el chart, `useMeasuredRequests: false` desactiva las
   solicitudes medidas, de modo que las solicitudes de nivel superior se aplican a todos los
   servicios; es lo que hace `--compact`.

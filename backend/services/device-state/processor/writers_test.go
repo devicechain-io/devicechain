@@ -68,7 +68,7 @@ func TestTheProjectionRunsTheConfiguredNumberOfWriters(t *testing.T) {
 	}{
 		{"two writers", []StateProcessorOption{WithProjection(config.ProjectionConfiguration{Writers: 2, MaxBatch: 1})}, 2},
 		{"three writers", []StateProcessorOption{WithProjection(config.ProjectionConfiguration{Writers: 3, MaxBatch: 1})}, 3},
-		{"the default", []StateProcessorOption{WithProjection(config.ProjectionConfiguration{MaxBatch: 1})}, 5},
+		{"the default", []StateProcessorOption{WithProjection(config.ProjectionConfiguration{MaxBatch: 1})}, 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-state"}
@@ -82,8 +82,9 @@ func TestTheProjectionRunsTheConfiguredNumberOfWriters(t *testing.T) {
 			if got := sp.Writers(); got != int(tc.want) {
 				t.Errorf("Writers() = %d; want %d", got, tc.want)
 			}
-			// More messages than any row's writers, so the writers are the limit.
-			for i := 0; i < 8; i++ {
+			// More messages than any row's writers, so the writers are the limit: with fewer,
+			// the default row would measure the message count instead.
+			for i := 0; i < 12; i++ {
 				encoded, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
 					SourceDeviceToken: fmt.Sprintf("dev-%d", i),
 					EventType:         esmodel.Alert,

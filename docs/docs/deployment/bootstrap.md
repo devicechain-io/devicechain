@@ -1056,7 +1056,7 @@ from measurement:
 | `event-management` | 900m | 2 cores |
 | `device-state` | 950m | 2 cores |
 | `event-sources` | 1 core | 2 cores |
-| `event-processing` | 400m | 500m |
+| `event-processing` | 400m | 1 core |
 | every other backend service | 100m | 500m |
 
 Each NATS server requests 500m of CPU and 768Mi of memory, and is limited to 2Gi of memory with no
@@ -1067,11 +1067,11 @@ instead, and the limits stay as above. The console is sized separately.
 
 The first four services do the per-event work: receiving, resolving and storing every event, and
 merging it into each device's live state. `event-processing` runs detection on every event; its
-500m limit is the default every other backend service has, not one sized from measurement. The
-first four services' limits are sized for live device traffic at a tenant's default ingest
-ceiling of 1000 messages per second, one reading per message, and for about 4,000 events per
-second, the rate a default installation sustained before `event-management`'s persistence
-defaults were raised (see [Measured throughput](#measured-throughput)).
+limit is twice what it was measured to use (see below). The first four services' limits are
+sized for live device traffic at a tenant's default ingest ceiling of 1000 messages per second,
+one reading per message, and for about 4,000 events per second, the rate a default installation
+sustained before `event-management`'s persistence defaults were raised (see
+[Measured throughput](#measured-throughput)).
 
 - **Requests are what each service used at 6,000 events per second.** A request is the CPU the
   scheduler sets aside for a pod on its node, and nothing else: it decides where the pod goes. Each
@@ -1079,8 +1079,8 @@ defaults were raised (see [Measured throughput](#measured-throughput)).
   rate a default `--ha` installation sustained on a cluster of three 4-vCPU database nodes and three
   4-vCPU service nodes, with resolution, storage and live device state each keeping pace (see
   [Measured throughput](#measured-throughput)). `event-processing` is the exception: at that rate
-  it was held back by its 500m limit and fell behind, so its request is what it used with a 1-core
-  limit at 6,800 events per second, where it still fell behind; it is a floor, not a measure of
+  it was held back by its then 500m limit and fell behind, so its request is what it used with a
+  1-core limit at 6,800 events per second, where it still fell behind; it is a floor, not a measure of
   what keeps up. Sized for a tenant's default ceiling of 1,000 instead, these services requested
   between 15% and 66% of what they used at that rate, and the scheduler put the busiest of them
   together: at 6,000 events per second two service nodes ran at about 80% CPU while the third ran
@@ -1103,6 +1103,14 @@ defaults were raised (see [Measured throughput](#measured-throughput)).
   second, so the live device view fell minutes behind. Measured without a limit in the way, they
   use 0.14 and 0.37 millicores per event, so at 4,000 events per second they need about half a
   core and one and a half cores.
+- **Detection gets up to one core.** `event-processing` checks every event against the detection
+  rules, as one partition. On a three-node cloud cluster at 500m it used about a third of a core at
+  6,000 events per second and was held back by its limit in about 5% of scheduling periods; in two
+  10-minute runs at that rate its backlog reached about 41,000 and 93,000 events, and in three
+  minutes at 6,800 about 181,000. With a 1-core limit alone, on a busier node, the backlog at 6,800
+  was larger; with a 1-core limit, a raised request and different placement it was about 64,000,
+  using 0.37 cores. What caused the lag was not isolated, and detection is not claimed to keep pace
+  at these rates. Its limit is 1 core, twice that 0.37.
 - **The busiest services avoid the event store's primary.** `device-management`,
   `event-management` and `event-sources` prefer a node that is not running the instance's
   event-store primary (on installations using CloudNativePG, the default), which is the busiest
@@ -1152,9 +1160,8 @@ defaults were raised (see [Measured throughput](#measured-throughput)).
 
   The event-path services' own CPU limits and requests are set that way too, so the top-level
   `resources` does not replace them: a top-level limit of 4 cores gives every other backend
-  service 4 cores and leaves the four with a limit of their own at 2, and a top-level
-  `requests.cpu` reaches none of the five. A top-level limit below 400m is refused, because it
-  would put `event-processing`'s limit below its request.
+  service 4 cores and leaves the five at their own limits (2 cores, and 1 for
+  `event-processing`), and a top-level `requests.cpu` reaches none of the five.
   Set theirs under `functionalAreas`, as above. On a chart-only installation,
   `useMeasuredRequests: false` turns the measured requests off, so the top-level requests apply
   to every service; that is what `--compact` does.

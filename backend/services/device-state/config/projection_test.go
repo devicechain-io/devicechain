@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The projection settings load as written, and an empty document takes the defaults: 5
+// The projection settings load as written, and an empty document takes the defaults: 10
 // writers, batches of up to 32, no linger.
 func TestProjectionWritersLoad(t *testing.T) {
 	cfg := &DeviceStateConfiguration{}
@@ -22,8 +22,8 @@ func TestProjectionWritersLoad(t *testing.T) {
 
 	cfg = &DeviceStateConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
-	assert.Equal(t, ProjectionConfiguration{Writers: 5, MaxBatch: 32, LingerMillis: 0}, cfg.Projection)
-	assert.Equal(t, 5, DefaultProjectionWriters)
+	assert.Equal(t, ProjectionConfiguration{Writers: 10, MaxBatch: 32, LingerMillis: 0}, cfg.Projection)
+	assert.Equal(t, 10, DefaultProjectionWriters)
 	assert.Equal(t, 32, DefaultProjectionMaxBatch)
 }
 
@@ -38,9 +38,18 @@ func TestProjectionWritersAreBounded(t *testing.T) {
 		{"at the default pool", `{"projection":{"writers":20}}`,
 			"projection.writers is 20, but the connection pool holds 20; keep it below 20 so reads are not starved"},
 		{"below the default pool", `{"projection":{"writers":19}}`, ""},
-		{"default writers on a small pool", `{"rdbConfiguration":{"maxOpenConnections":8}}`, ""},
+		// A pool set without setting writers runs the default writers on it. The default of 10
+		// stops a service whose pool is 10 or smaller, naming the writers and the pool; before
+		// the default was raised from 5, pools of 6 to 10 started, and the release notes say so.
+		{"default writers on a pool of 11", `{"rdbConfiguration":{"maxOpenConnections":11}}`, ""},
+		{"default writers on a pool of 10", `{"rdbConfiguration":{"maxOpenConnections":10}}`,
+			"projection.writers is 10, but the connection pool holds 10"},
+		{"default writers on a small pool", `{"rdbConfiguration":{"maxOpenConnections":8}}`,
+			"projection.writers is 10, but the connection pool holds 8"},
 		{"default writers on a pool of 5", `{"rdbConfiguration":{"maxOpenConnections":5}}`,
-			"projection.writers is 5, but the connection pool holds 5"},
+			"projection.writers is 10, but the connection pool holds 5"},
+		// The remedy the release notes give for a small pool: set the writers below it.
+		{"writers set below a small pool", `{"rdbConfiguration":{"maxOpenConnections":8},"projection":{"writers":5}}`, ""},
 		{"negative maxBatch", `{"projection":{"maxBatch":-1}}`, "projection.maxBatch must be between 1 and 64, got -1"},
 		{"maxBatch above the cap", `{"projection":{"maxBatch":65}}`, "projection.maxBatch must be between 1 and 64, got 65"},
 		{"maxBatch at the cap", `{"projection":{"maxBatch":64}}`, ""},

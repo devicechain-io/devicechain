@@ -50,9 +50,28 @@ const (
 	// (BenchmarkPersistBatch) with a synchronous standby, 64 bought little or nothing more
 	// than 32 at 5 writers (about 1,400 events a second either way), for twice the longest
 	// transaction. It is 64 so that a writer that finds a deep backlog can take more of it
-	// in one commit. With lingerMillis at 0 a writer never waits for a batch to fill, so
-	// at low rates it still commits the one event it finds.
+	// in one commit. With lingerMillis at 0 a writer never waits for a batch to fill, so at
+	// low rates it commits the one event it finds; at the default it waits up to
+	// DefaultPersistenceLingerMillis first.
 	DefaultPersistenceMaxBatch = 64
+	// DefaultPersistenceLingerMillis is how long a writer holding a batch that is not full
+	// waits for more events when persistence.lingerMillis is not set.
+	//
+	// On a three-node cloud cluster at 6,000 to 6,800 events a second, 59% of this service's
+	// transactions stored a single event, each with its own commit and its own wait for the
+	// synchronous standby. A writer waits only when nothing is already waiting for it (see
+	// messaging.CollectBatch), so under a backlog it takes a batch at once and the wait never
+	// happens: the wait costs latency, never throughput. With 10 writers and commits of about
+	// 14 ms it bounds the service to about 420 commits a second, against about 670 measured
+	// at 6,000 events a second.
+	//
+	// The saving needs every writer to be busy. A lingering writer queues for its next event
+	// behind the writers already idle, and an event goes to the writer that has waited
+	// longest, so a lingering writer gets a second event only once no writer is idle: about
+	// writers / (linger + commit time) events a second, roughly 400 to 500 per replica at
+	// the defaults. Below that rate each event still commits alone, up to this much later.
+	// Reasoned from those measurements, not yet measured end to end.
+	DefaultPersistenceLingerMillis = 10
 )
 
 type EventManagementConfiguration struct {
@@ -79,7 +98,8 @@ type EventManagementConfiguration struct {
 // PersistenceConfiguration sizes the writers that persist resolved events. Each writer
 // takes the events already waiting for it, up to MaxBatch, and commits them in ONE
 // transaction; an event is acknowledged only after that transaction commits. Every value
-// has a default, and 0 means "use it".
+// has a default. For Writers and MaxBatch 0 means "use it"; LingerMillis is unset when
+// absent (or null), and an explicit 0 turns the wait off.
 type PersistenceConfiguration struct {
 	// Writers is the number of writers running in parallel, each holding one pooled
 	// connection while it writes. Unset (0) defaults to DefaultPersistenceWriters. It must
@@ -93,16 +113,16 @@ type PersistenceConfiguration struct {
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more
-	// events before committing it, 0 to writerbatch.MaxLingerMillis. 0 (the default) takes
-	// only what is already waiting, which adds no latency: under light load a writer finds
-	// one event and commits it alone, and batches grow by themselves once events arrive
-	// faster than single commits keep up with.
-	LingerMillis int
+	// events before committing it, 0 to writerbatch.MaxLingerMillis. Unset (nil) defaults to
+	// DefaultPersistenceLingerMillis. An explicit 0 turns the wait off: a writer commits only
+	// what is already waiting, so under light load it finds one event and commits it alone.
+	// It is a pointer because 0 is a setting of its own, not "use the default".
+	LingerMillis *int
 }
 
-// ApplyDefaults fills the writer count and the batch size when they are unset. It is the
-// ONE definition of those defaults: the configuration load calls it, and so does the
-// processor for a value built in code.
+// ApplyDefaults fills the writer count, the batch size and the linger when they are unset.
+// It is the ONE place the defaults are written into the value: the configuration load calls
+// it, and so does the processor for a value built in code.
 func (p *PersistenceConfiguration) ApplyDefaults() {
 	if p.Writers == 0 {
 		p.Writers = DefaultPersistenceWriters
@@ -110,6 +130,19 @@ func (p *PersistenceConfiguration) ApplyDefaults() {
 	if p.MaxBatch == 0 {
 		p.MaxBatch = DefaultPersistenceMaxBatch
 	}
+	if p.LingerMillis == nil {
+		l := p.lingerMillis()
+		p.LingerMillis = &l
+	}
+}
+
+// lingerMillis is LingerMillis with an unset value read as the default, so a value built in
+// code and never defaulted validates and waits exactly as a loaded one does.
+func (p PersistenceConfiguration) lingerMillis() int {
+	if p.LingerMillis == nil {
+		return DefaultPersistenceLingerMillis
+	}
+	return *p.LingerMillis
 }
 
 // Validate refuses a value no reading makes sense of. pool is the event store's datastore
@@ -119,12 +152,12 @@ func (p PersistenceConfiguration) Validate(pool config.MicroserviceDatastoreConf
 	if err := rdb.CheckWriterCount("persistence.writers", p.Writers, pool); err != nil {
 		return err
 	}
-	return rdb.CheckWriterBatch("persistence", p.MaxBatch, p.LingerMillis)
+	return rdb.CheckWriterBatch("persistence", p.MaxBatch, p.lingerMillis())
 }
 
-// Linger is LingerMillis as a duration.
+// Linger is LingerMillis as a duration, the default when it is unset.
 func (p PersistenceConfiguration) Linger() time.Duration {
-	return time.Duration(p.LingerMillis) * time.Millisecond
+	return time.Duration(p.lingerMillis()) * time.Millisecond
 }
 
 // LifecycleConfiguration is the operator-facing surface for the TimescaleDB
@@ -194,7 +227,8 @@ func NewEventManagementConfiguration() *EventManagementConfiguration {
 // defaults the reconciliation-sweep interval to hourly when unset (a value of -1
 // can be used to disable it explicitly without leaving the field at its zero value),
 // fills the data-lifecycle policy defaults (ADR-026): 24h chunks, compression
-// after 7 days, retention off, and fills the persistence writer defaults.
+// after 7 days, retention off, and fills the persistence writer defaults,
+// the linger included.
 func (c *EventManagementConfiguration) ApplyDefaults() {
 	if c.AnchorSweepIntervalSeconds == 0 {
 		c.AnchorSweepIntervalSeconds = 3600
