@@ -326,7 +326,9 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 			"the GKE README and both bootstrap.md prerequisites say it fits. Rewrite them and this test",
 			oneInstance, quota)
 	}
-	const standardBoot = "standard persistent disks, which count against `DISKS_TOTAL_GB`"
+	// The negation is part of the held phrase: "boot disks do too" would match a
+	// pattern that started at "standard".
+	const standardBoot = "boot disks do not: they are standard persistent disks, which count against `DISKS_TOTAL_GB`"
 	if !regexp.MustCompile(strings.ReplaceAll(regexp.QuoteMeta(standardBoot), " ", `\s+`)).MatchString(readme) {
 		t.Errorf("the GKE README no longer says the boot disks are %q; the fit claim rests on it", standardBoot)
 	}
@@ -572,6 +574,38 @@ func TestGKEGuideShapeIsTheDefaults(t *testing.T) {
 		}
 	}
 	_, loadgenVCPU, _ := shape("loadgen")
+
+	// The table prints one boot disk for every node, so it is held to every pool's
+	// default, the optional load generator's included.
+	for _, m := range figures("the boot disk row", "\\| Every node's boot disk \\| ([0-9]+) GB `([a-z-]+)` \\|") {
+		for _, pool := range []string{"database", "services", "loadgen"} {
+			expect(pool+"'s boot disk GB in the table", num(m[1]), tofuNumberDefault(t, gkeTF, pool+"_disk_size_gb"))
+			if dt := tofuDefault(t, gkeTF, pool+"_disk_type"); m[2] != dt {
+				t.Errorf("the GKE README's table gives every node a %s boot disk; the %s pool defaults to %s",
+					m[2], pool, dt)
+			}
+		}
+	}
+
+	// The larger services shape the README offers, and what it says that costs:
+	// the vCPUs it adds across the pool, and that they take the default cluster
+	// past the vCPU quota of a new project.
+	quotas := figures("a new project's vCPU quota", "\\*\\*([0-9]+) vCPUs across all regions\\*\\*")
+	for _, m := range figures("the larger services shape", "`(n2-[a-z0-9-]+)` adds CPU, which is what binds first\\. "+
+		"It needs ([0-9]+) more vCPUs, which takes the cluster past a new project's ([0-9]+)") {
+		bigger, _, err := n2Shape(m[1])
+		if err != nil {
+			t.Fatalf("the GKE README offers %s for the services pool: %v", m[1], err)
+		}
+		_, servicesVCPU, _ := shape("services")
+		more := tofuNumberDefault(t, gkeTF, "services_node_count") * (bigger - servicesVCPU)
+		expect("the vCPUs "+m[1]+" adds", num(m[2]), more)
+		expect("a new project's vCPU quota", num(m[3]), num(quotas[0][1]))
+		if vcpus+more <= num(m[3]) {
+			t.Errorf("the GKE README says %s takes the cluster past a new project's %s vCPUs; it reaches %d",
+				m[1], m[3], vcpus+more)
+		}
+	}
 
 	for _, m := range figures("node sizes", "the `database` pool has ([0-9]+) GB nodes and the `services` pool ([0-9]+) GB ones") {
 		expect("the database pool's GB per node", num(m[1]), gbOf["database"])

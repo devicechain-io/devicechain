@@ -31,8 +31,8 @@ types'. **It bills until you destroy it.** See [Tearing it down](#tearing-it-dow
 
 The two pools want different machines. The services are CPU-bound first: in our
 runs on 4 GB services nodes the busiest ran at 80 to 93% CPU. Memory came second,
-with 1.2 to 2.0 GB left available and pages read back from disk several times a
-second; NATS alone used about 0.7 GB per server. The databases want memory:
+with 1.2 to 2.0 GiB left available and pages read back from disk several times a
+second; NATS alone used about 0.7 GiB per server. The databases want memory:
 Postgres keeps a small buffer cache of its own and leans on the node's page cache
 for the rest, so memory on a database node buys speed. That is why the `database`
 pool has 16 GB nodes and the `services` pool 8 GB ones, with the same 4 vCPU each.

@@ -559,11 +559,12 @@ The alerts for snapshots are described under
   Each further instance that ingests continuously also needs the backup store grown by about
   160 GiB, as [Backup store size](#backup-store-size) explains. On a cloud provider, check the
   disk quota first. A new Google Cloud project allows 500 GB of SSD per region, counting each GiB
-  of volume as one GB, and both of Google Kubernetes Engine's disk classes count against it, so a
-  default `--ha` install with one instance fits on the cluster the
+  of volume as one GB, and both of Google Kubernetes Engine's disk classes count against it. The
+  volumes of one instance are under that, and a default `--ha` install with one instance fits on
+  the cluster the
   [Google Kubernetes Engine guide](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)
-  creates, whose nodes boot from standard disks that count against a different quota. Balanced or
-  SSD boot disks would count against the SSD quota too. The guide gives the quota to request for
+  creates because its nodes boot from standard disks, which count against a different quota.
+  Balanced or SSD boot disks would count against the SSD quota too. The guide gives the quota to request for
   more instances. On a local cluster the monitoring stack keeps no volume, and on
   kind the sizes are not enforced.
 - **OpenTofu** (the `tofu` binary; `terraform` also works) on your `PATH`. `dcctl` drives it
