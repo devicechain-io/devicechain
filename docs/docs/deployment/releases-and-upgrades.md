@@ -3559,8 +3559,9 @@ to 19 start, and log at startup that more than half the pool is given to writers
 `persistence.writers` to half your pool to silence it.
 
 - An installation that sets `persistence.writers` or `persistence.maxBatch` keeps its values.
-- At rates where a writer finds one event at a time, nothing changes: it commits that event alone,
-  as before.
+- At rates where a writer finds one event at a time, it now waits up to
+  `persistence.lingerMillis` (10 milliseconds by default) before committing it; see
+  [the pipeline defaults item](#next-pipeline-defaults).
 - Under a backlog, up to 10 writers commit at once instead of 5, from the same pool of 20. The
   pool's ceiling is unchanged, so the connections the event store keeps for `event-management`
   still cover it.
@@ -4095,9 +4096,8 @@ recreated.
 - `event-processing` now has a measured request, so a top-level `resources.requests.cpu` no longer
   reaches it either. Set its own under `functionalAreas.event-processing.resources.requests`, or
   set `useMeasuredRequests: false`.
-- `event-processing` takes its CPU limit from the top-level `resources.limits.cpu`, so a top-level
-  limit below 400m now refuses to render, naming `measuredRequests`. Raise the limit, set the
-  service's own request, or set `useMeasuredRequests: false`.
+- `event-processing` now has a CPU limit of its own, so a top-level `resources.limits.cpu` no
+  longer reaches it; see [the pipeline defaults item](#next-pipeline-defaults).
 - A new key, `eventPathSpread`, is on for the five services. A values file that sets it on another
   service spreads that service with them.
 
@@ -4235,6 +4235,61 @@ kubectl -n dci-<instance> patch objectstores.barmancloud.cnpg.io dc-tsdb-backup 
 The backup plugin reads the destination again for each segment it archives, so segments archived
 from then on are compressed with zstd, and no database restarts. Segments already in the archive
 stay as they are.
+
+#### device-state merges with 10 writers, event-management waits up to 10 ms to fill a batch, and detection gets a full core {#next-pipeline-defaults}
+
+Three defaults change for the stages that fell behind first in a benchmark on a three-node cloud
+cluster at 6,000 to 7,600 events per second.
+
+- **`device-state` runs 10 projection writers instead of 5** (`projection.writers`). With 5, live
+  device state kept 95.7% of an offered 6,800 events per second over three minutes and fell
+  further behind above it. With 10, and the service's CPU request raised to what it uses (as this
+  release ships it), it kept pace at 7,600. The two changes were made together, so their shares
+  were not separated. In the same run `event-management`, sharing a node with `device-state`,
+  stored fewer events than with the earlier defaults (6,280 against 6,796 per second at 6,800
+  offered); that was not separated from the other changes either. `projection.maxBatch` stays
+  `32`: batches averaged about 15 events, below it.
+- **`event-management` waits up to 10 milliseconds to fill a batch** (`persistence.lingerMillis`,
+  previously `0`). In the same benchmark, 59% of its transactions stored a single event, each with
+  its own commit and its own wait for the standby. A writer that finds fewer events than a full
+  batch now waits up to 10 milliseconds for more; a writer that finds events already waiting takes
+  them at once, so under a backlog nothing changes. The wait saves commits only when every writer
+  is busy: below roughly a few hundred events per second per replica, each event is still
+  committed alone, up to 10 milliseconds later than before, and `persist_duration_seconds` rises
+  by about that much. The new default is reasoned, not yet measured end to end. Set
+  `persistence.lingerMillis: 0` to turn the wait off.
+- **`event-processing`'s CPU limit is 1 core instead of 500m.** At 500m it was held back in about
+  5% of scheduling periods at 6,000 events per second, and its backlog reached about 41,000 and
+  93,000 events in two 10-minute runs there. With a 1-core limit, a raised request and different
+  placement, its backlog after three minutes at 6,800 was about a third of what it had been at
+  500m; with the 1-core limit alone, on a busier node, it was larger. What caused the lag was not
+  isolated, and detection is not claimed to keep pace at these rates.
+
+**Before you upgrade:** if you set `rdbConfiguration.maxOpenConnections` for `device-state` to `10`
+or less and did not set `projection.writers`, the new `device-state` pod refuses to start, and its
+error names `projection.writers` and the size of the pool. The rolling update keeps the old pod
+running and merging live state, and `dcctl upgrade` fails after waiting, with the instance partly
+upgraded. Set `projection.writers` below your pool (your previous default was `5`), or remove the
+pool setting to use the default of 20, and run the upgrade again. Pools of 11 to 19 start, and log
+at startup that more than half the pool is given to writers.
+
+- An installation that sets `projection.writers`, `persistence.lingerMillis` or
+  `functionalAreas.event-processing.resources.limits.cpu` keeps its value. An explicit
+  `persistence.lingerMillis: 0` still means no wait.
+- A `ResourceQuota` or `LimitRange` on the instance's namespace can refuse `event-processing`'s
+  new 1-core limit.
+- `--compact` installations get the same defaults. Their requests do not change, and a CPU limit
+  reserves nothing on a node.
+- No stored data or schema changes, so going back to the previous release needs nothing.
+
+**If you install the chart yourself, with your own values:**
+
+- A top-level `resources.limits.cpu` no longer reaches `event-processing`. One above 1 core now
+  lowers it to 1, and one below 1 core now raises it to 1. Set its own under
+  `functionalAreas.event-processing.resources.limits`.
+- With `useMeasuredRequests: false`, a top-level `resources.requests.cpu` above 1 core still
+  reaches `event-processing`, and is now refused when the chart renders because it is above that
+  service's own limit. Set `event-processing`'s own limit or request.
 
 ### The one-time durable-ingest cutover
 

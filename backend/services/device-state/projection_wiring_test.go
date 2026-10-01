@@ -34,4 +34,12 @@ func TestConfiguredProjectionWritersReachTheProcessor(t *testing.T) {
 	require.Equal(t, 3, sp.Writers())
 	require.Equal(t, 8, sp.MaxBatch())
 	require.Equal(t, 2*time.Millisecond, sp.Linger())
+
+	// A document that sets none runs the defaults, stated here as literals.
+	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
+	require.NoError(t, parseConfiguration())
+	sp = newStateProcessor(nil)
+	require.Equal(t, 10, sp.Writers())
+	require.Equal(t, 32, sp.MaxBatch())
+	require.Equal(t, time.Duration(0), sp.Linger())
 }

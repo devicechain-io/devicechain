@@ -7,21 +7,54 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// The persistence settings load as written, and unset ones take their defaults.
+func millis(n int) *int { return &n }
+
+// The persistence settings load as written, and unset ones take their defaults: 10 writers,
+// batches of up to 64, and a 10 ms linger. An explicit 0 linger is a setting of its own and
+// survives the defaulting; a null one is unset.
 func TestPersistenceSettingsLoad(t *testing.T) {
+	assert.Equal(t, 10, DefaultPersistenceLingerMillis)
+
 	cfg := &EventManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"persistence":{"writers":8,"maxBatch":16,"lingerMillis":5}}`), cfg))
-	assert.Equal(t, PersistenceConfiguration{Writers: 8, MaxBatch: 16, LingerMillis: 5}, cfg.Persistence)
+	assert.Equal(t, PersistenceConfiguration{Writers: 8, MaxBatch: 16, LingerMillis: millis(5)}, cfg.Persistence)
 	assert.Equal(t, 5*time.Millisecond, cfg.Persistence.Linger())
 
 	cfg = &EventManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
-	assert.Equal(t, PersistenceConfiguration{Writers: 10, MaxBatch: 64, LingerMillis: 0}, cfg.Persistence)
+	assert.Equal(t, PersistenceConfiguration{Writers: 10, MaxBatch: 64, LingerMillis: millis(10)}, cfg.Persistence)
+	assert.Equal(t, 10*time.Millisecond, cfg.Persistence.Linger())
+
+	cfg = &EventManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"persistence":{"lingerMillis":0}}`), cfg))
+	if assert.NotNil(t, cfg.Persistence.LingerMillis) {
+		assert.Equal(t, 0, *cfg.Persistence.LingerMillis)
+	}
+	assert.Equal(t, time.Duration(0), cfg.Persistence.Linger())
+
+	cfg = &EventManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"persistence":{"lingerMillis":null}}`), cfg))
+	assert.Equal(t, PersistenceConfiguration{Writers: 10, MaxBatch: 64, LingerMillis: millis(10)}, cfg.Persistence)
+	assert.Equal(t, 10*time.Millisecond, cfg.Persistence.Linger())
+}
+
+// A value built in code and never defaulted reads an unset linger as the default, both
+// when it is validated and when it is run, and its bound is checked on what it reads.
+func TestPersistenceLingerBuiltInCodeTakesTheDefault(t *testing.T) {
+	p := PersistenceConfiguration{Writers: 3, MaxBatch: 4}
+	assert.Equal(t, 10*time.Millisecond, p.Linger())
+	assert.NoError(t, p.Validate(config.MicroserviceDatastoreConfiguration{}))
+
+	err := PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: millis(1001)}.Validate(config.MicroserviceDatastoreConfiguration{})
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "persistence.lingerMillis must be between 0 and 1000, got 1001")
+	}
 }
 
 // Out-of-range settings stop the service at startup, naming the setting; the edges of each
@@ -55,6 +88,7 @@ func TestPersistenceSettingsAreBounded(t *testing.T) {
 		{"negative lingerMillis", `{"persistence":{"lingerMillis":-1}}`, "persistence.lingerMillis must be between 0 and 1000, got -1"},
 		{"lingerMillis above the cap", `{"persistence":{"lingerMillis":1001}}`, "persistence.lingerMillis must be between 0 and 1000, got 1001"},
 		{"lingerMillis at the cap", `{"persistence":{"lingerMillis":1000}}`, ""},
+		{"lingerMillis zero", `{"persistence":{"lingerMillis":0}}`, ""},
 		{"a misspelled key", `{"persistence":{"workers":8}}`, `unknown field "workers"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -877,16 +877,24 @@ func TestShutdownPersistsThePartialBatch(t *testing.T) {
 	}
 }
 
-// The configured writer count and batch settings reach the writers Initialize starts.
+// The configured writer count and batch settings reach the writers Initialize starts, and
+// so do the defaults. The wanted settings are literals: a want built as a
+// PersistenceConfiguration would read an unset linger as the default on both sides, and
+// agree with any default.
 func TestTheWritersRunTheConfiguredSettings(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		opts []ProcessorOption
-		want emconfig.PersistenceConfiguration
+		name        string
+		opts        []ProcessorOption
+		wantWriters int
+		wantBatch   int
+		wantLinger  time.Duration
 	}{
-		{"configured", []ProcessorOption{WithPersistence(emconfig.PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: 7})},
-			emconfig.PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: 7}},
-		{"defaults", nil, emconfig.PersistenceConfiguration{Writers: 10, MaxBatch: 64}},
+		{"configured", []ProcessorOption{WithPersistence(emconfig.PersistenceConfiguration{Writers: 3, MaxBatch: 4, LingerMillis: millis(7)})},
+			3, 4, 7 * time.Millisecond},
+		{"defaults", nil, 10, 64, 10 * time.Millisecond},
+		// An explicit 0 survives the processor's own defaulting: it turns the wait off.
+		{"linger turned off", []ProcessorOption{WithPersistence(emconfig.PersistenceConfiguration{Writers: 2, MaxBatch: 8, LingerMillis: millis(0)})},
+			2, 8, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-management"}
@@ -898,15 +906,17 @@ func TestTheWritersRunTheConfiguredSettings(t *testing.T) {
 			}
 			defer func() { _ = proc.ExecuteStop(context.Background()) }()
 			writers := proc.Writers()
-			if len(writers) != tc.want.Writers {
-				t.Fatalf("%d writers started; want %d", len(writers), tc.want.Writers)
+			if len(writers) != tc.wantWriters {
+				t.Fatalf("%d writers started; want %d", len(writers), tc.wantWriters)
 			}
 			for i, w := range writers {
-				if w.MaxBatch != tc.want.MaxBatch || w.Linger != tc.want.Linger() {
+				if w.MaxBatch != tc.wantBatch || w.Linger != tc.wantLinger {
 					t.Errorf("writer %d runs batch %d linger %s; want %d and %s",
-						i, w.MaxBatch, w.Linger, tc.want.MaxBatch, tc.want.Linger())
+						i, w.MaxBatch, w.Linger, tc.wantBatch, tc.wantLinger)
 				}
 			}
 		})
 	}
 }
+
+func millis(n int) *int { return &n }

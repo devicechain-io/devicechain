@@ -167,7 +167,8 @@ func defaultIngestCeiling(t *testing.T) float64 {
 //
 // event-sources and event-processing are the counterweight: this rule alone would
 // pass them at 500m, so it does not simply raise everything. (event-sources' own
-// limit comes from the sustained-rate rule below.)
+// limit comes from the sustained-rate rule below, event-processing's from the
+// headroom rule over gkeSplitPoolCores.)
 func TestShippedCPULimitsCarryTheDefaultIngestCeiling(t *testing.T) {
 	ceiling := defaultIngestCeiling(t)
 	for _, tc := range []struct {
@@ -227,7 +228,8 @@ func cpuLimitShortfalls(t *testing.T, got map[string]renderedContainer, perEvent
 // CPU than its limit on average. At the old 500m, event-sources was throttled in
 // 84% of scheduling periods at 4000 events/s and device-state in all of them from
 // 2400, merging live state at no more than ~2.3k/s. event-processing is the
-// counterweight: it needs about half its 500m, so the rule does not raise it.
+// counterweight: it needs about half of 500m, so this rule does not raise it (its
+// limit comes from the headroom rule over gkeSplitPoolCores).
 func TestShippedCPULimitsCarryTheMeasuredSustainedRate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -398,6 +400,75 @@ func TestShippedCPURequestsAreTheMeasuredUseAtTheSizingRate(t *testing.T) {
 	})
 }
 
+// cpuHeadroomShortfalls names each area in gkeSplitPoolCores whose rendered CPU limit
+// is below cpuHeadroom times what it used at the rate it was measured at. An area
+// missing from the render is a shortfall, never a skip.
+func cpuHeadroomShortfalls(t *testing.T, got map[string]renderedContainer) []string {
+	t.Helper()
+
+	var out []string
+	for _, area := range slices.Sorted(maps.Keys(gkeSplitPoolCores)) {
+		c, ok := got[area]
+		if !ok {
+			out = append(out, fmt.Sprintf("%s did not render: its requirement was not checked", area))
+			continue
+		}
+		need := millicores(gkeSplitPoolCores[area]*cpuHeadroom, 1000)
+		if have := q(t, "cpu", c.limits["cpu"]); have < need {
+			out = append(out, fmt.Sprintf("%s: CPU limit %s (%dm) is below the %dm it needs to stay "+
+				"%.0fx over the %.2f cores it used at %d events/s",
+				area, c.limits["cpu"], have, need, cpuHeadroom, gkeSplitPoolCores[area], measuredAt(area)))
+		}
+	}
+	return out
+}
+
+// At the rates the CPU requests are sized from, every event-path area's CPU limit is
+// at least cpuHeadroom times what it used there: a CFS quota is spent by bursts, not
+// by the average. At 500m, event-processing used 0.33-0.34 cores at 6,000 events/s,
+// was throttled in about 5% of scheduling periods, and its backlog reached tens of
+// thousands of events in 10 minutes.
+//
+// The other four pass at 2 cores; event-sources by 40m (1,960m), which a re-measure
+// that moves its figure up will turn into a failure. That is the rule working.
+func TestShippedCPULimitsHaveHeadroomOverTheMeasuredUse(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   *State
+	}{{"default", compactState(false)}, {"compact", compactState(true)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := byArea(t, renderContainers(t, helmValues(tc.st)))
+			for _, s := range cpuHeadroomShortfalls(t, got) {
+				t.Error(s)
+			}
+		})
+	}
+
+	// The rule has to be able to fail: event-processing's old 500m limit is short of
+	// twice its 0.37 cores.
+	t.Run("the check can fail", func(t *testing.T) {
+		vals := helmValues(compactState(false))
+		mergeFunctionalArea(vals, "event-processing", map[string]interface{}{
+			"resources": map[string]interface{}{"limits": map[string]interface{}{"cpu": "500m"}},
+		})
+		got := cpuHeadroomShortfalls(t, byArea(t, renderContainers(t, vals)))
+		if len(got) != 1 || !strings.Contains(got[0], "event-processing") || !strings.Contains(got[0], "740m") {
+			t.Errorf("an event-processing limit of 500m reported %q, want exactly one shortfall "+
+				"naming event-processing and the 740m it needs", got)
+		}
+	})
+
+	t.Run("a missing area is a shortfall", func(t *testing.T) {
+		got := byArea(t, renderContainers(t, helmValues(compactState(false))))
+		delete(got, "event-processing")
+		short := cpuHeadroomShortfalls(t, got)
+		if len(short) != 1 || !strings.Contains(short[0], "event-processing did not render") {
+			t.Errorf("with event-processing missing from the render: %q, want exactly one "+
+				"shortfall saying it did not render", short)
+		}
+	})
+}
+
 // A measured request is a chart default the operator never wrote. So when an
 // operator lowers an area's CPU limit below it, the refusal has to say where the
 // request came from and how to turn the measured requests off, and turning them
@@ -471,9 +542,9 @@ func TestMeasuredRequestAboveAnOperatorsLimitNamesMeasuredRequests(t *testing.T)
 // requests at all, so --compact's lowered requests (written at the top level) never
 // reached it.
 func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
-	raised := map[string]bool{
-		"device-management": true, "event-management": true,
-		"event-sources": true, "device-state": true,
+	raised := map[string]string{
+		"device-management": "2", "event-management": "2",
+		"event-sources": "2", "device-state": "2", "event-processing": "1",
 	}
 	measured := map[string]string{
 		"device-management": "800m", "event-management": "900m",
@@ -489,8 +560,8 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 		}
 		for area, c := range got {
 			wantCPU := "500m"
-			if raised[area] {
-				wantCPU = "2"
+			if l, ok := raised[area]; ok {
+				wantCPU = l
 			}
 			wantReq := "100m"
 			if r, ok := measured[area]; ok {
@@ -531,7 +602,8 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 			},
 		}))
 		for area, want := range map[string]string{
-			"device-management": "4", "event-management": "2", "event-processing": "500m",
+			"device-management": "4", "event-management": "2", "event-processing": "1",
+			"command-delivery": "500m",
 		} {
 			if have := got[area].limits["cpu"]; have != want {
 				t.Errorf("%s: limits.cpu = %q, want %q", area, have, want)
@@ -558,7 +630,7 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 		}))
 		for area, want := range map[string]string{
 			"device-management": "2", "event-management": "2", "event-sources": "2",
-			"device-state": "2", "event-processing": "750m",
+			"device-state": "2", "event-processing": "1", "command-delivery": "750m",
 		} {
 			if have := got[area].limits["cpu"]; have != want {
 				t.Errorf("%s: limits.cpu = %q, want %q", area, have, want)
@@ -605,7 +677,7 @@ func TestAreaRequestAboveItsLimitIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := renderChart(t, map[string]interface{}{
 				"functionalAreas": map[string]interface{}{
-					"event-processing": map[string]interface{}{
+					"command-delivery": map[string]interface{}{
 						"resources": map[string]interface{}{
 							"requests": map[string]interface{}{tc.dim: tc.request},
 						},
@@ -616,7 +688,7 @@ func TestAreaRequestAboveItsLimitIsRefused(t *testing.T) {
 				t.Fatalf("a %s request of %s against the top-level limit rendered; the API "+
 					"server would refuse the pod instead", tc.dim, tc.request)
 			}
-			for _, want := range []string{"event-processing", tc.dim, tc.request} {
+			for _, want := range []string{"command-delivery", tc.dim, tc.request} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not name %q: %v", want, err)
 				}
@@ -629,7 +701,7 @@ func TestAreaRequestAboveItsLimitIsRefused(t *testing.T) {
 	t.Run("equal and raised together render", func(t *testing.T) {
 		got := byArea(t, renderContainers(t, map[string]interface{}{
 			"functionalAreas": map[string]interface{}{
-				"event-processing": map[string]interface{}{
+				"command-delivery": map[string]interface{}{
 					"resources": map[string]interface{}{
 						"requests": map[string]interface{}{"cpu": "500m", "memory": "512Mi"},
 						"limits":   map[string]interface{}{"memory": "512Mi"},
@@ -637,10 +709,10 @@ func TestAreaRequestAboveItsLimitIsRefused(t *testing.T) {
 				},
 			},
 		}))
-		ep := got["event-processing"]
-		if ep.requests["memory"] != "512Mi" || ep.limits["memory"] != "512Mi" || ep.requests["cpu"] != "500m" {
-			t.Errorf("event-processing rendered requests %v limits %v, want 500m/512Mi requested "+
-				"and a 512Mi memory limit", ep.requests, ep.limits)
+		cd := got["command-delivery"]
+		if cd.requests["memory"] != "512Mi" || cd.limits["memory"] != "512Mi" || cd.requests["cpu"] != "500m" {
+			t.Errorf("command-delivery rendered requests %v limits %v, want 500m/512Mi requested "+
+				"and a 512Mi memory limit", cd.requests, cd.limits)
 		}
 	})
 }
@@ -666,7 +738,7 @@ func TestTopLevelRequestAboveAnAreasOwnLimitNamesWhereTheLimitIsSet(t *testing.T
 	}
 	msg := err.Error()
 	var area string
-	for _, a := range []string{"device-management", "event-management", "event-sources", "device-state"} {
+	for _, a := range []string{"device-management", "event-management", "event-sources", "device-state", "event-processing"} {
 		if strings.Contains(msg, "functionalAreas."+a+".resources.limits.cpu") {
 			area = a
 		}

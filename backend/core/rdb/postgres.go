@@ -311,9 +311,9 @@ func applyPoolSizing(db *gorm.DB, cfg config.MicroserviceDatastoreConfiguration,
 const (
 	// defaultMaxOpenConnections is the per-pod cap on open database connections
 	// when the service does not configure one. It is intentionally larger than
-	// the historical value (5) so a service's writers (event-management's 10 and
-	// device-state's 5 by default, each below this pool) and the GraphQL server do not
-	// contend for the same handles.
+	// the historical value (5) so a service's writers (event-management's
+	// DefaultPersistenceWriters and device-state's DefaultProjectionWriters, each below this
+	// pool) and the GraphQL server do not contend for the same handles.
 	defaultMaxOpenConnections = 20
 
 	// connMaxLifetime closes a connection this long after it was opened, at its next

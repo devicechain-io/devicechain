@@ -7,8 +7,9 @@ package config
 //
 // MaxOpenConnections / MaxIdleConnections size the database connection pool for
 // the owning service. They must comfortably exceed that service's writer count
-// (event-management's persistence.writers, 10 by default, or device-state's
-// projection.writers, 5 by default, each refused unless it is below the pool size)
+// (event-management's persistence.writers or device-state's projection.writers, whose
+// defaults are each service's DefaultPersistenceWriters and DefaultProjectionWriters, each
+// refused unless it is below the pool size)
 // plus the GraphQL server's request concurrency, otherwise writers and GraphQL
 // contend for the same handles and throughput is capped. This struct is embedded in each
 // service's config and does NOT implement ApplyDefaults/Validate itself; a

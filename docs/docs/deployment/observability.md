@@ -493,18 +493,24 @@ batch is first written again in a new transaction, one event at a time, to find 
 transaction fails for a reason no single event caused, such as a lost database connection, every
 event in it is written again on its own.
 
-When traffic is light a writer finds a single event waiting and commits it alone, so batching adds
-no delay. Batches grow only when events arrive faster than single commits can keep up, which is when
-they help: on a replicated event store most of each commit is spent waiting for the standby, and a
-batch pays that wait once.
+A writer that finds fewer events waiting than a full batch waits up to 10 milliseconds for more
+before it commits (`persistence.lingerMillis`). A writer that finds events already waiting takes them
+at once, so under a backlog the wait costs nothing. The wait saves commits only once every writer is
+busy: an arriving event goes to a writer that is idle before one that is waiting to fill its batch,
+so below roughly a few hundred events per second per replica each event is still committed alone,
+up to 10 milliseconds later than it would be without the wait. Batching helps most under load: on a
+replicated event store most of each commit is spent waiting for the standby, and a batch pays that
+wait once.
 
 | Metric | What it tells you |
 | --- | --- |
-| `devicechain_eventmanagement_persist_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. Batches that grow towards the limit mean the writers are busy. With 10 writers sharing one stream, batches seldom reach the limit even when storing is behind, so read this beside the consumer's backlog. |
+| `devicechain_eventmanagement_persist_batch_size` | Events per committed transaction. Small batches mean the writers are keeping up. Batches that grow towards the limit mean the writers are busy. With 10 writers sharing one stream, batches seldom reach the limit even when storing is behind, so read this beside the consumer's backlog. |
 | `devicechain_eventmanagement_persist_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were written again. An occasional increase is one refused event, or two when the database refused a row in a statement that carried several events, because finding the event takes a second attempt. A steady rate means something is refusing writes repeatedly, such as a deleted tenant whose devices are still sending: each batch that holds its events costs one extra transaction, however many of them it holds. Those events show up in `persist_messages_total` under `failed` or `retry`. |
 | `devicechain_eventmanagement_persist_inflight` | Events writers hold, including those waiting for their batch to commit. |
 
-`persist_duration_seconds` measures each event from when a writer takes it until its batch commits.
+`persist_duration_seconds` measures each event from when a writer takes it until its batch commits,
+including up to `persistence.lingerMillis` spent waiting for the batch to fill, so under light load
+its median sits about 10 milliseconds higher than with the wait off.
 
 ### Tuning it
 
@@ -512,7 +518,7 @@ batch pays that wait once.
 | --- | --- | --- |
 | `persistence.writers` | `10` | Writers running in parallel. Each holds one database connection while it writes, so it must be below the service's connection pool (`tsdbConfiguration.maxOpenConnections`, 20 unless set). More than half the pool is allowed, and logged at startup, because reads then compete with the writers for the rest. |
 | `persistence.maxBatch` | `64` | Most events committed in one transaction, from `1` to `64`. `1` turns batching off. |
-| `persistence.lingerMillis` | `0` | How long a writer waits for more events before committing a batch that is not full, up to `1000`. `0` commits what is already waiting. |
+| `persistence.lingerMillis` | `10` | How long a writer holding a batch that is not full waits for more events before committing it, up to `1000`. A writer that finds events waiting does not wait. `0` turns the wait off and commits what is already waiting. |
 
 The defaults are the largest batch and half of the default connection pool. When the
 `event-management` consumer's backlog keeps growing, storing is behind, whatever the batch size
@@ -525,6 +531,11 @@ not isolated. In an earlier measurement, two replicas of 20 writers each cut bat
 events, the event store's database used over 4 cores, and the whole pipeline stored less than one
 replica of 10. Writers are per replica. Out-of-range values stop the service from starting, and the
 error names the setting. The service logs the values it is using when it starts.
+
+The 10-millisecond wait has not yet been measured end to end. It is reasoned from a benchmark at
+6,000 events per second, where 59% of transactions stored a single event: the wait limits each
+writer to one commit per 10 milliseconds plus the commit itself. If it costs more latency than it
+saves, set `persistence.lingerMillis: 0`.
 
 ### Live device state {#live-state-projection}
 
@@ -552,15 +563,17 @@ it is merged again on its own.
 
 | Setting (`device-state` config) | Default | What it does |
 | --- | --- | --- |
-| `projection.writers` | `5` | Writers running in parallel, each holding one database connection while it merges. Must be below `rdbConfiguration.maxOpenConnections` (20 unless set). |
+| `projection.writers` | `10` | Writers running in parallel, each holding one database connection while it merges. Must be below `rdbConfiguration.maxOpenConnections` (20 unless set). |
 | `projection.maxBatch` | `32` | Most events merged in one transaction, from `1` to `64`. `1` turns batching off. |
 | `projection.lingerMillis` | `0` | How long a writer waits for more events before merging a batch that is not full, up to `1000`. `0` merges what is already waiting. |
 
-Leave `writers` at its default unless the batches are full and the database has room to spare.
 Batching is what carries throughput on a replicated database. Merges for one device wait for each
-other, so when devices send in turn, more writers mean more batches waiting on the same devices, and
-past a handful of writers throughput can fall rather than rise. The service logs the values it is
-using when it starts. If the live state still falls behind, `JetStreamDurableFallingBehind` fires for the
+other, so on a small fleet whose devices send in turn, more writers can mean more batches waiting on
+the same devices. On a three-node cloud cluster with about 1,700 to 1,900 devices, 5 writers fell
+behind from about 6,800 events per second, and 10 writers, with the service's CPU request raised,
+kept pace at 7,600; the two were changed together. The default is 10, half the default connection
+pool. Raise it further only when the batches are full and the database has room to spare. The
+service logs the values it is using when it starts. If the live state still falls behind, `JetStreamDurableFallingBehind` fires for the
 `device-state` consumer (see [A consumer that stays behind](#consumer-backlog)).
 
 ## Replication {#replication}

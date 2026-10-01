@@ -18,12 +18,14 @@ const (
 	// device activity.
 	InactivityRecheckInterval = 60 // seconds
 
-	// DefaultProjectionWriters is the number of projection writers when none is
-	// configured: the count that was fixed in code before it was configurable.
-	DefaultProjectionWriters = 5
+	// DefaultProjectionWriters is the number of projection writers when none is configured:
+	// half the default connection pool of 20, the most rdb.CheckWriterCount accepts without
+	// logging that reads compete with the writers. See ProjectionConfiguration.Writers.
+	DefaultProjectionWriters = 10
 	// DefaultProjectionMaxBatch is the most events one projection writer merges in one
-	// transaction. 32 is event-management's persistence default too, and it is this
-	// projection's measured best on a realistic fleet (see ProjectionConfiguration.MaxBatch).
+	// transaction: this projection's measured best on a small fleet sending in turn, and a
+	// cap batches did not reach on a cloud cluster (see ProjectionConfiguration.MaxBatch).
+	// event-management's persistence default is larger.
 	DefaultProjectionMaxBatch = 32
 )
 
@@ -37,21 +39,32 @@ type DeviceStateConfiguration struct {
 // ProjectionConfiguration sizes the writers that merge resolved events into the live state.
 // Each writer takes the events already waiting for it, up to MaxBatch, and merges them in
 // ONE transaction; an event is acknowledged only after that transaction commits. Every
-// value has a default, and 0 means "use it" — the same settings, bounds and defaults as
-// event-management's persistence writers.
+// value has a default, and 0 means "use it" — the same settings and bounds as
+// event-management's persistence writers, with defaults of its own.
 type ProjectionConfiguration struct {
 	// Writers is the number of writers merging events in parallel, each holding one pooled
 	// connection while it merges. Unset (0) defaults to DefaultProjectionWriters. It must
 	// be below the relational connection pool, which the GraphQL reads and the inactivity
 	// monitor share.
 	//
-	// Batching, not more writers, is what carries capacity on a replicated database: every
-	// commit waits for the standby, and a batch pays that wait once for many events. Merges
-	// for one device wait for each other (each locks the device's row), so on a fleet whose
-	// devices send in turn, more writers mean more batches waiting on each other's rows:
-	// measured, 10 writers merged fewer events a second than 5 (numbers on MaxBatch). The
-	// default stays at the count that was fixed before, because every writer holds a
-	// connection from a pool the platform's connection budget sizes at 20.
+	// Batching is what carries capacity on a replicated database: every commit waits for
+	// the standby, and a batch pays that wait once for many events. Merges for one device
+	// wait for each other (each locks the device's row), so on a small fleet whose devices
+	// send in turn more writers can mean more batches waiting on each other's rows: measured
+	// in-process on 200 devices, 10 writers merged fewer events a second than 5 (numbers on
+	// MaxBatch).
+	//
+	// On a three-node cloud cluster with a replicated relational store and about 1,700 to
+	// 1,900 devices each sending every 250 ms, 5 writers kept 95.7% of an offered 6,800
+	// events a second over three minutes and fell further behind above it, with batches
+	// averaging 17 to 19. 10 writers, with the service's CPU request raised to its use in
+	// the same run, kept pace at 7,600 with batches averaging about 15. The two changes were
+	// shown only together, and the request is what the chart now ships. In that run the
+	// relational primary used about 12% more CPU per merged event, and event-management,
+	// sharing a node with this service, stored fewer events than with the earlier defaults
+	// (6,280 against 6,796 a second at 6,800 offered); neither was separated from the other
+	// changes made at the same time. Every writer holds a connection from a pool the
+	// platform's connection budget sizes at 20, which is why the default is half of it.
 	Writers int
 
 	// MaxBatch is the most events one transaction merges, 1 to writerbatch.MaxSize. Unset (0)
@@ -65,7 +78,8 @@ type ProjectionConfiguration struct {
 	// At 5 writers, 16 reached about 2000 and 64 about 2700: past 32, concurrent batches
 	// share more devices and wait on each other's rows. A fleet where every event is its own
 	// device, which no batch ever waits on, did gain from 64 (about 4700 against 3750), which
-	// is why the realistic fleet decides.
+	// is why the realistic fleet decides. On the cloud cluster described on Writers, batches
+	// averaged 15 to 19, below 32, so the cap did not bind.
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more

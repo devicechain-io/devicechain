@@ -510,20 +510,26 @@ así que primero el lote se vuelve a escribir en una transacción nueva, evento 
 encontrarlo. Si la transacción falla por una causa que no se debe a ningún evento concreto, como una
 conexión perdida con la base de datos, cada uno de sus eventos se vuelve a escribir por separado.
 
-Con poco tráfico, un escritor encuentra un único evento esperando y lo confirma solo, así que el
-procesamiento por lotes no añade retraso. Los lotes crecen solo cuando los eventos llegan más rápido
-de lo que las confirmaciones individuales pueden absorber, que es cuando ayudan: en un almacén de
+Un escritor que encuentra menos eventos esperando que un lote completo espera hasta 10
+milisegundos a que lleguen más antes de confirmar (`persistence.lingerMillis`). Un escritor que
+encuentra eventos ya esperando los toma enseguida, así que con cola acumulada la espera no cuesta
+nada. La espera ahorra confirmaciones solo cuando todos los escritores están ocupados: un evento que
+llega va a un escritor libre antes que a uno que espera para llenar su lote, así que por debajo de
+unos pocos cientos de eventos por segundo por réplica cada evento se sigue confirmando solo, hasta
+10 milisegundos más tarde que sin la espera. Los lotes ayudan sobre todo con carga: en un almacén de
 eventos replicado, la mayor parte de cada confirmación se va en esperar a la réplica, y un lote paga
 esa espera una sola vez.
 
 | Métrica | Qué indica |
 | --- | --- |
-| `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. Lotes que crecen hacia el límite indican que los escritores están ocupados. Con 10 escritores compartiendo un mismo flujo, los lotes rara vez llegan al límite aunque el almacenamiento vaya retrasado, así que léala junto a la cola del consumidor. |
+| `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Lotes pequeños indican que los escritores van al día. Lotes que crecen hacia el límite indican que los escritores están ocupados. Con 10 escritores compartiendo un mismo flujo, los lotes rara vez llegan al límite aunque el almacenamiento vaya retrasado, así que léala junto a la cola del consumidor. |
 | `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado, o dos cuando la base de datos rechazó una fila de una sentencia que llevaba varios eventos, porque encontrar el evento requiere un segundo intento. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada lote que contiene sus eventos cuesta una transacción adicional, por muchos que contenga. Esos eventos aparecen en `persist_messages_total` como `failed` o `retry`. |
 | `devicechain_eventmanagement_persist_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
 
 `persist_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se
-confirma.
+confirma, incluido el tiempo, hasta `persistence.lingerMillis`, que espera a que el lote se llene,
+así que con poca carga su mediana queda unos 10 milisegundos por encima que con la espera
+desactivada.
 
 ### Ajustarlo
 
@@ -531,7 +537,7 @@ confirma.
 | --- | --- | --- |
 | `persistence.writers` | `10` | Escritores en paralelo. Cada uno ocupa una conexión a la base de datos mientras escribe, así que debe ser menor que el pool de conexiones del servicio (`tsdbConfiguration.maxOpenConnections`, 20 si no se indica). Se permite más de la mitad del pool, y se registra al arrancar, porque entonces las lecturas compiten con los escritores por el resto. |
 | `persistence.maxBatch` | `64` | Máximo de eventos confirmados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
-| `persistence.lingerMillis` | `0` | Cuánto espera un escritor a más eventos antes de confirmar un lote incompleto, hasta `1000`. `0` confirma lo que ya está esperando. |
+| `persistence.lingerMillis` | `10` | Cuánto espera un escritor con un lote incompleto a más eventos antes de confirmarlo, hasta `1000`. Un escritor que encuentra eventos esperando no espera. `0` desactiva la espera y confirma lo que ya está esperando. |
 
 Los valores por defecto son el lote más grande y la mitad del pool de conexiones por defecto. Si la
 cola del consumidor de `event-management` sigue creciendo, el almacenamiento va retrasado, sea cual
@@ -546,6 +552,11 @@ réplicas de 20 escritores cada una redujeron los lotes a unos 3 eventos, la bas
 almacén de eventos usó más de 4 núcleos, y el conjunto almacenó menos que una réplica de 10. Los
 escritores son por réplica. Un valor fuera de rango impide que el servicio arranque, y el error
 nombra el ajuste. El servicio registra los valores que usa al arrancar.
+
+La espera de 10 milisegundos aún no se ha medido de extremo a extremo. Se razona a partir de una
+prueba a 6000 eventos por segundo, en la que el 59% de las transacciones almacenaba un único evento:
+la espera limita cada escritor a una confirmación cada 10 milisegundos más lo que tarda la propia
+confirmación. Si cuesta más latencia de la que ahorra, indique `persistence.lingerMillis: 0`.
 
 ### Estado en vivo de los dispositivos {#live-state-projection}
 
@@ -576,16 +587,18 @@ confirma.
 
 | Ajuste (configuración de `device-state`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
-| `projection.writers` | `5` | Escritores en paralelo; cada uno ocupa una conexión a la base de datos mientras fusiona. Debe ser menor que `rdbConfiguration.maxOpenConnections` (20 si no se indica). |
+| `projection.writers` | `10` | Escritores en paralelo; cada uno ocupa una conexión a la base de datos mientras fusiona. Debe ser menor que `rdbConfiguration.maxOpenConnections` (20 si no se indica). |
 | `projection.maxBatch` | `32` | Máximo de eventos fusionados en una transacción, de `1` a `64`. `1` desactiva los lotes. |
 | `projection.lingerMillis` | `0` | Cuánto espera un escritor a más eventos antes de fusionar un lote incompleto, hasta `1000`. `0` fusiona lo que ya está esperando. |
 
-Deje `writers` en su valor por defecto salvo que los lotes vayan llenos y la base de datos tenga
-margen. En una base de datos replicada, lo que sostiene el rendimiento son los lotes. Las fusiones de
-un mismo dispositivo se esperan entre sí, así que cuando los dispositivos envían por turnos, más
-escritores significan más lotes esperando a los mismos dispositivos, y a partir de unos pocos
-escritores el rendimiento puede bajar en lugar de subir. El servicio registra los valores que usa al
-arrancar. Si el
+En una base de datos replicada, lo que sostiene el rendimiento son los lotes. Las fusiones de un
+mismo dispositivo se esperan entre sí, así que en una flota pequeña cuyos dispositivos envían por
+turnos, más escritores pueden significar más lotes esperando a los mismos dispositivos. En un
+clúster en la nube de tres nodos con unos 1700 a 1900 dispositivos, 5 escritores se quedaron atrás a
+partir de unos 6800 eventos por segundo, y 10, con la solicitud de CPU del servicio aumentada,
+mantuvieron el ritmo a 7600; los dos cambios se hicieron a la vez. El valor por defecto es 10, la
+mitad del pool de conexiones por defecto. Auméntelo más solo si los lotes van llenos y la base de
+datos tiene margen. El servicio registra los valores que usa al arrancar. Si el
 estado en vivo sigue quedándose atrás, `JetStreamDurableFallingBehind` salta para el consumidor de
 `device-state` (consulte [Un consumidor que se queda atrás](#consumer-backlog)).
 

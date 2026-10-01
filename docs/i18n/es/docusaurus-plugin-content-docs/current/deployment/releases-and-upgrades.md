@@ -3821,8 +3821,9 @@ mitad del pool se da a los escritores; fije `persistence.writers` en la mitad de
 evitarlo.
 
 - Una instalación que fija `persistence.writers` o `persistence.maxBatch` conserva sus valores.
-- A ritmos en los que un escritor encuentra un evento cada vez, no cambia nada: lo confirma solo,
-  como antes.
+- A ritmos en los que un escritor encuentra un evento cada vez, ahora espera hasta
+  `persistence.lingerMillis` (10 milisegundos por defecto) antes de confirmarlo; consulte
+  [el apartado de los valores del flujo de eventos](#next-pipeline-defaults).
 - Con cola acumulada, confirman a la vez hasta 10 escritores en lugar de 5, del mismo pool de 20.
   El techo del pool no cambia, así que las conexiones que el almacén de eventos reserva para
   `event-management` siguen cubriéndolo.
@@ -4404,10 +4405,9 @@ que la instancia se vuelva a crear.
 - `event-processing` tiene ahora una solicitud medida, así que un `resources.requests.cpu` de nivel
   superior tampoco le llega ya. Define la suya en
   `functionalAreas.event-processing.resources.requests`, o establece `useMeasuredRequests: false`.
-- `event-processing` toma su límite de CPU de `resources.limits.cpu` de nivel superior, así que un
-  límite de nivel superior por debajo de 400m ahora se rechaza al generar el chart, nombrando
-  `measuredRequests`. Aumenta el límite, define la solicitud propia del servicio o establece
-  `useMeasuredRequests: false`.
+- `event-processing` tiene ahora un límite de CPU propio, así que un `resources.limits.cpu` de
+  nivel superior ya no le llega; consulta
+  [el apartado de los valores del flujo de eventos](#next-pipeline-defaults).
 - Una clave nueva, `eventPathSpread`, está activada en los cinco servicios. Un archivo de valores
   que la active en otro servicio lo reparte junto con ellos.
 
@@ -4558,6 +4558,65 @@ kubectl -n dci-<instance> patch objectstores.barmancloud.cnpg.io dc-tsdb-backup 
 El plugin de respaldo vuelve a leer el destino para cada segmento que archiva, así que los
 segmentos archivados a partir de ese momento se comprimen con zstd, y ninguna base de datos se
 reinicia. Los segmentos que ya están en el archivo se quedan como están.
+
+#### device-state fusiona con 10 escritores, event-management espera hasta 10 ms para llenar un lote y la detección dispone de un núcleo completo {#next-pipeline-defaults}
+
+Cambian tres valores predeterminados de las etapas que primero se quedaron atrás en una prueba en un
+clúster en la nube de tres nodos, a entre 6000 y 7600 eventos por segundo.
+
+- **`device-state` ejecuta 10 escritores de proyección en lugar de 5** (`projection.writers`). Con
+  5, el estado en vivo de los dispositivos mantuvo el 95,7% de 6800 eventos por segundo ofrecidos
+  durante tres minutos y se retrasó más por encima de ese ritmo. Con 10, y la solicitud de CPU del
+  servicio elevada a lo que usa (como la incluye esta versión), mantuvo el ritmo a 7600. Los dos
+  cambios se hicieron a la vez, así que no se separó la parte de cada uno. En la misma ejecución,
+  `event-management`, que compartía nodo con `device-state`, almacenó menos eventos que con los
+  valores anteriores (6280 frente a 6796 por segundo con 6800 ofrecidos); tampoco eso se separó de
+  los demás cambios. `projection.maxBatch` sigue en `32`: los lotes promediaron unos 15 eventos,
+  por debajo.
+- **`event-management` espera hasta 10 milisegundos para llenar un lote**
+  (`persistence.lingerMillis`, antes `0`). En la misma prueba, el 59% de sus transacciones
+  almacenaba un único evento, cada una con su propia confirmación y su propia espera a la réplica.
+  Un escritor que encuentra menos eventos que un lote completo espera ahora hasta 10 milisegundos a
+  que lleguen más; uno que encuentra eventos ya esperando los toma enseguida, así que con cola
+  acumulada no cambia nada. La espera ahorra confirmaciones solo cuando todos los escritores están
+  ocupados: por debajo de unos pocos cientos de eventos por segundo por réplica, cada evento se
+  sigue confirmando solo, hasta 10 milisegundos más tarde que antes, y `persist_duration_seconds`
+  sube más o menos eso. El nuevo valor se ha razonado, aún no se ha medido de extremo a extremo.
+  Indica `persistence.lingerMillis: 0` para desactivar la espera.
+- **El límite de CPU de `event-processing` es de 1 núcleo en lugar de 500m.** Con 500m, su límite
+  lo frenó en un 5% de los periodos de planificación a 6000 eventos por segundo, y su cola llegó a
+  unos 41 000 y 93 000 eventos en dos ejecuciones de 10 minutos a ese ritmo. Con un límite de 1
+  núcleo, una solicitud mayor y otra ubicación, su cola tras tres minutos a 6800 fue un tercio de
+  la que tenía con 500m; con solo el límite de 1 núcleo, en un nodo más ocupado, fue mayor. No se
+  aisló qué causó el retraso, y no se afirma que la detección mantenga el ritmo a estos niveles.
+
+**Antes de actualizar:** si indicaste `rdbConfiguration.maxOpenConnections` para `device-state` en
+`10` o menos y no indicaste `projection.writers`, el nuevo pod de `device-state` no arranca, y su
+error nombra `projection.writers` y el tamaño del pool. La actualización progresiva mantiene el pod
+anterior en marcha fusionando el estado en vivo, y `dcctl upgrade` falla tras esperar, con la
+instancia actualizada a medias. Indica `projection.writers` por debajo de tu pool (tu valor
+predeterminado anterior era `5`), o quita el ajuste del pool para usar el predeterminado de 20, y
+vuelve a ejecutar la actualización. Los pools de 11 a 19 arrancan y registran al iniciar que más de
+la mitad del pool se dedica a escritores.
+
+- Una instalación que indica `projection.writers`, `persistence.lingerMillis` o
+  `functionalAreas.event-processing.resources.limits.cpu` conserva su valor. Un
+  `persistence.lingerMillis: 0` explícito sigue significando sin espera.
+- Un `ResourceQuota` o `LimitRange` en el espacio de nombres de la instancia puede rechazar el nuevo
+  límite de 1 núcleo de `event-processing`.
+- Las instalaciones con `--compact` reciben los mismos valores. Sus solicitudes no cambian, y un
+  límite de CPU no reserva nada en un nodo.
+- No cambian ni los datos almacenados ni el esquema, así que volver a la versión anterior no requiere
+  nada.
+
+**Si instalas el chart tú mismo, con tus propios valores:**
+
+- Un `resources.limits.cpu` de nivel superior ya no llega a `event-processing`. Uno por encima de 1
+  núcleo ahora lo baja a 1, y uno por debajo de 1 núcleo ahora lo sube a 1. Define el suyo en
+  `functionalAreas.event-processing.resources.limits`.
+- Con `useMeasuredRequests: false`, un `resources.requests.cpu` de nivel superior por encima de 1
+  núcleo sigue llegando a `event-processing`, y ahora se rechaza al generar el chart porque supera
+  el límite propio de ese servicio. Define el límite o la solicitud propios de `event-processing`.
 
 ### La transición única a la ingesta duradera
 
