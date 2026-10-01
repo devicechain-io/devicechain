@@ -65,6 +65,10 @@ type InstallOptions struct {
 	// store; a weekly copy still goes to the store. Empty keeps object-store base
 	// backups. Every instance on the cluster follows it.
 	BackupSnapshotClass string
+	// DatabasePlacement confines the relational store, and the event store of every
+	// instance bootstrapped on the cluster, to the nodes it names. Settled from argv by
+	// ParseDatabasePlacement; the zero value places nothing.
+	DatabasePlacement DatabasePlacement
 	// MaxConnections is the relational store's connection budget. Zero keeps what the
 	// cluster was installed with, or the default on a first install.
 	MaxConnections int
@@ -149,6 +153,12 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := checkHaNodeCapacity(ctx, st); err != nil {
 		return err
 	}
+	// Before the dry-run branch and before every write: a placement the nodes cannot
+	// hold is refused with nothing taken but the claim. Counted against the default
+	// instance count for --ha; the cnpg-cluster module counts against the real one.
+	if err := checkDatabasePlacement(ctx, st); err != nil {
+		return err
+	}
 	if st.DryRun {
 		// Build, then operator, then the long OpenTofu apply — the order the real
 		// run performs them in. A rehearsal whose steps are in a different order
@@ -165,6 +175,9 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 			wouldDo("refuse, before any write, a VolumeSnapshotClass " + class + " that does not exist, " +
 				"does not use deletionPolicy Delete, or belongs to another driver than the database volumes' " +
 				"-- NOT rehearsed, because the cluster may not exist yet")
+		}
+		if p := databasePlacement(st); !p.IsZero() {
+			wouldDo("place the relational store, and every instance's event store, on " + p.describe())
 		}
 		wouldDo("install the operator — CRDs, RBAC and the controller Deployment at " +
 			operatorImageRef(st) + " — in namespace " + st.OperatorNamespace)
@@ -363,6 +376,7 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		BackupDestination: opts.BackupDestination,
 		// Read through backupSnapshotClass, which drops it when backups are off.
 		BackupSnapshotClass: opts.BackupSnapshotClass,
+		DatabasePlacement:   opts.DatabasePlacement,
 		MaxConnections:      opts.MaxConnections,
 		Restore:             opts.Restore,
 		Values:              map[string]string{},
@@ -591,6 +605,9 @@ func describeInstallSettings(s InstallSettings) string {
 	if s.BackupSnapshotClass != "" {
 		parts = append(parts, fmt.Sprintf("volume-snapshot base backups (%s)", s.BackupSnapshotClass))
 	}
+	if !s.DatabasePlacement.IsZero() {
+		parts = append(parts, "databases on "+s.DatabasePlacement.describe())
+	}
 	return strings.Join(parts, ", ")
 }
 
@@ -662,6 +679,10 @@ func reportInstall(st *State, provider string) {
 		fmt.Printf("  %s %s\n", color.WhiteString("Base backups:"), color.GreenString(
 			"daily volume snapshots (VolumeSnapshotClass %s), pruned by the operator to each store's window; "+
 				"a weekly one in the backup store, which is what a restore reads", class))
+	}
+	if p := databasePlacement(st); !p.IsZero() {
+		fmt.Printf("  %s %s\n", color.WhiteString("Databases on:"), color.GreenString(
+			"%s (the relational store, and every instance's event store)", p.describe()))
 	}
 	if p := st.Values["backupServerNameRdb"]; p != "" && databaseBackupsEnabled(st) {
 		fmt.Printf("  %s %s\n", color.WhiteString("Relational archive:"), color.GreenString(p))

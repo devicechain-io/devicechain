@@ -63,6 +63,20 @@ topologyKey: kubernetes.io/hostname
 # behaviour rather than an aggressive eviction it never asked for.
 nodeLossTolerationSeconds: null
 
+# Where this store's instances may run (`dcctl install --database-node-selector` /
+# `--database-toleration`). Both empty by default: the scheduler places them
+# anywhere, which is what every install did before these existed, and the Cluster
+# renders neither key.
+#
+# nodeSelector is rendered as the Cluster's spec.affinity.nodeSelector, so every
+# instance pod (and the job that creates the first instance's volume) runs only on
+# nodes carrying ALL of these labels. tolerations let those pods onto nodes tainted
+# to keep everything else off; they are MERGED with the node-loss pair above into
+# one list, never a replacement for it. Each entry is {key, operator, value,
+# effect}; operator defaults to Equal, and an empty value or effect is not rendered.
+nodeSelector: {}
+tolerations: []
+
 # CNPG's own default. The upstream chart sets this true; the platform never
 # connects as a superuser, so a superuser password would be a standing
 # credential with no consumer.

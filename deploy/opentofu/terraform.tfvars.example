@@ -125,3 +125,9 @@
 # monitoring_prometheus_retention   = "15d"
 # monitoring_prometheus_storage     = "20Gi"
 # monitoring_storage_class          = "retain-ssd"
+
+# Database placement (dcctl install --database-node-selector / --database-toleration).
+# Both roots declare these; dcctl passes them to both, so the relational store and
+# every instance's event store land on the same nodes.
+# database_node_selector = { "devicechain.io/pool" = "database" }
+# database_tolerations   = [{ key = "dedicated", value = "database", effect = "NoSchedule" }]

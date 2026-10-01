@@ -194,7 +194,7 @@ func TestTheSettledRestorePlanReachesTheInstallEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := installOptions(nil, plan, bootstrap.ImageSource{})
+	opts := installOptions(nil, plan, bootstrap.ImageSource{}, bootstrap.DatabasePlacement{})
 
 	if opts.Restore != plan {
 		t.Fatalf("the install engine was handed %+v, not the settled plan %+v", opts.Restore, plan)
@@ -245,7 +245,7 @@ func parseInstallImageFlags(t *testing.T, argv ...string) {
 // is the shape this arc exists to remove rather than relocate.
 func TestTheSettledImageSourceReachesTheInstallEngine(t *testing.T) {
 	img := bootstrap.ImageSource{Registry: "ghcr.io/example", Version: "v0.17.0"}
-	opts := installOptions(nil, bootstrap.RestorePlan{}, img)
+	opts := installOptions(nil, bootstrap.RestorePlan{}, img, bootstrap.DatabasePlacement{})
 
 	if opts.ImageRegistry != img.Registry || opts.ImageVersion != img.Version {
 		t.Fatalf("the install engine was told to deploy the operator from %q at %q, "+
@@ -265,7 +265,7 @@ func TestTheBuildFlagReachesTheInstallEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := installOptions(nil, bootstrap.RestorePlan{}, img)
+	opts := installOptions(nil, bootstrap.RestorePlan{}, img, bootstrap.DatabasePlacement{})
 
 	if !opts.BuildImages {
 		t.Fatal("--build was dropped on the way to the install engine, so the operator " +

@@ -43,7 +43,10 @@ const (
 	// cannot read them would build an instance whose event store took full copies on a
 	// cluster whose relational store takes snapshots -- and, re-installing, would drop
 	// the setting without seeing it change.
-	installRecordSchema = 4
+	// 5: settings.databasePlacement and outputs.databasePlacement. A dcctl that cannot
+	// read them would bootstrap an event store off the nodes the relational store was
+	// placed on, and, re-installing, would drop the placement without seeing it change.
+	installRecordSchema = 5
 
 	installPhaseApplying  = "applying"
 	installPhaseInstalled = "installed"
@@ -103,6 +106,9 @@ type InstallSettings struct {
 	// takes its scheduled base backup with; empty when those go to the object store.
 	// Schema 4.
 	BackupSnapshotClass string `json:"backupSnapshotClass,omitempty"`
+	// DatabasePlacement is the nodes every database on the cluster is confined to; zero
+	// when the scheduler chooses. Schema 5.
+	DatabasePlacement DatabasePlacement `json:"databasePlacement"`
 }
 
 // InstallOutputs is what the cluster prerequisites BUILT, read back from the cluster
@@ -119,6 +125,9 @@ type InstallOutputs struct {
 	// BackupSnapshotClass is the class the relational store's chart was handed, read
 	// back from the cluster apply; validate holds it equal to the setting. Schema 4.
 	BackupSnapshotClass string `json:"backupSnapshotClass,omitempty"`
+	// DatabasePlacement is the placement the relational store's chart was handed, read
+	// back from the cluster apply; validate holds it equal to the setting. Schema 5.
+	DatabasePlacement DatabasePlacement `json:"databasePlacement"`
 }
 
 // installSettingsFor is what this run applies the cluster root with. Every field comes
@@ -134,6 +143,7 @@ func installSettingsFor(st *State) InstallSettings {
 		DatabaseBackups:     databaseBackupsEnabled(st),
 		BackupsExternal:     databaseBackupsEnabled(st) && backupsAreExternal(st),
 		BackupSnapshotClass: backupSnapshotClass(st),
+		DatabasePlacement:   databasePlacement(st),
 	}
 }
 
@@ -278,6 +288,20 @@ func (r InstallRecord) validate(liveClusterUID string) error {
 		return fmt.Errorf("the install record asks for volume-snapshot base backups with class %q but "+
 			"the cluster apply reports %q; an instance built from it would back up differently from "+
 			"the relational store", r.Settings.BackupSnapshotClass, r.Outputs.BackupSnapshotClass)
+	}
+	// The placement is canonical or it is not one dcctl wrote, and the apply delivered
+	// what was asked: every instance's event store is placed by these settings.
+	if p := r.Settings.DatabasePlacement; !p.IsZero() {
+		canon, err := ParseDatabasePlacement(splitPlacementList(p.NodeSelector), splitPlacementList(p.Tolerations))
+		if err != nil || canon != p {
+			return fmt.Errorf("the install record's database placement cannot be read (%+v); an instance "+
+				"built from it would place its event store by a guess", p)
+		}
+	}
+	if r.Settings.DatabasePlacement != r.Outputs.DatabasePlacement {
+		return fmt.Errorf("the install record asks for the databases on %s but the cluster apply reports %s; "+
+			"an instance built from it would place its event store differently from the relational store",
+			r.Settings.DatabasePlacement.describe(), r.Outputs.DatabasePlacement.describe())
 	}
 	if r.Settings.CNPG && r.Outputs.CNPGNamespace == "" {
 		return fmt.Errorf("the install record says the database operator is installed but does " +

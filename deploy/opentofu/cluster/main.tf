@@ -500,6 +500,12 @@ module "cnpg_rdb" {
   storage            = var.postgres_storage
   storage_class      = var.postgres_storage_class
 
+  # Where this store's instances may run (dcctl install --database-node-selector /
+  # --database-toleration). Both stores take the same pair: the setting is the
+  # cluster's, and an instance's event store follows the install record.
+  node_selector = var.database_node_selector
+  tolerations   = var.database_tolerations
+
   # 3 under --ha, 1 otherwise, unless pinned explicitly. Both halves of the
   # topology come from ONE value; see the postgres_instances variable for why 2
   # is refused rather than merely discouraged.

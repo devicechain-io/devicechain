@@ -138,6 +138,8 @@ func TestTheClusterApplysSnapshotClassIsRecorded(t *testing.T) {
 			"namespace":                    {Value: []byte(`"dc-system"`)},
 			"postgres_cluster_name":        {Value: []byte(`"dc-rdb"`)},
 			"postgres_max_connections":     {Value: []byte(`600`)},
+			"database_node_selector":       {Value: []byte(`{}`)},
+			"database_tolerations":         {Value: []byte(`[]`)},
 		}
 	}
 	outputs := base()

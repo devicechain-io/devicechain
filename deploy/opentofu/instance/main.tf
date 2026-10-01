@@ -356,6 +356,12 @@ module "cnpg_tsdb" {
   storage            = var.timescale_storage
   storage_class      = var.timescale_storage_class
 
+  # Where this store's instances may run (dcctl install --database-node-selector /
+  # --database-toleration). Both stores take the same pair: the setting is the
+  # cluster's, and an instance's event store follows the install record.
+  node_selector = var.database_node_selector
+  tolerations   = var.database_tolerations
+
   instances = var.timescale_instances != 0 ? var.timescale_instances : (var.ha ? 3 : 1)
 
   # The read-only SQL/BI surface's roles.

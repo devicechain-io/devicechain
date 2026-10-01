@@ -282,6 +282,26 @@ line, so neither number would mean what it says.
   {{- fail (printf "cnpg-cluster %q: stopDelay %d leaves %d seconds for the fast shutdown after smartShutdownTimeout %d, and CloudNativePG documents a floor of 15. At or below smartShutdownTimeout the smart phase is skipped with only a log line to say so, so neither value would do what it says." $name $stop (sub $stop $smart) $smart) -}}
 {{- end -}}
 
+{{- /*
+PLACEMENT (nodeSelector / tolerations, see values.yaml). Each refusal below is a
+configuration that renders and applies cleanly and is wrong where it lands: the
+first two silently cancel the node-loss fuse rendered further down (a toleration
+with no key and operator Exists tolerates EVERY taint, including the not-ready and
+unreachable ones), and the third is a pod spec Kubernetes rejects, so the Cluster
+would never get an instance. `fail`s, for the coverage control's sake, as above.
+*/ -}}
+{{- range $i, $t := .Values.tolerations -}}
+  {{- if not $t.key -}}
+  {{- fail (printf "cnpg-cluster %q: toleration %d has no key. With operator Exists an empty key tolerates every taint, including the not-ready and unreachable taints nodeLossTolerationSeconds answers, so a database on a dead node would never be evicted. Name the key of the taint your database nodes carry." $name $i) -}}
+  {{- end -}}
+  {{- if hasPrefix "node.kubernetes.io/" $t.key -}}
+  {{- fail (printf "cnpg-cluster %q: toleration %q names a taint Kubernetes itself puts on failing nodes. Tolerating it overrides nodeLossTolerationSeconds. Tolerate the taint your database nodes carry instead." $name $t.key) -}}
+  {{- end -}}
+  {{- if and (eq ($t.operator | default "Equal") "Exists") $t.value -}}
+  {{- fail (printf "cnpg-cluster %q: toleration %q has operator Exists and value %q. Kubernetes refuses a pod with that toleration, so no instance would ever be created. Drop the value to tolerate any value, or use operator Equal." $name $t.key $t.value) -}}
+  {{- end -}}
+{{- end -}}
+
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -510,6 +530,18 @@ spec:
               matchExpressions:
                 - key: kubernetes.io/metadata.name
                   operator: Exists
+    {{- with .Values.nodeSelector }}
+    {{- /*
+    Every instance pod, and the job that creates the first instance's volume, runs
+    only on nodes carrying all of these labels. The cross-store preference above
+    still applies, among those nodes: two primaries on a one-node selection share it.
+    Rendered only when set, so an unplaced store's Cluster is unchanged.
+    */}}
+    nodeSelector:
+      {{- range $k, $v := . }}
+      {{ $k | quote }}: {{ $v | quote }}
+      {{- end }}
+    {{- end }}
     {{- /*
     🔴 `if not (kindIs "invalid" ...)`, NOT `with`. `with` is falsy on 0, and 0
     is a value an operator may legitimately want here -- it means "evict the
@@ -518,8 +550,7 @@ spec:
     aggressive request in the file producing the least aggressive behaviour. Only
     an unset value means "leave Kubernetes' default alone".
     */}}
-    {{- if not (kindIs "invalid" .Values.nodeLossTolerationSeconds) }}
-    {{- $tol := .Values.nodeLossTolerationSeconds | int }}
+    {{- $nodeLoss := not (kindIs "invalid" .Values.nodeLossTolerationSeconds) }}
     {{- /*
     Kubernetes' DefaultTolerationSeconds admission plugin injects
     `tolerationSeconds: 300` onto every pod that does not already tolerate these
@@ -565,7 +596,18 @@ spec:
     where the old primary rejoins as a replica when its node returns. All three
     drills confirmed that rejoin, with RPO 0 every time.
     */}}
+    {{- /*
+    ONE list, carrying the node-loss pair (when the fuse is set) and the database
+    tolerations (when placement asks for them). A second `tolerations:` key would be
+    a duplicate YAML key, and the parser keeps only one of the two -- either the
+    node-loss fuse or the database nodes' taint would vanish without an error. Only
+    the fields that are set are rendered: a null in the CRD is pruned server-side,
+    which would make the rendered spec and the stored object disagree.
+    */}}
+    {{- if or $nodeLoss .Values.tolerations }}
     tolerations:
+      {{- if $nodeLoss }}
+      {{- $tol := .Values.nodeLossTolerationSeconds | int }}
       - key: node.kubernetes.io/not-ready
         operator: Exists
         effect: NoExecute
@@ -574,6 +616,17 @@ spec:
         operator: Exists
         effect: NoExecute
         tolerationSeconds: {{ $tol }}
+      {{- end }}
+      {{- range .Values.tolerations }}
+      - key: {{ .key | quote }}
+        operator: {{ .operator | default "Equal" }}
+        {{- with .value }}
+        value: {{ . | quote }}
+        {{- end }}
+        {{- with .effect }}
+        effect: {{ . }}
+        {{- end }}
+      {{- end }}
     {{- end }}
 
   postgresql:

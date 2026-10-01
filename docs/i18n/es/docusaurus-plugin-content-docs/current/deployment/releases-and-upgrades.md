@@ -4324,8 +4324,9 @@ No hay que hacer nada en la actualización.
 La configuración de `deploy/gke` creaba un único grupo de tres nodos de 8 vCPU y 32 GB. Ahora crea
 un grupo `database` de tres nodos de 4 vCPU y 16 GB y un grupo `services` de tres nodos de 4 vCPU y
 4 GB, las mismas 24 vCPU en total. El grupo `database` tiene un taint, así que ningún pod de
-DeviceChain se ejecuta en él si no se coloca allí, y `dcctl install` todavía no coloca allí las
-bases de datos: hasta que lo haga, se ejecutan en el grupo `services` con todo lo demás. El clúster
+DeviceChain se ejecuta en él si no se coloca allí; `dcctl install --database-node-selector` y
+`--database-toleration` colocan allí las bases de datos (consulta
+[Las bases de datos pueden ejecutarse en los nodos que elijas](#next-database-placement)). El clúster
 tiene seis discos de arranque en lugar de tres, así que una instalación `--ha` predeterminada con
 una instancia necesita más cuota regional de SSD de la que permite un proyecto nuevo de Google
 Cloud: la guía indica la cuota que hay que solicitar.
@@ -4341,6 +4342,23 @@ solo avisa de un nombre antiguo que quede en un `terraform.tfvars` e ignora su v
 clúster recreado con ese archivo sin cambios se crea con los valores predeterminados: un
 `node_disk_type = "pd-standard"` elegido para no superar la cuota de SSD se descarta, y los discos de
 arranque vuelven a ser `pd-balanced`. Pasa cada ajuste a los nombres nuevos antes de aplicar.
+
+#### Las bases de datos pueden ejecutarse en los nodos que elijas {#next-database-placement}
+
+`dcctl install` admite `--database-node-selector` y `--database-toleration`. Colocan el almacén
+relacional compartido, y el almacén de eventos de cada instancia arrancada en el clúster, en los
+nodos que llevan una etiqueta, incluidos nodos con un taint que mantiene fuera otras cargas.
+`dcctl bootstrap` no tiene esos flags: cada instancia sigue a la instalación. Antes de instalar nada,
+install rechaza una ubicación con menos nodos utilizables que instancias tiene una base de datos, y
+cada bootstrap vuelve a comprobarlo. NATS, los servicios y el almacén de objetos de respaldo no se
+colocan. Consulta [Ubicación de las bases de datos](./bootstrap.md#database-placement).
+
+No cambia nada en un clúster instalado sin estos flags. El registro de instalación cambia de nuevo:
+vuelve a ejecutar `dcctl install` con esta versión antes de cualquier bootstrap, upgrade o destroy,
+como ya exige
+[Los respaldos base de las bases de datos pueden ser instantáneas de volumen](#next-snapshot-backups).
+Añadir una ubicación a un clúster que ya ejecuta instancias se rechaza, como cualquier otro cambio en
+sus ajustes.
 
 ### La transición única a la ingesta duradera
 

@@ -26,6 +26,8 @@ var (
 	installAllowLegacyDb     bool
 	installBackupCredentials string
 	installBackupSnapClass   string
+	installDBNodeSelector    []string
+	installDBTolerations     []string
 	installMaxConnections    int
 	installRestoreRdbFrom    string
 	installRestoreRdbAt      string
@@ -52,6 +54,12 @@ func installRestoreFlagsFromArgv(backupsEnabled bool) bootstrap.RestoreFlags {
 		RdbTargetTime:  installRestoreRdbAt,
 		BackupsEnabled: backupsEnabled,
 	}
+}
+
+// installPlacementFromArgv settles --database-node-selector and --database-toleration.
+// Its own function so the step RunE takes can be exercised with the flags parsed.
+func installPlacementFromArgv() (bootstrap.DatabasePlacement, error) {
+	return bootstrap.ParseDatabasePlacement(installDBNodeSelector, installDBTolerations)
 }
 
 // resolveInstallDevMode checks the --dev preset against the flags the user set
@@ -138,7 +146,7 @@ func resolveCompactMode(changed func(string) bool, noTLS, noMonitoring bool) com
 // --restore-rdb-from` would report a perfectly ordinary, perfectly green install of an
 // EMPTY relational store, during the recovery it was run for.
 func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.RestorePlan,
-	img bootstrap.ImageSource) bootstrap.InstallOptions {
+	img bootstrap.ImageSource, placement bootstrap.DatabasePlacement) bootstrap.InstallOptions {
 	return bootstrap.InstallOptions{
 		Options: bootstrap.Options{
 			KubeContext:          installKubeContext,
@@ -159,9 +167,12 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		// Checked from argv by ValidateBackupSnapshotClass, and against the cluster by
 		// the install itself before anything is written.
 		BackupSnapshotClass: installBackupSnapClass,
-		MaxConnections:      installMaxConnections,
-		Restore:             restore,
-		DcctlVersion:        Version,
+		// Parsed from argv by ParseDatabasePlacement, and checked against the cluster's
+		// nodes by the install itself before anything is written.
+		DatabasePlacement: placement,
+		MaxConnections:    installMaxConnections,
+		Restore:           restore,
+		DcctlVersion:      Version,
 	}
 }
 
@@ -188,6 +199,10 @@ The operator and its CRDs are the cluster's, not any instance's — there is one
 shared by every instance, so the release a cluster is prepared at is chosen here with
 --version, and moving it is this command's job rather than a side effect of building
 or upgrading one instance.
+
+--database-node-selector places the relational store, and the event store of every
+instance bootstrapped on the cluster, on the nodes it names; --database-toleration lets
+them onto nodes tainted to keep other workloads off.
 
 Running it again converges. Changing its settings is refused while any instance runs on
 the cluster, with one exception: the connection budget may be raised.`,
@@ -255,6 +270,14 @@ the cluster, with one exception: the connection budget may be raised.`,
 			return err
 		}
 
+		// Placement: the syntax, and a toleration with nothing to place, are knowable from
+		// argv. Whether the nodes can take the databases needs the cluster, and the
+		// install asks it before writing anything.
+		placement, err := installPlacementFromArgv()
+		if err != nil {
+			return err
+		}
+
 		// 🔴 SETTLED FROM ARGV, BEFORE ANY CLUSTER IS TOUCHED. Every way a restore's
 		// flags can be wrong — a recovery target with nothing to recover, a timestamp
 		// with no offset, an archive on a cluster that has no plugin to read it — is
@@ -284,7 +307,7 @@ the cluster, with one exception: the connection budget may be raised.`,
 			}
 		}
 
-		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan, imageSource))
+		return bootstrap.Install(cmd.Context(), provider, installOptions(backupDestination, restorePlan, imageSource, placement))
 	},
 	SilenceUsage: true,
 }
@@ -312,6 +335,15 @@ func init() {
 			"archiving is unchanged, and restores still read the store. The class must exist, use "+
 			"deletionPolicy Delete, and belong to the driver that provisions the database volumes. Every "+
 			"instance on the cluster follows it")
+	// Database placement. Install flags only: every instance's event store follows the
+	// install record, so a bootstrap has none of its own.
+	installCmd.Flags().StringSliceVar(&installDBNodeSelector, "database-node-selector", nil,
+		"run the databases only on nodes with this label, as key=value (repeatable; every label must "+
+			"match). Applies to the relational store and to the event store of every instance "+
+			"bootstrapped on the cluster. Refused when too few schedulable nodes match")
+	installCmd.Flags().StringSliceVar(&installDBTolerations, "database-toleration", nil,
+		"let the databases run on nodes with this taint, written as kubectl taint writes it: "+
+			"key=value:Effect, or key:Effect for any value (repeatable). Needs --database-node-selector")
 	// Database restore (ADR-028 / ADR-020 A2.5). These are the CLUSTER's half: the
 	// relational store is installed once per cluster and shared by every instance, so
 	// recovering it is an install operation. The event store is an instance's, and

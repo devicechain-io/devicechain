@@ -481,6 +481,31 @@ variable "backup_object_store_schedule" {
   }
 }
 
+variable "database_node_selector" {
+  description = <<-EOT
+    Node labels the database instances must run on: the relational store's in the
+    cluster root, and every instance's event store in the instance root. dcctl sets it
+    in BOTH roots from `dcctl install --database-node-selector`, recorded in the
+    install record, so an instance's event store follows the install. Empty (the
+    default) places nothing. Validated once, in modules/cnpg-cluster.
+  EOT
+  type        = map(string)
+  default     = {}
+  nullable    = false
+}
+
+variable "database_tolerations" {
+  description = "Taints the database instances tolerate, from `dcctl install --database-toleration`, merged with the node-loss tolerations. Needs database_node_selector. Validated once, in modules/cnpg-cluster."
+  type = list(object({
+    key      = string
+    operator = optional(string, "Equal")
+    value    = optional(string, "")
+    effect   = optional(string, "")
+  }))
+  default  = []
+  nullable = false
+}
+
 # ---------------------------------------------------------------------------
 # restore (ADR-028, ADR-020 A2.5)
 #
