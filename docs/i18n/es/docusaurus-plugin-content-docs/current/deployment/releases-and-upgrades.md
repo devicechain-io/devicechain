@@ -4108,6 +4108,52 @@ por ejemplo, actualiza siete índices en lugar de diez.
   aumentar.
 - Volver a `v0.18.0` deja los índices eliminados, y `v0.18.0` funciona sin ellos.
 
+#### Las primarias de las bases de datos prefieren nodos distintos {#next-primary-spread}
+
+Cada base de datos prefiere ahora un nodo que no ejecute la primaria de otra base de datos de
+DeviceChain. En las pruebas, con tres nodos de 8 vCPU, las primarias relacional y del almacén de
+eventos habían quedado en el mismo nodo, que funcionó al 94-98 % de CPU mientras los otros dos
+estaban al 45-51 %.
+
+- Es una preferencia, no un requisito: un clúster con menos nodos sigue planificando todas las
+  instancias de base de datos.
+- Actúa cuando se planifica un pod de base de datos, lo que en la práctica significa cuando se crea
+  el almacén de eventos de una instancia. Una conmutación por error, un traspaso, o el traspaso con
+  el que termina una actualización progresiva, todavía pueden dejar las dos primarias en un mismo
+  nodo. [Dónde se ejecutan las primarias de las bases de
+  datos](./bootstrap.md#ha-database-primaries) explica cómo comprobarlo y cómo mover una.
+
+**Antes de actualizar, comprueba si hay una cuota sobre la ubicación entre espacios de nombres.**
+Los pods de base de datos llevan ahora una preferencia de ubicación que tiene en cuenta otros
+espacios de nombres. Un `ResourceQuota` con el ámbito `CrossNamespacePodAffinity` rechaza esos
+pods, sea preferencia o no, en un espacio de nombres donde los prohíba: las instancias reiniciadas
+de la base de datos relacional en el espacio de nombres del clúster (`dc-system` por defecto), y
+el almacén de eventos de una instancia nueva en su propio espacio de nombres. Nada de lo que
+instala DeviceChain crea uno. Para listar los que existan:
+
+```bash
+kubectl get resourcequota -A \
+  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
+```
+
+**En la actualización.** La base de datos relacional adopta la nueva configuración la próxima vez
+que ejecutes `dcctl install` con esta versión, y sus instancias se reinician una vez. Con `--ha`
+primero se reinician las réplicas en espera y después el papel de primaria se traspasa a una de
+ellas, que está en otro nodo. Si las dos primarias compartían nodo antes de la actualización, ese
+traspaso las separa; si no, puede dejarlas en un mismo nodo, así que comprueba dónde están
+después. Una instalación de una sola instancia reinicia su única instancia en su sitio, y la base
+de datos relacional no está disponible hasta que termina de reiniciarse; las escrituras hechas
+mientras tanto se reintentan.
+
+El almacén de eventos de una instancia existente no cambia: `dcctl upgrade` no lo vuelve a
+aplicar, y sus instancias ya están ubicadas. No lleva la etiqueta que buscan las demás bases de
+datos, así que ni la base de datos relacional ni el almacén de eventos de una instancia nueva
+evitan su primaria, y en una instalación cuyas instancias son todas anteriores a esta versión la
+base de datos relacional se reinicia por una preferencia que no tiene sobre qué actuar hasta que
+se crea una instancia. Las instancias creadas con esta versión participan. Ejecuta `dcctl install`
+antes de crear una instancia nueva, para que los pods de la base de datos relacional lleven la
+etiqueta que busca el nuevo almacén de eventos.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

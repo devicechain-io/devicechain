@@ -431,6 +431,14 @@ spec:
   {{- end }}
   {{- end }}
 
+  # Marks every pod (and PVC, Service, job) of this Cluster as a DeviceChain database
+  # store, so the OTHER store's placement rule below can find this one's primary. The
+  # key is cnpg-cluster.storeLabel, shared with the selector; see _helpers.tpl.
+  # CloudNativePG patches a change here onto running pods in place, without a restart.
+  inheritedMetadata:
+    labels:
+      {{ include "cnpg-cluster.storeLabel" . }}: {{ $name | quote }}
+
   # 🔴 hostname, NOT zone. See the header: a topologyKey no node carries makes
   # the anti-affinity term inert, and three instances on one node look exactly
   # like three instances on three nodes from every check that counts pods.
@@ -442,6 +450,67 @@ spec:
     # instance there is nothing to spread, and `required` with a single pod on a
     # single-node cluster would refuse to schedule at all.
     podAntiAffinityType: {{ gt $instances 1 | ternary "required" "preferred" }}
+    {{- /*
+    THE DATABASES' PRIMARIES PREFER DIFFERENT NODES.
+
+    Measured on three 8-vCPU nodes: with the relational and the event-store primary
+    (and both WAL archivers) on one node, that node ran at 94-98% CPU while the other
+    two sat at 45-51%.
+
+    The term matches any pod that is a CloudNativePG primary AND carries the
+    DeviceChain store label, in ANY namespace -- the relational store lives in the
+    cluster's shared namespace and each event store in its instance's, so a term
+    without a namespaceSelector could never see the other store. The selector is
+    non-empty on purpose: `{}` also means "all namespaces", but an empty object is one
+    pruning step from absent, and absent means "this namespace only" -- silently
+    inert. Selecting on the label rather than on Cluster names keeps the other
+    root's name out of this chart: both stores render this one template, so the rule
+    is symmetric by construction.
+
+    🔴 WHAT IT CAN AND CANNOT DO. It acts when a pod is SCHEDULED. CloudNativePG puts
+    this affinity on the instance pods AND on the initdb/recovery job pod that
+    creates the first instance's volume (pkg/specs/jobs.go, CreateAffinitySection),
+    which matters because with WaitForFirstConsumer volumes that job decides the node.
+    Under --ha on three nodes every node already holds one instance of each store
+    (the required term above), so it decides one thing: where the second store's
+    FIRST primary is bootstrapped (the relational store is always created first). A
+    failover, a switchover, or the switchover that ends a rolling update picks a
+    standby that is already placed, and can put both primaries on one node again.
+    CloudNativePG has no declarative primary placement; moving one back is a
+    documented switchover (docs: bootstrap.md#ha-database-primaries).
+
+    An event store created before this rule carries neither the label nor the term,
+    and nothing re-applies it, so the rule sees only stores rendered with it.
+
+    Preferred, never required by the scheduler: a cluster with fewer nodes than
+    stores must still schedule every instance. (Admission is another matter: a
+    ResourceQuota with the CrossNamespacePodAffinity scope refuses pods that carry
+    a namespaceSelector, preferred or not, in a namespace it forbids them in. The
+    release notes say so.) It also matches this store's own primary, which is
+    harmless -- the required self term already keeps instances apart, and at one
+    instance the pod being scheduled is the only one.
+
+    Changing an affinity changes the pod spec, so CloudNativePG rolls the instances
+    when this first reaches an existing Cluster.
+
+    Read back by hack/check-cnpg-chart-schema.sh, which evaluates the selector
+    against the labels another store's primary actually carries.
+    */}}
+    additionalPodAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: {{ .Values.topologyKey }}
+            labelSelector:
+              matchLabels:
+                cnpg.io/instanceRole: primary
+              matchExpressions:
+                - key: {{ include "cnpg-cluster.storeLabel" . }}
+                  operator: Exists
+            namespaceSelector:
+              matchExpressions:
+                - key: kubernetes.io/metadata.name
+                  operator: Exists
     {{- /*
     🔴 `if not (kindIs "invalid" ...)`, NOT `with`. `with` is falsy on 0, and 0
     is a value an operator may legitimately want here -- it means "evict the

@@ -961,6 +961,56 @@ real.
 Planifica la vuelta de un nodo como planificas su pérdida, y no retires un segundo nodo hasta
 que `dcctl ha verify` vuelva a pasar.
 
+#### Dónde se ejecutan las primarias de las bases de datos {#ha-database-primaries}
+
+Cada base de datos prefiere un nodo que no ejecute la primaria de otra base de datos de
+DeviceChain. En las pruebas, con tres nodos de 8 vCPU y las primarias relacional y del almacén de
+eventos en el mismo nodo, ese nodo funcionó al 94-98 % de CPU mientras los otros dos estaban al
+45-51 %.
+
+- **Es una preferencia, no un requisito.** Un clúster con menos nodos sigue planificando todas
+  las instancias de base de datos. La única excepción es un `ResourceQuota` con el ámbito
+  `CrossNamespacePodAffinity`: rechaza los pods cuya ubicación tiene en cuenta otros espacios de
+  nombres, sea preferencia o no, así que rechaza estos pods de base de datos en un espacio de
+  nombres donde lo prohíba.
+- **Se aplica cuando se planifica un pod de base de datos.** Con `--ha` en tres nodos, cada nodo
+  ya ejecuta una instancia de cada base de datos, así que en la práctica la preferencia decide una
+  sola cosa: cuando se crea el almacén de eventos de una instancia, su primera primaria va a un
+  nodo que no ejecuta la primaria relacional. Una [conmutación por error](#ha-database-failover),
+  un traspaso, o el traspaso con el que termina una actualización progresiva de una base de
+  datos, todavía pueden dejar las dos primarias en un mismo nodo, y la preferencia no las vuelve
+  a separar.
+- **Un almacén de eventos creado antes de que existiera esta preferencia no participa.** Sus pods
+  no llevan la etiqueta que buscan las demás bases de datos ni prefieren nada, y nada lo vuelve a
+  aplicar. En una instalación anterior, la preferencia solo se aplica a las instancias creadas
+  después.
+
+Para ver dónde están las primarias (esto lista la primaria de cada base de datos, incluida una
+creada antes de que existiera la preferencia):
+
+```bash
+kubectl get pods -A -l cnpg.io/instanceRole=primary -o wide
+```
+
+Si dos de ellas comparten nodo, traspasa la primaria de una base de datos a una réplica en espera
+de otro nodo. Con el plugin de `kubectl` de CloudNativePG:
+
+```bash
+kubectl cnpg promote dc-rdb dc-rdb-2 -n dc-system
+```
+
+o, sin el plugin:
+
+```bash
+kubectl -n dc-system patch cluster dc-rdb --subresource=status --type=merge \
+  -p '{"status":{"targetPrimary":"dc-rdb-2"}}'
+```
+
+Elige una réplica en un nodo que, según el primer comando, no tenga ninguna primaria. Un traspaso
+interrumpe brevemente las escrituras de la base de datos (consulta
+[Cuando se detiene la primaria de una base de datos](#ha-database-failover)), y los servicios las
+reintentan. Una instalación de una sola instancia no tiene ninguna réplica a la que traspasar.
+
 ### Dimensionamiento de los servicios {#service-sizing}
 
 Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi. La CPU se
@@ -1019,6 +1069,11 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
   `event-management` de ese nodo elevó el ritmo sostenido de unos 4750 a unos 5600 eventos por
   segundo; su efecto con la configuración predeterminada no se ha medido. Para desactivarlo en un
   servicio, establece `functionalAreas.<servicio>.avoidEventStorePrimary: false`.
+- **Las primarias de las bases de datos prefieren nodos distintos.** En las pruebas, un nodo que
+  ejecutaba a la vez la primaria relacional y la del almacén de eventos funcionó al 94-98 % de CPU
+  mientras los demás estaban a la mitad, aproximadamente. Consulta
+  [Dónde se ejecutan las primarias de las bases de datos](#ha-database-primaries), incluido cómo
+  comprobarlo después de una conmutación por error o de una actualización.
 - **Más tráfico necesita más.** Varios inquilinos enviando cada uno a su techo, mensajes con
   muchas lecturas, o un inquilino [admitido por encima de su
   techo](../concepts/governance.md#ingest-above-ceiling) mientras se pone al día necesitan más
