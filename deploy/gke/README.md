@@ -252,8 +252,8 @@ kubectl --context "$CTX" -n dci-my-instance get cluster dc-tsdb \
 **This rebuilds the instance with an empty control plane.** The destroy also drops
 the instance's database on the shared relational store, so its tenants, devices,
 users and stored secrets are deleted and are not restored; only its event history
-comes back. To bring both back, recover the whole cluster instead, as described in
-[Recovering an instance](https://docs.devicechain.io/deployment/disaster-recovery#recover).
+comes back. To bring both back, rebuild the cluster and recover both databases
+instead, following [the full recovery procedure](https://docs.devicechain.io/deployment/disaster-recovery#recover).
 
 Move the instance's escrow artifact aside, because bootstrap will not overwrite it,
 and keep it: it is still the only key to the relational backups taken before the
