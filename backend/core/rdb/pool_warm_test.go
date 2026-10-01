@@ -6,6 +6,7 @@ package rdb
 import (
 	"context"
 	"database/sql"
+	"reflect"
 	"testing"
 	"time"
 
@@ -19,14 +20,14 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 )
 
-// burstStats opens a pool through applyPoolSizing, the function both an owned and a guest
-// connection are sized by, then twice holds n connections at once and releases them all,
-// and returns the pool's statistics afterwards.
+// burstPool opens a pool through applyPoolSizing, the function both an owned and a guest
+// connection are sized by, then twice holds n connections at once, releases them all, and
+// returns the pool.
 //
 // A connection released while the idle pool is full is CLOSED, and the next acquire opens
 // a new one; against PostgreSQL that is a new TLS handshake and SCRAM login on both the
 // service and the server. database/sql counts each such close in MaxIdleClosed.
-func burstStats(t *testing.T, cfg config.MicroserviceDatastoreConfiguration, n int) sql.DBStats {
+func burstPool(t *testing.T, cfg config.MicroserviceDatastoreConfiguration, n int) *sql.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, err)
@@ -53,7 +54,13 @@ func burstStats(t *testing.T, cfg config.MicroserviceDatastoreConfiguration, n i
 			require.NoError(t, c.Close())
 		}
 	}
-	return sqldb.Stats()
+	return sqldb
+}
+
+// burstStats is burstPool's statistics straight after the burst.
+func burstStats(t *testing.T, cfg config.MicroserviceDatastoreConfiguration, n int) sql.DBStats {
+	t.Helper()
+	return burstPool(t, cfg, n).Stats()
 }
 
 // A pool allowed N connections keeps all N open after N were in use at once. Below that,
@@ -91,4 +98,42 @@ func TestAnExplicitIdleCountClosesTheRest(t *testing.T) {
 	assert.Equal(t, 4, st.Idle)
 	assert.Equal(t, int64(16), st.MaxIdleClosed)
 	assert.Equal(t, 4, st.OpenConnections)
+}
+
+// A pool kept warm must STAY warm while the service is quiet. An idle-time limit
+// (SetConnMaxIdleTime) would close the connections a burst left open as soon as traffic
+// paused, and the next burst would log in to PostgreSQL again: the reconnect cost moves
+// from the busy period to the start of each one, which is the defect above with a delay.
+//
+// database/sql's connection cleaner runs at most once a second, so assertions made
+// straight after a burst cannot see such a limit. This one waits past the first tick.
+func TestAWarmPoolSurvivesAQuietPeriod(t *testing.T) {
+	cfg := config.MicroserviceDatastoreConfiguration{MaxOpenConnections: 5}
+	n := EffectiveMaxOpenConnections(cfg)
+	sqldb := burstPool(t, cfg, n)
+	require.Equal(t, n, sqldb.Stats().Idle, "the fixture: the burst left every connection idle")
+
+	time.Sleep(1500 * time.Millisecond)
+	st := sqldb.Stats()
+	assert.Equal(t, n, st.Idle, "connections still open after a quiet period")
+	assert.Equal(t, int64(0), st.MaxIdleTimeClosed, "connections closed for sitting idle")
+	assert.Equal(t, int64(0), st.MaxLifetimeClosed, "connections closed for their age")
+}
+
+// The other half of that bargain: a connection is still closed connMaxLifetime after it
+// was opened, which is what eventually returns the connections a burst opened and moves a
+// long-lived pool onto a restarted or failed-over server. An hour cannot be waited for and
+// database/sql reports the limit through no accessor, so this reads the value the pool
+// holds. A field database/sql renames fails here by name, never as a silent pass.
+func TestAPooledConnectionIsClosedAnHourAfterItOpened(t *testing.T) {
+	sqldb := burstPool(t, config.MicroserviceDatastoreConfiguration{}, 1)
+	for field, want := range map[string]time.Duration{
+		"maxLifetime": time.Hour,
+		"maxIdleTime": 0, // no idle-time limit; see the test above
+	} {
+		v := reflect.ValueOf(sqldb).Elem().FieldByName(field)
+		require.True(t, v.IsValid(), "database/sql.DB has no field %q any more", field)
+		require.Equal(t, reflect.Int64, v.Kind(), "database/sql.DB.%s", field)
+		assert.Equal(t, want, time.Duration(v.Int()), "the pool's %s", field)
+	}
 }

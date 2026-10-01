@@ -189,7 +189,7 @@ para alojar muchas instancias, o instancias con muchas áreas habilitadas, neces
 presupuesto mayor.
 
 Cada servicio mantiene abiertas entre usos todas las conexiones que ha abierto su pool, hasta el
-tamaño del pool (20 si no se fija `maxOpenConnections`), y sustituye cada una una hora después de
+tamaño del pool (20 si no se fija `maxOpenConnections`), y cierra cada una una hora después de
 abrirla. La reserva permite a cada área un pod con un pool completo del tamaño predeterminado, más
 otro pod durante un despliegue, así que con los valores predeterminados todos los pools caben en ella. Un
 servicio con `replicas` por encima de 1, o con un `maxOpenConnections` mayor, puede mantener más

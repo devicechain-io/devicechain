@@ -179,7 +179,7 @@ login — so a refused bootstrap leaves nothing to clean up. A cluster meant to 
 instances, or instances with many areas enabled, needs a larger budget.
 
 Each service keeps every connection its pool has opened, up to the pool size (20 unless
-`maxOpenConnections` is set), open between uses, and replaces each one an hour after it was
+`maxOpenConnections` is set), open between uses, and closes each one an hour after it was
 opened. The reservation allows each area one pod with a full pool of the default size, plus one
 more pod during a rollout, so at the defaults every pool fits within it. A service run at `replicas`
 above 1, or with a raised `maxOpenConnections`, can hold more than that after a busy period, so
