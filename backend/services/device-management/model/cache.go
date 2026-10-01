@@ -4,6 +4,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
@@ -61,6 +62,14 @@ type Caches struct {
 	// group does zero per-entity membership reads. Evicted on register/deregister/
 	// group-delete; the TTL is a backstop.
 	ScopedGroupsExist *messaging.Cache
+	// Credentials keeps a device credential that has just verified, with its device, in
+	// process memory for CredentialCacheTTL, in front of AuthenticateDevice. Nil means
+	// credentials are not cached (unit fixtures).
+	//
+	// 🔴 IT IS NEVER A KEY-VALUE BUCKET: an entry holds an MQTT_BASIC password, and an
+	// access token's id IS its secret, so nothing of it may reach broker storage. Replicas
+	// drop each other's entries through a messaging.EvictionBroadcast instead of a bucket.
+	Credentials *CredentialCache
 }
 
 // InitializeCaches builds the caches used by the cached API, TTL'd from the
@@ -79,11 +88,12 @@ type Caches struct {
 //   - DeviceByToken: read per event when the device token is trusted (auth disabled,
 //     optional with no credential, a transport-authenticated event). A device deleted, or
 //     deleted and re-created under the same token, through another replica resolves to its
-//     old row for up to 5 s here. Credentials are NOT cached (AuthenticateDevice reads the
-//     database every event), so under required auth a deleted device's credentialed events
-//     are still refused at once. The raise-alarm consumer, whose drop of an edge for a
-//     deleted device must hold at once, reads devices through the plain Api instead
-//     (main.go, newRaiseAlarmConsumer).
+//     old row for up to 5 s here. A credentialed event takes its device from Credentials
+//     instead, which a device delete through ANY replica empties for that device on every
+//     replica by broadcast, so its events are normally refused on the next one, and within
+//     5 s on a replica the broadcast did not reach. The raise-alarm consumer, whose drop of
+//     an edge for a deleted device must hold at once, reads devices through the plain Api
+//     instead (main.go, newRaiseAlarmConsumer).
 //   - RelationshipsBySource: a new or removed tracked edge reaches events on other
 //     replicas within 5 s.
 //   - ProfileResolutionByType, MembershipsByEntity, ScopedGroupsExist: a publish or
@@ -94,6 +104,12 @@ type Caches struct {
 //     scope. The event is still stamped with ONE version (the resolution is one entry),
 //     and scope arming already could not rely on sub-TTL visibility.
 //
+// Credentials is the sixth in-process copy, and it has no bucket behind it. It holds a
+// credential for up to 5 s after the database read that verified it began, and every write
+// that changes a credential or its device evicts it on every replica (see CredentialCache),
+// so the 5 s is what a LOST eviction costs. It holds at most CredentialCacheMaxEntries
+// entries and CredentialCacheMaxBytes, whatever cfg.InMemoryCache says.
+//
 // None of them is on the tenant-erasure path. The erasure fence is a database write
 // callback and reads no cache. The KV purge runs in user-management against the buckets
 // directly. A replica can still write a purged tenant's key back for a few seconds — an
@@ -101,6 +117,13 @@ type Caches struct {
 // from the database into the bucket — but the purge sweeps the buckets on every pass, a
 // pass that removed anything restarts the settle window, and that window is held above
 // messaging.RetainedCacheWindow plus the purge timeout, far longer than 5 s.
+//
+// A tenant purge evicts nothing from Credentials, and needs to evict nothing: a deleting
+// tenant's connects and ingest are refused well before any of its rows is purged, and every
+// entry dies 5 s after its read began, so no entry read from live rows survives into the
+// purge. What remains is events already queued for that tenant when the purge deletes its
+// credentials: for up to 5 s they can authenticate from memory where the database would
+// refuse them.
 //
 // 🔑 THE THREE CACHES KEYED BY DEVICE ARE SIZED FOR THE FLEET; THE OTHER TWO ARE NOT.
 // DeviceByToken, RelationshipsBySource and MembershipsByEntity hold an entry per device
@@ -151,11 +174,22 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	if err != nil {
 		return nil, err
 	}
+	// The credential cache, and the broadcast that empties it on every replica. Subscribed
+	// before the Api that fills it exists, so no credential is held on a replica that cannot
+	// yet hear an eviction. The subscription ends with the connection, as the buckets'
+	// handles do.
+	bcast := nmgr.NewEvictionBroadcast(CredentialCacheName)
+	credentials := NewCredentialCache(CredentialCacheMaxEntries, CredentialCacheMaxBytes,
+		WithCredentialCacheMetrics(nmgr.Microservice), WithCredentialEvictionBroadcast(bcast))
+	if err := bcast.Subscribe(credentials.ApplyEviction); err != nil {
+		return nil, fmt.Errorf("subscribing to credential cache evictions: %w", err)
+	}
 	return &Caches{
 		DeviceByToken:           deviceByToken,
 		RelationshipsBySource:   relationshipsBySource,
 		ProfileResolutionByType: profileResolutionByType,
 		MembershipsByEntity:     membershipsByEntity,
 		ScopedGroupsExist:       scopedGroupsExist,
+		Credentials:             credentials,
 	}, nil
 }

@@ -54,7 +54,8 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // resolution.workers is not set.
 //
 // A warm event makes its lookups in two steps — the credential (one database read, for
-// every event that carries one), then the profile, the tracked relationships and whether
+// an event whose credential was not verified on this replica in the last 5 s), then the
+// profile, the tracked relationships and whether
 // any scoped group exists, read from the message broker's key-value store at the same
 // time — so a resolver spends most of each event waiting for replies, not using CPU. The
 // measurements below were taken when those three reads were still made one after another.
@@ -66,7 +67,7 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // ceiling): 5 resolvers resolved about 1500 events a second, 8 about 2300, 10 about 2900
 // and 16 about 4600, the resolvers busy throughout in every arm. The count is capped at 10
 // rather than taken from the widest arm because each resolver holds a pooled connection
-// while it authenticates an event, and 10 is half of the default pool of 20, the most
+// while it reads an event's credential, and 10 is half of the default pool of 20, the most
 // rdb.CheckWriterCount accepts without a warning. On a real PostgreSQL the credential read
 // did not wait for a connection at 10 (BenchmarkAuthenticateDeviceConcurrency).
 const DefaultResolutionWorkers = 10
@@ -93,16 +94,25 @@ const DefaultResolutionWorkers = 10
 // than every 5 s, gets nothing more from a larger bound. Below it, a cache that is full
 // holds the devices that reported in the last (bound ÷ rate) seconds.
 //
-// 🔴 THE MEMORY BUDGET, STATED AGAINST THE LIMIT IT RUNS UNDER. At these defaults the five
-// caches hold at most 3 × 24 + 2 × 4 = 80 MiB, counted as above. With no GOMEMLIMIT set
-// (the chart's default), the heap can grow to about twice what is live before a
-// collection: about 160 MiB for full caches, plus the rest of the service (a replica
-// resolving several thousand events a second on a three-node GKE cluster used 32 MiB in
-// all, its then 4-MiB caches included), about 190 MiB against device-management's 256 MiB
-// memory limit. Full caches need a busy replica: three full 24-MiB caches at once take
-// device-by-token being read (devices authenticated at the transport, or device auth set to
-// optional or disabled) and a tenant with rule-scoped groups. Raising either setting needs
-// the memory limit raised with it; MaxPerDeviceCacheMiB is well past what 256 MiB can hold.
+// 🔴 THE MEMORY BUDGET, STATED AGAINST THE LIMIT IT RUNS UNDER. At these defaults the six
+// in-process caches — these three, the two keyed by device type and by tenant, and the
+// credential cache, fixed at 16 MiB (model.CredentialCacheMaxBytes) — hold at most
+// 3 × 24 + 2 × 4 + 16 = 96 MiB, counted as above. With no GOMEMLIMIT set (the chart's
+// default), the heap can grow to about twice what is live before a collection: about
+// 192 MiB for full caches, plus the rest of the service (a replica resolving several
+// thousand events a second on a three-node GKE cluster used 32 MiB in all, its then 4-MiB
+// caches included), about 224 MiB against device-management's 256 MiB memory limit.
+//
+// Full caches need a busy replica, and all six full at once needs more than one replica
+// has been measured doing. Three full 24-MiB caches at once take device-by-token being read
+// (devices authenticated at the transport, or device auth set to optional or disabled) and
+// a tenant with rule-scoped groups. Device-by-token and the credential cache are filled by
+// DISJOINT events — an event either presents a credential or resolves on its token — so both
+// full needs about 50,000 token-path devices (24 MiB at about 500 B) and about 15,000
+// credentialed ones (16 MiB at about 1.1 KB) each reporting within 5 s on one replica:
+// about 13,000 events a second, twice the highest rate one replica has been measured
+// resolving. Raising either setting needs the memory limit raised with it;
+// MaxPerDeviceCacheMiB is well past what 256 MiB can hold.
 //
 // That budget is why the default is 24 MiB and not the ~33 MiB that 35,000 singly assigned
 // devices would need: 32 MiB per cache would put full caches at about 240 MiB under the
@@ -216,9 +226,11 @@ type ResolutionConfiguration struct {
 	// DefaultResolutionWorkers.
 	//
 	// Every event that carries a credential — every event, under the default "required"
-	// device-auth mode — is authenticated with one database read, which holds a pooled
-	// connection while it runs (the credential lookup is deliberately never cached, so a
-	// revocation takes effect on the next event). A resolver reads the key-value caches for
+	// device-auth mode — is authenticated with one database read when that credential was
+	// not verified on this replica in the last 5 s, and that read holds a pooled connection
+	// while it runs. A cold fleet (every device reporting less often than every 5 s) still
+	// reads on every event, so the bound below is unchanged by the credential cache. A
+	// resolver reads the key-value caches for
 	// one event at the same time, but reads the database for whatever they could not answer
 	// one lookup after another, so it still holds at most one connection at a time, and with
 	// every resolver busy

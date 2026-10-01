@@ -193,6 +193,36 @@ func newInboundEventsProcessor(reader messaging.MessageReader) *processor.Inboun
 		processor.WithResolvers(Configuration.Resolution.Workers))
 }
 
+// buildApis builds the service's two Apis over the relational store and the broker: the
+// plain Api every GraphQL resolver writes through, and the caching decorator the inbound
+// resolution path reads through.
+//
+// It is a function of its own so that the wiring tests build the Apis exactly as the
+// service does. 🔴 THE EVICTOR LINE IS THE ONE THAT MATTERS: every write that invalidates a
+// cache — a delete's hot-path entries, and a changed credential's or device's cached
+// credentials — evicts through Api.CacheEvictor, and the GraphQL mutations run on the plain
+// Api. Without it every eviction is silently skipped, a revoked credential keeps
+// authenticating events from memory until its copy expires, and only a test that builds
+// the Apis through here can see it.
+func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
+	cfg *config.DeviceManagementConfiguration) (*model.Api, *model.CachedApi, error) {
+	// Create NATS KV caches TTL'd from configuration (ADR-022 review B2), and the
+	// in-process credential cache.
+	caches, err := model.InitializeCaches(nmgr, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
+	// inbound-event resolution path.
+	api := model.NewApi(rdbm)
+	cached := model.NewCachedApi(api, caches)
+	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
+	// mutations run on the plain *Api, so the evictor is wired onto it.
+	api.CacheEvictor = cached
+	return api, cached, nil
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound events (wildcard across tenants).
 	ievents, err := nmgr.NewReader(streams.InboundEvents)
@@ -459,20 +489,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// built — the one point in the sequence where this service can have both a
 		// relational handle and a broker to build KV buckets from.
 		AfterNats: func(_ context.Context, m *service.Managers) error {
-			// Create NATS KV caches TTL'd from configuration (ADR-022 review B2).
-			caches, err := model.InitializeCaches(m.Nats, Configuration)
+			var err error
+			Api, CachedApi, err = buildApis(m.Nats, RdbManager, Configuration)
 			if err != nil {
 				return err
 			}
-
-			// Wrap api around rdb manager, then wrap a caching decorator over it for the
-			// hot inbound-event resolution path.
-			Api = model.NewApi(RdbManager)
-			CachedApi = model.NewCachedApi(Api, caches)
-			// The delete path evicts the hot-path caches through this seam so a delete does
-			// not leave ingest re-creating the removed entity's anchors (ADR-044 F2). The
-			// GraphQL deletes run on the plain *Api, so the evictor is wired onto it.
-			Api.CacheEvictor = CachedApi
 
 			// Report the size of this schema's append-only history tables (ADR-023). Every one of
 			// them only grows — nothing prunes a version history short of purging the whole tenant —

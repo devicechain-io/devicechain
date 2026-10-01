@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // relationshipSourceDevices returns the distinct device source ids of the tracked
@@ -285,19 +286,50 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 // The journal goes WITH the device rather than holding it back. It is a record ABOUT
 // this device — it names no other entity, and the tenant purge already erases it with
 // the tenant — so there is nothing for it to outlive.
+//
+// The credentials it removes are evicted from the credential cache after the commit, by
+// the tenant and device each row RETURNED, so a device with no credential evicts nothing.
 func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
-	return api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
+	var credentials []DeviceCredential
+	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
 		func(tx *gorm.DB, id uint) error {
-			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceCredential{}).Error; err != nil {
+			credentials = credentials[:0]
+			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
 				return err
 			}
 			return tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error
 		})
+	if err == nil && deleted {
+		api.evictCredentialOwners(ctx, credentials)
+	}
+	return deleted, err
 }
 
-// DeleteDeviceCredential deletes a single device credential by token (ADR-014).
+// DeleteDeviceCredential deletes a single device credential by token (ADR-014), and after
+// the commit evicts it from the credential cache under the device and tenant the deleted
+// row names. The delete returns those columns itself, so nothing is read first.
 func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool, error) {
-	return api.hardDeleteByToken(ctx, &DeviceCredential{}, token)
+	var credentials []DeviceCredential
+	if err := deleteCredentialsReturningOwners(api.RDB.DB(ctx).Unscoped().Where("token = ?", token), &credentials); err != nil {
+		return false, err
+	}
+	api.evictCredentialOwners(ctx, credentials)
+	return len(credentials) > 0, nil
+}
+
+// deleteCredentialsReturningOwners runs the hard delete scoped by db and fills rows with
+// the tenant and device of every credential it removed (DELETE ... RETURNING).
+func deleteCredentialsReturningOwners(db *gorm.DB, rows *[]DeviceCredential) error {
+	return db.Clauses(clause.Returning{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_id"}}}).
+		Delete(rows).Error
+}
+
+// evictCredentialOwners evicts the cached credentials of each deleted row's device, under
+// that row's tenant.
+func (api *Api) evictCredentialOwners(ctx context.Context, rows []DeviceCredential) {
+	for _, r := range rows {
+		api.evictDeviceCredentials(ctx, r.TenantId, r.DeviceId)
+	}
 }
 
 // --- Assets --------------------------------------------------------------------

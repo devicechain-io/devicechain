@@ -6,10 +6,12 @@ package model
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/rs/zerolog/log"
 )
 
 // CachedApi is a caching decorator over *Api implementing the ADR-022 review B2
@@ -25,12 +27,18 @@ import (
 //     cached and goes to the DB by promotion.
 //   - ProfileResolutionByDeviceType: a device type's published profile — metric
 //     definitions, rule scope and fence-set version — as one entry read once per event.
+//   - AuthenticateDevice: a credential that has just verified, with its device, for five
+//     seconds (Caches.Credentials). Only a success is kept, every hit is checked again
+//     exactly as a database row is (expiry, then the constant-time secret compare), and
+//     every write that changes a credential or its device evicts it by owning device, on
+//     this replica before the write returns and on every other one by broadcast.
 //
-// AuthenticateDevice and ResolveDeviceCredential are deliberately NOT cached:
-// credential validation is security-sensitive (caching would delay the effect of
-// revocation/expiry), so both always go straight to the DB via method promotion.
-// Each costs one indexed SELECT (credential JOIN device) per call, which is the price
-// of a disable, delete or expiry taking effect on the very next event.
+// AuthenticateDeviceConnect and ResolveDeviceCredential, the MQTT connect checks, are
+// deliberately NOT cached and go straight to the DB via method promotion. A connect is
+// granted a session that lasts hours, so a connect answered from a copy a revocation had
+// not reached would outlive that copy by hours; and the password connect compares through
+// credential.Checker under a backoff, from a row (deviceCredentialForConnect) that must
+// never reach evaluateCredential.
 //
 // Tenant scoping: every cache key includes the tenant derived from the context, so
 // one tenant can never read another tenant's device or relationships (a
@@ -47,6 +55,59 @@ func NewCachedApi(api *Api, caches *Caches) *CachedApi {
 		Api:    api,
 		caches: caches,
 	}
+}
+
+// AuthenticateDevice answers a credential this replica verified within the last
+// CredentialCacheTTL from memory, and otherwise reads it from the database and keeps it
+// if it verifies. Either way the same checks decide: evaluateCredential (expiry, then the
+// constant-time secret compare) and credentialDevice. A failure is never kept, so a
+// corrected credential works on the next event.
+//
+// With no cache, no tenant in context, or nothing usable presented it is the plain Api's
+// method, which returns the same sentinels as before.
+func (capi *CachedApi) AuthenticateDevice(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error) {
+	creds := capi.caches.Credentials
+	tenant, hasTenant := core.TenantFromContext(ctx)
+	if creds == nil || !hasTenant || presented == nil || presented.CredentialId == "" ||
+		!CredentialType(presented.CredentialType).Valid() {
+		return capi.Api.AuthenticateDevice(ctx, presented, now)
+	}
+	key := credentialCacheKey(tenant, presented.CredentialType, presented.CredentialId)
+	if cred, ok := creds.lookup(tenant, key); ok {
+		// A refusal here leaves the entry where it is: what is held is still the stored
+		// row, and only the presented secret or the time was wrong.
+		if err := evaluateCredential(&cred, presented, now); err != nil {
+			return nil, err
+		}
+		return credentialDevice(&cred)
+	}
+	gen, readAt := creds.readStarted()
+	cred, device, err := capi.Api.authenticateCredential(ctx, presented, now)
+	if err != nil {
+		return nil, err
+	}
+	creds.fill(key, presented.CredentialType, cred, gen, readAt)
+	return device, nil
+}
+
+// EvictDeviceCredentials satisfies model.CacheEvictor: it drops the cached credentials of
+// each given device of tenant, here first, before the write that called it returns, and
+// then, by broadcast, on every other replica. The tenant is the ROW's, passed by the
+// caller, not the context's: a write made under a system context still evicts what was
+// filed under the credential's own tenant. An empty tenant evicts nothing and is logged
+// as the defect it is.
+func (capi *CachedApi) EvictDeviceCredentials(_ context.Context, tenant string, deviceIds []uint) {
+	creds := capi.caches.Credentials
+	if creds == nil || len(deviceIds) == 0 {
+		return
+	}
+	if tenant == "" {
+		log.Error().Uints("deviceIds", deviceIds).
+			Msg("A credential cache eviction named no tenant, so it evicted nothing; the entries expire within 5s.")
+		return
+	}
+	creds.EvictDevices(tenant, deviceIds)
+	creds.publishEviction(tenant, deviceIds)
 }
 
 // EvictEntityDelete satisfies model.CacheEvictor (ADR-044 F2): it drops the caches

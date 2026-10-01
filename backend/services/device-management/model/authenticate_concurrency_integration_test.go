@@ -17,9 +17,9 @@ import (
 )
 
 // BenchmarkAuthenticateDeviceConcurrency measures the one relational read inbound-event
-// resolution makes for every event that carries a credential: AuthenticateDevice, which is
-// deliberately uncached (a revoked or expired credential takes effect on the next event), so
-// each call is one SELECT holding one pooled connection.
+// resolution makes for an event whose credential it has not verified in the last 5 s:
+// AuthenticateDevice on the plain Api, the read a credential costs when the cache cannot
+// answer it, which is one SELECT holding one pooled connection.
 //
 // The resolver pool runs that call from as many goroutines as it has resolvers, over the
 // service's connection pool at its default size. The arms run it the same way at several

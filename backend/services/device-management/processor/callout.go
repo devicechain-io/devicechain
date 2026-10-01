@@ -260,7 +260,11 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		// backoff would slow nothing and write one attempt record per guess. Limiting
 		// it needs a key the guesser cannot vary (per source or per tenant), which
 		// this does not have.
-		device, err = c.api.AuthenticateDevice(ctx, presented, c.now())
+		//
+		// It goes through AuthenticateDeviceConnect, never AuthenticateDevice, which the
+		// service's cached Api answers from memory: a connect granted on a copy a
+		// revocation had not yet reached would hold its session for hours.
+		device, err = c.api.AuthenticateDeviceConnect(ctx, presented, c.now())
 	}
 	if err != nil {
 		c.logAuthFailure(tenant, err)
@@ -347,7 +351,7 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 // The backoff bounds how many samples a caller gets per username; it does not equalize
 // them.
 //
-// An access-token connect resolves through AuthenticateDevice instead, which reads every
+// An access-token connect resolves through AuthenticateDeviceConnect instead, which reads every
 // column of both rows. There the credential id IS the secret, so a row found is normally
 // the grant itself and existence is the answer rather than a side channel; only a token
 // that exists but is refused pays for that full row without connecting: one that is

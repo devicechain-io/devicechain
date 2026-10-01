@@ -1118,7 +1118,8 @@ functionalAreas:
       # device with no tracked relationship and 950 with one, so 24 MiB holds about
       # 87,000 or 26,000 devices. An entry is kept 5 s from when it was read, so a
       # device reporting less often than that is never answered from memory, however
-      # large these are. At the defaults the five caches hold at most 80 MiB, which
+      # large these are. At the defaults the six in-memory caches (these three, two
+      # small ones, and the device credentials' fixed 16 MiB) hold at most 96 MiB, which
       # the heap can double before a collection: raise the memory limit with them.
       #   inMemoryCache:
       #     perDeviceCacheEntries: 131072

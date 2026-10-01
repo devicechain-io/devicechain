@@ -105,10 +105,11 @@ func evaluateCredential(cred *DeviceCredential, presented *PresentedCredential, 
 		// stored: they exist only for this length-safe compare.
 		//
 		// This compare serves the per-event path only (AuthenticateDevice, from the
-		// event resolver), whose verdict never reaches the sender. The MQTT auth
-		// callout, which DOES answer, does not come here: it resolves the credential
-		// with ResolveDeviceCredential and compares through credential.Checker, under
-		// a per-credential backoff.
+		// event resolver), whose verdict never reaches the sender. It runs on every
+		// event, including one CachedApi answers from memory: the cache keeps the stored
+		// row, never the verdict. The MQTT auth callout, which DOES answer, does not come
+		// here for a password: it resolves the credential with ResolveDeviceCredential and
+		// compares through credential.Checker, under a per-credential backoff.
 		got := sha256.Sum256([]byte(*presented.Secret))
 		want := sha256.Sum256([]byte(stored))
 		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
@@ -151,22 +152,54 @@ func storedSecret(cred *DeviceCredential) (string, error) {
 // 🔴 THE MQTT AUTH CALLOUT DOES NOT USE IT FOR A PASSWORD, and must not: the callout
 // answers the device, so its password compare has to sit behind a per-credential
 // backoff. For an MQTT_BASIC connect it calls ResolveDeviceCredential and compares
-// through credential.Checker instead; it comes here only for an access-token connect,
-// which compares no secret (the token IS the credential id). This path stays
-// unthrottled on purpose — a throttle here would cost a KV round trip on every such
+// through credential.Checker instead. An access-token connect, which compares no secret
+// (the token IS the credential id), runs this same check through AuthenticateDeviceConnect,
+// which nothing caches. This path stays unthrottled on purpose — a throttle here would cost a KV round trip on every such
 // event, and would let a device's own event stream push its connects into backoff.
+//
+// CachedApi answers a credential verified within the last five seconds from memory,
+// checked exactly as here (see CachedApi.AuthenticateDevice). An access-token CONNECT is
+// never answered from memory: the callout calls AuthenticateDeviceConnect.
 //
 // It returns the owning Device on success, or one of the ErrCredential* sentinels
 // on failure. now is supplied by the caller so expiry is deterministic in tests.
 func (api *Api) AuthenticateDevice(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error) {
+	_, device, err := api.authenticateCredential(ctx, presented, now)
+	return device, err
+}
+
+// AuthenticateDeviceConnect is AuthenticateDevice for an MQTT connect that presents an
+// access token: the auth callout's one call into this path.
+//
+// 🔴 IT IS A METHOD OF ITS OWN SO THAT NO CACHE CAN SIT IN FRONT OF IT. A connect that
+// succeeds is granted a device JWT the broker honours until the connection drops or the
+// JWT expires, hours later, so a connect answered from a copy that a revocation had not
+// yet reached would outlive that copy by hours: the revoked token would keep the device's
+// command subscription. CachedApi overrides AuthenticateDevice and must never override
+// this; every connect reads the database, which is what makes a revocation refuse the
+// next connect on every replica at once.
+func (api *Api) AuthenticateDeviceConnect(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error) {
+	_, device, err := api.authenticateCredential(ctx, presented, now)
+	return device, err
+}
+
+// authenticateCredential is AuthenticateDevice returning the verified row as well, for
+// CachedApi to keep. The row is the full one (DeviceCredentialByCredentialId), never the
+// connect finder's.
+func (api *Api) authenticateCredential(ctx context.Context, presented *PresentedCredential,
+	now time.Time) (*DeviceCredential, *Device, error) {
 	cred, err := api.lookupPresentedCredential(ctx, presented, api.DeviceCredentialByCredentialId)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := evaluateCredential(cred, presented, now); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return credentialDevice(cred)
+	device, err := credentialDevice(cred)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cred, device, nil
 }
 
 // ResolveDeviceCredential is AuthenticateDevice WITHOUT the secret compare, for a

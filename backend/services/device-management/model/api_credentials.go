@@ -105,6 +105,9 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		return nil, gorm.ErrRecordNotFound
 	}
 	updated := matches[0]
+	// The device the credential belonged to before this update: a re-point must evict the
+	// credential's cached copy under the device it is leaving as well as the one it joins.
+	priorDeviceId := updated.DeviceId
 
 	// Everything that can refuse resolves before anything is written, so a refused update
 	// leaves the credential exactly as the device last authenticated with it.
@@ -173,6 +176,10 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	// EVERY committed update evicts, a metadata-only edit included: one database read on
+	// the device's next event, in place of a field-by-field judgement of which changes
+	// matter that would have to be kept right forever.
+	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId)
 	return updated, nil
 }
 

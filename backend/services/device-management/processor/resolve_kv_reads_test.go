@@ -50,6 +50,9 @@ type resolveRig struct {
 	capi   *model.CachedApi
 	rez    *EventResolver
 	stores map[string]*msgtest.MemoryKV
+	// caches is the bundle capi holds. Setting Credentials nil turns the credential
+	// cache off, which is how a benchmark measures what it saves.
+	caches *model.Caches
 
 	mu  sync.Mutex
 	sql []string
@@ -157,7 +160,13 @@ func buildResolveRig(t testing.TB, db *gorm.DB, scoped bool, extraMetrics int,
 	if len(rig.stores) == 0 {
 		t.Fatal("found no cache fields on model.Caches; the rig would count nothing")
 	}
+	// The credential cache is not a key-value store, so the loop above leaves it out: the
+	// rig builds it as the service does, and wires the evictor as main.go does, so a
+	// revocation made through rig.api reaches it.
+	caches.Credentials = model.NewCredentialCache(4096, 4<<20)
+	rig.caches = caches
 	rig.capi = model.NewCachedApi(api, caches)
+	api.CacheEvictor = rig.capi
 	rig.rez = NewEventResolver(1, rig.capi, config.AuthModeDisabled, EventTimePolicy{},
 		nil, nil, nil, nil, nil, nil)
 

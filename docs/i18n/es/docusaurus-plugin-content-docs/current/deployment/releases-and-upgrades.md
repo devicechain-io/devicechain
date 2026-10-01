@@ -3734,7 +3734,8 @@ No hay que hacer nada en la actualización.
   borrado, o vuelto a crear con el mismo token, puede seguir resolviéndose a través de su registro
   anterior en otra réplica durante esos segundos, y una regla cuyo alcance de grupo acaba de
   cambiar puede evaluarse allí con el alcance anterior. Los eventos que presentan una credencial
-  de dispositivo se comprueban contra la base de datos cada vez, como antes, y un flanco de alarma
+  de dispositivo se comprueban como describe
+  [el apartado de la caché de credenciales](#next-credential-cache), y un flanco de alarma
   para un dispositivo recién borrado se sigue descartando de inmediato en todas las réplicas.
 - **Cuatro métricas nuevas** cuentan las búsquedas respondidas desde memoria, las entradas
   descartadas de ella y su tamaño. `kv_cache_request_duration_seconds{op="get"}` ahora cuenta solo
@@ -4287,6 +4288,36 @@ nada se reinicie:
 kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
   -p '{"spec":{"postgresql":{"parameters":{"wal_compression":null}}}}'
 ```
+
+#### device-management comprueba desde memoria una credencial de dispositivo repetida {#next-credential-cache}
+
+No hay que hacer nada en la actualización.
+
+- **Cada réplica de `device-management` guarda en memoria, durante hasta cinco segundos, una
+  credencial de dispositivo que acaba de verificar**, y comprueba los siguientes eventos del
+  dispositivo contra esa copia en lugar de leer la base de datos. En un perfil de CPU de una
+  réplica con carga, esa lectura era la mayor parte de la CPU del servicio. La copia se comprueba
+  exactamente igual que la credencial almacenada: la contraseña de `MQTT_BASIC` se sigue
+  comparando en cada evento, y una expiración sigue surtiendo efecto en su momento. Una credencial
+  que no se pudo verificar nunca se guarda.
+- **Una revocación puede tardar ahora hasta cinco segundos en una réplica que no recibió el
+  aviso.** Cada uno de estos cambios descarta la copia en la réplica que lo hace antes de
+  responder, y avisa a las demás réplicas para que descarten la suya:
+  - deshabilitar, borrar o reasignar una credencial, o cambiar cualquier otra cosa de ella
+  - reemplazar, editar o borrar su dispositivo
+
+  Si ese aviso se pierde, por ejemplo mientras una réplica se reconecta a NATS o mientras algunas
+  réplicas aún ejecutan la versión anterior durante la actualización, la copia de esa réplica
+  caduca en cinco segundos como máximo desde el cambio. Hasta ahora una revocación surtía efecto
+  en el siguiente evento en todas las réplicas. Consulte
+  [Cuánto tarda en aplicarse una revocación](../guides/device-credentials.md#revocation-timing).
+- **Las conexiones MQTT siguen leyendo la base de datos cada vez**, con contraseña o con token de
+  acceso, así que una credencial revocada no puede abrir una conexión nueva en ninguna réplica.
+- **Cada réplica guarda como máximo 65.536 credenciales o 16 MiB.** El límite es fijo, y con los
+  valores por defecto las cachés en memoria del servicio guardan ahora como máximo 96 MiB en lugar
+  de 80. **Métricas nuevas** cuentan las comprobaciones respondidas desde la copia, las
+  credenciales descartadas de ella, su tamaño y los mensajes que cada réplica envió y recibió para
+  descartar copias. Consulte [Cachés que dejan de responder](./observability.md#kv-caches).
 
 ### La transición única a la ingesta duradera
 

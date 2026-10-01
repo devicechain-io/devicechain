@@ -78,8 +78,8 @@ import (
 // # The latency model
 //
 // The resolver's lookups for a warm measurement event are, in order: the credential (one
-// uncached SELECT, when the event carries a credential — every event, under the default
-// "required" device-auth mode), or the device by token (a key-value read) when it does not;
+// SELECT, when the event carries a credential — every event, under the default "required"
+// device-auth mode — modelled here as the read a credential costs when it is not cached), or the device by token (a key-value read) when it does not;
 // then the profile, the tracked relationships and whether any scoped group exists (three
 // key-value reads). Each is given the same fixed delay. That is a MODEL of a network round
 // trip, and a sleeping resolver costs no CPU, so the arms measure how the pipeline's queues

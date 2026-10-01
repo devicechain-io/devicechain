@@ -121,7 +121,11 @@ under the identity now also held by its replacement. Two units answering as one 
 telemetry no reader can attribute. Disabled is sufficient, because
 `presentedCredentialStatement` — the one statement both credential finders run
 (`DeviceCredentialByCredentialId` for events and access-token connects,
-`deviceCredentialForConnect` for MQTT password connects) — matches `enabled = true` only.
+`deviceCredentialForConnect` for MQTT password connects) — matches `enabled = true` only. The
+per-event check can also be answered from `device-management`'s in-memory credential cache, so
+after the commit `ReplaceDevice` evicts the device's credentials from it (`evictDeviceCredentials`):
+on this replica before the call returns, on the others by broadcast, and within five seconds on a
+replica the broadcast missed.
 
 `DeviceReplaceRequest` carries **no device identity fields at all**: no token, no `externalId`, no
 device type, no name. "Rotate credentials, not identity" is unrepresentable to violate rather than
