@@ -478,6 +478,11 @@ store already past 85% can fill at the next nightly backup: act on the first ale
 is full, archiving stops for every instance on the cluster, and each database keeps its unshipped
 log on its own volume until that fills too and the database stops.
 
+Each database compresses the log it archives with zstd. The 1.9 KB figure was measured while the
+archive was compressed with gzip. On the same log, zstd's output was 2% to 16% smaller than
+gzip's, so the switch does not make the archive larger. A segment closed early on a quiet
+database is about 16 KiB, or about 32 KiB on a database that still archives with gzip.
+
 The store's size is set when `dcctl install` first creates it. Re-running install, including as
 the first step of an upgrade, keeps the size the store has, and so does a direct `tofu apply` of
 the OpenTofu configuration. To grow it, on a StorageClass that allows volume expansion:

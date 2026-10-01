@@ -470,7 +470,7 @@ variable "backup_retention_tsdb" {
 
     🔴 WAL IS CHEAP ONLY WHILE THE INSTANCE IS QUIET. `archive_timeout` forces a
     segment every 5 minutes, but a segment closed early is zero-filled past the
-    switch record and gzips to tens of KiB, so an idle store costs well under a
+    switch record and compresses to tens of KiB, so an idle store costs well under a
     GiB per month. Under sustained ingest the archived WAL grows with the write
     rate instead, and costs about as much as the data it records. Measured on GKE
     benchmark clusters (v0.18.x): up to about 1.9 KB of archive per ingested

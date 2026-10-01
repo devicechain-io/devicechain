@@ -664,7 +664,7 @@ spec:
     rather than quiet.
 
     The cost is a mostly-empty 16MB segment per interval on an idle cluster,
-    which gzip compresses to almost nothing. The alert threshold in
+    which the archive compresses to tens of KiB. The alert threshold in
     prometheusrule-database-backup.yaml is derived from this value; move one and
     move the other.
     */ -}}

@@ -139,7 +139,10 @@ locals {
     # stores different durability settings. This one takes device telemetry at
     # ingest rates, so it generates WAL far faster; an archiver that cannot keep
     # up does not drop segments, it leaves them on the database's own volume
-    # until that volume fills and Postgres stops.
+    # until that volume fills and Postgres stops. On GKE at up to 6,800 events/s
+    # offered, the store reported no failed archives at 4 in any logged run.
+    # More parallelism does not cut the archiver's CPU: every segment is its own
+    # archiver process either way.
     wal_max_parallel = 4
   } : null
 

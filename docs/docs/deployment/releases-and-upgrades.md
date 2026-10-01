@@ -4209,6 +4209,33 @@ that keeps an instance over the line across this release.
   The same applies while the previous `event-management` keeps running because a rebuild stopped
   after the base events table was already rebuilt. The new release reads that list on the key.
 
+#### The archived write-ahead log is compressed with zstd {#next-archive-zstd}
+
+Both databases now compress the write-ahead log they archive with zstd instead of gzip. Under
+sustained ingest the archiver runs beside the event store's primary, and it used about as much CPU
+as the database itself. In a local benchmark on write-ahead log shaped like the event store's,
+zstd took 29% to 39% less archiver CPU for each archived segment, end to end. On that log, and on
+uncompressed log shaped like the relational store's, its output was 2% to 16% smaller than gzip's.
+Base backups are still compressed with gzip, and the
+[backup store sizing](./bootstrap.md#backup-store-size) is unchanged.
+
+Restores read both. Each archived segment is named by its compression (`.gz` or `.zst`) and is
+decompressed by that name, so an archive that changes compression part-way restores as before.
+Expiring old backups reads both the same way.
+
+Re-running `dcctl install` with this release switches the relational store. `dcctl upgrade` does
+not run the infrastructure apply, so an existing instance's event store keeps archiving with gzip.
+That is correct, only costlier. To switch it, change its backup destination:
+
+```bash
+kubectl -n dci-<instance> patch objectstores.barmancloud.cnpg.io dc-tsdb-backup --type merge \
+  -p '{"spec":{"configuration":{"wal":{"compression":"zstd"}}}}'
+```
+
+The backup plugin reads the destination again for each segment it archives, so segments archived
+from then on are compressed with zstd, and no database restarts. Segments already in the archive
+stay as they are.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

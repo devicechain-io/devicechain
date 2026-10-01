@@ -706,7 +706,8 @@ archive_base_backups() {
 
 # 🔴 The grep is not tidying. MinIO represents an object as a DIRECTORY holding an
 # `xl.meta`, so `wals/*/*` matches two different kinds of thing: the segments
-# inside a timeline prefix (`wals/0000000100000000/…0007.gz`) and the metadata
+# inside a timeline prefix (`wals/0000000100000000/…0007.zst`, or `.gz` in an
+# archive written before zstd) and the metadata
 # inside any object stored directly under `wals/` — which is what a timeline
 # history file is. A recovered cluster promotes to timeline 2 and uploads
 # `wals/00000002.history`, so the unfiltered listing on that path returns a bare

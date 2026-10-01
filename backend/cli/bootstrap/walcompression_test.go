@@ -58,16 +58,17 @@ func tfStringMapAttr(t *testing.T, body, name string) map[string]string {
 	return out
 }
 
-// renderedClusterParameters renders the cnpg-cluster module's chart, as embedded
-// in dcctl, with the given Postgres parameters and, when backups is true, the
-// backup block the module hands it on a default install. It returns the Cluster's
-// spec.postgresql.parameters.
+// renderCNPGChart renders the cnpg-cluster module's chart, as embedded in dcctl,
+// with the given Postgres parameters and, when backup is non-nil, that backup
+// block, and returns the rendered documents. The other values are a bare
+// event-store install's; every render test of this chart goes through here, so
+// they are one install.
 //
 // The release name and namespace are renderChartClientSide's placeholders. This
 // chart DOES read .Release.Namespace (unlike the instance chart that function's
 // comment is about), but only as the metadata.namespace of the objects it renders,
-// never for the parameters read here, so the placeholder cannot change them.
-func renderedClusterParameters(t *testing.T, params map[string]string, backups bool) map[string]string {
+// never for the fields its tests read, so the placeholder cannot change them.
+func renderCNPGChart(t *testing.T, params map[string]string, backup map[string]interface{}) []string {
 	t.Helper()
 	src, err := fs.Sub(assets.OpenTofu(), "modules/cnpg-cluster/chart")
 	if err != nil {
@@ -91,22 +92,44 @@ func renderedClusterParameters(t *testing.T, params map[string]string, backups b
 		"sharedPreloadLibraries": []interface{}{"timescaledb"},
 		"parameters":             p,
 	}
-	if backups {
-		vals["backup"] = map[string]interface{}{
-			"enabled":            true,
-			"bucket":             "devicechain-tsdb",
-			"endpointURL":        "http://dc-object-store.dc-system:9000",
-			"credentialsSecret":  "dc-object-store-credentials",
-			"accessKeyIdKey":     "MINIO_ROOT_USER",
-			"secretAccessKeyKey": "MINIO_ROOT_PASSWORD",
-		}
+	if backup != nil {
+		vals["backup"] = backup
 	}
 	manifest, err := renderChartClientSide(context.Background(), ch, vals)
 	if err != nil {
 		t.Fatalf("rendering the cnpg-cluster chart: %v", err)
 	}
-	var found []map[string]string
+	var docs []string
 	for _, doc := range releaseutil.SplitManifests(manifest) {
+		docs = append(docs, doc)
+	}
+	return docs
+}
+
+// defaultBackupValues is the backup block the module hands the chart on a
+// default install, less the fields the chart defaults itself.
+func defaultBackupValues() map[string]interface{} {
+	return map[string]interface{}{
+		"enabled":            true,
+		"bucket":             "devicechain-tsdb",
+		"endpointURL":        "http://dc-object-store.dc-system:9000",
+		"credentialsSecret":  "dc-object-store-credentials",
+		"accessKeyIdKey":     "MINIO_ROOT_USER",
+		"secretAccessKeyKey": "MINIO_ROOT_PASSWORD",
+	}
+}
+
+// renderedClusterParameters renders the chart (renderCNPGChart) with the given
+// Postgres parameters and, when backups is true, a default install's backup
+// block, and returns the Cluster's spec.postgresql.parameters.
+func renderedClusterParameters(t *testing.T, params map[string]string, backups bool) map[string]string {
+	t.Helper()
+	var backup map[string]interface{}
+	if backups {
+		backup = defaultBackupValues()
+	}
+	var found []map[string]string
+	for _, doc := range renderCNPGChart(t, params, backup) {
 		var obj struct {
 			Kind string `json:"kind"`
 			Spec struct {

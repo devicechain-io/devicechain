@@ -522,6 +522,12 @@ respaldo nocturno: actúa con la primera alerta. Cuando el almacén está lleno,
 detiene para todas las instancias del clúster, y cada base de datos conserva el log sin enviar en
 su propio volumen hasta que también se llena y la base de datos se detiene.
 
+Cada base de datos comprime con zstd el log que archiva. La cifra de 1,9 KB se midió cuando el
+archivo se comprimía con gzip. Sobre el mismo log, la salida de zstd fue entre un 2 % y un 16 %
+menor que la de gzip, así que el cambio no hace crecer el archivo. Un segmento cerrado antes de
+tiempo en una base de datos tranquila ocupa unos 16 KiB, o unos 32 KiB en una base de datos que
+sigue archivando con gzip.
+
 El tamaño del almacén se fija cuando `dcctl install` lo crea por primera vez. Volver a ejecutar
 install, también como primer paso de una actualización, conserva el tamaño que tiene el almacén, y
 lo mismo hace un `tofu apply` directo de la configuración de OpenTofu. Para ampliarlo, con una
