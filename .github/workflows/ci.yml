@@ -1659,6 +1659,18 @@ jobs:
           refuses "misspelled key in an area's values" "additional properties 'avoidEventStorePrimry' not allowed" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set functionalAreas.event-sources.avoidEventStorePrimry=false
+          refuses "misspelled spread switch" "additional properties 'eventPathSpred' not allowed" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.event-sources.eventPathSpred=false
+          renders "spread switched off for one area" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set functionalAreas.event-sources.eventPathSpread=false
+          # event-processing takes its CPU limit from the top level, so a top-level
+          # limit below its measured request is refused, naming the measured request.
+          refuses "top-level limit below event-processing's measured request" \
+            "functionalAreas.event-processing.measuredRequests.cpu" \
+            --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
+            --set resources.limits.cpu=300m
           renders "measured requests off, area limit lowered" \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY" \
             --set useMeasuredRequests=false \

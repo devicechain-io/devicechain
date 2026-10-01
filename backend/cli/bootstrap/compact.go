@@ -119,9 +119,10 @@ type compactSizing struct {
 	// exists to catch before it gets there.
 	ObjectStoreStorage string
 
-	// Scheduling requests, for EVERY area: the preset also turns off the chart's
-	// measured per-area requests (useMeasuredRequests, see helmValues), which would
-	// otherwise keep the busiest services at their full-size request. Lowering
+	// Scheduling requests, for EVERY area and for each NATS server (infraVars passes
+	// them as nats_cpu_request and nats_memory_request): the preset also turns off the
+	// chart's measured per-area requests (useMeasuredRequests, see helmValues), which
+	// would otherwise keep the busiest services at their full-size request. Lowering
 	// REQUESTS fixes scheduling — pods sitting
 	// Pending on a small node — and does not itself lower usage. The limits are
 	// left alone because lowering them shrinks nothing: a lower MEMORY limit

@@ -703,3 +703,62 @@ func kindHostPortMapping(t *testing.T, hostPort int) int {
 		"cannot work without it", hostPort)
 	return 0
 }
+
+// --compact lowers each NATS server's REQUESTS to the preset's own two values, the
+// same ones every service gets, and leaves its memory LIMIT at the module default
+// (compactSizing.CPURequest: a lower limit only turns pressure into a killed broker).
+// Without it a compact install would ask a small node for 500m and 768Mi per server.
+//
+// The request variables are read from the embedded instance root, so a third one
+// added later fails here until compact decides about it.
+func TestCompactLowersTheBrokersRequests(t *testing.T) {
+	raw, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
+	if err != nil {
+		t.Fatalf("reading embedded variables.tf: %v", err)
+	}
+	decl := regexp.MustCompile(`variable\s+"(nats_[a-z_]+_request)"\s*\{`)
+	var requests []string
+	for _, m := range decl.FindAllSubmatch(raw, -1) {
+		requests = append(requests, string(m[1]))
+	}
+	if len(requests) == 0 {
+		t.Fatal("found no nats_*_request variable in the embedded variables.tf: the broker has no " +
+			"requests for --compact to lower, or this test can no longer see them")
+	}
+
+	want := map[string]string{
+		"nats_cpu_request":    compact.CPURequest,
+		"nats_memory_request": compact.MemoryRequest,
+	}
+	passed := func(vars []string) map[string]string {
+		out := map[string]string{}
+		for _, v := range vars {
+			if name, val, ok := strings.Cut(v, "="); ok && strings.HasPrefix(name, "nats_") {
+				out[name] = val
+			}
+		}
+		return out
+	}
+
+	got := passed(infraVars(compactState(true)))
+	for _, name := range requests {
+		w, decided := want[name]
+		if !decided {
+			t.Errorf("the instance root declares %s and --compact makes no decision about it", name)
+			continue
+		}
+		if got[name] != w {
+			t.Errorf("--compact passes %s=%q, want %q (the preset's request)", name, got[name], w)
+		}
+	}
+	if v, ok := got["nats_memory_limit"]; ok {
+		t.Errorf("--compact passes nats_memory_limit=%s; the preset lowers requests and never limits", v)
+	}
+
+	full := passed(infraVars(compactState(false)))
+	for _, name := range append(requests, "nats_memory_limit") {
+		if v, ok := full[name]; ok {
+			t.Errorf("a default install passes %s=%s; it should take the module's default", name, v)
+		}
+	}
+}

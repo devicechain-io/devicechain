@@ -24,17 +24,19 @@ import (
 // way dcctl installs it and hold each event-path area's CPU limit and CPU request
 // to what it was measured to use.
 //
-// CPU per event depends on the hardware, so the measurements are kept by the
-// cluster they were taken on, one table each, and each rule reads one table:
+// CPU depends on the hardware, so the measurements are kept by the cluster they
+// were taken on, one table each, and each rule reads one table:
 //
 //   - kindCPUPerEvent (a laptop kind cluster) holds the LIMITS to the default
 //     ceiling with headroom. It is the slower machine and reads higher per event
 //     (device-management about twice the GKE figure): the conservative side for a
 //     limit, which throttles a service that reaches it.
-//   - gkeCPUPerEvent (Google Kubernetes Engine) holds the REQUESTS to the default
-//     ceiling, and the LIMITS to the rate a default --ha install sustained there.
-//     A request only places a pod, and the production-shaped cluster is the one
-//     whose placement it is for.
+//   - gkeCPUPerEvent (Google Kubernetes Engine, v0.18.0) holds the LIMITS to the
+//     rate a default --ha install sustained there.
+//   - gkeSplitPoolCores (Google Kubernetes Engine, the build after v0.18.0) holds
+//     the REQUESTS to what each service used at requestSizingRate. A request only
+//     places a pod, and the production-shaped cluster is the one whose placement it
+//     is for.
 
 // kindCPUPerEvent is each ingest-path area's CPU cost per event, in
 // millicores, measured on a four-node --ha kind cluster (2026-09-26, with the CPU
@@ -242,6 +244,9 @@ func TestShippedCPULimitsCarryTheMeasuredSustainedRate(t *testing.T) {
 	// The rule has to be able to fail: the old event-sources limit is 25m short.
 	t.Run("the check can fail", func(t *testing.T) {
 		vals := helmValues(compactState(false))
+		// Its measured 1-core request would refuse a 500m limit before this rule
+		// was reached; with the measured requests off it renders.
+		vals["useMeasuredRequests"] = false
 		mergeFunctionalArea(vals, "event-sources", map[string]interface{}{
 			"resources": map[string]interface{}{"limits": map[string]interface{}{"cpu": "500m"}},
 		})
@@ -253,22 +258,75 @@ func TestShippedCPULimitsCarryTheMeasuredSustainedRate(t *testing.T) {
 	})
 }
 
-// Each event-path area REQUESTS the CPU it measurably uses at the default ingest
-// ceiling, rounded up to a multiple of 50m and never below the chart's top-level
-// request. With every area at the same 100m the scheduler could not tell the
-// service that resolves every event from an idle one, and on a three-node cluster
-// it put the busiest services on the node running the event store's primary.
+// requestSizingRate is the ingest rate, in events/s, the CPU REQUESTS are sized
+// for: the rate a default --ha install sustained on gkeSplitPoolCores' cluster for 10
+// minutes, twice, with resolution, storage and live state each keeping at least 99.7%
+// of it and every accepted event stored exactly once. Detection (event-processing)
+// did not keep up there; see its row below. A request only places a pod: sized at
+// the default tenant ceiling (1,000/s) these services requested between 15% and 66%
+// of what they used at this rate, and the scheduler stacked the busiest together.
+const requestSizingRate = 6000
+
+// gkeSplitPoolCores is each event-path area's CPU use, in CORES, on Google
+// Kubernetes Engine: 3 x n2-standard-4 database nodes and 3 x n2-highcpu-4 service
+// nodes, SSD persistent disks, --ha, the development build after v0.18.0, shipped
+// defaults. Container CPU averaged over each run, at requestSizingRate; the highest
+// of three runs:
+//
+//	area               180 s   10 min  10 min
+//	device-management  0.75    0.76    0.76
+//	event-management   0.87    0.78    0.79
+//	device-state       0.83    0.91    0.91
+//	event-sources      0.97    0.98    0.98
+//	event-processing   0.34    0.34    0.33   throttled in ~5% of periods and
+//	                                           falling behind, so not used
+//
+// event-processing's figure is instead its one UNTHROTTLED reading, 0.37 cores at
+// 6,800 events/s with a 1-core limit: a throttled reading is what the service did,
+// not what it was offered (the rule gkeCPUPerEvent follows too). It still fell behind
+// there, so its request is a floor for keeping up, not a measure of it.
+var gkeSplitPoolCores = map[string]float64{
+	"device-management": 0.76,
+	"event-management":  0.87,
+	"device-state":      0.91,
+	"event-sources":     0.98,
+	"event-processing":  0.37,
+}
+
+// gkeMeasuredAtRate is the rate an area's gkeSplitPoolCores figure was read at, where
+// that is not requestSizingRate. Only event-processing's is: see above.
+var gkeMeasuredAtRate = map[string]int{
+	"event-processing": 6800,
+}
+
+// measuredAt is the rate area's gkeSplitPoolCores figure was read at.
+func measuredAt(area string) int {
+	if r, ok := gkeMeasuredAtRate[area]; ok {
+		return r
+	}
+	return requestSizingRate
+}
+
+// sizedRequest is the request a measured use of `cores` gets: rounded up to a
+// multiple of 50m, never below the chart's own floor.
+func sizedRequest(cores float64, floor int64) int64 {
+	return max(floor, (millicores(cores, 1000)+49)/50*50)
+}
+
+// Each event-path area REQUESTS the CPU it used at requestSizingRate, rounded up to
+// a multiple of 50m and never below the chart's top-level request. With every area
+// at the same 100m the scheduler could not tell the service that resolves every
+// event from an idle one; sized at the default tenant ceiling they were still about
+// half their use or less, and the scheduler put the busiest on one node.
 //
 // It renders what dcctl installs without --compact. The floor is read from an area
-// with no measured request of its own, not restated. event-processing is the
-// counterweight: it uses less than the floor and keeps it. Memory requests do not
-// move: no event-path pod's working set passed 40Mi on that cluster.
-func TestShippedCPURequestsAreTheMeasuredUseAtTheDefaultCeiling(t *testing.T) {
-	ceiling := defaultIngestCeiling(t)
+// with no measured request of its own, not restated. Memory requests do not move:
+// no event-path pod's working set passed 51Mi on that cluster, up to 9,200 events/s.
+func TestShippedCPURequestsAreTheMeasuredUseAtTheSizingRate(t *testing.T) {
 	got := byArea(t, renderContainers(t, helmValues(compactState(false))))
 
 	const plain = "command-delivery"
-	if _, ok := gkeCPUPerEvent[plain]; ok {
+	if _, ok := gkeSplitPoolCores[plain]; ok {
 		t.Fatalf("%s is measured, so it cannot stand for the chart's own request", plain)
 	}
 	c, ok := got[plain]
@@ -276,18 +334,23 @@ func TestShippedCPURequestsAreTheMeasuredUseAtTheDefaultCeiling(t *testing.T) {
 		t.Fatalf("%s did not render: there is no floor to read", plain)
 	}
 	floor := q(t, "cpu", c.requests["cpu"])
+	for area := range gkeMeasuredAtRate {
+		if _, ok := gkeSplitPoolCores[area]; !ok {
+			t.Errorf("gkeMeasuredAtRate names %s, which has no measurement", area)
+		}
+	}
 
-	for _, area := range slices.Sorted(maps.Keys(gkeCPUPerEvent)) {
+	for _, area := range slices.Sorted(maps.Keys(gkeSplitPoolCores)) {
 		c, ok := got[area]
 		if !ok {
 			t.Errorf("%s did not render: its request was not checked", area)
 			continue
 		}
-		want := max(floor, (millicores(gkeCPUPerEvent[area], ceiling)+49)/50*50)
+		want := sizedRequest(gkeSplitPoolCores[area], floor)
 		if have := q(t, "cpu", c.requests["cpu"]); have != want {
-			t.Errorf("%s: requests.cpu %s (%dm), want %dm: %.4fm per event at the default "+
-				"ceiling of %.0f messages/s, rounded up to 50m, at least the chart's %dm",
-				area, c.requests["cpu"], have, want, gkeCPUPerEvent[area], ceiling, floor)
+			t.Errorf("%s: requests.cpu %s (%dm), want %dm: %.2f cores measured at %d events/s, "+
+				"rounded up to 50m, at least the chart's %dm",
+				area, c.requests["cpu"], have, want, gkeSplitPoolCores[area], measuredAt(area), floor)
 		}
 	}
 	for area, c := range got {
@@ -295,6 +358,44 @@ func TestShippedCPURequestsAreTheMeasuredUseAtTheDefaultCeiling(t *testing.T) {
 			t.Errorf("%s: requests.memory %q, want the chart's 128Mi", area, c.requests["memory"])
 		}
 	}
+
+	// The table and the chart name the same areas. An area given a measured request
+	// with no measurement here, or a measurement whose area lost its request, is a
+	// failure: either way one of them is not checked by the loop above.
+	t.Run("every measured request has a measurement and the reverse", func(t *testing.T) {
+		ch, err := loadEmbeddedChart()
+		if err != nil {
+			t.Fatalf("loading embedded chart: %v", err)
+		}
+		areas, ok := ch.Values["functionalAreas"].(map[string]interface{})
+		if !ok || len(areas) == 0 {
+			t.Fatal("the chart's values have no functionalAreas map: nothing to compare")
+		}
+		var inChart []string
+		for area, cfg := range areas {
+			if m, ok := cfg.(map[string]interface{}); ok {
+				if _, has := m["measuredRequests"]; has {
+					inChart = append(inChart, area)
+				}
+			}
+		}
+		slices.Sort(inChart)
+		if inTable := slices.Sorted(maps.Keys(gkeSplitPoolCores)); !slices.Equal(inChart, inTable) {
+			t.Errorf("areas with measuredRequests in values.yaml %v, areas measured in gkeSplitPoolCores %v: "+
+				"they must be the same set", inChart, inTable)
+		}
+	})
+
+	// The floor applies: a service measured below the chart's own request keeps it.
+	// No shipped area is below it, so this is the only thing exercising the branch.
+	t.Run("the floor applies", func(t *testing.T) {
+		if got := sizedRequest(0.01, floor); got != floor {
+			t.Errorf("0.01 cores measured: %dm, want the chart's %dm", got, floor)
+		}
+		if got := sizedRequest(0.76, floor); got != 800 {
+			t.Errorf("0.76 cores measured: %dm, want 800m", got)
+		}
+	})
 }
 
 // A measured request is a chart default the operator never wrote. So when an
@@ -320,7 +421,7 @@ func TestMeasuredRequestAboveAnOperatorsLimitNamesMeasuredRequests(t *testing.T)
 	}
 	for _, want := range []string{
 		"functionalAreas.device-management.measuredRequests.cpu",
-		"500m", "300m",
+		"800m", "300m",
 		"useMeasuredRequests: false",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -375,8 +476,8 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 		"event-sources": true, "device-state": true,
 	}
 	measured := map[string]string{
-		"device-management": "500m", "event-management": "400m",
-		"event-sources": "150m", "device-state": "400m",
+		"device-management": "800m", "event-management": "900m",
+		"event-sources": "1", "device-state": "950m", "event-processing": "400m",
 	}
 
 	t.Run("shipped", func(t *testing.T) {
@@ -437,9 +538,10 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 			}
 		}
 		for area, want := range map[string]string{
-			"device-management": "500m", // its measured request: it set only a limit
+			"device-management": "800m", // its measured request: it set only a limit
 			"event-management":  "1",    // its own request wins over its measured one
-			"event-processing":  "100m", // unmeasured: the top-level request
+			"event-processing":  "400m", // its measured request
+			"user-management":   "100m", // unmeasured: the top-level request
 		} {
 			if have := got[area].requests["cpu"]; have != want {
 				t.Errorf("%s: requests.cpu = %q, want %q", area, have, want)
@@ -468,7 +570,7 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 		// A measured request is an area's own for this purpose: the top-level request
 		// reaches only the areas without one.
 		for area, want := range map[string]string{
-			"event-sources": "150m", "event-processing": "200m",
+			"event-sources": "1", "event-processing": "400m", "user-management": "200m",
 		} {
 			if have := got[area].requests["cpu"]; have != want {
 				t.Errorf("%s: requests.cpu = %q, want %q", area, have, want)

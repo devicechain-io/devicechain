@@ -256,6 +256,39 @@ variable "nats_mqtt_node_port" {
   default     = 0
 }
 
+variable "nats_cpu_request" {
+  description = "CPU each NATS server requests: millicores (\"500m\") or cores. 500m by default, deliberately below a server's use under load; dcctl --compact passes its own lowered request. See modules/nats var.cpu_request for why."
+  type        = string
+  default     = "500m"
+
+  validation {
+    condition     = can(regex("^([0-9]+m|[0-9]+(\\.[0-9]+)?)$", var.nats_cpu_request)) && !can(regex("^[0.]+m?$", var.nats_cpu_request))
+    error_message = "nats_cpu_request must be a nonzero number of millicores (\"500m\") or cores (\"1\", \"1.5\")."
+  }
+}
+
+variable "nats_memory_request" {
+  description = "Memory each NATS server requests, in Mi or Gi. 768Mi by default, from the highest resident memory measured; dcctl --compact passes its own lowered request. See modules/nats var.memory_request."
+  type        = string
+  default     = "768Mi"
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*(Mi|Gi)$", var.nats_memory_request))
+    error_message = "nats_memory_request must be a nonzero whole number of Mi or Gi (e.g. \"768Mi\")."
+  }
+}
+
+variable "nats_memory_limit" {
+  description = "Memory limit of each NATS server, in Mi or Gi; GOMEMLIMIT is set to 80% of it. 2Gi by default. See modules/nats var.memory_limit, including what was not measured."
+  type        = string
+  default     = "2Gi"
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*(Mi|Gi)$", var.nats_memory_limit))
+    error_message = "nats_memory_limit must be a nonzero whole number of Mi or Gi (e.g. \"2Gi\")."
+  }
+}
+
 variable "enable_database_backups" {
   description = <<-EOT
     WAL archiving, scheduled base backups and PITR for both database stores

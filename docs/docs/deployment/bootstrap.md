@@ -567,6 +567,12 @@ The alerts for snapshots are described under
   Balanced or SSD boot disks would count against the SSD quota too. The guide gives the quota to request for
   more instances. On a local cluster the monitoring stack keeps no volume, and on
   kind the sizes are not enforced.
+- **CPU and memory for the requests.** Without `--compact`, the five services that handle every
+  event request about 4 CPU between them, and each NATS server (three under `--ha`) requests 500m
+  of CPU and 768Mi of memory, on top of the other services, the databases and the cluster's
+  own components. A pod that does not fit stays `Pending`, and the install waits out its timeout.
+  See [Service sizing](#service-sizing) for each figure. On a cluster that cannot spare them, such
+  as a laptop, use [`--compact`](#--compact).
 - **OpenTofu** (the `tofu` binary; `terraform` also works) on your `PATH`. `dcctl` drives it
   to provision infrastructure. Install it from [opentofu.org](https://opentofu.org). Run
   `dcctl preflight local` to check this and the rest of your environment up front.
@@ -686,7 +692,8 @@ already exist rather than adding a tuning axis of its own:
 - lower JetStream and KV per-stream ceilings, and the smaller volumes those permit (3Gi
   JetStream, 2Gi relational Postgres, 4Gi TimescaleDB, and a 20Gi backup store when TLS is
   kept);
-- lower scheduling **requests** (25m / 64Mi), so pods fit a small node. Limits are untouched:
+- lower scheduling **requests** (25m / 64Mi) for every service and every NATS server, so pods
+  fit a small node. Limits are untouched:
   lowering the memory limit converts pressure into OOMKills and lowering the CPU limit
   throttles, and neither shrinks anything. `device-management`, `event-management`,
   `event-sources` and `device-state` keep their higher CPU limits, and the per-service requests
@@ -1040,28 +1047,41 @@ from measurement:
 
 | Service | CPU request | CPU limit |
 | --- | --- | --- |
-| `device-management` | 500m | 2 cores |
-| `event-management` | 400m | 2 cores |
-| `device-state` | 400m | 2 cores |
-| `event-sources` | 150m | 2 cores |
+| `device-management` | 800m | 2 cores |
+| `event-management` | 900m | 2 cores |
+| `device-state` | 950m | 2 cores |
+| `event-sources` | 1 core | 2 cores |
+| `event-processing` | 400m | 500m |
 | every other backend service | 100m | 500m |
 
-Under [`--compact`](#--compact) every backend service requests 25m and 64Mi instead, and the
-limits stay as above. The console is sized separately.
+Each NATS server requests 500m of CPU and 768Mi of memory, and is limited to 2Gi of memory with no
+CPU limit; see [The message broker](#broker-sizing).
 
-These four services do the per-event work: receiving, resolving and storing every event, and
-merging it into each device's live state. Their limits are sized for live device traffic at a
-tenant's default ingest ceiling of 1000 messages per second, one reading per message, and for
-about 4,000 events per second, the rate a default installation sustained before
-`event-management`'s persistence defaults were raised (see [Measured
-throughput](#measured-throughput)).
+Under [`--compact`](#--compact) every backend service and every NATS server requests 25m and 64Mi
+instead, and the limits stay as above. The console is sized separately.
 
-- **Requests are what each service uses at a tenant's default ceiling.** A request is the CPU
-  the scheduler sets aside for a pod on its node. Each one above is what that service was measured
-  to use at the default ceiling, rounded up. With every service requesting the same 100m, the
-  scheduler could not tell the busy services from idle ones when it placed them, and put the
-  busiest on one node. Memory stays at 128Mi: on v0.18.0 no event-path service used more than
-  40Mi in any sample, even at 4800 events per second.
+The first four services do the per-event work: receiving, resolving and storing every event, and
+merging it into each device's live state. `event-processing` runs detection on every event; its
+500m limit is the default every other backend service has, not one sized from measurement. The
+first four services' limits are sized for live device traffic at a tenant's default ingest
+ceiling of 1000 messages per second, one reading per message, and for about 4,000 events per
+second, the rate a default installation sustained before `event-management`'s persistence
+defaults were raised (see [Measured throughput](#measured-throughput)).
+
+- **Requests are what each service used at 6,000 events per second.** A request is the CPU the
+  scheduler sets aside for a pod on its node, and nothing else: it decides where the pod goes. Each
+  one above is what that service was measured to use at 6,000 events per second, rounded up: the
+  rate a default `--ha` installation sustained on a cluster of three 4-vCPU database nodes and three
+  4-vCPU service nodes, with resolution, storage and live device state each keeping pace (see
+  [Measured throughput](#measured-throughput)). `event-processing` is the exception: at that rate
+  it was held back by its 500m limit and fell behind, so its request is what it used with a 1-core
+  limit at 6,800 events per second, where it still fell behind; it is a floor, not a measure of
+  what keeps up. Sized for a tenant's default ceiling of 1,000 instead, these services requested
+  between 15% and 66% of what they used at that rate, and the scheduler put the busiest of them
+  together: at 6,000 events per second two service nodes ran at about 80% CPU while the third ran
+  at 55%. Memory stays at 128Mi: no event-path service used more than 51Mi in any sample, up to
+  9,200 events per second. A request is per pod, so a service scaled to two replicas requests
+  twice its figure for the same traffic.
 - **Limits do not reserve anything.** Kubernetes schedules a pod by its requests, so the higher
   limits need no extra room on a node. They only let a busy service use CPU the node has spare.
   `--compact` lowers every request, and leaves the limits alone.
@@ -1087,6 +1107,16 @@ throughput](#measured-throughput)).
   moving `event-management` off that node raised the sustained rate from about 4,750 to about
   5,600 events per second; its effect at the default settings has not been measured. To turn it
   off for one service, set `functionalAreas.<service>.avoidEventStorePrimary: false`.
+- **The five event-path services spread across nodes.** `device-management`, `event-management`,
+  `device-state`, `event-sources` and `event-processing` prefer a node running fewer of the five,
+  so on three nodes they usually run no more than two to a node. It is a preference the scheduler
+  weighs with others, not a guarantee: with fewer nodes they still schedule, and a node with more
+  free CPU can win. It applies when a pod is scheduled, so pods already running are not moved.
+  Which NATS server leads a stream is decided by NATS, so a service can still share a node with
+  the busiest server. A service with a spread of its own no longer gets the cluster's default
+  spread, which places one service's replicas in different zones; at one replica, the default,
+  that changes nothing. To turn it off for one service, set
+  `functionalAreas.<service>.eventPathSpread: false`.
 - **The databases' primaries prefer different nodes.** In testing, a node running both the
   relational and the event-store primary ran at 94 to 98% CPU while the others ran at about
   half. See [Where the
@@ -1115,15 +1145,46 @@ throughput](#measured-throughput)).
   above its service's limit is refused when the chart renders, and the refusal names where each
   value came from.
 
-  The four services' own CPU limits and requests are set that way too, so the top-level
+  The event-path services' own CPU limits and requests are set that way too, so the top-level
   `resources` does not replace them: a top-level limit of 4 cores gives every other backend
-  service 4 cores and leaves these four at 2, and a top-level `requests.cpu` does not reach them.
+  service 4 cores and leaves the four with a limit of their own at 2, and a top-level
+  `requests.cpu` reaches none of the five. A top-level limit below 400m is refused, because it
+  would put `event-processing`'s limit below its request.
   Set theirs under `functionalAreas`, as above. On a chart-only installation,
   `useMeasuredRequests: false` turns the measured requests off, so the top-level requests apply
   to every service; that is what `--compact` does.
 
 The metric that shows a service held back by its limit is
 `container_cpu_cfs_throttled_periods_total` for its container.
+
+#### The message broker {#broker-sizing}
+
+Each NATS server requests 500m of CPU and 768Mi of memory, and is limited to 2Gi of memory. Its Go
+runtime is given a soft memory limit of 80% of that (`GOMEMLIMIT`), so it collects harder before the
+kernel would stop it. Before, the servers requested and were limited to nothing, which put them
+first in line for eviction when a node ran short of memory.
+
+- **Memory is sized from measurement.** No server held more than 749 MiB in any run up to 9,200
+  events per second. Those runs were steady ingest: a server rejoining its cluster, or catching up
+  a large backlog after a node is lost, was not measured. If a server is ever stopped for running
+  out of memory (`OOMKilled` in `kubectl describe pod`), raise its limit.
+- **CPU is requested below what a server uses under load**: about 1.1 to 1.65 cores each at
+  6,000 events per second. Under `--ha` on three nodes each node runs exactly one server, so the
+  request cannot change where a server runs. What it does is keep the servers out of the class evicted first and
+  give them a share of a busy node's CPU. Requesting their full use would take about 4 cores from
+  a three-node cluster without moving anything. Without `--ha`, one server carries every event
+  and its use was not measured; 500m understates it. There is no CPU limit: every event passes
+  through the broker, and a limit would slow every service at once.
+- **Each node needs room for a server.** Under `--ha` the servers must run on three different
+  nodes. If one of the three cannot fit 500m and 768Mi more, that server stays `Pending`, and the
+  bootstrap waits up to 15 minutes before it fails. `kubectl get pods -n <instance namespace>`
+  shows the server `Pending`, and `kubectl describe pod` on it says why.
+- **It applies to instances bootstrapped with this release.** `dcctl upgrade` does not re-apply an
+  instance's broker, so an existing instance's servers keep running with no requests or limits
+  until `dcctl bootstrap` applies the instance again: when it is recreated, or when bootstrap is
+  re-run over the running instance, as a restore does, which also restarts the servers.
+- To change them for a new instance, set `nats_cpu_request`, `nats_memory_request` or
+  `nats_memory_limit` on the instance's OpenTofu root. Memory takes `Mi` or `Gi`.
 
 #### Measured throughput {#measured-throughput}
 
@@ -1133,6 +1194,7 @@ The metric that shows a service held back by its limit is
 | v0.18.0 | the same | tuned: see below | about 5,600 events/s | 180-second runs. At 5,600 offered, every stage kept at least 98.9% of the offered rate, the backlog drained in 3 seconds, and every accepted event was stored exactly once. Live device state kept up. |
 | after v0.18.0, before its persistence defaults | the same | the sizing above, with `event-management` at `persistence.writers: 5` and `persistence.maxBatch: 32` | about 3,900 events/s | Two 10-minute runs at 4,000 events/s offered each stored all 2,400,000 accepted events, with none lost and none duplicated. Storing was the slowest stage, at 96.7% and 95.7% of the offered rate. Live device state stayed within about 40 seconds. |
 | after v0.18.0 | the same | tuned: `event-management` at `persistence.writers: 10` and `persistence.maxBatch: 64`; see below | about 6,000 events/s | 180-second runs. At 6,000 offered, every stage kept at least 98% of the offered rate, the backlog drained in 5 seconds, and every accepted event was stored exactly once. Held for 5 minutes at 6,000, storing kept 96%, so about 5,800 to 6,000 is the sustained figure. |
+| after v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-4 database nodes (tainted, databases only) and 3 × n2-highcpu-4 service nodes, SSD persistent disks, `--ha` | the defaults before the requests above (`device-management` 500m, `event-management` and `device-state` 400m, `event-sources` 150m, `event-processing` 100m), with `event-management`'s current persistence defaults | about 6,000 events/s | Two 10-minute runs at 6,000 events/s offered each stored all 3,600,000 accepted events, with none lost and none duplicated. Resolution, storage and live device state each kept 99.7% of the offered rate or more, and the backlog drained within 10 seconds. Detection (`event-processing`) fell behind: its backlog peaked at about 93,000 events. The event-store and backup volumes were smaller than the defaults. The requests above were sized from these runs. |
 
 The v0.18.0 rows were measured on v0.18.0 and the others on the development build that followed
 it, all with the load generator on a separate node and a replicated (`--ha`) event store. At
@@ -1153,8 +1215,9 @@ used the same `event-management` and `device-state` settings, with CPU limits of
 limits of 1Gi for `device-management`, `event-sources`, `event-management` and `device-state`.
 There, `event-management` used at most about 1.7 cores; it was not measured under its default
 limit of 2. Its batches averaged below 32 in every run, so the measurement does not show a batch
-of 64 helping over 32. A default installation with the new persistence settings has not been
-measured end to end, so no sustained rate is given for it here. Batches averaged about 21 events at 6,000 per second; past it, storing stopped rising with batches
+of 64 helping over 32. A default installation with the new persistence settings was measured on
+the split cluster in the last row, where it sustained about 6,000 events per second; it has not
+been measured on the three-node cluster of the other rows. Batches averaged about 21 events at 6,000 per second; past it, storing stopped rising with batches
 averaging 28 to 30, below the limit, while two of the three nodes, one of them the event store's, were at 86 to 95%
 CPU. Which of those held the rate was not isolated, but more throughput on that cluster needs more
 nodes before more per-service tuning.

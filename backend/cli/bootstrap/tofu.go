@@ -552,6 +552,13 @@ func infraVars(st *State) []string {
 			// exported by the services either way, so nothing that speaks about
 			// stream replication is lost here.
 			"nats_prom_exporter=false",
+			// The broker's REQUESTS, lowered with every other request in the preset and
+			// from the same two values, so compact has one request size rather than one
+			// for the services and another for the broker. Its memory LIMIT stays at the
+			// module default, by the rule in compactSizing.CPURequest: a lower limit only
+			// turns memory pressure into a killed broker.
+			"nats_cpu_request="+compact.CPURequest,
+			"nats_memory_request="+compact.MemoryRequest,
 		)
 		// cert-manager and database backups are dropped by --compact --no-tls; see
 		// certManagerEnabled and databaseBackupsEnabled, which the emission above reads.

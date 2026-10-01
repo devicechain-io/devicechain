@@ -3749,8 +3749,8 @@ No hay que hacer nada en la actualización.
 limitaban el ritmo al que podían enviar los dispositivos, y `device-state` dejaba que la vista en
 vivo de los dispositivos se retrasara minutos a ritmos que el resto de la instalación soportaba.
 Los cuatro servicios también **solicitan** CPU dimensionada a partir de mediciones en lugar de
-100m cada uno: `device-management` 500m, `event-management` 400m, `device-state` 400m,
-`event-sources` 150m. `device-management`, `event-management` y `event-sources` prefieren un nodo
+100m cada uno; [la nota sobre las solicitudes de la ruta de eventos](#next-event-path-requests)
+indica los valores. `device-management`, `event-management` y `event-sources` prefieren un nodo
 que no ejecute el primario del almacén de eventos. El almacén de eventos de una instancia nueva
 recibe un volumen de 32Gi en lugar de 8Gi. Consulta
 [Dimensionamiento de los servicios](./bootstrap.md#service-sizing), que también recoge el
@@ -3758,16 +3758,8 @@ rendimiento medido.
 
 **Antes de actualizar una instancia instalada sin `--compact`:**
 
-- **Comprueba que hay espacio para las solicitudes mayores.** Una vez actualizada, la instancia
-  solicita alrededor de 1 CPU más que antes. Durante la actualización gradual cada servicio
-  ejecuta su pod nuevo junto al anterior, así que los nodos necesitan libres también las nuevas
-  solicitudes: alrededor de 1,5 CPU para estos cuatro servicios. Compara la CPU asignable libre de
-  los nodos (`kubectl describe nodes`, "Allocated resources") con la tabla de Dimensionamiento de
-  los servicios. Si un pod nuevo no se puede ubicar, queda en `Pending` y la actualización falla
-  tras esperar, con la instancia actualizada a medias: los servicios cuyos pods nuevos arrancaron
-  están en la nueva versión, y el resto sigue en la anterior. Haz espacio y vuelve a ejecutar
-  `dcctl upgrade` para terminar. Una instancia creada con `dcctl` no tiene forma de conservar las
-  solicitudes anteriores; el remedio es la capacidad.
+- **Comprueba que hay espacio para las solicitudes mayores**, como explica
+  [la nota sobre las solicitudes de la ruta de eventos](#next-event-path-requests).
 - **Un `ResourceQuota` o `LimitRange` en el namespace de la instancia** puede rechazar el nuevo
   límite de 2 núcleos de `event-sources` y `device-state`, o las solicitudes mayores, como podía
   hacerlo con `device-management` y `event-management` en v0.18.0.
@@ -4368,6 +4360,55 @@ con una ubicación podía fallar en su paso de OpenTofu con `argument must not b
 comprobación de ubicación trataba como un error un nodo que nunca se había acordonado o que no tenía
 ningún taint. Esta versión cuenta esos nodos. La ejecución fallida no creó ni cambió ninguna base de
 datos: vuelve a ejecutar la instalación con esta versión.
+
+#### Los servicios de la ruta de eventos solicitan lo que usan a 6000 eventos por segundo y se reparten entre los nodos {#next-event-path-requests}
+
+Los cinco servicios que procesan cada evento ahora **solicitan** la CPU que se midió que usan a
+6000 eventos por segundo: `device-management` 800m, `event-management` 900m, `device-state` 950m,
+`event-sources` 1 núcleo y `event-processing` 400m. Dimensionados para el techo predeterminado de un
+inquilino, 1000 eventos por segundo, solicitaban entre el 15% y el 66% de lo que usaban al ritmo que
+sostiene una instalación `--ha` predeterminada, y el planificador, que ubica los pods según sus
+solicitudes, juntaba a los más ocupados. Además prefieren ejecutarse en nodos distintos; con tres
+nodos suelen ejecutarse no más de dos por nodo. `functionalAreas.<servicio>.eventPathSpread: false`
+lo desactiva para un servicio. Los servidores NATS de una instancia nueva solicitan 500m de CPU y
+768Mi de memoria y tienen un límite de 2Gi de memoria; antes no solicitaban nada, lo que los
+convertía en los primeros pods desalojados cuando un nodo se quedaba sin memoria. Consulta
+[Dimensionamiento de los servicios](./bootstrap.md#service-sizing) y
+[El intermediario de mensajes](./bootstrap.md#broker-sizing).
+
+**Antes de actualizar una instancia instalada sin `--compact`:**
+
+- **Comprueba que hay espacio para las solicitudes más grandes.** Una vez actualizados, los cinco
+  servicios solicitan unas 3,6 CPU más que en v0.18.0. Durante la actualización progresiva, cuatro
+  de ellos ejecutan su pod nuevo junto al antiguo (`event-processing` detiene primero el antiguo),
+  así que los nodos necesitan unas 3,65 CPU libres para los pods nuevos, y cada pod nuevo necesita
+  hasta un núcleo libre en un solo nodo. Compara la CPU asignable libre de los nodos
+  (`kubectl describe nodes`, "Allocated resources") con la tabla de Dimensionamiento de los
+  servicios. Un clúster kind en un portátil es el que más probablemente no la tenga. Si un pod nuevo
+  no se puede ubicar, se queda en `Pending` y la actualización falla tras esperar, con la instancia
+  actualizada a medias: los servicios cuyos pods nuevos arrancaron están en la nueva versión, y el
+  resto sigue en la antigua. Haz espacio y vuelve a ejecutar `dcctl upgrade` para terminar. Una
+  instancia creada con `dcctl` no tiene forma de conservar las solicitudes antiguas; el remedio es
+  la capacidad, o volver a crearla con `--compact`.
+
+Las instancias instaladas con `--compact` conservan sus solicitudes de 25m y 64Mi, y los servidores
+NATS de una instancia compacta nueva solicitan lo mismo.
+
+**Los servidores NATS de una instancia existente no cambian:** `dcctl upgrade` no vuelve a aplicar
+el intermediario de una instancia, así que sus servidores siguen sin solicitudes ni límites hasta
+que la instancia se vuelva a crear.
+
+**Si instalas el chart tú mismo, con tus propios valores:**
+
+- `event-processing` tiene ahora una solicitud medida, así que un `resources.requests.cpu` de nivel
+  superior tampoco le llega ya. Define la suya en
+  `functionalAreas.event-processing.resources.requests`, o establece `useMeasuredRequests: false`.
+- `event-processing` toma su límite de CPU de `resources.limits.cpu` de nivel superior, así que un
+  límite de nivel superior por debajo de 400m ahora se rechaza al generar el chart, nombrando
+  `measuredRequests`. Aumenta el límite, define la solicitud propia del servicio o establece
+  `useMeasuredRequests: false`.
+- Una clave nueva, `eventPathSpread`, está activada en los cinco servicios. Un archivo de valores
+  que la active en otro servicio lo reparte junto con ellos.
 
 ### La transición única a la ingesta duradera
 
