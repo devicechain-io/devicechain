@@ -80,6 +80,7 @@ func BenchmarkProjectionWriters(b *testing.B) {
 						}
 					}
 					acked.Store(0)
+					cpu0, cpuOK := processCPU()
 					b.ResetTimer()
 					start := time.Now()
 					for i := 0; i < b.N; i++ {
@@ -94,6 +95,7 @@ func BenchmarkProjectionWriters(b *testing.B) {
 						time.Sleep(time.Millisecond)
 					}
 					elapsed := time.Since(start)
+					cpu1, cpuOK1 := processCPU()
 					b.StopTimer()
 					if err := sp.ExecuteStop(context.Background()); err != nil {
 						b.Fatalf("stop: %v", err)
@@ -102,6 +104,13 @@ func BenchmarkProjectionWriters(b *testing.B) {
 					// Batch transactions that did not commit (a lock wait that ended in a
 					// deadlock, a first sight lost to another writer), per 1000 events.
 					b.ReportMetric(1000*testutil.ToFloat64(metrics.fallbacks)/float64(b.N), "fallbacks/1000ev")
+					// This process's CPU per event while the events were merged: the writers'
+					// cost, plus the benchmark's own handing-off and polling, which is the same
+					// on either side of a comparison. The database runs in another process and
+					// is not in it. Absent where processCPU cannot read it, never reported as 0.
+					if cpuOK && cpuOK1 {
+						b.ReportMetric(float64((cpu1-cpu0).Microseconds())/float64(b.N), "cpu-us/ev")
+					}
 				})
 			}
 		}

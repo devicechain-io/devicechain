@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -75,6 +76,13 @@ type chunkValueOfPtrValuer struct {
 type chunkPtrToPtrValuer struct {
 	A string
 	P *ptrValued
+}
+
+// chunkStamped has an update-time column: gorm binds its value into an UpdateAll's DO UPDATE.
+type chunkStamped struct {
+	A         string
+	B         string
+	UpdatedAt time.Time
 }
 
 func chunkDB(t *testing.T, cfg *gorm.Config) *gorm.DB {
@@ -201,6 +209,50 @@ func TestRowsPerInsertIsWhatOneStatementBinds(t *testing.T) {
 			assert.Greater(t, bound(n+1), MaxBindParameters, "one row more must not fit, or the bound is loose")
 		})
 	}
+}
+
+// An ON CONFLICT … UpdateAll on a model with an update-time column is refused: gorm adds a bound
+// assignment of that column when the statement runs, after the count is taken. The control
+// shows that the count it would otherwise give binds one parameter too many.
+func TestRowsPerInsertRefusesUpdateAllOverAnUpdateTimeColumn(t *testing.T) {
+	updateAll := clause.OnConflict{Columns: []clause.Column{{Name: "a"}}, UpdateAll: true}
+
+	// Control: three insertable columns, so 65535/3 = 21845 rows by the column count — and
+	// gorm binds 21845×3 + 1 parameters for them under UpdateAll.
+	dry := chunkDB(t, &gorm.Config{DryRun: true})
+	batch := make([]chunkStamped, 21845)
+	for i := range batch {
+		batch[i] = chunkStamped{A: fmt.Sprint(i), B: "b", UpdatedAt: time.Unix(1, 0)}
+	}
+	stmt := dry.Clauses(updateAll).Create(&batch).Statement
+	require.Len(t, stmt.Vars, MaxBindParameters+1, "the control no longer over-binds")
+
+	db := chunkDB(t, &gorm.Config{})
+	n, err := RowsPerInsert(db.Clauses(updateAll), []chunkStamped{})
+	require.ErrorIs(t, err, ErrRowWidthUnknown, "counted %d rows", n)
+
+	require.NoError(t, db.AutoMigrate(&chunkStamped{}))
+	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX uix_chunk_stampeds_a ON chunk_stampeds (a)`).Error)
+	rows := []chunkStamped{{A: "1", B: "x"}, {A: "2", B: "y"}}
+	require.ErrorIs(t, CreateChunked(db.Clauses(updateAll), &rows).Error, ErrRowWidthUnknown)
+	var written int64
+	require.NoError(t, db.Model(&chunkStamped{}).Count(&written).Error)
+	assert.Equal(t, int64(0), written, "a refused insert wrote rows")
+}
+
+// UpdateAll on a model with NO update-time column binds nothing beyond the rows, so it is
+// counted, not refused; so is a named DoUpdates over a model that has one.
+func TestRowsPerInsertCountsUpdateAllWithNoUpdateTimeColumn(t *testing.T) {
+	db := chunkDB(t, &gorm.Config{})
+	target := []clause.Column{{Name: "a"}}
+	n, err := RowsPerInsert(db.Clauses(clause.OnConflict{Columns: target, UpdateAll: true}), []chunkThree{})
+	require.NoError(t, err)
+	assert.Equal(t, 21845, n)
+
+	n, err = RowsPerInsert(db.Clauses(clause.OnConflict{Columns: target,
+		DoUpdates: clause.AssignmentColumns([]string{"b", "updated_at"})}), []chunkStamped{})
+	require.NoError(t, err)
+	assert.Equal(t, 21845, n)
 }
 
 // A model whose width cannot be bounded is refused before anything is written.

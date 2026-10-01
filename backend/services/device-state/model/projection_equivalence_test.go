@@ -41,7 +41,7 @@ import (
 // ends where re-reading the row between them does.
 //
 // It runs on SQLite here and on PostgreSQL under the integration tag
-// (projection_equivalence_integration_test.go), because SQLite compares these time columns
+// (projection_integration_test.go), because SQLite compares these time columns
 // as text and PostgreSQL as timestamps, and a pass on one says nothing about the other.
 
 // newSQLiteProjectionApi is an Api over a fresh in-memory SQLite database of its own, with the

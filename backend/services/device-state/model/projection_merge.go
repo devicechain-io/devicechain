@@ -6,10 +6,12 @@ package model
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -31,6 +33,8 @@ import (
 // there is no read-then-write window for a concurrent writer to land in and nothing to lock
 // in advance; and the same statement serves one event (MergeLatestMeasurements /
 // MergeLatestLocations) and a whole batch (MergeProjectionBatch), so both paths apply one rule.
+// The device rows a batch has locked and folded are written back the same way, as one
+// INSERT … ON CONFLICT DO UPDATE per tenant (writeFoldedStates).
 //
 // Soft delete: the upsert would update a soft-deleted row and leave it deleted. Nothing
 // soft-deletes these rows (the tenant purge hard-deletes with raw SQL), so that state is not
@@ -51,6 +55,128 @@ var latestMeasurementGuard = clause.Where{Exprs: []clause.Expression{
 var latestLocationGuard = clause.Where{Exprs: []clause.Expression{
 	clause.Expr{SQL: "latest_locations.occurred_time < excluded.occurred_time"},
 }}
+
+// deviceStateKey is device_states' conflict key: the columns both of the batch's device-row
+// statements arbitrate on (createFolded's first-sight insert, writeFoldedStates' write-back),
+// and therefore the columns the write-back never rewrites. One definition for every use.
+var deviceStateKey = []string{"tenant_id", "device_token"}
+
+// deviceStateConflict is deviceStateKey as an ON CONFLICT target.
+func deviceStateConflict() []clause.Column {
+	cols := make([]clause.Column, len(deviceStateKey))
+	for i, k := range deviceStateKey {
+		cols[i] = clause.Column{Name: k}
+	}
+	return cols
+}
+
+// foldedStateColumns is every column of device_states the batch writes back over a row it has
+// locked and folded: all of them but the row's identity — its primary key, created_at, and
+// deviceStateKey. It is derived from the model and not listed, because it must stay the set of
+// columns tx.Save writes on the per-event path (MergeDeviceState, which updates every field): a
+// column applyEvent learns to set is then written by both paths, with no second list to
+// remember. A column gorm would not insert (not Creatable) is left out too, because its
+// excluded.<col> would be the column's default rather than the folded value.
+//
+// The NAMES match Save's; the values can differ in one way, which writeFoldedStates refuses
+// rather than writes: see zeroUnderDefault.
+func foldedStateColumns(db *gorm.DB) ([]string, error) {
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(&DeviceState{}); err != nil {
+		return nil, err
+	}
+	key := map[string]bool{}
+	for _, k := range deviceStateKey {
+		key[k] = true
+	}
+	cols := make([]string, 0, len(stmt.Schema.DBNames))
+	for _, name := range stmt.Schema.DBNames {
+		f := stmt.Schema.FieldsByDBName[name]
+		if f == nil || f.PrimaryKey || f.AutoCreateTime > 0 || !f.Updatable || !f.Creatable || key[name] {
+			continue
+		}
+		cols = append(cols, name)
+	}
+	return cols, nil
+}
+
+// zeroUnderDefault names the first written column in which a row holds its type's zero while
+// the model declares a different default (a `default:` tag). A gorm Create replaces such a zero
+// with the default, where Save wrote the zero — so writing that row back would persist a value
+// the fold never produced. No column can do that today: PresenceSource's default is INFERRED and
+// every writer sets it, and SessionId's default is its zero. A column that later could is
+// refused loudly here instead of written wrong in batches only.
+func zeroUnderDefault(db *gorm.DB, cols []string, rows []DeviceState) error {
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(&DeviceState{}); err != nil {
+		return err
+	}
+	ctx := db.Statement.Context
+	for _, name := range cols {
+		f := stmt.Schema.FieldsByDBName[name]
+		if f == nil || f.DefaultValueInterface == nil {
+			continue
+		}
+		zero := reflect.Zero(f.FieldType).Interface()
+		if reflect.DeepEqual(f.DefaultValueInterface, zero) {
+			continue
+		}
+		for i := range rows {
+			if _, isZero := f.ValueOf(ctx, reflect.ValueOf(&rows[i]).Elem()); isZero {
+				return fmt.Errorf("device %s: column %s holds its zero value, which a batch write-back "+
+					"would replace with the declared default %v", rows[i].DeviceToken, name, f.DefaultValueInterface)
+			}
+		}
+	}
+	return nil
+}
+
+// writeFoldedStates writes back every existing row the batch has locked and folded for one
+// tenant, as one multi-row INSERT … ON CONFLICT (tenant_id, device_token) DO UPDATE per
+// rdb.RowsPerInsert rows (rdb.CreateChunked): one statement for any batch the processor forms,
+// where a Save per device was one each. Every row in rows was read FOR UPDATE by this
+// transaction, so for every one the conflict arm is taken — it is an UPDATE of a row the
+// transaction already holds, the statement Save would have sent, and it takes no lock that was
+// not already held. The explicit id in VALUES is therefore never inserted.
+//
+// It is a gorm Create, not raw SQL, so the erasure fence and the tenant stamp run on it as they
+// ran on Save (raw SQL runs on gorm's Raw processor, where neither is registered). UpdatedAt is
+// set here because a Create stamps it only when it is zero, and a row read back never is; Save
+// stamps it on every write, and the GraphQL updatedAt shows it. (gorm's
+// gorm:update_track_time setting is no substitute: it is cleared after the first statement, so
+// under a chunked write only the first chunk would be stamped.) Moving from an update to a
+// create changes nothing else a callback sees: the fence is still read at the transaction's
+// first write for the tenant (now this statement, or the first createFolded), and DeviceState
+// is exempt from the audit journal on both paths.
+//
+// 🔴 Not OnConflict{UpdateAll: true}: gorm binds its updated_at assignment after
+// rdb.RowsPerInsert has counted, and core/rdb refuses that combination (ErrRowWidthUnknown).
+func writeFoldedStates(tdb *gorm.DB, rows []DeviceState) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	cols, err := foldedStateColumns(tdb)
+	if err != nil {
+		return err
+	}
+	if err := zeroUnderDefault(tdb, cols, rows); err != nil {
+		return err
+	}
+	now := tdb.NowFunc()
+	for i := range rows {
+		rows[i].UpdatedAt = now
+	}
+	return rdb.CreateChunked(foldedStatesUpsert(tdb, cols), &rows).Error
+}
+
+// foldedStatesUpsert is tdb with writeFoldedStates' conflict clause: on the device's key,
+// overwrite cols from the incoming row.
+func foldedStatesUpsert(tdb *gorm.DB, cols []string) *gorm.DB {
+	return tdb.Clauses(clause.OnConflict{
+		Columns:   deviceStateConflict(),
+		DoUpdates: clause.AssignmentColumns(cols),
+	})
+}
 
 // coalesceMeasurements reduces one device's readings, in arrival order, to one row per name:
 // the reading with the latest time at stored precision, and among readings with equal times
@@ -206,8 +332,10 @@ func (e *BatchRefusal) Unwrap() error { return e.Err }
 //     inserted with ON CONFLICT DO NOTHING; when another writer created it after step 1 read,
 //     the insert does nothing, the committed row is locked and read, and every update is
 //     folded into it instead — what merging them one at a time would have done after losing
-//     the race. An existing row is saved.
-//  3. The batch's readings, then its positions, are written as one upsert each.
+//     the race. An existing row is kept for step 3.
+//  3. The batch's existing device rows are written back in one statement (writeFoldedStates),
+//     then its readings, then its positions, as one upsert each. The write-back takes no lock
+//     step 1 or 2 did not already hold.
 //
 // Locks are taken in (tenant, table, key) order in every batch, so two batch writers cannot
 // deadlock on each other in steps 1 and 3. Three shapes can still meet in a deadlock, and
@@ -263,6 +391,7 @@ func mergeTenantBatch(tdb *gorm.DB, devices map[string][]int, updates []Projecti
 		rows[existing[i].DeviceToken] = &existing[i]
 	}
 
+	var folded []DeviceState
 	var measurements []LatestMeasurement
 	var locations []LatestLocation
 	for _, tok := range tokens {
@@ -289,9 +418,7 @@ func mergeTenantBatch(tdb *gorm.DB, devices map[string][]int, updates []Projecti
 				u := updates[i]
 				applyEvent(row, storedTime(u.OccurredAt), storedTransition(u.Presence), u.Identity)
 			}
-			if err := tdb.Save(row).Error; err != nil {
-				return err
-			}
+			folded = append(folded, *row)
 		}
 
 		var readings []LatestMeasurementInput
@@ -304,6 +431,9 @@ func mergeTenantBatch(tdb *gorm.DB, devices map[string][]int, updates []Projecti
 		if fix := coalesceLocations(tok, fixes); fix != nil {
 			locations = append(locations, *fix)
 		}
+	}
+	if err := writeFoldedStates(tdb, folded); err != nil {
+		return err
 	}
 	if err := upsertLatestMeasurements(tdb, measurements); err != nil {
 		return err
@@ -322,7 +452,7 @@ func createFolded(tdb *gorm.DB, tok string, idx []int, updates []ProjectionUpdat
 		applyEvent(row, storedTime(u.OccurredAt), storedTransition(u.Presence), u.Identity)
 	}
 	res := tdb.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}},
+		Columns:   deviceStateConflict(),
 		DoNothing: true,
 	}).Create(row)
 	if res.Error != nil {

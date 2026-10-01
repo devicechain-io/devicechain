@@ -15,6 +15,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -192,9 +193,9 @@ func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhileOnPostgres(t *testing.T
 }
 
 // 🔴 THE BATCH HOLDS EVERY ROW IT READS UNTIL IT COMMITS. Step 1 reads each existing row
-// with SELECT … FOR UPDATE, folds the batch into its copy and saves it. Without the lock that
-// is an unlocked read-modify-write: another writer (here the single-event merge) commits a
-// newer activity between the batch's read and its save, and the batch then writes its stale
+// with SELECT … FOR UPDATE, folds the batch into its copy and writes it back. Without the lock
+// that is an unlocked read-modify-write: another writer (here the single-event merge) commits
+// a newer activity between the batch's read and its write-back, and the batch then writes its stale
 // copy over it — the device's activity goes backwards. The other writer starts right after
 // the batch's read, from a connection of its own, and must still be waiting for the row when
 // the batch moves on; once the batch commits it reads the batch's row and moves it forward.
@@ -257,7 +258,7 @@ func TestABatchHoldsTheRowsItReadUntilItCommitsOnPostgres(t *testing.T) {
 		t.Fatalf("%d rows for lock-1; want exactly 1", len(rows))
 	}
 	if got := rows[0].LastActivityTime.Time; !got.Equal(t0.Add(5 * time.Minute)) {
-		t.Errorf("last activity = %v; want the other writer's newer %v — the batch saved a stale copy over it",
+		t.Errorf("last activity = %v; want the other writer's newer %v — the batch wrote a stale copy over it",
 			got, t0.Add(5*time.Minute))
 	}
 }
@@ -290,5 +291,74 @@ func TestTheUpsertsRunOnPostgres(t *testing.T) {
 	}
 	if v := mustReading(t, api, globex, "d1", "temp").Value.Float64; v != 5 {
 		t.Errorf("globex temp = %v; an equal time must not replace 5", v)
+	}
+}
+
+// The write-back of a batch's existing device rows is split so that no statement binds more
+// than PostgreSQL's parameter limit: one row more than a statement can carry is two
+// statements, and every row lands. MergeProjectionBatch puts no bound of its own on a batch.
+func TestABatchOfMoreExistingDevicesThanOneStatementHoldsOnPostgres(t *testing.T) {
+	api := newPostgresProjectionApi(t, "wide")
+	ctx := context.Background()
+	acme := core.WithTenant(ctx, "acme")
+	cols, err := foldedStateColumns(api.RDB.DB(acme))
+	if err != nil {
+		t.Fatalf("columns: %v", err)
+	}
+	perStatement, err := rdb.RowsPerInsert(foldedStatesUpsert(api.RDB.DB(acme), cols), []DeviceState{})
+	if err != nil {
+		t.Fatalf("rows per statement: %v", err)
+	}
+	n := perStatement + 1
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	batchAt := func(when time.Time) []ProjectionUpdate {
+		updates := make([]ProjectionUpdate, n)
+		for i := range updates {
+			updates[i] = data("acme", fmt.Sprintf("w-%05d", i), when)
+		}
+		return updates
+	}
+	if err := api.MergeProjectionBatch(ctx, batchAt(t0)); err != nil {
+		t.Fatalf("first sight of %d devices: %v", n, err)
+	}
+
+	// Precondition: the same rows in ONE statement are refused by the driver, so only the
+	// split lets the batch below through.
+	t.Run("one statement is too large", func(t *testing.T) {
+		var rows []DeviceState
+		if err := api.RDB.DB(acme).Order("device_token").Find(&rows).Error; err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if len(rows) != n {
+			t.Fatalf("%d rows seeded; want %d", len(rows), n)
+		}
+		probe := errors.New("roll back the probe")
+		err := api.RDB.DB(acme).Transaction(func(tx *gorm.DB) error {
+			if err := foldedStatesUpsert(tx, cols).Create(&rows).Error; err != nil {
+				return err
+			}
+			return probe
+		})
+		if !rdb.IsStatementTooLarge(err) {
+			t.Fatalf("%d rows in one statement: err = %v; want the driver's statement-too-large refusal", n, err)
+		}
+	})
+
+	counter := rdbtest.NewStatementCounter("device_states")
+	counted := NewApi(&rdb.RdbManager{Database: api.RDB.Database.Session(&gorm.Session{Logger: counter})})
+	counter.Reset()
+	if err := counted.MergeProjectionBatch(ctx, batchAt(t1)); err != nil {
+		t.Fatalf("a batch of %d existing devices: %v", n, err)
+	}
+	if _, marked := counter.Counts(); marked != 3 {
+		t.Errorf("the batch sent %d statements on device_states; want 3 (a lock read and two write-backs)", marked)
+	}
+	var moved int64
+	if err := api.RDB.DB(acme).Model(&DeviceState{}).Where("last_activity_time = ?", t1).Count(&moved).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if moved != int64(n) {
+		t.Errorf("%d of %d devices at %v after the batch", moved, n, t1)
 	}
 }

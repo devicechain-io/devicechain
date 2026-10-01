@@ -3920,6 +3920,17 @@ is still acknowledged only after its batch commits, and a redelivered event stil
 
 Nothing needs doing. See [Event persistence](./observability.md#event-persistence).
 
+#### device-state writes a batch's device states in one statement per tenant {#next-state-batch-writes}
+
+`device-state` merges the events waiting for each writer in one transaction. It wrote the state
+of each device in that batch with a statement of its own; on a three-node cloud cluster at about
+4,400 events a second, those statements were about half of `device-state`'s CPU. It now writes
+the state of every device that already has one in a single statement for each tenant in the
+batch. What a batch leaves is unchanged, and a device's `updatedAt` still advances whenever its
+state is written. A device seen for the first time is still created on its own. Nothing needs
+doing: there is no schema change, and the previous `device-state` can run beside the new one
+during the upgrade.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
