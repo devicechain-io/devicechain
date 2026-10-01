@@ -1982,6 +1982,19 @@ jobs:
           tofu init -backend=false
           tofu validate
 
+      # The plan's shape, rather than its syntax: two pools, the database one
+      # tainted, and the outputs naming how a pod reaches the database pool.
+      # `tofu test` with no test files reports success, so the pass count is
+      # required to be non-zero rather than the exit status alone trusted. The
+      # output goes through tee so a failing run still prints its per-run lines;
+      # pipefail keeps tofu's own status. (The step above ran init here.)
+      - name: tofu test deploy/gke
+        working-directory: deploy/gke
+        run: |
+          set -euo pipefail
+          tofu test -no-color | tee "$RUNNER_TEMP/gke-tftest.log"
+          grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/gke-tftest.log"
+
       # The provider's max_history default is 0, which keeps every revision of every
       # release forever. That is not a setting anyone chose, so a release added
       # without one is the expected mistake rather than an unusual one. The self-test

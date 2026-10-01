@@ -263,19 +263,34 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 		return string(b)
 	}
 	gkeTF := []byte(read("deploy", "gke", "variables.tf"))
-	nodes := tofuNumberDefault(t, gkeTF, "node_count")
-	boot := tofuNumberDefault(t, gkeTF, "node_disk_size_gb")
-	if diskType := tofuDefault(t, gkeTF, "node_disk_type"); diskType != "pd-balanced" && diskType != "pd-ssd" {
-		t.Fatalf("the GKE boot disks default to %s; the guide counts them against SSD_TOTAL_GB, which a "+
-			"pd-standard disk does not draw on. Rewrite its quota step", diskType)
+	// The README prices every further node (a load generator, an upgrade's surge
+	// node) at one boot-disk size, so the pools must agree on it.
+	boot := tofuNumberDefault(t, gkeTF, "loadgen_disk_size_gb")
+	var nodes, bootTotal int64
+	for _, pool := range []string{"database", "services", "loadgen"} {
+		if diskType := tofuDefault(t, gkeTF, pool+"_disk_type"); diskType != "pd-balanced" && diskType != "pd-ssd" {
+			t.Fatalf("the GKE %s pool's boot disks default to %s; the guide counts them against SSD_TOTAL_GB, "+
+				"which a pd-standard disk does not draw on. Rewrite its quota step", pool, diskType)
+		}
+		size := tofuNumberDefault(t, gkeTF, pool+"_disk_size_gb")
+		if size != boot {
+			t.Fatalf("the GKE %s pool's boot disks default to %d GB and the load generator's to %d; the README "+
+				"prices every node at one size", pool, size, boot)
+		}
+		if pool == "loadgen" {
+			continue // optional, priced below as an extra node
+		}
+		n := tofuNumberDefault(t, gkeTF, pool+"_node_count")
+		nodes += n
+		bootTotal += n * size
 	}
 
 	oneInstance := ha.clusterGiB() + ha.perInstanceGiB()
-	withBoot := oneInstance + nodes*boot
+	withBoot := oneInstance + bootTotal
 	// One load-generator node and the one surge node GKE adds while it upgrades a pool.
-	floor := oneInstance + (nodes+2)*boot
-	t.Logf("GKE: %d nodes × %d GB boot; one instance %d, with boot disks %d, floor to request %d",
-		nodes, boot, oneInstance, withBoot, floor)
+	floor := oneInstance + bootTotal + 2*boot
+	t.Logf("GKE: %d nodes, %d GB of boot disk; one instance %d, with boot disks %d, floor to request %d",
+		nodes, bootTotal, oneInstance, withBoot, floor)
 
 	readme := read("deploy", "gke", "README.md")
 	enBootstrap := read("docs", "docs", "deployment", "bootstrap.md")
@@ -293,28 +308,24 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 	}
 
 	// The new-project quota the guide names, and the claim it makes about it: a
-	// default install fits with almost nothing to spare, and the next 50 GB disk
-	// does not fit. Both halves are checked, so the guide's "leaves almost none"
-	// fails here the day the defaults make it false either way.
+	// default install on the guide's cluster does not fit. That fails here the day
+	// the defaults make it fit, so the guide cannot keep telling people to ask for
+	// quota they do not need.
 	quotas := figures("the GKE README's new-project quota", readme, `\*\*(\d+) GB of SSD per region\*\*`)
 	quota := quotas[0]
-	if withBoot > quota {
-		t.Fatalf("a default --ha install with one instance needs %d GB, over the %d GB of a new project; "+
-			"the README says it fits with almost none to spare", withBoot, quota)
-	}
-	if withBoot+boot <= quota {
-		t.Fatalf("a default --ha install with one instance and one more node needs %d GB, within the %d GB "+
-			"of a new project; the README says the next node takes it over", withBoot+boot, quota)
+	if withBoot <= quota {
+		t.Fatalf("a default --ha install with one instance on the GKE guide's cluster needs %d GB, within "+
+			"the %d GB of a new project; the README says it does not fit", withBoot, quota)
 	}
 
 	exact := []struct {
 		what, text, pattern string
 		want                int64
 	}{
-		{"the GKE README", readme, `leaves almost none of a new project's (\d+) GB`, quota},
+		{"the GKE README", readme, `does not fit a new project's (\d+) GB`, quota},
 		{"the GKE README", readme, `With one instance, DeviceChain claims (\d+) GB`, oneInstance},
 		{"the GKE README", readme, `(\d+) GB of it the backup store`, ha.backupStore},
-		{"the GKE README", readme, `boot disks add (\d+) GB`, nodes * boot},
+		{"the GKE README", readme, `boot disks add (\d+) GB`, bootTotal},
 		{"the GKE README", readme, `(\d+) GB in all`, withBoot},
 		{"the GKE README", readme, `add (\d+) GB each`, boot},
 		{"the GKE README", readme, `each further instance claims (\d+) GB more`, ha.perInstanceGiB()},
@@ -346,10 +357,10 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 		for _, published := range figures(tc.what, tc.text, tc.pattern) {
 			if published != tc.want {
 				t.Errorf("%s says %d (%q); the shipped defaults (%d database and %d NATS replicas; %d/%d/%d GiB "+
-					"cluster, %d/%d GiB per instance; %d × %d GB boot) give %d. Change the prose with the "+
-					"defaults, in both locales and the GKE README.", tc.what, published, tc.pattern,
+					"cluster, %d/%d GiB per instance; %d nodes, %d GB of boot disk) give %d. Change the prose "+
+					"with the defaults, in both locales and the GKE README.", tc.what, published, tc.pattern,
 					ha.dbReplicas, ha.natsReplicas, ha.relational, ha.backupStore, ha.prometheus,
-					ha.eventStore, ha.jetStream, nodes, boot, tc.want)
+					ha.eventStore, ha.jetStream, nodes, bootTotal, tc.want)
 			}
 		}
 	}
@@ -381,5 +392,143 @@ func TestPublishedDiskBudgetIsTheDefaults(t *testing.T) {
 			t.Errorf("%s no longer scopes the disk budget to a non-local cluster with the default install "+
 				"settings; the figures are not true without that scope", tc.what)
 		}
+	}
+
+	// The quota claim the prerequisites make is about the GKE guide's cluster, whose
+	// boot disks are what push it over, not about any cluster: the volumes alone
+	// (oneInstance, above) fit a new project's quota. The scope is held here, since
+	// the check above only proves the guide's cluster does not fit.
+	for _, tc := range []struct{ what, text, pattern string }{
+		{"bootstrap.md#prerequisites", enBootstrap,
+			"a default `--ha` install with one instance does not fit on the cluster the \\[Google Kubernetes Engine guide\\]"},
+		{"the es bootstrap.md#prerequisites", esBootstrap,
+			"una instalación `--ha` predeterminada con una instancia no cabe en el clúster que crea la \\[guía de Google Kubernetes Engine\\]"},
+	} {
+		if !regexp.MustCompile(strings.ReplaceAll(tc.pattern, " ", `\s+`)).MatchString(tc.text) {
+			t.Errorf("%s no longer says the default install does not fit on the cluster the GKE guide creates; "+
+				"%d GiB of volumes alone fit a new project's %d GB, so the claim is true only with that scope",
+				tc.what, oneInstance, quota)
+		}
+	}
+	if oneInstance > quota {
+		t.Fatalf("the volumes of a default --ha install with one instance (%d GiB) no longer fit a new project's "+
+			"%d GB; the prerequisites scope the claim to the GKE guide's cluster, and it is now true of any", oneInstance, quota)
+	}
+}
+
+// numberWord reads a small number the prose spells out.
+func numberWord(t *testing.T, w string) int64 {
+	t.Helper()
+
+	words := []string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+		"eleven", "twelve"}
+	for i, x := range words {
+		if strings.EqualFold(w, x) {
+			return int64(i)
+		}
+	}
+	t.Fatalf("%q is not a number word this test reads; extend numberWord", w)
+	return 0
+}
+
+// The GKE guide describes the cluster its configuration creates: each pool's
+// machine type, size and node count, the vCPUs that adds up to against the quota,
+// and what a cluster from the earlier one-pool configuration needs while it is
+// replaced. Every one of those is a function of the defaults in deploy/gke, so a
+// default that moves without the prose fails here. The release notes are not
+// checked: they record what a release changed, and stay true when a later one
+// changes the defaults again.
+func TestGKEGuideShapeIsTheDefaults(t *testing.T) {
+	repo := filepath.Join("..", "..", "..")
+	read := func(rel ...string) string {
+		b, err := os.ReadFile(filepath.Join(append([]string{repo}, rel...)...))
+		if err != nil {
+			t.Fatalf("reading %s: %v", filepath.Join(rel...), err)
+		}
+		return string(b)
+	}
+	gkeTF := []byte(read("deploy", "gke", "variables.tf"))
+	readme := read("deploy", "gke", "README.md")
+
+	// A predefined N2 type is named family-class-vCPUs, and its class fixes the
+	// memory per vCPU. Anything else fails rather than being guessed at.
+	machine := regexp.MustCompile(`^n2-(standard|highcpu|highmem)-([0-9]+)$`)
+	gbPerVCPU := map[string]int64{"highcpu": 1, "standard": 4, "highmem": 8}
+	shape := func(pool string) (mt string, vcpu, gb int64) {
+		mt = tofuDefault(t, gkeTF, pool+"_machine_type")
+		m := machine.FindStringSubmatch(mt)
+		if m == nil {
+			t.Fatalf("the GKE %s pool defaults to %s, which this test cannot size; extend it", pool, mt)
+		}
+		vcpu, err := strconv.ParseInt(m[2], 10, 64)
+		if err != nil {
+			t.Fatalf("%s: %v", mt, err)
+		}
+		return mt, vcpu, vcpu * gbPerVCPU[m[1]]
+	}
+
+	figures := func(what, pattern string) [][]string {
+		ms := regexp.MustCompile(strings.ReplaceAll(pattern, " ", `\s+`)).FindAllStringSubmatch(readme, -1)
+		if len(ms) == 0 {
+			t.Fatalf("the GKE README no longer matches %s (%s); if the sentence was reworded, point this "+
+				"test at the new wording rather than deleting the check", pattern, what)
+		}
+		return ms
+	}
+	num := func(s string) int64 {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return numberWord(t, s)
+		}
+		return n
+	}
+	expect := func(what string, got, want int64) {
+		if got != want {
+			t.Errorf("the GKE README says %d for %s; the defaults in deploy/gke/variables.tf give %d", got, what, want)
+		}
+	}
+
+	var nodes, vcpus, maxNodeVCPU int64
+	gbOf := map[string]int64{}
+	for _, pool := range []string{"database", "services"} {
+		mt, vcpu, gb := shape(pool)
+		n := tofuNumberDefault(t, gkeTF, pool+"_node_count")
+		nodes += n
+		vcpus += n * vcpu
+		maxNodeVCPU = max(maxNodeVCPU, vcpu)
+		gbOf[pool] = gb
+		for _, m := range figures(pool+"'s row", "\\| A `"+pool+"` node pool[^|\\n]*\\| ([0-9]+) × `([a-z0-9-]+)` \\(([0-9]+) vCPU, ([0-9]+) GB\\)") {
+			expect(pool+" nodes in the table", num(m[1]), n)
+			if m[2] != mt {
+				t.Errorf("the GKE README's table gives the %s pool %s; it defaults to %s", pool, m[2], mt)
+			}
+			expect(pool+"'s vCPUs per node in the table", num(m[3]), vcpu)
+			expect(pool+"'s GB per node in the table", num(m[4]), gb)
+		}
+	}
+	_, loadgenVCPU, _ := shape("loadgen")
+
+	for _, m := range figures("node sizes", "the `database` pool has ([0-9]+) GB nodes and the `services` pool ([0-9]+) GB ones") {
+		expect("the database pool's GB per node", num(m[1]), gbOf["database"])
+		expect("the services pool's GB per node", num(m[2]), gbOf["services"])
+	}
+	for _, m := range figures("the default vCPUs", "(?:The defaults use|The default cluster uses) ([0-9]+) vCPUs, and ([0-9]+) with a load-generator node") {
+		expect("the default cluster's vCPUs", num(m[1]), vcpus)
+		expect("the vCPUs with a load-generator node", num(m[2]), vcpus+loadgenVCPU)
+	}
+	for _, m := range figures("an upgrade's surge node", "takes ([0-9]+) more, which reaches ([0-9]+)") {
+		expect("an upgrade's surge node's vCPUs", num(m[1]), maxNodeVCPU)
+		expect("the vCPUs during an upgrade with a load generator", num(m[2]), vcpus+loadgenVCPU+maxNodeVCPU)
+	}
+	for _, m := range figures("the default node count", "the default ([a-z]+) nodes' boot disks") {
+		expect("the default cluster's nodes", num(m[1]), nodes)
+	}
+
+	// A cluster from the earlier configuration had one pool of three 8-vCPU nodes;
+	// while it is replaced the project may hold both shapes.
+	const oldNodes, oldVCPUs = 3, 24
+	for _, m := range figures("both shapes at once", "up to ([0-9]+) vCPUs and the boot disks of ([a-z]+) nodes") {
+		expect("the vCPUs of both shapes", num(m[1]), oldVCPUs+vcpus)
+		expect("the nodes of both shapes", num(m[2]), oldNodes+nodes)
 	}
 }

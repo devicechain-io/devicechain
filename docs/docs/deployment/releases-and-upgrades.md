@@ -4017,6 +4017,28 @@ Nothing needs doing at the upgrade.
   messages each replica sent and received to drop copies. See
   [Caches that stop answering](./observability.md#kv-caches).
 
+#### The Google Kubernetes Engine guide creates a database pool and a services pool {#next-gke-node-pools}
+
+The configuration in `deploy/gke` used to create one pool of three 8-vCPU, 32 GB nodes. It now
+creates a `database` pool of three 4-vCPU, 16 GB nodes and a `services` pool of three 4-vCPU,
+4 GB nodes, the same 24 vCPUs in all. The `database` pool is tainted, so no DeviceChain pod runs
+there unless it is placed there, and `dcctl install` does not yet place the databases there: until
+it does, they run on the `services` pool with everything else. The cluster has six boot disks
+instead of three, so a default `--ha` install with one instance needs more of the regional SSD
+quota than a new Google Cloud project allows: the guide gives the quota to request.
+
+Nothing changes for an installed instance. Applying the new configuration to a cluster created by
+the old one removes its node pool and creates the two new ones in no guaranteed order, which can
+need more vCPU and SSD quota than the project has. Recreate the cluster instead: take it down as the
+guide describes, then create it again and install.
+
+The variables `node_machine_type`, `node_count`, `node_disk_type` and `node_disk_size_gb` are gone,
+replaced by `database_*`, `services_*` and `loadgen_*` variables for each pool. OpenTofu only warns
+about an old name left in a `terraform.tfvars` and ignores its value, so a cluster recreated from an
+unchanged file is built with the defaults: a `node_disk_type = "pd-standard"` chosen to stay inside
+the SSD quota is dropped, and the boot disks go back to `pd-balanced`. Move each setting to the new
+names before you apply.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

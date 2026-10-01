@@ -560,9 +560,10 @@ The alerts for snapshots are described under
   160 GiB, as [Backup store size](#backup-store-size) explains. On a cloud provider, check the
   disk quota first. A new Google Cloud project allows 500 GB of SSD per region, counting each GiB
   of volume as one GB, and both of Google Kubernetes Engine's disk classes and the nodes' boot
-  disks count against it, so a default `--ha` install leaves almost none of it spare: the
+  disks count against it, so a default `--ha` install with one instance does not fit on the
+  cluster the
   [Google Kubernetes Engine guide](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)
-  gives the quota to request. On a local cluster the monitoring stack keeps no volume, and on
+  creates: the guide gives the quota to request. On a local cluster the monitoring stack keeps no volume, and on
   kind the sizes are not enforced.
 - **OpenTofu** (the `tofu` binary; `terraform` also works) on your `PATH`. `dcctl` drives it
   to provision infrastructure. Install it from [opentofu.org](https://opentofu.org). Run
