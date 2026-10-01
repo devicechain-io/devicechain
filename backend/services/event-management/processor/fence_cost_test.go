@@ -68,16 +68,24 @@ func newFencedPersistenceWorker(t *testing.T) (*EventPersistenceWorker, *gorm.DB
 		t.Fatalf("register erasure fence: %v", err)
 	}
 	if err := db.AutoMigrate(&rdb.PurgedTenant{}, &rdb.AuditEvent{},
-		&model.Event{}, &model.MeasurementEvent{}, &model.EventAnchor{}); err != nil {
+		&model.Event{}, &model.MeasurementEvent{}, &model.LocationEvent{}, &model.AlertEvent{},
+		&model.StateChangeEvent{}, &model.EventAnchor{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	// The ON CONFLICT arbiters, restated for sqlite exactly as model/persistence_test.go
 	// restates them (production gets them from the Postgres migration). Copied rather than
 	// shared because that helper lives in another package's _test file, and exporting a
-	// test fixture from model would put it in the production package.
+	// test fixture from model would put it in the production package. The alternate-id
+	// index is here too: without it sqlite would accept the second of two events sharing an
+	// alternate id and instant, which PostgreSQL refuses (23505), and the persistence
+	// writer's alternate-id skip could be removed with nothing turning red.
 	for _, stmt := range []string{
 		`CREATE UNIQUE INDEX idx_events_identity ON events (tenant_id, event_id, occurred_time);`,
+		`CREATE UNIQUE INDEX idx_events_tenant_alt_id ON events (tenant_id, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`,
 		`CREATE UNIQUE INDEX uq_measurement_events_idem ON measurement_events (tenant_id, payload_id, occurred_time);`,
+		`CREATE UNIQUE INDEX uq_location_events_idem ON location_events (tenant_id, payload_id, occurred_time);`,
+		`CREATE UNIQUE INDEX uq_alert_events_idem ON alert_events (tenant_id, payload_id, occurred_time);`,
+		`CREATE UNIQUE INDEX uq_state_change_events_idem ON state_change_events (tenant_id, device_token, occurred_time, state, session_id);`,
 		`CREATE UNIQUE INDEX uq_event_anchors_idem ON event_anchors (tenant_id, event_id, occurred_time, anchor_type, anchor_token);`,
 	} {
 		if err := db.Exec(stmt).Error; err != nil {

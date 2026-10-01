@@ -56,6 +56,12 @@ type EventPersistenceResults struct {
 	// CreateEventAnchors upserts against exactly those columns. The older comment here
 	// claimed event_anchors carried no unique index; that stopped being true when the
 	// index was added, and the claim survived the change.
+	//
+	// The skip still matters for one case the index cannot cover: anchors are not part of
+	// the event id, so a redelivery that was resolved again after its device was reassigned
+	// re-presents the SAME event with a DIFFERENT anchor set, and re-running would add the
+	// new set beside the old one. That is why the batch writer (persist_grouped.go) does not
+	// group state changes but writes each through writeEvent, which keeps this skip.
 	Deduped bool
 }
 
@@ -174,11 +180,16 @@ func parseNullableFloat64(val *string) (*float64, error) {
 	return &parsed, nil
 }
 
-// Persists a location event to the datastore. All of the message's location
-// rows are inserted as a single batch on the supplied (transaction-bound) db
-// handle so they commit all-or-nothing (ADR-022 E5).
-func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db *gorm.DB, event model.Event,
-	payload dmmodel.ResolvedLocationsPayload) (*EventPersistenceResults, error) {
+// errPayloadMismatch is the refusal for a location, measurement or alert event whose
+// payload is not of its type (see writeEvent).
+func errPayloadMismatch(kind string) error {
+	return fmt.Errorf("%w: non-%s payload in %s event", ErrDeterministic, kind, kind)
+}
+
+// locationRequests maps a location payload to one create request per entry, each under
+// the message's base event. A value that is not a number is refused as deterministic.
+// It is the one mapping, shared by the per-message path and the grouped batch write.
+func locationRequests(event model.Event, payload dmmodel.ResolvedLocationsPayload) ([]*model.LocationEventCreateRequest, error) {
 	requests := make([]*model.LocationEventCreateRequest, 0, len(payload.Entries))
 	for _, location := range payload.Entries {
 		lat, err := parseNullableFloat64(location.Latitude)
@@ -216,25 +227,12 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db 
 			Heading:           hdg,
 		})
 	}
-	created, err := ep.Api.CreateLocationEvents(ctx, db, requests)
-	if err != nil {
-		return nil, err
-	}
-	events := make([]interface{}, 0, len(created))
-	for _, locevt := range created {
-		events = append(events, locevt)
-	}
-	results := &EventPersistenceResults{
-		Events: events,
-	}
-	return results, nil
+	return requests, nil
 }
 
-// Persists measurement events to the datastore. All of the message's
-// measurement rows are inserted as a single batch on the supplied
-// (transaction-bound) db handle so they commit all-or-nothing (ADR-022 E5).
-func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, db *gorm.DB, event model.Event,
-	payload dmmodel.ResolvedMeasurementsPayload) (*EventPersistenceResults, error) {
+// measurementRequests is locationRequests for a measurement payload: one request per
+// reading of every entry.
+func measurementRequests(event model.Event, payload dmmodel.ResolvedMeasurementsPayload) ([]*model.MeasurementEventCreateRequest, error) {
 	requests := make([]*model.MeasurementEventCreateRequest, 0)
 	for _, mxentry := range payload.Entries {
 		for _, mx := range mxentry.Entries {
@@ -259,6 +257,57 @@ func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, 
 			})
 		}
 	}
+	return requests, nil
+}
+
+// alertRequests is locationRequests for an alert payload, which has nothing to parse.
+func alertRequests(event model.Event, payload dmmodel.ResolvedAlertsPayload) []*model.AlertEventCreateRequest {
+	requests := make([]*model.AlertEventCreateRequest, 0, len(payload.Entries))
+	for _, alert := range payload.Entries {
+		requests = append(requests, &model.AlertEventCreateRequest{
+			Event:             event,
+			EntryOccurredTime: alert.OccurredTime,
+			Type:              alert.Type,
+			Level:             alert.Level,
+			Message:           alert.Message,
+			Source:            alert.Source,
+		})
+	}
+	return requests
+}
+
+// Persists a location event to the datastore. All of the message's location
+// rows are inserted as a single batch on the supplied (transaction-bound) db
+// handle so they commit all-or-nothing (ADR-022 E5).
+func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db *gorm.DB, event model.Event,
+	payload dmmodel.ResolvedLocationsPayload) (*EventPersistenceResults, error) {
+	requests, err := locationRequests(event, payload)
+	if err != nil {
+		return nil, err
+	}
+	created, err := ep.Api.CreateLocationEvents(ctx, db, requests)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]interface{}, 0, len(created))
+	for _, locevt := range created {
+		events = append(events, locevt)
+	}
+	results := &EventPersistenceResults{
+		Events: events,
+	}
+	return results, nil
+}
+
+// Persists measurement events to the datastore. All of the message's
+// measurement rows are inserted as a single batch on the supplied
+// (transaction-bound) db handle so they commit all-or-nothing (ADR-022 E5).
+func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, db *gorm.DB, event model.Event,
+	payload dmmodel.ResolvedMeasurementsPayload) (*EventPersistenceResults, error) {
+	requests, err := measurementRequests(event, payload)
+	if err != nil {
+		return nil, err
+	}
 	created, err := ep.Api.CreateMeasurementEvents(ctx, db, requests)
 	if err != nil {
 		return nil, err
@@ -278,18 +327,7 @@ func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, 
 // they commit all-or-nothing (ADR-022 E5).
 func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *gorm.DB, event model.Event,
 	payload dmmodel.ResolvedAlertsPayload) (*EventPersistenceResults, error) {
-	requests := make([]*model.AlertEventCreateRequest, 0, len(payload.Entries))
-	for _, alert := range payload.Entries {
-		requests = append(requests, &model.AlertEventCreateRequest{
-			Event:             event,
-			EntryOccurredTime: alert.OccurredTime,
-			Type:              alert.Type,
-			Level:             alert.Level,
-			Message:           alert.Message,
-			Source:            alert.Source,
-		})
-	}
-	created, err := ep.Api.CreateAlertEvents(ctx, db, requests)
+	created, err := ep.Api.CreateAlertEvents(ctx, db, alertRequests(event, payload))
 	if err != nil {
 		return nil, err
 	}
@@ -433,19 +471,19 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 		case esmodel.Location:
 			payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload)
 			if !ok {
-				return fmt.Errorf("%w: non-location payload in location event", ErrDeterministic)
+				return errPayloadMismatch("location")
 			}
 			results, perr = ep.PersistLocationEvents(ctx, tx, pevent, *payload)
 		case esmodel.Measurement:
 			payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
 			if !ok {
-				return fmt.Errorf("%w: non-measurement payload in measurement event", ErrDeterministic)
+				return errPayloadMismatch("measurement")
 			}
 			results, perr = ep.PersistMeasurementEvents(ctx, tx, pevent, *payload)
 		case esmodel.Alert:
 			payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload)
 			if !ok {
-				return fmt.Errorf("%w: non-alert payload in alert event", ErrDeterministic)
+				return errPayloadMismatch("alert")
 			}
 			results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
 		case esmodel.StateChange:
@@ -468,8 +506,9 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 		// skips anchor persistence. This is an optimization, NOT the correctness guard the
 		// comment here used to claim: event_anchors does carry a unique index
 		// (uq_event_anchors_idem) and CreateEventAnchors upserts on exactly its columns, so
-		// re-running this would be a no-op rather than a duplicated anchor set. Removing
-		// the skip would cost a round trip, not correctness.
+		// re-running this with the SAME anchor set would be a no-op rather than a duplicate.
+		// A redelivery resolved again after a reassignment carries a different set, though,
+		// and the skip is what keeps that set off the stored event (see Deduped).
 		if results != nil && results.Deduped {
 			return nil
 		}
@@ -491,6 +530,12 @@ func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *g
 	if len(event.Anchors) == 0 {
 		return nil
 	}
+	return ep.Api.CreateEventAnchors(ctx, db, anchorRows(eventId, event))
+}
+
+// anchorRows is an event's anchor set as event_anchors rows: one per resolved anchor,
+// each under the event's id, device, type and instant.
+func anchorRows(eventId []byte, event dmmodel.ResolvedEvent) []*model.EventAnchor {
 	anchors := make([]*model.EventAnchor, 0, len(event.Anchors))
 	for _, a := range event.Anchors {
 		anchors = append(anchors, &model.EventAnchor{
@@ -502,7 +547,7 @@ func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *g
 			AnchorToken:  a.AnchorToken,
 		})
 	}
-	return ep.Api.CreateEventAnchors(ctx, db, anchors)
+	return anchors
 }
 
 // Process persists what arrives on Unpersisted until the channel is closed: it collects a

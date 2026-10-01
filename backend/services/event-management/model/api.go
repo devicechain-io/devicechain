@@ -49,6 +49,11 @@ type EventManagementApi interface {
 	CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error)
 	CreateStateChangeEvents(ctx context.Context, db *gorm.DB, requests []*StateChangeEventCreateRequest) ([]*StateChangeEvent, int64, error)
 
+	// CreateEventRows writes one tenant's parent and payload rows, built for any number of
+	// events, with one statement per table (see EventRows). The persistence writer uses it
+	// to write a batch grouped by tenant; the batch creates above are its per-message path.
+	CreateEventRows(ctx context.Context, db *gorm.DB, rows *EventRows) error
+
 	// CreateEventAnchors persists an event's anchor set (ADR-013) on the given db
 	// handle (a transaction), so the event is queryable by each of the device's
 	// tracked-relationship dimensions.
@@ -78,6 +83,9 @@ type EventManagementApi interface {
 	// alternateId was already persisted for the tenant in context, backing
 	// idempotent ingestion of a redelivered message.
 	EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error)
+	// EventsExistByAltId is EventExistsByAltId for many keys in one query, answering each
+	// key in order.
+	EventsExistByAltId(ctx context.Context, db *gorm.DB, keys []AltIdKey) ([]bool, error)
 
 	// AnchorsForEvent returns one event's anchor set by its EVENT ID, backing the
 	// Event.anchors field. Keyed on the identity because the natural key can name two
@@ -94,36 +102,102 @@ type EventManagementApi interface {
 // context. The inserts performed by fn either all commit or all roll back, making
 // a message's events atomic (ADR-022 E5) — or a whole batch of messages', when the
 // persistence writer commits several in one transaction. Each statement fn makes
-// binds its own message's context (db.WithContext), so the tenant-scope and erasure
-// fence callbacks, which read the tenant from the statement, see that
-// message's tenant however many tenants the transaction carries.
+// binds the context of a message of the statement's own tenant (db.WithContext) — one
+// message's, or, for a statement the writer shares between several messages, the first of
+// that tenant's — so the tenant-scope and erasure fence callbacks, which read the tenant
+// from the statement, see that tenant however many tenants the transaction carries.
 //
 // Idempotency on the at-least-once consume path does not depend on the
 // transaction: every event id is derived from the event's content and every insert
 // carries an ON CONFLICT DO NOTHING arbiter, so a redelivery — with or without an
 // alternateId — or a batch written again after a rollback adds nothing twice.
 // EventExistsByAltId is a shortcut that skips a known redelivery before its
-// inserts, not the guard.
+// inserts, not that guard. It does guard one thing the arbiters cannot: an event
+// re-sent with the same alternate id and instant but different content has a
+// different event id, so the events insert's arbiter does not absorb it, and
+// idx_events_tenant_alt_id would refuse it (23505) if the probe had not skipped it.
 func (api *Api) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) error {
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(tx)
 	})
 }
 
-// EventExistsByAltId reports whether an event with the given alternateId already
-// exists for the tenant in context at occurred (the dedup key components beyond
-// tenant_id, which the global query callback applies). It backs idempotent
-// ingestion: a redelivered resolved event is detected and skipped rather than
-// double-persisted. db may be a transaction handle so the check and the inserts
-// that follow share one transaction.
+// AltIdKey is an event's alternate-id dedup key beyond its tenant: its alternate id and
+// the instant it occurred.
+type AltIdKey struct {
+	AltId        string
+	OccurredTime time.Time
+}
+
+// AltIdMatch is an AltIdKey as the event store compares it. occurred_time is stored at
+// microsecond resolution, and the PostgreSQL driver binds a time.Time as
+// Unix()*1e6 + Nanosecond()/1e3, which is exactly time.Time.UnixMicro, so two keys with
+// equal AltIdMatch are the same key to the server. It is comparable, so a caller can key a
+// map on it; it is the one definition of "the same alternate id" the persistence writer
+// uses, here and in its in-batch rule.
+type AltIdMatch struct {
+	altId string
+	us    int64
+}
+
+// Match is k as the event store compares it.
+func (k AltIdKey) Match() AltIdMatch {
+	return AltIdMatch{altId: k.AltId, us: k.OccurredTime.UnixMicro()}
+}
+
+// EventsExistByAltId reports, for each key in order, whether an event with that alternate
+// id at that instant is already stored for the tenant in ctx (tenant_id is applied by the
+// global query callback). It backs idempotent ingestion: a redelivered resolved event is
+// detected and skipped rather than double-persisted. db may be a transaction handle, so the
+// check and the inserts that follow share one transaction.
+//
+// It is ONE query whatever the number of keys: the (alt_id, occurred_time) pairs are
+// matched in SQL, so the server compares each instant exactly as it compares a single
+// key's, and the pairs are bounded by the keys' earliest and latest instants so a
+// hypertable read touches only the chunks that cover them. The rows found are matched back
+// to the keys at the store's resolution (AltIdMatch).
+func (api *Api) EventsExistByAltId(ctx context.Context, db *gorm.DB, keys []AltIdKey) ([]bool, error) {
+	out := make([]bool, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	pairs := make([][]any, 0, len(keys))
+	lo, hi := keys[0].OccurredTime, keys[0].OccurredTime
+	for _, k := range keys {
+		pairs = append(pairs, []any{k.AltId, k.OccurredTime})
+		if k.OccurredTime.Before(lo) {
+			lo = k.OccurredTime
+		}
+		if k.OccurredTime.After(hi) {
+			hi = k.OccurredTime
+		}
+	}
+	var found []struct {
+		AltId        string
+		OccurredTime time.Time
+	}
+	if err := db.WithContext(ctx).Model(&Event{}).Select("alt_id", "occurred_time").
+		Where("(alt_id, occurred_time) IN ? AND occurred_time >= ? AND occurred_time <= ?", pairs, lo, hi).
+		Find(&found).Error; err != nil {
+		return nil, err
+	}
+	stored := make(map[AltIdMatch]struct{}, len(found))
+	for _, f := range found {
+		stored[AltIdKey{AltId: f.AltId, OccurredTime: f.OccurredTime}.Match()] = struct{}{}
+	}
+	for i, k := range keys {
+		_, out[i] = stored[k.Match()]
+	}
+	return out, nil
+}
+
+// EventExistsByAltId is EventsExistByAltId for one key.
 func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error) {
-	var count int64
-	if err := db.WithContext(ctx).Model(&Event{}).
-		Where("alt_id = ? AND occurred_time = ?", altId, occurred).
-		Count(&count).Error; err != nil {
+	found, err := api.EventsExistByAltId(ctx, db, []AltIdKey{{AltId: altId, OccurredTime: occurred}})
+	if err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	return found[0], nil
 }
 
 // canonicalPayloadEntry renders one payload row's distinguishing content as deterministic
@@ -253,20 +327,37 @@ func (api *Api) CreateAlertEvent(ctx context.Context, request *AlertEventCreateR
 	return created[0], nil
 }
 
-// Create a batch of location events in multi-row INSERTs of at most rdb.RowsPerInsert
-// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
-// transaction). The per-row request->row mapping is
-// identical to CreateLocationEvent; tenant scoping is applied by the global
-// tenant-scope create callback, which stamps the tenant onto every slice entry.
-func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*LocationEventCreateRequest) ([]*LocationEvent, error) {
-	if len(requests) == 0 {
-		return []*LocationEvent{}, nil
-	}
+// payloadConflict is the arbiter every payload table shares: a row's own identity.
+//
+// ON CONFLICT on the row's own identity, for the same reason the parent has one: the
+// base-event key cannot cover payload rows, so a redelivery of an event carrying no
+// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
+// envelope owning N copies of its own rows.
+var payloadConflict = clause.OnConflict{
+	Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
+	DoNothing: true,
+}
+
+// insertPayloadRows inserts payload rows (a pointer to a slice of a payload model) ON
+// CONFLICT on their identity, split by rdb.CreateChunked. The caller upserts the parent
+// events first; the payload rows relate to them by event_id, with no association or
+// foreign key (ADR-026 amd, see events.go).
+func insertPayloadRows(ctx context.Context, db *gorm.DB, rows any) error {
+	return rdb.CreateChunked(db.WithContext(ctx).Clauses(payloadConflict), rows).Error
+}
+
+// BuildLocationRows maps requests to their parent events and location rows without
+// writing anything. It is the one request-to-row mapping, shared by CreateLocationEvents
+// and the persistence writer's grouped batch write. It refuses a request with no entry
+// instant (ErrZeroEntryTime) and returns the error DeriveLocationPayloadId returns. The
+// rows carry no tenant: the tenant-scope create callback stamps the context's, or refuses
+// a row a caller stamped with another.
+func BuildLocationRows(requests []*LocationEventCreateRequest) ([]*Event, []*LocationEvent, error) {
 	parents := make([]*Event, 0, len(requests))
-	created := make([]*LocationEvent, 0, len(requests))
+	rows := make([]*LocationEvent, 0, len(requests))
 	for _, request := range requests {
 		if request.EntryOccurredTime.IsZero() {
-			return nil, errZeroEntryTime("location")
+			return nil, nil, errZeroEntryTime("location")
 		}
 		parents = append(parents, &request.Event)
 		// The row's identity is derived from the frozen preimage in
@@ -274,11 +365,11 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 		// measurement subscription derives the same identity for a reading it streams
 		// rather than stores, and two copies of a content-addressed preimage is two
 		// answers waiting to disagree.
-		payloadId, cerr := DeriveLocationPayloadId(request)
-		if cerr != nil {
-			return nil, cerr
+		payloadId, err := DeriveLocationPayloadId(request)
+		if err != nil {
+			return nil, nil, err
 		}
-		created = append(created, &LocationEvent{
+		rows = append(rows, &LocationEvent{
 			EventId:      request.EventId,
 			PayloadId:    payloadId,
 			DeviceToken:  request.DeviceToken,
@@ -292,47 +383,23 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 			Heading:      rdb.NullFloat64Of(request.Heading),
 		})
 	}
-	if err := upsertParentEvents(ctx, db, parents); err != nil {
-		return nil, err
-	}
-	// The parent events are upserted above; the child rows relate to the base event by
-	// event_id — no association / foreign key (ADR-026 amd, see events.go).
-	//
-	// ON CONFLICT on the row's own identity, for the same reason the parent has one: the
-	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
-	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
-	// envelope owning N copies of its own rows.
-	result := rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
-		DoNothing: true,
-	}), &created)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return created, nil
+	return parents, rows, nil
 }
 
-// Create a batch of measurement events in multi-row INSERTs of at most rdb.RowsPerInsert
-// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
-// transaction). The per-row request->row mapping is
-// identical to CreateMeasurementEvent; tenant scoping is applied by the global
-// tenant-scope create callback.
-func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error) {
-	if len(requests) == 0 {
-		return []*MeasurementEvent{}, nil
-	}
+// BuildMeasurementRows is BuildLocationRows for measurement requests.
+func BuildMeasurementRows(requests []*MeasurementEventCreateRequest) ([]*Event, []*MeasurementEvent, error) {
 	parents := make([]*Event, 0, len(requests))
-	created := make([]*MeasurementEvent, 0, len(requests))
+	rows := make([]*MeasurementEvent, 0, len(requests))
 	for _, request := range requests {
 		if request.EntryOccurredTime.IsZero() {
-			return nil, errZeroEntryTime("measurement")
+			return nil, nil, errZeroEntryTime("measurement")
 		}
 		parents = append(parents, &request.Event)
-		payloadId, cerr := DeriveMeasurementPayloadId(request)
-		if cerr != nil {
-			return nil, cerr
+		payloadId, err := DeriveMeasurementPayloadId(request)
+		if err != nil {
+			return nil, nil, err
 		}
-		created = append(created, &MeasurementEvent{
+		rows = append(rows, &MeasurementEvent{
 			EventId:      request.EventId,
 			PayloadId:    payloadId,
 			DeviceToken:  request.DeviceToken,
@@ -345,47 +412,23 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 			DataType:     request.DataType,
 		})
 	}
-	if err := upsertParentEvents(ctx, db, parents); err != nil {
-		return nil, err
-	}
-	// The parent events are upserted above; the child rows relate to the base event by
-	// event_id — no association / foreign key (ADR-026 amd, see events.go).
-	//
-	// ON CONFLICT on the row's own identity, for the same reason the parent has one: the
-	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
-	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
-	// envelope owning N copies of its own rows.
-	result := rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
-		DoNothing: true,
-	}), &created)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return created, nil
+	return parents, rows, nil
 }
 
-// Create a batch of alert events in multi-row INSERTs of at most rdb.RowsPerInsert
-// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
-// transaction). The per-row request->row mapping is
-// identical to CreateAlertEvent; tenant scoping is applied by the global
-// tenant-scope create callback.
-func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error) {
-	if len(requests) == 0 {
-		return []*AlertEvent{}, nil
-	}
+// BuildAlertRows is BuildLocationRows for alert requests.
+func BuildAlertRows(requests []*AlertEventCreateRequest) ([]*Event, []*AlertEvent, error) {
 	parents := make([]*Event, 0, len(requests))
-	created := make([]*AlertEvent, 0, len(requests))
+	rows := make([]*AlertEvent, 0, len(requests))
 	for _, request := range requests {
 		if request.EntryOccurredTime.IsZero() {
-			return nil, errZeroEntryTime("alert")
+			return nil, nil, errZeroEntryTime("alert")
 		}
 		parents = append(parents, &request.Event)
-		payloadId, cerr := DeriveAlertPayloadId(request)
-		if cerr != nil {
-			return nil, cerr
+		payloadId, err := DeriveAlertPayloadId(request)
+		if err != nil {
+			return nil, nil, err
 		}
-		created = append(created, &AlertEvent{
+		rows = append(rows, &AlertEvent{
 			EventId:      request.EventId,
 			PayloadId:    payloadId,
 			DeviceToken:  request.DeviceToken,
@@ -397,24 +440,110 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 			Source:       request.Source,
 		})
 	}
+	return parents, rows, nil
+}
+
+// Create a batch of location events in multi-row INSERTs of at most rdb.RowsPerInsert
+// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
+// transaction). The per-row request->row mapping is BuildLocationRows; tenant scoping is
+// applied by the global tenant-scope create callback, which stamps the tenant onto every
+// slice entry.
+func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*LocationEventCreateRequest) ([]*LocationEvent, error) {
+	if len(requests) == 0 {
+		return []*LocationEvent{}, nil
+	}
+	parents, created, err := BuildLocationRows(requests)
+	if err != nil {
+		return nil, err
+	}
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	// The parent events are upserted above; the child rows relate to the base event by
-	// event_id — no association / foreign key (ADR-026 amd, see events.go).
-	//
-	// ON CONFLICT on the row's own identity, for the same reason the parent has one: the
-	// base-event key cannot cover payload rows, so a redelivery of an event carrying no
-	// alternateId (every event lwm2m-ingest and sparkplug-ingest produce) used to leave one
-	// envelope owning N copies of its own rows.
-	result := rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
-		DoNothing: true,
-	}), &created)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := insertPayloadRows(ctx, db, &created); err != nil {
+		return nil, err
 	}
 	return created, nil
+}
+
+// Create a batch of measurement events in multi-row INSERTs of at most rdb.RowsPerInsert
+// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
+// transaction). The per-row request->row mapping is BuildMeasurementRows; tenant scoping
+// is applied by the global tenant-scope create callback.
+func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error) {
+	if len(requests) == 0 {
+		return []*MeasurementEvent{}, nil
+	}
+	parents, created, err := BuildMeasurementRows(requests)
+	if err != nil {
+		return nil, err
+	}
+	if err := upsertParentEvents(ctx, db, parents); err != nil {
+		return nil, err
+	}
+	if err := insertPayloadRows(ctx, db, &created); err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// Create a batch of alert events in multi-row INSERTs of at most rdb.RowsPerInsert
+// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
+// transaction). The per-row request->row mapping is BuildAlertRows; tenant scoping is
+// applied by the global tenant-scope create callback.
+func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error) {
+	if len(requests) == 0 {
+		return []*AlertEvent{}, nil
+	}
+	parents, created, err := BuildAlertRows(requests)
+	if err != nil {
+		return nil, err
+	}
+	if err := upsertParentEvents(ctx, db, parents); err != nil {
+		return nil, err
+	}
+	if err := insertPayloadRows(ctx, db, &created); err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// EventRows is every parent and payload row a group of ONE tenant's events writes, built
+// without touching the database (Build*Rows). A caller that builds it for several events
+// must give every row that tenant's TenantId: the tenant-scope create callback then refuses
+// a row filed under the wrong group (rdb.ErrTenantMismatch) instead of stamping it with the
+// context's.
+type EventRows struct {
+	Parents      []*Event
+	Locations    []*LocationEvent
+	Measurements []*MeasurementEvent
+	Alerts       []*AlertEvent
+}
+
+// CreateEventRows writes rows on db under the tenant in ctx: the parents first
+// (deduplicated on their event id, as upsertParentEvents always has), then each payload
+// table that has rows. It makes one rdb.CreateChunked call per table, so one INSERT per
+// table unless that table's rows exceed rdb.RowsPerInsert, and at most one held savepoint
+// per table when they do. Every statement keeps its ON CONFLICT arbiter.
+func (api *Api) CreateEventRows(ctx context.Context, db *gorm.DB, rows *EventRows) error {
+	if err := upsertParentEvents(ctx, db, rows.Parents); err != nil {
+		return err
+	}
+	if len(rows.Locations) > 0 {
+		if err := insertPayloadRows(ctx, db, &rows.Locations); err != nil {
+			return err
+		}
+	}
+	if len(rows.Measurements) > 0 {
+		if err := insertPayloadRows(ctx, db, &rows.Measurements); err != nil {
+			return err
+		}
+	}
+	if len(rows.Alerts) > 0 {
+		if err := insertPayloadRows(ctx, db, &rows.Alerts); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Create a new state change event. Returns the created row.

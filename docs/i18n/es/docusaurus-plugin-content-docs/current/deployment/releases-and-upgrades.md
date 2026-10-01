@@ -4191,6 +4191,28 @@ a unos 5.200 eventos por segundo en tres nodos de 8 vCPU, volver a iniciar sesi�
   bajo mantiene menos conexiones en la base de datos, a costa de una conexión e inicio de sesión
   nuevos para cada consulta que encuentra más que esas en uso.
 
+#### event-management escribe cada lote con una sentencia por tabla {#next-grouped-writes}
+
+`event-management` almacenaba un lote de eventos con sentencias separadas para cada evento: una
+para el evento, otra para sus lecturas, ubicaciones o alertas, y otra para sus anclajes de relación,
+cada una un viaje de ida y vuelta al almacén de eventos mientras la transacción del lote seguía
+abierta. Ahora escribe el lote con una sentencia por tabla para cada inquilino que contiene, dentro
+de la misma transacción, así que un lote hace unos pocos viajes en lugar de varios por evento. Lo
+que se almacena no cambia, un evento se sigue reconociendo solo después de que su lote se confirme,
+y un evento reentregado sigue sin añadir nada.
+
+- Cuando la base de datos rechaza una fila de una de esas sentencias que lleva varios eventos, por
+  ejemplo un valor demasiado grande para su columna, no indica a qué evento pertenece. El lote se
+  vuelve a escribir entonces en una transacción nueva, evento a evento, para encontrar el evento
+  rechazado, que se trata como antes. Ese evento le cuesta a su lote una transacción más, y
+  `persist_batch_fallbacks_total` cuenta las dos. Un evento rechazado antes de enviar nada, como
+  una lectura que no es un número, y los eventos de un inquilino eliminado se siguen apartando de
+  inmediato.
+- Los eventos de conexión y desconexión se siguen escribiendo uno a uno dentro del lote.
+- Volver a `v0.18.0` no requiere nada: lee y escribe las mismas filas.
+
+No hay que hacer nada. Consulte [Persistencia de eventos](./observability.md#event-persistence).
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe
