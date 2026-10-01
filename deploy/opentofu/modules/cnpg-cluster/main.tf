@@ -736,10 +736,22 @@ locals {
   # Kubernetes' toleration rule, restricted to the two operators the variable admits:
   # same key; Exists, or Equal with the same value; an empty effect matches every
   # effect. A PreferNoSchedule taint never keeps a pod off, so it is not counted.
+  #
+  # 🔴 A FIELD THE CLUSTER DID NOT SET IS PRESENT AND NULL, NOT ABSENT. kubernetes_resources
+  # types each Node from the API schema, so a node that was never cordoned reads back with
+  # spec.unschedulable null and an untainted one with spec.taints null. try() catches only
+  # an error, and reading a null attribute is not one: try(n.spec.unschedulable, false)
+  # returns null, and both `!null` and `for … in null` are errors that stop the run. So each node field
+  # is compared against null rather than defaulted by try() alone; try() remains only for
+  # a node with no spec at all. No operand below relies on `&&`/`||` short-circuiting,
+  # which OpenTofu before 1.10 does not do: each one is error-free for every node shape.
+  # The taint value in the comparison needs no such guard: `==` with null is false, and
+  # an Equal toleration can never carry the empty value a null would stand for (the
+  # tolerations variable refuses one).
   placement_usable = [
     for n in local.placement_nodes : n.metadata.name
-    if !try(n.spec.unschedulable, false) && alltrue([
-      for taint in try(n.spec.taints, []) :
+    if !(try(n.spec.unschedulable, null) == true) && alltrue([
+      for taint in(try(n.spec.taints, null) == null ? [] : n.spec.taints) :
       !contains(["NoSchedule", "NoExecute"], taint.effect) || anytrue([
         for t in var.tolerations :
         t.key == taint.key &&
