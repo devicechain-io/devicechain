@@ -1984,11 +1984,31 @@ failed is a CREATE, on an instance that is running the code under test."
   # is readable by any local process through /proc for as long as the command runs, and
   # is one `set -x` away from a CI step log with a ninety-day retention. apiprobe
   # REFUSES a DSN carrying one rather than trusting this comment.
-  PGPASSWORD="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get secret "$secret" \
-    -o jsonpath='{.data.password}' | base64 -d)" \
-    "$apiprobe" tablesweep \
-    --dsn "postgres://${user}@127.0.0.1:${port}/${rdb_db}?sslmode=disable" \
-    --tenant "$sweep_tenant" || rc=$?
+  local pg_pw
+  pg_pw="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get secret "$secret" \
+    -o jsonpath='{.data.password}' | base64 -d)"
+
+  # 🔴 A COVERAGE answer is re-asked for a bounded time, and only a COVERAGE answer.
+  # Some tables are not written by the API call that seeds them: event-processing
+  # projects device-management's roster, attribute and active-version facts into its
+  # own tables, and it consumes them only while it holds its detection partition. An
+  # upgrade that rolls the broker can leave the previous replica's lease to EXPIRE
+  # rather than be released, and the new replica then waits out the lease and its
+  # handover slack (about fifty seconds) before it reads a single fact. The facts are
+  # durable and arrive; a sweep taken seconds after the seed simply reads before
+  # they have. The bound stays well short of anything that would let a table no
+  # entity writes to pass: that one is still empty when the window closes, and fails
+  # exactly as before.
+  local deadline=$((SECONDS + 180))
+  while :; do
+    rc=0
+    PGPASSWORD="$pg_pw" "$apiprobe" tablesweep \
+      --dsn "postgres://${user}@127.0.0.1:${port}/${rdb_db}?sslmode=disable" \
+      --tenant "$sweep_tenant" || rc=$?
+    [[ $rc -eq $APIPROBE_EXIT_COVERAGE && $SECONDS -lt $deadline ]] || break
+    note "not every table holds a row yet; asking again in 10s (event-processing's projections are written asynchronously)"
+    sleep 10
+  done
   stop_forward
 
   if [[ $rc -eq $APIPROBE_EXIT_SETUP ]]; then
