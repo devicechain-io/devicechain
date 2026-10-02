@@ -22,7 +22,7 @@ func TestIngestSamplesDoesNotRetryBackpressure(t *testing.T) {
 	failures := prometheus.NewCounter(prometheus.CounterOpts{Name: "ingest_failures"})
 	refusal := fmt.Errorf("emit: %w", &messaging.BackpressureError{Stream: "s", Durable: "d", Ratio: 0.93})
 	fake := &fakeIngester{err: refusal}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, fixedNow,
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, admitAllSamples{}, fixedNow,
 		Metrics{IngestFailures: failures})
 
 	c.ingestSamples("g/n", []Sample{{Name: "t", Value: 1, Time: 1}})

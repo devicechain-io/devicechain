@@ -31,8 +31,9 @@ package eventlimit
 // It bounds ONE EVENT — its stored rows, the parameters of the statement that inserts them,
 // and the work one event costs downstream. It does not bound a message's total fan-out on
 // the gateway paths, since a split message becomes several events; the ingest rate limits
-// bound volume, and a rate limit cannot stand in for this bound, because it charges one
-// token however much a message carries.
+// bound volume, counted in readings over time, and a rate limit cannot stand in for this
+// bound, because a single charge is bounded only by the tier's burst, which an operator
+// may raise to any size.
 const MaxReadingsPerEvent = 256
 
 // Split cuts s, in order, into consecutive pieces of at most MaxReadingsPerEvent elements.

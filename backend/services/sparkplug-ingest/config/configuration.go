@@ -27,6 +27,15 @@ import (
 // stable, MQTT-topic-safe token; "devicechain" is the platform default.
 const DefaultHostId = "devicechain"
 
+const (
+	// DefaultIngestMessagesPerSecond and DefaultIngestBurst are the per-tenant ingest
+	// ceiling applied when none is configured, counted in READINGS (one numeric Sparkplug
+	// metric), the same platform default as event-sources and lwm2m-ingest. Why 1000 is in
+	// the chart's values.yaml, event-sources block. A tenant's tier overrides both.
+	DefaultIngestMessagesPerSecond = 1000
+	DefaultIngestBurst             = 2000
+)
+
 // SparkplugConfiguration is the top-level configuration for the adapter: the set
 // of per-tenant Sparkplug sources it connects to (ADR-069). An empty set is a
 // valid, inert configuration (the service runs but connects to nothing) — this is
@@ -36,6 +45,25 @@ type SparkplugConfiguration struct {
 	// Host Application connection each. Tenancy is fixed per source (M7); see the
 	// package doc.
 	Sources []SparkplugSource
+
+	// IngestRateLimit is the platform-default, per-tenant ingest ceiling the readings
+	// of every DATA message are charged against. See IngestRateLimit.
+	IngestRateLimit IngestRateLimit
+}
+
+// IngestRateLimit is the platform-default, per-tenant ingest ceiling, counted in readings.
+// A Sparkplug DATA message's numeric metrics are charged against it before they are
+// ingested; readings over it are dropped and counted (a clean-session Host gets no
+// redelivery). Births, deaths and the message rate are not metered: the session machine
+// must observe every message. It is fail-safe: an unset, non-positive or NaN value falls
+// back to the platform default, never to unlimited and never to zero.
+type IngestRateLimit struct {
+	// MessagesPerSecond is the sustained per-tenant rate, in readings per second. The name
+	// matches event-sources' and lwm2m-ingest's key, which also meters messages there.
+	MessagesPerSecond float64
+	// Burst is the largest instantaneous batch, in readings, before the sustained rate
+	// applies.
+	Burst int
 }
 
 // SparkplugSource is one tenant-bound Sparkplug Host Application connection. The
@@ -114,12 +142,19 @@ func NewSparkplugConfiguration() *SparkplugConfiguration {
 // ApplyDefaults fills unset fields (ADR-022 decision 1). Only a source's HostId
 // has a universal default; an empty Groups list is a meaningful value (subscribe
 // to all groups), not an unset one, so it is left alone. An empty Sources list is
-// likewise meaningful (connect to nothing).
+// likewise meaningful (connect to nothing). The ingest ceiling is floored per field to
+// the platform default, written `!(x > 0)` so a NaN rate floors too.
 func (c *SparkplugConfiguration) ApplyDefaults() {
 	for i := range c.Sources {
 		if strings.TrimSpace(c.Sources[i].HostId) == "" {
 			c.Sources[i].HostId = DefaultHostId
 		}
+	}
+	if !(c.IngestRateLimit.MessagesPerSecond > 0) {
+		c.IngestRateLimit.MessagesPerSecond = DefaultIngestMessagesPerSecond
+	}
+	if c.IngestRateLimit.Burst <= 0 {
+		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
 }
 

@@ -319,10 +319,14 @@ read yet.
 - `device-management` stops reading `inbound-events` while `resolved-events` is refusing, and
   `event-sources` stops reading the MQTT capture stream while `inbound-events` is refusing. The
   backlog waits in the stream before, and no message uses up its delivery attempts.
-- The refusal applies to **every tenant**, because the streams are shared. A single tenant sending
-  more than the pipeline can process can therefore hold back the others. The per-tenant ingest
-  ceiling (see [Tenants metered at the platform default](#tenant-ceilings)) is the control that
-  prevents this.
+- The refusal applies to **every tenant**, because the streams are shared. Each tenant is first
+  held to its own ingest ceiling, counted in readings, before the shared gate is consulted. At the
+  default of 1000 readings per second, a tenant's own devices cannot by themselves send more than
+  a default high-availability installation was measured to store, on the cluster described in
+  [what the default allows](../concepts/governance.md#ingest-default), with one `event-sources`
+  replica. Tenants together still can, and so can a tenant whose tier raises its ceiling, any
+  tenant on a smaller cluster, and a client posting over HTTP under many tenant names, since a
+  name is metered before its credential is checked. The gate then refuses everyone.
 - The broker still discards the oldest message when a stream is full. That now happens only if
   events arrive faster than the gate can act, and the alerts in
   [Messages a consumer never read](#unread-loss) still report it.
@@ -331,9 +335,9 @@ What each transport does while the stream is refusing:
 
 | Transport | What the device sees |
 | --- | --- |
-| HTTP | `503` with `Retry-After: 10`, before the body is read. The event was not stored. Retry it. |
+| HTTP | `503` with `Retry-After: 10`, after the request has passed its tenant's own ceiling (a tenant over it gets `429` instead). The event was not stored. Retry it. |
 | MQTT (the platform broker) | Nothing. The broker acknowledged the message before the platform could refuse it. The message waits in the capture stream, which discards its oldest messages once it is full (`JetStreamDurableLostUnread`). |
-| External MQTT broker | Nothing. The message was already acknowledged. It is dropped and counted in `devicechain_eventsources_total_msg_backpressured{source}`. |
+| External MQTT broker | Nothing. The message was already acknowledged. It is dropped and counted in `devicechain_eventsources_total_msg_backpressured{source}` (a message over its tenant's ceiling is counted in `devicechain_eventsources_total_msg_rate_limited` instead). |
 | Sparkplug | Readings are dropped without retrying and counted in `devicechain_sparkplugingest_ingest_failures_total`. |
 | LwM2M | Notifications are dropped and counted in `devicechain_lwm2mingest_notify_ingest_dropped_total`. The next notification replaces the lost one. |
 

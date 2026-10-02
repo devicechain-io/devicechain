@@ -190,7 +190,7 @@ Conviene tener prevista la consecuencia. Un inquilino apretado contra su techo t
 
 **Una degradación pasa por la misma puerta.** A un inquilino apretado contra su techo se le puede rechazar la reparación junto con la rotación que causa la presión. No se pierde nada, porque una liberación rechazada deja el dispositivo afirmado y la siguiente pasada lo vuelve a encontrar, pero la reparación no llega antes de lo que el techo permite.
 
-Esto se aplica a la toma MQTT del broker de la plataforma. La ingesta de Sparkplug no aplica ningún techo por inquilino y no descarta nada, y LwM2M usa su propio límite, configurado por separado.
+Esto se aplica a la toma MQTT del broker de la plataforma. Sparkplug cobra sus lecturas DATA contra el techo del inquilino, pero no las transiciones de presencia que afirman sus nacimientos y muertes. LwM2M usa su propio límite, configurado por separado.
 
 ### Reducir el clúster del broker exige reiniciar `event-sources` {#resizing-the-broker-cluster}
 

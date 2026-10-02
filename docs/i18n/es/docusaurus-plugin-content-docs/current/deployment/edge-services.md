@@ -479,7 +479,7 @@ yendo al único pod que sirve.
 | `security.handshakeTimeoutSeconds` | `10` | Acota un handshake DTLS, para que uno atascado no pueda inmovilizar recursos. |
 | `security.maxSessions` | `100000` | Techo de la tabla de sesiones vivas. Un handshake por encima del techo se rechaza y se cuenta, nunca se admite en silencio. |
 | `maxLifetimeSeconds` | `86400` | El techo hasta el que se recorta el tiempo de vida de todo registro. **Es la palanca que acota cuánto tiempo figura en línea un dispositivo muerto.** Debe quedar por encima del mayor tiempo de vida que pidan tus dispositivos. |
-| `ingestRateLimit.messagesPerSecond` | `1000` | Techo de ingesta sostenida por inquilino. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
+| `ingestRateLimit.messagesPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas (muestras decodificadas) y en mensajes Notify antes de decodificar. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
 | `ingestRateLimit.burst` | `2000` | Margen de ráfaga para lo anterior. |
 | `downlink.timeoutSeconds` | `10` | Acota un intercambio de comando con un dispositivo. Al expirar, el comando se reporta como fallido en lugar de quedar colgado. Súbelo para dispositivos celulares lentos que duermen. |
 | `downlink.concurrency` | `16` | Paralelismo de comandos entre dispositivos. Los comandos de un mismo dispositivo se ejecutan siempre en orden, sea cual sea este valor. |
@@ -516,30 +516,44 @@ muerte retrasada de una sesión anterior. Es también la razón por la que todas
 un mismo client id: lo que expulsa a un host zombi es el propio desalojo por client id duplicado del
 broker.
 
-:::caution La vía de Sparkplug no acota ni la tasa de mensajes ni el tamaño total de un mensaje
-La ingesta de Sparkplug **no aplica ningún techo de ingesta por inquilino y no descarta nada**. Un
-mensaje con más de 256 lecturas se divide en eventos consecutivos de como máximo 256, así que ningún
-evento supera el límite de la plataforma, pero el total del mensaje no está acotado. Un nodo de borde
-desbocado en un broker configurado no se limita en la puerta. Acótalo en el broker, mediante los
-grupos a los que te suscribes, y mediante el número de métricas por publicación en el nodo de borde.
-Consulta [Ingesta de Sparkplug sin límite](#unbounded-sparkplug-ingest).
+:::caution La vía de Sparkplug no acota la tasa de mensajes ni el tamaño total de un mensaje
+Sparkplug cobra las lecturas de cada mensaje DATA contra el techo de ingesta del inquilino, y descarta
+lo que lo supera. No mide la tasa de mensajes, los nacimientos ni las muertes, y el tamaño total de un
+mensaje solo lo acota el broker. Consulta [Qué acota la ingesta de Sparkplug](#unbounded-sparkplug-ingest).
 :::
 
-### Ingesta de Sparkplug sin límite {#unbounded-sparkplug-ingest}
+### Qué acota la ingesta de Sparkplug {#unbounded-sparkplug-ingest}
 
-A diferencia de LwM2M y de las vías de ingesta de dispositivo habituales, la ingesta de Sparkplug **no
-aplica ningún techo de ingesta por inquilino y no descarta nada**. El razonamiento es que su
-exposición es un broker al que elegiste conectarte deliberadamente, y no un endpoint abierto. La
-consecuencia es tuya: un nodo de borde desbocado en un broker configurado no se limita en la puerta.
-Acótalo en el broker, o mediante los grupos a los que te suscribes.
+**Las lecturas se cobran contra el techo de ingesta del inquilino.** Cada métrica numérica de un
+mensaje NDATA o DDATA es una lectura, que se cobra contra el mismo techo por inquilino, contado en
+lecturas, que usan todos los demás transportes de dispositivo (consulta
+[qué permite el valor por defecto](../concepts/governance.md#ingest-default)). Se cobra una vez por
+mensaje, antes de almacenarlo, y un reintento dentro del manejador no se vuelve a cobrar. Las lecturas
+por encima del techo se descartan y se cuentan en `ingest_samples_shed_total`. Un Host de sesión
+limpia no recibe reentregas del broker, así que una lectura descartada se pierde, como ocurre en
+cualquier transporte con una lectura por encima de su techo.
 
-**El límite de tasa no se aplica aquí, y el límite de lecturas se aplica dividiendo.** El límite de
-tasa anterior mide *mensajes*. El [límite de lecturas por evento](../guides/connecting-a-device.md#how-much-one-message-may-carry)
-se aplica en esta vía dividiendo el mensaje, no rechazándolo. Un DDATA que lleve miles de métricas se
+| Ajuste | Predeterminado | Qué hace |
+|---|---|---|
+| `ingestRateLimit.messagesPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas. El nivel del inquilino lo sustituye. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
+| `ingestRateLimit.burst` | `2000` | Ráfaga permitida para lo anterior, en lecturas. |
+
+**Qué no se mide.** La tasa de mensajes no se mide, porque el Host debe observar cada mensaje para
+mantener correctas sus sesiones. Los valores de métricas de un nacimiento no se cobran: Sparkplug
+informa por excepción, así que un nacimiento es el único lugar donde aparece una métrica que cambia
+poco, y un renacimiento tras una reconexión o una conmutación por error reenvía a la vez el conjunto
+completo de métricas de cada nodo. Los nacimientos los acota la sesión: una vez por secuencia de
+nacimiento, y con los renacimientos solicitados espaciados. Tampoco se miden las transiciones de
+presencia que afirman nacimientos y muertes. Un nodo de borde desbocado aún puede enviar mensajes tan
+rápido como el broker los entregue. Acótalo en el broker, o mediante los grupos a los que te suscribes.
+
+**El límite de lecturas se aplica dividiendo.** El
+[límite de lecturas por evento](../guides/connecting-a-device.md#how-much-one-message-may-carry) se
+aplica en esta vía dividiendo el mensaje, no rechazándolo. Un DDATA que lleve miles de métricas se
 convierte en varios eventos, y sigue siendo una lectura almacenada por métrica: cada una, su propia
 fila, actualización de estado y evaluación de reglas en el motor de detección que comparten todos los
-inquilinos. La división acota cada evento, no el mensaje. Acota el número de métricas por publicación
-en el nodo de borde, del mismo modo y por la misma razón por la que acotas su tasa.
+inquilinos. La división acota cada evento, y el techo acota las lecturas por segundo, pero nada acota
+el total de un mensaje. Acota el número de métricas por publicación en el nodo de borde.
 
 La [puerta del ciclo de vida del inquilino](./tenant-deletion.md) sigue aplicándose. El tráfico de un
 inquilino en eliminación se rechaza en esta vía como en cualquier otra, y se cuenta en
@@ -678,6 +692,7 @@ Prefijo: `devicechain_sparkplugingest_`.
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths que pidió la máquina de sesión, y los que su cola de publicación estaba demasiado llena para aceptar. Un descarte es una señal de latencia más que un fallo (la petición se vuelve a hacer en la siguiente ventana del nodo), pero una tasa de descarte sostenida significa que los rebirths salen más despacio de lo que se piden. Léelo junto a `rebirth_requests_total`, que solo cuenta lo que llegó al cable y por tanto está limitado por el publicador y no por la demanda: **descartes mientras `rebirth_requests_total` sube hasta un techo estable** es un fan-out que supera a un publicador por lo demás sano; **descartes mientras está plano** son las propias publicaciones atascándose, lo que apunta a la conexión con el broker. |
 | `unknown_device_dropped_total` | Tráfico de identidades sin dispositivo, con el registro automático desactivado. |
 | `decode_errors_total` / `ingest_failures_total` | Payloads malformados, y fallos al publicar hacia adelante. |
+| `ingest_samples_shed_total` | Lecturas DATA descartadas porque un inquilino supera su techo de ingesta. Un inquilino que descarta aquí envía más lecturas de las que permite su nivel. |
 | `tenant_deleted_dropped_total` | Tráfico rechazado porque su inquilino está siendo eliminado. |
 
 ### Métricas de la ingesta LwM2M {#lwm2m-ingestion-metrics}
@@ -697,7 +712,7 @@ Prefijo: `devicechain_lwm2mingest_`.
 | `notify_decode_failures_total` | Payloads malformados. |
 | `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Lecturas que traía un Notify y que no produjeron ninguna medición. **Que no sean numéricas es normal**: una lectura IPSO booleana o de texto es un dispositivo funcionando bien, y este contador es lo que distingue ese caso del de un dispositivo que se ha quedado callado, que desde aquí se ve igual. Los otros dos son fallos de firmware: un valor que resolvió a infinito o NaN, y una lectura sin ruta de recurso. |
 | `observation_overflow_total` | Un registro que supera el tope de 32 observaciones. Algunos de sus recursos no se observan. |
-| `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta. |
+| `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta, en mensajes Notify y en lecturas. |
 | `shadows_reconstructed_total` | Presencia reconstruida tras un cambio de liderazgo. Un pico es la huella de un relevo. |
 | `commands_failed_total` / `commands_not_served_total` | Comandos descendentes que no llegaron a destino. |
 | `command_live_claim_errors_total` | Comandos **no llevados a cabo** porque command-delivery no pudo confirmarlos. Cada comando se confirma con command-delivery inmediatamente antes de llegar al dispositivo, y sin esa confirmación nunca se envía. Una tasa sostenida significa que ningún comando LwM2M está llegando a su dispositivo: **es la señal sobre la que alertar.** Los comandos se reintentan, no se pierden. |

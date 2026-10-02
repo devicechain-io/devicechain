@@ -90,7 +90,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 		func(_ string, _ string, _ []byte, err error) error {
 			t.Errorf("unexpected failed-decode: %v", err)
 			return nil
-		}, nil)
+		}, nil, admitAllReadings)
 	require.NoError(t, src.Initialize(ctx))
 	src.SetReader(reader)
 	src.SetWriter(writer)

@@ -28,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -142,6 +143,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// sources so an inert (empty-sources) deployment does not demand service auth it
 	// will never use.
 	var ingester *host.Ingester
+	var limiter *adapter.IngestLimiter
 	var reconciler *host.Reconciler
 	if len(Configuration.Sources) > 0 {
 		writer, err := NatsManager.NewWriter(streams.InboundEvents)
@@ -154,9 +156,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		}
 		ingester = built
 		reconciler = rec
+		// Built beside the ingester, and only with it: every client that ingests charges
+		// its DATA readings against the tenant's ingest ceiling.
+		limiter = buildSampleLimiter(Microservice.InstanceConfiguration.Infrastructure, Configuration.IngestRateLimit,
+			adapter.IngestLimiterMetrics{SamplesShed: Microservice.NewCounter("ingest_samples_shed_total",
+				"Sparkplug readings dropped at the tenant's ingest ceiling (counted in readings).")},
+			governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
 	}
 
-	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, reconciler, metrics)
+	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, limiter, reconciler, metrics)
 	if err != nil {
 		return err
 	}
@@ -217,16 +225,27 @@ func buildMetrics() host.Metrics {
 // client. Failing here (bad scheme, an intended-but-empty password env) fails the
 // service closed at startup rather than dialing a mis-authenticated broker and
 // retry-looping silently — repo convention (ADR-022).
-func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester, reconciler *host.Reconciler, metrics host.Metrics) ([]*host.Client, error) {
+func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester,
+	limiter *adapter.IngestLimiter, reconciler *host.Reconciler, metrics host.Metrics) ([]*host.Client, error) {
 	// Convert a possibly-nil *Ingester into the interface as a real nil rather than a
 	// typed nil: passing a nil *Ingester directly would wrap into a NON-nil interface,
 	// so the Client's `ingester != nil` guard would pass and Ingest would panic. This
 	// makes the "non-nil whenever there are sources" invariant structural, not a
 	// comment. (In production the caller only builds an ingester when Sources is
-	// non-empty, so this stays nil only for the zero-source case.)
+	// non-empty, so this stays nil only for the zero-source case.) The limiter is
+	// converted the same way, for the same reason: a typed-nil limiter would pass
+	// NewClient's check and panic on the first DATA message instead.
 	var si host.SampleIngester
 	if ingester != nil {
 		si = ingester
+	}
+	var sl host.SampleLimiter
+	if limiter != nil {
+		sl = limiter
+	}
+	if si != nil && sl == nil {
+		return nil, fmt.Errorf("sparkplug sources were given an ingest path but no ingest ceiling: " +
+			"every client that ingests must charge its readings against the tenant's ceiling")
 	}
 	clients := make([]*host.Client, 0, len(cfg.Sources))
 	for i := range cfg.Sources {
@@ -235,7 +254,7 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		if err != nil {
 			return nil, err
 		}
-		client := host.NewClient(src, broker, si, time.Now, metrics)
+		client := host.NewClient(src, broker, si, sl, time.Now, metrics)
 		// The reconciler is shared across sources; a nil one (no ingest path) leaves
 		// reconciliation off. Set before Connect so the first onConnected can use it.
 		if reconciler != nil {
@@ -244,6 +263,28 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		clients = append(clients, client)
 	}
 	return clients, nil
+}
+
+// buildSampleLimiter builds the per-tenant reading ceiling every DATA message is charged
+// against: the tenant's ingest ceiling from user-management (cached, failing open to the
+// platform default) when it is configured, or the platform default for every tenant when
+// it is not — either way a real limit, never unlimited. It is stage 2 of
+// adapter.IngestLimiter alone (NewSampleLimiter): the Sparkplug session machine must
+// observe every message, so there is no message stage to shed at. The token is a separate
+// service token scoped to tenant:read alone, like the tenant gate's.
+func buildSampleLimiter(infra mscfg.InfrastructureConfiguration, cfg config.IngestRateLimit,
+	metrics adapter.IngestLimiterMetrics, unresolved func(core.CeilingSource)) *adapter.IngestLimiter {
+	def := governance.Limits{MessagesPerSecond: cfg.MessagesPerSecond, Burst: cfg.Burst}
+	resolve := core.StaticCeiling(def.MessagesPerSecond, def.Burst)
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant Sparkplug ingest overrides disabled; metering every tenant at the platform default.")
+	} else {
+		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
+			[]string{string(auth.TenantRead)})
+		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+		resolve = governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest).Ceiling
+	}
+	return adapter.NewSampleLimiter(resolve, metrics, unresolved)
 }
 
 // buildIngester assembles the device-resolution + durable-emit pipeline around a

@@ -92,6 +92,16 @@ var (
 	// topology (the chart always wires user-management) and the result is still bounded.
 	HttpRateLimiter *core.TenantRateLimiter
 
+	// ReadingRateLimiter, BacklogReadingRateLimiter and HttpReadingRateLimiter are the
+	// READING-stage counterparts of RateLimiter, BacklogRateLimiter and HttpRateLimiter:
+	// each charges a decoded message's readings, over the same resolver as its message
+	// counterpart wrapped in governance.ReadingCeiling, with the same contention shedding
+	// (live and HTTP shed, backlog never). They carry no unresolved or overflow counter:
+	// the message stage already counts each message once.
+	ReadingRateLimiter        *core.TenantRateLimiter
+	BacklogReadingRateLimiter *core.TenantRateLimiter
+	HttpReadingRateLimiter    *core.TenantRateLimiter
+
 	// ShedPriorityResolver resolves a tenant's ADR-063 shed priority (band) from
 	// user-management, cached like the ingest ceiling. It is what turns the contention
 	// floor into a per-tenant shed factor and what labels a shed by its class. nil when
@@ -126,12 +136,22 @@ var (
 	// event is a durable write into a tenant, so a path around it would be a path
 	// around both the erasure refusal and the ceiling.
 	ingestGate processor.RateGate
+	// readingGate is the reading stage every transport passes after decode, built once
+	// over the three reading limiters and shared like ingestGate.
+	readingGate processor.ReadingGate
 
 	// Metrics
 	MessagesCounter     *prometheus.CounterVec
 	DecodedCounter      *prometheus.CounterVec
 	FailedDecodeCounter *prometheus.CounterVec
 	RateLimitedCounter  *prometheus.CounterVec
+	// ReadingLimitedCounter counts decoded messages shed at the per-tenant ingest ceiling
+	// for the readings they carry, and ReadingsRateLimitedCounter the readings in them.
+	// Apart from RateLimitedCounter because such a message WAS received (it is counted on
+	// total_inbound_messages), where a message RateLimitedCounter counts was not; keeping
+	// them apart keeps "received minus rate-limited" meaning what it meant.
+	ReadingLimitedCounter      *prometheus.CounterVec
+	ReadingsRateLimitedCounter *prometheus.CounterVec
 	// TenantGoneCounter counts inbound messages refused because their tenant has been
 	// deleted (ADR-077). Apart from RateLimitedCounter because the two mean opposite
 	// things: a rate shed is a tenant pressing against a ceiling, this is the platform
@@ -220,6 +240,14 @@ func initializeMetrics() {
 		// unbounded, attacker-influenceable cardinality vector, ADR-023 G.3). It lets an
 		// operator see WHICH tier is being shed under a contention floor without leaking
 		// per-tenant cardinality into the metric.
+		[]string{"source", "shed_class"})
+	ReadingLimitedCounter = Microservice.NewCounterVec(
+		"total_msg_reading_limited",
+		"Count of decoded inbound messages shed at the per-tenant ingest ceiling for the readings they carry, by shed class",
+		[]string{"source", "shed_class"})
+	ReadingsRateLimitedCounter = Microservice.NewCounterVec(
+		"total_readings_rate_limited",
+		"Count of decoded readings shed at the per-tenant ingest ceiling, by shed class",
 		[]string{"source", "shed_class"})
 	InvalidEventTimeCounter = Microservice.NewCounterVec(
 		"total_msg_invalid_event_time",
@@ -329,6 +357,7 @@ func buildRateLimiter() {
 		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
 		HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
+		buildReadingRateLimiters(flat, shedPrio)
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
@@ -352,8 +381,21 @@ func buildRateLimiter() {
 	RateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved)
 	BacklogRateLimiter = core.NewTenantRateLimiter(resolver.Ceiling, unresolved)
 	HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(resolver.Ceiling, ShedPriorityResolver.Resolve), unresolved, overflow)
+	buildReadingRateLimiters(resolver.Ceiling, ShedPriorityResolver.Resolve)
 	log.Info().Str("userManagement", umURL).Int("contentionFloor", contentionLevel()).
 		Msg("Per-tenant ingest overrides + ADR-063 shed priorities enabled (fail-open to platform default).")
+}
+
+// buildReadingRateLimiters builds the reading-stage limiters over the same base resolver
+// and shed priorities as the message stage, each through governance.ReadingCeiling (the
+// one definition of a reading ceiling). It is one function for both branches of
+// buildRateLimiter so the rule the message stage follows holds here by construction: the
+// live and HTTP allowances carry the contention shed, and the backlog allowance never
+// does, because it drains messages the broker already PUBACKed.
+func buildReadingRateLimiters(base core.TenantCeilingResolver, shedPriority func(string) (int, bool)) {
+	ReadingRateLimiter = core.NewTenantRateLimiter(governance.ReadingCeiling(shedAdjusted(base, shedPriority)))
+	BacklogReadingRateLimiter = core.NewTenantRateLimiter(governance.ReadingCeiling(base))
+	HttpReadingRateLimiter = core.NewTenantRateLimiter(governance.ReadingCeiling(shedAdjusted(base, shedPriority)))
 }
 
 // Create decoder based on event source configuration.
@@ -386,6 +428,10 @@ func buildEventSources() error {
 		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources"),
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, onRateShed),
 		onTenantGone)
+	// The reading stage, charged after decode on every transport. One gate, built once,
+	// for the same reason as ingestGate.
+	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter,
+		onReadingShed)
 
 	for _, source := range Configuration.EventSources {
 		// Create decoder.
@@ -441,7 +487,7 @@ func buildEventSources() error {
 				GatewaySourceId = source.Id
 				gateway := processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
-					ingestGate)
+					ingestGate, readingGate)
 				// Held so createNatsComponents can hand it the capture reader and its
 				// inbound-events writer once they exist. Sources are built in the
 				// INITIALIZE phase and readers and writers are created in START, so there
@@ -458,7 +504,7 @@ func buildEventSources() error {
 			// reconnect is a post-startup failure; see the source's onConnect.
 			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, nil, "", "",
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				ingestGate, admitInbound, failProcess)
+				ingestGate, readingGate, admitInbound, failProcess)
 			if err != nil {
 				return err
 			}
@@ -467,7 +513,7 @@ func buildEventSources() error {
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
 				Configuration.HttpIngest,
 				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				ingestGate, admitInbound, onConnectionClosedBeforeRequest)
+				ingestGate, readingGate, admitInbound, onConnectionClosedBeforeRequest)
 			if err != nil {
 				return err
 			}
@@ -547,6 +593,20 @@ func onRateShed(source string, tenant string) {
 	if log.Debug().Enabled() {
 		log.Debug().Str("source", source).Str("tenant", tenant).
 			Msg("Shed inbound event exceeding per-tenant ingest rate limit")
+	}
+}
+
+// onReadingShed accounts for one decoded message shed at its tenant's ceiling for the
+// readings it carries: one message on ReadingLimitedCounter and its readings on
+// ReadingsRateLimitedCounter, both by the bounded shed class. The tenant goes to the
+// debug log as a FIELD only, for the reason onRateShed gives.
+func onReadingShed(source, tenant string, readings int) {
+	class := shedClassOf(tenant)
+	ReadingLimitedCounter.WithLabelValues(source, class).Inc()
+	ReadingsRateLimitedCounter.WithLabelValues(source, class).Add(float64(readings))
+	if log.Debug().Enabled() {
+		log.Debug().Str("source", source).Str("tenant", tenant).Int("readings", readings).
+			Msg("Shed a decoded event exceeding the per-tenant ingest ceiling in readings")
 	}
 }
 

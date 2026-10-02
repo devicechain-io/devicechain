@@ -328,11 +328,16 @@ los que ese consumidor aún no ha leído.
 - `device-management` deja de leer `inbound-events` mientras `resolved-events` rechaza, y
   `event-sources` deja de leer el flujo de captura MQTT mientras `inbound-events` rechaza. La cola
   espera en el flujo anterior, y ningún mensaje gasta sus intentos de entrega.
-- El rechazo afecta a **todos los inquilinos**, porque los flujos son compartidos. Un solo
-  inquilino que envíe más de lo que la canalización puede procesar puede frenar a los demás. El
-  límite de ingesta por inquilino (consulte
-  [Inquilinos medidos con el valor por defecto de la plataforma](#tenant-ceilings)) es el control
-  que lo impide.
+- El rechazo afecta a **todos los inquilinos**, porque los flujos son compartidos. Antes de
+  consultar la compuerta compartida, cada inquilino se limita a su propio techo de ingesta, contado
+  en lecturas. Con el valor por defecto de 1000 lecturas por segundo, los dispositivos de un solo
+  inquilino no pueden enviar por sí mismos más de lo que se midió que almacena una instalación de
+  alta disponibilidad por defecto, en el clúster descrito en
+  [qué permite el valor por defecto](../concepts/governance.md#ingest-default), con una réplica de
+  `event-sources`. Varios inquilinos juntos sí pueden, igual que un inquilino cuyo nivel eleva su
+  techo, cualquier inquilino en un clúster más pequeño y un cliente que publica por HTTP con muchos
+  nombres de inquilino, porque un nombre se mide antes de comprobar su credencial. Entonces la
+  compuerta rechaza a todos.
 - El broker sigue descartando el mensaje más antiguo cuando un flujo está lleno. Ahora eso solo
   ocurre si los eventos llegan más rápido de lo que la compuerta puede actuar, y las alertas de
   [Mensajes que un consumidor nunca leyó](#unread-loss) lo siguen informando.
@@ -341,9 +346,9 @@ Qué hace cada transporte mientras el flujo rechaza:
 
 | Transporte | Qué ve el dispositivo |
 | --- | --- |
-| HTTP | `503` con `Retry-After: 10`, antes de leer el cuerpo. El evento no se almacenó. Reinténtelo. |
+| HTTP | `503` con `Retry-After: 10`, después de que la solicitud haya pasado el techo de su inquilino (un inquilino por encima recibe `429`). El evento no se almacenó. Reinténtelo. |
 | MQTT (el broker de la plataforma) | Nada. El broker confirmó el mensaje antes de que la plataforma pudiera rechazarlo. El mensaje espera en el flujo de captura, que descarta sus mensajes más antiguos cuando se llena (`JetStreamDurableLostUnread`). |
-| Broker MQTT externo | Nada. El mensaje ya estaba confirmado. Se descarta y se cuenta en `devicechain_eventsources_total_msg_backpressured{source}`. |
+| Broker MQTT externo | Nada. El mensaje ya estaba confirmado. Se descarta y se cuenta en `devicechain_eventsources_total_msg_backpressured{source}` (un mensaje por encima del techo de su inquilino se cuenta en `devicechain_eventsources_total_msg_rate_limited`). |
 | Sparkplug | Las lecturas se descartan sin reintentar y se cuentan en `devicechain_sparkplugingest_ingest_failures_total`. |
 | LwM2M | Las notificaciones se descartan y se cuentan en `devicechain_lwm2mingest_notify_ingest_dropped_total`. La siguiente notificación sustituye a la perdida. |
 

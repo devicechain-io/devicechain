@@ -40,7 +40,7 @@ DeviceChain **observa** (Observe) las instancias de objeto de *sensor* del dispo
 - La observación tiene un tope de 32 instancias por registro.
 - Ni el rango ni el tope son un ajuste configurable.
 - Los objetos de gestión (Security, Server, Device y el resto del conjunto OMA) nunca se observan.
-- Un Notify con más de 256 valores numéricos se almacena como varios eventos de como máximo 256 cada uno, en lugar de recortarse. El presupuesto de muestras del inquilino sigue aplicándose: un Notify mayor de lo que el presupuesto puede admitir de una vez conserva los eventos que admite, y el resto se descarta y se cuenta en `ingest_samples_shed_total`.
+- Un Notify con más de 256 valores numéricos se almacena como varios eventos de como máximo 256 cada uno, en lugar de recortarse. El techo de ingesta del inquilino, contado en lecturas, sigue aplicándose: un Notify mayor de lo que el techo puede admitir de una vez conserva los eventos que admite, y el resto se descarta y se cuenta en `ingest_samples_shed_total`.
 
 Hoy solo se decodifican las notificaciones en **SenML-JSON**, y conviene que lo dimensiones de antemano: un cliente conforme solo LwM2M 1.0 no puede producirlas. SenML llegó con LwM2M 1.1, así que un cliente 1.0 responde correctamente al Observe con `4.06 Not Acceptable`. Ese dispositivo sigue registrándose, impulsa la presencia y acepta comandos, pero no reporta **ninguna telemetría**. Esta es hoy la mayor brecha funcional del soporte de LwM2M; decodificar el formato TLV más antiguo es el trabajo pendiente que la cierra. Ambos rechazos se contabilizan, de modo que un operador puede verlo ocurrir en lugar de deducirlo a partir de datos ausentes.
 

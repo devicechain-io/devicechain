@@ -448,7 +448,7 @@ proxy). It must be a path that keeps every datagram of a session going to the on
 | `security.handshakeTimeoutSeconds` | `10` | Bounds one DTLS handshake, so a stalled one cannot pin resources. |
 | `security.maxSessions` | `100000` | Ceiling on the live session table. A handshake past the ceiling is refused and counted, never silently admitted. |
 | `maxLifetimeSeconds` | `86400` | The ceiling every registration lifetime is clamped down to. **This is the lever that bounds how long a dead device reads online.** Must stay above the longest lifetime your devices request. |
-| `ingestRateLimit.messagesPerSecond` | `1000` | Per-tenant sustained ingest ceiling. Unset or non-positive falls back to this default, never to unlimited. |
+| `ingestRateLimit.messagesPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings (decoded samples), and in Notify messages before decode. Unset or non-positive falls back to this default, never to unlimited. |
 | `ingestRateLimit.burst` | `2000` | Burst allowance for the above. |
 | `downlink.timeoutSeconds` | `10` | Bounds one command exchange to a device. On expiry the command is reported failed rather than left hanging. Raise it for slow cellular sleepers. |
 | `downlink.concurrency` | `16` | Cross-device command parallelism. A device's own commands always run in order regardless of this value. |
@@ -483,29 +483,43 @@ certificate to carry the same timestamp, so an edge node can reject a delayed de
 session. This is also why every replica shares one client id: the broker's own duplicate-id takeover
 is what evicts a zombie host.
 
-:::caution The Sparkplug path bounds neither the message rate nor a message's total size
-Sparkplug ingestion applies **no per-tenant ingest ceiling and sheds nothing**. A message with more
-than 256 readings is split into consecutive events of at most 256, so no single event exceeds the
-platform limit, but the message's total is not bounded. A runaway edge node on a configured broker is
-not throttled at the door. Bound it at the broker, by the groups you subscribe to, and by the metric
-count per publish at the edge node. See [Unbounded Sparkplug ingest](#unbounded-sparkplug-ingest).
+:::caution The Sparkplug path does not bound the message rate or a message's total size
+Sparkplug charges each DATA message's readings against the tenant's ingest ceiling, and drops what is
+over it. It does not meter the message rate, births or deaths, and a message's total size is bounded
+only by the broker. See [What Sparkplug ingest bounds](#unbounded-sparkplug-ingest).
 :::
 
-### Unbounded Sparkplug ingest {#unbounded-sparkplug-ingest}
+### What Sparkplug ingest bounds {#unbounded-sparkplug-ingest}
 
-Unlike LwM2M and the standard device ingest paths, Sparkplug ingestion applies **no per-tenant ingest
-ceiling and sheds nothing**. The reasoning is that its exposure is a broker you deliberately chose to
-connect to, rather than an open endpoint. The consequence is yours: a runaway edge node on a
-configured broker is not throttled at the door. Bound it at the broker, or by the groups you subscribe
+**Readings are charged against the tenant's ingest ceiling.** Every numeric metric in an NDATA or
+DDATA message is one reading, charged against the same per-tenant ceiling, counted in readings, that
+every other device transport uses (see [what the default allows](../concepts/governance.md#ingest-default)).
+It is charged once per message, before the message is stored, and an in-handler retry is not charged
+again. Readings over the ceiling are dropped and counted in `ingest_samples_shed_total`. A
+clean-session Host gets no broker redelivery, so a dropped reading is lost, as a reading over its
+ceiling is on every transport.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ingestRateLimit.messagesPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings. A tenant's tier overrides it. Unset or non-positive falls back to this default, never to unlimited. |
+| `ingestRateLimit.burst` | `2000` | Burst allowance for the above, in readings. |
+
+**What is not metered.** The message rate is not metered, because the Host must observe every
+message to keep its sessions correct. A birth's metric values are not charged: Sparkplug reports by
+exception, so a birth is the only place a slow-changing metric appears, and a rebirth after a
+reconnect or a failover re-sends every node's whole metric set at once. Births are bounded by the
+session instead, once per birth sequence and with requested rebirths backed off. The presence
+transitions births and deaths assert are not metered either. A runaway edge node can still send
+messages as fast as the broker delivers them. Bound it at the broker, or by the groups you subscribe
 to.
 
-**The rate limit does not apply here, and the reading limit is applied by splitting.** The rate
-limit above meters *messages*. The [per-event reading limit](../guides/connecting-a-device.md#how-much-one-message-may-carry)
-is applied on this path by splitting a message, not refusing it. A DDATA carrying thousands of
-metrics becomes several events, and still one stored reading per metric: each is its own row, state
-update and rule evaluation on the detection engine every tenant shares. Splitting bounds each event,
-not the message. Bound the metric count per publish at the edge node, the same way and for the same
-reason you bound its rate.
+**The reading limit is applied by splitting.** The
+[per-event reading limit](../guides/connecting-a-device.md#how-much-one-message-may-carry) is applied
+on this path by splitting a message, not refusing it. A DDATA carrying thousands of metrics becomes
+several events, and still one stored reading per metric: each is its own row, state update and rule
+evaluation on the detection engine every tenant shares. Splitting bounds each event, and the ceiling
+bounds readings per second, but nothing bounds one message's total. Bound the metric count per
+publish at the edge node.
 
 The [tenant lifecycle gate](./tenant-deletion.md) still applies. Traffic for a deleting tenant is
 refused on this path like any other, and counted in `tenant_deleted_dropped_total`.
@@ -634,6 +648,7 @@ Prefix: `devicechain_sparkplugingest_`.
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths the session machine asked for, and the ones its publish queue was too full to take. A drop is a latency signal rather than a failure — the request is re-made on the node's next window — but a standing drop rate means rebirths are going out slower than they are being asked for. Read it against `rebirth_requests_total`, which counts only what reached the wire and is therefore capped by the publisher rather than by demand: **drops while `rebirth_requests_total` climbs to a steady ceiling** is fan-out outrunning a publisher that is otherwise healthy; **drops while it is flat** is the publishes themselves stalling, which points at the broker connection. |
 | `unknown_device_dropped_total` | Traffic from identities with no device, with auto-registration off. |
 | `decode_errors_total` / `ingest_failures_total` | Malformed payloads, and failures publishing onward. |
+| `ingest_samples_shed_total` | DATA readings dropped because a tenant is over its ingest ceiling. A tenant shedding here sends more readings than its tier allows. |
 | `tenant_deleted_dropped_total` | Traffic refused because its tenant is being deleted. |
 
 ### LwM2M ingestion metrics {#lwm2m-ingestion-metrics}
@@ -653,7 +668,7 @@ Prefix: `devicechain_lwm2mingest_`.
 | `notify_decode_failures_total` | Malformed payloads. |
 | `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Readings a Notify carried that produced no measurement. **Non-numeric is normal** — a boolean or string IPSO reading is a device working correctly, and this counter is what tells that apart from a device that has gone quiet, which otherwise looks identical from here. The other two are firmware faults: a value that resolved to infinity or NaN, and a reading with no resource path. |
 | `observation_overflow_total` | A registration exceeding the 32-observation cap. Some of its resources are not observed. |
-| `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling. |
+| `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling, in Notify messages and in readings. |
 | `shadows_reconstructed_total` | Presence rebuilt after a leadership change. A spike is the fingerprint of a failover. |
 | `commands_failed_total` / `commands_not_served_total` | Downlink commands that did not land. |
 | `command_live_claim_errors_total` | Commands **not carried out** because command-delivery could not confirm them. Each command is confirmed with command-delivery immediately before it reaches the device, and without that confirmation it is never sent. A sustained rate means no LwM2M command is reaching its device: **this is the one to alert on.** The commands are retried, not lost. |

@@ -4,9 +4,13 @@
 package processor
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventlimit"
+	"github.com/rs/zerolog/log"
 )
 
 // RateGate meters one inbound message against its tenant's ingest ceiling
@@ -136,7 +140,7 @@ const BacklogThreshold = 5 * time.Second
 // panics: a gate missing one of its allowances cannot meter the traffic routed to it.
 //
 // A message whose origin is not OriginAuthenticated is admitted through
-// untrusted.AllowUntrusted: always at now (an untrusted transport has no durable backlog
+// untrusted.AllowUntrustedN: always at now (an untrusted transport has no durable backlog
 // behind it), and in a bounded pool of buckets unless its tenant is confirmed. It never
 // reaches the live or the backlog limiter.
 //
@@ -183,7 +187,8 @@ const BacklogThreshold = 5 * time.Second
 // backlog may be admitted up to twice its ceiling until the drain catches up; one also
 // sending over HTTP, up to one ceiling more — three times its ceiling per replica at
 // worst. That is bounded and predictable, and it multiplies with the exposure the
-// platform already carries from running N replicas with independent limiters.
+// platform already carries from running N replicas with independent limiters. The same
+// holds, allowance by allowance, for the readings NewReadingGate charges.
 func NewRateGate(live, backlog, untrusted *core.TenantRateLimiter,
 	onShed func(source string, tenant string)) RateGate {
 	if live == nil || backlog == nil || untrusted == nil {
@@ -208,16 +213,7 @@ func NewRateGate(live, backlog, untrusted *core.TenantRateLimiter,
 		if redelivery {
 			return true
 		}
-		var admitted bool
-		switch {
-		case origin != OriginAuthenticated:
-			admitted = untrusted.AllowUntrusted(tenant)
-		case !sentAt.IsZero() && time.Since(sentAt) > BacklogThreshold:
-			admitted = backlog.AllowAt(tenant, sentAt)
-		default:
-			admitted = live.AllowAt(tenant, time.Time{})
-		}
-		if admitted {
+		if admitN(live, backlog, untrusted, tenant, sentAt, origin, 1) {
 			return true
 		}
 		if onShed != nil {
@@ -225,4 +221,90 @@ func NewRateGate(live, backlog, untrusted *core.TenantRateLimiter,
 		}
 		return false
 	}
+}
+
+// meterTime is the send time a message is metered at: sentAt itself when the message is
+// BACKLOG (more than BacklogThreshold old), and the zero time, meaning now, when it is live.
+//
+// It is the ONE routing decision between the live and backlog limiters. A source that
+// meters a message twice (once as a message before decode, once for its readings after)
+// computes it once, before the first stage, and passes the result to both, so the two
+// stages cannot route one message to different limiters. Recomputed at decode, a message
+// that sat in the decode queue past the threshold would be charged its readings in the
+// un-shed backlog allowance after being charged as a message in the live one.
+func meterTime(sentAt time.Time) time.Time {
+	if !sentAt.IsZero() && time.Since(sentAt) > BacklogThreshold {
+		return sentAt
+	}
+	return time.Time{}
+}
+
+// admitN routes a charge of n units to the limiter that meters it, and is the one routing
+// rule both gates share (see NewRateGate for why there are three limiters): an untrusted
+// origin to the untrusted limiter, always at now; an authenticated backlog message to the
+// backlog limiter at its send time; everything else to the live limiter at now.
+func admitN(live, backlog, untrusted *core.TenantRateLimiter, tenant string, sentAt time.Time,
+	origin Origin, n int) bool {
+	if origin != OriginAuthenticated {
+		return untrusted.AllowUntrustedN(tenant, n)
+	}
+	if at := meterTime(sentAt); !at.IsZero() {
+		return backlog.AllowNAt(tenant, at, n)
+	}
+	return live.AllowNAt(tenant, time.Time{}, n)
+}
+
+// ReadingGate meters a DECODED message's readings against its tenant's ingest ceiling,
+// returning true when it may proceed and false when it must be shed. It is the second
+// stage of ingest admission: RateGate charges each message once before it is decoded, so
+// a flood is shed before it costs a parse; this charges what the message turned out to
+// carry, so a tenant cannot send 256 readings for the price of one.
+//
+// It takes the same sentAt, redelivery and origin as RateGate and routes them the same way
+// (admitN), with the same redelivery exemption: delivery 1 paid. readings <= 0 admits and
+// charges nothing.
+//
+// It carries no lifecycle refusal. That is RateGate's: it runs on every delivery before
+// decode, and a message it refuses never reaches this stage.
+type ReadingGate func(source, tenant string, sentAt time.Time, redelivery bool, origin Origin, readings int) bool
+
+// NewReadingGate builds the reading stage over three READING limiters (live, backlog and
+// untrusted), each built over governance.ReadingCeiling so a single full event always fits
+// an idle bucket. They must be separate from the message limiters: one bucket charged both
+// would spend a tenant's message allowance on its readings. onShed, when non-nil, receives
+// each shed message's reading count. A nil limiter panics, as in NewRateGate.
+func NewReadingGate(live, backlog, untrusted *core.TenantRateLimiter,
+	onShed func(source, tenant string, readings int)) ReadingGate {
+	if live == nil || backlog == nil || untrusted == nil {
+		panic("processor.NewReadingGate: the live, backlog and untrusted reading limiters are all required")
+	}
+	return func(source, tenant string, sentAt time.Time, redelivery bool, origin Origin, readings int) bool {
+		if redelivery || readings <= 0 {
+			return true
+		}
+		if admitN(live, backlog, untrusted, tenant, sentAt, origin, readings) {
+			return true
+		}
+		if onShed != nil {
+			onShed(source, tenant, readings)
+		}
+		return false
+	}
+}
+
+// readingsOf is what a decoded payload is charged: model.ReadingCount, and never less than
+// one, since even an event with no readings is an event the pipeline stores and evaluates.
+//
+// A kind model.ReadingCount does not know is charged the most one event may carry
+// (eventlimit.MaxReadingsPerEvent) and logged, never charged nothing. The JSON decoder
+// already refuses such a kind (model.CheckReadingCount), so this is reached only by a
+// decoder that does not, which is a defect to fix rather than a path traffic takes.
+func readingsOf(payload interface{}) int {
+	_, n, ok := model.ReadingCount(payload)
+	if !ok {
+		log.Error().Str("payload", fmt.Sprintf("%T", payload)).
+			Msg("Decoded payload has no reading count; charging the per-event maximum. Give model.ReadingCount a case for it.")
+		return eventlimit.MaxReadingsPerEvent
+	}
+	return max(n, 1)
 }

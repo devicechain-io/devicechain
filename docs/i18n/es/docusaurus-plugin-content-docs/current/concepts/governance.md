@@ -8,7 +8,7 @@ DeviceChain ejecuta [un único conjunto compartido de servicios para todos los i
 
 Los límites se aplican en los bordes, antes de que el tráfico llegue a la infraestructura compartida:
 
-- **Ingesta.** El servicio event-sources aplica un límite de tasa por inquilino a medida que se decodifica el tráfico de dispositivos, antes de publicarlo en el pipeline interno. El exceso de un inquilino que supera el límite se descarta en la puerta de entrada en lugar de acumularse en el stream compartido.
+- **Ingesta.** Todos los transportes de dispositivo (HTTP, MQTT, LwM2M y Sparkplug) aplican un límite de tasa por inquilino **contado en lecturas**, un valor almacenado cada una, antes de publicar el tráfico de dispositivos en el pipeline interno. En HTTP, MQTT y LwM2M cada mensaje se cobra además una vez antes de decodificarlo, con el mismo número. El exceso de un inquilino que supera el límite se descarta en la puerta de entrada en lugar de acumularse en el stream compartido. Consulte [qué permite el valor por defecto](#ingest-default).
 - **Egreso.** El volumen saliente de las [acciones](./outbound-connectors.md#governance) tiene un límite de tasa por inquilino en ambos extremos del salto. El motor de detección descarta las emisiones que exceden el presupuesto antes del despacho, y el servicio outbound-connectors admite tráfico hacia los destinos dentro de un presupuesto acotado. Ambos extremos miden una acción según el momento en que llegó a la plataforma la telemetría que la desencadenó, de modo que un atraso procesado tras un reinicio se cobra como ocurrió.
 - **Inferencia de IA.** El servicio de IA opcional aplica un límite de tasa por inquilino, para que las sesiones de autoría de un inquilino no puedan monopolizar la vía de inferencia compartida. Puedes observar el gasto de inferencia: los tokens de entrada y salida que reporta el proveedor se contabilizan como métricas de toda la instancia que un operador puede vigilar y sobre las que puede alertar. El gasto no se registra por inquilino y no se aplica ningún presupuesto sobre él. El techo de tasa es lo único que acota a un inquilino aquí.
 - **Comandos no entregados.** Un techo por inquilino limita cuántos comandos pueden estar esperando a salir a la vez, y se aplica al encolar el comando. Es el único límite de esta lista que **rechaza** en lugar de descartar. Los tres anteriores descartan el exceso de tráfico de un inquilino; este devuelve un rechazo que quien llama puede ver y reintentar, porque un comando es una actuación física y descartarlo en silencio no es una opción. Consulta [cuánta acumulación puede retener un inquilino](./commands.md#held-command-ceiling).
@@ -39,7 +39,7 @@ La alerta `TenantsMeteredAtPlatformDefault` se dispara solo cuando `unreachable`
 
 El endpoint de ingesta HTTP toma el inquilino de la ruta de la petición, antes de comprobar cualquier credencial de dispositivo. Por eso la ingesta HTTP tiene una asignación propia para cada inquilino, separada de la que consume el tráfico MQTT, NATS y de presencia del broker de ese inquilino. Las peticiones HTTP que nombran a un inquilino no pueden agotar el tráfico de sus dispositivos.
 
-Aun así, cualquiera que pueda llegar al puerto HTTP y conozca el nombre de un inquilino puede agotar la asignación HTTP de ese inquilino, porque la credencial del dispositivo solo se comprueba después de admitir la petición. Dentro de la asignación HTTP, un nombre de inquilino obtiene una asignación propia solo si el plano de control lo ha confirmado, o de un conjunto fijo de 1024. Pasado ese conjunto, todos esos nombres comparten una única asignación con el valor por defecto de la plataforma, y se dispara la alerta `RateLimiterOverflowInUse`.
+Aun así, cualquiera que pueda llegar al puerto HTTP y conozca el nombre de un inquilino puede agotar la asignación HTTP de ese inquilino, porque la credencial del dispositivo solo se comprueba después de admitir la petición. La asignación se cuenta en lecturas, y las lecturas de una petición se cobran antes de comprobar su credencial, así que bastan pocas peticiones: con el valor por defecto de la plataforma, unas cuatro peticiones por segundo de 256 lecturas cada una son suficientes. Dentro de la asignación HTTP, un nombre de inquilino obtiene una asignación propia solo si el plano de control lo ha confirmado, o de un conjunto fijo de 1024. Pasado ese conjunto, todos esos nombres comparten una única asignación con el valor por defecto de la plataforma, y se dispara la alerta `RateLimiterOverflowInUse`.
 
 El conjunto acota la memoria del servicio, no el total admitido entre nombres inventados: entre ellos se puede admitir hasta 1024 veces el valor por defecto de la plataforma.
 
@@ -68,7 +68,7 @@ La misma cascada gobierna el derecho de uso de modelos de IA: una asignación de
 
 ## Los techos son por réplica {#per-replica}
 
-Cada copia en ejecución de un servicio aplica por su cuenta todos los techos de tasa de esta página, sin coordinación entre copias. Si ejecutas dos réplicas de `event-sources`, `outbound-connectors` o `ai-inference` y se reparten el tráfico de un inquilino, ese inquilino puede ser admitido hasta al doble de su techo, y N réplicas permiten hasta N veces. La instalación por defecto ejecuta una réplica de cada uno, y ahí el techo es exacto.
+Cada copia en ejecución de un servicio aplica por su cuenta todos los techos de tasa de esta página, sin coordinación entre copias. Si ejecutas dos réplicas de `event-sources`, `outbound-connectors` o `ai-inference` y se reparten el tráfico de un inquilino, ese inquilino puede ser admitido hasta al doble de su techo, y N réplicas permiten hasta N veces. La instalación por defecto ejecuta una réplica de cada uno, así que ahí cada techo se aplica una vez, salvo brevemente durante una actualización progresiva, mientras corren a la vez el pod antiguo y el nuevo.
 
 Hay dos techos que no se multiplican:
 
@@ -85,7 +85,21 @@ Dentro de una réplica de `event-sources`, el techo de ingesta de un inquilino s
 - **Atraso (backlog)**: mensajes que el broker de la plataforma guardó mientras `event-sources` estaba caído o retrasado, medidos según cuándo se enviaron a medida que se drenan. Un inquilino que drena un atraso tras una caída mientras también envía en vivo puede ser admitido hasta al doble de su techo hasta que el drenaje se pone al día.
 - **Ingesta HTTP**: se mide por separado, así que un inquilino que envía por HTTP y por MQTT a la vez puede ser admitido hasta su techo en cada uno.
 
-En el peor caso, un inquilino puede ser admitido al triple de su techo en cada réplica, multiplicado por el número de réplicas como se indica arriba.
+Dentro de `event-sources`, un inquilino puede ser admitido por tanto hasta el triple de su techo en cada réplica, multiplicado por el número de réplicas como se indica arriba. LwM2M y Sparkplug miden cada uno al inquilino con una asignación propia, así que con ambos en marcha el peor caso es cinco veces su techo.
+
+### Qué permite el valor por defecto {#ingest-default}
+
+El valor por defecto de la plataforma es de 1000 lecturas por segundo por inquilino, con una ráfaga de 2000. Una lectura es un valor almacenado: una clave de una entrada de medición, una ubicación o una alerta. Un mensaje que lleva 256 lecturas cuesta 256.
+
+Se midió que una instalación de alta disponibilidad por defecto, en un clúster de tres nodos de base de datos dedicados de 4 vCPU/16 GB y tres nodos de servicios de 4 vCPU/8 GB, con una réplica de `event-sources`, almacenaba 6000 lecturas por segundo durante 10 minutos. Con el valor por defecto, los dispositivos de un solo inquilino se admiten como máximo a cinco veces 1000, es decir, 5000 lecturas por segundo, incluso con un atraso vaciándose y ambos servicios de borde en marcha, lo que queda por debajo de esa medición. Sin atraso ni servicios de borde son 2000.
+
+No es una garantía en todas las configuraciones:
+
+- Un clúster más pequeño almacena menos. Baje ahí el valor por defecto.
+- Más de una réplica de `event-sources`, y una actualización progresiva mientras corren a la vez el pod antiguo y el nuevo, multiplican el límite.
+- Un inquilino cuyo nivel eleva su techo puede enviar más.
+- Varios inquilinos juntos sí pueden superar lo que almacena la instalación. Cuando lo hacen, la compuerta de contrapresión compartida rechaza a todos.
+- La ingesta HTTP nombra a su inquilino antes de comprobar ninguna credencial, así que un remitente puede publicar con nombres que no son inquilinos. Cada uno de esos nombres se mide con el valor por defecto de la plataforma por sí mismo, y muchos juntos aún pueden cerrar la compuerta.
 
 ## Observar la gobernanza {#seeing-it-work}
 

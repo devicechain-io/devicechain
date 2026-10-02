@@ -53,7 +53,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/eventlimit"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -376,7 +375,7 @@ func buildMetrics() {
 		MessagesShed: Microservice.NewCounter("ingest_messages_shed_total",
 			"Device messages shed at the per-tenant ingest message-rate ceiling (Register/Update/Notify)."),
 		SamplesShed: Microservice.NewCounter("ingest_samples_shed_total",
-			"Decoded measurement samples shed at the per-tenant ingest sample-rate ceiling."),
+			"Decoded measurement samples shed at the per-tenant ingest ceiling (counted in readings)."),
 	}
 	limiterUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Ingest)
 
@@ -642,11 +641,12 @@ func buildIngestLimiter(client *svcclient.Client, infra mscfg.InfrastructureConf
 		log.Info().Str("userManagement", umURL).
 			Msg("Per-tenant LwM2M ingest overrides enabled (ADR-023, fail-open to platform default).")
 	}
-	// The sample budget is the message ceiling scaled by DefaultSamplesPerMessage, with its burst
-	// floored at the platform's per-event limit — the SAME number the emitter splits a Notify
-	// at, and the most AdmitSamples charges at once — so every charge fits an idle bucket and
-	// a Notify is shed only on sustained rate.
-	return adapter.NewIngestLimiter(resolve, adapter.DefaultSamplesPerMessage, eventlimit.MaxReadingsPerEvent, limiterMetrics, unresolved)
+	// The sample budget is the tenant's ingest ceiling itself, counted in readings
+	// (governance.ReadingCeiling, the one definition every transport charges against), with its
+	// burst floored at the platform's per-event limit — the SAME number the emitter splits a
+	// Notify at, and the most AdmitSamples charges at once — so every charge fits an idle bucket
+	// and a Notify is shed only on sustained rate.
+	return adapter.NewIngestLimiter(resolve, limiterMetrics, unresolved)
 }
 
 // assertedActiveReader is the device-state read the reconstruction pass needs (*adapter.Reconciler

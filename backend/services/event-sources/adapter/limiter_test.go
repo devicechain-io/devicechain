@@ -6,6 +6,7 @@ package adapter
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventlimit"
@@ -33,8 +34,7 @@ func counterValue(c prometheus.Counter) float64 {
 // STAGE 1 sheds a message flood and counts each shed once, per tenant independently.
 func TestIngestLimiter_MessageStageShedsAndCounts(t *testing.T) {
 	shed := counter()
-	l := NewIngestLimiter(flatResolve(2), DefaultSamplesPerMessage, 256,
-		IngestLimiterMetrics{MessagesShed: shed}, nil)
+	l := NewIngestLimiter(flatResolve(2), IngestLimiterMetrics{MessagesShed: shed}, nil)
 
 	assert.True(t, l.AllowMessage("acme"), "1st within burst 2")
 	assert.True(t, l.AllowMessage("acme"), "2nd within burst 2")
@@ -46,15 +46,15 @@ func TestIngestLimiter_MessageStageShedsAndCounts(t *testing.T) {
 	assert.True(t, l.AllowMessage("beta"), "beta's own burst is intact")
 }
 
-// STAGE 2 charges the decoded sample COUNT, sheds the batch that overflows the sample bucket,
-// and counts the shed VOLUME (n), not shed events.
+// STAGE 2 charges the decoded sample COUNT against the tenant's ingest ceiling itself (a
+// burst of 300 is 300 readings, not 25 times that), sheds the batch that overflows, and
+// counts the shed VOLUME (n), not shed events.
 func TestIngestLimiter_SampleStageChargesCountAndCounts(t *testing.T) {
 	shed := counter()
-	// Sample burst = satMul(burst 4, factor 25) = 100 (>= floor 50), so ~100 sample tokens.
-	l := NewIngestLimiter(flatResolve(4), 25, 50, IngestLimiterMetrics{SamplesShed: shed}, nil)
+	l := NewIngestLimiter(flatResolve(300), IngestLimiterMetrics{SamplesShed: shed}, nil)
 
-	assert.True(t, l.AllowSamples("acme", 60), "60 of ~100 sample tokens")
-	assert.True(t, l.AllowSamples("acme", 40), "next 40 drains the bucket")
+	assert.True(t, l.AllowSamples("acme", 160), "160 of 300 reading tokens")
+	assert.True(t, l.AllowSamples("acme", 140), "next 140 drains the bucket")
 	assert.False(t, l.AllowSamples("acme", 30), "30 more overflows — shed")
 	assert.Equal(t, float64(30), counterValue(shed), "shed counts SAMPLES (30), not one event")
 
@@ -64,32 +64,31 @@ func TestIngestLimiter_SampleStageChargesCountAndCounts(t *testing.T) {
 	assert.Equal(t, float64(30), counterValue(shed), "no-op batches charged nothing")
 }
 
-// The sample burst is FLOORED at the per-event limit, so a single charge up to the limit
-// always fits — the AllowN(n>burst) forever-shed edge is closed. A batch the floored limiter
-// admits is shed by an unfloored (floor 0) one built from the same tiny ceiling.
-func TestIngestLimiter_SampleBurstFlooredAtCap(t *testing.T) {
-	// Tiny message burst 1, factor 1 → satMul = 1. Without a floor the sample burst is 1, so a
-	// 200-sample batch could never be admitted. Floored at 256 it fits.
-	floored := NewIngestLimiter(flatResolve(1), 1, 256, IngestLimiterMetrics{}, nil)
-	unfloored := NewIngestLimiter(flatResolve(1), 1, 0, IngestLimiterMetrics{}, nil)
-
-	assert.True(t, floored.AllowSamples("acme", 200), "200 <= floored burst 256 admits")
-	assert.False(t, unfloored.AllowSamples("acme", 200), "200 > unfloored burst 1 is shed forever")
+// The sample stage's RATE is the ingest rate, not a multiple of it. At 10 readings/s, 200 ms
+// after the bucket is drained it holds about 2 tokens, so a 50-reading charge is refused; a
+// limiter that scaled the rate 25 times would hold about 50 and admit it.
+func TestIngestLimiter_SampleRateIsTheIngestRate(t *testing.T) {
+	l := NewIngestLimiter(core.StaticCeiling(10, 20), IngestLimiterMetrics{}, nil)
+	assert.Equal(t, 256, l.AdmitSamples("acme", 256), "the floored burst admits one full event")
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, 0, l.AdmitSamples("acme", 50), "200 ms at 10 readings/s refills about 2, not 50")
 }
 
-// satMulInt saturates instead of overflowing to a negative burst — the guard that keeps a
-// huge per-tenant override from silently black-holing a tenant's samples.
-func TestSatMulInt_Saturates(t *testing.T) {
-	assert.Equal(t, 100, satMulInt(4, 25))
-	assert.Equal(t, math.MaxInt, satMulInt(math.MaxInt, 25), "no overflow to negative")
-	assert.Equal(t, math.MaxInt, satMulInt(math.MaxInt/10, 25), "saturates below MaxInt too")
-	assert.Equal(t, 0, satMulInt(0, 25))
-	assert.Equal(t, 0, satMulInt(-3, 25))
-	assert.Equal(t, 0, satMulInt(4, 0))
+// The sample burst is FLOORED at the per-event limit, so a single charge up to the limit
+// always fits — the AllowN(n>burst) forever-shed edge is closed — and a charge above it is
+// still refused.
+func TestIngestLimiter_SampleBurstFlooredAtCap(t *testing.T) {
+	floored := NewIngestLimiter(flatResolve(1), IngestLimiterMetrics{}, nil)
+	assert.True(t, floored.AllowSamples("acme", eventlimit.MaxReadingsPerEvent), "one full event fits a burst-1 tier")
+	assert.False(t, NewIngestLimiter(flatResolve(1), IngestLimiterMetrics{}, nil).
+		AllowSamples("acme", eventlimit.MaxReadingsPerEvent+1), "the floor is one event, not more")
+}
 
-	// End to end: a max-burst override must still admit a real batch (not a negative bucket).
-	l := NewIngestLimiter(flatResolve(math.MaxInt), 25, 256, IngestLimiterMetrics{}, nil)
-	assert.True(t, l.AllowSamples("acme", 1000), "a saturated sample burst still admits")
+// A max-burst override still admits a real batch: the ceiling passes through unscaled, so
+// there is no multiplication to overflow into a negative bucket.
+func TestIngestLimiter_MaxBurstOverrideAdmits(t *testing.T) {
+	l := NewIngestLimiter(flatResolve(math.MaxInt), IngestLimiterMetrics{}, nil)
+	assert.True(t, l.AllowSamples("acme", 1000), "a max-int burst admits")
 }
 
 // The derived sample ceiling is re-read from the shared resolver on every admission, so a
@@ -99,29 +98,27 @@ func TestSatMulInt_Saturates(t *testing.T) {
 func TestIngestLimiter_SampleCeilingTracksResolver(t *testing.T) {
 	curBurst := 1
 	resolve := func(string) core.TenantCeiling { return core.TenantCeiling{RatePerSecond: 1e-9, Burst: curBurst} }
-	l := NewIngestLimiter(resolve, 1, 1, IngestLimiterMetrics{}, nil) // factor 1, floor 1
+	l := NewIngestLimiter(resolve, IngestLimiterMetrics{}, nil)
 
-	// At burst 1 the sample bucket can never fit a 5-sample batch.
-	assert.False(t, l.AllowSamples("acme", 5), "burst 1: a 5-sample batch is shed")
+	// At burst 1 (floored to one event) the sample bucket can never fit a 300-sample batch.
+	assert.False(t, l.AllowSamples("acme", 300), "burst 1: a 300-sample batch is shed")
 
 	// Raise the override. A fresh tenant's sample bucket must reflect the NEW ceiling — proof the
 	// closure re-reads the resolver rather than a construction-time snapshot.
-	curBurst = 100
-	assert.True(t, l.AllowSamples("beta", 5), "burst 100 after override: a 5-sample batch admits")
+	curBurst = 1000
+	assert.True(t, l.AllowSamples("beta", 300), "burst 1000 after override: a 300-sample batch admits")
 }
 
-// A non-positive sampleBurstFloor (a shared-mechanism footgun the LwM2M path avoids) must not
-// yield a zero-burst sample bucket, which would admit NOTHING. The constructor floors it at 1.
-func TestIngestLimiter_ZeroFloorStillAdmitsOne(t *testing.T) {
-	// resolve burst 0 (governance never returns this, but an adopter's flat closure might) with a
-	// non-positive floor: satMul(0,25)=0, floor 0 → the guard raises the sample burst to 1.
-	l := NewIngestLimiter(core.StaticCeiling(1e-9, 0), 25, 0, IngestLimiterMetrics{}, nil)
-	assert.True(t, l.AllowSamples("acme", 1), "a zero-derived sample burst must still admit a single sample")
+// A zero burst from an adopter's flat closure (governance never returns one) must not yield a
+// zero-burst sample bucket, which would admit NOTHING: a positive rate floors it to one event.
+func TestIngestLimiter_ZeroBurstStillAdmits(t *testing.T) {
+	l := NewIngestLimiter(core.StaticCeiling(1e-9, 0), IngestLimiterMetrics{}, nil)
+	assert.True(t, l.AllowSamples("acme", 1), "a zero-burst ceiling must still admit a single sample")
 }
 
 // A nil-metrics limiter is fully usable (tests / inert deployments) — no panic on shed.
 func TestIngestLimiter_NilMetricsSafe(t *testing.T) {
-	l := NewIngestLimiter(flatResolve(1), DefaultSamplesPerMessage, 256, IngestLimiterMetrics{}, nil)
+	l := NewIngestLimiter(flatResolve(1), IngestLimiterMetrics{}, nil)
 	assert.True(t, l.AllowMessage("acme"))
 	assert.False(t, l.AllowMessage("acme"), "shed with nil MessagesShed does not panic")
 	assert.False(t, l.AllowSamples("acme", 1_000_000), "shed with nil SamplesShed does not panic")
@@ -134,15 +131,13 @@ func TestIngestLimiter_NilMetricsSafe(t *testing.T) {
 // ingests splits into exactly the events that were charged.
 func TestIngestLimiter_AdmitSamplesChargesPerEvent(t *testing.T) {
 	shed := counter()
-	l := NewIngestLimiter(flatResolve(1), DefaultSamplesPerMessage, eventlimit.MaxReadingsPerEvent,
-		IngestLimiterMetrics{SamplesShed: shed}, nil)
+	l := NewIngestLimiter(flatResolve(1), IngestLimiterMetrics{SamplesShed: shed}, nil)
 	assert.Equal(t, 256, l.AdmitSamples("acme", 600), "the budget admits one event's worth")
 	assert.Equal(t, float64(344), counterValue(shed), "every sample not admitted is counted, once")
 	assert.Equal(t, 0, l.AdmitSamples("acme", 10), "the bucket is now empty")
 	assert.Equal(t, float64(354), counterValue(shed))
 
-	roomy := NewIngestLimiter(flatResolve(1000), DefaultSamplesPerMessage, eventlimit.MaxReadingsPerEvent,
-		IngestLimiterMetrics{}, nil)
+	roomy := NewIngestLimiter(flatResolve(1000), IngestLimiterMetrics{}, nil)
 	assert.Equal(t, 600, roomy.AdmitSamples("acme", 600), "a budget with room admits the whole message")
 	assert.Equal(t, 0, roomy.AdmitSamples("acme", 0), "nothing to charge admits nothing")
 }

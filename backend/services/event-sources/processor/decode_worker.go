@@ -37,6 +37,20 @@ type rawMessage struct {
 	// of an event that reports none, and it is identical on every redelivery. Zero for
 	// a transport with none (the external-broker MQTT source), read as now.
 	receivedAt time.Time
+	// meterAt is the send time the message stage metered this message at (see meterTime):
+	// the capture append time when the message was BACKLOG, zero (now) when it was live.
+	// The reading stage is charged at the same time, so both stages route one message to
+	// the same limiter. Zero on HTTP and external MQTT, which have no backlog.
+	meterAt time.Time
+	// redelivery is true when the broker re-offers a message it delivered before (a capture
+	// message with NumDelivered > 1). The reading charge exempts it for the reason RateGate
+	// does: delivery 1 paid. One gap is accepted: a pod stopped after delivery 1 was charged
+	// as a message but before it was decoded leaves it unacked, and its redelivery is then
+	// exempt from both stages. That is bounded by the decode queue per restart.
+	redelivery bool
+	// origin is the tenant's provenance, which decides the reading stage's limiter (see
+	// Origin). The zero value is treated as untrusted.
+	origin Origin
 	// done reports the outcome of handling this message back to the source that
 	// produced it, so the source can acknowledge the broker only once the payload
 	// is durably forwarded. nil for a fire-and-forget transport, which is why every
@@ -101,6 +115,9 @@ type DecodeWorker struct {
 	SourceId    string
 	Decoder     Decoder
 	RawMessages <-chan rawMessage
+	// Readings charges a decoded message's readings against its tenant's ingest ceiling
+	// before it is handed on; see ReadingGate. Never nil.
+	Readings ReadingGate
 	// Callback hands a decoded event on for publishing; see DecodedFunc.
 	Callback DecodedFunc
 	// Failed routes an undecodable payload to the failed-decode path, likewise
@@ -108,15 +125,21 @@ type DecodeWorker struct {
 	Failed func(string, string, []byte, error) error
 }
 
-// Create a new decode worker.
+// Create a new decode worker. A nil readings panics: a worker built without the reading
+// stage would hand on every message uncharged, and nothing at the call site would show it.
 func NewDecodeWorker(workerId int, sourceId string, decoder Decoder, rawMessages <-chan rawMessage,
+	readings ReadingGate,
 	callback DecodedFunc,
 	failed func(string, string, []byte, error) error) *DecodeWorker {
+	if readings == nil {
+		panic("processor.NewDecodeWorker: a reading gate is required")
+	}
 	worker := &DecodeWorker{
 		WorkerId:    workerId,
 		SourceId:    sourceId,
 		Decoder:     decoder,
 		RawMessages: rawMessages,
+		Readings:    readings,
 		Callback:    callback,
 		Failed:      failed,
 	}
@@ -149,6 +172,13 @@ func (wrk *DecodeWorker) Process() {
 				} else {
 					raw.settle(nil)
 				}
+			} else if !wrk.Readings(wrk.SourceId, raw.tenant, raw.meterAt, raw.redelivery, raw.origin, readingsOf(payload)) {
+				// Shed at the tenant's ceiling for the readings it carries. ACKED, like a
+				// message the message stage sheds: left unacked it would be redelivered into
+				// the same over-limit gate (the ACK TRAP). Workers can take a backlog slightly
+				// out of order; the limiter charges an older time at its mark, so that can
+				// over-shed by milliseconds and can never mint tokens.
+				raw.settle(nil)
 			} else {
 				wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.captureSeq, raw.settle)
 			}

@@ -34,7 +34,7 @@
   "heldCeilingDescription": "Most commands this tenant may have waiting to be delivered — both those still on their way out and those held for devices that are offline. Leave blank to inherit the tier's ceiling, then the platform default — which is a real limit, never unlimited.",
   "heldCeilingLabel": "Held command ceiling",
   "ingestBurstLabel": "Ingest burst",
-  "ingestRateLabel": "Ingest rate (events/sec)",
+  "ingestRateLabel": "Ingest rate (readings/sec)",
   "inheritDefaultHint": "Leave blank to inherit the platform default.",
   "loading": "Loading tenants…",
   "loadingAiModels": "Loading AI models…",

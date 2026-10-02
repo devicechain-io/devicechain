@@ -84,6 +84,6 @@
   "tokenTaken": "That token is already in use.",
   "tryAgain": "Try again",
   "unitCallsPerSec": "calls/sec",
-  "unitEventsPerSec": "events/sec",
+  "unitReadingsPerSec": "readings/sec",
   "unitRequestsPerMin": "requests/min"
 }

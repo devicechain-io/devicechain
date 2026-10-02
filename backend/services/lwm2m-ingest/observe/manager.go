@@ -400,8 +400,8 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 	if len(samples) == 0 {
 		return // a well-formed but non-numeric batch (e.g. a boolean IPSO object) — nothing to measure
 	}
-	// STAGE 2 (ADR-075 L2c): the per-tenant sample-rate budget, charged with the decoded sample
-	// COUNT AFTER decode. It bounds measurement VOLUME — a slow trickle of enormous packs sails
+	// STAGE 2 (ADR-075 L2c): the per-tenant reading budget (the ingest ceiling itself, counted
+	// in readings), charged with the decoded sample COUNT AFTER decode. It bounds measurement VOLUME — a slow trickle of enormous packs sails
 	// through the per-message gate but is shed here.
 	//
 	// 🔴 IT IS CHARGED ONCE PER EVENT, NOT ONCE PER NOTIFY (AdmitSamples). The emitter stores a

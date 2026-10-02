@@ -117,7 +117,7 @@ func (f *fakeClient) OptionsReader() mqtt.ClientOptionsReader { return mqtt.Clie
 // If a change froze the timestamp for the client's lifetime, the two sessions'
 // ONLINE stamps would collide and this test goes red.
 func TestStateTimestampIsFreshPerSession(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h"}, Broker{}, nil, nil, Metrics{})
+	c := NewClient(config.SparkplugSource{Tenant: "t", HostId: "h"}, Broker{}, nil, nil, nil, Metrics{})
 	// Every group granted. The fake's Subscribe returns a plain token, which the real
 	// confirmed subscribe (rightly) reads as a refusal, and a refused group now ends the
 	// session before ONLINE; this test's subject is the timestamps and their order, so it

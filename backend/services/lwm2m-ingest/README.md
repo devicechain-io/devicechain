@@ -193,7 +193,8 @@ trading presence-write volume for a bounded telemetry blackout.
   prefer an **opaque handle** over a `tenant:device` string.
 - **`ingestRateLimit`** — the platform-default per-tenant ingest ceiling (ADR-023):
   `messagesPerSecond` (default 1000) is the pre-decode stage-1 rate and `burst` (default
-  2000) the instantaneous allowance; the sample budget is derived from it. Non-positive
+  2000) the instantaneous allowance; the same numbers are the tenant's budget in readings
+  (decoded samples), charged after decode, as on every other transport. Non-positive
   values take the platform default, never *unlimited* and never *zero*.
 - **`maxLifetimeSeconds`** — the ceiling every registration lifetime is clamped down to,
   and *identically* the lifetime a failover-reconstruction shadow timer is armed for.

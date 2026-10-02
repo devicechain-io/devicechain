@@ -68,7 +68,7 @@ hay ningún bróker aparte que operar.
   el pipeline.
 
   Hay un agujero, y es la razón de que esto no sea `●`. Un mensaje que llega mientras el inquilino
-  supera su **límite de tasa de ingesta** se confirma al bróker y se descarta. El dispositivo ya
+  supera su **techo de ingesta, contado en lecturas,** se confirma al bróker y se descarta. El dispositivo ya
   recibió su PUBACK cuando el bróker lo capturó, así que nada informa al publicador; en este
   transporte no hay un `429` que enviar. Si tu flota puede superar su límite a ráfagas,
   dimensiónala contra ese límite en lugar de confiar en una contrapresión que no existe.
@@ -97,7 +97,9 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
 - **Suscripción ●**: `POST /{instanceId}/{tenant}/events` devuelve:
   - `202` una vez almacenado el evento en el stream de entrada de la plataforma;
   - `400` ante un cuerpo que no puede decodificar o un inquilino sintácticamente inválido;
-  - `429` cuando el inquilino supera su límite de tasa de ingesta;
+  - `429` cuando el inquilino supera su techo de ingesta, contado en lecturas. Se comprueba antes
+    de la contrapresión, así que un inquilino por encima de su propio techo recibe `429`, nunca el
+    `503` de contrapresión;
   - **`503` con una cabecera `Retry-After` cuando la plataforma aplica contrapresión**: un
     consumidor va tan atrasado que aceptar más desplazaría eventos que aún no ha procesado
     (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure));

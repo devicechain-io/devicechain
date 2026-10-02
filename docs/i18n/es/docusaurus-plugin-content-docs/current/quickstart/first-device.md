@@ -272,7 +272,7 @@ Ya tienes un dispositivo de principio a fin: registrado, con credencial, reporta
 | Conexión rechazada en `:8081` | La redirección de puerto del paso 5 no está corriendo. |
 | `400` en el `POST` de ingesta | Un número desnudo en vez de una cadena, lecturas no envueltas en `entries`, o un segmento de inquilino que no es un token válido. |
 | `202`, pero no aparece nada | O el **inquilino** no existe (se acepta un nombre bien formado, exista o no ese inquilino), o la credencial no coincidió. El `credentialId` del cuerpo debe ser exactamente el que creaste en el paso 4. |
-| `429` en el `POST` de ingesta | El inquilino supera su límite de tasa de ingesta: estás enviando más rápido de lo que permite su nivel. El evento no se aceptó. La respuesta lleva una cabecera `Retry-After`, así que espera y vuelve a enviarlo. |
+| `429` en el `POST` de ingesta | El inquilino supera su techo de ingesta: estás enviando más lecturas por segundo de las que permite su nivel. El evento no se aceptó. La respuesta lleva una cabecera `Retry-After`, así que espera y vuelve a enviarlo. |
 | `503` en el `POST` de ingesta | El evento no pudo entregarse al stream, y **no** se almacenó. Reinténtalo. Aparte de `429` tras esperar, los demás estados son terminales para esa petición. |
 | No autorizado en una llamada a la API | El token de acceso ha caducado, o estás enviando el `identityToken` de la primera llamada del paso 3 en vez del `accessToken` de la segunda. |
 

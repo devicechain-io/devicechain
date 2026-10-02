@@ -15,11 +15,13 @@ import (
 
 const (
 	// DefaultIngestMessagesPerSecond and DefaultIngestBurst are the platform
-	// per-tenant ingest ceiling applied when none is configured. They are a
-	// generous safety ceiling — high enough not to shed a normally busy fleet,
-	// low enough that a single runaway tenant cannot saturate the pipeline. A
-	// genuinely high-volume tenant is raised past this by a per-tenant override
-	// (a later slice); the platform default is deliberately never unlimited.
+	// per-tenant ingest ceiling applied when none is configured, counted in READINGS
+	// after decode and in messages before it, at the same number (see
+	// governance.ReadingCeiling). High enough not to shed a normally busy fleet, low
+	// enough that one tenant at the default stays below what a default HA installation
+	// was measured to store; the measurement and the arithmetic are in the chart's
+	// values.yaml, event-sources block. A genuinely high-volume tenant is raised past
+	// this on its tier; the platform default is deliberately never unlimited.
 	DefaultIngestMessagesPerSecond = 1000
 	DefaultIngestBurst             = 2000
 
@@ -67,15 +69,17 @@ type EventSource struct {
 }
 
 // IngestRateLimit is the platform-default, per-tenant ingest ceiling. Every
-// tenant is metered by an independent token bucket at these rates and events over
-// the ceiling are shed at the receive point, before decode, so a noisy tenant
-// spends no pipeline CPU past its allowance. It is fail-safe: an unset or
-// non-positive value falls back to the platform default rather than to unlimited,
-// so a misconfiguration cannot silently remove the protection. Per-tenant
-// overrides that raise the ceiling for a legitimately high-volume tenant are a
-// later slice.
+// tenant is metered by independent token buckets at these rates: once per message
+// at the receive point, before decode, so a noisy tenant spends no pipeline CPU past
+// its allowance, and once per READING after decode, so a message carrying many
+// readings costs what it stores. It is fail-safe: an unset or non-positive value
+// falls back to the platform default rather than to unlimited, so a
+// misconfiguration cannot silently remove the protection. A tenant's tier overrides
+// both numbers.
 type IngestRateLimit struct {
-	// MessagesPerSecond is the sustained per-tenant event rate.
+	// MessagesPerSecond is the sustained per-tenant rate, in readings per second (and
+	// in messages per second before decode). The name predates the reading count and is
+	// kept so no configuration has to change.
 	MessagesPerSecond float64
 	// Burst is the largest instantaneous batch a tenant may send before the
 	// sustained rate applies — it absorbs bursty devices without raising the

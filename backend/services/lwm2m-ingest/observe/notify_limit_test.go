@@ -15,7 +15,6 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/eventlimit"
 )
 
 // numericNotifyBody is one SenML-JSON Notify body of n numeric records /3303/0/0 … at an
@@ -48,13 +47,13 @@ func TestA300SampleNotifyIsIngestedWhole(t *testing.T) {
 
 // 🔴 THE SAMPLE BUDGET IS CHARGED PER EVENT, SO A NOTIFY LARGER THAN THE TENANT'S SAMPLE
 // BURST IS NEVER SHED WHOLE FOR EVER. This runs the REAL limiter at the smallest ceiling a
-// tenant can be given (1 message/s, burst 1), which floors the sample burst at the per-event
+// tenant can be given (1 reading/s, burst 1), which floors the sample burst at the per-event
 // limit of 256. Charging the whole 300-sample Notify at once could never fit that bucket, so
 // every such Notify from the device would be lost; charging each ≤256 piece admits what the
 // budget allows and sheds the rest, counted.
 func TestANotifyLargerThanTheSampleBurstKeepsWhatTheBudgetAdmits(t *testing.T) {
 	shed := prometheus.NewCounter(prometheus.CounterOpts{Name: "samples_shed"})
-	lim := adapter.NewIngestLimiter(core.StaticCeiling(1, 1), adapter.DefaultSamplesPerMessage, eventlimit.MaxReadingsPerEvent,
+	lim := adapter.NewIngestLimiter(core.StaticCeiling(1, 1),
 		adapter.IngestLimiterMetrics{SamplesShed: shed}, nil)
 	m, ing, _, _ := newGatedHarness(t, lim)
 	c := newFakeConn(1)

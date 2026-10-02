@@ -190,7 +190,7 @@ The consequence is worth planning for. A tenant pressed against its ceiling has 
 
 **A demotion goes through the same gate.** A tenant pressed against its ceiling can have its repair refused along with the churn causing the pressure. Nothing is lost, because a refused release leaves the device asserted and the next pass finds it again, but the repair arrives no sooner than the ceiling allows.
 
-This applies to the platform broker's MQTT tap. Sparkplug ingestion applies no per-tenant ceiling and sheds nothing, and LwM2M runs its own separately configured limit.
+This applies to the platform broker's MQTT tap. Sparkplug charges its DATA readings against the tenant's ceiling, but not the presence transitions its births and deaths assert. LwM2M runs its own separately configured limit.
 
 ### Resizing the broker cluster requires restarting `event-sources` {#resizing-the-broker-cluster}
 

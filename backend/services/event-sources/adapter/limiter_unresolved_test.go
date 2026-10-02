@@ -19,7 +19,7 @@ func TestIngestLimiterCountsOncePerMessage(t *testing.T) {
 	unreachable := func(string) core.TenantCeiling {
 		return core.TenantCeiling{RatePerSecond: 1, Burst: 100, Source: core.CeilingUnreachable}
 	}
-	l := NewIngestLimiter(unreachable, DefaultSamplesPerMessage, 256, IngestLimiterMetrics{},
+	l := NewIngestLimiter(unreachable, IngestLimiterMetrics{},
 		func(s core.CeilingSource) { counted = append(counted, s) })
 
 	for i := 0; i < 3; i++ {
@@ -28,4 +28,20 @@ func TestIngestLimiterCountsOncePerMessage(t *testing.T) {
 	}
 	assert.Equal(t, []core.CeilingSource{core.CeilingUnreachable, core.CeilingUnreachable, core.CeilingUnreachable},
 		counted, "three messages, each counted once, with their cause")
+}
+
+// A sample-only limiter (Sparkplug) has no message stage, so a tenant metered at the
+// platform default is counted on the sample stage instead — once per admitted charge — and
+// is not invisible on the shared counter.
+func TestSampleLimiterCountsUnresolvedOnTheSampleStage(t *testing.T) {
+	var counted []core.CeilingSource
+	unreachable := func(string) core.TenantCeiling {
+		return core.TenantCeiling{RatePerSecond: 1, Burst: 1000, Source: core.CeilingUnreachable}
+	}
+	l := NewSampleLimiter(unreachable, IngestLimiterMetrics{}, func(s core.CeilingSource) { counted = append(counted, s) })
+
+	assert.Equal(t, 300, l.AdmitSamples("acme", 300))
+	assert.Equal(t, []core.CeilingSource{core.CeilingUnreachable, core.CeilingUnreachable}, counted,
+		"300 samples are two per-event charges (256 + 44), each counted once")
+	assert.Panics(t, func() { l.AllowMessage("acme") }, "a sample-only limiter has no message stage to ask")
 }

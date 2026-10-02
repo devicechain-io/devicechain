@@ -29,7 +29,7 @@ func TestA600MetricBirthIsEmittedAsThreeEvents(t *testing.T) {
 	w := &fakeWireWriter{}
 	ing := NewIngester(NewRegistrar(fakeCreateGQL{}, "url", nil), NewEmitter(w, fixedNow), IngestMetrics{})
 	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp-node"}
-	c := NewClient(src, Broker{}, ing, fixedNow, Metrics{})
+	c := NewClient(src, Broker{}, ing, admitAllSamples{}, fixedNow, Metrics{})
 
 	metrics := []*sppb.Payload_Metric{bdSeqM(1)}
 	want := map[string]bool{}

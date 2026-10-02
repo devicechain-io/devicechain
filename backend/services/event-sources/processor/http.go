@@ -68,11 +68,14 @@ type HttpEventSource struct {
 	// before the body is read/decoded; a false return sheds the request with a
 	// 429. nil disables metering (used by tests that exercise decoding directly).
 	allow RateGate
+	// readings charges a decoded request's readings against its tenant's ingest ceiling; a
+	// false return sheds it with a 429. Never nil (the constructor refuses one).
+	readings ReadingGate
 	// admit reports whether the ingest pipeline is accepting events: nil when it is, an
 	// error matching messaging.ErrStreamBackpressure while inbound-events is refusing
-	// because a reader is far behind. It is asked BEFORE the body is read, so a refused
-	// request costs no read, no decode and no rate-limit token. Never nil (the
-	// constructor refuses one).
+	// because a reader is far behind. It is asked AFTER both stages of the tenant's own
+	// ceiling, so a tenant over its ceiling is answered 429 and never the shared 503; a
+	// request it refuses has been read and decoded. Never nil (the constructor refuses one).
 	admit func(source string) error
 	// earlyClose accounts for a connection that closed without ever delivering a
 	// request, which is what a header-timeout close looks like from the outside. nil
@@ -94,6 +97,7 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
 	allow RateGate,
+	readings ReadingGate,
 	admit func(source string) error,
 	earlyClose func(string)) (*HttpEventSource, error) {
 	// Refused rather than defaulted to "always admit": an ingest path built without the
@@ -101,6 +105,9 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 	// call site would show it had been left out.
 	if admit == nil {
 		return nil, errNoAdmit
+	}
+	if readings == nil {
+		return nil, errNoReadingGate
 	}
 	port, err := config.HttpSourcePort(srcConfig)
 	if err != nil {
@@ -117,6 +124,7 @@ func NewHttpEventSource(id string, srcConfig map[string]string, instanceId strin
 		decoded:    decoded,
 		failed:     failed,
 		allow:      allow,
+		readings:   readings,
 		admit:      admit,
 		earlyClose: earlyClose,
 	}
@@ -138,11 +146,13 @@ func (es *HttpEventSource) handler() http.Handler {
 
 // handleEvent decodes a single posted event and forwards it to the shared
 // publish path. It returns 202 once the event is stored in the inbound stream, 400
-// when the body cannot be decoded, 429 when the tenant is over its ingest ceiling,
-// and 503 when it was not accepted: with a Retry-After when the pipeline refused it
-// under backpressure (a reader is far behind; the event was certainly not stored),
-// and without one when the publish itself failed (it may or may not have been
-// stored, so a retry can duplicate it).
+// when the body cannot be decoded, 429 when the tenant is over its ingest ceiling
+// (in messages before decode, or in readings after it), and 503 when it was not
+// accepted: with a Retry-After when the pipeline refused it under backpressure (a
+// reader is far behind; the event was certainly not stored), and without one when
+// the publish itself failed (it may or may not have been stored, so a retry can
+// duplicate it). The tenant's ceiling is checked first, so a tenant over it gets 429
+// even while the pipeline is refusing.
 func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	tenant := r.PathValue("tenant")
 	if tenant == "" {
@@ -158,18 +168,19 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Refuse while the pipeline is applying backpressure, before reading the body and
-	// before metering: a refused request should cost the tenant no rate-limit token,
-	// or the retry the 503 asks for would be charged twice.
-	if err := es.admit(es.Id); err != nil {
-		writeBackpressured(w)
-		return
-	}
-
-	// Meter against the tenant's ingest ceiling before reading or decoding the
-	// body, so a tenant over its limit is shed with a 429 having spent no decode
-	// CPU. Advise a Retry-After (RFC 6585 §4) so a well-behaved client backs off
-	// rather than immediately re-hitting the gate.
+	// 🔴 THE TENANT'S OWN CEILING IS CHECKED BEFORE THE SHARED BACKPRESSURE GATE, both its
+	// stages. A tenant over its ceiling is answered 429 whether or not the pipeline is
+	// refusing, and only a request within its tenant's ceiling can be answered the
+	// backpressure 503. Checked the other way round, a tenant over its own ceiling could
+	// keep filling the shared stream until the gate closed, and then every tenant was
+	// refused for one tenant's overage. Charging before the gate does not charge the
+	// retry twice for a client that honours the 503's Retry-After: that interval refills
+	// the default burst several times over.
+	//
+	// The message stage first, before the body is read, so a tenant over its message
+	// rate is shed having spent no read and no decode CPU. Advise a Retry-After
+	// (RFC 6585 §4) so a well-behaved client backs off rather than immediately
+	// re-hitting the gate.
 	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginUntrusted) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "ingest rate limit exceeded for tenant", http.StatusTooManyRequests)
@@ -181,6 +192,10 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unable to read request body", http.StatusBadRequest)
 		return
 	}
+	// Counted as inbound once its body is read, before decode, as the other transports
+	// count a message before their decode workers: a request later refused for its
+	// readings or by backpressure was received, and is counted on that refusal's own
+	// counter as well.
 	es.received(es.Id, body)
 
 	// Received now: HTTP has no durable backlog in front of it.
@@ -188,6 +203,20 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		es.failed(es.Id, tenant, body, err)
 		http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// The reading stage: what the request turned out to carry, so a tenant cannot send
+	// 256 readings for the price of one message.
+	if !es.readings(es.Id, tenant, time.Time{}, false, OriginUntrusted, readingsOf(payload)) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "ingest rate limit exceeded for tenant (counted in readings)", http.StatusTooManyRequests)
+		return
+	}
+
+	// Only now the shared gate: this request is within its tenant's own ceiling.
+	if err := es.admit(es.Id); err != nil {
+		writeBackpressured(w)
 		return
 	}
 	// HTTP carries no capture sequence — there is no broker redelivery to dedup on

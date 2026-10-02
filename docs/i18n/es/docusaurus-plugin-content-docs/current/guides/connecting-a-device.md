@@ -81,7 +81,7 @@ Un evento lleva **como máximo 256 lecturas**, en todos los transportes. El lím
 
 Una lectura es un dato almacenado. En mediciones, es una *clave de métrica*, así que una entrada con doce métricas son doce lecturas. En ubicaciones y alertas, es una entrada. El límite cuenta claves en lugar de entradas porque una sola entrada puede llevar miles de métricas, y son las lecturas, no las entradas, las que se convierten en filas almacenadas, actualizaciones de estado y evaluaciones de reglas.
 
-Ese abanico es la razón de ser del límite. El limitador de ingesta por inquilino mide *mensajes*, y cobra lo mismo por un mensaje de una lectura que por uno de cuarenta mil. Sin el límite, un solo mensaje sería un coste ilimitado que comparte toda la instancia. Un dispositivo con un backlog más profundo lo sube en varios mensajes.
+Ese abanico es la razón de ser del límite. El techo de ingesta por inquilino cuenta lecturas a lo largo del tiempo, así que limita cuántas envía un inquilino por segundo, y un mensaje no puede costar más que la ráfaga del nivel. Pero la ráfaga es un ajuste del nivel: un nivel cuya ráfaga se eleve a cuarenta mil podría enviar un mensaje de cuarenta mil. Sin el límite, lo que un mensaje le cuesta a toda la instancia lo fijaría la mayor ráfaga que permita cualquier nivel. Un dispositivo con un backlog más profundo lo sube en varios mensajes.
 
 Por encima del límite, el mensaje se **rechaza entero**, nunca se recorta para que quepa. Un lote recortado en silencio se respondería con `202`, y las lecturas ausentes serían indetectables desde ambos extremos. No se almacena nada y no se pierde nada: el mensaje se enruta íntegro al flujo de decodificación fallida.
 
@@ -230,7 +230,7 @@ Publica con QoS 0, o con QoS 1 con `altId` y `occurredTime`. Un operador que rea
 `event-sources` también acepta eventos por HTTP en el puerto **8081**. El id de instancia y el inquilino se toman de la ruta `/{instanceId}/{tenant}/events`, siguiendo la convención del topic MQTT; el dispositivo y su credencial viajan en el cuerpo.
 
 - `POST` devuelve **202 Accepted** una vez que el evento está en cola.
-- Devuelve **429 Too Many Requests** si el inquilino supera su límite de tasa de ingesta HTTP. La ruta MQTT descarta los mensajes que exceden el límite en lugar de responder.
+- Devuelve **429 Too Many Requests** si el inquilino supera su techo de ingesta HTTP, contado en lecturas, así que un mensaje que lleva muchas lecturas cuesta más que uno que lleva una sola. La ruta MQTT descarta los mensajes que exceden el límite en lugar de responder.
 
 La ingesta HTTP tiene una asignación por inquilino propia, separada de la que consume el tráfico MQTT del inquilino, así que las peticiones HTTP que nombran a un inquilino no pueden agotar su telemetría MQTT (consulta [nombres de inquilino que no se pueden confirmar](../concepts/governance.md#unconfirmed-tenants)).
 

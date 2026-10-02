@@ -81,7 +81,7 @@ An event carries **at most 256 readings**, on every transport. The limit is fixe
 
 A reading is one stored datum. For measurements, that is one *metric key*, so an entry with twelve metrics is twelve readings. For locations and alerts, it is one entry. The limit counts keys rather than entries because a single entry can hold thousands of metrics, and it is the readings, not the entries, that become stored rows, state updates and rule evaluations.
 
-That fan-out is what the limit exists for. The per-tenant ingest limiter meters *messages*, and charges the same for a message of one reading as for a message of forty thousand. Without the limit, one message would be an unbounded cost the whole instance shares. A device with a deeper backlog uploads it as several messages.
+That fan-out is what the limit exists for. The per-tenant ingest ceiling counts readings over time, so it bounds how many a tenant sends per second, and one message can cost no more than the tier's burst. But the burst is a tier setting: a tier whose burst is raised to forty thousand could send one message of forty thousand. Without the limit, what one message costs the whole instance would be set by the largest burst any tier allows. A device with a deeper backlog uploads it as several messages.
 
 Over the limit, a message is **refused whole**, never trimmed to fit. A batch quietly cut short would be answered `202`, and the missing readings would be undetectable from either end. Nothing is stored and nothing is lost: the message is routed intact to the failed-decode stream.
 
@@ -230,7 +230,7 @@ Publish at QoS 0, or QoS 1 with `altId` and `occurredTime`. An operator who genu
 `event-sources` also accepts events over HTTP on port **8081**. The instance id and tenant come from the path `/{instanceId}/{tenant}/events`, mirroring the MQTT topic convention; the device and its credential ride in the body.
 
 - `POST` returns **202 Accepted** once the event is queued.
-- It returns **429 Too Many Requests** if the tenant is over its HTTP ingest rate limit. The MQTT path drops over-limit messages instead of answering.
+- It returns **429 Too Many Requests** if the tenant is over its HTTP ingest ceiling, counted in readings, so a message carrying many readings costs more than one carrying a single reading. The MQTT path drops over-limit messages instead of answering.
 
 HTTP ingest has a per-tenant allowance of its own, separate from the one the tenant's MQTT traffic spends, so HTTP requests naming a tenant cannot use up that tenant's MQTT telemetry (see [unconfirmed tenant names](../concepts/governance.md#unconfirmed-tenants)).
 
