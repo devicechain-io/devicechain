@@ -1351,7 +1351,9 @@ dcctl destroy local my-instance
 1. Its Helm release. The instance's namespace belongs to that release, so uninstalling it
    deletes the namespace and everything in it, including its NATS broker and its event store.
 2. Its infrastructure state, through `tofu destroy`, which removes anything that state still
-   holds.
+   holds. Destroy prints OpenTofu's plan of what it removes, without the plan's list of output
+   values: a destroy works some of those values out from the configuration's defaults rather
+   than the instance's settings, so the list would not describe the instance.
 3. Its database and database login on the shared relational database.
 4. Its namespace, if it is still there. A bootstrap that stopped before Helm installed
    anything leaves a namespace with no release to uninstall. Destroy waits to see the

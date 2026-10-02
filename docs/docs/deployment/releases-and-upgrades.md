@@ -4419,6 +4419,18 @@ applies the new limit and waits for it to roll out. The same goes for a server l
 when you lower `nats_cpu_request` or `nats_memory_request` instead of making room, except on a
 `--compact` instance, where `dcctl` sets the requests itself.
 
+#### `dcctl destroy` no longer prints output values that are not the instance's {#next-destroy-outputs}
+
+`dcctl destroy` streams the output of `tofu destroy`, which begins with OpenTofu's plan. That plan
+ended with a **Changes to Outputs** list in which several values were the defaults of
+DeviceChain's OpenTofu configuration rather than the instance's: an HA instance's broker showed as
+one server, its event store as not replicating synchronously, and a restored instance's backups
+under the default path rather than the one they were written to. Destroy removed the right
+things; only that list was wrong. A destroy works those values out without the instance's
+settings, so destroy now leaves the list out and prints a line saying so. When destroy removes
+the instance's backups, it still prints their path before it changes anything, read from the
+running event store. Nothing needs doing.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

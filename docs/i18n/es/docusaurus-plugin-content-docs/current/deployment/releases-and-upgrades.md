@@ -4760,6 +4760,19 @@ despliegue. Lo mismo vale para un servidor que queda `Pending` cuando, en lugar 
 bajas `nats_cpu_request` o `nats_memory_request`, salvo en una instancia `--compact`, donde
 `dcctl` fija las solicitudes por sí mismo.
 
+#### `dcctl destroy` ya no muestra valores de salida que no son los de la instancia {#next-destroy-outputs}
+
+`dcctl destroy` muestra la salida de `tofu destroy`, que empieza con el plan de OpenTofu. Ese plan
+terminaba con una lista **Changes to Outputs** en la que varios valores eran los predeterminados
+de la configuración de OpenTofu de DeviceChain en lugar de los de la instancia: el bróker de una
+instancia HA aparecía con un solo servidor, su almacén de eventos como si no replicara de forma
+síncrona, y los respaldos de una instancia restaurada bajo la ruta predeterminada en lugar de la
+ruta en la que se escribieron. Destroy eliminaba lo correcto; solo esa lista era errónea. Un
+destroy calcula esos valores sin los ajustes de la instancia, así que destroy ahora omite la lista
+y muestra una línea que lo indica. Cuando destroy elimina los respaldos de la instancia, sigue
+mostrando su ruta antes de cambiar nada, leída del almacén de eventos en ejecución. No hay que
+hacer nada.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

@@ -18,7 +18,9 @@ import (
 // stderr, which must reach the terminal for reads and progress commands alike.
 //
 // `destroy` exits 1 when a file named fail-destroy sits beside the binary, so a test can
-// make a progress command fail without a second fake.
+// make a progress command fail without a second fake. Its progress line has NO trailing
+// newline on purpose: Destroy's output filter holds an unterminated line until it is
+// flushed, so a destroy that forgot to flush (on success or on failure) loses it.
 //
 // `init` writes its argv, one argument per line, to init-argv beside the binary, so a
 // test can read the flags dcctl actually handed the CLI.
@@ -33,7 +35,7 @@ case "$1" in
   output)  echo '{"secret":{"sensitive":true,"type":"string","value":"LEAK-output"}}' ;;
   init)    printf '%s\n' "$@" > "$(dirname "$0")/init-argv"; echo 'PROGRESS-init' ;;
   apply)   echo 'PROGRESS-apply' ;;
-  destroy) echo 'PROGRESS-destroy'; if [ -f "$(dirname "$0")/fail-destroy" ]; then exit 1; fi ;;
+  destroy) printf 'PROGRESS-destroy'; if [ -f "$(dirname "$0")/fail-destroy" ]; then exit 1; fi ;;
   state)   echo "PROGRESS-state-$2" ;;
   *)       echo "unexpected subcommand $1" >&2; exit 1 ;;
 esac
@@ -181,7 +183,8 @@ func TestAFailedProgressCommandStillQuietsStdout(t *testing.T) {
 		t.Error(f)
 	}
 	if !strings.Contains(out, "PROGRESS-destroy") {
-		t.Errorf("the failing destroy's progress did not reach stdout, so it never streamed; got:\n%s", out)
+		t.Errorf("the failing destroy's progress did not reach stdout, so it never streamed or its "+
+			"unterminated last line was never flushed; got:\n%s", out)
 	}
 	if strings.Contains(out, "LEAK-") {
 		t.Errorf("a read after a failed progress command reached stdout:\n%s", out)

@@ -155,7 +155,11 @@ func destroyOpenedInstanceRoot(ctx context.Context, tf destroyTofu, kubeContext,
 
 	// 🔴 instance_namespace HAS NO DEFAULT, and omitting it fails the destroy (measured).
 	// The two variables are what a destroy plan needs to reach the cluster; nothing else
-	// this run decides changes what the state says to remove.
+	// this run decides changes what the state says to remove. The same two are why the
+	// plan's output values would be the configuration's defaults rather than this
+	// instance's: tofuExec.Destroy leaves that list out instead of passing the instance's
+	// inputs, which a destroy of a half-removed instance must not depend on (see
+	// outputsBlockFilter).
 	if err := tf.Destroy(ctx,
 		tfexec.Var("kubeconfig_context="+kubeContext),
 		tfexec.Var("instance_namespace="+InstanceNamespace(instance)),
