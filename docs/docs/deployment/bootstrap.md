@@ -1200,7 +1200,9 @@ first in line for eviction when a node ran short of memory.
 - To change them, set `nats_cpu_request`, `nats_memory_request` or `nats_memory_limit` in a
   `terraform.tfvars` beside the instance's OpenTofu state
   (`~/.devicechain/instances/<instance>/infra/instance/`), which every `dcctl` apply of the
-  instance reads, including an upgrade's. Memory takes `Mi` or `Gi`.
+  instance reads, including an upgrade's. Memory takes `Mi` or `Gi`. On an instance installed with
+  `--compact`, `dcctl` passes the two requests itself on every apply, which overrides the file, so
+  there only `nats_memory_limit` can be changed this way.
 
 #### Measured throughput {#measured-throughput}
 

@@ -330,12 +330,19 @@ It refuses, and changes nothing, when:
   or the event store. The refusal names what. The release notes for such a release say how to
   move. This judges the resources the configuration manages; an object dropped from inside one
   of them is shown as a change to that resource.
-- **The plan would shorten the event store's recovery window, switch its backups off, or stop
-  declaring an analytics reader** that nothing this upgrade reads declares. Those are values set
-  by hand, and applying without them would prune backups or leave a reader's password
-  unmanaged. Declare them as described below and run the upgrade again.
+- **The plan would shorten the event store's recovery window, or stop declaring an analytics
+  reader**, that nothing this upgrade reads declares. Those are values set by hand, and applying
+  without them would prune backups or leave a reader's password unmanaged. Declare them as
+  described below and run the upgrade again.
+- **The plan would switch the event store's backups off.** No declaration gets this through:
+  `dcctl` decides whether backups are on from how the cluster was installed. `--skip-infrastructure`
+  moves the services and leaves the event store as it is.
 - **The broker or the event store is not healthy before it starts**, such as a server that is
-  not ready or a store mid-failover. Bring it back first.
+  not ready or a store mid-failover. Bring it back first. The one exception is a broker whose last
+  roll did not finish, with some servers already on new settings and one of them not ready. Only
+  an apply can change the settings it is rolling to, so the upgrade applies over it, says so with
+  the plan, and waits for the new settings to roll out. A broker short of a server on the settings
+  every server already runs, for example after losing a node, is still refused.
 - **The plan changes the event store's image and its settings together** on a store of more
   than one instance, which the database operator refuses. The refusal gives the order to apply
   them in.
@@ -352,6 +359,18 @@ not kept. The values operators are told to set this way include `backup_retentio
 `timescale_analytics_readers` (see [SQL and BI access](../guides/sql-and-bi-access.md)) and the
 broker's `nats_cpu_request`, `nats_memory_request` and `nats_memory_limit`. A broker request or
 limit the upgrade would lower is printed as a warning with the plan.
+
+This works only for a variable `dcctl` does not pass itself, because OpenTofu lets a `-var` on the
+command line override those files and `TF_VAR_`. `dcctl` passes, on every apply:
+
+- **for an instance installed with `--compact`**, the broker's `nats_cpu_request` and
+  `nats_memory_request`, and the sizes of its volumes. Setting those requests in
+  `terraform.tfvars` has no effect on a compact instance. `nats_memory_limit` is not among them.
+- **from how the cluster was installed**, whether database backups are on
+  (`enable_database_backups`), the snapshot class (`backup_snapshot_class`) and the databases'
+  node placement. Change those through `dcctl install`, not in this file.
+
+The upgrade's warnings and refusals say which case a value is in.
 
 What a running instance sees:
 
@@ -4385,7 +4404,9 @@ same time. The upgrade waits for both before it moves the services.
   passed with `-var`. It refuses rather than shorten the event store's recovery window
   (`backup_retention_tsdb`) or stop declaring an analytics reader (`timescale_analytics_readers`),
   and it prints a warning for a broker request or limit it would lower. Move such values into
-  that file before you upgrade.
+  that file before you upgrade. The file does not reach a variable `dcctl` passes itself: on an
+  instance installed with `--compact` that includes the broker's two requests. See
+  [Values you set on the configuration yourself](#upgrade-infrastructure).
 
 The volume sizes are kept. An instance created with an 8Gi event store keeps it, and the upgrade
 says that this release creates 32Gi.
@@ -4393,7 +4414,10 @@ says that this release creates 32Gi.
 The new 2Gi memory limit on each NATS server was sized from steady ingest. A server catching up
 after its restart was not measured; if one is killed for memory during the upgrade
 (`OOMKilled` in `kubectl describe pod`), raise `nats_memory_limit` in that `terraform.tfvars` and
-run `dcctl upgrade` again.
+run `dcctl upgrade` again. The upgrade accepts a broker whose roll did not finish, so the re-run
+applies the new limit and waits for it to roll out. The same goes for a server left `Pending`
+when you lower `nats_cpu_request` or `nats_memory_request` instead of making room, except on a
+`--compact` instance, where `dcctl` sets the requests itself.
 
 ### The one-time durable-ingest cutover
 

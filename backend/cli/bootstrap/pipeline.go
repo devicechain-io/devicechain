@@ -225,6 +225,9 @@ type State struct {
 	// reads them before its apply, so a release that changes a default size never asks
 	// to resize a volume that exists. Empty on a bootstrap. See volumeSize.
 	LiveVolumes liveVolumes
+	// InfraNotes are what an upgrade's settle found worth saying with the plan — a broker
+	// roll an earlier run left unfinished, which this apply replaces. Empty on a bootstrap.
+	InfraNotes []string
 	// CarriedRestoreVars re-pass the recovery source of an event store that was
 	// restored, read from the instance root's own state by an upgrade, so its Cluster's
 	// spec.bootstrap is not re-rendered as an empty initdb. Nil on a bootstrap.

@@ -168,7 +168,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// nothing has moved. Under --dry-run this IS the rehearsal of the infrastructure:
 	// it plans and prints, and the apply below is never reached.
 	var infra *upgradeInfraPlan
-	if !st.SkipInfrastructure {
+	if appliesInfrastructure(st) {
 		if err := runStreamed("Planning the instance's message broker and event store", "infrastructure plan", func() error {
 			var perr error
 			infra, perr = planUpgradeInfra(ctx, st)
@@ -337,11 +337,22 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	return nil
 }
 
+// appliesInfrastructure is whether this upgrade plans and applies the instance's
+// message broker and event store: always, unless --skip-infrastructure said not to.
+//
+// 🔴 ONE READER OF THE FLAG. The plan, the closing summary and the rehearsal all ask
+// this, so what the upgrade does and what it says it did cannot disagree — and the
+// default, applying, is a value a test can hold rather than a branch only a cluster
+// reaches (TestAnUpgradeAppliesTheInfrastructureUnlessToldNotTo).
+func appliesInfrastructure(st *State) bool {
+	return !st.SkipInfrastructure
+}
+
 // sayUpgradeInfrastructure closes a finished upgrade with what happened to the
 // instance's broker and event store — and, when they were skipped, says so in yellow:
 // an instance that keeps an older broker configuration must not read as fully moved.
 func sayUpgradeInfrastructure(st *State, opts UpgradeOptions) {
-	if st.SkipInfrastructure {
+	if !appliesInfrastructure(st) {
 		fmt.Println(color.YellowString(
 			"\nThis instance's message broker and event store were NOT applied (--skip-infrastructure)\n"+
 				"and keep the configuration they were built with. Run `dcctl upgrade %s %s` without it\n"+
@@ -357,7 +368,7 @@ func sayUpgradeInfrastructure(st *State, opts UpgradeOptions) {
 // Its own function so what it says can be tested: Upgrade itself needs a cluster.
 func sayUpgradeDryRun(st *State) {
 	fmt.Println()
-	if st.SkipInfrastructure {
+	if !appliesInfrastructure(st) {
 		wouldDo("leave this instance's message broker and event store as they are (--skip-infrastructure)")
 	} else {
 		wouldDo("apply this instance's message broker and event store from this release's " +

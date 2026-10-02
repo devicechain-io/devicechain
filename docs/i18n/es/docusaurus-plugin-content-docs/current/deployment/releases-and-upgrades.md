@@ -347,13 +347,20 @@ Se niega, sin cambiar nada, cuando:
   almacén de eventos. El rechazo dice qué. Las notas de una versión así explican cómo pasar a
   ella. Esto juzga los recursos que gestiona la configuración; un objeto que desaparece dentro de
   uno de ellos se muestra como un cambio de ese recurso.
-- **El plan acortaría la ventana de recuperación del almacén de eventos, desactivaría sus
-  respaldos o dejaría de declarar un lector de analítica** que nada de lo que lee esta
-  actualización declara. Son valores puestos a mano, y aplicar sin ellos podaría respaldos o
-  dejaría sin gestionar la contraseña de un lector. Declárelos como se describe abajo y vuelva a
-  ejecutar la actualización.
+- **El plan acortaría la ventana de recuperación del almacén de eventos o dejaría de declarar un
+  lector de analítica** que nada de lo que lee esta actualización declara. Son valores puestos a
+  mano, y aplicar sin ellos podaría respaldos o dejaría sin gestionar la contraseña de un lector.
+  Declárelos como se describe abajo y vuelva a ejecutar la actualización.
+- **El plan desactivaría los respaldos del almacén de eventos.** Ninguna declaración lo deja
+  pasar: `dcctl` decide si los respaldos están activos según cómo se instaló el clúster.
+  `--skip-infrastructure` mueve los servicios y deja el almacén de eventos como está.
 - **El bróker o el almacén de eventos no está sano antes de empezar**, por ejemplo un servidor
-  que no está listo o un almacén a mitad de una conmutación por error. Recupérelo primero.
+  que no está listo o un almacén a mitad de una conmutación por error. Recupérelo primero. La
+  única excepción es un bróker cuyo último despliegue gradual no terminó, con algunos servidores
+  ya en los ajustes nuevos y uno de ellos sin estar listo. Solo una aplicación puede cambiar los
+  ajustes hacia los que avanza, así que la actualización aplica sobre él, lo indica junto al plan
+  y espera a que los ajustes nuevos terminen de desplegarse. Un bróker al que le falta un servidor
+  con los ajustes que ya ejecutan todos, por ejemplo tras perder un nodo, se sigue rechazando.
 - **El plan cambia la imagen del almacén de eventos y sus ajustes a la vez** en un almacén de más
   de una instancia, algo que rechaza el operador de la base de datos. El rechazo indica el orden
   en que aplicarlos.
@@ -371,6 +378,20 @@ mano con `-var` no se conserva. Entre los valores que se indica fijar así está
 [Acceso SQL y BI](../guides/sql-and-bi-access.md)) y los del bróker `nats_cpu_request`,
 `nats_memory_request` y `nats_memory_limit`. Una solicitud o un límite del bróker que la
 actualización bajaría se muestra como aviso junto al plan.
+
+Esto solo funciona para una variable que `dcctl` no pasa por sí mismo, porque OpenTofu deja que un
+`-var` en la línea de órdenes prevalezca sobre esos archivos y sobre `TF_VAR_`. `dcctl` pasa, en
+cada aplicación:
+
+- **en una instancia instalada con `--compact`**, las solicitudes del bróker `nats_cpu_request` y
+  `nats_memory_request`, y los tamaños de sus volúmenes. Fijar esas solicitudes en
+  `terraform.tfvars` no tiene efecto en una instancia compacta. `nats_memory_limit` no está entre
+  ellas.
+- **según cómo se instaló el clúster**, si los respaldos de base de datos están activos
+  (`enable_database_backups`), la clase de instantánea (`backup_snapshot_class`) y la ubicación de
+  las bases de datos en los nodos. Cámbielos con `dcctl install`, no en ese archivo.
+
+Los avisos y rechazos de la actualización indican en qué caso está cada valor.
 
 Lo que ve una instancia en marcha:
 
@@ -4722,7 +4743,10 @@ vez. La actualización espera a ambos antes de mover los servicios.
   uno que pasaste con `-var`. Se niega antes que acortar la ventana de recuperación del almacén de
   eventos (`backup_retention_tsdb`) o dejar de declarar un lector de analítica
   (`timescale_analytics_readers`), y muestra un aviso para una solicitud o un límite del bróker que
-  bajaría. Pasa esos valores a ese archivo antes de actualizar.
+  bajaría. Pasa esos valores a ese archivo antes de actualizar. El archivo no alcanza a una
+  variable que `dcctl` pasa por sí mismo: en una instancia instalada con `--compact` eso incluye
+  las dos solicitudes del bróker. Consulta
+  [Valores que usted mismo dio a la configuración](#upgrade-infrastructure).
 
 Los tamaños de los volúmenes se conservan. Una instancia creada con un almacén de eventos de 8Gi
 lo conserva, y la actualización indica que esta versión crea 32Gi.
@@ -4730,7 +4754,11 @@ lo conserva, y la actualización indica que esta versión crea 32Gi.
 El nuevo límite de memoria de 2Gi de cada servidor NATS se dimensionó con ingesta sostenida. No se
 midió un servidor poniéndose al día tras su reinicio; si uno muere por memoria durante la
 actualización (`OOMKilled` en `kubectl describe pod`), sube `nats_memory_limit` en ese
-`terraform.tfvars` y vuelve a ejecutar `dcctl upgrade`.
+`terraform.tfvars` y vuelve a ejecutar `dcctl upgrade`. La actualización acepta un bróker cuyo
+despliegue gradual no terminó, así que la nueva ejecución aplica el límite nuevo y espera a que se
+despliegue. Lo mismo vale para un servidor que queda `Pending` cuando, en lugar de hacer sitio,
+bajas `nats_cpu_request` o `nats_memory_request`, salvo en una instancia `--compact`, donde
+`dcctl` fija las solicitudes por sí mismo.
 
 ### La transición única a la ingesta duradera
 

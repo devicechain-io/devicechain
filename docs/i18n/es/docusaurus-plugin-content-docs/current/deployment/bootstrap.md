@@ -1301,7 +1301,10 @@ un nodo se quedaba sin memoria.
 - Para cambiarlos, establece `nats_cpu_request`, `nats_memory_request` o `nats_memory_limit` en
   un `terraform.tfvars` junto al estado de OpenTofu de la instancia
   (`~/.devicechain/instances/<instancia>/infra/instance/`), que lee cada aplicación de la
-  instancia que hace `dcctl`, también la de una actualización. La memoria admite `Mi` o `Gi`.
+  instancia que hace `dcctl`, también la de una actualización. La memoria admite `Mi` o `Gi`. En
+  una instancia instalada con `--compact`, `dcctl` pasa las dos solicitudes por sí mismo en cada
+  aplicación, lo que prevalece sobre el archivo, así que allí solo `nats_memory_limit` se puede
+  cambiar de esta forma.
 
 #### Rendimiento medido {#measured-throughput}
 

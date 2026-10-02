@@ -90,7 +90,9 @@ type liveVolumes struct{ JetStream, EventStore string }
 // file-store ceiling is derived from the size STRING (90% of its magnitude, in its unit).
 // Passing the read-back spelling would turn 14745Mi into 14Gi: a config change that rolls
 // the broker and lowers its ceiling, over a volume that did not change. So a live size
-// equal to what would otherwise be passed yields that, spelled as it always was.
+// equal to what would otherwise be passed yields that, spelled as it always was — and a
+// live size that differs arrives here already spelled as the state recorded it
+// (spellVolumesAsRecorded), for the same reason.
 func volumeSize(live, otherwise string) string {
 	if live == "" {
 		return otherwise
@@ -230,6 +232,13 @@ func statefulSetRolledOut(s *appsv1.StatefulSet) bool {
 		st.UpdatedReplicas == desired &&
 		st.ReadyReplicas == desired &&
 		st.CurrentRevision == st.UpdateRevision
+}
+
+// brokerRollUnfinished reports whether the broker is part-way through a roll: the
+// StatefulSet controller has a template not every server runs yet. It is the one
+// unhealthy broker an upgrade applies over — see settleUpgradeInfraInputs.
+func brokerRollUnfinished(s *appsv1.StatefulSet) bool {
+	return s.Status.UpdateRevision != "" && s.Status.CurrentRevision != s.Status.UpdateRevision
 }
 
 // brokerNotReady says which broker pod is not ready and what it is doing, for a
@@ -486,10 +495,27 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	// or a store already failing over, is a roll that cannot finish — the upgrade would
 	// time out a quarter of an hour later with the infrastructure half moved. Refused
 	// here, while a refusal still means nothing has moved.
+	//
+	// 🔴 EXCEPT A ROLL THAT DID NOT FINISH, BECAUSE ONLY AN APPLY CAN FINISH IT. A broker
+	// whose servers are part-way onto a new template got there through an apply — most
+	// likely an earlier run of this upgrade — and a server that cannot run that template
+	// (killed for memory, Pending for want of the CPU it requests) is fixed by applying a
+	// different one: the remedy the docs give is to raise nats_memory_limit, or lower a
+	// request, in terraform.tfvars and run the upgrade again. Refusing here would make that
+	// remedy unreachable — nothing else applies the broker of a running instance. So an
+	// unfinished roll is let through, said out loud, and the wait after the apply decides
+	// whether the new template rolls out. A broker short of a server on the template it
+	// already runs (a lost node, a crashing server nobody changed) is still refused: an
+	// apply would add a restart to it and fix nothing.
 	if !statefulSetRolledOut(infra.Broker) {
-		return fmt.Errorf("instance %q's broker is not healthy (%s), so this upgrade would restart "+
-			"servers of a broker that is already short of one. Nothing has been changed. Bring it "+
-			"back first, then run the upgrade again", st.Instance, brokerNotReady(infra.Broker, infra.BrokerPods))
+		if !brokerRollUnfinished(infra.Broker) {
+			return fmt.Errorf("instance %q's broker is not healthy (%s), so this upgrade would restart "+
+				"servers of a broker that is already short of one. Nothing has been changed. Bring it "+
+				"back first, then run the upgrade again", st.Instance, brokerNotReady(infra.Broker, infra.BrokerPods))
+		}
+		st.InfraNotes = append(st.InfraNotes, fmt.Sprintf("the broker's last roll did not finish (%s). "+
+			"This apply replaces the template it is rolling to, and the upgrade waits for that one "+
+			"to roll out", brokerNotReady(infra.Broker, infra.BrokerPods)))
 	}
 	if ok, why := eventStoreReady(infra.EventStore, infra.StoreImages); !ok {
 		return fmt.Errorf("instance %q's event store is not healthy (%s), so this upgrade would "+
@@ -546,6 +572,49 @@ func carriedRestoreVars(state *tfjson.State) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// spellVolumesAsRecorded gives each live volume size the spelling the instance root's
+// state recorded for it, when the two are the same quantity.
+//
+// 🔴 THE API SERVER RETURNS A CANONICAL QUANTITY, AND THE BROKER READS THE STRING. A
+// JetStream volume created at 12288Mi reads back as 12Gi, and the broker's file-store
+// ceiling is derived from the size string (90% of its magnitude, floored, in its unit):
+// 11059Mi for one spelling, 10Gi for the other. Passing the read-back spelling would
+// change the broker's configuration, roll every server and LOWER its ceiling, over a
+// volume that did not change. The state holds the spelling the volume was created with,
+// so that is what is passed. A recorded size that is a different quantity is not used:
+// the live volume is what an upgrade keeps (see volumeSize).
+func spellVolumesAsRecorded(st *State, state *tfjson.State) error {
+	for _, v := range []struct {
+		live    *string
+		address string
+		path    []string
+	}{
+		{&st.LiveVolumes.JetStream, natsReleaseAddress, []string{"config", "jetstream", "fileStore", "pvc", "size"}},
+		{&st.LiveVolumes.EventStore, tsdbReleaseAddress, []string{"storage", "size"}},
+	} {
+		if *v.live == "" {
+			continue
+		}
+		vals, found, err := releaseValuesInState(state, v.address)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		recorded, ok := nestedString(vals, v.path...)
+		if !ok || recorded == "" {
+			continue
+		}
+		l, lerr := resource.ParseQuantity(*v.live)
+		r, rerr := resource.ParseQuantity(recorded)
+		if lerr == nil && rerr == nil && l.Cmp(r) == 0 {
+			*v.live = recorded
+		}
+	}
+	return nil
 }
 
 // releaseValuesInState finds a helm_release in the state and decodes its values.
@@ -620,19 +689,50 @@ type planReview struct {
 	Warnings []string
 }
 
+// operatorInputs says where an instance-root variable's value comes from, for the
+// judgements that depend on whether an operator chose it.
+type operatorInputs struct {
+	// declared: the operator states it in a variables file OpenTofu loads on its own, or
+	// in TF_VAR_<name> (statedByOperator).
+	declared func(string) bool
+	// passed: dcctl passes it itself, with -var.
+	passed func(string) bool
+}
+
+// kept reports whether a value the operator declared is the one the apply runs with.
+//
+// 🔴 A DECLARATION dcctl ALSO PASSES IS NOT KEPT. OpenTofu takes a -var over
+// terraform.tfvars, *.auto.tfvars and TF_VAR_ alike, so for every variable dcctl emits
+// itself — the compact preset's broker requests and volumes, enable_database_backups,
+// backup_snapshot_class, the database placement — a file entry is read and then
+// overridden. Counting it as stated would accept a change on the strength of a value
+// that never reaches the apply.
+func (o operatorInputs) kept(name string) bool {
+	return !o.passed(name) && o.declared(name)
+}
+
+// passedIn reports whether vars (name=value strings) set name.
+func passedIn(vars []string, name string) bool {
+	for _, v := range vars {
+		if strings.HasPrefix(v, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
 // reviewUpgradePlan judges a saved plan before it is applied, and refuses — by name,
 // with nothing changed — what an upgrade must not do.
 //
-// stated reports whether the operator declared an instance-root variable themselves, in
-// a terraform.tfvars beside the state or in TF_VAR_<name>. A change that would cost data
-// is accepted when the operator stated the value it comes from, because then it is what
+// A change that would cost data is accepted when the operator declared the value it
+// comes from somewhere the apply honours (operatorInputs.kept), because then it is what
 // they asked for; it is refused when it comes from nobody stating anything.
 //
 // 🔴 IT JUDGES RESOURCES, NOT THE OBJECTS INSIDE A CHART. A helm_release update that
 // drops an object from its manifest is an UPDATE here, and Helm deletes the object; what
 // this refuses is a resource the configuration manages being deleted or replaced. The
 // settings checks below are what look inside the two releases.
-func reviewUpgradePlan(instance string, plan *tfjson.Plan, stated func(string) bool) (planReview, error) {
+func reviewUpgradePlan(instance string, plan *tfjson.Plan, in operatorInputs) (planReview, error) {
 	var out planReview
 	if plan == nil {
 		return out, fmt.Errorf("the infrastructure plan for instance %q could not be read. Nothing has been changed", instance)
@@ -666,7 +766,7 @@ func reviewUpgradePlan(instance string, plan *tfjson.Plan, stated func(string) b
 		case a.Update():
 			out.Changes = append(out.Changes, plannedChange{rc.Address, "update"})
 			if rc.Address == natsReleaseAddress || rc.Address == tsdbReleaseAddress {
-				if err := reviewReleaseChange(&out, rc, stated); err != nil {
+				if err := reviewReleaseChange(&out, rc, in); err != nil {
 					return planReview{}, fmt.Errorf("applying this release's infrastructure to instance %q: %w", instance, err)
 				}
 			}
@@ -708,7 +808,7 @@ func actionsDelete(a tfjson.Actions) bool {
 
 // reviewReleaseChange looks inside one release's values: it names every setting that
 // moves, and refuses the moves that lose something.
-func reviewReleaseChange(out *planReview, rc *tfjson.ResourceChange, stated func(string) bool) error {
+func reviewReleaseChange(out *planReview, rc *tfjson.ResourceChange, in operatorInputs) error {
 	// Values the plan cannot know until it applies cannot be judged, and reading them as
 	// absent would judge an empty release: refused, not passed.
 	if u, ok := rc.Change.AfterUnknown.(map[string]interface{}); ok && containsTrue(u["values"]) {
@@ -731,10 +831,10 @@ func reviewReleaseChange(out *planReview, rc *tfjson.ResourceChange, stated func
 		out.Lines = append(out.Lines, what+": "+d)
 	}
 	if rc.Address == natsReleaseAddress {
-		out.Warnings = append(out.Warnings, brokerResourceDecreases(before, after)...)
+		out.Warnings = append(out.Warnings, brokerResourceDecreases(before, after, in)...)
 		return nil
 	}
-	return refuseEventStoreLosses(before, after, stated)
+	return refuseEventStoreLosses(before, after, in)
 }
 
 // refuseEventStoreLosses refuses the event store changes that cost something an
@@ -748,16 +848,23 @@ func reviewReleaseChange(out *planReview, rc *tfjson.ResourceChange, stated func
 //     segment older than it — lost recovery range, which no later change gives back;
 //   - an analytics reader that disappears from the declared roles stops being managed,
 //     so the documented password rotation silently stops working for it.
-func refuseEventStoreLosses(before, after map[string]interface{}, stated func(string) bool) error {
+//
+// 🔴 SWITCHING BACKUPS OFF IS REFUSED WHATEVER IS DECLARED. dcctl decides
+// enable_database_backups itself, from the install record, and passes it with -var — so
+// no terraform.tfvars entry reaches it, and no declaration lets this through.
+func refuseEventStoreLosses(before, after map[string]interface{}, in operatorInputs) error {
 	if b, ok := nestedMap(before, "backup"); ok && b["enabled"] == true {
 		a, aok := nestedMap(after, "backup")
 		if !aok || a["enabled"] != true {
 			return fmt.Errorf("the event store's backups would be switched off, and with them every " +
-				"archived base backup and WAL segment would stop being kept. Nothing has been changed")
+				"archived base backup and WAL segment would stop being kept. An upgrade never switches " +
+				"an event store's backups off, and no setting in terraform.tfvars changes that: dcctl " +
+				"decides it from how the cluster was installed. Nothing has been changed. To move only " +
+				"the services and leave the event store as it is, re-run with --skip-infrastructure")
 		}
 		br, _ := b["retentionPolicy"].(string)
 		ar, _ := a["retentionPolicy"].(string)
-		if br != ar && !stated("backup_retention_tsdb") {
+		if br != ar && !in.kept("backup_retention_tsdb") {
 			shorter, known := retentionShorter(ar, br)
 			if !known || shorter {
 				return fmt.Errorf("the event store's recovery window would change from %q to %q, and a "+
@@ -770,7 +877,7 @@ func refuseEventStoreLosses(before, after map[string]interface{}, stated func(st
 			}
 		}
 	}
-	if lost := lostLoginRoles(before, after); len(lost) > 0 && !stated("timescale_analytics_readers") {
+	if lost := lostLoginRoles(before, after); len(lost) > 0 && !in.kept("timescale_analytics_readers") {
 		return fmt.Errorf("the event store would stop declaring the analytics reader role(s) %s. A role "+
 			"that is no longer declared is no longer managed, so its password rotation stops working. "+
 			"They are not set anywhere this upgrade reads, so they were most likely declared by hand and "+
@@ -801,13 +908,22 @@ func refuseEventStoreLosses(before, after map[string]interface{}, stated func(st
 // brokerResourceDecreases names any broker request or limit this apply lowers. A lower
 // value is not a loss of data, so it is reported rather than refused — loudly, because
 // the most likely cause is a value set by hand that this apply does not know about.
-func brokerResourceDecreases(before, after map[string]interface{}) []string {
+//
+// The advice depends on who sets the variable: a terraform.tfvars entry is the way to
+// keep a value only when dcctl does not pass that variable itself (operatorInputs.kept).
+// For a compact instance dcctl passes both requests, so telling its operator to set them
+// in a file would be advice the apply silently ignores.
+func brokerResourceDecreases(before, after map[string]interface{}, in operatorInputs) []string {
 	var out []string
-	for _, path := range [][]string{
-		{"container", "resources", "requests", "cpu"},
-		{"container", "resources", "requests", "memory"},
-		{"container", "resources", "limits", "memory"},
+	for _, r := range []struct {
+		path     []string
+		variable string
+	}{
+		{[]string{"container", "resources", "requests", "cpu"}, "nats_cpu_request"},
+		{[]string{"container", "resources", "requests", "memory"}, "nats_memory_request"},
+		{[]string{"container", "resources", "limits", "memory"}, "nats_memory_limit"},
 	} {
+		path := r.path
 		b, bok := nestedString(before, path...)
 		a, aok := nestedString(after, path...)
 		if !bok || !aok {
@@ -818,10 +934,15 @@ func brokerResourceDecreases(before, after map[string]interface{}) []string {
 		if berr != nil || aerr != nil || aq.Cmp(bq) >= 0 {
 			continue
 		}
-		out = append(out, fmt.Sprintf("the broker's %s is LOWERED from %s to %s. If you raised it by hand, "+
-			"set it in the terraform.tfvars beside the instance's infrastructure state "+
-			"(~/.devicechain/instances/<instance>/infra/instance/), which every dcctl apply reads",
-			strings.Join(path[1:], "."), b, a))
+		what := fmt.Sprintf("the broker's %s is LOWERED from %s to %s.", strings.Join(path[1:], "."), b, a)
+		if in.passed(r.variable) {
+			out = append(out, what+fmt.Sprintf(" dcctl sets %s itself for this instance (--compact), "+
+				"so a value in terraform.tfvars would not change it", r.variable))
+			continue
+		}
+		out = append(out, what+fmt.Sprintf(" If you raised it by hand, set %s in the terraform.tfvars "+
+			"beside the instance's infrastructure state (~/.devicechain/instances/<instance>/infra/instance/), "+
+			"which every dcctl apply reads", r.variable))
 	}
 	return out
 }
@@ -1049,7 +1170,7 @@ func statedByOperator(rootdir, name string) bool {
 	if err != nil {
 		return false
 	}
-	decl := regexp.MustCompile(`(?m)^\s*"?` + regexp.QuoteMeta(name) + `"?\s*[=:]`)
+	decl := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=`)
 	for _, e := range entries {
 		n := e.Name()
 		if e.IsDir() || !(n == "terraform.tfvars" || n == "terraform.tfvars.json" ||
@@ -1057,7 +1178,22 @@ func statedByOperator(rootdir, name string) bool {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(rootdir, n))
-		if err == nil && decl.Match(b) {
+		if err != nil {
+			continue
+		}
+		// A .json form is read as JSON: its top-level keys are the declarations, on one
+		// line or many. A file that does not parse is not read as declaring anything,
+		// which leaves the refusal standing — the side to fail on.
+		if strings.HasSuffix(n, ".json") {
+			var m map[string]json.RawMessage
+			if json.Unmarshal(b, &m) == nil {
+				if _, ok := m[name]; ok {
+					return true
+				}
+			}
+			continue
+		}
+		if decl.Match(b) {
 			return true
 		}
 	}
@@ -1115,6 +1251,7 @@ type upgradeInfraPlan struct {
 	vars     []string
 	review   planReview
 	kept     []string
+	notes    []string
 }
 
 // say prints what the plan changes. It never prints a value outside shownValuePaths.
@@ -1138,6 +1275,9 @@ func (p *upgradeInfraPlan) say() {
 	}
 	for _, k := range p.kept {
 		fmt.Println(color.YellowString("    %s", k))
+	}
+	for _, n := range p.notes {
+		fmt.Println(color.YellowString("    ⚠ %s", n))
 	}
 	for _, w := range p.review.Warnings {
 		fmt.Println(color.YellowString("    ⚠ %s", w))
@@ -1182,6 +1322,9 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 	if st.CarriedRestoreVars, err = carriedRestoreVars(state); err != nil {
 		return nil, err
 	}
+	if err := spellVolumesAsRecorded(st, state); err != nil {
+		return nil, err
+	}
 	vars, err := instanceRootVars(st)
 	if err != nil {
 		return nil, err
@@ -1191,6 +1334,7 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 		return nil, err
 	}
 	p.kept = sayKeptVolumes(st)
+	p.notes = st.InfraNotes
 	return p, nil
 }
 
@@ -1216,7 +1360,10 @@ func planGated(ctx context.Context, tf upgradeTofu, rootdir string, vars []strin
 		_ = os.Remove(planPath)
 		return nil, fmt.Errorf("reading instance %q's infrastructure plan: %w. Nothing has been changed", instance, err)
 	}
-	review, err := reviewUpgradePlan(instance, plan, func(name string) bool { return statedByOperator(rootdir, name) })
+	review, err := reviewUpgradePlan(instance, plan, operatorInputs{
+		declared: func(name string) bool { return statedByOperator(rootdir, name) },
+		passed:   func(name string) bool { return passedIn(vars, name) },
+	})
 	if err != nil {
 		_ = os.Remove(planPath)
 		return nil, err
@@ -1278,7 +1425,7 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		if perr != nil {
 			return fmt.Errorf("%w (the apply that triggered the re-plan failed with: %v)", perr, err)
 		}
-		again.kept = p.kept
+		again.kept, again.notes = p.kept, p.notes
 		*p = *again
 		p.say()
 		if rerr := p.tf.Apply(ctx, tfexec.DirOrPlan(p.planPath)); rerr != nil {

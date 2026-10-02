@@ -125,6 +125,9 @@ func releaseChange(t *testing.T, address, typ string, actions tfjson.Actions, be
 
 func notStated(string) bool { return false }
 
+// nobody is a plan judged with no value declared by the operator and none passed by dcctl.
+var nobody = operatorInputs{declared: notStated, passed: notStated}
+
 // --- bootstrap is unchanged ---------------------------------------------------
 
 // 🔴 THE REFACTOR GUARD. Bootstrap's instance-root vars now come through
@@ -278,7 +281,7 @@ func TestThePlanGateRefusesValuesItCannotSee(t *testing.T) {
 	rc := releaseChange(t, tsdbReleaseAddress, "helm_release", tfjson.Actions{tfjson.ActionUpdate},
 		map[string]interface{}{"backup": map[string]interface{}{"enabled": true, "retentionPolicy": "7d"}}, nil)
 	rc.Change.AfterUnknown = map[string]interface{}{"values": []interface{}{false, true}}
-	_, err := reviewUpgradePlan("prod", &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{rc}}, notStated)
+	_, err := reviewUpgradePlan("prod", &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{rc}}, nobody)
 	if err == nil || !strings.Contains(err.Error(), "until it applies them") {
 		t.Errorf("unknown values were judged rather than refused: %v", err)
 	}
@@ -293,8 +296,9 @@ func TestSettleRefusesWhatCannotBeAppliedSafely(t *testing.T) {
 		return &State{Instance: "prod", KubeContext: "gke_p_z_c", Values: map[string]string{
 			"natsCA": "ca", "natsCalloutIssuerSeed": creds.IssuerSeed, "natsServicePassword": creds.ServicePassword}}
 	}
+	// Short a server on the template every server already runs: a lost node, a crash
+	// nobody's change caused. An apply would add a restart and fix nothing.
 	unhealthyBroker := healthyInfra("16Gi", "32Gi")
-	unhealthyBroker.Broker.Status.UpdateRevision = "dc-nats-new"
 	unhealthyBroker.Broker.Status.ReadyReplicas = 2
 	unhealthyBroker.BrokerPods = []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "dc-nats-2"},
 		Status: corev1.PodStatus{Phase: corev1.PodPending}}}
@@ -314,7 +318,7 @@ func TestSettleRefusesWhatCannotBeAppliedSafely(t *testing.T) {
 			[]string{"no broker certificate authority", "--skip-infrastructure", "Nothing has been changed"}},
 		{"no event store", base, clusterArchiveState{}, healthyInfra("16Gi", "32Gi"),
 			[]string{"has no event store", "Nothing has been changed"}},
-		{"broker mid-roll", base, clusterArchiveState{Exists: true}, unhealthyBroker,
+		{"broker short a server on its current template", base, clusterArchiveState{Exists: true}, unhealthyBroker,
 			[]string{"broker is not healthy", "dc-nats-2 Pending", "Nothing has been changed"}},
 		{"store failing over", base, clusterArchiveState{Exists: true}, degradedStore,
 			[]string{"event store is not healthy", "Failing over", "Nothing has been changed"}},
@@ -448,7 +452,7 @@ func TestThePlanGateRefusesDeletesReplacementsAndAMissingState(t *testing.T) {
 		{"create the store", &tfjson.ResourceChange{Address: tsdbReleaseAddress, Type: "helm_release", Change: &tfjson.Change{Actions: tfjson.Actions{tfjson.ActionCreate}}}, "holds no infrastructure state"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := reviewUpgradePlan("prod", &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{c.rc}}, notStated)
+			_, err := reviewUpgradePlan("prod", &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{c.rc}}, nobody)
 			switch {
 			case c.refused == "" && err != nil:
 				t.Fatalf("refused: %v", err)
@@ -479,23 +483,31 @@ func TestThePlanGateRefusesLosingARecoveryWindowOrAReader(t *testing.T) {
 	}
 	noBackups := map[string]interface{}{"imageName": "tsdb:1", "instances": 3,
 		"extraRoles": []interface{}{map[string]interface{}{"name": "analytics_reader", "login": false}}}
-	stated := func(name string) func(string) bool { return func(n string) bool { return n == name } }
+	is := func(name string) func(string) bool { return func(n string) bool { return n == name } }
+	stated := func(name string) operatorInputs { return operatorInputs{declared: is(name), passed: notStated} }
+	// 🔴 DECLARED AND ALSO PASSED BY dcctl: the -var wins over the file, so the operator's
+	// value never reaches the apply and must not be counted as stated.
+	overridden := func(name string) operatorInputs { return operatorInputs{declared: is(name), passed: is(name)} }
 	upd := tfjson.Actions{tfjson.ActionUpdate}
 
 	for _, c := range []struct {
 		name          string
 		before, after map[string]interface{}
-		stated        func(string) bool
+		stated        operatorInputs
 		refused       string
 	}{
-		{"30d to 7d, set by hand", store("30d"), store("7d"), notStated, "backup_retention_tsdb"},
+		{"30d to 7d, set by hand", store("30d"), store("7d"), nobody, "backup_retention_tsdb"},
 		{"30d to 7d, stated", store("30d"), store("7d"), stated("backup_retention_tsdb"), ""},
-		{"keep-all to 7d", store(""), store("7d"), notStated, "backup_retention_tsdb"},
-		{"7d to 30d", store("7d"), store("30d"), notStated, ""},
-		{"backups off", store("7d"), noBackups, notStated, "switched off"},
-		{"a reader dropped", store("7d", "analytics_acme"), store("7d"), notStated, "timescale_analytics_readers"},
+		{"30d to 7d, stated but overridden by dcctl", store("30d"), store("7d"), overridden("backup_retention_tsdb"), "backup_retention_tsdb"},
+		{"keep-all to 7d", store(""), store("7d"), nobody, "backup_retention_tsdb"},
+		{"7d to 30d", store("7d"), store("30d"), nobody, ""},
+		{"backups off", store("7d"), noBackups, nobody, "switched off"},
+		// No declaration gets this through: dcctl decides enable_database_backups.
+		{"backups off, stated", store("7d"), noBackups, stated("enable_database_backups"), "no setting in terraform.tfvars"},
+		{"a reader dropped", store("7d", "analytics_acme"), store("7d"), nobody, "timescale_analytics_readers"},
 		{"a reader dropped, stated", store("7d", "analytics_acme"), store("7d"), stated("timescale_analytics_readers"), ""},
-		{"a reader kept", store("7d", "analytics_acme"), store("7d", "analytics_acme"), notStated, ""},
+		{"a reader dropped, stated but overridden by dcctl", store("7d", "analytics_acme"), store("7d"), overridden("timescale_analytics_readers"), "timescale_analytics_readers"},
+		{"a reader kept", store("7d", "analytics_acme"), store("7d", "analytics_acme"), nobody, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			plan := &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{
@@ -522,7 +534,7 @@ func TestThePlanGateRefusesAnImageAndSettingsChangeTogether(t *testing.T) {
 	plan := func(b, a map[string]interface{}) *tfjson.Plan {
 		return &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{releaseChange(t, tsdbReleaseAddress, "helm_release", upd, b, a)}}
 	}
-	_, err := reviewUpgradePlan("prod", plan(store("tsdb:1", "", 3), store("tsdb:2", "lz4", 3)), notStated)
+	_, err := reviewUpgradePlan("prod", plan(store("tsdb:1", "", 3), store("tsdb:2", "lz4", 3)), nobody)
 	if err == nil || !strings.Contains(err.Error(), `timescale_image = "tsdb:1"`) {
 		t.Errorf("an image and settings change on a three-instance store was not refused with the order out: %v", err)
 	}
@@ -531,7 +543,7 @@ func TestThePlanGateRefusesAnImageAndSettingsChangeTogether(t *testing.T) {
 		"settings only": plan(store("tsdb:1", "", 3), store("tsdb:1", "lz4", 3)),
 		"image only":    plan(store("tsdb:1", "lz4", 3), store("tsdb:2", "lz4", 3)),
 	} {
-		if _, err := reviewUpgradePlan("prod", p, notStated); err != nil {
+		if _, err := reviewUpgradePlan("prod", p, nobody); err != nil {
 			t.Errorf("%s: refused: %v", name, err)
 		}
 	}
@@ -548,7 +560,7 @@ func TestThePlanSaysWhatMovesAndNeverPrintsASecret(t *testing.T) {
 			"limits": map[string]interface{}{"memory": "2Gi"}}},
 	}
 	review, err := reviewUpgradePlan("prod", &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{
-		releaseChange(t, natsReleaseAddress, "helm_release", tfjson.Actions{tfjson.ActionUpdate}, before, after)}}, notStated)
+		releaseChange(t, natsReleaseAddress, "helm_release", tfjson.Actions{tfjson.ActionUpdate}, before, after)}}, nobody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,12 +582,54 @@ func TestALoweredBrokerLimitIsReportedLoudly(t *testing.T) {
 			"limits": map[string]interface{}{"memory": limit}}}}
 	}
 	review, err := reviewUpgradePlan("prod", &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{
-		releaseChange(t, natsReleaseAddress, "helm_release", tfjson.Actions{tfjson.ActionUpdate}, res("4Gi"), res("2Gi"))}}, notStated)
+		releaseChange(t, natsReleaseAddress, "helm_release", tfjson.Actions{tfjson.ActionUpdate}, res("4Gi"), res("2Gi"))}}, nobody)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(review.Warnings) != 1 || !strings.Contains(review.Warnings[0], "limits.memory is LOWERED from 4Gi to 2Gi") {
 		t.Errorf("a lowered broker limit was not reported: %q", review.Warnings)
+	}
+	if !strings.Contains(review.Warnings[0], "set nats_memory_limit in the terraform.tfvars") {
+		t.Errorf("the warning does not name the variable to set: %q", review.Warnings)
+	}
+}
+
+// 🔴 THE ADVICE MUST BE ONE THE APPLY HONOURS. On a compact instance dcctl passes the
+// broker's requests itself with -var, which overrides terraform.tfvars, so telling the
+// operator to set them there is advice that is read and then silently ignored. The plan
+// is judged through planGated, so the "passed" half is the vars this apply really runs
+// with, not a stub.
+func TestALoweredCompactBrokerRequestDoesNotSendTheOperatorToTfvars(t *testing.T) {
+	req := func(cpu string) map[string]interface{} {
+		return map[string]interface{}{"container": map[string]interface{}{"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": cpu}}}}
+	}
+	plan := &tfjson.Plan{ResourceChanges: []*tfjson.ResourceChange{
+		releaseChange(t, natsReleaseAddress, "helm_release", tfjson.Actions{tfjson.ActionUpdate}, req("100m"), req("25m"))}}
+	rec := aCompleteInstall()
+	compactVars, err := instanceRootVars(&State{Instance: "prod", KubeContext: "gke_p_z_c", Compact: true,
+		Install: &rec, Values: map[string]string{"natsCA": "ca"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		vars []string
+		want string
+		not  string
+	}{
+		"compact":   {compactVars, "dcctl sets nats_cpu_request itself", "set nats_cpu_request in the terraform.tfvars"},
+		"full size": {nil, "set nats_cpu_request in the terraform.tfvars", "dcctl sets"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := planGated(context.Background(), &fakeUpgradeTofu{plans: []*tfjson.Plan{plan}}, t.TempDir(), c.vars, "prod")
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := strings.Join(p.review.Warnings, "\n")
+			if !strings.Contains(w, "requests.cpu is LOWERED from 100m to 25m") || !strings.Contains(w, c.want) || strings.Contains(w, c.not) {
+				t.Errorf("want a warning saying %q and not %q, got:\n%s", c.want, c.not, w)
+			}
+		})
 	}
 }
 
@@ -598,6 +652,16 @@ func TestStatedByOperatorReadsWhatTofuLoadsOnItsOwn(t *testing.T) {
 	}
 	if !statedByOperator(dir, "timescale_analytics_readers") {
 		t.Error("a value in an .auto.tfvars.json was not seen")
+	}
+	// A .json form on one line is still a declaration: OpenTofu reads it as JSON.
+	if err := os.WriteFile(filepath.Join(dir, "terraform.tfvars.json"), []byte(`{"backup_retention_tsdb_x":"1d","nats_cpu_request":"1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !statedByOperator(dir, "nats_cpu_request") {
+		t.Error("a value in a single-line terraform.tfvars.json was not seen")
+	}
+	if statedByOperator(dir, "backup_retention") {
+		t.Error("a different variable's prefix was read as this one in a .json file")
 	}
 	t.Setenv("TF_VAR_nats_memory_limit", "4Gi")
 	if !statedByOperator(dir, "nats_memory_limit") {
