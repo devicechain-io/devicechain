@@ -88,7 +88,11 @@ de memoria), las acciones pendientes de despachar se reanudan cuando el reemplaz
 hasta unos 35 segundos después. La detección se reanuda más tarde todavía: el reemplazo espera
 primero un periodo de traspaso adicional, porque no puede distinguir un pod detenido de uno aislado
 que sigue en marcha, y después reproduce el flujo como se describe más abajo. Un reinicio ordenado
-libera la partición y se salta ambas esperas.
+libera la partición y se salta ambas esperas. Si el bróker está inaccesible un momento mientras el
+pod se detiene, el pod sigue intentando liberar la partición hasta poco antes de que termine su
+periodo de gracia. Una interrupción del bróker de más de 30 segundos termina la tenencia incluso de
+un pod en marcha. Cuando el bróker vuelve, el motor toma de nuevo la partición, espera el periodo de
+traspaso y reproduce el flujo, porque nada registra que se detuvo limpiamente.
 
 | | Qué ocurre |
 |---|---|

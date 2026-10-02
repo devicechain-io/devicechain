@@ -514,6 +514,10 @@ type ResolvedEventsProcessor struct {
 	supCtx    context.Context
 	supCancel context.CancelFunc
 	supWG     sync.WaitGroup
+	// stopDeadline is the teardown deadline in unix nanoseconds, or 0 while the process
+	// is not stopping. ExecuteStop writes it once, BEFORE it cancels supCtx; endTerm's
+	// release reads it (releaseContext) to know how long it may wait for the broker.
+	stopDeadline atomic.Int64
 	// termBuildFailures counts CONSECUTIVE failed term builds, and only those. It is
 	// touched solely by the supervisor goroutine. See maxConsecutiveTermBuildFailures
 	// for why Acquire failures must never reach it.
@@ -2652,8 +2656,17 @@ func (rp *ResolvedEventsProcessor) Stop(ctx context.Context) error {
 // to flush the final checkpoint and release the partition. Cancelling only the term
 // would send the supervisor straight back into acquireWithBackoff on a process that
 // is shutting down.
-func (rp *ResolvedEventsProcessor) ExecuteStop(context.Context) error {
+//
+// The release waits for a broker that does not answer, up to ctx's deadline less
+// releaseShutdownHeadroom (core's teardown hands this stop its whole budget, the grace
+// period less the drain and a margin). So the deadline is recorded BEFORE the
+// supervisor is cancelled: a release already retrying when the stop arrives reads it
+// the moment supCtx ends, and one that starts afterwards reads it at once.
+func (rp *ResolvedEventsProcessor) ExecuteStop(ctx context.Context) error {
 	if rp.leadershipEnabled() {
+		if dl, ok := ctx.Deadline(); ok {
+			rp.stopDeadline.Store(dl.UnixNano())
+		}
 		if rp.supCancel != nil {
 			rp.supCancel()
 		}

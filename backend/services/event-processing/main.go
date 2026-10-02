@@ -801,7 +801,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	//
 	// The DETECT partition lease is unaffected either way: the processor's stop above waits
 	// for the term to end, which flushes the final checkpoint and releases the lease, and
-	// both of those happen before either of these two lines runs.
+	// both of those happen before either of these two lines runs. The release waits for a
+	// broker that does not answer, up to its share of the teardown budget (the stop
+	// deadline less releaseShutdownHeadroom), so the NATS manager it needs is still up.
 	// core/service walks them in exactly that order, for every service. Pinned next door in
 	// graphql_shutdown_order_test.go, which drives this function.
 	return Svc.Stop(ctx)
