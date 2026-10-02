@@ -498,8 +498,9 @@ spec:
     CloudNativePG has no declarative primary placement; moving one back is a
     documented switchover (docs: bootstrap.md#ha-database-primaries).
 
-    An event store created before this rule carries neither the label nor the term,
-    and nothing re-applies it, so the rule sees only stores rendered with it.
+    An event store created before this rule carries neither the label nor the term
+    until `dcctl upgrade` applies its instance's infrastructure, which re-renders it
+    (and restarts its instances once); until then the rule does not see it.
 
     Preferred, never required by the scheduler: a cluster with fewer nodes than
     stores must still schedule every instance. (Admission is another matter: a

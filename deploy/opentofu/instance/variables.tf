@@ -744,8 +744,8 @@ variable "timescale_storage" {
     here wants about five GiB more in the destination.
 
     Applied when an instance is created, or when a re-run finishes an interrupted
-    bootstrap: dcctl upgrade does not re-apply this root, so an existing instance keeps
-    its volume. Growing one in place is a patch to the Cluster's spec.storage.size and
+    bootstrap. dcctl upgrade applies this root but passes the event store's live size,
+    so an existing instance keeps its volume. Growing one in place is a patch to the Cluster's spec.storage.size and
     needs a StorageClass with allowVolumeExpansion (kind's local-path has none). The
     one path that meets an existing volume is a bootstrap interrupted under an earlier
     release (8Gi) and finished by this one: the apply asks for the larger size, which

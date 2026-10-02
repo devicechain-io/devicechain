@@ -106,7 +106,7 @@ func TestEveryOutputDcctlReadsIsDeclaredByTheRootItIsReadFrom(t *testing.T) {
 		root               fs.FS
 		floor              int
 	}{
-		{"tofu.go", "applyInstanceInfra", "instance", assets.OpenTofuInstance(), 4},
+		{"tofu.go", "readInstanceInfraOutputs", "instance", assets.OpenTofuInstance(), 4},
 		{"clusterprereqs.go", "clusterOutputs", "cluster", assets.OpenTofuCluster(), 4},
 		{"clusterprereqs.go", "objectStoreFromOutputs", "cluster", assets.OpenTofuCluster(), 1},
 		{"dbplacement.go", "placementFromOutputs", "cluster", assets.OpenTofuCluster(), 2},

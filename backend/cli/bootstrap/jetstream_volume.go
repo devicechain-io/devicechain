@@ -112,11 +112,27 @@ func jetStreamStorageFor(st *State) string {
 // embeddedJetStreamStorageDefault extracts the nats_jetstream_storage default from
 // the embedded OpenTofu variables.tf, or "" if it cannot be found.
 func embeddedJetStreamStorageDefault() string {
+	return embeddedInstanceDefault("nats_jetstream_storage")
+}
+
+// embeddedInstanceDefault extracts one string variable's `default` from the embedded
+// instance root's variables.tf, or "" if it cannot be found.
+//
+// Read out of the binary rather than restated, for the reason jetStreamStorageFor
+// gives: a hand-copied default keeps describing the old value after the shipped one
+// moves.
+func embeddedInstanceDefault(name string) string {
 	raw, err := readEmbeddedTofuVariables()
 	if err != nil {
 		return ""
 	}
-	m := jetStreamStorageDefaultRe.FindSubmatch(raw)
+	// The variable's own block, up to the closing brace at the start of a line, so a
+	// variable with no default cannot borrow the next one's.
+	block := regexp.MustCompile(`(?s)variable\s+"` + regexp.QuoteMeta(name) + `"\s*\{(.*?)\n\}`).FindSubmatch(raw)
+	if block == nil {
+		return ""
+	}
+	m := tofuStringDefaultRe.FindSubmatch(block[1])
 	if m == nil {
 		return ""
 	}
@@ -128,6 +144,5 @@ func readEmbeddedTofuVariables() ([]byte, error) {
 	return fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
 }
 
-// jetStreamStorageDefaultRe finds the `default` immediately following the
-// nats_jetstream_storage declaration.
-var jetStreamStorageDefaultRe = regexp.MustCompile(`(?s)variable\s+"nats_jetstream_storage"\s*\{.*?default\s*=\s*"([^"]+)"`)
+// tofuStringDefaultRe finds a `default = "..."` line inside one variable block.
+var tofuStringDefaultRe = regexp.MustCompile(`(?m)^\s*default\s*=\s*"([^"]*)"`)

@@ -75,7 +75,7 @@ func TestARenewedCertificateStillVerifiesAgainstTheAuthorityTheServicesTrust(t *
 	}
 	before := brokerLeaf(t, c)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	if _, err := renewBrokerCertificate(context.Background(), c, st); err != nil {
 		t.Fatalf("renewing the broker's certificate: %v", err)
 	}
 	settleStringDataLikeAnAPIServer(t, c)
@@ -104,7 +104,7 @@ func TestARenewedCertificateStillVerifiesAgainstTheAuthorityTheServicesTrust(t *
 func TestTheBrokerIsRestartedOntoTheCertificateItWasGiven(t *testing.T) {
 	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	if _, err := renewBrokerCertificate(context.Background(), c, st); err != nil {
 		t.Fatalf("renewing the broker's certificate: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestACertificateWellInsideItsLifeIsLeftAlone(t *testing.T) {
 	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC(), 1)
 	before := brokerLeaf(t, c)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	if _, err := renewBrokerCertificate(context.Background(), c, st); err != nil {
 		t.Fatalf("checking a healthy certificate: %v", err)
 	}
 	settleStringDataLikeAnAPIServer(t, c)
@@ -237,7 +237,7 @@ func TestAnInstanceWithNoStoredAuthorityIsToldRatherThanFailed(t *testing.T) {
 	}
 	before := brokerLeaf(t, c)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	if _, err := renewBrokerCertificate(context.Background(), c, st); err != nil {
 		t.Fatalf("an upgrade failed because a certificate could not be renewed: %v", err)
 	}
 	settleStringDataLikeAnAPIServer(t, c)

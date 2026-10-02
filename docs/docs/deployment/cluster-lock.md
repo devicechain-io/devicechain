@@ -63,6 +63,11 @@ the cluster has no operator, or has one identifiably from another release, and i
 `dcctl install` as the way through. An operator installed by hand is let through with a
 note instead. See [Releases & upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
 
+Because an upgrade also applies the instance's broker and event store from the OpenTofu state
+on the machine running it, a second upgrade of the same instance from another machine, past the
+warning, applies that machine's copy of the state at the same time. Upgrade an instance from one
+machine at a time.
+
 The asymmetry is deliberate:
 
 - **Install and bootstrap refuse.** A second bootstrap running alongside a first

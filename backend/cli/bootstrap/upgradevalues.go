@@ -3,14 +3,15 @@
 
 package bootstrap
 
-// The values an upgrade cannot derive from the cluster, and has to take from the
-// release it is replacing.
+// The values an upgrade takes from the release it is replacing.
 //
-// 🔴 THESE EXIST BECAUSE `dcctl upgrade` DOES NOT RUN THE INFRASTRUCTURE APPLY, AND
-// EVERY ONE OF THEM FAILS SILENTLY. They are not credentials and not topology — they
-// are what an apply REPORTED, recorded in the release because nothing else keeps
-// them. An upgrade that recomputed them from an apply it never ran would compute
-// their zero values, and a zero value here is never an error:
+// 🔴 THESE ARE WHAT AN INFRASTRUCTURE APPLY REPORTED, AND EVERY ONE OF THEM FAILS
+// SILENTLY. They are not credentials and not topology; they are recorded in the
+// release because nothing else keeps them. When the upgrade applies the instance's
+// infrastructure itself, that apply's outputs supersede the two it reports (the backup
+// flags — see carryForwardFromRelease); under --skip-infrastructure there is no apply,
+// and an upgrade that recomputed them would compute their zero values, and a zero value
+// here is never an error:
 //
 //   - metrics.databaseBackups gates the WAL-archiving alerts. False renders no rules
 //     at all, which looks exactly like an instance that does not archive.
@@ -35,13 +36,21 @@ package bootstrap
 // metrics values to carry and wants none. What must not happen is an upgrade
 // INVENTING any of them, so every one of these is copied or left alone — never
 // defaulted.
+//
+// 🔴 EXCEPT OVER WHAT THIS RUN'S OWN APPLY REPORTED. When the upgrade applied the
+// instance root (st.InfraApplied), readInstanceInfraOutputs has already set the two
+// backup flags from what that apply says exists — the newer answer, and the one the
+// alerting rules must match. Carrying the release's copy over it would let a store
+// whose backups the apply reports off keep rules that can never fire.
 func carryForwardFromRelease(st *State, previous map[string]interface{}) {
 	metrics, _ := previous["metrics"].(map[string]interface{})
-	if enabled, ok := metrics["databaseBackups"].(bool); ok && enabled {
-		st.Values[databaseBackupsKey] = "true"
-	}
-	if on, ok := metrics["databaseBackupSnapshots"].(bool); ok && on {
-		st.Values[databaseBackupSnapshotsKey] = "true"
+	if !st.InfraApplied {
+		if enabled, ok := metrics["databaseBackups"].(bool); ok && enabled {
+			st.Values[databaseBackupsKey] = "true"
+		}
+		if on, ok := metrics["databaseBackupSnapshots"].(bool); ok && on {
+			st.Values[databaseBackupSnapshotsKey] = "true"
+		}
 	}
 	if ns, ok := metrics["databaseNamespace"].(string); ok && ns != "" {
 		st.Values[databaseNamespaceKey] = ns

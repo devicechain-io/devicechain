@@ -28,8 +28,13 @@ import (
 //   - THE dcctl-OWNED SECRETS hold what the INFRASTRUCTURE was built from — the
 //     database owner passwords above all, which the document also carries but which
 //     the Secret is authoritative for. See reuseMintedCredential.
-//   - THE PREVIOUS RELEASE holds the handful of values that came out of an
-//     infrastructure apply this verb does not run. See carryForwardFromRelease.
+//   - THE PREVIOUS RELEASE holds the handful of values that came out of the last
+//     infrastructure apply, which this verb falls back on when it does not apply the
+//     infrastructure itself (--skip-infrastructure). See carryForwardFromRelease.
+//
+// What the infrastructure apply needs beyond these — the broker's hashes, the live
+// archive path, the volume sizes — is read by settleUpgradeInfraInputs, after this and
+// only when the apply is going to run.
 //
 // 🔴 AND THE ORDER MATTERS. The OPERATOR is checked before anything else, because
 // with no Instance CRD there can be no declaration and the declaration's refusal
@@ -52,6 +57,8 @@ func hydrateUpgradeState(
 		DryRun:       opts.DryRun,
 		DcctlVersion: opts.DcctlVersion,
 		Values:       map[string]string{},
+
+		SkipInfrastructure: opts.SkipInfrastructure,
 	}
 
 	// 0. THE OPERATOR, AND IT COMES FIRST FOR A REASON THAT IS NOT PRIORITY.

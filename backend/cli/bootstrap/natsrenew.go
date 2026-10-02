@@ -200,32 +200,35 @@ func namesMissingFrom(have, wanted []string) []string {
 // picked up by nothing. The old leaf keeps being served until something unrelated
 // happens to roll the StatefulSet, which on a healthy instance may be never, and the
 // certificate would expire anyway with a green renewal in the log.
-func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st *State) error {
+//
+// restarted reports that it restarted the broker, so the caller can wait for the
+// servers to come back before it moves anything else.
+func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st *State) (restarted bool, err error) {
 	current, err := typed.CoreV1().Secrets(InstanceNamespace(st.Instance)).Get(
 		ctx, natsReleaseName+"-tls", metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		fmt.Println(color.YellowString(
 			"  The broker has no certificate Secret, so there is nothing to renew. This instance " +
 				"predates dcctl owning it; its certificate is renewed by rebuilding the instance."))
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("reading the broker's certificate to see whether it needs renewing: %w", err)
+		return false, fmt.Errorf("reading the broker's certificate to see whether it needs renewing: %w", err)
 	}
 
 	replicas := haFor(st.HA).ServerReplicas
 	wanted := natsServerDNSNames(natsReleaseName, InstanceNamespace(st.Instance), replicas)
 	reason, err := leafReissueReason(string(current.Data["tls.crt"]), wanted, time.Now().UTC())
 	if err != nil {
-		return err
+		return false, err
 	}
 	if reason == "" {
-		return nil
+		return false, nil
 	}
 
 	caCert, caKey, err := readNATSAuthority(ctx, typed, st.Instance, st.InstanceUID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if caCert == nil {
 		// 🔴 REPORTED LOUDLY AND NOT FAILED. This instance needs a new certificate and
@@ -240,13 +243,13 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 				"     keep the authority that signed it — so it cannot be re-issued in place.\n"+
 				"     Rebuilding the instance mints a fresh authority and certificate; until then\n"+
 				"     the broker will refuse every connection once the certificate lapses.", reason))
-		return nil
+		return false, nil
 	}
 
 	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(
 		caCert, caKey, natsReleaseName, InstanceNamespace(st.Instance), replicas, time.Now().UTC())
 	if err != nil {
-		return err
+		return false, err
 	}
 	material := &natsTLSMaterial{
 		Namespace:   InstanceNamespace(st.Instance),
@@ -256,16 +259,16 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		natsTLSSecret(natsReleaseName, material), time.Now); err != nil {
-		return err
+		return false, err
 	}
 
 	if err := restartBroker(ctx, typed, InstanceNamespace(st.Instance)); err != nil {
-		return err
+		return false, err
 	}
 	fmt.Println(color.WhiteString(
 		"  Broker certificate re-issued under the same authority (%s), and the broker restarted\n"+
 			"  to present it. Nothing had to re-trust anything.", reason))
-	return nil
+	return true, nil
 }
 
 // restartBroker rolls the broker onto a certificate it has already been handed.

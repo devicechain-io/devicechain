@@ -57,9 +57,7 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 			"archives. The bootstrap command reads it before the pipeline runs", st.Instance)
 	}
 
-	// Every value dcctl decides, computed ONCE and then routed by which root declares
-	// it. See splitVars for why this is computed rather than two hand-kept lists.
-	_, instanceVars, err := splitVars(infraVars(st))
+	instanceVars, err := instanceRootVars(st)
 	if err != nil {
 		return err
 	}
@@ -103,10 +101,31 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 		return err
 	}
 
-	// The archive contract, READ BACK from the install record rather than recomputed
-	// here. Appended after the instance's own variables so that what the cluster
-	// actually built wins over anything derived from this run's flags.
-	return applyInstanceInfra(ctx, st, inst.tf, append(instanceVars, st.Install.Outputs.Archive.archiveVars()...))
+	return applyInstanceInfra(ctx, st, inst.tf, instanceVars)
+}
+
+// instanceRootVars is every `-var` an apply of the instance root runs with. A bootstrap
+// and an upgrade both call it, so the two cannot come to apply one root with different
+// inputs.
+//
+// Every value dcctl decides is computed ONCE and then routed by which root declares
+// it (see splitVars for why that is computed rather than two hand-kept lists). The
+// archive contract follows, READ BACK from the install record rather than recomputed
+// here, appended after the instance's own variables so that what the cluster actually
+// built wins over anything derived from this run's flags. Last come the recovery
+// source an upgrade carries for a restored event store (CarriedRestoreVars, nil on a
+// bootstrap, which states its own restore through st.Restore).
+func instanceRootVars(st *State) ([]string, error) {
+	if st.Install == nil {
+		return nil, fmt.Errorf("refusing to compose the infrastructure inputs for instance %q: the "+
+			"cluster's install record was never read, so nothing says where its archive is", st.Instance)
+	}
+	_, vars, err := splitVars(infraVars(st))
+	if err != nil {
+		return nil, err
+	}
+	vars = append(vars, st.Install.Outputs.Archive.archiveVars()...)
+	return append(vars, st.CarriedRestoreVars...), nil
 }
 
 // instanceRoot is the instance root, extracted, initialised and fenced — ready to apply.
@@ -262,7 +281,19 @@ func applyInstanceInfra(ctx context.Context, st *State, tf *tofuExec, vars []str
 	}); err != nil {
 		return err
 	}
+	return readInstanceInfraOutputs(ctx, st, tf)
+}
 
+// infraOutputReader is the one tofu read readInstanceInfraOutputs needs.
+type infraOutputReader interface {
+	Output(ctx context.Context, opts ...tfexec.OutputOption) (map[string]tfexec.OutputMeta, error)
+}
+
+// readInstanceInfraOutputs records what an apply of the instance root REPORTS it
+// built, for the Helm step to render against. Both verbs that apply the root call it
+// after their apply, so an upgrade renders its alerting rules from what its own apply
+// reported rather than from what the previous release recorded.
+func readInstanceInfraOutputs(ctx context.Context, st *State, tf infraOutputReader) error {
 	// Read the NATS TLS material back out (ADR-025): the broker terminates TLS and
 	// emits its CA, which the Helm step threads into the instance config so
 	// services dial over TLS. The broker flag and the client flag come from the
@@ -411,8 +442,16 @@ func infraVars(st *State) []string {
 	// certificate anyone may hold, and the key that signs with it never leaves this
 	// process. The module still renders the CA-only ConfigMap its chart references;
 	// it just receives the material instead of generating it.
-	if st.NATSTLS != nil {
-		vars = append(vars, "nats_ca_cert_pem="+st.NATSTLS.CACertPEM)
+	//
+	// 🔴 READ FROM natsCA, NOT FROM THE MINT, because there are two writers of the
+	// authority and only one of them mints. A bootstrap mints it and records the public
+	// half here in the same breath (stepRenderConfig); an upgrade mints nothing and reads
+	// it back from the configuration document the services run on. Keyed on the mint,
+	// an upgrade's apply passed no CA at all, and the module's default for that is an
+	// EMPTY one — a broker no client can verify. An upgrade refuses an instance whose
+	// document carries no CA before it gets here (settleUpgradeInfraInputs).
+	if ca := st.Values["natsCA"]; ca != "" {
+		vars = append(vars, "nats_ca_cert_pem="+ca)
 	}
 	// The off-site archive, when one was supplied. Everything here is an ADDRESS
 	// rather than a credential — the two keys travel in a Secret dcctl writes, and
@@ -531,9 +570,9 @@ func infraVars(st *State) []string {
 		// and leaves the one that does at its full-size default, which makes the
 		// preset's disk claim describe a fraction of the disk it uses.
 		vars = append(vars,
-			"nats_jetstream_storage="+compact.JetStreamStorage,
+			"nats_jetstream_storage="+volumeSize(st.LiveVolumes.JetStream, compact.JetStreamStorage),
 			"postgres_storage="+compact.PostgresStorage,
-			"timescale_storage="+compact.TimescaleStorage,
+			"timescale_storage="+volumeSize(st.LiveVolumes.EventStore, compact.TimescaleStorage),
 			// The backup destination's volume. It joined this list when A2.5 made
 			// enable_database_backups provision a destination rather than merely
 			// installing the plugin — before that, compact's footprint genuinely
@@ -562,6 +601,19 @@ func infraVars(st *State) []string {
 		)
 		// cert-manager and database backups are dropped by --compact --no-tls; see
 		// certManagerEnabled and databaseBackupsEnabled, which the emission above reads.
+	} else {
+		// The full-size volumes are the roots' own defaults, so nothing is emitted for
+		// them — unless this instance already HAS volumes of another size. See
+		// volumeSize: an upgrade keeps the sizes an instance was built with.
+		for _, v := range []struct{ name, live string }{
+			{"nats_jetstream_storage", st.LiveVolumes.JetStream},
+			{"timescale_storage", st.LiveVolumes.EventStore},
+		} {
+			def := embeddedInstanceDefault(v.name)
+			if size := volumeSize(v.live, def); size != def {
+				vars = append(vars, v.name+"="+size)
+			}
+		}
 	}
 	// The archive path each store OWNS (ADR-020 A2.5 / ADR-028), settled in
 	// stepRenderConfig. Empty is the OpenTofu default — the Cluster's own name — and

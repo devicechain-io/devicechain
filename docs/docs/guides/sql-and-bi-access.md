@@ -79,7 +79,11 @@ apply rather than a surprise.
      --namespace dci-<instance-id> cnpg.io/reload=true
    ```
 
-2. **Declare the role in your deployment variables**, with a connection limit:
+2. **Declare the role in your deployment variables**, with a connection limit. On an instance
+   built with `dcctl`, that is a `terraform.tfvars` file beside the instance's OpenTofu state,
+   `~/.devicechain/instances/<instance-id>/infra/instance/terraform.tfvars`. Every `dcctl` apply of
+   the instance reads it, an upgrade's included, so the role stays declared; `dcctl upgrade`
+   refuses rather than stop declaring a reader it finds nowhere else.
 
    ```hcl
    timescale_analytics_readers = [
@@ -91,7 +95,9 @@ apply rather than a surprise.
    ]
    ```
 
-3. **Apply.** The role appears, joins the reader group, and can connect. Nothing needs restarting.
+3. **Apply.** On an instance built with `dcctl`, `dcctl upgrade <provider> <instance-id>` applies
+   the instance's configuration with that file. The role appears, joins the reader group, and can
+   connect. Nothing needs restarting.
 
 :::warning The label is what makes rotation work
 Without `cnpg.io/reload`, later changes to the Secret are not noticed promptly, and rotation does not

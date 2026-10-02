@@ -47,7 +47,10 @@
 #   hack/upgrade-rig.sh control   THE NEGATIVE CONTROLS: break the instance three
 #                                 different ways and require the right check to
 #                                 notice each, with the exact exit code for it
-#   hack/upgrade-rig.sh all       up, then whichever drill `mode` names
+#   hack/upgrade-rig.sh infra     the instance's broker and event store must carry
+#                                 the release's settings, by value, and still enforce
+#                                 broker auth; nothing they owned may have gone
+#   hack/upgrade-rig.sh all      up, then whichever drill `mode` names
 #   hack/upgrade-rig.sh down      dcctl destroy the instance (with the working tree's
 #                                 dcctl), then delete the cluster, dcctl's local state
 #                                 for it, and the rig's state
@@ -466,6 +469,11 @@ target_file="$work/upgrade-target"
 # (the extracted baseline tree is expensive), which is precisely how a marker from
 # last week would certify today's run.
 ran_file="$work/drill-ran"
+# What the instance's broker and event store carried BEFORE the upgrade (the NATS memory
+# limit, the event store's wal_compression), and the objects its namespace held. Written
+# by `upgrade` before it moves anything, read by `infra`.
+infra_before_file="$work/infra-before"
+infra_inventory_before="$work/infra-inventory-before"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 note() { printf '\033[0;37m    %s\033[0m\n' "$*"; }
@@ -1026,8 +1034,9 @@ cmd_up() {
   need_all
   mkdir -p "$work"
   chmod 700 "$work"
-  # The marker from a previous session must not certify this one. See ran_file.
-  rm -f "$ran_file"
+  # The marker from a previous session must not certify this one. See ran_file. The
+  # infrastructure readings taken before the upgrade, likewise: see infra_before_file.
+  rm -f "$ran_file" "$infra_before_file" "$infra_inventory_before"
   build_apiprobe
   extract_baseline
   build_baseline_dcctl
@@ -1207,6 +1216,10 @@ $baseline_tag will actually meet."
   # Keeping the actions in `upgrade` and the assertion in `operator` is what makes the
   # assertion capable of failing.
   build_target_dcctl
+
+  # What the broker and event store carry BEFORE anything moves, so `infra` can say
+  # whether this run exercised their convergence or found them already there.
+  record_infra_before
 
   # --compact because the cluster was installed compact by `cmd_up`, and this is a
   # RE-install of a cluster that already exists.
@@ -2350,6 +2363,174 @@ is why this blocks the release rather than being noted in it."
 }
 
 # ---------------------------------------------------------------------------
+# infra — the instance's broker and event store carry THIS release's settings
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM: `dcctl upgrade` applied the instance's own infrastructure — its NATS
+# servers and its event store — from the OpenTofu configuration the release ships, so a
+# setting the release changed reached the upgraded instance and not only new ones.
+#
+# 🔴 UNTIL IT DID, NOTHING WATCHED THIS, AND EVERY OTHER PHASE STAYED GREEN. The data
+# survived, the doors answered and the operator was in step while the broker ran with
+# no resource requests and the event store without the settings the release notes
+# described: the services do not care what the broker's memory limit is. So this
+# phase measures the settings THEMSELVES, by value, against what the working tree
+# declares — read out of the tree, never restated here, so a moved default moves the
+# check with it.
+
+# infra_compare <have> <want>
+#
+#   0  equal, exactly — the module passes the literal, so "2048Mi" is NOT "2Gi"
+#   1  different: the finding
+#   2  nothing to compare against: the tree's value could not be read, which is the
+#      check failing to run and must never read as a pass
+infra_compare() {
+  local have="$1" want="$2"
+  [[ -n "$want" ]] || return 2
+  [[ "$have" == "$want" ]] || return 1
+  return 0
+}
+
+infra_kubectl() { kubectl --context "$kube_context" -n "$(instance_namespace)" "$@"; }
+
+infra_nats_limit() {
+  infra_kubectl get statefulset dc-nats \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="nats")].resources.limits.memory}'
+}
+
+infra_wal_compression() {
+  infra_kubectl get clusters.postgresql.cnpg.io dc-tsdb \
+    -o jsonpath='{.spec.postgresql.parameters.wal_compression}'
+}
+
+# infra_inventory prints the namespace's objects of the kinds an infrastructure apply
+# owns, as sorted `kind/name` lines. A kind the API does not serve (no backup plugin,
+# say) is skipped; a kind it serves and could not be listed is a failure, because an
+# empty listing would read as "everything disappeared" or, worse, "nothing to lose".
+infra_inventory() {
+  local kind out served
+  served="$(kubectl --context "$kube_context" api-resources -o name)" ||
+    fail "could not list the API's resource types, so the inventory cannot be taken"
+  for kind in statefulsets services poddisruptionbudgets clusters.postgresql.cnpg.io \
+    scheduledbackups.postgresql.cnpg.io objectstores.barmancloud.cnpg.io; do
+    grep -qx "$kind" <<<"$served" || continue
+    out="$(infra_kubectl get "$kind" -o name)" ||
+      fail "could not list $kind in $(instance_namespace) for the inventory"
+    if [[ -n "$out" ]]; then printf '%s\n' "$out"; fi
+  done | sort
+}
+
+record_infra_before() {
+  local limit wal
+  limit="$(infra_nats_limit)" || fail "could not read the broker's memory limit before the upgrade"
+  wal="$(infra_wal_compression)" || fail "could not read the event store's wal_compression before the upgrade"
+  printf 'limit=%s\nwal=%s\n' "$limit" "$wal" >"$infra_before_file"
+  infra_inventory >"$infra_inventory_before"
+  [[ -s "$infra_inventory_before" ]] || fail "the instance namespace held none of the infrastructure's
+objects before the upgrade, so there is nothing to compare afterwards. That is the check
+failing to run, not the upgrade succeeding."
+  note "before the upgrade: broker memory limit '${limit}', event store wal_compression '${wal}', $(wc -l <"$infra_inventory_before") objects"
+}
+
+cmd_infra() {
+  need kubectl
+  [[ -s "$infra_before_file" && -s "$infra_inventory_before" ]] || fail "the readings taken before the
+upgrade are missing; run 'upgrade' first. Without them this check cannot say whether the
+upgrade moved anything or the baseline already carried it."
+
+  say "THE INFRASTRUCTURE — do the instance's broker and event store carry this release's settings?"
+  local rc want have before_limit before_wal
+
+  # 1. The broker's memory limit, against the instance root's default.
+  want="$(tofu_default "$repo_root/deploy/opentofu/instance/variables.tf" nats_memory_limit)"
+  have="$(infra_nats_limit)" || fail "could not read the broker's StatefulSet"
+  rc=0; infra_compare "$have" "$want" || rc=$?
+  case "$rc" in
+  0) note "broker memory limit $have ✓" ;;
+  2) fail "cannot measure: deploy/opentofu/instance/variables.tf declares no default for
+nats_memory_limit, so there is nothing to compare the broker against. The variable moved
+or was renamed — read that file. This is the check failing to run, not a pass." ;;
+  *) fail "THE BROKER WAS NOT APPLIED: its memory limit is '${have}', and this release sets
+'${want}'. \`dcctl upgrade\` moved the services and left the instance's NATS servers on the
+configuration they were built with — exactly the drift this phase exists to catch." ;;
+  esac
+
+  # 2. The broker finished rolling, every server on the current revision.
+  local upd cur ready replicas pods name hash
+  upd="$(infra_kubectl get statefulset dc-nats -o jsonpath='{.status.updateRevision}')"
+  cur="$(infra_kubectl get statefulset dc-nats -o jsonpath='{.status.currentRevision}')"
+  ready="$(infra_kubectl get statefulset dc-nats -o jsonpath='{.status.readyReplicas}')"
+  replicas="$(infra_kubectl get statefulset dc-nats -o jsonpath='{.status.replicas}')"
+  [[ -n "$upd" && "$upd" == "$cur" && -n "$replicas" && "$ready" == "$replicas" ]] ||
+    fail "THE BROKER DID NOT FINISH ROLLING: update revision '$upd', current '$cur', $ready of
+$replicas ready. The upgrade returned while a server was still on the old configuration."
+  pods="$(infra_kubectl get pods \
+    -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.labels.controller-revision-hash}{"\n"}{end}' |
+    awk '$1 ~ /^dc-nats-[0-9]+$/')" || fail "could not list the broker's pods"
+  [[ "$(grep -c . <<<"$pods")" == "$replicas" ]] ||
+    fail "found $(grep -c . <<<"$pods") broker pods for $replicas servers:
+$pods"
+  while read -r name hash; do
+    [[ "$hash" == "$upd" ]] || fail "broker pod $name runs revision '$hash', not '$upd'"
+  done <<<"$pods"
+  note "every broker server ($replicas) runs revision $upd ✓"
+
+  # 3. The broker still enforces auth. A broker applied without its auth inputs comes up
+  # accepting anyone, and every other check here — and every service — stays green.
+  # Read whole, then searched: `kubectl … | grep -q` under pipefail fails whenever grep
+  # stops reading before kubectl stops writing.
+  local conf
+  conf="$(infra_kubectl get configmap dc-nats-config -o jsonpath='{.data}')" ||
+    fail "could not read the broker's configuration (dc-nats-config)"
+  grep -q auth_callout <<<"$conf" ||
+    fail "THE BROKER LOST ITS AUTHENTICATION: dc-nats-config renders no auth_callout after the
+upgrade. Services still connect to a broker that accepts anyone, which is why nothing
+else noticed."
+  note "the broker still renders its auth callout ✓"
+
+  # 4. The event store's settings, against the instance root's literal.
+  want="$(awk -F'"' '/"wal_compression"[[:space:]]*=/{print $4; exit}' "$repo_root/deploy/opentofu/instance/main.tf")"
+  have="$(infra_wal_compression)" || fail "could not read the event store's Cluster"
+  rc=0; infra_compare "$have" "$want" || rc=$?
+  case "$rc" in
+  0) note "event store wal_compression $have ✓" ;;
+  2) fail "cannot measure: deploy/opentofu/instance/main.tf sets no wal_compression literal
+this check can read. This is the check failing to run, not a pass." ;;
+  *) fail "THE EVENT STORE WAS NOT APPLIED: its Cluster's wal_compression is '${have}', and this
+release sets '${want}'." ;;
+  esac
+
+  # 5. ...and the database took it, rather than the Cluster merely saying so.
+  local primary shown
+  primary="$(infra_kubectl get clusters.postgresql.cnpg.io dc-tsdb -o jsonpath='{.status.currentPrimary}')"
+  [[ -n "$primary" ]] || fail "the event store reports no current primary"
+  shown="$(infra_kubectl exec "$primary" -c postgres -- psql -U postgres -tAc 'SHOW wal_compression')" ||
+    fail "could not ask the event store's primary $primary for its wal_compression"
+  shown="$(tr -d '[:space:]' <<<"$shown")"
+  rc=0; infra_compare "$shown" "$want" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "THE EVENT STORE'S DATABASE DID NOT TAKE IT: $primary reports wal_compression
+'${shown}' while its Cluster says '${want}'."
+  note "the primary $primary runs with wal_compression $shown ✓"
+
+  # 6. Nothing the infrastructure owned disappeared. The plan gate refuses a resource
+  # being deleted; this is what sees an object dropped from INSIDE a release.
+  local after gone
+  after="$(infra_inventory)"
+  gone="$(comm -23 "$infra_inventory_before" <(printf '%s\n' "$after"))"
+  [[ -z "$gone" ]] || fail "THE UPGRADE REMOVED INFRASTRUCTURE OBJECTS from $(instance_namespace):
+$gone"
+  note "every one of $(wc -l <"$infra_inventory_before") objects from before the upgrade is still there ✓"
+
+  before_limit="$(sed -n 's/^limit=//p' "$infra_before_file")"
+  before_wal="$(sed -n 's/^wal=//p' "$infra_before_file")"
+  if [[ "$before_limit" == "$(infra_nats_limit)" && "$before_wal" == "$have" ]]; then
+    warn "the baseline already carried these settings (memory limit '$before_limit', wal_compression
+'$before_wal'), so this run did not exercise their convergence. That is not a pass claim about it."
+  fi
+  say "INFRASTRUCTURE AT THIS RELEASE — the broker and the event store carry its settings"
+}
+
+# ---------------------------------------------------------------------------
 # selftest — the part of this rig that runs without a cluster
 # ---------------------------------------------------------------------------
 #
@@ -2666,6 +2847,30 @@ commit-ish without the chart, or this check has quietly stopped checking."
 
   upgrade_images="$saved_images" upgrade_tag="$saved_tag" baseline_tag="$saved_baseline"
 
+  # ---- the infrastructure comparison ----------------------------------------
+  # Its NEGATIVE controls first: a broker that carries no limit at all (what a v0.18.0
+  # instance runs), and one carrying the same amount spelled differently, must both
+  # fail — the module passes the literal, so only the literal is a match. And a tree
+  # value that could not be read must be its own answer, never a pass.
+  say "the infrastructure comparison"
+  expect_infra() {
+    local have="$1" want="$2" expected="$3" label="$4"
+    rc=0
+    infra_compare "$have" "$want" || rc=$?
+    [[ "$rc" -eq "$expected" ]] ||
+      fail "SELF-TEST FAILED ($label): infra_compare '$have' '$want' returned $rc, wanted $expected"
+    note "$label"
+  }
+  expect_infra "" "2Gi" 1 "a broker with no limit is NOT at the release"
+  expect_infra "2048Mi" "2Gi" 1 "the same amount spelled differently is NOT the literal the module passes"
+  expect_infra "2Gi" "2Gi" 0 "the release's own value is a match"
+  expect_infra "2Gi" "" 2 "an unreadable tree value cannot tell, and says so"
+  [[ -n "$(tofu_default "$repo_root/deploy/opentofu/instance/variables.tf" nats_memory_limit)" ]] ||
+    fail "SELF-TEST FAILED: the tree's nats_memory_limit default cannot be read, so 'infra' would measure nothing"
+  [[ -n "$(awk -F'"' '/"wal_compression"[[:space:]]*=/{print $4; exit}' "$repo_root/deploy/opentofu/instance/main.tf")" ]] ||
+    fail "SELF-TEST FAILED: the tree's wal_compression literal cannot be read, so 'infra' would measure nothing"
+  note "both values 'infra' measures against can be read out of the tree"
+
   selftest_policy
   selftest_superuser_password
 
@@ -2955,6 +3160,7 @@ tablesweep) cmd_tablesweep ;;
 control) cmd_control ;;
 controlverify) cmd_control_verify ;;
 operator) cmd_operator ;;
+infra) cmd_infra ;;
 selftest) selftest ;;
 down) cmd_down ;;
 all)
@@ -3012,7 +3218,8 @@ and event history belongs to the DR drill, not this one."
   # drill and its primary result — a real data-loss defect found on a run that
   # stopped here would be invisible.
   cmd_operator
-  say "UPGRADE DRILL COMPLETE — data survived AND the operator is in step."
+  cmd_infra
+  say "UPGRADE DRILL COMPLETE — data survived, the operator is in step, and the broker and event store carry this release's settings."
   ;;
-*) fail "unknown command ${1}; try mode | up | upgrade | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | all | selftest | down" ;;
+*) fail "unknown command ${1}; try mode | up | upgrade | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | all | selftest | down" ;;
 esac
