@@ -1,0 +1,305 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package bootstrap
+
+import (
+	"fmt"
+	"maps"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+
+	"helm.sh/helm/v3/pkg/releaseutil"
+	"sigs.k8s.io/yaml"
+)
+
+// persistenceState is a State a real bootstrap would hand the Helm and infra steps,
+// for one combination of --ha, --compact and the profile.
+func persistenceState(ha, compact bool, profile string) *State {
+	st := compactState(compact)
+	st.HA = ha
+	st.Profile = profile
+	return st
+}
+
+// renderedArea is what one functional area rendered as: its Deployment's replica
+// count, its pod spread (renderedSpread, placement_test.go), and whether it got a
+// PodDisruptionBudget.
+type renderedArea struct {
+	Replicas int
+	Spread   spreadView
+	PDB      bool
+}
+
+// renderedAreas decodes every Deployment's replica count and every
+// PodDisruptionBudget of a manifest, keyed by the devicechain.io/functional-area
+// label, and joins each to its spread. A document it cannot decode is a failure, as
+// in containersOf: a decoder that skipped one would report that area as absent,
+// which is exactly the shape of the defect these tests look for.
+func renderedAreas(t *testing.T, manifest string) map[string]*renderedArea {
+	t.Helper()
+
+	out := map[string]*renderedArea{}
+	area := func(name string) *renderedArea {
+		if out[name] == nil {
+			out[name] = &renderedArea{}
+		}
+		return out[name]
+	}
+	for _, doc := range releaseutil.SplitManifests(manifest) {
+		var obj struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Spec struct {
+				Replicas *int `json:"replicas"`
+			} `json:"spec"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatalf("decoding a rendered document: %v\n%s", err, doc)
+		}
+		if obj.Kind != "Deployment" && obj.Kind != "PodDisruptionBudget" {
+			continue
+		}
+		name := obj.Metadata.Labels["devicechain.io/functional-area"]
+		if name == "" {
+			t.Fatalf("a rendered %s carries no functional-area label:\n%s", obj.Kind, doc)
+		}
+		if obj.Kind == "PodDisruptionBudget" {
+			area(name).PDB = true
+			continue
+		}
+		if obj.Spec.Replicas == nil {
+			t.Fatalf("Deployment %s renders no spec.replicas", name)
+		}
+		area(name).Replicas = *obj.Spec.Replicas
+	}
+	for name, v := range renderedSpread(t, manifest) {
+		a, ok := out[name]
+		if !ok {
+			t.Fatalf("renderedSpread found a Deployment %q the replica reader did not", name)
+		}
+		a.Spread = v
+	}
+	return out
+}
+
+// ownSpread returns the area's spread over its OWN pods: the constraints whose
+// selector names the area, rather than the label every event-path pod shares.
+func (a *renderedArea) ownSpread(area string) []spreadConstraint {
+	var out []spreadConstraint
+	for _, c := range a.Spread.constraints {
+		if c.LabelSelector != nil && c.LabelSelector.MatchLabels["devicechain.io/functional-area"] == area {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func renderAreas(t *testing.T, vals map[string]interface{}) map[string]*renderedArea {
+	t.Helper()
+	manifest, err := renderChart(t, vals)
+	if err != nil {
+		t.Fatalf("rendering the chart: %v", err)
+	}
+	return renderedAreas(t, manifest)
+}
+
+var persistenceCases = []struct {
+	name        string
+	ha, compact bool
+	profile     string
+	want        int
+}{
+	{"default", false, false, "default", 1},
+	{"--ha", true, false, "default", 2},
+	{"--compact", false, true, "default", 1},
+	{"--ha --compact", true, true, "default", 1},
+	// No event-management at all: nothing to run twice, and nothing to reserve for.
+	{"--ha --profile ingest-only", true, false, "ingest-only", 1},
+}
+
+// The ruling and the measurement: under --ha, without --compact, event-management runs
+// as two pods; every other combination, and every other area, stays at one.
+func TestEventManagementRunsTwoPodsOnlyUnderHaWithoutCompact(t *testing.T) {
+	for _, c := range persistenceCases {
+		t.Run(c.name, func(t *testing.T) {
+			areas := renderAreas(t, helmValues(persistenceState(c.ha, c.compact, c.profile)))
+
+			// Positive control: the decoder sees the areas this profile deploys, so an
+			// absent area below is an absent area and not a blind reader.
+			if !slices.Contains(slices.Collect(maps.Keys(areas)), "device-management") || len(areas) < 3 {
+				t.Fatalf("the render decoded too few areas to judge: %v", slices.Sorted(maps.Keys(areas)))
+			}
+			if c.profile == "default" && len(areas) < 9 {
+				t.Fatalf("the default profile decoded only %d areas: %v", len(areas), slices.Sorted(maps.Keys(areas)))
+			}
+
+			em, deployed := areas["event-management"]
+			if c.profile == "ingest-only" {
+				if deployed {
+					t.Fatalf("ingest-only rendered event-management: %+v", em)
+				}
+			} else {
+				if !deployed {
+					t.Fatalf("event-management did not render: %v", slices.Sorted(maps.Keys(areas)))
+				}
+				if em.Replicas != c.want {
+					t.Errorf("event-management replicas = %d under %s, want %d", em.Replicas, c.name, c.want)
+				}
+				if em.PDB != (c.want > 1) {
+					t.Errorf("event-management PodDisruptionBudget = %t under %s, want %t", em.PDB, c.name, c.want > 1)
+				}
+				// Two pods that share a node share the CPU that starved one, and a node
+				// loss takes both: the area's own spread is what keeps them apart.
+				own := em.ownSpread("event-management")
+				if c.want > 1 {
+					want := map[string]string{"devicechain.io/instance": "dctest", "devicechain.io/functional-area": "event-management"}
+					if len(own) != 1 || own[0].TopologyKey != "kubernetes.io/hostname" ||
+						own[0].WhenUnsatisfiable != "ScheduleAnyway" || own[0].MaxSkew != 1 ||
+						!maps.Equal(own[0].LabelSelector.MatchLabels, want) || len(own[0].MatchLabelKeys) != 0 {
+						t.Errorf("event-management at %d pods spreads its own pods as %+v, want one preferred "+
+							"hostname spread over its own labels", em.Replicas, own)
+					}
+				} else if len(own) != 0 {
+					t.Errorf("event-management at one pod renders a spread over its own pods: %+v", own)
+				}
+			}
+			for name, a := range areas {
+				if name == "event-management" {
+					continue
+				}
+				if a.Replicas != 1 || a.PDB || len(a.ownSpread(name)) != 0 {
+					t.Errorf("%s under %s: replicas %d, PDB %t, own spread %+v; want 1, none, none",
+						name, c.name, a.Replicas, a.PDB, a.ownSpread(name))
+				}
+			}
+		})
+	}
+}
+
+// The reader can see a 2, and the PDB and spread assertions above are not vacuous:
+// the tuned benchmark's values file verbatim gives two pods, a PDB and the spread;
+// replicas 1 gives none of them; and a top-level replicas 2 gives every area a PDB.
+func TestTheRenderedReplicaReaderSeesWhatTheChartWasGiven(t *testing.T) {
+	two := renderAreas(t, map[string]interface{}{
+		"functionalAreas": map[string]interface{}{"event-management": map[string]interface{}{"replicas": 2}},
+	})
+	if em := two["event-management"]; em == nil || em.Replicas != 2 || !em.PDB || len(em.ownSpread("event-management")) != 1 {
+		t.Fatalf("functionalAreas.event-management.replicas: 2 decoded as %+v", em)
+	}
+	one := renderAreas(t, map[string]interface{}{
+		"functionalAreas": map[string]interface{}{"event-management": map[string]interface{}{"replicas": 1}},
+	})
+	if em := one["event-management"]; em == nil || em.Replicas != 1 || em.PDB || len(em.ownSpread("event-management")) != 0 {
+		t.Fatalf("functionalAreas.event-management.replicas: 1 decoded as %+v", em)
+	}
+	// Areas the chart pins to one pod of its own (event-processing, frontend) keep
+	// it; these three take the top-level count.
+	all := renderAreas(t, map[string]interface{}{"replicas": 2})
+	for _, name := range []string{"device-management", "event-management", "user-management"} {
+		if a := all[name]; a == nil || a.Replicas != 2 || !a.PDB {
+			t.Errorf("top-level replicas: 2 rendered %s as %+v", name, a)
+		}
+	}
+	// The spread over an area's own pods is the event-path areas' replacement for the
+	// scheduler's default spread, which a pod with a spread of its own loses. An area
+	// without the shared spread keeps the default and gets nothing here.
+	if dm := all["device-management"]; len(dm.ownSpread("device-management")) != 1 {
+		t.Errorf("device-management at two pods does not spread its own pods: %+v", dm.Spread.constraints)
+	}
+	if um := all["user-management"]; len(um.Spread.constraints) != 0 {
+		t.Errorf("user-management (no event-path spread) renders a spread: %+v", um.Spread.constraints)
+	}
+}
+
+// Both tools that need the count get it, from the one value: the chart above, and
+// the instance root here, whose event store reserves connections per pod.
+func TestInfraVarsCarryTheEventManagementReplicaCount(t *testing.T) {
+	for _, c := range persistenceCases {
+		t.Run(c.name, func(t *testing.T) {
+			st := persistenceState(c.ha, c.compact, c.profile)
+			vars := infraVars(st)
+			if got := valueOf(t, vars, "event_management_replicas"); got != strconv.Itoa(c.want) {
+				t.Errorf("event_management_replicas = %s under %s, want %d", got, c.name, c.want)
+			}
+			_, inst, err := splitVars(vars)
+			if err != nil {
+				t.Fatalf("splitting the infra vars: %v", err)
+			}
+			if got := valueOf(t, inst, "event_management_replicas"); got != strconv.Itoa(c.want) {
+				t.Errorf("the instance root is handed event_management_replicas = %s, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+// The numbers the reserve is built from: one pod's pool, doubled for a rollout, is
+// the per-pod base, and the rollout that doubling assumes is the chart's maxSurge 1.
+func TestTheEventStoreReserveIsOnePodsRolloutPerPod(t *testing.T) {
+	if got := tofuVariableDefault(t, "event_management_replicas"); got != "1" {
+		t.Errorf("event_management_replicas defaults to %s, want 1: a direct tofu user who "+
+			"installs the chart at its default must get today's reserve", got)
+	}
+	if got, want := tofuVariableDefault(t, "timescale_analytics_reserved_connections"),
+		strconv.Itoa(servicePoolSize*rolloutSurge); got != want {
+		t.Errorf("timescale_analytics_reserved_connections defaults to %s, want %s "+
+			"(one pod's pool of %d, doubled for a rollout)", got, want, servicePoolSize)
+	}
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ru, _ := ch.Values["rollingUpdate"].(map[string]interface{})
+	if s := fmt.Sprint(ru["maxSurge"]); s != "1" {
+		t.Errorf("the chart's rollingUpdate.maxSurge is %s: the reserve's \"doubled for a "+
+			"rollout\" assumes 1, so a wider surge must revisit it (and connbudget.go)", s)
+	}
+	main := rootSources(t, "main.tf")["instance"]
+	if !strings.Contains(main, "reserved_application_connections = local.event_store_reserved_connections") {
+		t.Errorf("the instance root does not hand the event store local.event_store_reserved_connections")
+	}
+}
+
+// The event-management block is merged into functionalAreas, so another feature's
+// block for another area survives it, and it survives that one.
+func TestEventManagementReplicasLeaveAnotherAreasBlockAlone(t *testing.T) {
+	st := persistenceState(true, false, "default")
+	st.EnabledAreas = []string{"user-management", "device-management", "event-sources", "event-management", "lwm2m-ingest"}
+	st.Lwm2mIdentities = []Lwm2mIdentity{{Identity: "dev-1", PSK: "c2VjcmV0", Tenant: "acme", ExternalID: "dev-1"}}
+	fa, _ := helmValues(st)["functionalAreas"].(map[string]interface{})
+	em, _ := fa["event-management"].(map[string]interface{})
+	if em["replicas"] != 2 {
+		t.Errorf("functionalAreas.event-management = %v, want replicas 2", em)
+	}
+	lw, _ := fa["lwm2m-ingest"].(map[string]interface{})
+	cfg, _ := lw["config"].(map[string]interface{})
+	sec, _ := cfg["security"].(map[string]interface{})
+	if ids, _ := sec["identities"].([]interface{}); len(ids) != 1 {
+		t.Errorf("functionalAreas.lwm2m-ingest lost its identities: %v", lw)
+	}
+}
+
+// An upgrade that skips the infrastructure moves the services and not the event
+// store's reserve, so a --ha one says so.
+func TestASkippedInfrastructureUpgradeSaysTheReserveDidNotMove(t *testing.T) {
+	opts := UpgradeOptions{Options: Options{Instance: "prod"}}
+	st := persistenceState(true, false, "default")
+	st.SkipInfrastructure = true
+	st.Provider = "local"
+	out := captureStdout(t, func() { sayUpgradeInfrastructure(st, opts) })
+	if !strings.Contains(out, "event-management now runs 2 pods") || !strings.Contains(out, "connection reserve") {
+		t.Errorf("a --ha upgrade under --skip-infrastructure does not say the reserve was left:\n%s", out)
+	}
+	for _, other := range []*State{persistenceState(false, false, "default"), persistenceState(true, true, "default")} {
+		other.SkipInfrastructure = true
+		other.Provider = "local"
+		if out := captureStdout(t, func() { sayUpgradeInfrastructure(other, opts) }); strings.Contains(out, "event-management") {
+			t.Errorf("a one-pod instance (ha %t, compact %t) is warned about event-management:\n%s",
+				other.HA, other.Compact, out)
+		}
+	}
+}

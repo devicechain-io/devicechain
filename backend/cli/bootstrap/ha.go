@@ -69,9 +69,11 @@ import (
 // then, treat the database sentence in summary() as a statement about the DEFAULT
 // topology, not an assertion about the applied one.
 //
-// What --ha does NOT raise is the DeviceChain services' own replica counts: the
-// stateful areas are pinned to one writer by the ADR-070 lease fence, and running
-// two would be a correctness change, not a sizing one.
+// --ha raises exactly one DeviceChain service's replica count, event-management's,
+// and not from here: persistenceTopology owns it, because it also depends on --compact
+// and on the areas deployed, and has an OpenTofu half of its own (the event store's
+// connection reserve). The stateful areas stay pinned to one writer by the ADR-070
+// lease fence; running two of those would be a correctness change, not a sizing one.
 type haTopology struct {
 	// ServerReplicas is the number of NATS servers — the OpenTofu half. It is the
 	// CEILING on StreamReplicas, since a stream cannot have more replicas than

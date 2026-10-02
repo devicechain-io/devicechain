@@ -635,10 +635,17 @@ Which NATS server leads a stream is NATS's choice, so no rule here can keep a se
 off the busiest broker's node. What this does is cap how many of these pods share one.
 
 A pod that sets a spread of its own loses the scheduler's DEFAULT spread (one
-Deployment's replicas across nodes and zones). At replicas: 1 that costs nothing; above
-it, the replicas still count here (they carry the label) but no longer prefer different
-zones. values.yaml (device-management) says so where the switch is.
-Parameters: areaCfg.
+Deployment's replicas across nodes and zones). At replicas: 1 that costs nothing. Above
+it, the shared constraint alone would let one area's replicas share a node: a layout
+with both event-management pods on one node and two other event-path pods on each of
+the others has skew 0 and satisfies it. So above one replica a second constraint
+restores the node half of the default, a PREFERRED hostname spread over the area's own
+pods (its areaLabels, the Deployment's selector). Two pods that share a node share its
+CPU and are lost together, which is what running two was for. No matchLabelKeys: the
+old revision's pods count too during a rollout, which is right, since they still occupy
+their nodes (the scheduler skips pods already terminating). The zone half is not
+restored; values.yaml (device-management) says so where the switch is.
+Parameters: areaCfg, replicas (the area's resolved count), areaLabels (its labels).
 */}}
 {{- define "devicechain.eventPathSpread" -}}
 {{- with include "devicechain.eventPathLabel" (dict "areaCfg" .areaCfg) -}}
@@ -649,6 +656,14 @@ topologySpreadConstraints:
     labelSelector:
       matchLabels:
         {{- . | nindent 8 }}
+{{- if gt (int $.replicas) 1 }}
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        {{- $.areaLabels | nindent 8 }}
+{{- end }}
 {{- end }}
 {{- end -}}
 

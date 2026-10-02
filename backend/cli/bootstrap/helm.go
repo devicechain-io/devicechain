@@ -502,6 +502,12 @@ func helmValues(st *State) map[string]interface{} {
 		vals["useMeasuredRequests"] = false
 	}
 
+	// How many event-management pods run, and the same count the infra step reserves
+	// event-store connections for: see persistenceTopology. Unconditional, like
+	// haFor's halves, so turning --ha off renders 1 rather than leaving the chart's
+	// value to whatever the release held.
+	persistenceFor(st).mergeInto(vals)
+
 	// LwM2M PSK provisioning (--lwm2m-identities): render the device PSKs into a
 	// chart-owned Secret (extraSecrets) and bind each into lwm2m-ingest's config
 	// (security.identities[]) + an extraEnv secretKeyRef that projects it. The area is

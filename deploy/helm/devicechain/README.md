@@ -312,6 +312,11 @@ For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
 with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
 `rollingUpdate.maxSurge`.
 
+Each `event-management` pod holds its own pool of 20 connections to the event store.
+On an event store built from this repository's OpenTofu, set the instance root's
+`event_management_replicas` to the same count, so the store keeps room for every pod's
+pool during a rollout. `dcctl install --ha` (without `--compact`) runs two and sets both.
+
 Per-tenant rate ceilings are enforced by each replica separately: at `replicas: 2`,
 event-sources, outbound-connectors and ai-inference can admit up to twice a tenant's
 ceiling.

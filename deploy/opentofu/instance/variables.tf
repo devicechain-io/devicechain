@@ -691,6 +691,18 @@ variable "timescale_analytics_readers" {
     condition     = alltrue([for r in var.timescale_analytics_readers : !contains(["analytics_reader", "analytics_location_reader"], r.name)])
     error_message = "analytics_reader and analytics_location_reader are the read surface's group roles, not readers. Declaring either here would give it LOGIN; name the reader after its tenant instead."
   }
+
+  validation {
+    # 🔴 THE EVENT STORE'S CHART REFUSES THE SAME OVER-COMMITMENT, BUT ONLY WHEN IT
+    # RENDERS, WHICH IS AT APPLY. An apply that moves the broker and the event store
+    # together can have rolled the broker by then, so `dcctl upgrade` would stop part
+    # way. Here it is refused at plan, before anything moves. The 97 is what the chart
+    # computes for this store: PostgreSQL's default max_connections 100 less its 3
+    # superuser slots, neither of which this root overrides (main.tf). The reserve is
+    # the one main.tf hands the store, so the two checks count the same number.
+    condition     = sum(concat([0], [for r in var.timescale_analytics_readers : r.connection_limit])) + local.event_store_reserved_connections <= 97
+    error_message = "The analytics readers' connection_limit values total ${sum(concat([0], [for r in var.timescale_analytics_readers : r.connection_limit]))}, and the platform keeps ${local.event_store_reserved_connections} of the event store's 97 usable connections for event-management (${var.timescale_analytics_reserved_connections} per pod, ${var.event_management_replicas} pod(s)), so together they may take at most ${97 - local.event_store_reserved_connections}. Lower a reader's connection_limit. If you raised timescale_analytics_reserved_connections to run a second event-management pod, set it back to 40: the reserve now grows with event_management_replicas on its own."
+  }
 }
 
 variable "timescale_analytics_reserved_connections" {
@@ -699,11 +711,18 @@ variable "timescale_analytics_reserved_connections" {
     after every analytics reader has taken its limit.
 
     Sized from the pools that actually exist rather than from a round number:
-    event-management is the only service holding a pool against this store, capped
-    at 20 (backend/core/rdb defaultMaxOpenConnections), and a RollingUpdate has two
-    of its pods alive at once. 40 is that, and it is what a render-time check keeps
-    available. Raise it before scaling event-management out, or the shortfall lands
-    on whichever connection is opened last -- normally the application's.
+    event-management holds a pool against this store, capped at 20
+    (backend/core/rdb defaultMaxOpenConnections), and a RollingUpdate has two of its
+    pods alive at once. 40 is that, PER event-management POD: main.tf multiplies it
+    by event_management_replicas (a two-pod rollout can hold four pools, because the
+    next new pod starts while an old one is still terminating), and the product is
+    what a check keeps available, at plan (timescale_analytics_readers' validation)
+    and when the event store renders. So it is not raised here for a second pod.
+    Raise it only for a larger pool per pod; the shortfall otherwise lands on
+    whichever connection is opened last -- normally the application's.
+
+    (user-management's tenant purge also opens a connection here, serially and
+    normally one at a time; the per-pod doubling is what absorbs it.)
 
     🔴 IT IS 20, NOT THE `maxConnections: 5` IN THE HELM VALUES, and the two are easy
     to confuse because they sit under the same store. That key is the LEGACY
@@ -715,6 +734,24 @@ variable "timescale_analytics_reserved_connections" {
   EOT
   type        = number
   default     = 40
+}
+
+variable "event_management_replicas" {
+  description = <<-EOT
+    How many event-management pods the instance runs: the DeviceChain chart's
+    functionalAreas.event-management.replicas. dcctl passes both from one value (2
+    under --ha without --compact when the instance runs event-management, otherwise
+    1). It is here because each pod holds its own pool against the event store, so
+    the reserve above is multiplied by it. A direct tofu user who raises the chart
+    value must raise this with it.
+  EOT
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.event_management_replicas >= 1 && floor(var.event_management_replicas) == var.event_management_replicas
+    error_message = "event_management_replicas must be a whole number of at least 1: the count of event-management pods, each of which holds its own pool against the event store."
+  }
 }
 
 variable "timescale_storage" {

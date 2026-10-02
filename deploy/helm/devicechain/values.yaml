@@ -716,8 +716,9 @@ resources:
 # from one that is idle, and on a three-node GKE cluster it put the busiest services
 # on the node running the event store's primary.
 #
-# Together the five event-path areas request 4.05 cores. A non-compact install on a
-# cluster that cannot spare them leaves pods Pending; use --compact there.
+# Together the five event-path areas request 4.05 cores (4.95 under `dcctl --ha`,
+# which runs two event-management pods). A non-compact install on a cluster that
+# cannot spare them leaves pods Pending; use --compact there.
 useMeasuredRequests: true
 
 # GOMEMLIMIT, as a percentage of each container's own memory LIMIT.
@@ -769,6 +770,10 @@ goMemLimit: ""
 # Per-tenant rate ceilings are enforced by each replica separately (ADR-023): at
 # replicas: 2, event-sources, outbound-connectors and ai-inference can admit up to
 # twice a tenant's ceiling. Size tier ceilings for the replica count you run.
+# `dcctl install --ha` (without --compact) sets functionalAreas.event-management.replicas
+# to 2; nothing else changes it. Each event-management pod holds its own event-store
+# pool, so a direct install that raises it must raise the instance root's
+# event_management_replicas too.
 replicas: 1
 
 # Zero-downtime rolling-update strategy (methodology §10.1). maxUnavailable:0 keeps
@@ -1103,9 +1108,9 @@ functionalAreas:
     #
     # One trade: a pod that sets a spread of its own no longer gets the cluster's
     # DEFAULT spread, which keeps one Deployment's replicas on different nodes and
-    # zones. At replicas: 1 there is nothing to spread. Above 1, this constraint still
-    # counts the replicas (they carry the same label), but no longer prefers
-    # different zones for them.
+    # zones. At replicas: 1 there is nothing to spread. Above 1, the chart adds a
+    # second preferred constraint over this area's own pods, so its replicas still
+    # prefer different nodes; they no longer prefer different zones.
     eventPathSpread: true
     # Profiling listener: Go runtime profiles (CPU, heap, goroutines, execution
     # trace) served by this service on a port of its own. OFF, here and in every
@@ -1288,6 +1293,14 @@ functionalAreas:
     # moved.
     avoidEventStorePrimary: true
     eventPathSpread: true  # See device-management above.
+    # REPLICAS: 1 here (the top-level default); `dcctl install --ha` without --compact
+    # runs 2 (backend/cli/bootstrap/persistence_replicas.go). Measured on GKE (three
+    # 4-vCPU service nodes, --ha, 3-minute runs): one pod shared a node with the NATS
+    # server leading the incoming-event stream and with device-state, ran CPU-starved,
+    # and storing fell behind first from 6,800 events/s; with two, every stage held
+    # 6,800. Each pod fills its own batches, so a batch holds about half as many
+    # events. Each pod also holds its own event-store pool: above 1, raise the instance
+    # root's event_management_replicas with it, which scales the store's reserve.
     config: {}
     # anchorSweepIntervalSeconds: 3600  # ADR-044 decision 3 reconciliation-sweep
     # cadence. Unset defaults to hourly; a negative value disables the sweep (the

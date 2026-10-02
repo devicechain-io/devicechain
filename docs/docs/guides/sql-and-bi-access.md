@@ -278,6 +278,12 @@ and the database keeps reporting healthy while the application can no longer rea
 deployment refuses to render a reader with no limit, and refuses a set of readers whose limits do not
 fit the server.
 
+The platform keeps 40 of the event store's 97 usable connections for its own pools, or 80 on an
+instance installed with `--ha` (without `--compact`), where `event-management` runs two pods and each
+holds its own pool. So your readers' `connection_limit` values together may take at most 57, or 17
+there. Above that, planning the infrastructure fails before anything changes, and the error names
+both numbers.
+
 :::warning The cap bounds connections, not load
 The limit stops analytics from taking *connections* the platform needs. It does not stop queries on
 those connections competing for CPU, disk and PostgreSQL's shared parallel-worker pool. So

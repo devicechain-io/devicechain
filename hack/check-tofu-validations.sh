@@ -1031,6 +1031,38 @@ run_assertions() {
   accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=true}]'
   accepts timescale_analytics_readers '[{name="analytics_acme",connection_limit=5,reads_location=false}]'
 
+  # --- the event store's connection budget, at plan --------------------------------
+  #
+  # The readers' limits plus what the platform keeps must fit the store's 97 usable
+  # connections. The event store's chart refuses an over-committed set too, but only
+  # when it renders, at apply, after the broker may already have rolled; this is the
+  # same refusal at plan. The reserve is per event-management pod, so the boundary
+  # moves with event_management_replicas: 57 at one pod (97 - 40), 17 at two (97 - 80).
+  # Each boundary is asserted from both sides, so a check written `<` or counting one
+  # pod fails here.
+  accepts timescale_analytics_readers '[{name="analytics_a",connection_limit=50},{name="analytics_b",connection_limit=7}]'
+  rejects timescale_analytics_readers '[{name="analytics_a",connection_limit=50},{name="analytics_b",connection_limit=8}]'
+  accepts timescale_analytics_readers '[{name="analytics_a",connection_limit=17}]' -var event_management_replicas=2
+  rejects timescale_analytics_readers '[{name="analytics_a",connection_limit=18}]' -var event_management_replicas=2
+  # An operator's own per-pod base is multiplied, not replaced: 50 a pod leaves 47 at
+  # one pod, and two pods (100) do not fit even with no reader at all.
+  accepts timescale_analytics_readers '[{name="analytics_a",connection_limit=47}]' -var timescale_analytics_reserved_connections=50
+  rejects timescale_analytics_readers '[{name="analytics_a",connection_limit=48}]' -var timescale_analytics_reserved_connections=50
+  rejects timescale_analytics_readers '[]' -var timescale_analytics_reserved_connections=50 -var event_management_replicas=2
+
+  # A count of pods: whole, and at least one. (Three or more is a whole number the
+  # budget above refuses at the default 40 a pod, so it is not an accepts case.)
+  for v in 1 2; do accepts event_management_replicas "$v"; done
+  accepts event_management_replicas 4 -var timescale_analytics_reserved_connections=20
+  for v in 0 -1 1.5; do rejects event_management_replicas "$v"; done
+
+  # What the event store is handed, through the root: one pod's rollout per pod, and
+  # an operator's base scaled with the count rather than overwritten by it.
+  evaluates 40 local.event_store_reserved_connections
+  evaluates 40 local.event_store_reserved_connections -var event_management_replicas=1
+  evaluates 80 local.event_store_reserved_connections -var event_management_replicas=2
+  evaluates 60 local.event_store_reserved_connections -var timescale_analytics_reserved_connections=30 -var event_management_replicas=2
+
   # The per-store objects the modules actually receive. Null on a normal install —
   # and this is the assertion that fails if a future edit makes "restore" a flag
   # rather than an absent object, which would hand the chart a half-populated
