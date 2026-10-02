@@ -173,7 +173,11 @@ With [`--backup-snapshot-class`](./bootstrap.md#snapshot-base-backups), both ste
 recover from the backup store, never from a snapshot: from the newest weekly base backup and the
 log archived since. So each can replay up to a week of log, and takes longer than it would with
 daily base backups. The snapshots belong to the cluster being replaced, and a rebuild has no step
-that reads them.
+that reads them. They stay at your cloud provider after the old cluster is gone, and nothing on
+the new cluster prunes them. They hold the databases' contents, including data a tenant deletion
+removed: once the recovered instance is verified, delete them from your provider's snapshot list
+(for Google Kubernetes Engine, see
+[Tearing it down](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#tearing-it-down)).
 :::
 
 You recover the two databases with two commands, in this order, because the two stores belong to

@@ -527,9 +527,17 @@ of its disks instead of a full copy in the backup store. Nothing changes without
 - **What it does not do.** No restore reads a snapshot. A restore (`--restore-rdb-from`,
   `--restore-tsdb-from`) reads the backup store: the newest weekly base backup and the log
   since, so it can replay up to a week of log. An instance's snapshots are deleted with its
-  namespace when it is destroyed. Snapshots taken at your cloud provider outlive a cluster
-  deleted without destroying its instances first, and they hold the databases' contents,
-  including data a tenant deletion has removed, until you delete them there.
+  namespace when it is destroyed, and the relational database's when the `dc-system`
+  namespace is deleted. Snapshots taken at your cloud provider outlive the cluster, and
+  deleting the provider's copy can finish after the namespace is gone. If the cluster is
+  deleted before that, they stay at the provider, holding the databases' contents,
+  including data a tenant deletion has removed, until you delete them there; nothing
+  prunes them any more. Before deleting the cluster, check that
+  `kubectl get volumesnapshotcontent` lists none whose snapshot namespace (the
+  `VOLUMESNAPSHOTNAMESPACE` column) is `dc-system` or one of your instances' namespaces;
+  afterwards, check your provider's snapshot list. The
+  [Google Kubernetes Engine guide](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#tearing-it-down)
+  gives the commands for GKE.
 - **What it does to the backup store.** The store now keeps up to a week more log for each
   database: log back to the newest weekly base backup before each window. It holds fewer full
   copies, but where log is most of what it holds, it fills sooner. With the default windows

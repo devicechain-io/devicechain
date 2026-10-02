@@ -82,7 +82,10 @@ deleted tenant's data stays in the backup archive until it ages out of that data
 [recovery window](./bootstrap.md#backup-retention): its core data for 30 days by default
 (`backup_retention_rdb`), and its event data for 7 (`backup_retention_tsdb`). Until then, a restore
 to a point before the deletion brings that data back. Backups sent to an object store you supplied
-are also subject to that store's own lifecycle rules.
+are also subject to that store's own lifecycle rules. With
+[volume-snapshot base backups](./bootstrap.md#snapshot-base-backups), the snapshots at your cloud
+provider are pruned to the same window while the cluster runs; if the cluster is deleted before
+it has deleted them, they stay at the provider, with that data, until you delete them there.
 
 ### The audit journal {#audit}
 

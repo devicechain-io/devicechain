@@ -3810,6 +3810,9 @@ instead of a full copy in the backup store. Nothing changes unless you pass the 
 - A restore (`--restore-rdb-from`, `--restore-tsdb-from`) still reads the backup store, not the
   snapshots: the newest weekly base backup and the log since, so it can replay up to a week of
   log. An instance's snapshots are deleted with it.
+- The snapshots are kept at your cloud provider and outlive the cluster.
+  [Volume-snapshot base backups](./bootstrap.md#snapshot-base-backups) says what to check
+  before and after deleting one.
 - The backup store keeps up to a week more log for each database, so it fills sooner where log
   is most of what it holds: with the default windows and store, at about 60 events per second of
   sustained ingest rather than about 100.
