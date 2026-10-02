@@ -144,7 +144,7 @@ func (m fakeMessage) Ack()              {}
 func TestOnMessageIngestsWithConnectionTenant(t *testing.T) {
 	fake := &fakeIngester{}
 	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp-node"}
-	c := NewClient(src, Broker{}, fake, fixedNow, Metrics{})
+	c := NewClient(src, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
 
 	enc, err := codec.Encode(&sppb.Payload{
 		Seq:     proto.Uint64(0),
@@ -169,7 +169,7 @@ func TestOnMessageIngestsWithConnectionTenant(t *testing.T) {
 func TestOnMessageEmitsPresence(t *testing.T) {
 	fake := &fakeIngester{}
 	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp-node"}
-	c := NewClient(src, Broker{}, fake, fixedNow, Metrics{})
+	c := NewClient(src, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
 
 	enc, err := codec.Encode(&sppb.Payload{
 		Seq:     proto.Uint64(0),
@@ -195,7 +195,7 @@ func TestOnMessageEmitsPresence(t *testing.T) {
 // declare it dead. Mutation control: move the markSeen call above the NCMD/DCMD drop and
 // this turns red.
 func TestOnMessageDoesNotMarkSeenForEchoedRebirth(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{}, fixedNow, Metrics{})
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{}, admitAllSamples{}, fixedNow, Metrics{})
 	c.resetSeen()
 
 	payload, err := rebirthCommand(fixedNow().UnixMilli())
@@ -208,7 +208,7 @@ func TestOnMessageDoesNotMarkSeenForEchoedRebirth(t *testing.T) {
 
 func TestIngestSamplesRetriesThenSucceeds(t *testing.T) {
 	fake := &fakeIngester{failN: 1}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, fixedNow, Metrics{})
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
 	c.ingestSamples("g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Equal(t, 2, fake.count(), "a transient failure is retried, then succeeds")
 }
@@ -219,7 +219,7 @@ func TestIngestSamplesRetriesThenSucceeds(t *testing.T) {
 func TestIngestSamplesDropsAndCountsWhenCancelled(t *testing.T) {
 	failures := prometheus.NewCounter(prometheus.CounterOpts{Name: "ingest_failures"})
 	fake := &fakeIngester{err: errors.New("always down")}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, fixedNow,
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, admitAllSamples{}, fixedNow,
 		Metrics{IngestFailures: failures})
 
 	ctx, cancel := context.WithCancel(context.Background())

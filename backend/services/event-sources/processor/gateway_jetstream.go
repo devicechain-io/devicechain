@@ -144,6 +144,9 @@ type GatewayJetStreamSource struct {
 	// allow meters an inbound message against its tenant's ingest ceiling before it
 	// is queued for decode; a false return sheds the message. nil disables metering.
 	allow RateGate
+	// readings charges a decoded message's readings against its tenant's ingest ceiling
+	// (see ReadingGate). Never nil (the constructor refuses one).
+	readings ReadingGate
 
 	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
 	// the errors stop clearing. It carries the microservice a give-up is reported to, so
@@ -155,12 +158,17 @@ type GatewayJetStreamSource struct {
 
 // NewGatewayJetStreamSource builds the capture-stream source. The reader and the
 // inbound-events writer are supplied separately by SetReader and SetWriter, because at
-// the point sources are built neither exists yet — see SetReader.
+// the point sources are built neither exists yet — see SetReader. A nil readings panics:
+// a source built without the reading stage would charge every message one unit however
+// many readings it carried.
 func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder,
 	received func(string, []byte),
 	build InboundMessageFunc,
 	failed func(string, string, []byte, error) error,
-	allow RateGate) *GatewayJetStreamSource {
+	allow RateGate, readings ReadingGate) *GatewayJetStreamSource {
+	if readings == nil {
+		panic("processor.NewGatewayJetStreamSource: a reading gate is required")
+	}
 	es := &GatewayJetStreamSource{
 		Id:        id,
 		Decoder:   decoder,
@@ -168,6 +176,7 @@ func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder
 		build:     build,
 		failed:    failed,
 		allow:     allow,
+		readings:  readings,
 		readPacer: core.NewReadPacer(ms, "gateway capture"),
 	}
 	es.lifecycle = core.NewLifecycleManager("gateway-jetstream-event-source", es, core.NewNoOpLifecycleCallbacks())
@@ -268,7 +277,7 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 	var running sync.WaitGroup
 	es.workers = make([]*DecodeWorker, 0, workers)
 	for w := 1; w <= workers; w++ {
-		worker := NewDecodeWorker(w, es.Id, es.Decoder, messages, submit, es.failed)
+		worker := NewDecodeWorker(w, es.Id, es.Decoder, messages, es.readings, submit, es.failed)
 		es.workers = append(es.workers, worker)
 		running.Add(1)
 		go func() {
@@ -501,7 +510,14 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// the tenant-deleted refusal stopped being consulted on redeliveries, so a tenant
 	// deleted between delivery 1 and a retry had that retry admitted. The exemption
 	// belongs to the metering layer, which is the only layer it is true of.
-	if es.allow != nil && !es.allow(es.Id, tenant, msg.AppendTime, msg.NumDelivered > 1, OriginAuthenticated) {
+	//
+	// Readings are charged after decode, in the decode worker, on the same timeline
+	// (meterAt, decided once here so both stages route the message to the same limiter)
+	// and with the same redelivery exemption. A message over its tenant's reading ceiling
+	// is ack-dropped there, as a message over the message ceiling is here.
+	meterAt := meterTime(msg.AppendTime)
+	redelivery := msg.NumDelivered > 1
+	if es.allow != nil && !es.allow(es.Id, tenant, meterAt, redelivery, OriginAuthenticated) {
 		ackDrop(msg, "refused at the tenant ingest gate")
 		return
 	}
@@ -520,7 +536,9 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	}
 
 	// Count the arrival only once it clears the gate, so a shed message is not
-	// counted as both inbound and rate-limited (matches the HTTP path).
+	// counted as both inbound and rate-limited (matches the HTTP path). A message the
+	// reading stage sheds after decode WAS received: it is counted as inbound and on the
+	// reading-shed counters, never on the message stage's rate-limited counter.
 	es.received(es.Id, msg.Value)
 
 	es.messages <- rawMessage{
@@ -529,6 +547,9 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		device:     deviceFromSubject(msg.Subject),
 		captureSeq: msg.StreamSeq,
 		receivedAt: msg.AppendTime,
+		meterAt:    meterAt,
+		redelivery: redelivery,
+		origin:     OriginAuthenticated,
 		done:       es.settler(msg, tenant),
 	}
 }

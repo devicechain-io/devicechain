@@ -124,7 +124,7 @@ func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader)
 			t.Errorf("unexpected failed-decode on the full hop: %v", decodeErr)
 			return nil
 		},
-		nil)
+		nil, admitAllReadings)
 
 	ctx := context.Background()
 	require.NoError(t, src.Initialize(ctx))

@@ -44,7 +44,7 @@ func (f *fakeReconciler) AssertedActive(_ context.Context, tenant, source string
 // window, and a rebirth publisher captured into rebirthed (all succeed by default), ready
 // for a direct establishEpochFloor / reconcileProbe call.
 func reconcileClient(fake *fakeIngester, rec reconcileSource) (*Client, *[]nodeKey) {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, fake, fixedNow, Metrics{})
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
 	c.SetReconciler(rec)
 	c.probeWindow = 5 * time.Millisecond
 	rebirthed := &[]nodeKey{}

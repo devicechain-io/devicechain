@@ -170,11 +170,11 @@ func TestResolveSourcesBuildsOnePerSource(t *testing.T) {
 	cfg := &config.SparkplugConfiguration{Sources: []config.SparkplugSource{
 		src("tcp://a:1883"), src("ssl://b:8883"),
 	}}
-	clients, err := resolveSources(cfg, "inst", nil, nil, host.Metrics{})
+	clients, err := resolveSources(cfg, "inst", nil, nil, nil, host.Metrics{})
 	require.NoError(t, err)
 	assert.Len(t, clients, 2)
 
-	empty, err := resolveSources(&config.SparkplugConfiguration{}, "inst", nil, nil, host.Metrics{})
+	empty, err := resolveSources(&config.SparkplugConfiguration{}, "inst", nil, nil, nil, host.Metrics{})
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
@@ -211,7 +211,7 @@ func TestResolveSourcesGivesEachClientTheRegisteredMetrics(t *testing.T) {
 	cfg := &config.SparkplugConfiguration{Sources: []config.SparkplugSource{
 		src("tcp://a:1883"), src("ssl://b:8883"),
 	}}
-	clients, err := resolveSources(cfg, "inst", nil, nil, metrics)
+	clients, err := resolveSources(cfg, "inst", nil, nil, nil, metrics)
 	require.NoError(t, err)
 	require.Len(t, clients, 2)
 

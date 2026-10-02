@@ -156,11 +156,18 @@ func listenerAddr(t *testing.T) string {
 }
 
 // buildTestRateLimiters builds the ingest limiters the way main does, on the caller's
-// metrics registry, restoring the package's limiters afterwards. buildEventSources needs them:
-// the ingest gate refuses to be built without all three.
+// metrics registry, restoring the package's limiters and gates afterwards. buildEventSources
+// needs them: the ingest gate and the reading gate each refuse to be built without all three
+// of theirs.
 func buildTestRateLimiters(t *testing.T) {
 	t.Helper()
 	savedLive, savedBacklog, savedHTTP := RateLimiter, BacklogRateLimiter, HttpRateLimiter
-	t.Cleanup(func() { RateLimiter, BacklogRateLimiter, HttpRateLimiter = savedLive, savedBacklog, savedHTTP })
+	savedRLive, savedRBacklog, savedRHTTP := ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter
+	savedIngest, savedReading := ingestGate, readingGate
+	t.Cleanup(func() {
+		RateLimiter, BacklogRateLimiter, HttpRateLimiter = savedLive, savedBacklog, savedHTTP
+		ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter = savedRLive, savedRBacklog, savedRHTTP
+		ingestGate, readingGate = savedIngest, savedReading
+	})
 	buildRateLimiter()
 }

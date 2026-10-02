@@ -101,7 +101,7 @@ export function PurgeBadge({ state, epoch }: { state: string; epoch?: string | n
 
 // Governance rate-limit dimensions (ADR-065) arrive from the server with English
 // display labels + units (the core governance fetcher hardcodes "Ingest",
-// "events/sec", …). The stable `dimension.name` token ('ingest'/'outbound'/
+// "readings/sec", …). The stable `dimension.name` token ('ingest'/'outbound'/
 // 'ai-inference') is the localization key: map it to a `common` catalog entry so
 // the tenant/tier governance screens render a localized label rather than
 // interpolating raw English into an otherwise-translated template. An unknown
@@ -112,7 +112,7 @@ const DIMENSION_LABEL_KEY: Record<string, string> = {
   'ai-inference': 'common:dimensionAiDrafting',
 };
 const DIMENSION_UNIT_KEY: Record<string, string> = {
-  ingest: 'common:unitEventsPerSec',
+  ingest: 'common:unitReadingsPerSec',
   outbound: 'common:unitCallsPerSec',
   'ai-inference': 'common:unitRequestsPerMin',
 };

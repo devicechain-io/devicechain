@@ -52,7 +52,7 @@ func (q queueCounters) metrics() Metrics {
 // moves" and would make the drop series useless.
 func TestEnqueueRebirthCountsAnAcceptedRequest(t *testing.T) {
 	q := newQueueCounters()
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, nil, fixedNow, q.metrics())
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, nil, nil, fixedNow, q.metrics())
 
 	// Data before any birth: the Host missed the NBIRTH, which is one of the session
 	// errors that funnel into a rebirth command.
@@ -85,7 +85,7 @@ func TestEnqueueRebirthCountsAnAcceptedRequest(t *testing.T) {
 // that would look like they were exercising a backoff they never reach.
 func TestEnqueueRebirthCountsADropWhenTheQueueIsFull(t *testing.T) {
 	q := newQueueCounters()
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, nil, fixedNow, q.metrics())
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, nil, nil, fixedNow, q.metrics())
 
 	// Data before any birth for each of N distinct nodes: N rebirth requests, none of
 	// them collapsed, exactly as a site coming back on line produces.
@@ -116,7 +116,7 @@ func TestEnqueueRebirthCountsADropWhenTheQueueIsFull(t *testing.T) {
 // The counters are optional, exactly as every other field of Metrics is: a host built
 // for a test with no registry must not panic on either arm of the select.
 func TestEnqueueRebirthToleratesAbsentCounters(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, nil, fixedNow, Metrics{})
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, nil, nil, fixedNow, Metrics{})
 
 	for i := 0; i <= rebirthQueueDepth; i++ {
 		c.enqueueRebirth("g", fmt.Sprintf("n%d", i))

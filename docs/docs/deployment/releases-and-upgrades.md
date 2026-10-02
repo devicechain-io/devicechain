@@ -4488,6 +4488,69 @@ The instance's OpenTofu configuration now declares that it needs OpenTofu 1.9 or
 Terraform 1.9 or later). It already needed 1.9 to load, so an older version now fails with a
 clearer message rather than a different one.
 
+#### A tenant's ingest ceiling counts readings, and HTTP checks it before the shared backpressure gate {#next-ingest-readings}
+
+The per-tenant ingest ceiling now counts **readings** on every device transport. A reading is one
+stored value: one key of a measurement entry, one location or one alert. Before, HTTP and MQTT
+charged one unit per message however many readings it carried. A tenant at the default of 1000 per
+second could therefore send up to 256,000 readings per second, far more than an installation can
+store, and the backpressure gate then refused every tenant's events.
+
+- **HTTP and MQTT:** a message is charged once before it is decoded, as before, and then once per
+  reading it carries. Over HTTP, a tenant over its ceiling gets `429`. Over MQTT, the message is
+  acknowledged and dropped, as an over-ceiling message already was. Such a message is counted in
+  the new `devicechain_eventsources_total_msg_reading_limited` and its readings in the new
+  `devicechain_eventsources_total_readings_rate_limited`. It was received, so it is also counted in
+  `devicechain_eventsources_total_inbound_messages`, and not in
+  `devicechain_eventsources_total_msg_rate_limited`, which still counts only messages shed before
+  decode.
+- **HTTP checks the tenant's own ceiling first.** A request over its tenant's ceiling is answered
+  `429` even while the platform is refusing events. Only a request within its tenant's ceiling can
+  get the backpressure `503`. The request body is now read and decoded before the backpressure
+  check, and a request refused by backpressure is now counted as received.
+- **External MQTT brokers** check the tenant's ceiling before the backpressure gate too, so a
+  message over its tenant's ceiling while the platform is refusing is counted in
+  `devicechain_eventsources_total_msg_rate_limited` rather than
+  `devicechain_eventsources_total_msg_backpressured`.
+- **LwM2M** already charged readings, at 25 times the ceiling. It now charges them at the ceiling
+  itself, so a tenant's LwM2M reading budget is **25 times smaller** than before.
+- **Sparkplug now has a per-tenant ingest ceiling**, counted in readings:
+  `ingestRateLimit.messagesPerSecond` (default 1000) and `ingestRateLimit.burst` (default 2000).
+  The readings of each DATA message over it are dropped and counted in
+  `devicechain_sparkplugingest_ingest_samples_shed_total`. Births, deaths and the message rate
+  are not metered. See [What Sparkplug ingest bounds](./edge-services.md#unbounded-sparkplug-ingest).
+- **The default stays 1000 per second with a burst of 2000, now in readings.** A fleet that sends
+  one reading per message sees no change. A fleet that batches several readings into a message is
+  now limited to 1000 readings per second per tenant. If that traffic is legitimate, raise the
+  ingest rate on the tenant's tier. The console now shows the ingest rate in readings per second.
+
+At the default, a tenant's own devices are admitted at most 5,000 readings per second, even with a
+backlog draining and both edge services running, which is below the 6,000 per second a default
+high-availability installation was measured to store on the cluster described in
+[what the default allows](../concepts/governance.md#ingest-default). On a smaller cluster, or with
+more than one `event-sources` replica, lower the default.
+
+**Before you upgrade:** find any tenant that sends more than 1000 readings per second, and raise
+the ingest rate on its tier first. Readings over the ceiling are dropped, not delayed: MQTT, LwM2M
+and Sparkplug devices are not told, and an MQTT message dropped this way was already acknowledged.
+
+- For JSON devices over MQTT and HTTP, count the tenant's stored measurements per second over a
+  busy hour.
+- For LwM2M, compare the tenant's current reading rate with its ceiling, not 25 times its ceiling.
+- For Sparkplug, `rate(devicechain_sparkplugingest_measurements_emitted_total[5m])` is the
+  readings of the tenants on that pod's sources, since each source belongs to one tenant.
+- An [edge agent](./edge-services.md) re-publishes a site's buffered readings as fast
+  as it can after a reconnect. A site that batches several readings into a message can exceed its
+  tenant's ceiling while it catches up.
+
+**After you upgrade:** watch `devicechain_eventsources_total_readings_rate_limited`,
+`devicechain_lwm2mingest_ingest_samples_shed_total` and
+`devicechain_sparkplugingest_ingest_samples_shed_total`. A tenant that sheds there is sending more
+readings than its tier allows. Raise its tier's ingest rate, or have its devices send less.
+
+Going back to the previous release restores per-message charging. No stored data or schema
+changes, and no configuration key is renamed.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

@@ -169,6 +169,13 @@ type SampleIngester interface {
 	IngestPresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error
 }
 
+// SampleLimiter charges a DATA message's samples against its tenant's ingest ceiling,
+// counted in readings, and returns how many leading samples it admitted (a whole number
+// of events; see adapter.IngestLimiter.AdmitSamples, which implements it).
+type SampleLimiter interface {
+	AdmitSamples(tenant string, n int) int
+}
+
 // reconcileSource reads the device-state presence projection for the failover
 // reconciliation (ADR-067 SP4b). *Reconciler implements it; the Client depends on the
 // interface so a host test can drive reconcile with a fake, without a device-state.
@@ -192,6 +199,9 @@ type Client struct {
 	// per connection, ADR-069 M7). A nil ingester leaves the receive path decode-only.
 	ingester SampleIngester
 	policy   IngestPolicy
+	// limiter charges each DATA message's samples against the tenant's ingest ceiling
+	// before they are ingested. Never nil when ingester is set (NewClient refuses that).
+	limiter SampleLimiter
 
 	// reconciler reads the device-state presence projection to repopulate presence on
 	// (re)connect (ADR-067 SP4b failover reconciliation). Nil disables reconciliation
@@ -249,10 +259,17 @@ type Client struct {
 
 // NewClient builds a tenant-bound Host Application client from one configured
 // source and its resolved broker connection. ingester turns accepted messages into
-// durable telemetry (nil ⇒ decode+log only, the SP1/SP2 behavior). now is the clock
-// supplying each session's STATE timestamp (pass time.Now in production); nil
-// defaults to it.
-func NewClient(source config.SparkplugSource, broker Broker, ingester SampleIngester, now func() time.Time, metrics Metrics) *Client {
+// durable telemetry (nil ⇒ decode+log only, the SP1/SP2 behavior). limiter charges
+// each DATA message's samples against the tenant's ingest ceiling; it is required
+// whenever ingester is set, and NewClient panics without it, because a client that
+// ingests with no limiter would ingest unmetered and nothing at the call site would
+// show it. now is the clock supplying each session's STATE timestamp (pass time.Now
+// in production); nil defaults to it.
+func NewClient(source config.SparkplugSource, broker Broker, ingester SampleIngester, limiter SampleLimiter,
+	now func() time.Time, metrics Metrics) *Client {
+	if ingester != nil && limiter == nil {
+		panic("host.NewClient: a client that ingests needs a sample limiter")
+	}
 	if now == nil {
 		now = time.Now
 	}
@@ -262,6 +279,7 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 		groups:   append([]string(nil), source.Groups...),
 		metrics:  metrics,
 		ingester: ingester,
+		limiter:  limiter,
 		policy: IngestPolicy{
 			// Built through transport.Qualify rather than by concatenating ":" here: the
 			// separator is half of a match whose other half lives in command-delivery, and a
@@ -298,6 +316,12 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 // them.
 func (c *Client) Metrics() Metrics {
 	return c.metrics
+}
+
+// SampleLimiter returns the ceiling this client charges DATA readings against, for the
+// same reason as Metrics: so the service's wiring of it can be gated.
+func (c *Client) SampleLimiter() SampleLimiter {
+	return c.limiter
 }
 
 // SetReconciler binds the device-state reconciler that repopulates presence on
@@ -632,8 +656,19 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	// has no node session.
 	if !rec.Topic.IsState && rec.Payload != nil && c.ingester != nil {
 		obs := c.sessions.Observe(rec.Topic, rec.Payload)
-		if len(obs.Samples) > 0 {
-			c.ingestSamples(SparkplugExternalId(rec.Topic), obs.Samples)
+		samples := obs.Samples
+		// Only a DATA message's readings are charged against the tenant's ingest ceiling.
+		// A BIRTH's are not: Sparkplug reports by exception, so a birth is the only place
+		// a rarely-changing metric appears, and a rebirth storm (a Host reconnect, a
+		// leader handover, the reconcile probe) re-sends every node's whole metric set at
+		// once — shedding a birth's tail would lose those values until they next change,
+		// with no redelivery to bring them back. A birth is bounded by the session machine
+		// instead: once per bdSeq, and a requested rebirth is backoff-gated.
+		if len(samples) > 0 && isData(rec.Topic.MessageType) {
+			samples = c.admitSamples(samples)
+		}
+		if len(samples) > 0 {
+			c.ingestSamples(SparkplugExternalId(rec.Topic), samples)
 		}
 		if len(obs.Presence) > 0 {
 			c.ingestPresence(obs.Presence)
@@ -644,6 +679,19 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		c.sessions.Observe(rec.Topic, rec.Payload)
 	}
 	c.logRecord(rec)
+}
+
+// isData reports whether a message type carries DATA (NDATA or DDATA), the messages whose
+// readings are charged against the tenant's ingest ceiling.
+func isData(t MessageType) bool { return t == NDATA || t == DDATA }
+
+// admitSamples charges a DATA message's samples against the tenant's ingest ceiling, ONCE
+// per message and before ingestWithRetry, so an in-handler retry is never charged again. It
+// returns the admitted leading samples: a whole number of events, the rest dropped and
+// counted by the limiter on ingest_samples_shed_total. A dropped tail is real loss, since a
+// clean-session Host gets no broker redelivery; that is what a ceiling is.
+func (c *Client) admitSamples(samples []Sample) []Sample {
+	return samples[:c.limiter.AdmitSamples(c.tenant, len(samples))]
 }
 
 // ingestSamples resolves the device and emits its samples, retrying a transient

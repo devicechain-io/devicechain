@@ -8,7 +8,7 @@ DeviceChain runs [one shared set of services for all tenants](./multi-tenancy.md
 
 Limits are enforced at the edges, before traffic reaches shared infrastructure:
 
-- **Ingest.** The event-sources service applies a per-tenant rate limit as device traffic is decoded, before it is published onto the internal pipeline. An over-limit tenant's excess is shed at the front door instead of backing up the shared stream.
+- **Ingest.** Every device transport (HTTP, MQTT, LwM2M and Sparkplug) applies a per-tenant rate limit **counted in readings**, one stored value each, before device traffic is published onto the internal pipeline. On HTTP, MQTT and LwM2M each message is also charged once before it is decoded, at the same number. An over-limit tenant's excess is shed at the front door instead of backing up the shared stream. See [what the default allows](#ingest-default).
 - **Egress.** Outbound volume from [actions](./outbound-connectors.md#governance) is rate-limited per tenant at both ends of the hop. The detection engine sheds over-budget emissions before dispatch, and the outbound-connectors service admits sink traffic within a bounded budget. Both ends meter an action on the time the telemetry that triggered it reached the platform, so a backlog drained after a restart is charged as it happened.
 - **AI inference.** The opt-in AI service applies a per-tenant rate limit, so one tenant's authoring sessions cannot monopolize the shared inference path. You can observe inference spend: the input and output tokens the provider reports are counted as instance-wide metrics an operator can watch and alert on. Spend is not tracked per tenant, and no budget is enforced against it. The rate ceiling is the only thing that bounds a tenant here.
 - **Undelivered commands.** A per-tenant ceiling caps how many commands may be waiting to go out at once, enforced as a command is enqueued. This is the one limit here that **refuses** rather than sheds. The three above drop a tenant's excess traffic; this one returns a rejection the caller can see and retry, because a command is a physical actuation and quietly dropping one is not an option. See [how much backlog a tenant may hold](./commands.md#held-command-ceiling).
@@ -68,7 +68,7 @@ The same cascade governs AI model entitlement: a per-tenant model assignment, th
 
 ## Ceilings are per replica {#per-replica}
 
-Each running copy of a service enforces every rate ceiling on this page on its own, with no coordination between copies. If you run two replicas of `event-sources`, `outbound-connectors` or `ai-inference` and they share a tenant's traffic, that tenant can be admitted at up to twice its ceiling, and N replicas allow up to N times. The default install runs one replica of each, and there the ceiling is exact.
+Each running copy of a service enforces every rate ceiling on this page on its own, with no coordination between copies. If you run two replicas of `event-sources`, `outbound-connectors` or `ai-inference` and they share a tenant's traffic, that tenant can be admitted at up to twice its ceiling, and N replicas allow up to N times. The default install runs one replica of each, so there each ceiling applies once, except briefly during a rolling update, while the old and new pods both run.
 
 Two ceilings are not multiplied:
 
@@ -85,7 +85,21 @@ Within one `event-sources` replica, a tenant's ingest ceiling applies to each of
 - **Backlog**: messages the platform broker stored while `event-sources` was down or behind, metered by when they were sent as they drain. A tenant draining a backlog after an outage while also sending live can be admitted up to twice its ceiling until the drain catches up.
 - **HTTP ingest**: metered separately, so a tenant sending over HTTP and MQTT at once can be admitted up to its ceiling on each.
 
-In the worst case a tenant can be admitted at three times its ceiling on each replica, multiplied by the number of replicas as above.
+Within `event-sources`, a tenant can therefore be admitted at up to three times its ceiling on each replica, multiplied by the number of replicas as above. LwM2M and Sparkplug each meter the tenant on an allowance of their own, so with both running the worst case is five times its ceiling.
+
+### What the default allows {#ingest-default}
+
+The platform default is 1000 readings per second per tenant, with a burst of 2000. A reading is one stored value: one key of a measurement entry, one location or one alert. A message carrying 256 readings costs 256.
+
+A default high-availability installation on a cluster of three dedicated 4-vCPU/16 GB database nodes and three 4-vCPU/8 GB service nodes, with one `event-sources` replica, was measured storing 6,000 readings per second for 10 minutes. At the default, a single tenant's own devices are admitted at most five times 1000, or 5,000 readings per second, even with a backlog draining and both edge services running, which is below that measurement. Without a drain or the edge services it is 2,000.
+
+That is not a guarantee in every setup:
+
+- A smaller cluster stores less. Lower the default there.
+- More than one `event-sources` replica, and a rolling update while the old and new pods both run, multiply the bound.
+- A tenant whose tier raises its ceiling can send more.
+- Tenants together can still exceed what the installation stores. When they do, the shared backpressure gate refuses everyone.
+- HTTP ingest names its tenant before any credential is checked, so a sender can post under names that are not tenants. Each such name is metered at the platform default in its own right, and many of them together can still close the gate.
 
 ## Observing governance {#seeing-it-work}
 

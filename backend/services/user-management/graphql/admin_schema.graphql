@@ -194,7 +194,7 @@ type AdminGovernanceDimension {
     # names the enforcing service reads off the wire.
     rateField: String!
     burstField: String!
-    # The unit the RATE is declared in ("events/sec", "requests/min"). Bursts are a
+    # The unit the RATE is declared in ("readings/sec", "requests/min"). Bursts are a
     # count and have no unit.
     rateUnit: String!
 }

@@ -269,7 +269,7 @@ You now have a device end to end: registered, credentialed, reporting and querya
 | Connection refused on `:8081` | The port-forward in step 5 is not running. |
 | `400` from the ingest `POST` | A bare number instead of a string, readings not wrapped in `entries`, or a tenant segment that is not a valid token. |
 | `202`, but nothing appears | Either the **tenant** does not exist (a well-formed name is accepted whether or not it names anything), or the credential did not match. `credentialId` in the body must be exactly the one you created in step 4. |
-| `429` from the ingest `POST` | The tenant is over its ingest rate limit: you are sending faster than its tier allows. The event was not accepted. The response carries a `Retry-After` header, so back off and send it again. |
+| `429` from the ingest `POST` | The tenant is over its ingest ceiling: you are sending more readings per second than its tier allows. The event was not accepted. The response carries a `Retry-After` header, so back off and send it again. |
 | `503` from the ingest `POST` | The event could not be handed to the stream, and it was **not** stored. Retry it. Apart from `429` after backing off, the other statuses are terminal for that request. |
 | Unauthorized on an API call | The access token has expired, or you are sending the `identityToken` from the first call in step 3 instead of the `accessToken` from the second. |
 

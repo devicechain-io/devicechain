@@ -83,11 +83,14 @@ func register(d Dimension) Dimension {
 // exposed by user-management's tenantGovernance query. Each is independent: a
 // tenant overriding one inherits the platform default for the others.
 var (
-	// Ingest governs inbound device telemetry admission at event-sources (ADR-023 G.1/G.2).
+	// Ingest governs inbound device telemetry admission (ADR-023 G.1/G.2), counted in
+	// READINGS — one stored value; see ReadingCeiling. The same number also meters
+	// messages before they are decoded. The field names still say "messages": renaming
+	// them would change the stored schema and the API for no change in behaviour.
 	Ingest = register(Dimension{
 		Name: "ingest", RateField: "ingestMessagesPerSecond", BurstField: "ingestBurst",
 		PerSecondScale: 1,
-		Label:          "Ingest", RateUnit: "events/sec",
+		Label:          "Ingest", RateUnit: "readings/sec",
 	})
 	// Outbound governs REACT connector egress, charged at both the source
 	// (event-processing) and the sink (outbound-connectors) — ADR-060 SD-3.

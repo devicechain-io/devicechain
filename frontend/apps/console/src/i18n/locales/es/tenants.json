@@ -34,7 +34,7 @@
   "heldCeilingDescription": "Máximo de comandos que este inquilino puede tener a la espera de entrega, tanto los que aún van de salida como los retenidos para dispositivos sin conexión. Déjalo en blanco para heredar el límite del nivel y, después, el valor predeterminado de la plataforma — que es un límite real, nunca ilimitado.",
   "heldCeilingLabel": "Límite de comandos retenidos",
   "ingestBurstLabel": "Ráfaga de ingesta",
-  "ingestRateLabel": "Tasa de ingesta (eventos/s)",
+  "ingestRateLabel": "Tasa de ingesta (lecturas/s)",
   "inheritDefaultHint": "Déjalo en blanco para heredar el valor predeterminado de la plataforma.",
   "loading": "Cargando inquilinos…",
   "loadingAiModels": "Cargando modelos de IA…",

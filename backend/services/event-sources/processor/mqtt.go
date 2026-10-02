@@ -93,8 +93,11 @@ type MqttEventSource struct {
 	// before it is queued for decode; a false return sheds the message. nil
 	// disables metering (used by tests that exercise decoding in isolation).
 	allow RateGate
+	// readings charges a decoded message's readings against its tenant's ingest ceiling,
+	// in the decode worker (see ReadingGate). Never nil (the constructor refuses one).
+	readings ReadingGate
 	// admit reports whether the ingest pipeline is accepting events (see
-	// HttpEventSource.admit). Never nil.
+	// HttpEventSource.admit). Asked after the tenant's own ceiling. Never nil.
 	admit func(source string) error
 
 	// fail ends the process for a cause found after startup: a broker that refuses
@@ -129,6 +132,13 @@ var errNoFailHook = errors.New("an MQTT event source needs a way to end the proc
 var errNoAdmit = errors.New("an event source needs to ask whether the ingest pipeline is accepting " +
 	"events (backpressure); none was given")
 
+// errNoReadingGate is what the HTTP and external-MQTT constructors return for a nil reading
+// gate. A source built without it would charge every message one unit however many readings
+// it carried, and the call site would not show that the charge was left out. The admit check
+// comes first, so a constructor given neither reports errNoAdmit.
+var errNoReadingGate = errors.New("an event source needs a reading gate to charge each decoded " +
+	"message's readings against its tenant's ingest ceiling; none was given")
+
 // Create a new MQTT event source based on the given configuration. tlsConfig is
 // non-nil when the broker terminates TLS on the MQTT gateway (ADR-025), in which
 // case the client dials ssl:// and verifies the server; nil dials plaintext.
@@ -139,12 +149,15 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
-	allow RateGate, admit func(source string) error, fail func(error)) (*MqttEventSource, error) {
+	allow RateGate, readings ReadingGate, admit func(source string) error, fail func(error)) (*MqttEventSource, error) {
 	if fail == nil {
 		return nil, errNoFailHook
 	}
 	if admit == nil {
 		return nil, errNoAdmit
+	}
+	if readings == nil {
+		return nil, errNoReadingGate
 	}
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
@@ -169,6 +182,7 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	es.decoded = decoded
 	es.failed = failed
 	es.allow = allow
+	es.readings = readings
 	es.admit = admit
 	return es, nil
 }
@@ -288,33 +302,37 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 		return
 	}
 
-	// Drop while the pipeline is applying backpressure, before metering so a dropped
-	// message spends no rate-limit token. 🔴 THE PUBLISHER IS NOT TOLD: paho acknowledged
-	// the message to the external broker before this callback ran (auto-ack, clean
-	// session), so this protocol has no lever to make the device retry. The drop is counted
-	// by admit (total_msg_backpressured), which is all that can be done on a broker the
-	// platform does not own. The platform's own broker keeps such messages instead, in the
-	// capture stream (see GatewayJetStreamSource).
-	if es.admit(es.Id) != nil {
+	// Meter against the tenant's own ingest ceiling first, before the shared backpressure
+	// gate and before enqueue, so a tenant over its limit is shed as its own overage and
+	// spends no decode CPU. MQTT has no per-message acknowledgement back to the
+	// publisher, so an over-limit message is simply dropped (the HTTP path returns 429
+	// instead). A token spent on a message the gate below then drops costs nothing here:
+	// this transport has no retry to charge twice.
+	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginAuthenticated) {
 		return
 	}
 
-	// Meter against the tenant's ingest ceiling before enqueue so a tenant over
-	// its limit sheds here, spending no decode CPU. MQTT has no per-message
-	// acknowledgement back to the publisher, so an over-limit message is simply
-	// dropped (the HTTP path returns 429 instead).
-	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginAuthenticated) {
+	// Drop while the pipeline is applying backpressure. 🔴 THE PUBLISHER IS NOT TOLD: paho
+	// acknowledged the message to the external broker before this callback ran (auto-ack,
+	// clean session), so this protocol has no lever to make the device retry. The drop is
+	// counted by admit (total_msg_backpressured), which is all that can be done on a broker
+	// the platform does not own. The platform's own broker keeps such messages instead, in
+	// the capture stream (see GatewayJetStreamSource).
+	if es.admit(es.Id) != nil {
 		return
 	}
 
 	// Count the arrival only once it clears the gate, so a shed message is not
 	// counted as both inbound and rate-limited (matches the HTTP path, which
-	// accounts after the gate).
+	// accounts after the gate). A message the reading stage sheds after decode WAS
+	// received: it is counted as inbound and on the reading-shed counters, never on the
+	// message stage's rate-limited counter.
 	es.received(es.Id, msg.Payload())
 	es.messages <- rawMessage{
 		tenant:  tenant,
 		payload: msg.Payload(),
 		device:  deviceFromTopic(msg.Topic()),
+		origin:  OriginAuthenticated,
 	}
 }
 
@@ -477,7 +495,7 @@ func (es *MqttEventSource) initializeDecodeWorkers() {
 	es.messages = make(chan rawMessage, DECODE_CHANNEL_DEPTH)
 	es.workers = make([]*DecodeWorker, 0)
 	for w := 1; w <= DECODE_WORKER_COUNT; w++ {
-		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, Inline(es.decoded), es.failed)
+		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.readings, Inline(es.decoded), es.failed)
 		es.workers = append(es.workers, worker)
 		go worker.Process()
 	}

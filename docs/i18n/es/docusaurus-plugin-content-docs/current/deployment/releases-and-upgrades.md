@@ -4835,6 +4835,77 @@ La configuración de OpenTofu de la instancia declara ahora que necesita OpenTof
 (o Terraform 1.9 o posterior). Ya necesitaba la 1.9 para cargarse, así que una versión anterior
 falla ahora con un mensaje más claro en lugar de con otro.
 
+#### El techo de ingesta de un inquilino cuenta lecturas, y HTTP lo comprueba antes de la compuerta de contrapresión compartida {#next-ingest-readings}
+
+El techo de ingesta por inquilino cuenta ahora **lecturas** en todos los transportes de dispositivo.
+Una lectura es un valor almacenado: una clave de una entrada de medición, una ubicación o una
+alerta. Antes, HTTP y MQTT cobraban una unidad por mensaje, llevara las lecturas que llevara. Un
+inquilino con el valor por defecto de 1000 por segundo podía enviar hasta 256 000 lecturas por
+segundo, mucho más de lo que una instalación puede almacenar, y la compuerta de contrapresión
+acababa rechazando los eventos de todos los inquilinos.
+
+- **HTTP y MQTT:** un mensaje se cobra una vez antes de decodificarlo, como antes, y después una vez
+  por cada lectura que lleva. En HTTP, un inquilino por encima de su techo recibe `429`. En MQTT, el
+  mensaje se confirma y se descarta, como ya ocurría con un mensaje por encima del techo. Ese
+  mensaje se cuenta en el nuevo `devicechain_eventsources_total_msg_reading_limited` y sus lecturas
+  en el nuevo `devicechain_eventsources_total_readings_rate_limited`. Se recibió, así que también
+  se cuenta en `devicechain_eventsources_total_inbound_messages`, y no en
+  `devicechain_eventsources_total_msg_rate_limited`, que sigue contando solo los mensajes
+  descartados antes de decodificar.
+- **HTTP comprueba primero el techo del propio inquilino.** Una solicitud por encima del techo de su
+  inquilino recibe `429` aunque la plataforma esté rechazando eventos. Solo una solicitud dentro del
+  techo de su inquilino puede recibir el `503` de contrapresión. El cuerpo de la solicitud se lee y
+  se decodifica ahora antes de comprobar la contrapresión, y una solicitud rechazada por
+  contrapresión se cuenta ahora como recibida.
+- **Los brokers MQTT externos** también comprueban el techo del inquilino antes de la compuerta de
+  contrapresión, así que un mensaje por encima del techo de su inquilino mientras la plataforma
+  rechaza se cuenta en `devicechain_eventsources_total_msg_rate_limited` en lugar de en
+  `devicechain_eventsources_total_msg_backpressured`.
+- **LwM2M** ya cobraba lecturas, a 25 veces el techo. Ahora las cobra al propio techo, así que el
+  presupuesto de lecturas LwM2M de un inquilino es **25 veces menor** que antes.
+- **Sparkplug tiene ahora un techo de ingesta por inquilino**, contado en lecturas:
+  `ingestRateLimit.messagesPerSecond` (por defecto 1000) e `ingestRateLimit.burst` (por defecto
+  2000). Las lecturas de cada mensaje DATA que lo superan se descartan y se cuentan en
+  `devicechain_sparkplugingest_ingest_samples_shed_total`. Los nacimientos, las muertes y el ritmo
+  de mensajes no se miden. Consulta
+  [Qué acota la ingesta de Sparkplug](./edge-services.md#unbounded-sparkplug-ingest).
+- **El valor por defecto sigue siendo 1000 por segundo con una ráfaga de 2000, ahora en lecturas.**
+  Una flota que envía una lectura por mensaje no nota ningún cambio. Una flota que agrupa varias
+  lecturas en un mensaje queda limitada a 1000 lecturas por segundo por inquilino. Si ese tráfico es
+  legítimo, eleva la tasa de ingesta del nivel del inquilino. La consola muestra ahora la tasa de
+  ingesta en lecturas por segundo.
+
+Con el valor por defecto, los dispositivos de un inquilino se admiten como máximo a 5000 lecturas
+por segundo, incluso con un atraso vaciándose y ambos servicios de borde en marcha, lo que queda por
+debajo de las 6000 por segundo que se midió que almacena una instalación de alta disponibilidad por
+defecto en el clúster descrito en
+[qué permite el valor por defecto](../concepts/governance.md#ingest-default). En un clúster más
+pequeño, o con más de una réplica de `event-sources`, baja el valor por defecto.
+
+**Antes de actualizar:** localiza cualquier inquilino que envíe más de 1000 lecturas por segundo y
+eleva primero la tasa de ingesta de su nivel. Las lecturas por encima del techo se descartan, no se
+retrasan: los dispositivos MQTT, LwM2M y Sparkplug no reciben aviso, y un mensaje MQTT descartado así
+ya estaba confirmado.
+
+- Para dispositivos JSON por MQTT y HTTP, cuenta las mediciones almacenadas por segundo del
+  inquilino durante una hora de mucha actividad.
+- Para LwM2M, compara la tasa actual de lecturas del inquilino con su techo, no con 25 veces su
+  techo.
+- Para Sparkplug, `rate(devicechain_sparkplugingest_measurements_emitted_total[5m])` son las
+  lecturas de los inquilinos de las fuentes de ese pod, ya que cada fuente pertenece a un inquilino.
+- Un [agente de borde](./edge-services.md) vuelve a publicar las lecturas que tenía en búfer tan
+  rápido como puede tras una reconexión. Un sitio que agrupa varias lecturas en un mensaje puede
+  superar el techo de su inquilino mientras se pone al día.
+
+**Después de actualizar:** vigila `devicechain_eventsources_total_readings_rate_limited`,
+`devicechain_lwm2mingest_ingest_samples_shed_total` y
+`devicechain_sparkplugingest_ingest_samples_shed_total`. Un inquilino que descarta ahí está enviando
+más lecturas de las que permite su nivel. Eleva la tasa de ingesta de su nivel, o haz que sus
+dispositivos envíen menos.
+
+Volver a la versión anterior restaura el cobro por mensaje. No cambian datos almacenados ni el
+esquema, y no se renombra ninguna clave de configuración.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

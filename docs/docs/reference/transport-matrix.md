@@ -65,8 +65,8 @@ there is no separate broker to run.
   event carries a credential that is checked again in the pipeline.
 
   There is one hole, and it is why this is not `●`. A message that arrives while the tenant is
-  over its **ingest rate limit** is acknowledged to the broker and dropped. The device was
-  PUBACKed when the broker captured it, so nothing tells the publisher; this transport has no
+  over its **ingest ceiling, counted in readings,** is acknowledged to the broker and dropped. The
+  device was PUBACKed when the broker captured it, so nothing tells the publisher; this transport has no
   `429` to send. If your fleet can burst past its limit, size it against the limit rather than
   relying on backpressure that does not exist.
 
@@ -94,7 +94,8 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
 - **Subscribe ●** — `POST /{instanceId}/{tenant}/events` returns:
   - `202` once the event is stored in the platform's inbound stream;
   - `400` on a body it cannot decode or a syntactically invalid tenant;
-  - `429` when the tenant is over its ingest rate limit;
+  - `429` when the tenant is over its ingest ceiling, counted in readings. This is checked before
+    backpressure, so a tenant over its own ceiling gets `429`, never the backpressure `503`;
   - **`503` with a `Retry-After` header when the platform is applying backpressure**: a consumer
     is so far behind that accepting more would push out events it has not processed (see
     [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure));

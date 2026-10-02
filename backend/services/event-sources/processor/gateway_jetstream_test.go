@@ -77,11 +77,37 @@ type captureHarness struct {
 	// per-tenant limiter and observe what admission actually depends on. Set it
 	// before the first handle call.
 	gate RateGate
+	// readings, when set, is the reading stage the decode workers ask; nil admits every
+	// charge. readingCalls records what the workers passed it, in order.
+	readings     ReadingGate
+	readingCalls []readingCall
 	// events records every event the source handed its publish callback, in order.
 	events []*model.UnresolvedEvent
 	// settles counts the publishes whose done has RETURNED — so the settler has run,
 	// and a test may assert what it did (or did not do) to the message.
 	settles int
+}
+
+// readingCall is one call a decode worker made to the reading stage.
+type readingCall struct {
+	tenant     string
+	sentAt     time.Time
+	redelivery bool
+	origin     Origin
+	readings   int
+}
+
+// readingGate is the reading stage the harness's source is built with: it records the call
+// and defers to readings, admitting when that is unset.
+func (h *captureHarness) readingGate(_ string, tenant string, sentAt time.Time, redelivery bool, origin Origin, n int) bool {
+	h.mu.Lock()
+	h.readingCalls = append(h.readingCalls, readingCall{tenant, sentAt, redelivery, origin, n})
+	gate := h.readings
+	h.mu.Unlock()
+	if gate == nil {
+		return true
+	}
+	return gate("gw-test", tenant, sentAt, redelivery, origin, n)
 }
 
 // harnessWriter is the harness's inbound-events writer: every publish is answered at
@@ -154,7 +180,7 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 				return true
 			}
 			return h.allowResult
-		})
+		}, h.readingGate)
 
 	// Start only the publish pipeline, through the code ExecuteStart runs; the read loop
 	// is bypassed so tests drive handle directly with the exact message they mean to
@@ -253,6 +279,14 @@ func TestEveryDeliberateDropAcknowledgesTheCaptureStream(t *testing.T) {
 			subject: captureSubject,
 			body:    validEvent,
 			setup:   func(h *captureHarness) { h.allowResult = false },
+		},
+		{
+			name:    "over the tenant ingest ceiling in readings",
+			subject: captureSubject,
+			body:    validEvent,
+			setup: func(h *captureHarness) {
+				h.readings = func(string, string, time.Time, bool, Origin, int) bool { return false }
+			},
 		},
 		{
 			name:    "payload cannot be decoded",
@@ -625,7 +659,7 @@ func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
 			return nil, messaging.Message{}, false
 		},
 		func(string, string, []byte, error) error { return nil },
-		nil)
+		nil, admitAllReadings)
 	// The writer IS wired, so the refusal this reaches is the reader's, whichever order
 	// the two checks run in.
 	source.SetWriter(harnessWriter{&captureHarness{}})

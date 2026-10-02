@@ -79,8 +79,8 @@ func (s CeilingSource) unresolved() bool {
 }
 
 // TenantCeiling is one tenant's resolved ceiling and where it came from. RatePerSecond is
-// the sustained rate (events/sec) and Burst the largest instantaneous batch before the
-// sustained rate applies.
+// the sustained rate (units/sec: events, readings or calls, per the dimension) and Burst
+// the largest instantaneous batch before the sustained rate applies.
 type TenantCeiling struct {
 	RatePerSecond float64
 	Burst         int
@@ -255,12 +255,26 @@ func (l *TenantRateLimiter) AllowNAt(tenant string, when time.Time, n int) bool 
 // The pool bounds MEMORY, not the aggregate admitted across invented names: each pooled
 // name is metered at the platform default in its own right.
 func (l *TenantRateLimiter) AllowUntrusted(tenant string) bool {
+	return l.AllowUntrustedN(tenant, 1)
+}
+
+// AllowUntrustedN is AllowUntrusted for a batch: it admits n units NOW for a tenant
+// string the platform has not authenticated, charging n tokens from the same bucket
+// AllowUntrusted would use (confirmed, pooled, or the shared overflow). A non-positive n
+// admits and charges nothing, and creates no bucket. As with AllowN, an n above the
+// bucket's burst is always refused, so a caller charging a variable batch must size the
+// burst for its largest one (governance.ReadingCeiling does). The overflow-admissions
+// counter counts admitted CALLS, not tokens.
+func (l *TenantRateLimiter) AllowUntrustedN(tenant string, n int) bool {
+	if n <= 0 {
+		return true
+	}
 	c := l.resolve(tenant)
 
 	l.mu.Lock()
 	now := l.now()
 	b, at := l.bucketLocked(tenant, c, time.Time{}, now, true)
-	ok := b.limiter.AllowN(at, 1)
+	ok := b.limiter.AllowN(at, n)
 	b.mark = at
 	servedByOverflow := b == l.overflow
 	l.mu.Unlock()

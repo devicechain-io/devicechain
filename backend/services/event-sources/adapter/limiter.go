@@ -4,53 +4,35 @@
 package adapter
 
 import (
-	"math"
-
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventlimit"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
-// DefaultSamplesPerMessage scales a tenant's message-rate ceiling into its sample-rate
-// ceiling: the sample budget is the message ceiling times this factor. It exists because
-// one message legitimately carries several measurement samples, so metering samples at the
-// raw message rate would shed a compliant multi-sample fleet. A factor of 25 gives generous
-// headroom over a typical IPSO Notify (~5-20 numeric resources) while still bounding the
-// pathological case — a slow trickle of enormous packs — that the message-rate gate alone
-// cannot see (it counts messages, not samples). It is a platform constant, never per-tenant:
-// a per-tenant sample ceiling is the deferred dedicated-dimension follow-up (ADR-023).
-//
-// 🔑 IT IS A MEAN, NOT A MAXIMUM, and reading it as one invites the wrong comparison. The
-// HARD bound is a separate number and a larger one — eventlimit.MaxReadingsPerEvent (256),
-// the most readings one EVENT may carry on every transport — and the two are related by
-// construction rather than by coincidence: that limit is what a caller passes as
-// sampleBurstFloor below, and a caller charges the sample budget once per event, so no
-// single charge can exceed the bucket and nothing is shed permanently on the burst edge.
-// Both count the same unit, which is what makes them comparable at all.
-//
-// ⏭ The JSON transports do not yet wire stage 2, and should. Two things must exist first: a
-// send-time-aware AllowN (their stage-1 gate meters a post-outage backlog on the broker's
-// append time, because metering a drain on ARRIVAL sheds data the broker already
-// acknowledged), and a redelivery signal at the post-decode hook, which today would
-// double-charge every JetStream redelivery.
-const DefaultSamplesPerMessage = 25
-
 // IngestLimiter is the shared, two-stage, per-tenant admission gate for a device-facing
-// ingest source (ADR-023, ADR-075 L2c). It fronts the durable emit path so an authenticated
-// device that floods — the LwM2M exposure, where devices reach the socket directly — cannot
-// spend unbounded pipeline CPU or unbounded downstream write volume, and cannot evade its
-// tenant's ingest ceiling:
+// gateway ingest source (ADR-023, ADR-075 L2c). It fronts the durable emit path so an
+// authenticated device that floods — the LwM2M exposure, where devices reach the socket
+// directly — cannot spend unbounded pipeline CPU or unbounded downstream write volume, and
+// cannot evade its tenant's ingest ceiling:
 //
 //   - STAGE 1, AllowMessage — a coarse per-tenant MESSAGE-rate gate charged ONCE per inbound
 //     message BEFORE decode, so a message flood is shed before it costs a parse. It is the
 //     only meter that sees every message, including undecodable garbage (a message that never
 //     yields samples is metered nowhere else), which is why it is a separate bucket rather
 //     than a pre-charge on the sample bucket.
-//   - STAGE 2, AdmitSamples — a per-tenant SAMPLE-rate gate charged with the decoded sample
+//   - STAGE 2, AdmitSamples — a per-tenant READING-rate gate charged with the decoded sample
 //     COUNT AFTER decode, so a slow trickle of enormous packs (which sails through a
 //     per-message gate) is bounded by measurement VOLUME, the thing that actually reaches the
-//     time-series store.
+//     time-series store. It meters readings at the tenant's ingest ceiling itself, through
+//     governance.ReadingCeiling — the same definition event-sources' JSON transports charge
+//     their readings against, so a tenant's ceiling means the same number of readings on
+//     every transport.
+//
+// LwM2M uses both stages (NewIngestLimiter). Sparkplug uses stage 2 alone
+// (NewSampleLimiter): its session machine must observe every message, because sequence
+// numbers and rebirth depend on it, so it has no message stage to shed at.
 //
 // Both stages are per-tenant token buckets (core.TenantRateLimiter): independent per tenant
 // so one tenant's flood consumes only its own allowance, and LABEL-FREE — the buckets are
@@ -61,12 +43,9 @@ const DefaultSamplesPerMessage = 25
 // It is fail-safe: both buckets resolve their ceiling through the same resolver, which fails
 // open to the platform default (never zero/unlimited) — a missing or unusable per-tenant
 // override meters at the default, never removes the gate.
-//
-// It lives in adapter (not in any one protocol's package) so LwM2M wires it now and Sparkplug
-// can adopt it later without re-deriving the label-free/fail-safe discipline.
 type IngestLimiter struct {
-	message *core.TenantRateLimiter // stage 1: messages/sec per tenant
-	sample  *core.TenantRateLimiter // stage 2: samples/sec per tenant (message ceiling × factor)
+	message *core.TenantRateLimiter // stage 1: messages/sec per tenant; nil for a sample-only limiter
+	sample  *core.TenantRateLimiter // stage 2: readings/sec per tenant, at the same ceiling
 	metrics IngestLimiterMetrics
 }
 
@@ -76,55 +55,52 @@ type IngestLimiter struct {
 // construction). SamplesShed counts SAMPLES shed (the volume), not shed events.
 type IngestLimiterMetrics struct {
 	MessagesShed prometheus.Counter // inbound messages shed at the per-tenant message-rate ceiling
-	SamplesShed  prometheus.Counter // decoded samples shed at the per-tenant sample-rate ceiling
+	SamplesShed  prometheus.Counter // decoded samples shed at the per-tenant reading ceiling
 }
 
 // NewIngestLimiter builds the two-stage limiter over a single ceiling resolver (so one cache
 // / one authority query per TTL serves both buckets, and an override change retunes both).
-// resolve returns a tenant's message ceiling — typically governance.TenantLimitResolver.Ceiling,
+// resolve returns a tenant's ingest ceiling — typically governance.TenantLimitResolver.Ceiling,
 // or core.StaticCeiling when no authority is configured. It MUST fail safe (a
 // missing/unusable override → the positive platform default), because a non-positive ceiling
 // yields a bucket that admits nothing.
+//
+// The sample bucket meters readings at that same ceiling through governance.ReadingCeiling,
+// which floors its burst at eventlimit.MaxReadingsPerEvent. AdmitSamples charges once per
+// EVENT (at most that many samples; a message larger than one event is charged piece by
+// piece), so every charge fits an idle bucket and a message is shed on sustained RATE, never
+// permanently on its size.
 //
 // unresolved, when non-nil, is counted for each MESSAGE admitted at the platform default for
 // want of the tenant's own ceiling (core.WithUnresolvedAdmissions). It rides on the message
 // stage only: the sample stage sees the same messages again after decode, so counting there
 // too would count one message twice.
-//
-// samplesPerMessage scales the message ceiling into the sample ceiling (see
-// DefaultSamplesPerMessage). sampleBurstFloor floors the sample bucket's burst so a single
-// charge no larger than the floor always fits. The caller passes eventlimit.MaxReadingsPerEvent
-// here and charges through AdmitSamples, once per EVENT (at most that many samples; a message
-// larger than one event is charged piece by piece), so AllowN sheds on sustained RATE and
-// never permanently on a single charge striking the burst edge. A caller that charged a whole
-// message larger than the burst would have it refused every time: a token bucket can never
-// admit more than its burst in one call.
-func NewIngestLimiter(resolve core.TenantCeilingResolver, samplesPerMessage float64,
-	sampleBurstFloor int, metrics IngestLimiterMetrics, unresolved func(core.CeilingSource)) *IngestLimiter {
-	if samplesPerMessage <= 0 {
-		samplesPerMessage = DefaultSamplesPerMessage
-	}
+func NewIngestLimiter(resolve core.TenantCeilingResolver, metrics IngestLimiterMetrics,
+	unresolved func(core.CeilingSource)) *IngestLimiter {
 	var messageOpts []core.TenantRateLimiterOption
 	if unresolved != nil {
 		messageOpts = append(messageOpts, core.WithUnresolvedAdmissions(unresolved))
 	}
 	return &IngestLimiter{
 		message: core.NewTenantRateLimiter(resolve, messageOpts...),
-		sample: core.NewTenantRateLimiter(func(tenant string) core.TenantCeiling {
-			c := resolve(tenant)
-			sampleBurst := satMulInt(c.Burst, samplesPerMessage)
-			if sampleBurst < sampleBurstFloor {
-				sampleBurst = sampleBurstFloor
-			}
-			if sampleBurst < 1 {
-				// A caller that passes a non-positive sampleBurstFloor (the shared-mechanism
-				// footgun the LwM2M path avoids by passing MaxReadingsPerEvent) must not get a
-				// zero-burst bucket, which admits NOTHING — the fail-safe floor is a real limit,
-				// never a silent black-hole.
-				sampleBurst = 1
-			}
-			return core.TenantCeiling{RatePerSecond: c.RatePerSecond * samplesPerMessage, Burst: sampleBurst, Source: c.Source}
-		}),
+		sample:  core.NewTenantRateLimiter(governance.ReadingCeiling(resolve)),
+		metrics: metrics,
+	}
+}
+
+// NewSampleLimiter builds a stage-2-only limiter for a source with no message stage
+// (Sparkplug). Its sample bucket is the one NewIngestLimiter builds. unresolved, when
+// non-nil, is counted on the sample stage instead — there is no message stage to count it
+// on — once per admitted CHARGE (one event's worth of samples), so a tenant metered at the
+// platform default is still visible on the shared counter. AllowMessage panics on it.
+func NewSampleLimiter(resolve core.TenantCeilingResolver, metrics IngestLimiterMetrics,
+	unresolved func(core.CeilingSource)) *IngestLimiter {
+	var sampleOpts []core.TenantRateLimiterOption
+	if unresolved != nil {
+		sampleOpts = append(sampleOpts, core.WithUnresolvedAdmissions(unresolved))
+	}
+	return &IngestLimiter{
+		sample:  core.NewTenantRateLimiter(governance.ReadingCeiling(resolve), sampleOpts...),
 		metrics: metrics,
 	}
 }
@@ -139,7 +115,13 @@ func NewIngestLimiter(resolve core.TenantCeilingResolver, samplesPerMessage floa
 // still a message the tenant sent, and this is the only bucket that sees it. A protocol-state
 // message that is NOT tenant telemetry (e.g. an RFC 7641 terminal notification) must be
 // handled before this gate, so it is neither charged nor shed.
+//
+// It panics on a limiter built by NewSampleLimiter, which has no message stage: a caller
+// that asks has been wired to the wrong constructor, and admitting would hide it.
 func (l *IngestLimiter) AllowMessage(tenant string) bool {
+	if l.message == nil {
+		panic("adapter.IngestLimiter.AllowMessage: this limiter was built without a message stage (NewSampleLimiter)")
+	}
 	if l.message.Allow(tenant) {
 		return true
 	}
@@ -153,8 +135,8 @@ func (l *IngestLimiter) AllowMessage(tenant string) bool {
 // AllowSamples is STAGE 2: it reports whether a decoded batch of n samples from the tenant may
 // be emitted, consuming n tokens from the tenant's sample bucket. Call it after decode, before
 // the durable emit, once per event's worth of samples (n ≤ eventlimit.MaxReadingsPerEvent —
-// see NewIngestLimiter's sampleBurstFloor). A non-positive n admits and charges nothing. A shed batch counts n against
-// SamplesShed (the volume shed) and is logged at debug with the tenant as a FIELD.
+// see NewIngestLimiter). A non-positive n admits and charges nothing. A shed batch counts n
+// against SamplesShed (the volume shed) and is logged at debug with the tenant as a FIELD.
 func (l *IngestLimiter) AllowSamples(tenant string, n int) bool {
 	if n <= 0 {
 		return true
@@ -165,7 +147,7 @@ func (l *IngestLimiter) AllowSamples(tenant string, n int) bool {
 	incr(l.metrics.SamplesShed, n)
 	if log.Debug().Enabled() {
 		log.Debug().Str("tenant", tenant).Int("samples", n).
-			Msg("Shed a decoded sample batch at the per-tenant ingest sample-rate ceiling.")
+			Msg("Shed a decoded sample batch at the per-tenant ingest ceiling (counted in readings).")
 	}
 	return false
 }
@@ -179,10 +161,10 @@ func (l *IngestLimiter) AllowSamples(tenant string, n int) bool {
 // SamplesShed, the refused piece by AllowSamples and the pieces after it, which were never
 // offered, here.
 //
-// 🔴 WHY PER EVENT: sampleBurstFloor is MaxReadingsPerEvent, so every charge fits an idle
-// bucket. One charge for the whole message would be refused every time for a message larger
-// than the tenant's sample burst — shed permanently, not on rate — which is the one thing the
-// floor exists to prevent.
+// 🔴 WHY PER EVENT: governance.ReadingCeiling floors the burst at MaxReadingsPerEvent, so
+// every charge fits an idle bucket. One charge for the whole message would be refused every
+// time for a message larger than the tenant's burst — shed permanently, not on rate — which
+// is the one thing the floor exists to prevent.
 func (l *IngestLimiter) AdmitSamples(tenant string, n int) int {
 	admitted := 0
 	for admitted < n {
@@ -194,20 +176,4 @@ func (l *IngestLimiter) AdmitSamples(tenant string, n int) int {
 		admitted += piece
 	}
 	return admitted
-}
-
-// satMulInt multiplies an int count by a positive float factor, saturating at math.MaxInt
-// instead of overflowing to a negative value. A per-tenant burst override may be as large as
-// math.MaxInt (governance floors only non-positive values), and burst × factor would overflow
-// int — handing core.TenantRateLimiter a NEGATIVE burst, a bucket that admits NOTHING, which
-// would silently black-hole that tenant's samples while presence and stage 1 kept working.
-func satMulInt(n int, factor float64) int {
-	if n <= 0 || factor <= 0 {
-		return 0
-	}
-	scaled := float64(n) * factor
-	if scaled >= float64(math.MaxInt) {
-		return math.MaxInt
-	}
-	return int(scaled)
 }

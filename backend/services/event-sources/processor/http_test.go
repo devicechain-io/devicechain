@@ -47,6 +47,14 @@ func admitAll(string) error { return nil }
 func newTestHttpSourceAdmitting(t *testing.T, allow RateGate, admit func(string) error, ingest config.HttpIngest,
 	earlyClose func(string)) (*HttpEventSource, *capturedDecode, *capturedFailure) {
 	t.Helper()
+	return newTestHttpSourceGated(t, allow, admitAllReadings, admit, ingest, earlyClose)
+}
+
+// newTestHttpSourceGated is newTestHttpSourceAdmitting with the reading stage spelled out,
+// for the tests that drive it.
+func newTestHttpSourceGated(t *testing.T, allow RateGate, readings ReadingGate, admit func(string) error,
+	ingest config.HttpIngest, earlyClose func(string)) (*HttpEventSource, *capturedDecode, *capturedFailure) {
+	t.Helper()
 	dec := &capturedDecode{}
 	fail := &capturedFailure{}
 	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", ingest,
@@ -65,7 +73,7 @@ func newTestHttpSourceAdmitting(t *testing.T, allow RateGate, admit func(string)
 			fail.err = err
 			return nil
 		},
-		allow, admit, earlyClose)
+		allow, readings, admit, earlyClose)
 	assert.NoError(t, err)
 	return es, dec, fail
 }
@@ -203,7 +211,7 @@ func TestNewHttpEventSource_Port(t *testing.T) {
 	newSource := func(cfg map[string]string) (*HttpEventSource, error) {
 		return NewHttpEventSource("http-test", cfg, "inst-1", config.HttpIngest{},
 			NewJsonDecoder(map[string]string{}),
-			func(string, []byte) {}, nil, nil, nil, admitAll, nil)
+			func(string, []byte) {}, nil, nil, nil, admitAllReadings, admitAll, nil)
 	}
 
 	es, err := newSource(map[string]string{"port": "9000"})

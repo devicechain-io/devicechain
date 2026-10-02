@@ -59,9 +59,11 @@ const (
 	// safety ceiling, high enough not to shed a normally busy fleet, low enough that one
 	// runaway device cannot saturate the pipeline. They MUST be positive: a zero ceiling
 	// yields a token bucket that admits nothing (core.TenantRateLimiter), which would
-	// black-hole every device's telemetry. The value matches event-sources so the two
-	// device-ingest paths share one platform default; a genuinely high-volume tenant is
-	// raised by a per-tenant override, never by making the default unlimited.
+	// black-hole every device's telemetry. The value matches event-sources so the
+	// device-ingest paths share one platform default, counted in readings after decode and in
+	// Notify messages before it; why 1000 is in the chart's values.yaml, event-sources block.
+	// A genuinely high-volume tenant is raised by a per-tenant override, never by making the
+	// default unlimited.
 	DefaultIngestMessagesPerSecond = 1000
 	DefaultIngestBurst             = 2000
 	// DefaultMaxLifetimeSeconds is the ceiling a registration lifetime is clamped DOWN to
@@ -135,7 +137,8 @@ type DownlinkConfiguration struct {
 // bucket that admits nothing.
 type IngestRateLimit struct {
 	// MessagesPerSecond is the sustained per-tenant message rate (the pre-decode STAGE 1
-	// ceiling). The per-tenant sample budget (STAGE 2) is derived from it.
+	// ceiling). The per-tenant reading budget (STAGE 2) is the same number, counted in
+	// readings, as on every other transport.
 	MessagesPerSecond float64 `json:"messagesPerSecond"`
 	// Burst is the largest instantaneous batch a tenant may send before the sustained rate
 	// applies — it absorbs a bursty fleet without raising the sustained ceiling.

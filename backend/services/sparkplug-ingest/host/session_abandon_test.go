@@ -58,7 +58,7 @@ func abandonClient(t *testing.T, fake *fakeIngester, seam *refuseFilters) (*Clie
 	const bigSession = uint64(5_000_000_000_000_000_000)
 	failures := prometheus.NewCounter(prometheus.CounterOpts{Name: "subscribe_failures_total"})
 	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1", "g2", "g3"}},
-		Broker{}, fake, fixedNow, Metrics{SubscribeFailures: failures})
+		Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{SubscribeFailures: failures})
 	c.SetReconciler(&fakeReconciler{devices: []AssertedDevice{{ExternalId: "g1/node", SessionId: bigSession}}, max: bigSession})
 	c.probeWindow = 5 * time.Millisecond
 	c.subscribe = seam.subscribe
@@ -221,7 +221,7 @@ func (s *scriptedClient) Connect() mqtt.Token {
 // connection is disconnected.
 func TestAnAbandonedSessionBacksOffAndAFullSessionResets(t *testing.T) {
 	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
-		Broker{}, nil, fixedNow, Metrics{})
+		Broker{}, nil, nil, fixedNow, Metrics{})
 	// The session's outcome is decided by the script, through the subscribe seam: a
 	// "refused" session refuses g1.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -314,7 +314,7 @@ func runScriptedSessions(t *testing.T, c *Client, script []string, prepare func(
 // broker kept the message and only the acknowledgement went missing.
 func TestAnAbandonedSessionOverwritesAPossiblyRetainedOnlineBeforeDisconnecting(t *testing.T) {
 	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
-		Broker{}, nil, fixedNow, Metrics{})
+		Broker{}, nil, nil, fixedNow, Metrics{})
 	c.subscribe = grantAll
 
 	clients := runScriptedSessions(t, c, []string{"online-unacked"}, func(_ int, fc *fakeClient) {
@@ -344,7 +344,7 @@ func TestAnAbandonedSessionOverwritesAPossiblyRetainedOnlineBeforeDisconnecting(
 // ever sent on that connection.
 func TestALostFullSessionLeavesItsOfflineToTheWill(t *testing.T) {
 	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
-		Broker{}, nil, fixedNow, Metrics{})
+		Broker{}, nil, nil, fixedNow, Metrics{})
 	c.subscribe = grantAll
 
 	clients := runScriptedSessions(t, c, []string{"full-then-lost"}, func(int, *fakeClient) {})

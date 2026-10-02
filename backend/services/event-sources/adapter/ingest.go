@@ -725,20 +725,20 @@ func measurementDedupID(prefix, tenant, deviceToken string, occurredMillis int64
 // the per-tenant ingest gate belongs at the receive point, BEFORE decode, so a flood costs no
 // parse. That gate is IngestLimiter in this package (ADR-075 L2c): a two-stage, label-free,
 // fail-safe per-tenant limiter — a coarse message-rate ceiling charged before decode and a
-// sample-rate budget charged with the decoded sample count. The LwM2M adapter, the
-// device-facing source where authenticated devices reach the socket directly, wires it around
-// this Ingester on its Register/Update and Notify paths. The Sparkplug source does NOT yet
-// gate: its exposure is bounded (an opt-in broker an operator deliberately connects to, not
-// open-internet device ingest), and it can adopt IngestLimiter unchanged when that changes.
+// reading budget, at the same ceiling, charged with the decoded sample count. The LwM2M
+// adapter, the device-facing source where authenticated devices reach the socket directly,
+// wires both stages around this Ingester on its Register/Update and Notify paths. Sparkplug
+// charges the reading stage alone (NewSampleLimiter), per DATA message, before Ingest; it has
+// no message stage, because its session machine must observe every message.
 //
-// 🔴 THAT GAP IS NOT ONLY ABOUT RATE. Emit builds one entry per sample handed to it, so the
+// 🔴 WHAT THAT LEAVES IS NOT ABOUT RATE. Emit builds one entry per sample handed to it, so the
 // samples in ONE call are also the FAN-OUT of one message — the stored rows, the projection
 // writes and the evaluations on the single DETECT goroutine every tenant shares. Each EVENT
-// is bounded by eventlimit.MaxReadingsPerEvent, because Emit splits a larger batch; a
-// MESSAGE's total is still bounded only by the broker on the Sparkplug path, since
-// samplesFrom appends one Sample per numeric metric with no cap and Sparkplug does not yet
-// wire IngestLimiter. It runs on paho's ordered receive goroutine, so a wide DDATA also
-// blocks that client's receive. Adopting IngestLimiter closes the rate half.
+// is bounded by eventlimit.MaxReadingsPerEvent, because Emit splits a larger batch, and the
+// reading stage bounds a tenant's readings per second; but a MESSAGE's total is still bounded
+// only by the broker on the Sparkplug path, since samplesFrom appends one Sample per numeric
+// metric with no cap. It runs on paho's ordered receive goroutine, so a wide DDATA also
+// blocks that client's receive.
 // Any gate here MUST stay label-free per tenant (no per-tenant metric labels — the ADR-023
 // cardinality lesson), as these counters and IngestLimiter's do.
 type Ingester struct {

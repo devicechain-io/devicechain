@@ -56,7 +56,7 @@ func newExternalMqttSource(t *testing.T, host string, port int, topic string, re
 		received,
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
-		nil, admitAll, fail)
+		nil, admitAllReadings, admitAll, fail)
 	require.NoError(t, err)
 	return es
 }
@@ -402,7 +402,7 @@ func TestAnMqttSourceWithoutAFailHookIsRefused(t *testing.T) {
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
-		nil, admitAll, nil)
+		nil, admitAllReadings, admitAll, nil)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "end the process"), "unexpected error: %v", err)
 }

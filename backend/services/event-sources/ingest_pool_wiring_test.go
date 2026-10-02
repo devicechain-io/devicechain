@@ -105,10 +105,14 @@ func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring
 	t.Helper()
 	savedConfig, savedSources, savedMs := Configuration, EventSources, Microservice
 	savedLive, savedBacklog, savedHTTP, savedShed := RateLimiter, BacklogRateLimiter, HttpRateLimiter, ShedPriorityResolver
+	savedRLive, savedRBacklog, savedRHTTP := ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter
+	savedIngest, savedReading := ingestGate, readingGate
 	savedInbound, savedFailed, savedAdmission := InboundEventsWriter, FailedDecodeWriter, inboundBackpressure
 	t.Cleanup(func() {
 		Configuration, EventSources, Microservice = savedConfig, savedSources, savedMs
 		RateLimiter, BacklogRateLimiter, HttpRateLimiter, ShedPriorityResolver = savedLive, savedBacklog, savedHTTP, savedShed
+		ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter = savedRLive, savedRBacklog, savedRHTTP
+		ingestGate, readingGate = savedIngest, savedReading
 		InboundEventsWriter, FailedDecodeWriter, inboundBackpressure = savedInbound, savedFailed, savedAdmission
 	})
 	// No broker here, so the pipeline is declared open: these tests are about the rate gate.

@@ -107,7 +107,7 @@ func refusalClient(url string, groups []string, failures prometheus.Counter) *Cl
 	return NewClient(
 		config.SparkplugSource{Tenant: "acme", HostId: "refusal-host", Groups: groups},
 		Broker{URL: url, ClientID: "refusal-host-client", Username: refusalHostUser, Password: refusalHostPass},
-		nil, nil, Metrics{SubscribeFailures: failures},
+		nil, nil, nil, Metrics{SubscribeFailures: failures},
 	)
 }
 

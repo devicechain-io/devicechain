@@ -22,13 +22,15 @@ func refuseAll(string) error {
 	return &messaging.BackpressureError{Stream: "inst-1_inbound-events", Durable: "d", Ratio: 0.95}
 }
 
-// While the pipeline refuses, a POST is answered 503 with a Retry-After BEFORE its body is
-// read: nothing is decoded, and the tenant's rate-limit token is not spent, so the retry the
-// 503 asks for is not charged twice.
-func TestHttpBackpressureIsRefusedBeforeTheBodyIsRead(t *testing.T) {
+// While the pipeline refuses, a POST within its tenant's ceiling is answered 503 with a
+// Retry-After, after both stages of that ceiling were consulted: nothing is published.
+// (TestHttpTenantOverItsCeilingIs429EvenWhileThePipelineRefuses pins the other half.)
+func TestHttpBackpressureIsRefusedAfterTheTenantsOwnCeiling(t *testing.T) {
 	metered := false
 	allow := func(string, string, time.Time, bool, Origin) bool { metered = true; return true }
-	es, dec, fail := newTestHttpSourceAdmitting(t, allow, refuseAll, config.HttpIngest{}, nil)
+	charged := 0
+	readings := func(_ string, _ string, _ time.Time, _ bool, _ Origin, n int) bool { charged += n; return true }
+	es, dec, fail := newTestHttpSourceGated(t, allow, readings, refuseAll, config.HttpIngest{}, nil)
 
 	rec := httptest.NewRecorder()
 	es.handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/inst-1/acme/events",
@@ -36,9 +38,10 @@ func TestHttpBackpressureIsRefusedBeforeTheBodyIsRead(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Equal(t, "10", rec.Header().Get("Retry-After"))
-	assert.False(t, dec.called, "a refused request must not be decoded or published")
+	assert.False(t, dec.called, "a refused request must not be published")
 	assert.False(t, fail.called)
-	assert.False(t, metered, "a refused request must not spend the tenant's rate-limit token")
+	assert.True(t, metered, "the tenant's message stage is asked before the shared gate")
+	assert.Equal(t, 1, charged, "the tenant's readings are charged before the shared gate")
 }
 
 // The gate can close between the check and the publish. The publish's refusal is answered
@@ -83,7 +86,7 @@ func TestHttpAcceptedEventCarriesNoRetryAfter(t *testing.T) {
 // that is refusing, and nothing at the call site would show it.
 func TestSourcesRefuseToBeBuiltWithoutAdmit(t *testing.T) {
 	_, err := NewHttpEventSource("h", map[string]string{}, "inst-1", config.HttpIngest{},
-		NewJsonDecoder(map[string]string{}), func(string, []byte) {}, nil, nil, nil, nil, nil)
+		NewJsonDecoder(map[string]string{}), func(string, []byte) {}, nil, nil, nil, nil, nil, nil)
 	require.ErrorIs(t, err, errNoAdmit)
 
 	_, err = NewMqttEventSource("m", map[string]string{"host": "h", "port": "1883", "topic": "t"},
@@ -91,13 +94,15 @@ func TestSourcesRefuseToBeBuiltWithoutAdmit(t *testing.T) {
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
-		nil, nil, func(error) {})
+		nil, nil, nil, func(error) {})
 	require.ErrorIs(t, err, errNoAdmit)
 }
 
 // An external broker's message is dropped while the pipeline refuses: paho has already
-// acknowledged it, so there is no lever to make the device retry. It is not metered and not
-// queued for decode; admit counts the drop.
+// acknowledged it, so there is no lever to make the device retry. It is metered against its
+// tenant's own ceiling FIRST (a token spent on a message the gate then drops costs nothing on
+// a transport with no retry), then refused by the pipeline, not queued for decode and not
+// counted as received; admit counts the drop.
 func TestExternalMqttDropsWhileThePipelineRefuses(t *testing.T) {
 	metered := false
 	allow := func(string, string, time.Time, bool, Origin) bool { metered = true; return true }
@@ -109,6 +114,6 @@ func TestExternalMqttDropsWhileThePipelineRefuses(t *testing.T) {
 
 	assert.Equal(t, 1, asked, "the source must ask the pipeline before queueing")
 	assert.Equal(t, 0, *received, "a refused message must not be counted as received")
-	assert.False(t, metered, "a refused message must not spend a rate-limit token")
+	assert.True(t, metered, "the tenant's own ceiling is checked before the shared gate")
 	assert.Len(t, es.messages, 0, "a refused message must not be queued for decode")
 }

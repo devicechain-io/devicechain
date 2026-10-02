@@ -288,7 +288,7 @@ func startPipelineCaseWith(t *testing.T, w *heldWriter, n, numDelivered int, fai
 			}
 			return nil
 		},
-		nil)
+		nil, admitAllReadings)
 	ctx := context.Background()
 	require.NoError(t, pc.source.Initialize(ctx))
 	pc.source.SetReader(pc.reader)
@@ -381,7 +381,7 @@ func TestStartingWithoutAnInboundWriterFailsLoudly(t *testing.T) {
 			return nil, messaging.Message{}, false
 		},
 		func(string, string, []byte, error) error { return nil },
-		nil)
+		nil, admitAllReadings)
 	ctx := context.Background()
 	require.NoError(t, source.Initialize(ctx))
 	source.SetReader(&sliceReader{})
@@ -660,7 +660,7 @@ func TestStoppingASourceThatNeverStartedDoesNothing(t *testing.T) {
 			return nil, messaging.Message{}, false
 		},
 		func(string, string, []byte, error) error { return nil },
-		nil)
+		nil, admitAllReadings)
 	ctx := context.Background()
 	require.NoError(t, source.Initialize(ctx))
 
