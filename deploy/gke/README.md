@@ -447,9 +447,10 @@ This should print `No resources found`. Each line it does print is a disk snapsh
 has not been deleted yet; wait a minute and run it again. A snapshot still being taken
 cannot be deleted until it is complete, which on a large volume can take a while. If a
 line stays for more than half an hour, `kubectl --context "$CTX" describe
-volumesnapshotcontent <name>` shows why; note its `SNAPSHOT` column, which names the disk
-snapshot, and delete that snapshot yourself after the cluster is gone. Then destroy the
-cluster:
+volumesnapshotcontent <name>` shows why. Note its `SNAPSHOT` column, a path ending in
+`/snapshots/snapshot-<id>`: that last part is the disk snapshot's name, which is what
+`gcloud compute snapshots delete` below takes. Delete that snapshot yourself after the
+cluster is gone. Then destroy the cluster:
 
 ```bash
 tofu destroy
