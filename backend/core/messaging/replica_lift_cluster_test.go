@@ -30,7 +30,8 @@ import (
 //
 // The cluster is the shared fixture's, so it is formed by the one definition of
 // formed (see dctest.StartJetStreamCluster), which waits for a server slow to start and
-// makes a new construction only when a server's route port was taken before it bound it.
+// is isolated from every other cluster: it dials only addresses it holds, under a cluster
+// name of its own.
 func newTestCluster(t *testing.T) (*NatsManager, func()) {
 	t.Helper()
 	servers := dctest.StartJetStreamCluster(t, 3)

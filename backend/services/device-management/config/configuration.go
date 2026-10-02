@@ -62,7 +62,9 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // On a kind cluster five resolvers topped out at about 1600 events a second on 1.5 of the
 // pod's 4 cores, with the events above that rate queued in front of them.
 //
-// Measured in-process (BenchmarkInboundStageOccupancy: a three-server broker, credentialed
+// Measured in-process (BenchmarkInboundStageOccupancy: a three-server broker whose routes
+// were then direct; the test fixture now carries each route through a loopback proxy, so
+// a re-run measures that hop too; credentialed
 // events, each lookup answering after 750µs, which puts five resolvers near the kind
 // ceiling): 5 resolvers resolved about 1500 events a second, 8 about 2300, 10 about 2900
 // and 16 about 4600, the resolvers busy throughout in every arm. The count is capped at 10
