@@ -1226,8 +1226,8 @@ covered=0
 while read -r v; do
   [[ -n "$v" ]] || continue
   r=""; a=""
-  printf '%s\n' "${rejected_vars[@]}" | grep -qx -- "$v" || r="no rejects"
-  printf '%s\n' "${accepted_vars[@]}" | grep -qx -- "$v" || a="no accepts"
+  grep -qx -- "$v" <<<"$(printf '%s\n' "${rejected_vars[@]}")" || r="no rejects"
+  grep -qx -- "$v" <<<"$(printf '%s\n' "${accepted_vars[@]}")" || a="no accepts"
   if [[ -n "$r" || -n "$a" ]]; then
     echo "FAIL  variable \"$v\" declares a validation block that this run never exercised" \
       "(${r:-ok}, ${a:-ok}). Nothing else in this repo evaluates it: \`tofu validate\`" \

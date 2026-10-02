@@ -214,7 +214,7 @@ EOF
 # to a re-run is its own deterrent to running the rig at all.
 create_cluster() {
   local name="$1" config="$2"
-  if kind get clusters 2>/dev/null | grep -qx "$name"; then
+  if grep -qx -- "$name" <<<"$(kind get clusters 2>/dev/null)"; then
     say "kind cluster $name already exists; reusing it"
     return
   fi
@@ -565,7 +565,7 @@ destroy_rig_instance() {
     say "not destroying instance $inst: there is no ~/.devicechain/instances/$inst"
     return 0
   fi
-  if ! kind get clusters 2>/dev/null | grep -qx "$kind_cluster"; then
+  if ! grep -qx -- "$kind_cluster" <<<"$(kind get clusters 2>/dev/null)"; then
     say "not destroying instance $inst: kind cluster $kind_cluster is not running (clear the leftover state with: $dcctl destroy local $inst)"
     return 0
   fi
@@ -613,7 +613,7 @@ remove_cluster_state() {
 # The UID is read BEFORE the delete, because afterwards there is nothing left to ask.
 delete_cluster() {
   local name="$1" context="kind-$1" uid=""
-  if kind get clusters 2>/dev/null | grep -qx "$name"; then
+  if grep -qx -- "$name" <<<"$(kind get clusters 2>/dev/null)"; then
     uid="$(kubectl --context "$context" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
     say "deleting kind cluster $name"
     kind delete cluster --name "$name"

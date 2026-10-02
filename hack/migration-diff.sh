@@ -130,7 +130,7 @@ case "$LAUNCH" in
 
     # Discover the host port Docker actually bound (the ephemeral one, or the pinned one).
     # `docker port <c> 5432/tcp` prints e.g. "127.0.0.1:49153"; take the port after the colon.
-    HOST_PORT="$(docker port "$CONTAINER" 5432/tcp | head -n1 | sed 's/.*://')"
+    HOST_PORT="$(docker port "$CONTAINER" 5432/tcp | sed -n '1s/.*://p')"
     [ -n "$HOST_PORT" ] || { echo "could not determine the container's published port" >&2; docker logs "$CONTAINER" | tail -20 >&2; exit 1; }
     echo "==> Postgres published on 127.0.0.1:$HOST_PORT"
 
@@ -238,11 +238,11 @@ if [ "$MODE" = "verify" ]; then
   printf '%s\n' "$dcctl_db_out"
   # A skip against a live server is a gate that examined nothing, and so is a filter
   # that stopped matching the one test the suite exists for.
-  if printf '%s\n' "$dcctl_db_out" | grep -q -- '--- SKIP'; then
+  if grep -q -- '--- SKIP' <<<"$dcctl_db_out"; then
     echo "dcctl's per-instance database suite SKIPPED against a live server" >&2
     exit 1
   fi
-  if ! printf '%s\n' "$dcctl_db_out" | grep -q -- '--- PASS: TestInstanceDatabaseLoginsCannotReachEachOthersDatabases'; then
+  if ! grep -q -- '--- PASS: TestInstanceDatabaseLoginsCannotReachEachOthersDatabases' <<<"$dcctl_db_out"; then
     echo "dcctl's per-instance database suite did not run its isolation test" >&2
     exit 1
   fi

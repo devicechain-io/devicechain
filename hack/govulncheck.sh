@@ -192,7 +192,7 @@ scan() {
   if ! ( cd "$repo_root/$module" && "$bin" -format json ./... ) > "$json"; then
     echo "::error::govulncheck failed to run in $module. This is NOT 'no"
     echo "vulnerabilities found' — nothing was scanned. Refusing to pass."
-    sed 's/^/    /' "$json" | head -20
+    sed -n '1,20s/^/    /p' "$json"
     return 1
   fi
 

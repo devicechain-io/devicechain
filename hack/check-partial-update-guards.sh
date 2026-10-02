@@ -175,8 +175,8 @@ sdl_guard_wired() {
   while read -r f; do
     [ -n "$f" ] || continue
     code="$(code_of "$f")"
-    printf '%s\n' "$code" | grep -qE 'AssertNoUpdateInputCarriesAnSDLDefault[[:space:]]*\(' || continue
-    if printf '%s\n' "$code" | grep -qE "SDL:[[:space:]]*$var([^A-Za-z0-9_]|\$)"; then
+    grep -qE 'AssertNoUpdateInputCarriesAnSDLDefault[[:space:]]*\(' <<<"$code" || continue
+    if grep -qE "SDL:[[:space:]]*$var([^A-Za-z0-9_]|\$)" <<<"$code"; then
       return 0
     fi
   done < <(grep -rl 'AssertNoUpdateInputCarriesAnSDLDefault' "$svcdir" --include='*_test.go' 2>/dev/null || true)
@@ -188,10 +188,11 @@ sdl_guard_wired() {
 # twice, for its admin Service and its identity Manager — so the module is the right
 # granularity for a check that deliberately does not know which Api backs which schema.
 surface_guard_wired() {
-  local svcdir="$1" f
+  local svcdir="$1" f code
   while read -r f; do
     [ -n "$f" ] || continue
-    if code_of "$f" | grep -qE 'AssertEveryUpdateTakesADedicatedRequest[[:space:]]*\('; then
+    code="$(code_of "$f")"
+    if grep -qE 'AssertEveryUpdateTakesADedicatedRequest[[:space:]]*\(' <<<"$code"; then
       return 0
     fi
   done < <(grep -rl 'AssertEveryUpdateTakesADedicatedRequest' "$svcdir" --include='*_test.go' 2>/dev/null || true)
@@ -409,6 +410,24 @@ EOF
     return 1
   fi
   echo "  ok   discovery that finds nothing fails instead of passing"
+
+  # 9. A LARGE TEST FILE WHOSE GUARD CALL SITS NEAR THE TOP STILL COUNTS AS WIRING. This
+  #    is the one positive case beyond the clean tree. The wiring checks used to pipe a
+  #    file into grep -q, which stops reading at its match; with a megabyte after the
+  #    call the writer is always left a write to fail, and under pipefail that failure
+  #    read as "not wired". device-management wires each guard in exactly one file, so
+  #    padding those two leaves nothing else that could find the wiring.
+  rm -rf "$tmp/t"; cp -r backend "$tmp/t"
+  local pad i
+  pad="$(for ((i = 0; i < 100000; i++)); do echo 'var _ = 0'; done)"
+  printf '%s\n' "$pad" >>"$tmp/t/services/device-management/graphql/partial_update_sdl_default_test.go"
+  printf '%s\n' "$pad" >>"$tmp/t/services/device-management/model/api_token_argument_test.go"
+  if ! check_tree "$tmp/t" >/dev/null 2>&1; then
+    echo "🔴 self-test: a guard call followed by a large file was read as not wired" >&2
+    check_tree "$tmp/t" >&2 || true
+    return 1
+  fi
+  echo "  ok   a large test file still counts as wired"
 
   return 0
 }

@@ -76,7 +76,7 @@ for tool in "$TF" kind kubectl jq go timeout; do
     exit 1
   fi
 done
-echo "== CLI: $("$TF" version | head -1)"
+echo "== CLI: $("$TF" version | sed -n 1p)"
 
 work="$(mktemp -d)"
 export TF_PLUGIN_CACHE_DIR="$work/plugin-cache"
@@ -253,7 +253,7 @@ if [[ "$(instance_status "$a")" == "tainted" ]]; then ok "the Deployment is tain
 fi
 tf "$a" a-apply-good apply -auto-approve -no-color -var "image=$good_image"
 if [[ $rc -eq 0 ]]; then
-  echo "INCONCLUSIVE: $("$TF" version | head -1) does not store resource identity, so it"
+  echo "INCONCLUSIVE: $("$TF" version | sed -n 1p) does not store resource identity, so it"
   echo "  cannot show this defect; the phases below would prove nothing. Use Terraform >= 1.12."
   exit 2
 fi

@@ -501,7 +501,7 @@ build_tools() {
 }
 
 create_cluster() {
-  if kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+  if grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)"; then
     say "kind cluster $cluster already exists; reusing it"
     return
   fi
@@ -514,7 +514,7 @@ create_cluster() {
 # remove_cluster_state.
 delete_cluster() {
   local uid=""
-  if kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+  if grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)"; then
     uid="$(kubectl --context "$kube_context" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
     say "deleting kind cluster $cluster"
     kind delete cluster --name "$cluster"
@@ -605,7 +605,7 @@ minio_up() {
   # holds the archive, and the old form did not see it — it went straight to
   # `rm -f` and created an empty one, destroying the only off-site copy without
   # the "run down first" refusal the rig gives everywhere else.
-  if docker ps -a --format '{{.Names}}' | grep -qx "$minio_container"; then
+  if grep -qx -- "$minio_container" <<<"$(docker ps -a --format '{{.Names}}')"; then
     # 🔴 Reuse only the SAME image. A container created by an earlier version of
     # this rig runs whatever it was created from, and starting it would run the
     # drill against bytes a default install no longer runs — silently. Refused
@@ -686,7 +686,7 @@ never seeded. Run 'hack/dr-rig.sh down' first."
 }
 
 minio_down() {
-  if docker ps -a --format '{{.Names}}' | grep -qx "$minio_container"; then
+  if grep -qx -- "$minio_container" <<<"$(docker ps -a --format '{{.Names}}')"; then
     say "removing the object store $minio_container"
     docker rm -f "$minio_container" >/dev/null
   fi
@@ -1301,7 +1301,7 @@ cmd_disaster() {
   for f in "$escrow_file" "$receipt_file" "$backup_creds_file"; do
     [[ -s "$f" ]] || fail "refusing to simulate a disaster: $f is missing or empty. Run 'up' first."
   done
-  docker ps --format '{{.Names}}' | grep -qx "$minio_container" ||
+  grep -qx -- "$minio_container" <<<"$(docker ps --format '{{.Names}}')" ||
     fail "refusing to simulate a disaster: the object store $minio_container is not running,
 so there is nothing holding the archive the restore would read."
   # 🔴 EVERY store, because this check's entire purpose is to be BEFORE the
@@ -1753,7 +1753,7 @@ here, so this run is INCONCLUSIVE. Re-run."
 # missing surface stops the run before the bring-up rather than after it.
 relational_restore_flag="--restore-rdb-from"
 require_relational_restore() {
-  "$dcctl" install --help 2>&1 | grep -q -- "$relational_restore_flag" || fail \
+  grep -q -- "$relational_restore_flag" <<<"$("$dcctl" install --help 2>&1)" || fail \
     "dcctl install does not offer $relational_restore_flag, so this drill cannot recover the
 RELATIONAL store — and both of its verdicts read that store: the sealed secret lives
 there, and the event half's verify logs in as an identity that lives there too.
@@ -2198,7 +2198,7 @@ destroy_rig_instance() {
     note "not destroying instance $instance: there is no ~/.devicechain/instances/$instance (expected after 'disaster')"
     return 0
   fi
-  if ! kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+  if ! grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)"; then
     note "not destroying instance $instance: kind cluster $cluster is not running"
     return 0
   fi

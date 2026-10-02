@@ -39,7 +39,7 @@ echo "    compat:      ${TIMESCALEDB_COMPAT_VERSIONS:-<none>}"
 # sideloaded plugin) `docker build` is still the legacy builder and dies with
 # `unknown flag: --load`. Asking the binary what it supports cannot be wrong.
 load=()
-if docker build --help 2>/dev/null | grep -q -- '--load'; then
+if grep -q -- '--load' <<<"$(docker build --help 2>/dev/null)"; then
   load=(--load)
 fi
 

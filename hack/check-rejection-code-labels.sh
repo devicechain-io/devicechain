@@ -66,11 +66,11 @@ check_tree() {
     # A code is allowlisted either by its literal value (the relayed entries) or by the
     # constant that carries it (ours). Both forms are legitimate, so both are accepted.
     const_name="$(grep -rhE "Reject[A-Za-z]+ +RejectionCode = \"$code\"" "$dir" |
-      sed -E 's/^[[:space:]]*(Reject[A-Za-z]+).*/\1/' | head -1)"
-    if printf '%s\n' "$allow" | grep -qx "\"$code\""; then
+      sed -E 's/^[[:space:]]*(Reject[A-Za-z]+).*/\1/' | sed -n 1p)"
+    if grep -qx "\"$code\"" <<<"$allow"; then
       continue
     fi
-    if [ -n "$const_name" ] && printf '%s\n' "$allow" | grep -qx "$const_name:"; then
+    if [ -n "$const_name" ] && grep -qx "$const_name:" <<<"$allow"; then
       continue
     fi
     echo "  $code${const_name:+  (${const_name})}"
@@ -90,7 +90,7 @@ check_target_kinds() {
 
   while read -r const_name; do
     [ -n "$const_name" ] || continue
-    if ! printf '%s\n' "$body" | grep -q "case ${const_name}:"; then
+    if ! grep -q "case ${const_name}:" <<<"$body"; then
       echo "  $const_name"
       missing=1
     fi

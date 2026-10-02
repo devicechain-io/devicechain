@@ -216,7 +216,7 @@ scan_nuget_metadata() {
 # reported by check_nuget_readmes_exist below, never passed over as clean.
 scan_nuget_readme() {
   local csproj="$1" readme path
-  readme="$(sed -n 's|.*<PackageReadmeFile>[[:space:]]*\([^<]*[^<[:space:]]\)[[:space:]]*</PackageReadmeFile>.*|\1|p' "$csproj" | head -1)"
+  readme="$(sed -n 's|.*<PackageReadmeFile>[[:space:]]*\([^<]*[^<[:space:]]\)[[:space:]]*</PackageReadmeFile>.*|\1|p' "$csproj" | sed -n 1p)"
   [ -n "$readme" ] || return 0
   path="$(dirname "$csproj")/$readme"
   [ -f "$path" ] || return 0   # reported as its own failure, not as an ADR hit
@@ -232,7 +232,7 @@ check_nuget_readmes_exist() {
   local base="${1:-sdks}" f readme path
   [ -d "$base" ] || return 0
   while IFS= read -r -d '' f; do
-    readme="$(sed -n 's|.*<PackageReadmeFile>[[:space:]]*\([^<]*[^<[:space:]]\)[[:space:]]*</PackageReadmeFile>.*|\1|p' "$f" | head -1)"
+    readme="$(sed -n 's|.*<PackageReadmeFile>[[:space:]]*\([^<]*[^<[:space:]]\)[[:space:]]*</PackageReadmeFile>.*|\1|p' "$f" | sed -n 1p)"
     [ -n "$readme" ] || continue
     path="$(dirname "$f")/$readme"
     [ -f "$path" ] || echo "${f}: <PackageReadmeFile> names '${readme}', but ${path} does not exist"

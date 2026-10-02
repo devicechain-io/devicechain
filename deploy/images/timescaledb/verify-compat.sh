@@ -204,7 +204,7 @@ if ! git cat-file -e "${BASE_REF}:${REL}" 2>/dev/null; then
   # Not necessarily a new file — the directory may have been renamed, and a
   # rename must not be a way to disarm the gate on the very commit that renames.
   moved="$(git ls-tree -r --name-only "${BASE_REF}" \
-            | grep -E '^deploy/images/[^/]+/versions\.env$' | head -n1 || true)"
+            | grep -E '^deploy/images/[^/]+/versions\.env$' | sed -n 1p || true)"
   if [ -n "$moved" ]; then
     echo "==> ${REL} is new at ${BASE_REF}, but found ${moved} — treating it as a rename."
     base_path="$moved"

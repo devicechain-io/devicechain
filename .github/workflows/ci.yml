@@ -1091,10 +1091,14 @@ jobs:
       # Self-test first, for the usual reason: this guard enumerates its own
       # inputs, and an enumeration that silently returns nothing is the classic
       # way a check reports "clean" about a tree it never looked at.
-      - name: shellcheck guard self-test
+      - name: shellcheck and early-closing-pipe guard self-test
         run: hack/shellcheck.sh --self-test
 
-      - name: shellcheck every tracked script
+      # The same script also refuses a pipe into a reader that can stop early
+      # (grep -q, head, ...): under pipefail the writer's broken pipe becomes
+      # the answer. A here-string cannot hit that, so the fix is always to
+      # capture the output first: grep -q ... <<<"$(cmd)".
+      - name: shellcheck every tracked script, and refuse early-closing pipes
         run: hack/shellcheck.sh
 
       # The fuzz tests are fuzzed nightly (fuzz-nightly.yml), not per PR, and that
