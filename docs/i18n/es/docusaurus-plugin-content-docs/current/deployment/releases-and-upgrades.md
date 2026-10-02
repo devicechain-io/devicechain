@@ -4094,6 +4094,9 @@ si no pasas la opción. Consulta
   respaldos, no las instantáneas: el respaldo base semanal más reciente y el log desde entonces,
   así que puede reproducir hasta una semana de log. Las instantáneas de una instancia se borran con
   ella.
+- Las instantáneas se guardan en tu proveedor de nube y sobreviven al clúster.
+  [Respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups) explica
+  qué comprobar antes y después de borrar uno.
 - El almacén de respaldos guarda hasta una semana más de log de cada base de datos, así que se
   llena antes donde el log es la mayor parte de lo que guarda: con las ventanas y el almacén
   predeterminados, a unos 60 eventos por segundo de ingesta sostenida en lugar de unos 100.

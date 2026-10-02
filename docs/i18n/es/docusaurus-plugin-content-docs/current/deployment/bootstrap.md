@@ -577,10 +577,17 @@ Sin la opción no cambia nada.
 - **Lo que no hace.** Ninguna restauración lee una instantánea. Una restauración
   (`--restore-rdb-from`, `--restore-tsdb-from`) lee el almacén de respaldos: el respaldo base
   semanal más reciente y el log desde entonces, así que puede reproducir hasta una semana de log.
-  Las instantáneas de una instancia se borran con su namespace cuando se destruye. Las
-  instantáneas tomadas en tu proveedor de nube sobreviven a un clúster que se borre sin destruir
-  antes sus instancias, y guardan el contenido de las bases de datos, incluidos los datos que ha
-  eliminado el borrado de un inquilino, hasta que las borres allí.
+  Las instantáneas de una instancia se borran con su namespace cuando se destruye, y las de la
+  base de datos relacional cuando se borra el namespace `dc-system`. Las instantáneas tomadas en
+  tu proveedor de nube sobreviven al clúster, y borrar la copia del proveedor puede terminar
+  después de que el namespace haya desaparecido. Si el clúster se borra antes, se quedan en el
+  proveedor con el contenido de las bases de datos, incluidos los datos que ha eliminado el
+  borrado de un inquilino, hasta que las borres allí; ya nada las poda. Antes de borrar el
+  clúster, comprueba que `kubectl get volumesnapshotcontent` no muestra ninguna cuyo namespace
+  de instantánea (la columna `VOLUMESNAPSHOTNAMESPACE`) sea `dc-system` o el de una de tus
+  instancias; después, revisa la lista de instantáneas de tu proveedor. La
+  [guía de Google Kubernetes Engine](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#tearing-it-down)
+  da los comandos para GKE.
 - **Lo que hace con el almacén de respaldos.** El almacén guarda ahora hasta una semana más de log
   de cada base de datos: el log hasta el respaldo base semanal más reciente anterior a cada
   ventana. Guarda menos copias completas, pero donde el log es la mayor parte de lo que guarda, se

@@ -289,9 +289,11 @@ gcloud compute snapshots list
 ```
 
 The DeviceChain operator deletes snapshots outside each database's recovery window,
-keeping the newest one before it. Deleting the GKE cluster without first destroying the instances leaves their
-disk snapshots in the project, holding the databases' contents: delete them with
-`gcloud compute snapshots delete`.
+keeping the newest one before it. The disk snapshots are project resources and outlive
+the cluster. Deleting it before its instances are destroyed and `dc-system` is deleted,
+or before the cluster has finished deleting their snapshots, leaves them in the project,
+holding the databases' contents, including data a tenant deletion removed, and nothing
+prunes them any more. [Tearing it down](#tearing-it-down) gives the order and the checks.
 
 To check pruning is running, look for a recent pass time on each snapshot schedule.
 The operator makes a pass every ten minutes:
@@ -419,8 +421,8 @@ their disk snapshots are deleted with its namespace either way.
 ## Tearing it down
 
 Destroying the cluster does **not** delete everything it caused to be created.
-Persistent volumes and the load balancer belong to your project, not to the cluster,
-so remove what created them while the cluster still exists.
+Persistent volumes, disk snapshots and the load balancer belong to your project, not to
+the cluster, so remove what created them while the cluster still exists.
 
 `dcctl destroy` removes an instance, including its volumes. There is no command yet
 that removes what `dcctl install` put on the cluster, and that includes the
@@ -430,6 +432,27 @@ ingress load balancer. Deleting those namespaces releases them:
 ```bash
 dcctl destroy local my-instance --kube-context "$CTX"
 kubectl --context "$CTX" delete namespace ingress-nginx dc-system monitoring
+```
+
+`kubectl delete namespace` returns once the namespaces are gone. If you installed with
+`--backup-snapshot-class`, deleting the provider's copy of each database snapshot can
+finish after that, so before you destroy the cluster, check that it has:
+
+```bash
+kubectl --context "$CTX" get volumesnapshotcontent \
+  -o custom-columns=NAME:.metadata.name,NAMESPACE:.spec.volumeSnapshotRef.namespace,POLICY:.spec.deletionPolicy,SNAPSHOT:.status.snapshotHandle
+```
+
+This should print `No resources found`. Each line it does print is a disk snapshot that
+has not been deleted yet; wait a minute and run it again. A snapshot still being taken
+cannot be deleted until it is complete, which on a large volume can take a while. If a
+line stays for more than half an hour, `kubectl --context "$CTX" describe
+volumesnapshotcontent <name>` shows why. Note its `SNAPSHOT` column, a path ending in
+`/snapshots/snapshot-<id>`: that last part is the disk snapshot's name, which is what
+`gcloud compute snapshots delete` below takes. Delete that snapshot yourself after the
+cluster is gone. Then destroy the cluster:
+
+```bash
 tofu destroy
 ```
 
@@ -439,7 +462,18 @@ Then check that nothing is left billing:
 gcloud compute disks list --filter="name~^pvc-"
 gcloud compute forwarding-rules list
 gcloud compute addresses list
+gcloud compute snapshots list --format="table(name,sourceDisk.basename(),creationTimestamp)"
 ```
 
-All three should come back empty. Delete anything they list with the matching
+The first three should come back empty. Delete anything they list with the matching
 `gcloud compute … delete` command.
+
+The snapshot list covers the whole project, so it can hold snapshots unrelated to
+DeviceChain. It is clean when no row's source disk starts with `pvc-`: such a snapshot
+was taken of a cluster's volume, and holds a copy of that database, including data a
+tenant deletion removed. Snapshots are named `snapshot-<id>`, not after their disk, so
+read the source disk column, not the name. Delete those you no longer need:
+
+```bash
+gcloud compute snapshots delete <name> [<name> …]
+```

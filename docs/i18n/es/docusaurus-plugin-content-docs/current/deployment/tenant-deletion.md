@@ -90,7 +90,11 @@ salen de la [ventana de recuperación](./bootstrap.md#backup-retention) de esa b
 datos de núcleo durante 30 días por defecto (`backup_retention_rdb`), y sus datos de eventos
 durante 7 (`backup_retention_tsdb`). Hasta entonces, una restauración a un punto anterior a la
 eliminación los recupera. Los respaldos enviados a un almacén de objetos que hayas proporcionado
-están sujetos además a las reglas de ciclo de vida de ese almacén.
+están sujetos además a las reglas de ciclo de vida de ese almacén. Con
+[respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups), las
+instantáneas en tu proveedor de nube se podan a la misma ventana mientras el clúster está en
+marcha; si el clúster se borra antes de haberlas borrado, se quedan en el proveedor, con esos
+datos, hasta que las borres allí.
 
 ### El diario de auditoría {#audit}
 

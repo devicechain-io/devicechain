@@ -189,7 +189,11 @@ siguen recuperando desde el almacén de respaldos, nunca desde una instantánea:
 base semanal más reciente y el log archivado desde entonces. Así que cada uno puede reproducir
 hasta una semana de log, y tarda más de lo que tardaría con respaldos base diarios. Las
 instantáneas pertenecen al clúster que se sustituye, y una reconstrucción no tiene ningún paso que
-las lea.
+las lea. Se quedan en tu proveedor de nube cuando el clúster antiguo ya no existe, y nada en el
+clúster nuevo las poda. Guardan el contenido de las bases de datos, incluidos los datos que ha
+eliminado el borrado de un inquilino: cuando hayas verificado la instancia recuperada, bórralas de
+la lista de instantáneas de tu proveedor (para Google Kubernetes Engine, consulta
+[cómo desmontarlo](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#tearing-it-down), en inglés).
 :::
 
 Recuperas las dos bases de datos con dos comandos, en este orden, porque los dos almacenes
