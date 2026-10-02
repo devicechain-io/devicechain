@@ -290,7 +290,7 @@ assert_guards() {
       echo "the $what guard did NOT fire: the chart rendered with input it is supposed to" >&2
       echo "refuse, so an operator making that mistake gets a policy instead of a message." >&2
       ok=1
-    elif ! printf '%s' "$out" | grep -qF "$expect"; then
+    elif ! grep -qF -- "$expect" <<<"$out"; then
       echo "the render failed for the $what case, but NOT with that guard's message." >&2
       echo "Expected to find: $expect" >&2
       printf '%s\n' "$out" | tail -5 | sed 's/^/  /' >&2
@@ -441,7 +441,7 @@ self_test() {
 
   # Arm 1: one prefix removed from the chart's deny table. The everyday drift.
   dir="$(tampered_chart '/^    "172.16.0.0\/12"$/d' templates/networkpolicy.yaml)"; record_tamper "$dir"
-  if chart_ranges_from "$dir" 2>/dev/null | grep -qxF 'v4 172.16.0.0/12'; then
+  if grep -qxF 'v4 172.16.0.0/12' <<<"$(chart_ranges_from "$dir" 2>/dev/null)"; then
     echo "SELF-TEST FAILED: the tamper did not take effect, so nothing was proven" >&2
     return 1
   fi
@@ -455,7 +455,7 @@ self_test() {
   # 🔴 THIS IS THE ARM THE PREVIOUS GATE COULD NOT HAVE HAD. Flipping policyTypes leaves
   # the prefixes identical and makes every egress rule inert; only the golden sees it.
   dir="$(tampered_chart 's/^    - Egress$/    - Ingress/' templates/networkpolicy.yaml)"; record_tamper "$dir"
-  if ! chart_policies_from "$dir" 2>/dev/null | grep -q 'Ingress'; then
+  if ! grep -q 'Ingress' <<<"$(chart_policies_from "$dir" 2>/dev/null)"; then
     echo "SELF-TEST FAILED: the policyTypes tamper did not take effect, so nothing was proven" >&2
     return 1
   fi

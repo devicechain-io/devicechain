@@ -142,7 +142,7 @@ pinned_default() {
 	sed -n "/^variable \"$2\" {/,/^}/p" "$1" \
 		| sed '/<<-\?[A-Z]\+$/,/^[[:space:]]*[A-Z]\+$/d' \
 		| sed -n "s/^  default[[:space:]]*=[[:space:]]*\"\($exact\)\".*/\1/p" \
-		| head -1
+		| sed -n 1p
 }
 
 # Strip HCL end-of-line comments so a trailing `# pinned` cannot break an expression

@@ -110,7 +110,7 @@ exempt_modules() {
 
 exempt_paths()  { exempt_modules | cut -d'|' -f1; }
 exempt_reason() { exempt_modules | awk -v m="$1" 'index($0, m "|") == 1 { print substr($0, length(m) + 2) }'; }
-is_exempt()     { exempt_paths | grep -qxF -- "$1"; }
+is_exempt()     { [ -n "$1" ] && grep -qxF -- "$1" <<<"$(exempt_paths)"; }
 
 # verdict_for <module> — COVERED or EXEMPT. do_module acts on exactly this answer,
 # and the self-test asks it about every workspace module, so the default the step
@@ -147,7 +147,7 @@ check_set_is_sane() {
 
   while read -r entry; do
     [ -n "$entry" ] || continue
-    if ! printf '%s\n' "$ws" | grep -qxF -- "$entry"; then
+    if ! grep -qxF -- "$entry" <<<"$ws"; then
       missing="$missing $entry"
     fi
   done <<EOF
@@ -400,6 +400,113 @@ EOF
   fi
   echo "  ok: exact match"
 
+  # 🔴 THE EARLY-CLOSED PIPE. Membership used to be `printf list | grep -q`, and
+  # grep -q stops reading at its match: the writer's next write then fails, and
+  # under pipefail that failure read as "not in the list". On a 29-line go.work
+  # that was a rare CI flake. With 1 MiB after the match -- far beyond a pipe's
+  # 64 KiB plus grep's read-ahead -- the writer ALWAYS outlives the reader, so
+  # the old code fails these cases every time, under either SIGPIPE disposition.
+  # Long lines rather than many: check_set_is_sane forks once per module.
+  local long pad_ws pad_set
+  long="$(printf '%*s' 16384 '' | tr ' ' x)"
+  pad_lines() { local i; for ((i = 0; i < 64; i++)); do printf 'padding/%s-%02d\n' "$long" "$i"; done; }
+  pad_ws="$(printf 'skipped\nclean\n'; pad_lines)"
+  pad_set="$(printf '%s\n' "$probe_set"; pad_lines | sed 's/$/|padding/')"
+  # probe_padded runs a probe whose go.work view is pad_ws; stub_race stands in
+  # for the go test run, which the DATA RACE case above already pins.
+  probe_padded() { local set="$1"; shift; probe "$set" with_padded_ws "$@"; }
+  # shellcheck disable=SC2317 # called indirectly, through probe
+  with_padded_ws() {
+    # shellcheck disable=SC2317 # called indirectly, through the command run below
+    workspace_modules() { printf '%s\n' "$pad_ws"; }
+    "$@"
+  }
+  # shellcheck disable=SC2317 # called indirectly, through probe
+  stub_race() {
+    # shellcheck disable=SC2317 # called indirectly, by do_module
+    race_test() { echo "race_test stubbed: $*"; }
+    "$@"
+  }
+
+  echo "==> Self-test: the padded fixture still closes a pipe early (premise)"
+  # The one place the old shape is written on purpose. It runs in a child shell
+  # fed by a quoted heredoc, because the early-closing-pipe lint in
+  # hack/shellcheck.sh does not read heredoc bodies; the fixture goes through a
+  # FILE because a single argument or environment string is capped at 128 KiB,
+  # and that E2BIG would be a non-zero status for the wrong reason.
+  printf '%s\n' "$pad_ws" >"$tmp/pad_ws"
+  if bash -o pipefail -s "$tmp/pad_ws" 2>/dev/null <<'PREMISE'
+printf '%s\n' "$(<"$1")" | grep -qxF -- skipped
+PREMISE
+  then
+    echo "  FAIL: the padded fixture no longer closes a pipe early on this runner, so the" >&2
+    echo "        cases below would pass against the old piped membership test too." >&2
+    return 1
+  fi
+  echo "  ok: piping the padded list into grep -q reads a listed module as absent"
+
+  echo "==> Self-test: a declared module is found however early the reader stops"
+  set +e
+  out="$(probe_padded "" stub_race do_module clean 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] || [[ "$out" == *"::error::"* ]] || [[ "$out" != *"race: COVERED clean -- "* ]] || [[ "$out" != *"race_test stubbed: ./..."* ]]; then
+    echo "  FAIL: a module go.work declares was not raced (exit $rc):" >&2
+    echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+    return 1
+  fi
+  echo "  ok: COVERED and run"
+
+  echo "==> Self-test: an exempt module stays exempt however early the reader stops"
+  out="$(probe "$pad_set" verdict_for skipped)"
+  if [ "$out" != EXEMPT ]; then
+    echo "  FAIL: an exempt module's verdict was '$out', not EXEMPT -- an early-closed" >&2
+    echo "        pipe read as 'not exempt', which races a module on purpose left out." >&2
+    return 1
+  fi
+  echo "  ok: EXEMPT"
+
+  echo "==> Self-test: the sanity check finds an exempt entry however early the reader stops"
+  # check_set_is_sane is asked directly as well as through do_module: these
+  # captures run under set +e, where do_module carries on past a failed sanity
+  # check, so its verdict line alone cannot show that the check passed.
+  set +e
+  out="$(probe_padded "$probe_set" check_set_is_sane 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] || [ -n "$out" ]; then
+    echo "  FAIL: the sanity check refused an exempt entry go.work declares (exit $rc):" >&2
+    echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+    return 1
+  fi
+  set +e
+  out="$(probe_padded "$probe_set" do_module skipped 2>&1)"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ] || [[ "$out" == *"::error::"* ]] || [[ "$out" != *"race: NOT COVERED skipped -- exempt (hack/go-race.sh): probe: exempt on purpose"* ]]; then
+    echo "  FAIL: an exempt entry go.work declares was refused or not reported (exit $rc):" >&2
+    echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+    return 1
+  fi
+  echo "  ok: NOT COVERED, not refused"
+
+  # The counterweights: finding a declared module must not have become finding
+  # anything. Each is refused, and none reaches the test run.
+  local bad
+  for bad in not-declared skippe skip.ed; do
+    echo "==> Self-test: '$bad' is not a module go.work declares, and is refused"
+    set +e
+    out="$(probe_padded "" stub_race do_module "$bad" 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" -eq 0 ] || [[ "$out" != *"'$bad' is not a module go.work declares"* ]] || [[ "$out" == *"race_test stubbed"* ]]; then
+      echo "  FAIL: '$bad' was not refused as undeclared (exit $rc):" >&2
+      echo "$out" | sed -n '1,5p' | cut -c1-200 >&2
+      return 1
+    fi
+    echo "  ok: refused"
+  done
+
   echo "==> Self-test: an exempt set that names a module twice is refused"
   set +e
   out="$(probe "$probe_set
@@ -459,7 +566,23 @@ do_module() {
   local module="$1"
   check_set_is_sane
 
-  if ! printf '%s\n' "$(workspace_modules)" | grep -qxF -- "$module"; then
+  # 🔴 NEVER PIPE A LIST INTO grep -q HERE. In a pipeline, printf writes the list
+  # one line at a time and grep -q exits at its first match, so the write after
+  # the match fails (EPIPE where SIGPIPE is ignored, as on GitHub's runners, or a
+  # SIGPIPE death elsewhere) and pipefail made that failure the pipeline's answer:
+  # "declared, and grep stopped reading" became "not declared". That failed the
+  # go job of backend/tools/credguard, a module nobody had touched, with
+  # `printf: write error: Broken pipe`. The list is captured first, in its own
+  # assignment so a lister failure aborts here under set -e rather than reading
+  # as "not declared", and grep reads it from a here-string, which is written in
+  # full before grep starts. The self-test case "a declared module is found
+  # however early the reader stops" reproduces the old failure every time.
+  # The pattern must be non-empty: a here-string ends in a newline, so `-x ''`
+  # would match the empty line an empty list becomes. The dispatch below
+  # refuses an empty argument.
+  local ws
+  ws="$(workspace_modules)"
+  if ! grep -qxF -- "$module" <<<"$ws"; then
     echo "::error::'$module' is not a module go.work declares; refusing to report on it" >&2
     exit 1
   fi

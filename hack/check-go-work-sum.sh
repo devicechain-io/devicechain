@@ -140,7 +140,7 @@ self_test() (
   reset() { git -C "$repo" checkout -q -- go.work.sum backend/core/go.mod; }
   # The locale case only bites where en_US.UTF-8 exists and sorts case-insensitively;
   # elsewhere bash falls back to C without failing, so say so rather than pass quietly.
-  if [ "$(printf 'B\na\n' | LC_ALL=en_US.UTF-8 sort 2>/dev/null | head -1)" != "a" ]; then
+  if [ "$(printf 'B\na\n' | LC_ALL=en_US.UTF-8 sort 2>/dev/null | sed -n 1p)" != "a" ]; then
     echo "check-go-work-sum self-test: WARNING — en_US.UTF-8 is not available here, so the mixed-case locale case is not exercised" >&2
   fi
   h1='github.com/Zeta/x v1.0.0/go.mod h1:ccc='

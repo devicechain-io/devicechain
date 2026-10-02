@@ -74,7 +74,7 @@ if [ "$CONTAINER" = "1" ]; then
   docker run -d --name "$NAME" -e POSTGRES_PASSWORD=postgres -P "$IMAGE" >/dev/null || {
     echo "failed to start $IMAGE"; exit 1; }
   trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
-  DC_IT_PGPORT=$(docker port "$NAME" 5432/tcp | head -n1 | sed 's/.*://')
+  DC_IT_PGPORT=$(docker port "$NAME" 5432/tcp | sed -n '1s/.*://p')
   for _ in $(seq 1 90); do
     docker exec "$NAME" pg_isready -U postgres >/dev/null 2>&1 && break
     sleep 2
@@ -109,7 +109,7 @@ for m in "${modules[@]}"; do
   ran=$(printf '%s\n' "$out" | ran_count)
   # Summaries always; PASS lines are not summaries — core alone emits 1131 of them and they
   # bury everything worth reading.
-  printf '%s\n' "$out" | grep -E '^(ok|FAIL|panic)' | head -40
+  printf '%s\n' "$out" | grep -E '^(ok|FAIL|panic)' | sed -n '1,40p'
   echo "  rc=$status tests_run=$ran"
   # 🔴 ON FAILURE, PRINT THE EVIDENCE. The first version showed a filtered head -40 and nothing
   # else, so a module with 643 tests failed with its `--- FAIL` past the cut and a lone
@@ -117,7 +117,7 @@ for m in "${modules[@]}"; do
   # say WHY sends its reader to reproduce the run by hand, which is most of what it was for.
   if [ $status -ne 0 ]; then
     echo "  ---- failures in $name ----"
-    printf '%s\n' "$out" | grep -E '^--- FAIL|_test\.go:[0-9]+:|^panic|^\s+/.*\.go:[0-9]+' | head -60
+    printf '%s\n' "$out" | grep -E '^--- FAIL|_test\.go:[0-9]+:|^panic|^\s+/.*\.go:[0-9]+' | sed -n '1,60p'
   fi
   # 🔴 THE GUARD. A module whose tests all failed to MATCH, or whose build tag was mistyped,
   # exits 0 with "no tests to run" — indistinguishable from a pass in every summary. A module

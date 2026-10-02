@@ -180,6 +180,18 @@ newest_stable_tag() {
   git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V | tail -1
 }
 
+# has_stable_tag answers whether the tag list on stdin (one per line) holds a
+# stable tag: a non-empty line with no `-`. Fed by a here-string, never a pipe,
+# so grep stopping at its first match cannot break the writer.
+#
+# 🔴 NOT `grep -qv '[-]'`, which is the obvious spelling and the wrong one: a
+# here-string of an EMPTY list is one empty line, and `-v '[-]'` matches it, so
+# a shallow clone with no tags at all would read as "has a stable tag". The
+# self-test pins the empty case.
+has_stable_tag() {
+  grep -q '^[^-]\{1,\}$'
+}
+
 # ---------------------------------------------------------------------------
 # which drill this baseline earns
 # ---------------------------------------------------------------------------
@@ -237,7 +249,7 @@ A value this rig cannot compare against a baseline would silently pick a drill."
 #
 # The comparison is `sort -V`, the same ordering the baseline derivation uses, so a
 # ceiling and a baseline are ranked the way a human ranks releases. Equality is
-# settled BEFORE the sort: `sort -V | head -1` over two identical strings prints that
+# settled BEFORE the sort: `sort -V | sed -n 1p` over two identical strings prints that
 # string, which reads as "the baseline is lower" and would be right by accident here
 # and wrong the day somebody rewrote the comparison.
 upgrade_mode() {
@@ -259,7 +271,7 @@ without a baseline there is nothing to compare the policy's ceiling against."
     printf 'recreate'
     return
   fi
-  lowest="$(printf '%s\n%s\n' "$baseline_tag" "$ceiling" | sort -V | head -1)"
+  lowest="$(printf '%s\n%s\n' "$baseline_tag" "$ceiling" | sort -V | sed -n 1p)"
   if [[ "$lowest" == "$baseline_tag" ]]; then
     printf 'recreate'
   else
@@ -796,7 +808,7 @@ build_baseline_dcctl() {
   say "building $baseline_tag's own dcctl (its chart, not the working tree's)"
   make -C "$baseline_src/backend/cli" build >/dev/null
   [[ -x "$baseline_dcctl" ]] || fail "the $baseline_tag dcctl was not built at $baseline_dcctl"
-  note "$("$baseline_dcctl" version | head -1)"
+  note "$("$baseline_dcctl" version | sed -n 1p)"
 }
 
 # build_target_dcctl builds the dcctl the upgrade is moving TO, which is the one
@@ -816,7 +828,7 @@ build_target_dcctl() {
   say "building the working tree's dcctl (it carries \`dcctl upgrade\`)"
   make -C "$repo_root/backend/cli" build >/dev/null
   [[ -x "$target_dcctl" ]] || fail "the working tree's dcctl was not built at $target_dcctl"
-  note "$("$target_dcctl" version | head -1)"
+  note "$("$target_dcctl" version | sed -n 1p)"
 }
 
 # pin_baseline_charts gives the BASELINE install the third-party chart versions the
@@ -972,7 +984,7 @@ ensure_registry() {
 }
 
 create_cluster() {
-  if kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+  if grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)"; then
     say "kind cluster $cluster already exists; reusing it"
     return
   fi
@@ -1720,7 +1732,7 @@ run_verify() {
 signing_key_replaced_after=v0.17.0
 verify_auth_window() {
   local release="${baseline_tag%%-*}" lowest
-  lowest="$(printf '%s\n%s\n' "$release" "$signing_key_replaced_after" | sort -V | head -1)"
+  lowest="$(printf '%s\n%s\n' "$release" "$signing_key_replaced_after" | sort -V | sed -n 1p)"
   if [[ "$lowest" == "$release" ]]; then
     printf '45s'
   else
@@ -1914,7 +1926,7 @@ as this instance — which says nothing about coverage in either direction."
 # the whole time. That is a broken instrument reporting a finding, which is the failure
 # this whole drill exists to make impossible.
 pf_port_from() {
-  sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]\{1,\}\).*/\1/p' "$1" | head -1
+  sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]\{1,\}\).*/\1/p' "$1" | sed -n 1p
 }
 
 # pg_forward opens a port-forward to the relational store and prints the local port.
@@ -1941,7 +1953,7 @@ pg_forward() {
   if [[ -z "$port" ]]; then
     stop_forward
     fail "could not open a port-forward to dc-postgresql in dc-system. kubectl said:
-$(sed 's/^/    /' "$pf_log" | head -10)"
+$(sed -n '1,10s/^/    /p' "$pf_log")"
   fi
   printf '%s' "$port"
 }
@@ -2643,10 +2655,24 @@ above it: $(printf '%s' "$above" | tr '\n' ' ')"
   [[ "$derived" != *-* ]] ||
     fail "SELF-TEST FAILED: the derived baseline '$derived' is a PRERELEASE. The drill must
 upgrade from a release an operator is actually on."
-  git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*-*' | grep -q . ||
+  grep -q . <<<"$(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*-*')" ||
     fail "SELF-TEST FAILED: this repository carries no prerelease tags, so the case above
 passed by ABSENCE. It would hold just as well against a filter that had stopped working."
   note "a prerelease is not chosen, and there was one to reject"
+
+  # has_stable_tag decides between "a shallow clone" and "no tag to measure"
+  # below, and the real repository only ever hands it a list WITH stable tags,
+  # so the inputs that must say "no" are asked here. The empty list is the one
+  # that matters: a here-string of nothing is one empty line.
+  local tags_in want_has got_has
+  for tags_in in "|no" "v0.13.0-rc.1|no" "v0.13.0-rc.1 v0.12.0|yes" "v0.12.0|yes"; do
+    want_has="${tags_in#*|}"
+    got_has=no
+    if has_stable_tag <<<"$(tr ' ' '\n' <<<"${tags_in%|*}")"; then got_has=yes; fi
+    [[ "$got_has" == "$want_has" ]] ||
+      fail "SELF-TEST FAILED: has_stable_tag on [${tags_in%|*}] answered $got_has, want $want_has"
+  done
+  note "has_stable_tag says no to an empty list and to prereleases alone"
 
   # An explicit request wins. Checked by asking the resolver, not by reading the
   # assignment: those are two encodings of one rule and only one of them runs.
@@ -2818,7 +2844,7 @@ $out"
   # and it happened here, on the first CI run, where a shallow checkout was reported
   # as "no stable tag carries a chart different from HEAD's".
   if [[ -z "$baseline_tag_for_chart_test" ]]; then
-    git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -qv '[-]' ||
+    has_stable_tag <<<"$(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*')" ||
       fail "SELF-TEST FAILED: this repository shows no stable release tags, so the chart
 lockstep case has no release to measure against. A shallow clone is the usual cause —
 this check needs history (fetch-depth: 0), and it refuses rather than skip, because
@@ -3093,7 +3119,7 @@ remove_cluster_state() {
 # The UID is read BEFORE the delete, because afterwards there is nothing left to ask.
 delete_cluster() {
   local name="$cluster" context="$kube_context" uid=""
-  if kind get clusters 2>/dev/null | grep -qx "$name"; then
+  if grep -qx -- "$name" <<<"$(kind get clusters 2>/dev/null)"; then
     uid="$(kubectl --context "$context" get ns kube-system -o jsonpath='{.metadata.uid}' 2>/dev/null || true)"
     say "deleting kind cluster $name"
     kind delete cluster --name "$name"
@@ -3133,7 +3159,7 @@ destroy_rig_instance() {
     note "not destroying instance $instance: there is no ~/.devicechain/instances/$instance"
     return 0
   fi
-  if ! kind get clusters 2>/dev/null | grep -qx "$cluster"; then
+  if ! grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)"; then
     note "not destroying instance $instance: kind cluster $cluster is not running"
     return 0
   fi

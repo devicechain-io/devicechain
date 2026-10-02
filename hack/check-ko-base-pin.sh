@@ -104,7 +104,7 @@ check_structure() {
   fi
   # Anchored at the end so a digest mentioned in a comment or a trailing tag
   # cannot satisfy it.
-  if ! printf '%s' "$ref" | grep -Eq '@sha256:[0-9a-f]{64}$'; then
+  if ! grep -Eq '@sha256:[0-9a-f]{64}$' <<<"$ref"; then
     echo "::error::${file}'s defaultBaseImage is not pinned by digest: ${ref}"
     echo "  A bare tag is mutable: the base of every published image could change"
     echo "  with no pull request, and ko records no base-image label, so afterwards"

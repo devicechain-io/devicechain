@@ -247,10 +247,10 @@ classify() {
   if [ "$rc" = 137 ]; then echo KILLED; tail -n 5 "$log"; return 0; fi
   if [ "$newinputs" -gt 0 ] || grep -qE '^[[:space:]]*Failing input written to ' "$log" ||
     grep -qE '^fuzz: (minimizing [0-9]+-byte failing input file|elapsed: [0-9hms]+, minimizing)$' "$log"; then
-    echo FINDING; sed -n '/^--- FAIL/,$p' "$log" | head -n 20; return 0
+    echo FINDING; sed -n '/^--- FAIL/,$p' "$log" | sed -n '1,20p'; return 0
   fi
   if grep -qE '^failure while testing seed corpus entry: ' "$log"; then
-    echo SEED-FAIL; grep -E -A 10 '^failure while testing seed corpus entry: ' "$log" | head -n 20; return 0
+    echo SEED-FAIL; grep -E -A 10 '^failure while testing seed corpus entry: ' "$log" | sed -n '1,20p'; return 0
   fi
   if ! grep -qE '^fuzz: elapsed: .*now fuzzing with [0-9]+ workers$' "$log"; then
     echo NOT-RUN; tail -n 10 "$log"; return 0
@@ -268,7 +268,7 @@ classify() {
     fi
   fi
   echo FAILED
-  if grep -qE '^--- FAIL' "$log"; then sed -n '/^--- FAIL/,$p' "$log" | head -n 20; else tail -n 10 "$log"; fi
+  if grep -qE '^--- FAIL' "$log"; then sed -n '/^--- FAIL/,$p' "$log" | sed -n '1,20p'; else tail -n 10 "$log"; fi
 }
 
 # list_inputs <dir>: the file names in a testdata/fuzz/<Name> dir, sorted; empty
@@ -520,7 +520,7 @@ EOF
   sed 's/^--- FAIL: FuzzOperationType /fuzz: minimizing 57-byte failing input file\n&/' "$L/deadline" >"$L/deadline-minimizing"
   sed 's/^--- FAIL: FuzzOperationType /fuzz: elapsed: 1m0s, minimizing\n&/' "$L/deadline" >"$L/deadline-minimizing-tick"
 
-  verdict_of() { classify "$1" "$L/$2" "$3" "${4:-FuzzRootFieldLimit}" "${5:-60}" | head -n 1; }
+  verdict_of() { classify "$1" "$L/$2" "$3" "${4:-FuzzRootFieldLimit}" "${5:-60}" | sed -n 1p; }
   expect "1 real passing run"                        PASS      "$(verdict_of 0 pass 0)"
   expect "2 no-match exits 0 (the trap)"             NOT-RUN   "$(verdict_of 0 nomatch 0)"
   expect "3 -fuzz matched two targets"               NOT-RUN   "$(verdict_of 1 multi 0)"

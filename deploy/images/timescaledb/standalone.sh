@@ -94,7 +94,7 @@ dc_operand_start() {
     --entrypoint bash "$image" -lc "$(dc_operand_bootstrap_cmd)" >/dev/null
 
   local host_port
-  host_port="$(docker port "$container" 5432/tcp | head -n1 | sed 's/.*://')"
+  host_port="$(docker port "$container" 5432/tcp | sed -n '1s/.*://p')"
   if [ -z "$host_port" ]; then
     echo "could not determine the container's published port" >&2
     docker logs "$container" 2>&1 | tail -20 >&2

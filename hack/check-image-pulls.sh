@@ -191,7 +191,7 @@ attempt() {
   rc=0; code="$(head_once "$url" "$hdr" 2>"$hdr.err")" || rc=$?
   if [ "$rc" -eq 0 ] && [ "$code" = "401" ]; then
     # The registry's own challenge names where an anonymous token comes from.
-    challenge="$(tr -d '\r' <"$hdr" | awk 'tolower($1) == "www-authenticate:" { sub(/^[^:]*:[ \t]*/, ""); print; exit }')"
+    challenge="$(tr -d '\r' <"$hdr" | awk '!found && tolower($1) == "www-authenticate:" { sub(/^[^:]*:[ \t]*/, ""); print; found = 1 }')"
     realm="$(sed -n 's/.*realm="\([^"]*\)".*/\1/p' <<<"$challenge")"
     service="$(sed -n 's/.*service="\([^"]*\)".*/\1/p' <<<"$challenge")"
     scope="$(sed -n 's/.*scope="\([^"]*\)".*/\1/p' <<<"$challenge")"

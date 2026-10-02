@@ -111,6 +111,53 @@ run_shellcheck() {
 }
 
 # ---------------------------------------------------------------------------
+# The early-closing-pipe rule — a second pass over the SAME scripts().
+#
+# 🔴 A READER THAT CAN STOP EARLY MUST NEVER READ FROM A PIPE WHOSE STATUS
+# ANYTHING CONSUMES. `printf '%s\n' "$list" | grep -qxF -- "$m"` looks like a
+# membership test, but grep -q exits at its first match, the writer's next write
+# then fails, and under pipefail that failure is the pipeline's status: "found,
+# and grep stopped reading" reads as "not found". hack/go-race.sh failed the go
+# job of a module nobody had touched exactly that way. shellcheck has no rule for
+# it, so this pass refuses the shape in every tracked script, with no exemption
+# list: capture the output first and test the captured text (grep -q... <<<"$x",
+# which is written in full before grep starts and is not a pipeline at all), and
+# truncate with sed -n '1,Np', which reads to the end, rather than head.
+#
+# The matcher is hack/lib/early-close-pipes.awk; its header lists what it
+# recognises and what it does not.
+# ---------------------------------------------------------------------------
+early_close_pipes() { awk -f hack/lib/early-close-pipes.awk "$@"; }
+
+run_pipe_rule() {
+  local -a files
+  local found
+  mapfile -t files < <(scripts)
+  if [ "${#files[@]}" -eq 0 ]; then
+    echo "::error::found no tracked *.sh files to check — the enumeration is broken, not the tree" >&2
+    return 1
+  fi
+  found="$(early_close_pipes "${files[@]}")"
+  if [ -n "$found" ]; then
+    echo "::error::a reader that can stop early reads from a pipe; under pipefail the writer's broken pipe becomes the answer:" >&2
+    printf '%s\n' "$found" >&2
+    echo "  Capture the output first and test it: grep -q... <<<\"\$(cmd)\"; truncate with sed -n '1,Np', not head." >&2
+    return 1
+  fi
+  echo "no early-closing pipes in ${#files[@]} tracked scripts"
+}
+
+# run_all is the whole gate: both passes, every time, so one failing does not
+# hide the other. It is a function rather than inline in the dispatch so the
+# self-test can run exactly what CI runs, and see it fail.
+run_all() {
+  local rc=0
+  run_shellcheck || rc=1
+  run_pipe_rule || rc=1
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # Self-test. A guard is worth nothing until it has been shown to FAIL, so this
 # proves both directions on throwaway fixtures: a clean script passes, a script
 # with a genuine warning-level defect is caught, and — the case that motivated
@@ -202,11 +249,196 @@ EOF
     return 1
   fi
 
+  # Case 4 — the early-closing-pipe rule finds every shape it claims to, each
+  # at its own line. Asserted as the exact list of line numbers, not a count: a
+  # count survives one shape dropping out while another is reported twice.
+  # Lines 10-11 and 12-13 are each one pipeline split across lines, reported
+  # where it starts.
+  cat >"$tmp/early.sh" <<'EARLY'
+a | grep -q x
+a | grep -qxF -- "$m"
+a | grep -Eq '^v'
+a | grep -E -q y
+a | grep -m1 z
+a | grep -l z
+a | head -1
+a | head -n 20
+x="$(a | head)"
+a |
+  grep -q x
+a \
+  | head -1
+a | awk '/x/ { print; exit }'
+a | sed 1q
+a | sed -n '/x/{p;q}'
+a | read -r first
+a | LC_ALL=C grep -q x
+a | command grep -q x
+a | { grep -q x; }
+a | grep --quiet x
+a | grep --max-count=1 x
+a | grep --files-with-matches x
+a | timeout 5 grep -q x
+a | awk '$1=="x" || $2=="y" { print; exit }'
+a | sed -n '/x/{p;Q}'
+a | env FOO=1 grep -q x
+a | grep --silent x
+a | grep --files-without-match x
+a | grep -e x -q
+EARLY
+  local want got
+  want="1 2 3 4 5 6 7 8 9 10 12 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 "
+  got="$(early_close_pipes "$tmp/early.sh" | cut -d: -f2 | tr '\n' ' ')"
+  if [ "$got" != "$want" ]; then
+    echo "FAIL: the early-closing-pipe rule reported lines [$got], want [$want]" >&2
+    return 1
+  fi
+  echo "  ok: every early-closing reader is reported, at its own line"
+
+  # Case 5 — the counterweight: readers that drain their input, a here-string,
+  # an ||, a comment and heredoc bodies are not reported. The inner heredocs use
+  # their own tags so they cannot end this one early. This fixture sitting in a
+  # heredoc of THIS file is also a standing proof: the real run scans this file
+  # and must not report what is written here.
+  cat >"$tmp/fine.sh" <<'FINE'
+grep -q x <<<"$v"
+a || grep -q x file
+grep -q x file
+a | grep -c x
+a | grep -o x
+a | sed -n 1p
+a | sed -n '1,10s/^/  /p'
+a | tail -1
+a | awk '{ n++ } END { print n }'
+# a | grep -q x
+cat <<'XX'
+a | grep -q x
+XX
+cat <<-YY
+	a | head -1
+	YY
+y=$(( 1 << 2 ))
+a | sed 's/q/Q/'
+a | awk '{ print $1 }' | sort -u
+[ "$(a | grep -c .)" -lt 2 ]
+a | while read -r l; do echo "$l"; done
+FINE
+  got="$(early_close_pipes "$tmp/fine.sh")"
+  if [ -n "$got" ]; then
+    echo "FAIL: the early-closing-pipe rule reported pipelines that drain their input:" >&2
+    printf '%s\n' "$got" >&2
+    return 1
+  fi
+  echo "  ok: readers that drain their input, here-strings and heredoc bodies are not reported"
+
+  # Case 6 — 🔴 a heredoc the matcher cannot see close FAILS, rather than
+  # silently skipping the rest of the file. `<<` inside a string or a shift
+  # opens one that never ends; the pipeline after it must not go unreported.
+  # (Heredoc fixtures again: written inline in this file, these lines would
+  # trip the real run of the rule, which is how that was found.)
+  cat >"$tmp/unclosed-string.sh" <<'UNCLOSED_STRING'
+echo "usage: cat <<EOF"
+a | grep -q x
+UNCLOSED_STRING
+  cat >"$tmp/unclosed-shift.sh" <<'UNCLOSED_SHIFT'
+z=$(( a << b ))
+a | grep -q x
+UNCLOSED_SHIFT
+  local probe_file tag
+  for probe_file in string shift; do
+    if [ "$probe_file" = string ]; then tag=EOF; else tag=b; fi
+    want="$tmp/unclosed-$probe_file.sh:1:heredoc <<$tag opened here never closes; the rest of the file was not scanned"
+    got="$(early_close_pipes "$tmp/unclosed-$probe_file.sh")"
+    if [ "$got" != "$want" ]; then
+      echo "FAIL: an unclosed heredoc ($probe_file) was reported as [$got], want [$want]" >&2
+      return 1
+    fi
+  done
+  # ...and the unclosed heredoc in one file does not hide the next file.
+  got="$(early_close_pipes "$tmp/unclosed-string.sh" "$tmp/early.sh" | sed -n 2p | cut -d: -f1,2)"
+  if [ "$got" != "$tmp/early.sh:1" ]; then
+    echo "FAIL: a heredoc left open in one file hid the next file's first finding (got [$got])" >&2
+    return 1
+  fi
+  echo "  ok: a heredoc that never closes is reported, and ends at its own file"
+
+  rc=0
+  ( scripts() { :; }; run_pipe_rule ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "  ok: the early-closing-pipe rule refuses an empty enumeration"
+  else
+    echo "FAIL: the early-closing-pipe rule passed an empty enumeration — it cannot fail" >&2
+    return 1
+  fi
+
+  # Case 7 — 🔴 THE GATE, NOT JUST ITS MATCHER. Cases 4-6 prove
+  # early_close_pipes finds the shape; they say nothing about whether a finding
+  # FAILS the run. A run_pipe_rule that printed its findings and returned 0, or
+  # a dispatch that ran it and ignored its status, passes all of them while CI
+  # goes green over any number of early-closing pipes. So the same fixture is
+  # run through run_pipe_rule and through run_all, the dispatch CI calls, and
+  # each must fail and name the fixture's line. The fixture is shellcheck-clean,
+  # so run_all's failure can only be the pipe rule's; the clean twin is the
+  # counterweight that a gate failing everything would not pass.
+  cat >"$tmp/gate-early.sh" <<'GATE_EARLY'
+#!/usr/bin/env bash
+set -euo pipefail
+true | grep -q x
+GATE_EARLY
+  cat >"$tmp/gate-clean.sh" <<'GATE_CLEAN'
+#!/usr/bin/env bash
+set -euo pipefail
+grep -q x <<<"$(true)" || true
+GATE_CLEAN
+  # gate_on runs one gate with the enumeration replaced by a single fixture, in
+  # a subshell so the override cannot leak into the rest of the self-test.
+  gate_on() (
+    gate_fixture="$1"
+    scripts() { printf '%s\n' "$gate_fixture"; }
+    case "$2" in
+      run_pipe_rule) run_pipe_rule ;;
+      run_all) run_all ;;
+      *) echo "gate_on: unknown gate $2" >&2; return 2 ;;
+    esac
+  )
+  local gate out
+  for gate in run_pipe_rule run_all; do
+    rc=0
+    out="$(gate_on "$tmp/gate-early.sh" "$gate" 2>&1)" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      echo "FAIL: $gate passed a script with an early-closing pipe — the gate cannot fail:" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+    if ! grep -qF -- "$tmp/gate-early.sh:3:" <<<"$out"; then
+      echo "FAIL: $gate failed (rc=$rc) but did not name $tmp/gate-early.sh:3:" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+    rc=0
+    out="$(gate_on "$tmp/gate-clean.sh" "$gate" 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "FAIL: $gate failed a clean script (rc=$rc):" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+  done
+  echo "  ok: an early-closing pipe fails run_pipe_rule and the full gate, at its line; a clean script passes both"
+  # ...and run_all fails on shellcheck's finding too, so neither pass's status
+  # can be dropped from it. dirty.sh is Case 2's unquoted expansion.
+  rc=0
+  gate_on "$tmp/dirty.sh" run_all >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: run_all passed a script shellcheck rejects — it drops run_shellcheck's status" >&2
+    return 1
+  fi
+  echo "  ok: a shellcheck finding fails the full gate"
+
   echo "==> Self-test passed"
 }
 
 case "${1:-}" in
   --self-test) self_test ;;
-  "") run_shellcheck ;;
+  "") run_all ;;
   *) usage ;;
 esac

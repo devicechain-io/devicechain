@@ -100,7 +100,7 @@ evaluate() {
     *)
       echo "::error::could not ask GitHub what license it detects (HTTP $status)."
       echo "    NOTHING WAS CHECKED. This is not 'no license problem found'."
-      sed 's/^/    /' "$body" | head -10
+      sed -n '1,10s/^/    /p' "$body"
       return 1
       ;;
   esac
@@ -111,7 +111,7 @@ evaluate() {
   if ! spdx="$(jq -er '.license.spdx_id // empty' "$body" 2>/dev/null)"; then
     echo "::error::GitHub answered 200 for $REPO but with no detected license in the body."
     echo "    NOTHING WAS CHECKED. This is not 'no license problem found'."
-    sed 's/^/    /' "$body" | head -10
+    sed -n '1,10s/^/    /p' "$body"
     return 1
   fi
 
