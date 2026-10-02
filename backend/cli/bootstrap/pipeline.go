@@ -210,8 +210,28 @@ type State struct {
 	DatabasePlacement DatabasePlacement
 	// Install is the cluster's install record, which a bootstrap FOLLOWS: the cluster's
 	// shape (HA, sizing, monitoring, backups) and what the cluster apply built. Nil for
-	// the install itself, which writes it, and for an upgrade.
+	// the install itself, which writes it. An upgrade reads it too: the archive
+	// contract its apply of the instance root passes comes from here, as a bootstrap's
+	// does.
 	Install *InstallRecord
+	// SkipInfrastructure is `dcctl upgrade --skip-infrastructure`: the instance's
+	// OpenTofu root is not opened, planned or applied, and the run ends saying so.
+	SkipInfrastructure bool
+	// InfraApplied is set once an upgrade has applied the instance root and read its
+	// outputs, so the Helm step takes what that apply REPORTED rather than what the
+	// previous release recorded. See carryForwardFromRelease.
+	InfraApplied bool
+	// LiveVolumes are the sizes an existing instance's volumes already have. An upgrade
+	// reads them before its apply, so a release that changes a default size never asks
+	// to resize a volume that exists. Empty on a bootstrap. See volumeSize.
+	LiveVolumes liveVolumes
+	// InfraNotes are what an upgrade's settle found worth saying with the plan — a broker
+	// roll an earlier run left unfinished, which this apply replaces. Empty on a bootstrap.
+	InfraNotes []string
+	// CarriedRestoreVars re-pass the recovery source of an event store that was
+	// restored, read from the instance root's own state by an upgrade, so its Cluster's
+	// spec.bootstrap is not re-rendered as an empty initdb. Nil on a bootstrap.
+	CarriedRestoreVars []string
 	// InstanceArchive is the cluster's archive credential as a bootstrap read it back,
 	// for the instance's own copy. Nil when the cluster archives nothing.
 	InstanceArchive *ownedSecret

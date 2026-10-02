@@ -97,8 +97,9 @@ helm install dc deploy/helm/devicechain \
 procedimiento de actualización. Cómo actualizas depende de cómo se creó la instancia:
 
 - **Una instancia que arrancaste con bootstrap** requiere dos comandos. `dcctl install` mueve el
-  operador, que pertenece al clúster. `dcctl upgrade` mueve el documento de configuración y la
-  versión desplegada, que pertenecen a la instancia. El operador no forma parte del chart, así
+  operador, que pertenece al clúster. `dcctl upgrade` mueve el bróker y el almacén de eventos de
+  la instancia, su documento de configuración y su versión desplegada, que pertenecen a la
+  instancia. El operador no forma parte del chart, así
   que algo externo al chart tiene que moverlo.
 - **Una instancia gobernada solo desde el chart** requiere `helm upgrade`, con tus valores
   [trasladados a mano](./releases-and-upgrades.md#chart-only-upgrade).

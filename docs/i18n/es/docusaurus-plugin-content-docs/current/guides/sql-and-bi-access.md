@@ -84,7 +84,12 @@ en lugar de una sorpresa.
      --namespace dci-<instance-id> cnpg.io/reload=true
    ```
 
-2. **Declara el rol en las variables de tu despliegue**, con un límite de conexiones:
+2. **Declara el rol en las variables de tu despliegue**, con un límite de conexiones. En una
+   instancia creada con `dcctl`, eso es un archivo `terraform.tfvars` junto al estado de OpenTofu
+   de la instancia, `~/.devicechain/instances/<instance-id>/infra/instance/terraform.tfvars`. Lo
+   lee cada aplicación de la instancia que hace `dcctl`, también la de una actualización, así que
+   el rol sigue declarado; `dcctl upgrade` se niega antes que dejar de declarar un lector que no
+   encuentra en ningún otro sitio.
 
    ```hcl
    timescale_analytics_readers = [
@@ -96,8 +101,9 @@ en lugar de una sorpresa.
    ]
    ```
 
-3. **Aplica.** El rol aparece, se une al grupo de lectores y puede conectarse. No hay que reiniciar
-   nada.
+3. **Aplica.** En una instancia creada con `dcctl`, `dcctl upgrade <provider> <instance-id>`
+   aplica la configuración de la instancia con ese archivo. El rol aparece, se une al grupo de
+   lectores y puede conectarse. No hay que reiniciar nada.
 
 :::warning La etiqueta es lo que hace que la rotación funcione
 Sin `cnpg.io/reload`, los cambios posteriores en el Secret no se detectan con prontitud, y la rotación

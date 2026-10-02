@@ -244,11 +244,10 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		// — that would restart the broker on every idempotent re-run. Best-effort by
 		// design: an empty result costs a fresh hash, and a supplied one is used only
 		// if it verifies against the plaintext below.
-		creds, err = natsauth.CredentialsFromDeployed(
+		creds, err = brokerCredentialsFromRunning(ctx, st,
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
 			deployed.Infrastructure.Nats.Auth.Password,
-			deployed.Infrastructure.Nats.Auth.SysPassword,
-			lookupDeployedBrokerHashes(ctx, st.KubeContext, InstanceNamespace(st.Instance), natsStatefulSetName))
+			deployed.Infrastructure.Nats.Auth.SysPassword)
 		if err != nil {
 			return fail("reusing the running instance's NATS auth credentials", err)
 		}
@@ -276,9 +275,8 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// succeed — the standing objection to adding this read at all — so it falls
 			// through to the mint below, loudly. Post-adoption a wrong mint converges on the
 			// broker's next roll; a refused run does not converge on anything.
-			reused, rerr := natsauth.CredentialsFromDeployed(
-				localRecord.IssuerSeed, localRecord.ServicePassword, localRecord.SysPassword,
-				lookupDeployedBrokerHashes(ctx, st.KubeContext, InstanceNamespace(st.Instance), natsStatefulSetName))
+			reused, rerr := brokerCredentialsFromRunning(ctx, st,
+				localRecord.IssuerSeed, localRecord.ServicePassword, localRecord.SysPassword)
 			if rerr == nil {
 				creds = reused
 				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
@@ -293,12 +291,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			return fail("minting NATS auth credentials", err)
 		}
 	}
-	st.Values["natsCalloutIssuerPublic"] = creds.IssuerPublic
-	st.Values["natsCalloutIssuerSeed"] = creds.IssuerSeed
-	st.Values["natsServicePassword"] = creds.ServicePassword
-	st.Values["natsServicePasswordBcrypt"] = creds.ServicePasswordBcrypt
-	st.Values["natsSysPassword"] = creds.SysPassword
-	st.Values["natsSysPasswordBcrypt"] = creds.SysPasswordBcrypt
+	setBrokerCredentialValues(st, creds)
 
 	// RECORD THEM BEFORE ANYTHING CONSUMES THEM — the same placement, and the same
 	// reasoning, as the root-key escrow write further down: the value of the artifact is

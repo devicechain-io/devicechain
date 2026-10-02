@@ -159,13 +159,13 @@ func assertCallOrder(t *testing.T, fn string, fset *token.FileSet, positions map
 // silently wrong.
 func TestApplyInfraAppliesOnlyTheInstanceInOrder(t *testing.T) {
 	fset, positions := callPositions(t, "tofu.go", "applyInfra",
-		"splitVars", "openInstanceRoot", "kubeClients", "ensureNamespaceForRelease", "writeMintedSecrets",
+		"instanceRootVars", "openInstanceRoot", "kubeClients", "ensureNamespaceForRelease", "writeMintedSecrets",
 		"provisionInstanceDatabase", "applyInstanceInfra",
 		// The cluster half, which must NOT be here.
 		"applyClusterPrereqs", "markInstallApplying", "writeInstalled", "writeClusterSecrets")
 
 	for _, want := range []struct{ name, why string }{
-		{"splitVars", "every -var would go to the instance root, and it would refuse the cluster root's"},
+		{"instanceRootVars", "nothing would compose the instance root's -vars, so the apply would run on the roots' defaults"},
 		{"openInstanceRoot", "nothing would run the fences that refuse an instance this build would damage"},
 		{"kubeClients", "there would be no client to create the instance namespace or write its credentials with"},
 		{"ensureNamespaceForRelease", "the instance's credentials could not be written into its own namespace"},
@@ -208,6 +208,32 @@ func TestApplyInfraAppliesOnlyTheInstanceInOrder(t *testing.T) {
 			"a database by this name owned by someone else must be refused before anything of " +
 				"this instance's is built on top of it"},
 	})
+}
+
+// 🔴 WHAT THE splitVars ENTRY ABOVE USED TO HOLD, NOW THAT THE ASSEMBLY HAS TWO CALLERS.
+// applyInfra and an upgrade's plan both take their -vars from instanceRootVars, so the
+// routing by root lives there: without splitVars every -var would go to the instance
+// root, and it would refuse the cluster root's. And an upgrade must compose its inputs
+// through the SAME assembly, or the two verbs apply one root with different inputs.
+func TestInstanceRootVarsAreRoutedAndSharedByBothVerbs(t *testing.T) {
+	_, positions := callPositions(t, "tofu.go", "instanceRootVars", "splitVars", "infraVars")
+	for _, name := range []string{"splitVars", "infraVars"} {
+		if _, ok := positions[name]; !ok {
+			t.Errorf("instanceRootVars no longer calls %s", name)
+		}
+	}
+	_, up := callPositions(t, "upgradeinfra.go", "prepareUpgradePlan", "instanceRootVars", "infraVars")
+	if _, ok := up["instanceRootVars"]; !ok {
+		t.Error("an upgrade's plan does not take its -vars from instanceRootVars")
+	}
+	if _, ok := up["infraVars"]; ok {
+		t.Error("an upgrade's plan calls infraVars directly, around the routing and the archive contract")
+	}
+	for _, c := range []struct{ file, fn string }{{"tofu.go", "applyInstanceInfra"}, {"upgradeinfra.go", "applyUpgradeInfra"}} {
+		if _, p := callPositions(t, c.file, c.fn, "readInstanceInfraOutputs"); p["readInstanceInfraOutputs"] == 0 {
+			t.Errorf("%s does not record what its apply reported through readInstanceInfraOutputs", c.fn)
+		}
+	}
 }
 
 // 🔴🔴 THE SAME GUARD FOR THE CLUSTER HALF, which moved into Install with the edges

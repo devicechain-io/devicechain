@@ -75,7 +75,7 @@ func TestARenewedCertificateStillVerifiesAgainstTheAuthorityTheServicesTrust(t *
 	}
 	before := brokerLeaf(t, c)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	if _, err := renewBrokerCertificate(context.Background(), c, st); err != nil {
 		t.Fatalf("renewing the broker's certificate: %v", err)
 	}
 	settleStringDataLikeAnAPIServer(t, c)
@@ -104,8 +104,16 @@ func TestARenewedCertificateStillVerifiesAgainstTheAuthorityTheServicesTrust(t *
 func TestTheBrokerIsRestartedOntoTheCertificateItWasGiven(t *testing.T) {
 	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	reported, err := renewBrokerCertificate(context.Background(), c, st)
+	if err != nil {
 		t.Fatalf("renewing the broker's certificate: %v", err)
+	}
+	// 🔴 THE RETURN VALUE IS WHAT Upgrade WAITS ON. A restart it does not report is a
+	// restart nothing waits for: under --skip-infrastructure the services would roll
+	// onto a broker whose servers are still coming back.
+	if !reported {
+		t.Error("the broker was restarted but renewBrokerCertificate reported restarted=false, " +
+			"so the upgrade does not wait for its servers before rolling the services")
 	}
 
 	var restarted bool
@@ -126,8 +134,12 @@ func TestACertificateWellInsideItsLifeIsLeftAlone(t *testing.T) {
 	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC(), 1)
 	before := brokerLeaf(t, c)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	reported, err := renewBrokerCertificate(context.Background(), c, st)
+	if err != nil {
 		t.Fatalf("checking a healthy certificate: %v", err)
+	}
+	if reported {
+		t.Error("nothing was restarted but renewBrokerCertificate reported restarted=true")
 	}
 	settleStringDataLikeAnAPIServer(t, c)
 
@@ -237,7 +249,7 @@ func TestAnInstanceWithNoStoredAuthorityIsToldRatherThanFailed(t *testing.T) {
 	}
 	before := brokerLeaf(t, c)
 
-	if err := renewBrokerCertificate(context.Background(), c, st); err != nil {
+	if _, err := renewBrokerCertificate(context.Background(), c, st); err != nil {
 		t.Fatalf("an upgrade failed because a certificate could not be renewed: %v", err)
 	}
 	settleStringDataLikeAnAPIServer(t, c)

@@ -426,7 +426,9 @@ Each database keeps its own recovery window: the span of time it can be restored
 within. The relational database, which holds tenants, users, devices, rules, secrets and each
 device's last-known state, keeps **30 days**; set it with `backup_retention_rdb` in the cluster's
 OpenTofu configuration. Each instance's event store keeps **7 days**; set it with
-`backup_retention_tsdb` in the instance's configuration. The relational database gets the longer
+`backup_retention_tsdb` in a `terraform.tfvars` beside the instance's OpenTofu state
+(`~/.devicechain/instances/<instance>/infra/instance/`), where every `dcctl` apply of the
+instance, an upgrade's included, reads it. The relational database gets the longer
 window because an instance cannot be rebuilt without it, and the mistakes it is restored from, such
 as a bad migration or a mistaken delete, are often found days later. Event history is bulk, has
 its own [data lifecycle](../concepts/architecture.md), and its log is what fills the backup store.
@@ -1191,12 +1193,16 @@ first in line for eviction when a node ran short of memory.
   nodes. If one of the three cannot fit 500m and 768Mi more, that server stays `Pending`, and the
   bootstrap waits up to 15 minutes before it fails. `kubectl get pods -n <instance namespace>`
   shows the server `Pending`, and `kubectl describe pod` on it says why.
-- **It applies to instances bootstrapped with this release.** `dcctl upgrade` does not re-apply an
-  instance's broker, so an existing instance's servers keep running with no requests or limits
-  until `dcctl bootstrap` applies the instance again: when it is recreated, or when bootstrap is
-  re-run over the running instance, as a restore does, which also restarts the servers.
-- To change them for a new instance, set `nats_cpu_request`, `nats_memory_request` or
-  `nats_memory_limit` on the instance's OpenTofu root. Memory takes `Mi` or `Gi`.
+- **Existing instances get them when they are upgraded.** `dcctl upgrade` applies an instance's
+  broker, so an instance created by an earlier release gets these requests and this limit at its
+  upgrade to this one, and its servers restart to take them: one at a time under `--ha`. See
+  [What an upgrade applies to the infrastructure](./releases-and-upgrades.md#upgrade-infrastructure).
+- To change them, set `nats_cpu_request`, `nats_memory_request` or `nats_memory_limit` in a
+  `terraform.tfvars` beside the instance's OpenTofu state
+  (`~/.devicechain/instances/<instance>/infra/instance/`), which every `dcctl` apply of the
+  instance reads, including an upgrade's. Memory takes `Mi` or `Gi`. On an instance installed with
+  `--compact`, `dcctl` passes the two requests itself on every apply, which overrides the file, so
+  there only `nats_memory_limit` can be changed this way.
 
 #### Measured throughput {#measured-throughput}
 
@@ -1261,8 +1267,9 @@ volume until it fills and the database stops; the
 `lifecycle` settings) bounds the stored data on an instance meant to run indefinitely, but not
 the archive.
 
-The size is fixed when an instance is created; `dcctl upgrade` does not change an existing
-instance's volume. To grow one, on a StorageClass that allows volume expansion:
+The size is fixed when an instance is created. `dcctl upgrade` applies the rest of the event
+store's configuration and keeps its volume at the size it has. To grow one, on a StorageClass that
+allows volume expansion:
 
 ```bash
 kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \

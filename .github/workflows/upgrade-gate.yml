@@ -591,6 +591,17 @@ jobs:
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh operator
 
+      # The instance's own infrastructure -- its NATS servers and its event store --
+      # must carry the settings this release ships, read by VALUE against the working
+      # tree: the broker's memory limit, every server on the current revision, the auth
+      # callout still rendered, the event store's wal_compression on both its Cluster
+      # and its primary, and nothing the infrastructure owned gone from the namespace.
+      # Every phase above stays green over a broker the upgrade never applied, which is
+      # why this one exists.
+      - name: The instance's broker and event store must carry the release's settings
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh infra
+
       # -------------------------------------------------------------------
       # DRILL B -- the recreate drill. This release does not upgrade onto the
       # baseline, so what is measured is the refusal an operator will actually meet.

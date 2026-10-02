@@ -461,7 +461,9 @@ cual se puede restaurar a cualquier punto. La base de datos relacional, que guar
 usuarios, dispositivos, reglas, secretos y el último estado conocido de cada dispositivo, conserva
 **30 días**; se ajusta con `backup_retention_rdb` en la configuración de OpenTofu del clúster. El
 almacén de eventos de cada instancia conserva **7 días**; se ajusta con `backup_retention_tsdb` en
-la configuración de la instancia. La base de datos relacional tiene la ventana más larga porque sin
+un `terraform.tfvars` junto al estado de OpenTofu de la instancia
+(`~/.devicechain/instances/<instancia>/infra/instance/`), donde lo lee cada aplicación de la
+instancia que hace `dcctl`, también la de una actualización. La base de datos relacional tiene la ventana más larga porque sin
 ella no se puede reconstruir una instancia, y los errores de los que se restaura, como una
 migración defectuosa o un borrado por error, se descubren a menudo días después. El historial de
 eventos es voluminoso, tiene su propio [ciclo de vida de los datos](../concepts/architecture.md), y
@@ -1291,13 +1293,18 @@ un nodo se quedaba sin memoria.
   `Pending`, y el bootstrap espera hasta 15 minutos antes de fallar.
   `kubectl get pods -n <namespace de la instancia>` muestra el servidor en `Pending`, y
   `kubectl describe pod` sobre él indica por qué.
-- **Se aplica a las instancias creadas con esta versión.** `dcctl upgrade` no vuelve a aplicar el
-  intermediario de una instancia, así que los servidores de una instancia existente siguen sin
-  solicitudes ni límites hasta que `dcctl bootstrap` vuelva a aplicar la instancia: cuando se
-  vuelve a crear, o cuando bootstrap se vuelve a ejecutar sobre la instancia en marcha, como hace
-  una restauración, lo que también reinicia los servidores.
-- Para cambiarlos en una instancia nueva, establece `nats_cpu_request`, `nats_memory_request` o
-  `nats_memory_limit` en la raíz de OpenTofu de la instancia. La memoria admite `Mi` o `Gi`.
+- **Las instancias existentes los reciben al actualizarse.** `dcctl upgrade` aplica el bróker de
+  una instancia, así que una instancia creada con una versión anterior recibe estas solicitudes y
+  este límite al actualizarse a esta, y sus servidores se reinician para tomarlos: de uno en uno
+  con `--ha`. Consulta
+  [Qué aplica una actualización a la infraestructura](./releases-and-upgrades.md#upgrade-infrastructure).
+- Para cambiarlos, establece `nats_cpu_request`, `nats_memory_request` o `nats_memory_limit` en
+  un `terraform.tfvars` junto al estado de OpenTofu de la instancia
+  (`~/.devicechain/instances/<instancia>/infra/instance/`), que lee cada aplicación de la
+  instancia que hace `dcctl`, también la de una actualización. La memoria admite `Mi` o `Gi`. En
+  una instancia instalada con `--compact`, `dcctl` pasa las dos solicitudes por sí mismo en cada
+  aplicación, lo que prevalece sobre el archivo, así que allí solo `nats_memory_limit` se puede
+  cambiar de esta forma.
 
 #### Rendimiento medido {#measured-throughput}
 
@@ -1370,8 +1377,9 @@ antes de ambas cosas. Una ventana de retención
 (`retentionDays` en la configuración `lifecycle` de event-management) limita los datos
 almacenados en una instancia que deba funcionar indefinidamente, pero no el archivo.
 
-El tamaño se fija al crear una instancia; `dcctl upgrade` no cambia el volumen de una instancia
-existente. Para ampliarlo, con una StorageClass que permita la expansión de volúmenes:
+El tamaño se fija al crear una instancia. `dcctl upgrade` aplica el resto de la configuración del
+almacén de eventos y conserva su volumen con el tamaño que tiene. Para ampliarlo, con una
+StorageClass que permita la expansión de volúmenes:
 
 ```bash
 kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \

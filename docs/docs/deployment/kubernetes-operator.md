@@ -95,8 +95,8 @@ helm install dc deploy/helm/devicechain \
 procedure. How you upgrade depends on how the instance was created:
 
 - **An instance you bootstrapped** takes two commands. `dcctl install` moves the operator,
-  which belongs to the cluster. `dcctl upgrade` moves the configuration document and the
-  release, which belong to the instance. The operator is not part of the chart, so something
+  which belongs to the cluster. `dcctl upgrade` moves the instance's broker and event store, its
+  configuration document and its release, which belong to the instance. The operator is not part of the chart, so something
   outside the chart has to move it.
 - **An instance driven from the chart alone** takes `helm upgrade`, with your values
   [carried forward by hand](./releases-and-upgrades.md#chart-only-upgrade).

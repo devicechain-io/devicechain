@@ -41,10 +41,16 @@ type UpgradeOptions struct {
 	// its command layer builds one; this verb's State is built inside
 	// hydrateUpgradeState, so it arrives here instead.
 	DcctlVersion string
+
+	// SkipInfrastructure moves only the services: the instance's message broker and
+	// event store are left on the configuration they were built with, and the run ends
+	// saying so. See Upgrade.
+	SkipInfrastructure bool
 }
 
-// Upgrade moves a live instance onto a release: the configuration document its
-// services read, and the Helm release that runs them.
+// Upgrade moves a live instance onto a release: its message broker and event store
+// (the instance's OpenTofu root), the configuration document its services read, and
+// the Helm release that runs them.
 //
 // 🔴 IT NO LONGER MOVES THE OPERATOR, AND THAT IS THE POINT RATHER THAN AN
 // OMISSION. The CRDs and the controller are cluster-scoped — one copy shared by
@@ -70,13 +76,21 @@ type UpgradeOptions struct {
 // a configuration field would have had no writer at all, silently: the pods keep
 // reading the document they were bootstrapped with.
 //
+// 🔴 IT APPLIES THE INSTANCE'S INFRASTRUCTURE, BECAUSE NOTHING ELSE CAN REACH A
+// RUNNING ONE. Bootstrap refuses an instance that is already running, so before this
+// verb applied the instance root a release that changed the broker or the event store
+// changed only instances built after it, and an upgraded instance kept its old
+// settings with nothing saying so. It applies bootstrap's root with inputs read back
+// from the running instance — its broker authority and logins, its archive path, its
+// volume sizes, a restored store's recovery source — plans before the first write, and
+// refuses a plan that deletes or replaces anything, loses a recovery window or a
+// declared reader, or is made from a state that does not describe the instance. See
+// upgradeinfra.go. --skip-infrastructure leaves the root alone and says so.
+//
 // What it deliberately does NOT do:
 //
-//   - It does not run the infrastructure apply. Some of that apply's inputs cannot
-//     be recovered from the cluster — the endpoint and bucket names of an operator's
-//     own backup destination — so an upgrade that ran it would either demand them
-//     again every time or reconfigure the instance without them. The apply joins this verb when the chart becomes an
-//     OpenTofu release and the state lives in the cluster.
+//   - It does not resize a volume. The broker's and the event store's keep the sizes
+//     they have; see volumeSize.
 //   - It does not change an instance's shape. Profile, topology and areas come from
 //     the declaration, not from flags here: this verb moves a version, and changing
 //     what an instance IS is a different question with different answers (raising
@@ -145,6 +159,29 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// means nothing has moved. See upgradeconnlimit.go.
 	if err := precheckUpgradeLogin(ctx, st); err != nil {
 		return err
+	}
+
+	// 🔴 THE INFRASTRUCTURE IS PLANNED AND JUDGED BEFORE THE FIRST WRITE, for the same
+	// reason as the budget above: every refusal it can raise — a plan that deletes or
+	// replaces, a state that does not describe this instance, a recovery window about to
+	// be lost, a broker or store already unhealthy — has to come while it still means
+	// nothing has moved. Under --dry-run this IS the rehearsal of the infrastructure:
+	// it plans and prints, and the apply below is never reached.
+	var infra *upgradeInfraPlan
+	if appliesInfrastructure(st) {
+		if err := runStreamed("Planning the instance's message broker and event store", "infrastructure plan", func() error {
+			var perr error
+			infra, perr = planUpgradeInfra(ctx, st)
+			return perr
+		}); err != nil {
+			return err
+		}
+		defer func() {
+			if cerr := infra.Close(); cerr != nil && err == nil {
+				err = cerr
+			}
+		}()
+		infra.say()
 	}
 
 	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
@@ -227,10 +264,35 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// while the services are mid-roll means two disruptions overlapping instead of
 	// one finishing before the other starts.
 	doing("checking the broker's certificate")
-	if err := renewBrokerCertificate(ctx, typed, st); err != nil {
+	restarted, err := renewBrokerCertificate(ctx, typed, st)
+	if err != nil {
 		return fail("renewing the broker's certificate", err)
 	}
 	done()
+	// A restart is waited on, so it is finished before anything else rolls.
+	if restarted {
+		doing("waiting for the broker's servers to restart")
+		if err := waitForBrokerRollout(ctx, typed, InstanceNamespace(st.Instance),
+			brokerRolloutTimeout, rolloutPollInterval); err != nil {
+			return fail("waiting for the broker's servers to restart", err)
+		}
+		done()
+	}
+
+	// THE BROKER AND THE EVENT STORE, BEFORE THE SERVICES.
+	//
+	// So the services roll onto a broker and a store already at the release, and the
+	// disruptions come one after another rather than overlapping. The two releases
+	// inside this apply have no ordering between them, so the broker's roll and the
+	// event store's restart can overlap each other; both are waited on before the
+	// services move.
+	if infra != nil {
+		if err := runStreamed("Applying the instance's message broker and event store", "infrastructure", func() error {
+			return applyUpgradeInfra(ctx, st, infra, clusterInfraWaits(st, typed, dyn))
+		}); err != nil {
+			return err
+		}
+	}
 
 	// Grown before the release, shrunk once its services have rolled over: see
 	// rolloutWithLoginResize.
@@ -270,8 +332,35 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// statement about what was verified, not about what was applied.
 	fmt.Printf("  %s %s\n", color.WhiteString("Operator:"),
 		color.GreenString("unchanged — the cluster's, already at this release"))
+	sayUpgradeInfrastructure(st, opts)
 	sayUpgradeCredentialsKept(st, opts)
 	return nil
+}
+
+// appliesInfrastructure is whether this upgrade plans and applies the instance's
+// message broker and event store: always, unless --skip-infrastructure said not to.
+//
+// 🔴 ONE READER OF THE FLAG. The plan, the closing summary and the rehearsal all ask
+// this, so what the upgrade does and what it says it did cannot disagree — and the
+// default, applying, is a value a test can hold rather than a branch only a cluster
+// reaches (TestAnUpgradeAppliesTheInfrastructureUnlessToldNotTo).
+func appliesInfrastructure(st *State) bool {
+	return !st.SkipInfrastructure
+}
+
+// sayUpgradeInfrastructure closes a finished upgrade with what happened to the
+// instance's broker and event store — and, when they were skipped, says so in yellow:
+// an instance that keeps an older broker configuration must not read as fully moved.
+func sayUpgradeInfrastructure(st *State, opts UpgradeOptions) {
+	if !appliesInfrastructure(st) {
+		fmt.Println(color.YellowString(
+			"\nThis instance's message broker and event store were NOT applied (--skip-infrastructure)\n"+
+				"and keep the configuration they were built with. Run `dcctl upgrade %s %s` without it\n"+
+				"to apply them.", st.Provider, opts.Instance))
+		return
+	}
+	fmt.Printf("  %s %s\n", color.WhiteString("Infrastructure:"),
+		color.GreenString("the message broker and event store, applied from this release and healthy"))
 }
 
 // sayUpgradeDryRun is what a rehearsed upgrade says it would do.
@@ -279,6 +368,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 // Its own function so what it says can be tested: Upgrade itself needs a cluster.
 func sayUpgradeDryRun(st *State) {
 	fmt.Println()
+	if !appliesInfrastructure(st) {
+		wouldDo("leave this instance's message broker and event store as they are (--skip-infrastructure)")
+	} else {
+		wouldDo("apply this instance's message broker and event store from this release's " +
+			"infrastructure configuration (the plan is listed above), and wait for both to be healthy")
+	}
 	wouldDo("recompose the instance configuration document from this release's chart, " +
 		"keeping every credential the instance is running on")
 	wouldDo("upgrade the instance's Helm release")

@@ -249,9 +249,13 @@ command also moves the rest of the cluster's shared prerequisites; see
 
 **`dcctl upgrade` moves one instance**, and moves nothing that is shared:
 
-1. **the configuration document** every service reads its credentials and endpoints from,
+1. **the instance's infrastructure**: its message broker (NATS) and its event store, applied
+   from the OpenTofu configuration this release ships, so a release that changes either reaches
+   existing instances and not only new ones. See
+   [What an upgrade applies to the infrastructure](#upgrade-infrastructure);
+2. **the configuration document** every service reads its credentials and endpoints from,
    recomposed from this release's chart and written by `dcctl`, which owns it;
-2. **the Helm release** that runs the services, which rolls them onto the new images and
+3. **the Helm release** that runs the services, which rolls them onto the new images and
    waits for each area to finish.
 
 **Order matters, and the upgrade checks it.** The operator is what the instance's
@@ -296,12 +300,98 @@ Changing what an instance *is* is a different question with different answers: r
 replica count, for one, does not re-replicate messaging streams that were created at the old
 one.
 
-Two things are deliberately outside this command as well. It does not run the infrastructure
-apply, because one of that apply's inputs cannot be recovered from the cluster — the endpoint
-and bucket names of an off-site backup destination, which come from the file you gave
-`dcctl install --backup-credentials-file`. And it does not touch the databases beyond letting
-the services run their own migrations.
+One thing is deliberately outside this command as well: it does not touch the databases' data
+beyond letting the services run their own migrations, and it never resizes a volume.
 :::
+
+### What an upgrade applies to the infrastructure {#upgrade-infrastructure}
+
+Before it moves the services, `dcctl upgrade` applies the instance's OpenTofu configuration,
+the same one `dcctl bootstrap` applied when it built the instance. That configuration holds the
+instance's NATS servers and its event store: the database's image, settings and placement, and
+its backup and archive configuration. The upgrade plans first and prints what will change; with
+`--dry-run` it prints the plan and stops. It needs `tofu` on `PATH`, as a bootstrap does, and
+preparing the configuration asks the provider registry (or your mirror) for its providers; a
+dry run does that too, in the local working directory it plans in.
+
+It keeps what the instance is running on. Every credential is kept, as above. The JetStream
+volume and the event store's volume keep their sizes. When this release creates a different
+size for new instances, the upgrade says so, and
+[Event store volume](./bootstrap.md#event-store-volume) shows how to grow one yourself. The event
+store keeps the path it archives under, and a store that was restored keeps the archive it was
+restored from.
+
+It refuses, and changes nothing, when:
+
+- **This machine has no state for the instance.** The configuration's state lives in
+  `~/.devicechain/instances/<instance>/` on the machine that bootstrapped it. Run the upgrade
+  there, or copy that directory first. It holds credentials, so keep it private (mode `0700`).
+- **The plan would delete or replace something the configuration manages**, such as the broker
+  or the event store. The refusal names what. The release notes for such a release say how to
+  move. This judges the resources the configuration manages; an object dropped from inside one
+  of them is shown as a change to that resource.
+- **The plan would shorten the event store's recovery window, or stop declaring an analytics
+  reader**, that nothing this upgrade reads declares. Those are values set by hand, and applying
+  without them would prune backups or leave a reader's password unmanaged. Declare them as
+  described below and run the upgrade again.
+- **The plan would switch the event store's backups off.** No declaration gets this through:
+  `dcctl` decides whether backups are on from how the cluster was installed. `--skip-infrastructure`
+  moves the services and leaves the event store as it is.
+- **The broker or the event store is not healthy before it starts**, such as a server that is
+  not ready or a store mid-failover. Bring it back first. The one exception is a broker whose last
+  roll did not finish, with some servers already on new settings and one of them not ready. Only
+  an apply can change the settings it is rolling to, so the upgrade applies over it, says so with
+  the plan, and waits for the new settings to roll out. A broker short of a server on the settings
+  every server already runs, for example after losing a node, is still refused.
+- **The plan changes the event store's image and its settings together** on a store of more
+  than one instance, which the database operator refuses. The refusal gives the order to apply
+  them in.
+
+`--skip-infrastructure` moves only the services, as upgrades before this release did, and the
+upgrade ends by saying what it left.
+
+**Values you set on the configuration yourself.** An upgrade applies the configuration with
+`dcctl`'s values, as a bootstrap does. A value is kept when it is declared in a
+`terraform.tfvars` or `*.auto.tfvars` file beside the instance's state, in
+`~/.devicechain/instances/<instance>/infra/instance/`, or in a `TF_VAR_<name>` environment
+variable: OpenTofu reads both on every apply `dcctl` runs. A value passed by hand with `-var` is
+not kept. The values operators are told to set this way include `backup_retention_tsdb`,
+`timescale_analytics_readers` (see [SQL and BI access](../guides/sql-and-bi-access.md)) and the
+broker's `nats_cpu_request`, `nats_memory_request` and `nats_memory_limit`. A broker request or
+limit the upgrade would lower is printed as a warning with the plan.
+
+This works only for a variable `dcctl` does not pass itself, because OpenTofu lets a `-var` on the
+command line override those files and `TF_VAR_`. `dcctl` passes, on every apply:
+
+- **for an instance installed with `--compact`**, the broker's `nats_cpu_request` and
+  `nats_memory_request`, and the sizes of its volumes. Setting those requests in
+  `terraform.tfvars` has no effect on a compact instance. `nats_memory_limit` is not among them.
+- **from how the cluster was installed**, whether database backups are on
+  (`enable_database_backups`), the snapshot class (`backup_snapshot_class`) and the databases'
+  node placement. Change those through `dcctl install`, not in this file.
+
+The upgrade's warnings and refusals say which case a value is in.
+
+What a running instance sees:
+
+- **NATS servers restart when their settings change.** Under `--ha` they restart one at a time.
+  Each one must be back, and caught up with the others, before the next is stopped, so two of
+  three always serve. Without `--ha` the single server restarts and the broker is unavailable
+  while it does, usually about a minute. Services and devices reconnect on their own; publishes
+  made meanwhile are refused. If the node has no room for the server's new requests, the server
+  stays `Pending`: under `--ha` the other two keep serving, but without `--ha` the broker stays
+  **down** until there is room, and the upgrade fails after up to 15 minutes saying so.
+- **The event store restarts when its pods change**, for example for a new image or placement.
+  A settings-only change reloads without a restart. Under `--ha` the standbys restart first, then
+  the primary role switches to one of them. Without `--ha` the one instance restarts and
+  event-management cannot store events until it is back. Those events wait in the ingest stream
+  and are retried, and one is given up on only after about four minutes of failed retries.
+- **The two can restart at the same time.** They are applied together, and the upgrade waits for
+  both to report healthy before it moves the services.
+
+A release that changes the event store's image now reaches existing instances through this
+step: their instances restart onto it. The release notes for such a release say what else it
+needs.
 
 ### What else an upgrade checks {#upgrade-checks}
 
@@ -3860,13 +3950,15 @@ not, it can put them on one node, so check where they are afterwards. A single-i
 installation restarts its only instance in place, and the relational database is unavailable
 until it has restarted; writes made meanwhile are retried.
 
-An existing instance's event store is not changed: `dcctl upgrade` does not re-apply it, and its
-instances are already placed. It does not carry the label the other databases look for, so
-neither the relational database nor a new instance's event store avoids its primary, and on an
-installation whose instances all predate this release the relational database restarts for a
-preference that has nothing to act on until an instance is bootstrapped. Instances bootstrapped
-with this release take part. Run `dcctl install` before you bootstrap a new instance, so that the
-relational database's pods carry the label the new event store looks for.
+`dcctl upgrade` with this release gives an existing instance's event store the preference and the
+label the other databases look for, and restarts its instances once to do it: under `--ha` the
+standbys first, then a switchover. Because `dcctl install` runs first, the relational database
+already carries its label when the event store restarts. Check where the two primaries are
+afterwards, as above. The event store's pods carry the same cross-namespace preference, so the
+quota check above applies to each instance's namespace before you upgrade it: a pod the quota
+refuses leaves that instance's event store short of an instance, or, without `--ha`, down. Run
+`dcctl install` before you bootstrap a new instance, too, so that the relational database's pods
+carry the label the new event store looks for.
 
 #### Services keep their database connections open between uses {#next-warm-pool}
 
@@ -3946,11 +4038,13 @@ offered, that cut the log written per stored event from about 3.0 KB to about 1.
 size, less for the standbys to replay, and less for the archiver to compress and ship. See
 [Event store volume](./bootstrap.md#event-store-volume). The relational store is unchanged.
 
-`dcctl upgrade` does not run the infrastructure apply, so an existing instance's event store keeps
-writing an uncompressed log. That is correct, only larger. To turn compression on for one, first
-check that its database image can use `lz4`. On an image that cannot, the change is not applied
-when the database reloads, and the next time an instance restarts it may not start. The
-commands below run `psql` in the store's database pods, where it needs no password.
+`dcctl upgrade` with this release turns it on for an existing instance's event store. The setting
+reloads without a restart; on an instance created by `v0.18.0` the same upgrade restarts the
+store's instances once, for [the placement preference](#next-primary-spread). The release's
+database image is the one new event stores already start on with `lz4`. If you replaced the event
+store's database image yourself, check first that it can use `lz4`, because on an image that
+cannot, an instance that restarts may not start. This runs `psql` in the store's database pods,
+where it needs no password:
 
 ```bash
 pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
@@ -3960,28 +4054,7 @@ for p in $pods; do
 done
 ```
 
-Go on only if every line prints `t`. Then:
-
-```bash
-kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
-  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":"lz4"}}}}'
-```
-
-The database reloads its configuration, and no instance restarts. Once the operator has applied
-it, every instance of the store reports `lz4`:
-
-```bash
-for p in $pods; do
-  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc 'SHOW wal_compression'
-done
-```
-
-If any instance still reports `off`, remove the setting at once, before anything restarts:
-
-```bash
-kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
-  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":null}}}}'
-```
+Upgrade only if every line prints `t`.
 
 #### device-management checks a repeated device credential from memory {#next-credential-cache}
 
@@ -4087,9 +4160,9 @@ when a node ran short of memory. See [Service sizing](./bootstrap.md#service-siz
 Instances installed with `--compact` keep their 25m and 64Mi requests, and a new compact
 instance's NATS servers request the same.
 
-**The NATS servers of an existing instance are not changed:** `dcctl upgrade` does not re-apply an
-instance's broker, so its servers keep running with no requests or limits until the instance is
-recreated.
+**`dcctl upgrade` gives an existing instance's NATS servers these requests and this limit**, and
+restarts them to do it. See [the broker and event store entry](#next-upgrade-infrastructure) for
+what that looks like, and for the room each node needs.
 
 **If you install the chart yourself, with your own values:**
 
@@ -4223,18 +4296,10 @@ Restores read both. Each archived segment is named by its compression (`.gz` or 
 decompressed by that name, so an archive that changes compression part-way restores as before.
 Expiring old backups reads both the same way.
 
-Re-running `dcctl install` with this release switches the relational store. `dcctl upgrade` does
-not run the infrastructure apply, so an existing instance's event store keeps archiving with gzip.
-That is correct, only costlier. To switch it, change its backup destination:
-
-```bash
-kubectl -n dci-<instance> patch objectstores.barmancloud.cnpg.io dc-tsdb-backup --type merge \
-  -p '{"spec":{"configuration":{"wal":{"compression":"zstd"}}}}'
-```
-
-The backup plugin reads the destination again for each segment it archives, so segments archived
-from then on are compressed with zstd, and no database restarts. Segments already in the archive
-stay as they are.
+Re-running `dcctl install` with this release switches the relational store, and `dcctl upgrade`
+switches the instance's event store. The backup plugin reads its destination again for each
+segment it archives, so segments archived from then on are compressed with zstd. No database
+restarts for it, and segments already in the archive stay as they are.
 
 #### device-state merges with 10 writers, event-management waits up to 10 ms to fill a batch, and detection gets a full core {#next-pipeline-defaults}
 
@@ -4295,6 +4360,64 @@ at startup that more than half the pool is given to writers.
 - With `useMeasuredRequests: false`, a top-level `resources.requests.cpu` above 1 core still
   reaches `event-processing`, and is now refused when the chart renders because it is above that
   service's own limit. Set `event-processing`'s own limit or request.
+
+#### `dcctl upgrade` applies an instance's message broker and event store settings {#next-upgrade-infrastructure}
+
+`dcctl upgrade` now applies the instance's own infrastructure, its NATS servers and its event
+store, from the OpenTofu configuration this release ships, before it moves the services. Until now
+only `dcctl bootstrap` applied it. So a release that changed the broker or the event store changed
+only instances created after it, and an upgraded instance kept its old settings without saying so.
+See [What an upgrade applies to the infrastructure](#upgrade-infrastructure).
+
+Upgrading an instance created by `v0.18.0` gives it what the earlier entries here describe for new
+instances:
+
+- [the NATS servers' requests and memory limit](#next-event-path-requests);
+- [the compressed write-ahead log](#next-wal-compression);
+- [zstd for the archived log](#next-archive-zstd);
+- [the primaries' placement preference](#next-primary-spread).
+
+**During the upgrade**, such an instance's NATS servers restart, one at a time under `--ha`.
+Without `--ha` the broker is unavailable while its one server restarts, usually about a minute.
+Its event store's instances also restart once, for the placement preference: standbys first, then
+a switchover under `--ha`. Without `--ha`, events are not stored until the one instance is back,
+and they wait in the ingest stream meanwhile. The broker and the event store can restart at the
+same time. The upgrade waits for both before it moves the services.
+
+**Before you upgrade:**
+
+- **Run it where the instance was bootstrapped**, or copy
+  `~/.devicechain/instances/<instance>/` there first and keep it private (mode `0700`): it holds
+  credentials. Without that state the upgrade refuses and changes nothing. It also needs `tofu` on
+  `PATH`. `--skip-infrastructure` moves only the services, as before, and says what it left.
+- **Check that each node running a NATS server has 500m CPU and 768Mi memory free for it**: 25m
+  and 64Mi on an instance installed with `--compact`. A server that cannot be placed stays
+  `Pending`. Under `--ha` the other two keep serving; **without `--ha` the broker is down** until
+  there is room. Either way the upgrade fails after up to 15 minutes; make room and run
+  `dcctl upgrade` again.
+- **Check each instance's namespace for a cross-namespace placement quota**, as
+  [the placement preference](#next-primary-spread) describes. A refused event store pod leaves
+  the store short of an instance, or, without `--ha`, down.
+- **Keep the settings you gave the instance's OpenTofu configuration yourself.** The upgrade keeps
+  a value declared in a `terraform.tfvars` beside the instance's state
+  (`~/.devicechain/instances/<instance>/infra/instance/`) or in `TF_VAR_<name>`, and not one you
+  passed with `-var`. It refuses rather than shorten the event store's recovery window
+  (`backup_retention_tsdb`) or stop declaring an analytics reader (`timescale_analytics_readers`),
+  and it prints a warning for a broker request or limit it would lower. Move such values into
+  that file before you upgrade. The file does not reach a variable `dcctl` passes itself: on an
+  instance installed with `--compact` that includes the broker's two requests. See
+  [Values you set on the configuration yourself](#upgrade-infrastructure).
+
+The volume sizes are kept. An instance created with an 8Gi event store keeps it, and the upgrade
+says that this release creates 32Gi.
+
+The new 2Gi memory limit on each NATS server was sized from steady ingest. A server catching up
+after its restart was not measured; if one is killed for memory during the upgrade
+(`OOMKilled` in `kubectl describe pod`), raise `nats_memory_limit` in that `terraform.tfvars` and
+run `dcctl upgrade` again. The upgrade accepts a broker whose roll did not finish, so the re-run
+applies the new limit and waits for it to roll out. The same goes for a server left `Pending`
+when you lower `nats_cpu_request` or `nats_memory_request` instead of making room, except on a
+`--compact` instance, where `dcctl` sets the requests itself.
 
 ### The one-time durable-ingest cutover
 

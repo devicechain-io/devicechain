@@ -65,6 +65,11 @@ clúster no tiene operador, o tiene uno identificablemente de otra versión, y n
 `dcctl install` como el camino a seguir. Un operador instalado a mano se deja pasar con una
 nota. Consulta [Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
 
+Como una actualización también aplica el bróker y el almacén de eventos de la instancia desde el
+estado de OpenTofu de la máquina que la ejecuta, una segunda actualización de la misma instancia
+desde otra máquina, pasando el aviso, aplica a la vez la copia del estado de esa máquina.
+Actualiza una instancia desde una sola máquina a la vez.
+
 La asimetría es deliberada:
 
 - **Install y bootstrap se niegan.** Un segundo arranque inicial ejecutándose junto al

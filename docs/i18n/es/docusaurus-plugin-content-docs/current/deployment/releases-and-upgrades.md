@@ -258,10 +258,14 @@ previos compartidos del clúster; consulte
 
 **`dcctl upgrade` mueve una instancia**, y no mueve nada de lo compartido:
 
-1. **el documento de configuración** del que cada servicio lee sus credenciales y sus
+1. **la infraestructura de la instancia**: su bróker de mensajería (NATS) y su almacén de
+   eventos, aplicados desde la configuración de OpenTofu que trae esta versión, de modo que un
+   cambio en cualquiera de los dos llega a las instancias existentes y no solo a las nuevas.
+   Consulte [Qué aplica una actualización a la infraestructura](#upgrade-infrastructure);
+2. **el documento de configuración** del que cada servicio lee sus credenciales y sus
    endpoints, recompuesto a partir del chart de esta versión y escrito por `dcctl`, que es su
    dueño;
-2. **la versión desplegada de Helm** que ejecuta los servicios, que los hace avanzar a las
+3. **la versión desplegada de Helm** que ejecuta los servicios, que los hace avanzar a las
    imágenes nuevas y espera a que cada área termine.
 
 **El orden importa, y la actualización lo comprueba.** El operador es lo que define la
@@ -310,12 +314,107 @@ Cambiar lo que una instancia *es* es una pregunta distinta con respuestas distin
 número de réplicas, por ejemplo, no vuelve a replicar los streams de mensajería que se crearon
 con el número anterior.
 
-Otras dos cosas quedan deliberadamente fuera de este comando. No ejecuta la aplicación de
-infraestructura, porque una de las entradas de esa aplicación no se puede recuperar del
-clúster: los nombres de endpoint y de bucket de un destino de respaldo externo, que provienen
-del archivo que usted entregó a `dcctl install --backup-credentials-file`. Y no toca las bases
-de datos más allá de dejar que los servicios ejecuten sus propias migraciones.
+Una cosa queda además deliberadamente fuera de este comando: no toca los datos de las bases de
+datos más allá de dejar que los servicios ejecuten sus propias migraciones, y nunca cambia el
+tamaño de un volumen.
 :::
+
+### Qué aplica una actualización a la infraestructura {#upgrade-infrastructure}
+
+Antes de mover los servicios, `dcctl upgrade` aplica la configuración de OpenTofu de la
+instancia, la misma que aplicó `dcctl bootstrap` al crearla. Esa configuración contiene los
+servidores NATS de la instancia y su almacén de eventos: la imagen, los ajustes y la ubicación
+de la base de datos, y su configuración de respaldo y archivado. La actualización planifica
+primero y muestra lo que va a cambiar; con `--dry-run` muestra el plan y se detiene. Necesita
+`tofu` en el `PATH`, como un bootstrap, y preparar la configuración consulta el registro de
+proveedores (o su réplica) por sus proveedores; una ejecución en seco también lo hace, en el
+directorio de trabajo local en el que planifica.
+
+Conserva aquello con lo que funciona la instancia. Conserva todas las credenciales, como se
+indica arriba. El volumen de JetStream y el del almacén de eventos conservan su tamaño. Si esta
+versión crea otro tamaño para las instancias nuevas, la actualización lo dice, y
+[Volumen del almacén de eventos](./bootstrap.md#event-store-volume) muestra cómo ampliar uno
+usted mismo. El almacén de eventos conserva la ruta bajo la que archiva, y un almacén restaurado
+conserva el archivo desde el que se restauró.
+
+Se niega, sin cambiar nada, cuando:
+
+- **Esta máquina no tiene el estado de la instancia.** El estado de la configuración vive en
+  `~/.devicechain/instances/<instancia>/` en la máquina que la creó. Ejecute allí la
+  actualización, o copie antes ese directorio. Contiene credenciales, así que manténgalo privado
+  (modo `0700`).
+- **El plan borraría o reemplazaría algo que gestiona la configuración**, como el bróker o el
+  almacén de eventos. El rechazo dice qué. Las notas de una versión así explican cómo pasar a
+  ella. Esto juzga los recursos que gestiona la configuración; un objeto que desaparece dentro de
+  uno de ellos se muestra como un cambio de ese recurso.
+- **El plan acortaría la ventana de recuperación del almacén de eventos o dejaría de declarar un
+  lector de analítica** que nada de lo que lee esta actualización declara. Son valores puestos a
+  mano, y aplicar sin ellos podaría respaldos o dejaría sin gestionar la contraseña de un lector.
+  Declárelos como se describe abajo y vuelva a ejecutar la actualización.
+- **El plan desactivaría los respaldos del almacén de eventos.** Ninguna declaración lo deja
+  pasar: `dcctl` decide si los respaldos están activos según cómo se instaló el clúster.
+  `--skip-infrastructure` mueve los servicios y deja el almacén de eventos como está.
+- **El bróker o el almacén de eventos no está sano antes de empezar**, por ejemplo un servidor
+  que no está listo o un almacén a mitad de una conmutación por error. Recupérelo primero. La
+  única excepción es un bróker cuyo último despliegue gradual no terminó, con algunos servidores
+  ya en los ajustes nuevos y uno de ellos sin estar listo. Solo una aplicación puede cambiar los
+  ajustes hacia los que avanza, así que la actualización aplica sobre él, lo indica junto al plan
+  y espera a que los ajustes nuevos terminen de desplegarse. Un bróker al que le falta un servidor
+  con los ajustes que ya ejecutan todos, por ejemplo tras perder un nodo, se sigue rechazando.
+- **El plan cambia la imagen del almacén de eventos y sus ajustes a la vez** en un almacén de más
+  de una instancia, algo que rechaza el operador de la base de datos. El rechazo indica el orden
+  en que aplicarlos.
+
+`--skip-infrastructure` mueve solo los servicios, como hacían las actualizaciones anteriores a
+esta versión, y al terminar dice lo que dejó sin aplicar.
+
+**Valores que usted mismo dio a la configuración.** Una actualización aplica la configuración con
+los valores de `dcctl`, como hace un bootstrap. Un valor se conserva cuando está declarado en un
+archivo `terraform.tfvars` o `*.auto.tfvars` junto al estado de la instancia, en
+`~/.devicechain/instances/<instancia>/infra/instance/`, o en una variable de entorno
+`TF_VAR_<nombre>`: OpenTofu lee ambos en cada aplicación que ejecuta `dcctl`. Un valor pasado a
+mano con `-var` no se conserva. Entre los valores que se indica fijar así están
+`backup_retention_tsdb`, `timescale_analytics_readers` (consulte
+[Acceso SQL y BI](../guides/sql-and-bi-access.md)) y los del bróker `nats_cpu_request`,
+`nats_memory_request` y `nats_memory_limit`. Una solicitud o un límite del bróker que la
+actualización bajaría se muestra como aviso junto al plan.
+
+Esto solo funciona para una variable que `dcctl` no pasa por sí mismo, porque OpenTofu deja que un
+`-var` en la línea de órdenes prevalezca sobre esos archivos y sobre `TF_VAR_`. `dcctl` pasa, en
+cada aplicación:
+
+- **en una instancia instalada con `--compact`**, las solicitudes del bróker `nats_cpu_request` y
+  `nats_memory_request`, y los tamaños de sus volúmenes. Fijar esas solicitudes en
+  `terraform.tfvars` no tiene efecto en una instancia compacta. `nats_memory_limit` no está entre
+  ellas.
+- **según cómo se instaló el clúster**, si los respaldos de base de datos están activos
+  (`enable_database_backups`), la clase de instantánea (`backup_snapshot_class`) y la ubicación de
+  las bases de datos en los nodos. Cámbielos con `dcctl install`, no en ese archivo.
+
+Los avisos y rechazos de la actualización indican en qué caso está cada valor.
+
+Lo que ve una instancia en marcha:
+
+- **Los servidores NATS se reinician cuando cambian sus ajustes.** Con `--ha` se reinician de
+  uno en uno. Cada uno debe volver, y ponerse al día con los demás, antes de que se detenga el
+  siguiente, así que siempre atienden dos de tres. Sin `--ha` se reinicia el único servidor y el
+  bróker no está disponible mientras tanto, normalmente alrededor de un minuto. Los servicios y
+  los dispositivos se reconectan solos; las publicaciones hechas entretanto se rechazan. Si el
+  nodo no tiene sitio para las nuevas solicitudes del servidor, este queda en `Pending`: con
+  `--ha` los otros dos siguen atendiendo, pero sin `--ha` el bróker sigue **caído** hasta que haya
+  sitio, y la actualización falla tras hasta 15 minutos diciéndolo.
+- **El almacén de eventos se reinicia cuando cambian sus pods**, por ejemplo por una imagen o una
+  ubicación nuevas. Un cambio solo de ajustes se recarga sin reinicio. Con `--ha` se reinician
+  primero las réplicas en espera y después el rol primario pasa a una de ellas. Sin `--ha` se
+  reinicia la única instancia, y event-management no puede almacenar eventos hasta que vuelva.
+  Esos eventos esperan en el stream de ingesta y se reintentan, y uno solo se abandona tras unos
+  cuatro minutos de reintentos fallidos.
+- **Los dos pueden reiniciarse a la vez.** Se aplican juntos, y la actualización espera a que
+  ambos estén sanos antes de mover los servicios.
+
+Una versión que cambie la imagen del almacén de eventos llega ahora por este paso a las
+instancias existentes: sus instancias se reinician con ella. Las notas de una versión así dicen
+qué más necesita.
 
 ### Qué más comprueba una actualización {#upgrade-checks}
 
@@ -4149,14 +4248,17 @@ después. Una instalación de una sola instancia reinicia su única instancia en
 de datos relacional no está disponible hasta que termina de reiniciarse; las escrituras hechas
 mientras tanto se reintentan.
 
-El almacén de eventos de una instancia existente no cambia: `dcctl upgrade` no lo vuelve a
-aplicar, y sus instancias ya están ubicadas. No lleva la etiqueta que buscan las demás bases de
-datos, así que ni la base de datos relacional ni el almacén de eventos de una instancia nueva
-evitan su primaria, y en una instalación cuyas instancias son todas anteriores a esta versión la
-base de datos relacional se reinicia por una preferencia que no tiene sobre qué actuar hasta que
-se crea una instancia. Las instancias creadas con esta versión participan. Ejecuta `dcctl install`
-antes de crear una instancia nueva, para que los pods de la base de datos relacional lleven la
-etiqueta que busca el nuevo almacén de eventos.
+`dcctl upgrade` con esta versión da al almacén de eventos de una instancia existente la
+preferencia y la etiqueta que buscan las otras bases de datos, y reinicia una vez sus instancias
+para hacerlo: con `--ha`, primero las réplicas en espera y después un cambio de primaria. Como
+`dcctl install` se ejecuta antes, la base de datos relacional ya lleva su etiqueta cuando se
+reinicia el almacén de eventos. Comprueba después dónde están las dos primarias, como se indica
+arriba. Los pods del almacén de eventos llevan la misma preferencia entre espacios de nombres, así
+que la comprobación de cuotas de arriba se aplica al espacio de nombres de cada instancia antes de
+actualizarla: un pod que la cuota rechaza deja el almacén de eventos de esa instancia con una
+instancia menos o, sin `--ha`, caído. Ejecuta también `dcctl install` antes de crear una instancia
+nueva, para que los pods de la base de datos relacional lleven la etiqueta que busca el nuevo
+almacén de eventos.
 
 #### Los servicios mantienen abiertas sus conexiones a la base de datos entre usos {#next-warm-pool}
 
@@ -4244,12 +4346,14 @@ menos que reproducir en las réplicas en espera y menos que comprimir y enviar a
 Consulta [Volumen del almacén de eventos](./bootstrap.md#event-store-volume). El almacén
 relacional no cambia.
 
-`dcctl upgrade` no ejecuta la aplicación de la infraestructura, así que el almacén de eventos de
-una instancia existente sigue escribiendo un registro sin comprimir. Es correcto, solo que más
-grande. Para activar la compresión en uno, comprueba primero que su imagen de base de datos puede
-usar `lz4`. En una imagen que no puede, el cambio no se aplica cuando la base de datos recarga su
-configuración, y la próxima vez que una instancia se reinicia puede no arrancar. Los comandos
-siguientes ejecutan `psql` en los pods de base de datos del almacén, donde no necesita contraseña.
+`dcctl upgrade` con esta versión la activa en el almacén de eventos de una instancia existente. El
+ajuste se recarga sin reinicio; en una instancia creada con `v0.18.0` la misma actualización
+reinicia una vez las instancias del almacén, por [la preferencia de ubicación](#next-primary-spread).
+La imagen de base de datos de la versión es la misma con la que los almacenes de eventos nuevos ya
+arrancan con `lz4`. Si sustituiste tú mismo la imagen de base de datos del almacén de eventos,
+comprueba primero que puede usar `lz4`, porque en una imagen que no puede, una instancia que se
+reinicie puede no arrancar. Esto ejecuta `psql` en los pods de base de datos del almacén, donde no
+necesita contraseña:
 
 ```bash
 pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
@@ -4259,29 +4363,7 @@ for p in $pods; do
 done
 ```
 
-Continúa solo si cada línea imprime `t`. Después:
-
-```bash
-kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
-  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":"lz4"}}}}'
-```
-
-La base de datos recarga su configuración, y ninguna instancia se reinicia. Cuando el operador la
-ha aplicado, cada instancia del almacén devuelve `lz4`:
-
-```bash
-for p in $pods; do
-  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc 'SHOW wal_compression'
-done
-```
-
-Si alguna instancia sigue devolviendo `off`, quita la configuración de inmediato, antes de que
-nada se reinicie:
-
-```bash
-kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge \
-  -p '{"spec":{"postgresql":{"parameters":{"wal_compression":null}}}}'
-```
+Actualiza solo si cada línea imprime `t`.
 
 #### device-management comprueba desde memoria una credencial de dispositivo repetida {#next-credential-cache}
 
@@ -4396,9 +4478,9 @@ convertía en los primeros pods desalojados cuando un nodo se quedaba sin memori
 Las instancias instaladas con `--compact` conservan sus solicitudes de 25m y 64Mi, y los servidores
 NATS de una instancia compacta nueva solicitan lo mismo.
 
-**Los servidores NATS de una instancia existente no cambian:** `dcctl upgrade` no vuelve a aplicar
-el intermediario de una instancia, así que sus servidores siguen sin solicitudes ni límites hasta
-que la instancia se vuelva a crear.
+**`dcctl upgrade` da a los servidores NATS de una instancia existente estas solicitudes y este
+límite**, y los reinicia para hacerlo. Consulta [la entrada del bróker y el almacén de
+eventos](#next-upgrade-infrastructure) para ver cómo se nota y el sitio que necesita cada nodo.
 
 **Si instalas el chart tú mismo, con tus propios valores:**
 
@@ -4545,19 +4627,11 @@ Las restauraciones leen ambos formatos. Cada segmento archivado lleva en el nomb
 (`.gz` o `.zst`) y se descomprime según ese nombre, así que un archivo que cambia de compresión a
 mitad se restaura como antes. La caducidad de los respaldos antiguos los lee igual.
 
-Volver a ejecutar `dcctl install` con esta versión cambia el almacén relacional. `dcctl upgrade` no
-ejecuta la aplicación de la infraestructura, así que el almacén de eventos de una instancia
-existente sigue archivando con gzip. Es correcto, solo más costoso. Para cambiarlo, modifica su
-destino de respaldo:
-
-```bash
-kubectl -n dci-<instance> patch objectstores.barmancloud.cnpg.io dc-tsdb-backup --type merge \
-  -p '{"spec":{"configuration":{"wal":{"compression":"zstd"}}}}'
-```
-
-El plugin de respaldo vuelve a leer el destino para cada segmento que archiva, así que los
-segmentos archivados a partir de ese momento se comprimen con zstd, y ninguna base de datos se
-reinicia. Los segmentos que ya están en el archivo se quedan como están.
+Volver a ejecutar `dcctl install` con esta versión cambia el almacén relacional, y `dcctl upgrade`
+cambia el almacén de eventos de la instancia. El plugin de respaldo vuelve a leer su destino para
+cada segmento que archiva, así que los segmentos archivados a partir de ese momento se comprimen
+con zstd. Ninguna base de datos se reinicia por ello, y los segmentos que ya están en el archivo
+se quedan como están.
 
 #### device-state fusiona con 10 escritores, event-management espera hasta 10 ms para llenar un lote y la detección dispone de un núcleo completo {#next-pipeline-defaults}
 
@@ -4623,6 +4697,68 @@ la mitad del pool se dedica a escritores.
 - Con `useMeasuredRequests: false`, un `resources.requests.cpu` de nivel superior por encima de 1
   núcleo sigue llegando a `event-processing`, y ahora se rechaza al generar el chart porque supera
   el límite propio de ese servicio. Define el límite o la solicitud propios de `event-processing`.
+
+#### `dcctl upgrade` aplica los ajustes del bróker de mensajería y del almacén de eventos de una instancia {#next-upgrade-infrastructure}
+
+`dcctl upgrade` ahora aplica la infraestructura propia de la instancia, sus servidores NATS y su
+almacén de eventos, desde la configuración de OpenTofu que trae esta versión, antes de mover los
+servicios. Hasta ahora solo la aplicaba `dcctl bootstrap`. Así, una versión que cambiaba el bróker
+o el almacén de eventos solo cambiaba las instancias creadas después, y una instancia actualizada
+conservaba sus ajustes antiguos sin decirlo. Consulta
+[Qué aplica una actualización a la infraestructura](#upgrade-infrastructure).
+
+Actualizar una instancia creada con `v0.18.0` le da lo que las entradas anteriores describen para
+las instancias nuevas:
+
+- [las solicitudes y el límite de memoria de los servidores NATS](#next-event-path-requests);
+- [el registro de escritura anticipada comprimido](#next-wal-compression);
+- [zstd para el registro archivado](#next-archive-zstd);
+- [la preferencia de ubicación de las primarias](#next-primary-spread).
+
+**Durante la actualización**, los servidores NATS de esa instancia se reinician, de uno en uno con
+`--ha`. Sin `--ha` el bróker no está disponible mientras se reinicia su único servidor, normalmente
+alrededor de un minuto. Las instancias de su almacén de eventos también se reinician una vez, por
+la preferencia de ubicación: primero las réplicas en espera y después un cambio de primaria con
+`--ha`. Sin `--ha`, los eventos no se almacenan hasta que vuelve la única instancia, y mientras
+tanto esperan en el stream de ingesta. El bróker y el almacén de eventos pueden reiniciarse a la
+vez. La actualización espera a ambos antes de mover los servicios.
+
+**Antes de actualizar:**
+
+- **Ejecútala donde se creó la instancia**, o copia antes allí
+  `~/.devicechain/instances/<instancia>/` y mantenlo privado (modo `0700`): contiene credenciales.
+  Sin ese estado la actualización se niega y no cambia nada. También necesita `tofu` en el `PATH`.
+  `--skip-infrastructure` mueve solo los servicios, como antes, y dice lo que dejó sin aplicar.
+- **Comprueba que cada nodo con un servidor NATS tiene libres 500m de CPU y 768Mi de memoria para
+  él**: 25m y 64Mi en una instancia instalada con `--compact`. Un servidor que no se puede colocar
+  queda en `Pending`. Con `--ha` los otros dos siguen atendiendo; **sin `--ha` el bróker está
+  caído** hasta que haya sitio. En ambos casos la actualización falla tras hasta 15 minutos; haz
+  sitio y vuelve a ejecutar `dcctl upgrade`.
+- **Comprueba si el espacio de nombres de cada instancia tiene una cuota de ubicación entre
+  espacios de nombres**, como describe [la preferencia de ubicación](#next-primary-spread). Un pod
+  del almacén de eventos rechazado deja el almacén con una instancia menos o, sin `--ha`, caído.
+- **Conserva los ajustes que diste tú mismo a la configuración de OpenTofu de la instancia.** La
+  actualización conserva un valor declarado en un `terraform.tfvars` junto al estado de la
+  instancia (`~/.devicechain/instances/<instancia>/infra/instance/`) o en `TF_VAR_<nombre>`, y no
+  uno que pasaste con `-var`. Se niega antes que acortar la ventana de recuperación del almacén de
+  eventos (`backup_retention_tsdb`) o dejar de declarar un lector de analítica
+  (`timescale_analytics_readers`), y muestra un aviso para una solicitud o un límite del bróker que
+  bajaría. Pasa esos valores a ese archivo antes de actualizar. El archivo no alcanza a una
+  variable que `dcctl` pasa por sí mismo: en una instancia instalada con `--compact` eso incluye
+  las dos solicitudes del bróker. Consulta
+  [Valores que usted mismo dio a la configuración](#upgrade-infrastructure).
+
+Los tamaños de los volúmenes se conservan. Una instancia creada con un almacén de eventos de 8Gi
+lo conserva, y la actualización indica que esta versión crea 32Gi.
+
+El nuevo límite de memoria de 2Gi de cada servidor NATS se dimensionó con ingesta sostenida. No se
+midió un servidor poniéndose al día tras su reinicio; si uno muere por memoria durante la
+actualización (`OOMKilled` en `kubectl describe pod`), sube `nats_memory_limit` en ese
+`terraform.tfvars` y vuelve a ejecutar `dcctl upgrade`. La actualización acepta un bróker cuyo
+despliegue gradual no terminó, así que la nueva ejecución aplica el límite nuevo y espera a que se
+despliegue. Lo mismo vale para un servidor que queda `Pending` cuando, en lugar de hacer sitio,
+bajas `nats_cpu_request` o `nats_memory_request`, salvo en una instancia `--compact`, donde
+`dcctl` fija las solicitudes por sí mismo.
 
 ### La transición única a la ingesta duradera
 
