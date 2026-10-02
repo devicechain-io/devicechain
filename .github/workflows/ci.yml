@@ -1965,6 +1965,16 @@ jobs:
       - name: tofu fmt
         run: tofu fmt -check -recursive
 
+      # dcctl destroy drops the plan's "Changes to Outputs:" block from what it streams,
+      # because a destroy given only two variables prints every other output at the
+      # configuration's default. The filter is keyed on that header line, so this runs
+      # the pinned binary over a scratch configuration and fails if the header changes
+      # (the false list would come back) or if a destroy stops printing a default
+      # (the list would be true, and the filter would be hiding it).
+      - name: destroy prints outputs at their defaults
+        working-directory: .
+        run: hack/check-tofu-destroy-outputs.sh
+
       # 🔴 EVERY ROOT, NOT THE ONE THIS JOB HAPPENS TO SIT IN. `tofu validate` acts
       # on a single directory, and this job's working-directory is deploy/opentofu.
       # For as long as there was one root those were the same thing. A second root —

@@ -4,11 +4,13 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +73,90 @@ func (s *streamSwitch) to(w io.Writer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.w = w
+}
+
+// tofuOutputsHeader is the line OpenTofu and terraform print, at column 0, above the
+// output values a plan changes. hack/check-tofu-destroy-outputs.sh reads this constant
+// out of this file and fails CI if the pinned OpenTofu stops printing exactly this line
+// on a destroy, which is the one way the filter below can quietly stop working.
+const tofuOutputsHeader = "Changes to Outputs:"
+
+// destroyOutputsNotShown replaces that block in a destroy's output.
+const destroyOutputsNotShown = "Changes to Outputs: not shown. A destroy works these values out " +
+	"without this instance's settings, so several of the values OpenTofu would print here " +
+	"are the configuration's defaults, not this instance's."
+
+// outputsBlockFilter passes a destroy's stdout through line by line, except the
+// "Changes to Outputs:" block, which it replaces with destroyOutputsNotShown.
+//
+// 🔴 WHY THE BLOCK IS FALSE, NOT MERELY NOISY. A destroy first refreshes in normal mode,
+// and that works every output out again from the configuration and the variables it was
+// given. destroyOpenedInstanceRoot passes two, so every output that depends on anything
+// else is printed at the configuration's default: one broker server for a three-server
+// instance, the default backup path for a restored one. The resource lines above the
+// block come from state and are true, which is why only the block goes. It goes whole
+// rather than line by line because a default can equal the instance's value by chance,
+// so no single line can be told apart as true.
+//
+// The block is the header line and every line after it that starts with a space,
+// including a multi-line value's continuation lines. The first line that does not start
+// with a space ends it and is printed; a blank line ends it too. An outputs-only destroy
+// (a resumed one whose resources are already gone) follows the block with OpenTofu's
+// "You can apply this plan to save these new output values" paragraph, which is kept
+// although the list it refers to is not shown: cosmetic, and matching more of a third
+// party's prose would be the more brittle trade.
+//
+// Write reports len(p) unless writing to the terminal fails: dropping a line is not a
+// short write.
+type outputsBlockFilter struct {
+	w       io.Writer
+	pending []byte // an incomplete last line, held until its newline or Flush
+	inBlock bool
+}
+
+func newOutputsBlockFilter(w io.Writer) *outputsBlockFilter { return &outputsBlockFilter{w: w} }
+
+func (f *outputsBlockFilter) Write(p []byte) (int, error) {
+	f.pending = append(f.pending, p...)
+	for {
+		i := bytes.IndexByte(f.pending, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		line := f.pending[:i+1]
+		f.pending = f.pending[i+1:]
+		if err := f.line(line); err != nil {
+			return 0, err
+		}
+	}
+}
+
+// Flush handles a last line that has no newline. Call it only once nothing can write
+// any more; see Destroy.
+func (f *outputsBlockFilter) Flush() error {
+	if len(f.pending) == 0 {
+		return nil
+	}
+	line := f.pending
+	f.pending = nil
+	return f.line(line)
+}
+
+func (f *outputsBlockFilter) line(line []byte) error {
+	text := strings.TrimRight(string(line), "\r\n")
+	if f.inBlock {
+		if strings.HasPrefix(text, " ") {
+			return nil
+		}
+		f.inBlock = false
+	}
+	if text == tofuOutputsHeader {
+		f.inBlock = true
+		_, err := io.WriteString(f.w, destroyOutputsNotShown+"\n")
+		return err
+	}
+	_, err := f.w.Write(line)
+	return err
 }
 
 // newTofuExec builds the runner for one root with stdout quiet and stderr streamed.
@@ -173,10 +259,15 @@ func runUntilAbandoned(ctx context.Context, budget time.Duration, run func() err
 // long enough to orphan the pipe. The version read above is outside it on purpose —
 // `version -json` starts no providers, so it has nothing to orphan the pipe TO.
 func (t *tofuExec) streaming(ctx context.Context, run func() error) error {
+	return t.streamingTo(ctx, os.Stdout, run)
+}
+
+// streamingTo is streaming with stdout sent to w instead of straight to the terminal.
+func (t *tofuExec) streamingTo(ctx context.Context, w io.Writer, run func() error) error {
 	if _, _, err := t.Version(ctx, false); err != nil {
 		return err
 	}
-	t.stdout.to(os.Stdout)
+	t.stdout.to(w)
 	// Restored on the way out even when the command below is abandoned, so a read that
 	// follows an abandoned apply still cannot print the state — and safely, because the
 	// parked command holds the same writer rather than a field this is overwriting.
@@ -208,8 +299,20 @@ func (t *tofuExec) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error 
 	return t.streaming(ctx, func() error { return t.Terraform.Apply(ctx, opts...) })
 }
 
+// Destroy streams like every progress command, except the plan's list of output
+// values: see outputsBlockFilter. Apply keeps its list, because bootstrap and upgrade
+// apply with the instance's own variables, so the values it prints are the instance's.
+//
+// 🔴 FLUSH ONLY AFTER streamingTo RETURNS. By then it has pointed the switch back at
+// io.Discard under the switch's own mutex, so even an abandoned command still holding
+// the writer can no longer reach the filter, and Flush is the filter's only user.
 func (t *tofuExec) Destroy(ctx context.Context, opts ...tfexec.DestroyOption) error {
-	return t.streaming(ctx, func() error { return t.Terraform.Destroy(ctx, opts...) })
+	f := newOutputsBlockFilter(os.Stdout)
+	err := t.streamingTo(ctx, f, func() error { return t.Terraform.Destroy(ctx, opts...) })
+	if ferr := f.Flush(); ferr != nil && err == nil {
+		err = ferr
+	}
+	return err
 }
 
 func (t *tofuExec) StateRm(ctx context.Context, address string, opts ...tfexec.StateRmCmdOption) error {

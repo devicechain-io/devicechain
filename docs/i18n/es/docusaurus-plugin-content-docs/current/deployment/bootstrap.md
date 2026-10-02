@@ -1466,7 +1466,10 @@ dcctl destroy local my-instance
    desinstalarla elimina el namespace y todo lo que contiene, incluidos su broker NATS y su
    almacén de eventos.
 2. Su estado de infraestructura, mediante `tofu destroy`, que elimina lo que ese estado aún
-   contenga.
+   contenga. Destroy muestra el plan de OpenTofu de lo que elimina, sin la lista de valores de
+   salida del plan: un destroy calcula algunos de esos valores con los valores predeterminados
+   de la configuración en lugar de con los ajustes de la instancia, así que la lista no
+   describiría la instancia.
 3. Su base de datos y su login de base de datos en la base de datos relacional compartida.
 4. Su namespace, si sigue ahí. Un arranque que se detuvo antes de que Helm instalara nada deja
    un namespace sin release que desinstalar. Destroy espera a ver desaparecer el namespace por
