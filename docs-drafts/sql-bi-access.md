@@ -155,7 +155,8 @@ renders as) and a set of roles whose limits plus the platform's reservation exce
 pool of 20, doubled for a RollingUpdate — per event-management pod: the instance root multiplies it
 by `event_management_replicas`, which dcctl sets to 2 under `--ha` (without `--compact`), so 80
 there. The same budget is also refused at plan, by a validation on `timescale_analytics_readers`,
-so an over-committed set stops before anything is applied.
+so an over-committed set stops before the instance root applies anything (on a first bootstrap,
+earlier roots such as the cluster root may already have run).
 [`deploy/opentofu/instance/variables.tf`, `timescale_analytics_reserved_connections`,
 `event_management_replicas`; `deploy/opentofu/instance/main.tf`, `event_store_reserved_connections`]
 

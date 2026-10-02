@@ -634,10 +634,11 @@ Las alertas de las instantáneas se describen en
   agotar su tiempo límite. Consulta cada cifra en
   [Dimensionamiento de los servicios](#service-sizing). En un clúster que no puede dedicarles eso,
   como un portátil, usa [`--compact`](#--compact).
-- **OpenTofu** (el binario `tofu`; `terraform` también funciona) en tu `PATH`. `dcctl` lo
-  ejecuta para aprovisionar infraestructura. Instálalo desde
-  [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar esto y
-  el resto de tu entorno de antemano.
+- **OpenTofu 1.9 o posterior** (el binario `tofu`; `terraform` 1.9 o posterior también
+  funciona) en tu `PATH`. `dcctl` lo ejecuta para aprovisionar infraestructura. Instálalo desde
+  [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar que está
+  y el resto de tu entorno de antemano. La comprobación previa no mira su versión; una anterior
+  falla al cargar la configuración de la infraestructura.
 - **`docker`, `kubectl` y `helm`** en tu `PATH`, y **`kind`** para el proveedor `local`. La
   comprobación previa falla si falta alguno. Docker debería ser un motor de Docker nativo y no
   Docker Desktop, y su daemon tiene que ser accesible.
@@ -1248,8 +1249,8 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
   réplicas de un servicio en nodos y zonas distintos; con una réplica, lo predeterminado, eso no
   cambia nada. Con más de una réplica, los pods del propio servicio siguen prefiriendo nodos
   distintos, mediante una segunda preferencia del mismo tipo, pero ya no zonas distintas. Con
-  `--ha`, `event-management` se ejecuta en dos pods, así que esto se le aplica. Para desactivarlo en un servicio, establece
-  `functionalAreas.<servicio>.eventPathSpread: false`.
+  `--ha`, `event-management` se ejecuta en dos pods, así que esto se le aplica. Para desactivarlo
+  en un servicio, establece `functionalAreas.<servicio>.eventPathSpread: false`.
 - **Las primarias de las bases de datos prefieren nodos distintos.** En las pruebas, un nodo que
   ejecutaba a la vez la primaria relacional y la del almacén de eventos funcionó al 94-98 % de CPU
   mientras los demás estaban a la mitad, aproximadamente. Consulta

@@ -4828,6 +4828,10 @@ una réplica. Para ejecutar dos, establece `functionalAreas.event-management.rep
 almacén de eventos creado con el OpenTofu de este repositorio, establece también
 `event_management_replicas = 2`, que reserva las conexiones del segundo pod.
 
+La configuración de OpenTofu de la instancia declara ahora que necesita OpenTofu 1.9 o posterior
+(o Terraform 1.9 o posterior). Ya necesitaba la 1.9 para cargarse, así que una versión anterior
+falla ahora con un mensaje más claro en lugar de con otro.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

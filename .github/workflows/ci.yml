@@ -1950,7 +1950,8 @@ jobs:
           # interpreter was not the one users get.
           #
           # 🔑 SO PIN THE OLDER SEMANTICS DELIBERATELY, not the newest release.
-          # versions.tf declares `required_version = ">= 1.6"` and dcctl's findTofu
+          # versions.tf declares `required_version = ">= 1.9"` (the instance root;
+          # the cluster root still says ">= 1.6") and dcctl's findTofu
           # takes the first of `tofu`/`terraform` on PATH with no version check, so
           # an eager-evaluation interpreter is squarely inside what this tree claims
           # to support. Testing >=1.10 here would make the whole class invisible to
@@ -1958,7 +1959,8 @@ jobs:
           #
           # Two ways to change this, both fine, both deliberate: raise the pin AND
           # `required_version` together (>= 1.10 buys short-circuiting as a language
-          # guarantee), or lower the pin toward the real floor. Do not raise this one
+          # guarantee), or lower the pin toward the real floor (the instance root's
+          # floor is now this pin itself). Do not raise this one
           # alone — that is how the skew came back.
           tofu_version: 1.9.1
 

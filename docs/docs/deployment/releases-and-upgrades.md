@@ -4481,6 +4481,10 @@ To run two, set `functionalAreas.event-management.replicas: 2`, and on an event 
 this repository's OpenTofu set `event_management_replicas = 2` with it, which reserves the second
 pod's connections.
 
+The instance's OpenTofu configuration now declares that it needs OpenTofu 1.9 or later (or
+Terraform 1.9 or later). It already needed 1.9 to load, so an older version now fails with a
+clearer message rather than a different one.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

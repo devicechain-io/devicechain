@@ -281,6 +281,25 @@ func TestEventManagementReplicasLeaveAnotherAreasBlockAlone(t *testing.T) {
 	if ids, _ := sec["identities"].([]interface{}); len(ids) != 1 {
 		t.Errorf("functionalAreas.lwm2m-ingest lost its identities: %v", lw)
 	}
+
+	// The other direction. In helmValues nothing writes functionalAreas before
+	// mergeInto runs, so the half above cannot tell a merge from an assignment that
+	// replaces the whole map. Call it on a map that already holds another area's
+	// block and another key of event-management's own: both must survive it.
+	vals := map[string]interface{}{"functionalAreas": map[string]interface{}{
+		"lwm2m-ingest":     map[string]interface{}{"enabled": true},
+		"event-management": map[string]interface{}{"logLevel": "debug"},
+	}}
+	persistenceFor(st).mergeInto(vals)
+	fa, _ = vals["functionalAreas"].(map[string]interface{})
+	if lw, _ := fa["lwm2m-ingest"].(map[string]interface{}); lw["enabled"] != true {
+		t.Errorf("mergeInto replaced another area's block: functionalAreas = %v", fa)
+	}
+	em, _ = fa["event-management"].(map[string]interface{})
+	if em["replicas"] != 2 || em["logLevel"] != "debug" {
+		t.Errorf("functionalAreas.event-management = %v, want replicas 2 beside the "+
+			"block's existing logLevel debug", em)
+	}
 }
 
 // An upgrade that skips the infrastructure moves the services and not the event

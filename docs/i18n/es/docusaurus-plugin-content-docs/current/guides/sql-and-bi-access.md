@@ -295,7 +295,7 @@ La plataforma reserva para sus propios pools 40 de las 97 conexiones utilizables
 eventos, u 80 en una instancia instalada con `--ha` (sin `--compact`), donde `event-management` se
 ejecuta en dos pods y cada uno tiene su propio pool. Así que los `connection_limit` de tus lectores
 pueden sumar como máximo 57, o 17 en ese caso. Por encima, planificar la infraestructura falla antes
-de cambiar nada, y el error indica ambas cifras.
+de que cambien el almacén de eventos o el broker de mensajes, y el error indica ambas cifras.
 
 :::warning El límite acota conexiones, no carga
 El límite impide que la analítica se quede con las *conexiones* que la plataforma necesita. No impide

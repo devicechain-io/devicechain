@@ -580,9 +580,11 @@ The alerts for snapshots are described under
   own components. A pod that does not fit stays `Pending`, and the install waits out its timeout.
   See [Service sizing](#service-sizing) for each figure. On a cluster that cannot spare them, such
   as a laptop, use [`--compact`](#--compact).
-- **OpenTofu** (the `tofu` binary; `terraform` also works) on your `PATH`. `dcctl` drives it
-  to provision infrastructure. Install it from [opentofu.org](https://opentofu.org). Run
-  `dcctl preflight local` to check this and the rest of your environment up front.
+- **OpenTofu 1.9 or later** (the `tofu` binary; `terraform` 1.9 or later also works) on your
+  `PATH`. `dcctl` drives it to provision infrastructure. Install it from
+  [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
+  and the rest of your environment, up front. The preflight does not check its version; an older
+  one fails when it loads the infrastructure configuration.
 - **`docker`, `kubectl` and `helm`** on your `PATH`, and **`kind`** for the `local` provider.
   The preflight check fails if any of them is missing. Docker should be a native Docker engine
   rather than Docker Desktop, and its daemon must be reachable.
@@ -827,7 +829,8 @@ in the relational store has no such upstream, which is why it stalls instead. Th
 the event store's recovery point is bounded by replication lag rather than being zero.
 
 `--ha` changes one service's replica count, `event-management`'s (two pods; see above). Every
-other service stays at one, and nothing here survives a node loss on its own. Replication is what makes recovery possible, not what performs it.
+other service stays at one, and nothing here survives a node loss on its own. Replication is what
+makes recovery possible, not what performs it.
 
 :::caution A stalled write is committed, not rejected
 This applies to the relational store, the one that stalls. When no standby is available, a
@@ -1153,8 +1156,7 @@ sustained before `event-management`'s persistence defaults were raised (see
   replica, the default, that changes nothing. Above one replica the service's own pods still
   prefer different nodes, through a second preference of the same kind, but no longer different
   zones. Under `--ha`, `event-management` runs two pods, so this applies to it. To turn it off for
-  one service, set
-  `functionalAreas.<service>.eventPathSpread: false`.
+  one service, set `functionalAreas.<service>.eventPathSpread: false`.
 - **The databases' primaries prefer different nodes.** In testing, a node running both the
   relational and the event-store primary ran at 94 to 98% CPU while the others ran at about
   half. See [Where the
