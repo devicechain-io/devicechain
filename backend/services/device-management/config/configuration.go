@@ -62,12 +62,12 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // On a kind cluster five resolvers topped out at about 1600 events a second on 1.5 of the
 // pod's 4 cores, with the events above that rate queued in front of them.
 //
-// Measured in-process (BenchmarkInboundStageOccupancy: a three-server broker whose routes
-// were then direct; the test fixture now carries each route through a loopback proxy, so
-// a re-run measures that hop too; credentialed
+// Measured in-process (BenchmarkInboundStageOccupancy: a three-server broker, credentialed
 // events, each lookup answering after 750µs, which puts five resolvers near the kind
 // ceiling): 5 resolvers resolved about 1500 events a second, 8 about 2300, 10 about 2900
-// and 16 about 4600, the resolvers busy throughout in every arm. The count is capped at 10
+// and 16 about 4600, the resolvers busy throughout in every arm. The broker's routes were
+// direct when these were measured. The test fixture now carries each route through a
+// loopback proxy, so a re-run measures that hop too. The count is capped at 10
 // rather than taken from the widest arm because each resolver holds a pooled connection
 // while it reads an event's credential, and 10 is half of the default pool of 20, the most
 // rdb.CheckWriterCount accepts without a warning. On a real PostgreSQL the credential read

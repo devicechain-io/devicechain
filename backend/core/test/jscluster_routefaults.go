@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -256,29 +257,51 @@ func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserve
 // the proxies carry: some route went around them, so Silence would not silence it.
 var errRoutesBypassProxies = errors.New("a route bypasses the proxies")
 
-// awaitAllRoutesProxied waits until every server is routed to every other one and every
-// route connection the servers report is carried by a proxy.
+// routeConnsPerPeer is how many route connections a server holds to each other server
+// once its routes are complete: a pool of DEFAULT_ROUTE_POOL_SIZE (no fixture server sets
+// a pool size of its own), and one more dedicated to the system account, as nats-server's
+// own route tests count them.
+const routeConnsPerPeer = natsserver.DEFAULT_ROUTE_POOL_SIZE + 1
+
+// awaitAllRoutesProxied waits until every server holds its complete set of route
+// connections to every other one, and every route connection the servers report is
+// carried by a proxy.
 //
 // Each proxied connection is one route connection at each of its two ends, so the sum of
 // the servers' route counts must be exactly twice the proxied connections. A route that
 // went around the proxies is counted by the servers and not by the proxies, and breaks
 // the equality for as long as it lives. The equality has to hold on consecutive checks,
 // because a route handshake or a duplicate being closed breaks it for a moment.
+//
+// The complete set is waited for because route connections keep arriving after the first
+// ones are up: a server dials a route it learns of from another server's INFO at the
+// address that INFO carries, which is the advertised one (processImplicitRoute in
+// nats-server's route.go). Checked before every pool is full, the equality can hold over
+// the first connections alone, and connections made around the proxies a moment later go
+// unseen; under load that window outlasted the five checks.
 func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within time.Duration) error {
 	deadline := time.Now().Add(within)
+	want := (len(servers) - 1) * routeConnsPerPeer
 	stable := 0
 	var routes, proxied int
+	var each []string
 	for {
 		routes = 0
-		meshed := true
+		meshed, complete := true, true
+		each = each[:0]
 		for _, srv := range servers {
-			routes += srv.NumRoutes()
+			n := srv.NumRoutes()
+			routes += n
+			each = append(each, fmt.Sprintf("%s %d", srv.Name(), n))
 			if srv.NumRemotes() != len(servers)-1 {
 				meshed = false
 			}
+			if n != want {
+				complete = false
+			}
 		}
 		proxied = f.LiveRouteConnections()
-		if meshed && routes > 0 && routes == 2*proxied {
+		if meshed && complete && routes == 2*proxied {
 			stable++
 			if stable == 5 {
 				return nil
@@ -288,7 +311,8 @@ func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within
 		}
 		if time.Now().After(deadline) {
 			err := fmt.Errorf("routes are not all carried by the proxies: the servers report %d route "+
-				"connections, the proxies carry %d (each should be counted twice)", routes, proxied)
+				"connections (%s; each should hold %d), the proxies carry %d (each should be counted twice)",
+				routes, strings.Join(each, ", "), want, proxied)
 			if meshed && routes > 2*proxied {
 				return fmt.Errorf("%w: %w", errRoutesBypassProxies, err)
 			}

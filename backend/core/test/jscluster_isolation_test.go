@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -24,12 +25,14 @@ import (
 
 // Every construction has a cluster name no other one has, within this process (the
 // counter) and across processes (the process id). Three constructions, of both public
-// fixtures, in one test.
+// fixtures, in one test. Uniqueness across processes cannot be seen from inside one, so
+// what is asserted is the part that gives it: each name carries this process's id.
 func TestEveryClusterHasANameOfItsOwn(t *testing.T) {
 	a := StartJetStreamCluster(t, 3)
 	b := StartJetStreamCluster(t, 3)
 	c, _ := StartJetStreamClusterWithRouteFaults(t, 3)
 	pattern := regexp.MustCompile(`^dctest-\d+-\d+$`)
+	ofThisProcess := fmt.Sprintf("dctest-%d-", os.Getpid())
 	seen := map[string]int{}
 	for k, servers := range [][]*natsserver.Server{a, b, c} {
 		name := servers[0].ClusterName()
@@ -40,6 +43,10 @@ func TestEveryClusterHasANameOfItsOwn(t *testing.T) {
 		}
 		if !pattern.MatchString(name) {
 			t.Errorf("cluster %d is named %q, which does not match %s", k, name, pattern)
+		}
+		if !strings.HasPrefix(name, ofThisProcess) {
+			t.Errorf("cluster %d is named %q, which does not begin %q: without this process's id, another "+
+				"test binary's construction can have the same name", k, name, ofThisProcess)
 		}
 		if prev, dup := seen[name]; dup {
 			t.Errorf("clusters %d and %d are both named %q", prev, k, name)
@@ -291,5 +298,47 @@ func TestEveryRouteOfAPlainClusterIsCarriedByAProxy(t *testing.T) {
 			t.Fatalf("the servers report %d route connections and the proxies carry %d; want twice as many", routes, proxied)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// A cluster whose routes go around the proxies fails to start, as a route that bypasses
+// them. Advertise is what keeps gossiped routes off the servers' real route listeners in
+// every other construction; without it, the servers gossip those addresses and dial them
+// directly, and only awaitAllRoutesProxied stands between that cluster and a test whose
+// Silence would silence nothing.
+func TestAClusterWhoseRoutesBypassTheProxiesFailsToStart(t *testing.T) {
+	rec := &recordingTB{TB: t}
+	defer rec.runCleanups()
+	h := defaultClusterHooks()
+	h.configure = func(_ int, o *natsserver.Options) { o.Cluster.Advertise = "" }
+
+	c, err := startCluster(rec, 3, h, clusterStartBudget)
+	if err == nil {
+		defer c.faults.close()
+		defer shutdownServers(c.servers)
+		t.Fatal("a cluster that advertises its real route listeners was reported started, so routes that " +
+			"bypass the proxies go unnoticed")
+	}
+	if !errors.Is(err, errRoutesBypassProxies) {
+		t.Fatalf("the start failed, but not as a route that bypasses the proxies: %v", err)
+	}
+}
+
+// A cluster of fewer than two servers is refused at once, loudly: a clustered server
+// needs a route to another, and one built anyway would never form.
+func TestAClusterOfFewerThanTwoServersIsRefused(t *testing.T) {
+	for _, size := range []int{0, 1} {
+		rec := &recordingTB{TB: t}
+		c, err := startCluster(rec, size, defaultClusterHooks(), 10*time.Second)
+		if err == nil {
+			shutdownServers(c.servers)
+			c.faults.close()
+			rec.runCleanups()
+			t.Fatalf("a cluster of %d server(s) was reported started", size)
+		}
+		rec.runCleanups()
+		if want := fmt.Sprintf("a JetStream cluster of %d server(s) cannot be built", size); !strings.Contains(err.Error(), want) {
+			t.Fatalf("a cluster of %d server(s) failed, but not by being refused (%q): %v", size, want, err)
+		}
 	}
 }
