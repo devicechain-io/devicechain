@@ -180,6 +180,18 @@ newest_stable_tag() {
   git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -v '[-]' | sort -V | tail -1
 }
 
+# has_stable_tag answers whether the tag list on stdin (one per line) holds a
+# stable tag: a non-empty line with no `-`. Fed by a here-string, never a pipe,
+# so grep stopping at its first match cannot break the writer.
+#
+# 🔴 NOT `grep -qv '[-]'`, which is the obvious spelling and the wrong one: a
+# here-string of an EMPTY list is one empty line, and `-v '[-]'` matches it, so
+# a shallow clone with no tags at all would read as "has a stable tag". The
+# self-test pins the empty case.
+has_stable_tag() {
+  grep -q '^[^-]\{1,\}$'
+}
+
 # ---------------------------------------------------------------------------
 # which drill this baseline earns
 # ---------------------------------------------------------------------------
@@ -2648,6 +2660,20 @@ upgrade from a release an operator is actually on."
 passed by ABSENCE. It would hold just as well against a filter that had stopped working."
   note "a prerelease is not chosen, and there was one to reject"
 
+  # has_stable_tag decides between "a shallow clone" and "no tag to measure"
+  # below, and the real repository only ever hands it a list WITH stable tags,
+  # so the inputs that must say "no" are asked here. The empty list is the one
+  # that matters: a here-string of nothing is one empty line.
+  local tags_in want_has got_has
+  for tags_in in "|no" "v0.13.0-rc.1|no" "v0.13.0-rc.1 v0.12.0|yes" "v0.12.0|yes"; do
+    want_has="${tags_in#*|}"
+    got_has=no
+    if has_stable_tag <<<"$(tr ' ' '\n' <<<"${tags_in%|*}")"; then got_has=yes; fi
+    [[ "$got_has" == "$want_has" ]] ||
+      fail "SELF-TEST FAILED: has_stable_tag on [${tags_in%|*}] answered $got_has, want $want_has"
+  done
+  note "has_stable_tag says no to an empty list and to prereleases alone"
+
   # An explicit request wins. Checked by asking the resolver, not by reading the
   # assignment: those are two encodings of one rule and only one of them runs.
   local saved="$baseline_tag"
@@ -2818,7 +2844,7 @@ $out"
   # and it happened here, on the first CI run, where a shallow checkout was reported
   # as "no stable tag carries a chart different from HEAD's".
   if [[ -z "$baseline_tag_for_chart_test" ]]; then
-    grep -q '^[^-]\{1,\}$' <<<"$(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*')" ||
+    has_stable_tag <<<"$(git -C "$repo_root" tag -l 'v[0-9]*.[0-9]*.[0-9]*')" ||
       fail "SELF-TEST FAILED: this repository shows no stable release tags, so the chart
 lockstep case has no release to measure against. A shallow clone is the usual cause —
 this check needs history (fetch-depth: 0), and it refuses rather than skip, because

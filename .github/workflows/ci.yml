@@ -1097,7 +1097,10 @@ jobs:
       # The same script also refuses a pipe into a reader that can stop early
       # (grep -q, head, ...): under pipefail the writer's broken pipe becomes
       # the answer. A here-string cannot hit that, so the fix is always to
-      # capture the output first: grep -q ... <<<"$(cmd)".
+      # capture the output first: grep -q ... <<<"$(cmd)". It scans tracked
+      # *.sh files only: the `run:` blocks in these workflows and any shell in a
+      # Makefile are NOT checked for this shape (actionlint shellchecks the
+      # run: blocks, but shellcheck has no rule for it).
       - name: shellcheck every tracked script, and refuse early-closing pipes
         run: hack/shellcheck.sh
 

@@ -27,6 +27,9 @@
 # A false opener that later closes on a coincidental line cannot be detected
 # this way; the lines between are not scanned.
 #
+# SCOPE: the tracked *.sh files hack/shellcheck.sh enumerates, nothing else.
+# Workflow `run:` blocks and shell inside Makefiles are not scanned.
+#
 # KNOWN BLIND SPOTS. None occurs in the tree; they are listed so that nobody
 # assumes coverage that is not there:
 #   - `| while read ...; do ...; break; done`, a loop that stops early;

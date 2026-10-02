@@ -147,6 +147,16 @@ run_pipe_rule() {
   echo "no early-closing pipes in ${#files[@]} tracked scripts"
 }
 
+# run_all is the whole gate: both passes, every time, so one failing does not
+# hide the other. It is a function rather than inline in the dispatch so the
+# self-test can run exactly what CI runs, and see it fail.
+run_all() {
+  local rc=0
+  run_shellcheck || rc=1
+  run_pipe_rule || rc=1
+  return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # Self-test. A guard is worth nothing until it has been shown to FAIL, so this
 # proves both directions on throwaway fixtures: a clean script passes, a script
@@ -361,17 +371,74 @@ UNCLOSED_SHIFT
     return 1
   fi
 
+  # Case 7 — 🔴 THE GATE, NOT JUST ITS MATCHER. Cases 4-6 prove
+  # early_close_pipes finds the shape; they say nothing about whether a finding
+  # FAILS the run. A run_pipe_rule that printed its findings and returned 0, or
+  # a dispatch that ran it and ignored its status, passes all of them while CI
+  # goes green over any number of early-closing pipes. So the same fixture is
+  # run through run_pipe_rule and through run_all, the dispatch CI calls, and
+  # each must fail and name the fixture's line. The fixture is shellcheck-clean,
+  # so run_all's failure can only be the pipe rule's; the clean twin is the
+  # counterweight that a gate failing everything would not pass.
+  cat >"$tmp/gate-early.sh" <<'GATE_EARLY'
+#!/usr/bin/env bash
+set -euo pipefail
+true | grep -q x
+GATE_EARLY
+  cat >"$tmp/gate-clean.sh" <<'GATE_CLEAN'
+#!/usr/bin/env bash
+set -euo pipefail
+grep -q x <<<"$(true)" || true
+GATE_CLEAN
+  # gate_on runs one gate with the enumeration replaced by a single fixture, in
+  # a subshell so the override cannot leak into the rest of the self-test.
+  gate_on() (
+    gate_fixture="$1"
+    scripts() { printf '%s\n' "$gate_fixture"; }
+    case "$2" in
+      run_pipe_rule) run_pipe_rule ;;
+      run_all) run_all ;;
+      *) echo "gate_on: unknown gate $2" >&2; return 2 ;;
+    esac
+  )
+  local gate out
+  for gate in run_pipe_rule run_all; do
+    rc=0
+    out="$(gate_on "$tmp/gate-early.sh" "$gate" 2>&1)" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      echo "FAIL: $gate passed a script with an early-closing pipe — the gate cannot fail:" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+    if ! grep -qF -- "$tmp/gate-early.sh:3:" <<<"$out"; then
+      echo "FAIL: $gate failed (rc=$rc) but did not name $tmp/gate-early.sh:3:" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+    rc=0
+    out="$(gate_on "$tmp/gate-clean.sh" "$gate" 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "FAIL: $gate failed a clean script (rc=$rc):" >&2
+      printf '%s\n' "$out" >&2
+      return 1
+    fi
+  done
+  echo "  ok: an early-closing pipe fails run_pipe_rule and the full gate, at its line; a clean script passes both"
+  # ...and run_all fails on shellcheck's finding too, so neither pass's status
+  # can be dropped from it. dirty.sh is Case 2's unquoted expansion.
+  rc=0
+  gate_on "$tmp/dirty.sh" run_all >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: run_all passed a script shellcheck rejects — it drops run_shellcheck's status" >&2
+    return 1
+  fi
+  echo "  ok: a shellcheck finding fails the full gate"
+
   echo "==> Self-test passed"
 }
 
 case "${1:-}" in
   --self-test) self_test ;;
-  "")
-    # Both passes run every time, so one failing does not hide the other.
-    rc=0
-    run_shellcheck || rc=1
-    run_pipe_rule || rc=1
-    exit "$rc"
-    ;;
+  "") run_all ;;
   *) usage ;;
 esac
