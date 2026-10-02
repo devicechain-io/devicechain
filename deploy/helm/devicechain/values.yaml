@@ -1057,10 +1057,10 @@ functionalAreas:
     # At 500m this service was the ceiling of the whole ingest path: on a four-node
     # --ha kind cluster it resolved at most ~720 events/s, CPU-throttled in 99.9% of
     # scheduling periods, below the 1000 messages/s (and readings/s) every tenant
-    # is allowed by default (event-sources DefaultIngestMessagesPerSecond). Measured unthrottled,
-    # it costs up to 0.96 millicores per event at 800-1600 events/s, so the default
-    # ceiling needs ~1 core. The limit is twice that because a CPU quota is spent by
-    # bursts, not by the average: at 500m this service was already throttled in 24%
+    # is allowed by default (event-sources DefaultIngestMessagesPerSecond).
+    # Measured unthrottled, it costs up to 0.96 millicores per event at 800-1600
+    # events/s, so the default ceiling needs ~1 core. The limit is twice that
+    # because a CPU quota is spent by bursts, not by the average: at 500m this service was already throttled in 24%
     # of periods while averaging 0.29 cores. GOMAXPROCS follows the limit (see
     # goMemLimitPercent above), so at "2" the Go runtime runs two threads.
     # backend/cli/bootstrap/sizing_test.go holds the limit to that measurement.

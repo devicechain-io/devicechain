@@ -39,7 +39,7 @@ The `TenantsMeteredAtPlatformDefault` alert fires only when `unreachable` keeps 
 
 The HTTP ingest endpoint takes the tenant from the request path, before any device credential is checked. So HTTP ingest has an allowance of its own for each tenant, separate from the one the tenant's MQTT, NATS and broker presence traffic spends. HTTP requests naming a tenant cannot use up that tenant's device traffic.
 
-Anyone who can reach the HTTP port and knows a tenant's name can still use up that tenant's HTTP allowance, because the device credential is checked only after the request is admitted. Within the HTTP allowance, a tenant name gets an allowance of its own only if the control plane has confirmed it, or from a fixed set of 1024. Past that set, all such names share one allowance at the platform default, and the `RateLimiterOverflowInUse` alert fires.
+Anyone who can reach the HTTP port and knows a tenant's name can still use up that tenant's HTTP allowance, because the device credential is checked only after the request is admitted. The allowance is counted in readings, and a request's readings are charged before its credential is checked, so this takes few requests: at the platform default, about four requests a second of 256 readings each are enough. Within the HTTP allowance, a tenant name gets an allowance of its own only if the control plane has confirmed it, or from a fixed set of 1024. Past that set, all such names share one allowance at the platform default, and the `RateLimiterOverflowInUse` alert fires.
 
 The set bounds the service's memory, not the total admitted across invented names: up to 1024 times the platform default can be admitted across them.
 

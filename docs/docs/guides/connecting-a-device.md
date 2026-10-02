@@ -81,7 +81,7 @@ An event carries **at most 256 readings**, on every transport. The limit is fixe
 
 A reading is one stored datum. For measurements, that is one *metric key*, so an entry with twelve metrics is twelve readings. For locations and alerts, it is one entry. The limit counts keys rather than entries because a single entry can hold thousands of metrics, and it is the readings, not the entries, that become stored rows, state updates and rule evaluations.
 
-That fan-out is what the limit exists for. The per-tenant ingest ceiling counts readings over time, so it bounds how many a tenant sends per second, but not what one message costs: within its rate a tenant could still send one message of forty thousand. Without the limit, one message would be an unbounded cost the whole instance shares. A device with a deeper backlog uploads it as several messages.
+That fan-out is what the limit exists for. The per-tenant ingest ceiling counts readings over time, so it bounds how many a tenant sends per second, and one message can cost no more than the tier's burst. But the burst is a tier setting: a tier whose burst is raised to forty thousand could send one message of forty thousand. Without the limit, what one message costs the whole instance would be set by the largest burst any tier allows. A device with a deeper backlog uploads it as several messages.
 
 Over the limit, a message is **refused whole**, never trimmed to fit. A batch quietly cut short would be answered `202`, and the missing readings would be undetectable from either end. Nothing is stored and nothing is lost: the message is routed intact to the failed-decode stream.
 
