@@ -92,5 +92,5 @@ if ! grep -qxF -- '  - replicas = 1 -> null' <<<"$out"; then
   exit 1
 fi
 
-version="$("$TOFU" version | head -n1)"
+version="$("$TOFU" version | sed -n '1p')"
 echo "ok: $version prints \"$header\" above default-valued outputs on a destroy"
