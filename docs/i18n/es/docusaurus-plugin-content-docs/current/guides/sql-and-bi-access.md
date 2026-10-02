@@ -291,6 +291,12 @@ se abren de forma perezosa y la base de datos sigue reportando buena salud mient
 no puede alcanzarla. Tu despliegue se niega a generar un lector sin límite, y rechaza un conjunto de
 lectores cuyos límites no caben en el servidor.
 
+La plataforma reserva para sus propios pools 40 de las 97 conexiones utilizables del almacén de
+eventos, u 80 en una instancia instalada con `--ha` (sin `--compact`), donde `event-management` se
+ejecuta en dos pods y cada uno tiene su propio pool. Así que los `connection_limit` de tus lectores
+pueden sumar como máximo 57, o 17 en ese caso. Por encima, planificar la infraestructura falla antes
+de que cambien el almacén de eventos o el broker de mensajes, y el error indica ambas cifras.
+
 :::warning El límite acota conexiones, no carga
 El límite impide que la analítica se quede con las *conexiones* que la plataforma necesita. No impide
 que las consultas sobre esas conexiones compitan por CPU, disco y el pool compartido de workers

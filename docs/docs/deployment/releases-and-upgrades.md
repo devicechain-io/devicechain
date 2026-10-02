@@ -4431,6 +4431,60 @@ settings, so destroy now leaves the list out and prints a line saying so. When d
 the instance's backups, it still prints their path before it changes anything, read from the
 running event store. Nothing needs doing.
 
+#### Under `--ha`, event-management runs two pods {#next-ha-persistence-replicas}
+
+An instance installed with `--ha` now runs `event-management`, the service that stores every
+event, as two pods instead of one. In a benchmark on three 4-vCPU service nodes, the scheduler put
+its one pod on the node running the NATS server that leads the incoming-event stream, together with
+`device-state`. That node ran at 94 to 95% CPU, and from 6,800 events per second offered, storing
+was the first stage to fall behind: 6,592 per second over three minutes. With a second pod added,
+every stage kept 6,800 in the same three-minute runs, and the backlog drained in 3 seconds. The
+sustained rate published for a default `--ha` installation, 6,000 events per second, was measured
+with one pod and is unchanged.
+
+- The two pods prefer different nodes. That is a preference the scheduler weighs with others, not
+  a guarantee.
+- Each pod fills its own batches, so a batch holds about half as many events, and the event store
+  commits about twice as many transactions per event. Its node stayed below 70% CPU.
+- Each pod holds its own connections to the event store, and an upgrade can briefly run four
+  pools, so these instances keep 80 of the store's connections for the platform instead of 40.
+  Analytics readers' `connection_limit` values together may take at most 17 instead of 57. See
+  [Connection cap](../guides/sql-and-bi-access.md#connection-cap).
+- Without `--ha`, with `--compact --ha`, and on an instance that runs no `event-management`,
+  it stays at one pod and nothing changes.
+
+**Before you upgrade an instance installed with `--ha` and without `--compact`:**
+
+- **Check there is room for 1.8 cores more during the upgrade, and 900m more afterwards.** Until
+  the new pods are ready, both run beside the old one. A pod that cannot be placed stays
+  `Pending`, and the upgrade fails after waiting, with the instance partly upgraded. Make room and
+  run `dcctl upgrade` again.
+- **If you declared analytics readers, add up their `connection_limit` values.** Above 17, the
+  upgrade stops when it plans the infrastructure, before it changes anything, with an error naming
+  the readers' total and the platform's reserve. Lower a reader's limit in the `terraform.tfvars`
+  beside the instance's state and run the upgrade again.
+- **If you raised `timescale_analytics_reserved_connections` to run a second `event-management`
+  pod, set it back to 40.** It is now the reserve for each pod, and is multiplied by the pod count,
+  so a raised value is counted twice and the upgrade may refuse.
+- With `--skip-infrastructure` the services move and the reserve does not, and the upgrade says
+  so. Keep readers' limits at 17 or less in total until an upgrade applies the infrastructure.
+
+During the upgrade the two new pods start together. One applies
+[the event store's key change](#next-time-leading-keys) while the other waits for it, and the
+waiting pod may be restarted once by its startup check before it comes up. That is expected.
+
+Going back to the previous release returns `event-management` to one pod. No stored data or schema
+changes.
+
+**If you install the chart yourself:** nothing changes. The chart's default is still one replica.
+To run two, set `functionalAreas.event-management.replicas: 2`, and on an event store built from
+this repository's OpenTofu set `event_management_replicas = 2` with it, which reserves the second
+pod's connections.
+
+The instance's OpenTofu configuration now declares that it needs OpenTofu 1.9 or later (or
+Terraform 1.9 or later). It already needed 1.9 to load, so an older version now fails with a
+clearer message rather than a different one.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

@@ -188,7 +188,7 @@ spec:
       {{- with include "devicechain.eventStorePrimaryAntiAffinity" (dict "areaCfg" $areaCfg) }}
       {{- . | nindent 6 }}
       {{- end }}
-      {{- with include "devicechain.eventPathSpread" (dict "areaCfg" $areaCfg) }}
+      {{- with include "devicechain.eventPathSpread" (dict "areaCfg" $areaCfg "replicas" $replicas "areaLabels" (include "devicechain.areaLabels" (dict "root" $root "area" $area))) }}
       {{- . | nindent 6 }}
       {{- end }}
       {{- if $root.Values.serviceAccount.create }}

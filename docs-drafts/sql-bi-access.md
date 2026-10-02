@@ -152,8 +152,13 @@ metrics vanish along with the application's. So the chart refuses, at render tim
 with no `connectionLimit` (PostgreSQL's `-1` is unlimited, and it is also what an omitted field
 renders as) and a set of roles whose limits plus the platform's reservation exceed
 `max_connections` less the superuser reserve. The event store's reservation defaults to 40 — one
-pool of 20, doubled for a RollingUpdate.
-[`deploy/opentofu/instance/variables.tf`, `timescale_analytics_reserved_connections`]
+pool of 20, doubled for a RollingUpdate — per event-management pod: the instance root multiplies it
+by `event_management_replicas`, which dcctl sets to 2 under `--ha` (without `--compact`), so 80
+there. The same budget is also refused at plan, by a validation on `timescale_analytics_readers`,
+so an over-committed set stops before the instance root applies anything (on a first bootstrap,
+earlier roots such as the cluster root may already have run).
+[`deploy/opentofu/instance/variables.tf`, `timescale_analytics_reserved_connections`,
+`event_management_replicas`; `deploy/opentofu/instance/main.tf`, `event_store_reserved_connections`]
 
 Both refusals are exercised by name in `hack/check-cnpg-chart-schema.sh`, whose coverage control
 requires every `fail` in the templates to have been tripped by a case.

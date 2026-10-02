@@ -134,7 +134,9 @@ var nobody = operatorInputs{declared: notStated, passed: notStated}
 // instanceRootVars, and its CA through natsCA rather than the mint. Both must leave
 // what a bootstrap passes EXACTLY as it was. The literals below were not typed: they
 // were printed by running the base commit's assembly — splitVars(infraVars(st)) plus
-// the archive vars, as applyInfra built them — over these same two States.
+// the archive vars, as applyInfra built them — over these same two States. One var
+// has been added since, on purpose: event_management_replicas (persistenceTopology),
+// 2 for the --ha State and 1 for the compact one.
 func TestBootstrapInstanceRootVarsAreUnchanged(t *testing.T) {
 	full := func() *State {
 		rec := aCompleteInstall()
@@ -157,8 +159,8 @@ func TestBootstrapInstanceRootVarsAreUnchanged(t *testing.T) {
 		st   *State
 		want []string
 	}{
-		"full":         {full(), []string{"kubeconfig_context=gke_project_zone_cluster", "timescale_database=prod", "instance_namespace=dci-prod", "nats_ca_cert_pem=-----CA-----", "ha=true", "nats_cluster_replicas=3", "database_node_selector={}", "database_tolerations=[]", "backup_server_name_tsdb=dc-tsdb-prod-1a2b3c4d", "nats_enable_auth=true", "nats_callout_issuer_public=AISSUERPUBLIC", "nats_service_password_bcrypt=$2a$10$service", "nats_sys_password_bcrypt=$2a$10$sys", "backup_endpoint_url=http://dc-object-store.dc-system:9000", "backup_credentials_secret=dc-object-store-credentials", "backup_access_key_id_key=MINIO_ROOT_USER", "backup_secret_access_key_key=MINIO_ROOT_PASSWORD", "backup_bucket_tsdb=devicechain-tsdb"}},
-		"compactLocal": {compactLocal(), []string{"kubeconfig_context=kind-devicechain", "timescale_database=dev", "instance_namespace=dci-dev", "nats_ca_cert_pem=-----CA-----", "ha=false", "nats_cluster_replicas=1", "nats_mqtt_node_port=31883", "database_node_selector={}", "database_tolerations=[]", "nats_jetstream_storage=3Gi", "timescale_storage=4Gi", "nats_prom_exporter=false", "nats_cpu_request=25m", "nats_memory_request=64Mi", "backup_server_name_tsdb=dc-tsdb-dev-1a2b3c4d", "nats_enable_auth=true", "nats_callout_issuer_public=AISSUERPUBLIC", "nats_service_password_bcrypt=$2a$10$service", "backup_endpoint_url=http://dc-object-store.dc-system:9000", "backup_credentials_secret=dc-object-store-credentials", "backup_access_key_id_key=MINIO_ROOT_USER", "backup_secret_access_key_key=MINIO_ROOT_PASSWORD", "backup_bucket_tsdb=devicechain-tsdb"}},
+		"full":         {full(), []string{"kubeconfig_context=gke_project_zone_cluster", "timescale_database=prod", "instance_namespace=dci-prod", "nats_ca_cert_pem=-----CA-----", "ha=true", "nats_cluster_replicas=3", "event_management_replicas=2", "database_node_selector={}", "database_tolerations=[]", "backup_server_name_tsdb=dc-tsdb-prod-1a2b3c4d", "nats_enable_auth=true", "nats_callout_issuer_public=AISSUERPUBLIC", "nats_service_password_bcrypt=$2a$10$service", "nats_sys_password_bcrypt=$2a$10$sys", "backup_endpoint_url=http://dc-object-store.dc-system:9000", "backup_credentials_secret=dc-object-store-credentials", "backup_access_key_id_key=MINIO_ROOT_USER", "backup_secret_access_key_key=MINIO_ROOT_PASSWORD", "backup_bucket_tsdb=devicechain-tsdb"}},
+		"compactLocal": {compactLocal(), []string{"kubeconfig_context=kind-devicechain", "timescale_database=dev", "instance_namespace=dci-dev", "nats_ca_cert_pem=-----CA-----", "ha=false", "nats_cluster_replicas=1", "event_management_replicas=1", "nats_mqtt_node_port=31883", "database_node_selector={}", "database_tolerations=[]", "nats_jetstream_storage=3Gi", "timescale_storage=4Gi", "nats_prom_exporter=false", "nats_cpu_request=25m", "nats_memory_request=64Mi", "backup_server_name_tsdb=dc-tsdb-dev-1a2b3c4d", "nats_enable_auth=true", "nats_callout_issuer_public=AISSUERPUBLIC", "nats_service_password_bcrypt=$2a$10$service", "backup_endpoint_url=http://dc-object-store.dc-system:9000", "backup_credentials_secret=dc-object-store-credentials", "backup_access_key_id_key=MINIO_ROOT_USER", "backup_secret_access_key_key=MINIO_ROOT_PASSWORD", "backup_bucket_tsdb=devicechain-tsdb"}},
 	} {
 		got, err := instanceRootVars(c.st)
 		if err != nil {

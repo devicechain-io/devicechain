@@ -4773,6 +4773,65 @@ y muestra una línea que lo indica. Cuando destroy elimina los respaldos de la i
 mostrando su ruta antes de cambiar nada, leída del almacén de eventos en ejecución. No hay que
 hacer nada.
 
+#### Con `--ha`, event-management se ejecuta en dos pods {#next-ha-persistence-replicas}
+
+Una instancia instalada con `--ha` ejecuta ahora `event-management`, el servicio que almacena cada
+evento, en dos pods en lugar de uno. En una prueba de rendimiento con tres nodos de servicios de 4
+vCPU, el planificador puso su único pod en el nodo que ejecutaba el servidor NATS que lidera el
+stream de eventos entrantes, junto con `device-state`. Ese nodo funcionó al 94-95% de CPU y, a
+partir de 6800 eventos por segundo ofrecidos, almacenar fue la primera etapa en quedarse atrás:
+6592 por segundo durante tres minutos. Con un segundo pod, todas las etapas mantuvieron 6800 en las
+mismas ejecuciones de tres minutos, y la cola se vació en 3 segundos. El ritmo sostenido publicado
+para una instalación `--ha` predeterminada, 6000 eventos por segundo, se midió con un pod y no
+cambia.
+
+- Los dos pods prefieren nodos distintos. Es una preferencia que el planificador pondera junto con
+  otras, no una garantía.
+- Cada pod llena sus propios lotes, así que un lote contiene más o menos la mitad de eventos y el
+  almacén de eventos confirma más o menos el doble de transacciones por evento. Su nodo se mantuvo
+  por debajo del 70% de CPU.
+- Cada pod tiene sus propias conexiones al almacén de eventos, y una actualización puede tener
+  brevemente cuatro pools, así que estas instancias reservan 80 de las conexiones del almacén para
+  la plataforma en lugar de 40. Los `connection_limit` de los lectores analíticos pueden sumar como
+  máximo 17 en lugar de 57. Consulta
+  [Límite de conexiones](../guides/sql-and-bi-access.md#connection-cap).
+- Sin `--ha`, con `--compact --ha` y en una instancia que no ejecuta `event-management`, sigue en
+  un pod y nada cambia.
+
+**Antes de actualizar una instancia instalada con `--ha` y sin `--compact`:**
+
+- **Comprueba que hay sitio para 1,8 núcleos más durante la actualización, y 900m más después.**
+  Hasta que los pods nuevos están listos, los dos se ejecutan junto al antiguo. Un pod que no se
+  puede colocar queda en `Pending`, y la actualización falla tras esperar, con la instancia
+  actualizada a medias. Haz sitio y vuelve a ejecutar `dcctl upgrade`.
+- **Si declaraste lectores analíticos, suma sus `connection_limit`.** Por encima de 17, la
+  actualización se detiene al planificar la infraestructura, antes de cambiar nada, con un error
+  que indica el total de los lectores y la reserva de la plataforma. Reduce el límite de un lector
+  en el `terraform.tfvars` junto al estado de la instancia y vuelve a ejecutar la actualización.
+- **Si subiste `timescale_analytics_reserved_connections` para ejecutar un segundo pod de
+  `event-management`, devuélvelo a 40.** Ahora es la reserva de cada pod y se multiplica por el
+  número de pods, así que un valor subido se cuenta dos veces y la actualización puede negarse.
+- Con `--skip-infrastructure` se mueven los servicios y la reserva no, y la actualización lo dice.
+  Mantén los límites de los lectores en 17 o menos en total hasta que una actualización aplique la
+  infraestructura.
+
+Durante la actualización los dos pods nuevos arrancan a la vez. Uno aplica
+[el cambio de claves del almacén de eventos](#next-time-leading-keys) mientras el otro lo espera, y
+el que espera puede ser reiniciado una vez por su comprobación de arranque antes de quedar listo. Es
+lo esperado.
+
+Volver a la versión anterior devuelve `event-management` a un pod. No cambian los datos almacenados
+ni el esquema.
+
+**Si instalas el chart por tu cuenta:** nada cambia. El valor predeterminado del chart sigue siendo
+una réplica. Para ejecutar dos, establece `functionalAreas.event-management.replicas: 2` y, en un
+almacén de eventos creado con el OpenTofu de este repositorio, establece también
+`event_management_replicas = 2`, que reserva las conexiones del segundo pod.
+
+La configuración de OpenTofu de la instancia declara ahora que necesita OpenTofu 1.9 o posterior
+(o Terraform 1.9 o posterior). Ya necesitaba la 1.9 para cargarse, así que una versión anterior
+falla ahora con un mensaje más claro en lugar de con otro.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

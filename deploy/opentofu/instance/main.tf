@@ -71,6 +71,17 @@ module "nats" {
 # a store here is one map entry, and an absent entry is visible in a way a
 # missing copy of a 40-line block is not.
 locals {
+  # The event-store connections the platform keeps after every analytics reader has
+  # taken its limit: one event-management pod's pool, doubled for a rollout
+  # (timescale_analytics_reserved_connections), per pod. Multiplied rather than "plus
+  # one pool per extra pod" because a two-pod RollingUpdate can hold four pools at
+  # once: the Deployment creates the next new pod while an old one is still
+  # terminating, and that one closes its pool only at teardown. At one replica it is
+  # the variable unchanged. Read by the event store (reserved_application_connections
+  # below) and by timescale_analytics_readers' plan-time check, so both count the same
+  # number.
+  event_store_reserved_connections = var.timescale_analytics_reserved_connections * var.event_management_replicas
+
   # Each pre-CloudNativePG StatefulSet this configuration replaces, keyed by the
   # store it belonged to. `dump` is the recovery recipe quoted back at whoever
   # trips the guard.
@@ -409,23 +420,27 @@ module "cnpg_tsdb" {
       in_roles             = r.reads_location ? ["analytics_reader", "analytics_location_reader"] : ["analytics_reader"]
     }]
   )
-  reserved_application_connections = var.timescale_analytics_reserved_connections
+  reserved_application_connections = local.event_store_reserved_connections
 
   # 🔑 NO max_connections OVERRIDE HERE — the relational store carries one and this
   # store deliberately does not. (This block DOES set `parameters`, further down,
   # for timescaledb.telemetry_level and wal_compression; add to that map rather than
-  # starting a second one.)
+  # starting a second one.) timescale_analytics_readers' plan-time check reads the
+  # resulting 97 usable as a literal: an override here must move it too.
   #
-  # Exactly ONE service holds a pool against this store: event-management, the
-  # only caller passing Persistence.Tsdb. That is 1 x 20 = 20 against 97 usable,
-  # so the A2.7b arithmetic next door lands nowhere near the ceiling here, and the
-  # stock 100 is a real margin rather than an inherited accident.
+  # The pools against this store are event-management's, one per pod (the only
+  # caller passing Persistence.Tsdb), plus user-management's tenant-purge
+  # connection, which it opens serially and normally one at a time. Each
+  # event-management pool is 20: 20 at one replica, and under dcctl --ha, which runs
+  # 2 (event_management_replicas), up to 4 x 20 = 80 mid-rollout, because the next
+  # new pod starts while an old one is still terminating. The reserve below counts
+  # that, so analytics readers cannot take what a rollout needs.
   #
-  # 🔴 RE-DERIVE IT ON `replicas`, WHICH IS THE LIKELIER TRIGGER than a second
-  # service. event-management inherits replicas 1 + RollingUpdate, and it is the
-  # ingest persistence path — the area most likely to be scaled out first. With
-  # maxSurge:1 the break point is 5 concurrent pods (5 x 20 = 100 > 97), i.e.
-  # replicas 4 mid-upgrade. A second tsdb-backed service moves it sooner.
+  # 🔴 THE CEILING IS 97, so the break point is 5 concurrent pools (5 x 20 = 100 >
+  # 97): replicas 3 can reach 6 mid-rollout, and its reserve (120) is refused at plan
+  # by the readers' check even with no reader declared. Before running more
+  # event-management pods than 2, raise max_connections here (and the literal in that
+  # check). A second tsdb-backed service moves the break point sooner.
   #
   # Remember the failure is silent: pools open lazily, the Cluster keeps reporting
   # Ready, and the exporter's own metrics vanish with the application's. The

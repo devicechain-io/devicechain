@@ -34,18 +34,26 @@ const (
 	rolloutSurge = 2
 )
 
-// instanceConnectionLimit is how many connections an instance's login may hold on the
-// shared relational store: every relational area it runs, at a full pool, mid-rollout.
-func instanceConnectionLimit(st *State) (int, error) {
+// instanceAreas is the set of functional areas an instance runs: the explicit set when
+// --enable-area expanded one, otherwise the profile's. The one reading of it for the
+// sizing that depends on it (instanceConnectionLimit, persistenceFor).
+func instanceAreas(st *State) ([]functionalarea.FunctionalArea, error) {
 	areas := make([]functionalarea.FunctionalArea, 0, len(st.EnabledAreas))
 	for _, a := range st.EnabledAreas {
 		areas = append(areas, functionalarea.FunctionalArea(a))
 	}
-	if len(areas) == 0 {
-		var err error
-		if areas, err = functionalarea.ResolveEnabled(st.Profile, nil); err != nil {
-			return 0, err
-		}
+	if len(areas) > 0 {
+		return areas, nil
+	}
+	return functionalarea.ResolveEnabled(st.Profile, nil)
+}
+
+// instanceConnectionLimit is how many connections an instance's login may hold on the
+// shared relational store: every relational area it runs, at a full pool, mid-rollout.
+func instanceConnectionLimit(st *State) (int, error) {
+	areas, err := instanceAreas(st)
+	if err != nil {
+		return 0, err
 	}
 	n := 0
 	for _, a := range areas {

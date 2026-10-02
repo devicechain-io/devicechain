@@ -474,6 +474,9 @@ func infraVars(st *State) []string {
 	// the disagreement reachable again by the narrow route of turning HA off on an
 	// instance that had it on. See haTopology.
 	vars = append(vars, haFor(st.HA).infraVars()...)
+	// The OpenTofu half of the event-management pod count, for the same reason: the
+	// event store reserves its connections per pod. See persistenceTopology.
+	vars = append(vars, persistenceFor(st).infraVars()...)
 	// On a kind/minikube node, ingress-nginx must bind the node's 80/443 via
 	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
 	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller

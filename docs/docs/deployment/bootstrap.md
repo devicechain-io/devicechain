@@ -580,9 +580,11 @@ The alerts for snapshots are described under
   own components. A pod that does not fit stays `Pending`, and the install waits out its timeout.
   See [Service sizing](#service-sizing) for each figure. On a cluster that cannot spare them, such
   as a laptop, use [`--compact`](#--compact).
-- **OpenTofu** (the `tofu` binary; `terraform` also works) on your `PATH`. `dcctl` drives it
-  to provision infrastructure. Install it from [opentofu.org](https://opentofu.org). Run
-  `dcctl preflight local` to check this and the rest of your environment up front.
+- **OpenTofu 1.9 or later** (the `tofu` binary; `terraform` 1.9 or later also works) on your
+  `PATH`. `dcctl` drives it to provision infrastructure. Install it from
+  [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
+  and the rest of your environment, up front. The preflight does not check its version; an older
+  one fails when it loads the infrastructure configuration.
 - **`docker`, `kubectl` and `helm`** on your `PATH`, and **`kind`** for the `local` provider.
   The preflight check fails if any of them is missing. Docker should be a native Docker engine
   rather than Docker Desktop, and its daemon must be reachable.
@@ -790,6 +792,22 @@ nothing. `dcctl` counts schedulable nodes and refuses before provisioning anythi
 single-node cluster, so a control plane plus two workers is a three-node cluster with two
 usable nodes.
 
+**`--ha` also runs `event-management` as two pods.** It stores every event. On a three-node
+services pool, one of the nodes also runs the NATS server that leads the incoming-event stream,
+which uses more CPU than any service. In testing, the scheduler put the single `event-management`
+pod there with `device-state`. That node ran at 94 to 95% CPU, and from 6,800 events per second
+offered, storing was the first stage to fall behind: 6,592 per second over three minutes. With a
+second pod added, in the same three-minute runs, every stage kept up with 6,800 and the backlog
+drained in 3 seconds. The two pods prefer different nodes, but that is a preference, not a
+guarantee. Each pod fills its own batches, so a batch holds about half as many events and the
+event store commits about twice as many transactions per event; the event store's node stayed
+below 70% CPU. The sustained rate in [Measured throughput](#measured-throughput) was measured with
+one pod, and this does not raise it. Two pods request twice the CPU, 1.8 cores together. Each pod
+also holds its own connections to the event store, so these instances keep 80 of its connections
+for the platform instead of 40 (see
+[Connection cap](../guides/sql-and-bi-access.md#connection-cap)). With `--compact --ha`, and
+without `--ha`, `event-management` runs one pod.
+
 #### Databases under `--ha` {#ha-databases}
 
 `--ha` also runs the relational database as three instances with synchronous replication,
@@ -810,8 +828,9 @@ until they are persisted, so a failover's worth of writes can be replayed. The a
 in the relational store has no such upstream, which is why it stalls instead. The cost is that
 the event store's recovery point is bounded by replication lag rather than being zero.
 
-`--ha` does not change the number of service replicas, and nothing here survives a node loss
-on its own. Replication is what makes recovery possible, not what performs it.
+`--ha` changes one service's replica count, `event-management`'s (two pods; see above). Every
+other service stays at one, and nothing here survives a node loss on its own. Replication is what
+makes recovery possible, not what performs it.
 
 :::caution A stalled write is committed, not rejected
 This applies to the relational store, the one that stalls. When no standby is available, a
@@ -908,7 +927,9 @@ happens:
   50 seconds to decide that the node is lost. Each service pod on it is then evicted after
   `nodeLossTolerationSeconds` (30 by default; `null` restores Kubernetes' own 300) and started on
   another node. At one replica per service, which is the default, a service whose pod was on the
-  lost node is unavailable until then. The database instances and the database operator use the
+  lost node is unavailable until then. Under `--ha`, `event-management` runs two pods, and when
+  they are on different nodes (the scheduler prefers that but does not guarantee it), the other
+  keeps storing events meanwhile. The database instances and the database operator use the
   same 30 seconds. The broker's servers do not, because Kubernetes does not recreate them on
   another node while it cannot confirm that the old one has stopped, so a shorter limit would
   gain nothing.
@@ -1088,7 +1109,9 @@ sustained before `event-management`'s persistence defaults were raised (see
   together: at 6,000 events per second two service nodes ran at about 80% CPU while the third ran
   at 55%. Memory stays at 128Mi: no event-path service used more than 51Mi in any sample, up to
   9,200 events per second. A request is per pod, so a service scaled to two replicas requests
-  twice its figure for the same traffic.
+  twice its figure for the same traffic. Under `--ha`, `event-management` runs two pods, so it
+  requests 1.8 cores; see [`--ha`](#ha). Each pod keeps the one-pod figure, measured with one pod
+  doing all the work, so there it reserves more than the two use.
 - **Limits do not reserve anything.** Kubernetes schedules a pod by its requests, so the higher
   limits need no extra room on a node. They only let a busy service use CPU the node has spare.
   `--compact` lowers every request, and leaves the limits alone.
@@ -1129,9 +1152,11 @@ sustained before `event-management`'s persistence defaults were raised (see
   free CPU can win. It applies when a pod is scheduled, so pods already running are not moved.
   Which NATS server leads a stream is decided by NATS, so a service can still share a node with
   the busiest server. A service with a spread of its own no longer gets the cluster's default
-  spread, which places one service's replicas in different zones; at one replica, the default,
-  that changes nothing. To turn it off for one service, set
-  `functionalAreas.<service>.eventPathSpread: false`.
+  spread, which places one service's replicas on different nodes and in different zones; at one
+  replica, the default, that changes nothing. Above one replica the service's own pods still
+  prefer different nodes, through a second preference of the same kind, but no longer different
+  zones. Under `--ha`, `event-management` runs two pods, so this applies to it. To turn it off for
+  one service, set `functionalAreas.<service>.eventPathSpread: false`.
 - **The databases' primaries prefer different nodes.** In testing, a node running both the
   relational and the event-store primary ran at 94 to 98% CPU while the others ran at about
   half. See [Where the

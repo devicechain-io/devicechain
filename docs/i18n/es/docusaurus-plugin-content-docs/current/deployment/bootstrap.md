@@ -634,10 +634,11 @@ Las alertas de las instantáneas se describen en
   agotar su tiempo límite. Consulta cada cifra en
   [Dimensionamiento de los servicios](#service-sizing). En un clúster que no puede dedicarles eso,
   como un portátil, usa [`--compact`](#--compact).
-- **OpenTofu** (el binario `tofu`; `terraform` también funciona) en tu `PATH`. `dcctl` lo
-  ejecuta para aprovisionar infraestructura. Instálalo desde
-  [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar esto y
-  el resto de tu entorno de antemano.
+- **OpenTofu 1.9 o posterior** (el binario `tofu`; `terraform` 1.9 o posterior también
+  funciona) en tu `PATH`. `dcctl` lo ejecuta para aprovisionar infraestructura. Instálalo desde
+  [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar que está
+  y el resto de tu entorno de antemano. La comprobación previa no mira su versión; una anterior
+  falla al cargar la configuración de la infraestructura.
 - **`docker`, `kubectl` y `helm`** en tu `PATH`, y **`kind`** para el proveedor `local`. La
   comprobación previa falla si falta alguno. Docker debería ser un motor de Docker nativo y no
   Docker Desktop, y su daemon tiene que ser accesible.
@@ -850,6 +851,23 @@ operación antes de aprovisionar nada. En un clúster `kind` local esto signific
 kind solo elimina el taint del plano de control en un clúster de un solo nodo, de modo que un
 plano de control más dos workers es un clúster de tres nodos con dos nodos utilizables.
 
+**`--ha` también ejecuta `event-management` en dos pods.** Este servicio almacena cada evento. En
+un grupo de tres nodos de servicios, uno de los nodos ejecuta además el servidor NATS que lidera el
+stream de eventos entrantes, que usa más CPU que cualquier servicio. En las pruebas, el planificador
+puso allí el único pod de `event-management` junto con `device-state`. Ese nodo funcionó al 94-95%
+de CPU y, a partir de 6800 eventos por segundo ofrecidos, almacenar fue la primera etapa en quedarse
+atrás: 6592 por segundo durante tres minutos. Con un segundo pod, en las mismas ejecuciones de tres
+minutos, todas las etapas siguieron el ritmo de 6800 y la cola se vació en 3 segundos. Los dos pods
+prefieren nodos distintos, pero es una preferencia, no una garantía. Cada pod llena sus propios
+lotes, así que un lote contiene más o menos la mitad de eventos y el almacén de eventos confirma más
+o menos el doble de transacciones por evento; el nodo del almacén de eventos se mantuvo por debajo
+del 70% de CPU. El ritmo sostenido de [Rendimiento medido](#measured-throughput) se midió con un
+pod, y esto no lo eleva. Dos pods solicitan el doble de CPU, 1,8 núcleos entre los dos. Cada pod
+tiene además sus propias conexiones al almacén de eventos, así que estas instancias reservan 80 de
+sus conexiones para la plataforma en lugar de 40 (consulta
+[Límite de conexiones](../guides/sql-and-bi-access.md#connection-cap)). Con `--compact --ha`, y sin
+`--ha`, `event-management` se ejecuta en un pod.
+
 #### Bases de datos con `--ha` {#ha-databases}
 
 `--ha` también ejecuta la base de datos relacional como tres instancias con replicación
@@ -873,7 +891,8 @@ tiene nada así aguas arriba, y por eso ese almacén se detiene. El costo es que
 recuperación del almacén de eventos queda acotado por el retraso de replicación en lugar de
 ser cero.
 
-`--ha` no cambia el número de réplicas de servicio, y nada de esto sobrevive por sí solo a la
+`--ha` cambia el número de réplicas de un servicio, el de `event-management` (dos pods; consulta
+más arriba). Todos los demás servicios se quedan en una, y nada de esto sobrevive por sí solo a la
 pérdida de un nodo. La replicación es lo que hace posible la recuperación, no lo que la
 ejecuta.
 
@@ -982,7 +1001,9 @@ real.
   cada pod de servicio de ese nodo al cabo de `nodeLossTolerationSeconds` (30 por defecto; `null`
   restablece los 300 del propio Kubernetes) y lo arranca en otro nodo. Con una réplica por
   servicio, que es lo predeterminado, un servicio cuyo pod estaba en el nodo perdido no está
-  disponible hasta entonces. Las instancias de base de datos y el operador de base de datos usan
+  disponible hasta entonces. Con `--ha`, `event-management` se ejecuta en dos pods y, cuando están
+  en nodos distintos (el planificador lo prefiere pero no lo garantiza), el otro sigue almacenando
+  eventos mientras tanto. Las instancias de base de datos y el operador de base de datos usan
   los mismos 30 segundos. Los servidores del broker no: Kubernetes no los recrea en otro nodo
   mientras no pueda confirmar que el anterior se ha detenido, así que un plazo más corto no
   aportaría nada.
@@ -1177,7 +1198,9 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
   funcionaban a un 80% de CPU mientras el tercero estaba al 55%. La memoria se queda en 128Mi:
   ningún servicio de la ruta de eventos usó más de 51Mi en ninguna muestra, hasta 9200 eventos por
   segundo. Una solicitud es por pod, así que un servicio escalado a dos réplicas solicita el doble
-  para el mismo tráfico.
+  para el mismo tráfico. Con `--ha`, `event-management` se ejecuta en dos pods, así que solicita
+  1,8 núcleos; consulta [`--ha`](#ha). Cada pod conserva la cifra de un solo pod, medida con un pod
+  haciendo todo el trabajo, así que ahí reserva más de lo que usan los dos.
 - **Los límites no reservan nada.** Kubernetes planifica un pod según sus solicitudes, así que
   los límites más altos no necesitan espacio adicional en un nodo. Solo permiten que un servicio
   ocupado use la CPU que el nodo tiene libre. `--compact` reduce todas las solicitudes y no toca
@@ -1223,9 +1246,11 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
   un pod, así que los pods en ejecución no se mueven. Qué servidor NATS lidera un stream lo decide
   NATS, así que un servicio puede seguir compartiendo nodo con el servidor más ocupado. Un servicio
   con un reparto propio deja de recibir el reparto predeterminado del clúster, que coloca las
-  réplicas de un servicio en zonas distintas; con una réplica, lo predeterminado, eso no cambia
-  nada. Para desactivarlo en un servicio, establece
-  `functionalAreas.<servicio>.eventPathSpread: false`.
+  réplicas de un servicio en nodos y zonas distintos; con una réplica, lo predeterminado, eso no
+  cambia nada. Con más de una réplica, los pods del propio servicio siguen prefiriendo nodos
+  distintos, mediante una segunda preferencia del mismo tipo, pero ya no zonas distintas. Con
+  `--ha`, `event-management` se ejecuta en dos pods, así que esto se le aplica. Para desactivarlo
+  en un servicio, establece `functionalAreas.<servicio>.eventPathSpread: false`.
 - **Las primarias de las bases de datos prefieren nodos distintos.** En las pruebas, un nodo que
   ejecutaba a la vez la primaria relacional y la del almacén de eventos funcionó al 94-98 % de CPU
   mientras los demás estaban a la mitad, aproximadamente. Consulta

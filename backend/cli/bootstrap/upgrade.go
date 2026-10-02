@@ -357,6 +357,18 @@ func sayUpgradeInfrastructure(st *State, opts UpgradeOptions) {
 			"\nThis instance's message broker and event store were NOT applied (--skip-infrastructure)\n"+
 				"and keep the configuration they were built with. Run `dcctl upgrade %s %s` without it\n"+
 				"to apply them.", st.Provider, opts.Instance))
+		// The services moved and the event store did not, so a reserve sized for one
+		// event-management pod may now sit under two. Said rather than refused: it bites
+		// only when analytics readers hold most of the store's connections during a
+		// rollout, and the remedy is the run the sentence above already asks for.
+		if p := persistenceFor(st); p.Replicas > 1 {
+			fmt.Println(color.YellowString(
+				"event-management now runs %d pods, and the event store's connection reserve was not\n"+
+					"raised by this run: unless an earlier upgrade from this release applied the infrastructure,\n"+
+					"it still counts one pod. Until one does, keep the analytics readers' connection_limit\n"+
+					"values within what the raised reserve will allow (the SQL and BI access guide's\n"+
+					"connection cap gives the figure).", p.Replicas))
+		}
 		return
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Infrastructure:"),
