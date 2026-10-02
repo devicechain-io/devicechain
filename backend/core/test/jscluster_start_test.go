@@ -89,7 +89,9 @@ const oldListenWait = 15 * time.Second
 
 // A server that is slow to open its listeners is waited for on the one construction, not
 // discarded along with the others and started again. The delay is well past the wait
-// the fixture used to give up after, so this fails if the fixture goes back to it.
+// the fixture used to give up after, so this fails if the fixture goes back to it. The
+// other servers dial the late one's proxy all the while, and are turned away there
+// until it listens.
 func TestAServerThatListensLateIsWaitedForNotRestarted(t *testing.T) {
 	const late = oldListenWait + 10*time.Second
 	rec := &recordingTB{TB: t}
@@ -102,27 +104,28 @@ func TestAServerThatListensLateIsWaitedForNotRestarted(t *testing.T) {
 	h.start = startsLate("n2", late, &starts, done)
 
 	began := time.Now()
-	servers, _, constructions, err := startJetStreamCluster(rec, 3, h, clusterStartBudget)
+	c, err := startCluster(rec, 3, h, clusterStartBudget)
 	elapsed := time.Since(began)
-	defer shutdownServers(servers)
 	if err != nil {
 		t.Fatalf("a cluster with one server %s late to start did not start: %v", late, err)
 	}
+	defer c.faults.close()
+	defer shutdownServers(c.servers)
 	// The negative control: without it, a delay that was never applied would pass.
 	if elapsed < late {
 		t.Fatalf("the cluster started in %s, before the late server's %s delay was over, so the delay "+
 			"was never applied and this proves nothing", elapsed, late)
 	}
-	if constructions != 1 || starts.Load() != 3 {
-		t.Fatalf("the late server cost %d construction(s) and %d server starts; want 1 and 3", constructions, starts.Load())
+	if starts.Load() != 3 {
+		t.Fatalf("the late server cost %d server starts; want 3", starts.Load())
 	}
-	if len(servers) != 3 {
-		t.Fatalf("got %d servers, want 3", len(servers))
+	if len(c.servers) != 3 {
+		t.Fatalf("got %d servers, want 3", len(c.servers))
 	}
 }
 
-// A server that never listens is not a port race, and a new construction cannot cure it:
-// the fixture fails on the first construction, naming the server and both listeners.
+// A server that never listens fails the start, named along with both listeners, and is
+// not retried: nothing a second construction would do differently could cure it.
 func TestAServerThatNeverListensIsNamedNotRetried(t *testing.T) {
 	rec := &recordingTB{TB: t}
 	defer rec.runCleanups()
@@ -141,14 +144,13 @@ func TestAServerThatNeverListensIsNamedNotRetried(t *testing.T) {
 	// this test by name instead of hanging the package. The bound is the start budget
 	// given below plus a margin for the servers that do start to shut down.
 	type result struct {
-		servers       []*natsserver.Server
-		constructions int
-		err           error
+		c   *cluster
+		err error
 	}
 	got := make(chan result, 1)
 	go func() {
-		servers, _, constructions, err := startJetStreamCluster(rec, 3, h, 30*time.Second)
-		got <- result{servers, constructions, err}
+		c, err := startCluster(rec, 3, h, 30*time.Second)
+		got <- result{c, err}
 	}()
 	var r result
 	select {
@@ -157,20 +159,19 @@ func TestAServerThatNeverListensIsNamedNotRetried(t *testing.T) {
 		t.Fatalf("the start was still waiting on a server that never started, long after its %s "+
 			"listening budget: the wait for listeners does not give up", h.listenWithin)
 	}
-	servers, constructions, err := r.servers, r.constructions, r.err
-	defer shutdownServers(servers)
-	if err == nil {
+	if r.err == nil {
+		defer r.c.faults.close()
+		defer shutdownServers(r.c.servers)
 		t.Fatal("a cluster with a server that never started was reported started")
 	}
-	if errors.Is(err, errListenerBind) {
-		t.Fatalf("a server that never started was reported as a port that could not be bound: %v", err)
+	if errors.Is(r.err, errListenerFailed) {
+		t.Fatalf("a server that never started was reported as a listener that could not open: %v", r.err)
 	}
-	if want := "n3 has not bound its client and route listeners"; !strings.Contains(err.Error(), want) {
-		t.Fatalf("the error does not say %q: %v", want, err)
+	if want := "n3 has not bound its client and route listeners"; !strings.Contains(r.err.Error(), want) {
+		t.Fatalf("the error does not say %q: %v", want, r.err)
 	}
-	if constructions != 1 || starts.Load() != 3 {
-		t.Fatalf("a server that never listens cost %d construction(s) and %d server starts; want 1 and 3",
-			constructions, starts.Load())
+	if starts.Load() != 3 {
+		t.Fatalf("a server that never listens cost %d server starts; want 3", starts.Load())
 	}
 	for _, line := range rec.lines() {
 		if strings.Contains(line, "retrying") {
@@ -179,28 +180,10 @@ func TestAServerThatNeverListensIsNamedNotRetried(t *testing.T) {
 	}
 }
 
-// portsTakingFirst returns a ports hook whose first call hands out held, which the test is
-// listening on, as the first server's route port, and whose later calls reserve fresh
-// ports as the fixture does.
-func portsTakingFirst(held int) func(n int) ([]int, error) {
-	var calls atomic.Int32
-	return func(n int) ([]int, error) {
-		if calls.Add(1) > 1 {
-			return reservePorts(n)
-		}
-		rest, err := reservePorts(n - 1)
-		if err != nil {
-			return nil, err
-		}
-		return append([]int{held}, rest...), nil
-	}
-}
-
-// A route port taken before the server could bind it is the one failure a new
-// construction cures. It is reported as that, from the server's own words, without the
-// construction waiting out its listening budget; and the fixture then starts a new
-// construction on fresh ports, which forms.
-func TestATakenRoutePortIsReportedAsABindFailureAndRetriedOnFreshPorts(t *testing.T) {
+// A route listener that cannot open fails the start at once, from the server's own
+// words and naming the server, and is not retried. The port n2 is told to listen on is
+// one this test holds, so its bind fails the same way on every host.
+func TestAListenerThatCannotOpenFailsAtOnceNamingTheServer(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("holding a port: %v", err)
@@ -208,60 +191,50 @@ func TestATakenRoutePortIsReportedAsABindFailureAndRetriedOnFreshPorts(t *testin
 	defer l.Close()
 	held := l.Addr().(*net.TCPAddr).Port
 
-	t.Run("one construction", func(t *testing.T) {
-		rec := &recordingTB{TB: t}
-		defer rec.runCleanups()
-		h := defaultClusterHooks()
-		h.ports = portsTakingFirst(held)
+	rec := &recordingTB{TB: t}
+	defer rec.runCleanups()
+	var starts atomic.Int32
+	h := defaultClusterHooks()
+	h.configure = func(i int, o *natsserver.Options) {
+		if i == 1 {
+			o.Cluster.Port = held
+		}
+	}
+	start := h.start
+	h.start = func(s *natsserver.Server) {
+		starts.Add(1)
+		start(s)
+	}
 
-		began := time.Now()
-		servers, _, err := tryStartJetStreamCluster(rec, 3, h, clusterStartBudget)
-		elapsed := time.Since(began)
-		defer shutdownServers(servers)
-		if !errors.Is(err, errListenerBind) {
-			t.Fatalf("a construction whose route port was taken did not fail as a bind failure: %v", err)
+	began := time.Now()
+	c, err := startCluster(rec, 3, h, clusterStartBudget)
+	elapsed := time.Since(began)
+	if err == nil {
+		defer c.faults.close()
+		defer shutdownServers(c.servers)
+		t.Fatalf("a cluster whose n2 was told to listen on the held port %d was reported started", held)
+	}
+	if !errors.Is(err, errListenerFailed) {
+		t.Fatalf("a route listener that could not open did not fail as one: %v", err)
+	}
+	for _, want := range []string{"n2: ", routeBindFailure, strconv.Itoa(held), "address already in use"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the failure does not carry %q: %v", want, err)
 		}
-		for _, want := range []string{"n1: ", strconv.Itoa(held), "address already in use"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("the bind failure does not carry %q: %v", want, err)
-			}
+	}
+	// Not a guess at how fast a machine is: the bound is the budget the start would
+	// otherwise have waited out.
+	if elapsed >= h.listenWithin {
+		t.Fatalf("the failure took %s, the whole listening budget: it was waited out, not seen", elapsed)
+	}
+	if starts.Load() != 3 {
+		t.Fatalf("the start made %d server starts; want 3, one construction", starts.Load())
+	}
+	for _, line := range rec.lines() {
+		if strings.Contains(line, "retrying") {
+			t.Fatalf("the fixture logged a retry for a failure a retry cannot cure: %s", line)
 		}
-		// Not a guess at how fast a machine is: the bound is the budget the construction
-		// would otherwise have waited out.
-		if elapsed >= h.listenWithin {
-			t.Fatalf("the bind failure took %s, the whole listening budget: it was waited out, not seen", elapsed)
-		}
-	})
-
-	t.Run("the start", func(t *testing.T) {
-		rec := &recordingTB{TB: t}
-		defer rec.runCleanups()
-		h := defaultClusterHooks()
-		h.ports = portsTakingFirst(held) // a fresh hook: its first call hands out the held port
-
-		servers, _, constructions, err := startJetStreamCluster(rec, 3, h, clusterStartBudget)
-		defer shutdownServers(servers)
-		if err != nil {
-			t.Fatalf("the start did not recover from a taken route port: %v", err)
-		}
-		// The negative control: a hook that failed to hand out the held port would form
-		// on the first construction. At least two, not exactly two: a construction on fresh
-		// ports can lose the release-to-bind race on its own, which is the very race the
-		// retry exists for, and is then retried in its turn.
-		if constructions < 2 {
-			t.Fatalf("the start took %d construction(s); want at least 2, the first failing on the taken port", constructions)
-		}
-		var retried bool
-		for _, line := range rec.lines() {
-			if strings.Contains(line, "cluster construction 1 could not bind a port") &&
-				strings.Contains(line, strconv.Itoa(held)) {
-				retried = true
-			}
-		}
-		if !retried {
-			t.Fatalf("the start did not log why it retried, naming the taken port %d; it logged %q", held, rec.lines())
-		}
-	})
+	}
 }
 
 // A test that fails prints what each fixture server logged at warning level and above,
@@ -383,8 +356,8 @@ func TestWithServerLogsKeepsTheCauseAndAddsEachServersLastLines(t *testing.T) {
 		a.Warnf("a %d", i)
 	}
 	b.Errorf("b only")
-	err := withServerLogs(fmt.Errorf("n1: %w: x", errListenerBind), []*serverLog{a, b, quiet})
-	if !errors.Is(err, errListenerBind) {
+	err := withServerLogs(fmt.Errorf("n1: %w: x", errListenerFailed), []*serverLog{a, b, quiet})
+	if !errors.Is(err, errListenerFailed) {
 		t.Fatalf("the error no longer wraps its cause: %v", err)
 	}
 	msg := err.Error()
@@ -399,104 +372,4 @@ func TestWithServerLogsKeepsTheCauseAndAddsEachServersLastLines(t *testing.T) {
 	if plain := errors.New("plain"); withServerLogs(plain, []*serverLog{quiet}) != plain {
 		t.Fatal("an error with nothing logged to add was changed")
 	}
-}
-
-// A route-fault cluster starts through the same step as the plain one, so a taken route
-// port is seen there too, from the server's own words, and cured by a new construction.
-// Without this, nothing reaches that fixture's start with a port that cannot be bound.
-func TestARouteFaultClusterRetriesATakenRoutePortOnFreshPorts(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("holding a port: %v", err)
-	}
-	defer l.Close()
-	held := l.Addr().(*net.TCPAddr).Port
-
-	rec := &recordingTB{TB: t}
-	defer rec.runCleanups()
-	h := defaultClusterHooks()
-	h.ports = portsTakingFirst(held) // n1's cluster port, the one its route listener binds
-
-	servers, faults, _, constructions, err := startJetStreamClusterWithRouteFaults(rec, 3, h, clusterStartBudget)
-	if faults != nil {
-		defer faults.close()
-	}
-	defer shutdownServers(servers)
-	if err != nil {
-		t.Fatalf("the route-fault start did not recover from a taken route port: %v", err)
-	}
-	if constructions < 2 {
-		t.Fatalf("the route-fault start took %d construction(s); want at least 2, the first failing on the taken port",
-			constructions)
-	}
-	var retried bool
-	for _, line := range rec.lines() {
-		if strings.Contains(line, "route-fault cluster construction 1 could not bind a port") &&
-			strings.Contains(line, strconv.Itoa(held)) && strings.Contains(line, "address already in use") {
-			retried = true
-		}
-	}
-	if !retried {
-		t.Fatalf("the route-fault start did not log a bind failure on the taken port %d as its reason to "+
-			"retry; it logged %q", held, rec.lines())
-	}
-}
-
-// The start budget is the one bound on retrying, and each construction is given only
-// what is left of it. A bind failure that never clears ends in an error saying the budget
-// is spent, not in a loop; and no construction is offered more time than remains.
-func TestRetryOnBindFailureStopsAtTheBudgetAndGivesEachTryWhatIsLeft(t *testing.T) {
-	const budget = 300 * time.Millisecond
-	const each = 20 * time.Millisecond
-	// A try loop that ignored the budget would call past this; the cap turns that into a
-	// failure of this test rather than a hang.
-	const runaway = 200
-	errRunaway := errors.New("called far more often than the budget allows")
-
-	rec := &recordingTB{TB: t}
-	var withins []time.Duration
-	began := time.Now()
-	n, err := retryOnBindFailure(rec, "test", budget, func(within time.Duration) error {
-		if len(withins) >= runaway {
-			return errRunaway
-		}
-		withins = append(withins, within)
-		// The fixture starts its clock a moment after began, so allow it that moment.
-		if within > budget-time.Since(began)+5*time.Millisecond {
-			t.Errorf("try %d was offered %s with only %s of the budget left", len(withins), within,
-				budget-time.Since(began))
-		}
-		time.Sleep(each)
-		return fmt.Errorf("n1: %w: taken", errListenerBind)
-	})
-	if errors.Is(err, errRunaway) {
-		t.Fatalf("retrying did not stop when the %s budget was spent: %d tries", budget, n)
-	}
-	if !errors.Is(err, errListenerBind) || !strings.Contains(err.Error(), "the start budget of "+budget.String()+" is spent") {
-		t.Fatalf("a bind failure that outlasted the budget ended with %v; want the bind failure, saying the budget is spent", err)
-	}
-	if n < 2 || n != len(withins) {
-		t.Fatalf("reported %d tries and made %d; want the same number, more than one", n, len(withins))
-	}
-	for i := 1; i < len(withins); i++ {
-		if withins[i] >= withins[i-1] {
-			t.Fatalf("try %d was offered %s after try %d was offered %s: each should get only what is left",
-				i+1, withins[i], i, withins[i-1])
-		}
-	}
-	if len(rec.lines()) != n-1 {
-		t.Fatalf("logged %d retries for %d tries: %q", len(rec.lines()), n, rec.lines())
-	}
-
-	t.Run("any other error is returned at once", func(t *testing.T) {
-		other := errors.New("not formed")
-		calls := 0
-		n, err := retryOnBindFailure(rec, "test", budget, func(time.Duration) error {
-			calls++
-			return other
-		})
-		if err != other || n != 1 || calls != 1 {
-			t.Fatalf("got n=%d, %d call(s), err %v; want one call returning %v unchanged", n, calls, err, other)
-		}
-	})
 }

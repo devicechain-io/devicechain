@@ -26,10 +26,11 @@ const (
 // whole of what was kept is printed when the test fails (reportServerLogsOnFailure).
 const serverLogInError = 10
 
-// routeBindFailure is how a server reports that its route listener could not bind
-// ("Error listening on router port: <port> - <err>"). Only the route port can be taken
-// from under a fixture: the fixtures give each server's client listener port -1, which
-// the operating system picks as it binds.
+// routeBindFailure is how a server reports that its route listener could not be opened
+// ("Error listening on router port: <port> - <err>"). The fixtures give every listener
+// port -1, which the operating system picks as it binds, so no port can be taken from
+// under them; what this line reports is a listener that cannot open at all, and a
+// fixture fails at once on it (errListenerFailed) rather than wait out its budget.
 const routeBindFailure = "Error listening on router port"
 
 // serverLog is a natsserver.Logger that keeps what one server logs at warning level and
@@ -103,7 +104,7 @@ func (l *serverLog) snapshot() []string {
 }
 
 // bindFailure returns the first line reporting that the server's route listener could
-// not bind, or "" when there is none.
+// not be opened, or "" when there is none.
 func (l *serverLog) bindFailure() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
