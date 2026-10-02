@@ -302,10 +302,20 @@ jobs:
       # of the generated manifest was tried first and is what let a bypassable
       # rule through — it could see that a rule existed, not that it fired.
       #
-      # Only the module that has such a suite pays for it.
+      # backend/cli installs the chart into the same kind of API server, for every
+      # profile dcctl renders, and drives Helm upgrades through it: a duplicate
+      # list-map key, and every other pod-spec rule the API server enforces, is
+      # invisible to a render, because a duplicate is valid YAML. A repeated
+      # topology spread pair made every --ha install fail at Helm while every
+      # render test passed.
+      #
+      # Only the modules that have such a suite pay for it. The working directory
+      # is backend/k8s for both, literally: the Makefile that holds the version,
+      # and `make envtest`, live there, so both modules exercise one API server
+      # version.
       - name: envtest binaries
-        if: matrix.module == 'backend/k8s'
-        working-directory: ${{ matrix.module }}
+        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        working-directory: backend/k8s
         run: |
           set -euo pipefail
           # The version comes from the Makefile, which is where `make test` reads it
@@ -320,7 +330,7 @@ jobs:
           make envtest
           assets="$(bin/setup-envtest use "$version" -p path)"
           if [ ! -x "$assets/kube-apiserver" ] || [ ! -x "$assets/etcd" ]; then
-            echo "::error::setup-envtest reported $assets but it holds no kube-apiserver/etcd; the CEL suite would fail for the wrong reason"
+            echo "::error::setup-envtest reported $assets but it holds no kube-apiserver/etcd; the API-server suites would fail for the wrong reason"
             exit 1
           fi
           echo "envtest $version at $assets"
@@ -530,7 +540,7 @@ jobs:
       # indistinguishable from the outside. Instead every entry runs the script
       # and every entry prints one of:
       #
-      #   race: COVERED backend/core -- go test -race -count=1 ./...
+      #   race: COVERED backend/core -- go test -race -count=1 -timeout 20m ./...
       #   race: NOT COVERED <module> -- exempt (hack/go-race.sh): <reason>
       #
       # and the step then requires that line to be present. A future edit that

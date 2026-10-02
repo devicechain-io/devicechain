@@ -25,17 +25,18 @@ func persistenceState(ha, compact bool, profile string) *State {
 }
 
 // renderedArea is what one functional area rendered as: its Deployment's replica
-// count, its pod spread (renderedSpread, placement_test.go), and whether it got a
-// PodDisruptionBudget.
+// count, its pod spread and anti-affinity (renderedSpread and renderedAntiAffinity,
+// placement_test.go), and whether it got a PodDisruptionBudget.
 type renderedArea struct {
 	Replicas int
 	Spread   spreadView
+	Affinity renderedAffinity
 	PDB      bool
 }
 
 // renderedAreas decodes every Deployment's replica count and every
 // PodDisruptionBudget of a manifest, keyed by the devicechain.io/functional-area
-// label, and joins each to its spread. A document it cannot decode is a failure, as
+// label, and joins each to its spread and affinity. A document it cannot decode is a failure, as
 // in containersOf: a decoder that skipped one would report that area as absent,
 // which is exactly the shape of the defect these tests look for.
 func renderedAreas(t *testing.T, manifest string) map[string]*renderedArea {
@@ -84,19 +85,20 @@ func renderedAreas(t *testing.T, manifest string) map[string]*renderedArea {
 		}
 		a.Spread = v
 	}
+	for name, ra := range renderedAntiAffinity(t, manifest) {
+		a, ok := out[name]
+		if !ok {
+			t.Fatalf("renderedAntiAffinity found a Deployment %q the replica reader did not", name)
+		}
+		a.Affinity = ra
+	}
 	return out
 }
 
-// ownSpread returns the area's spread over its OWN pods: the constraints whose
-// selector names the area, rather than the label every event-path pod shares.
-func (a *renderedArea) ownSpread(area string) []spreadConstraint {
-	var out []spreadConstraint
-	for _, c := range a.Spread.constraints {
-		if c.LabelSelector != nil && c.LabelSelector.MatchLabels["devicechain.io/functional-area"] == area {
-			out = append(out, c)
-		}
-	}
-	return out
+// keepsItsOwnPodsApart reports whether the area prefers nodes without another of its
+// own pods (prefersNodesWithoutItsOwnPods, placement_test.go) under the test instance.
+func (a *renderedArea) keepsItsOwnPodsApart(area string) bool {
+	return prefersNodesWithoutItsOwnPods(a.Affinity, area, "dctest") == ""
 }
 
 func renderAreas(t *testing.T, vals map[string]interface{}) map[string]*renderedArea {
@@ -154,27 +156,30 @@ func TestEventManagementRunsTwoPodsOnlyUnderHaWithoutCompact(t *testing.T) {
 					t.Errorf("event-management PodDisruptionBudget = %t under %s, want %t", em.PDB, c.name, c.want > 1)
 				}
 				// Two pods that share a node share the CPU that starved one, and a node
-				// loss takes both: the area's own spread is what keeps them apart.
-				own := em.ownSpread("event-management")
+				// loss takes both: a preferred anti-affinity against the area's own pods
+				// is what keeps them apart. NOT a second spread constraint: the API
+				// server refuses a second hostname/ScheduleAnyway entry, and an upgrade
+				// would merge it with the event-path one.
+				own := prefersNodesWithoutItsOwnPods(em.Affinity, "event-management", "dctest")
 				if c.want > 1 {
-					want := map[string]string{"devicechain.io/instance": "dctest", "devicechain.io/functional-area": "event-management"}
-					if len(own) != 1 || own[0].TopologyKey != "kubernetes.io/hostname" ||
-						own[0].WhenUnsatisfiable != "ScheduleAnyway" || own[0].MaxSkew != 1 ||
-						!maps.Equal(own[0].LabelSelector.MatchLabels, want) || len(own[0].MatchLabelKeys) != 0 {
-						t.Errorf("event-management at %d pods spreads its own pods as %+v, want one preferred "+
-							"hostname spread over its own labels", em.Replicas, own)
+					if why := spreadsWithTheEventPath(em.Spread, "event-management", "dctest"); why != "" {
+						t.Errorf("event-management at %d pods: %s", em.Replicas, why)
 					}
-				} else if len(own) != 0 {
-					t.Errorf("event-management at one pod renders a spread over its own pods: %+v", own)
+					if own != "" {
+						t.Errorf("event-management at %d pods: %s", em.Replicas, own)
+					}
+				} else if own == "" {
+					t.Errorf("event-management at one pod renders a preferred term against its own pods")
 				}
 			}
 			for name, a := range areas {
 				if name == "event-management" {
 					continue
 				}
-				if a.Replicas != 1 || a.PDB || len(a.ownSpread(name)) != 0 {
-					t.Errorf("%s under %s: replicas %d, PDB %t, own spread %+v; want 1, none, none",
-						name, c.name, a.Replicas, a.PDB, a.ownSpread(name))
+				if a.Replicas != 1 || a.PDB || a.keepsItsOwnPodsApart(name) || len(a.Spread.constraints) > 1 {
+					t.Errorf("%s under %s: replicas %d, PDB %t, term against its own pods %t, %d spread "+
+						"constraints; want 1, none, none, at most one",
+						name, c.name, a.Replicas, a.PDB, a.keepsItsOwnPodsApart(name), len(a.Spread.constraints))
 				}
 			}
 		})
@@ -188,13 +193,15 @@ func TestTheRenderedReplicaReaderSeesWhatTheChartWasGiven(t *testing.T) {
 	two := renderAreas(t, map[string]interface{}{
 		"functionalAreas": map[string]interface{}{"event-management": map[string]interface{}{"replicas": 2}},
 	})
-	if em := two["event-management"]; em == nil || em.Replicas != 2 || !em.PDB || len(em.ownSpread("event-management")) != 1 {
+	if em := two["event-management"]; em == nil || em.Replicas != 2 || !em.PDB ||
+		len(em.Spread.constraints) != 1 || !em.keepsItsOwnPodsApart("event-management") {
 		t.Fatalf("functionalAreas.event-management.replicas: 2 decoded as %+v", em)
 	}
 	one := renderAreas(t, map[string]interface{}{
 		"functionalAreas": map[string]interface{}{"event-management": map[string]interface{}{"replicas": 1}},
 	})
-	if em := one["event-management"]; em == nil || em.Replicas != 1 || em.PDB || len(em.ownSpread("event-management")) != 0 {
+	if em := one["event-management"]; em == nil || em.Replicas != 1 || em.PDB ||
+		len(em.Spread.constraints) != 1 || em.keepsItsOwnPodsApart("event-management") {
 		t.Fatalf("functionalAreas.event-management.replicas: 1 decoded as %+v", em)
 	}
 	// Areas the chart pins to one pod of its own (event-processing, frontend) keep
@@ -205,14 +212,17 @@ func TestTheRenderedReplicaReaderSeesWhatTheChartWasGiven(t *testing.T) {
 			t.Errorf("top-level replicas: 2 rendered %s as %+v", name, a)
 		}
 	}
-	// The spread over an area's own pods is the event-path areas' replacement for the
-	// scheduler's default spread, which a pod with a spread of its own loses. An area
-	// without the shared spread keeps the default and gets nothing here.
-	if dm := all["device-management"]; len(dm.ownSpread("device-management")) != 1 {
-		t.Errorf("device-management at two pods does not spread its own pods: %+v", dm.Spread.constraints)
+	// The term against an area's own pods is the event-path areas' replacement for
+	// the scheduler's default spread, which a pod with a spread of its own loses; the
+	// spread itself stays one constraint. An area without the shared spread keeps the
+	// default and gets neither.
+	if dm := all["device-management"]; len(dm.Spread.constraints) != 1 || !dm.keepsItsOwnPodsApart("device-management") {
+		t.Errorf("device-management at two pods: %d spread constraints, term against its own pods %t; "+
+			"want one and true", len(dm.Spread.constraints), dm.keepsItsOwnPodsApart("device-management"))
 	}
-	if um := all["user-management"]; len(um.Spread.constraints) != 0 {
-		t.Errorf("user-management (no event-path spread) renders a spread: %+v", um.Spread.constraints)
+	if um := all["user-management"]; len(um.Spread.constraints) != 0 || um.Affinity.present {
+		t.Errorf("user-management (no event-path spread) renders a spread %+v or an affinity %+v",
+			um.Spread.constraints, um.Affinity)
 	}
 }
 

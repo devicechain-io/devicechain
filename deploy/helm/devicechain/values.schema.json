@@ -370,7 +370,7 @@
           },
           "eventPathSpread": {
             "type": "boolean",
-            "description": "Prefer (never require) a node running fewer of this instance's event-path services: every area with this set counts. Shipped on device-management, event-management, device-state, event-sources and event-processing."
+            "description": "Prefer (never require) a node running fewer of this instance's event-path services: every area with this set counts. Shipped on device-management, event-management, device-state, event-sources and event-processing. Above one replica, also prefers a node not running another of this area's own pods; off keeps the cluster's default spread instead."
           },
           "profiler": {
             "type": "object",

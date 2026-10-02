@@ -1255,7 +1255,8 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
   con un reparto propio deja de recibir el reparto predeterminado del clúster, que coloca las
   réplicas de un servicio en nodos y zonas distintos; con una réplica, lo predeterminado, eso no
   cambia nada. Con más de una réplica, los pods del propio servicio siguen prefiriendo nodos
-  distintos, mediante una segunda preferencia del mismo tipo, pero ya no zonas distintas. Con
+  distintos, mediante una preferencia por evitar los nodos que ya ejecutan uno de ellos, pero ya
+  no zonas distintas. Con
   `--ha`, `event-management` se ejecuta en dos pods, así que esto se le aplica. Para desactivarlo
   en un servicio, establece `functionalAreas.<servicio>.eventPathSpread: false`.
 - **Las primarias de las bases de datos prefieren nodos distintos.** En las pruebas, un nodo que

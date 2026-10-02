@@ -1162,8 +1162,8 @@ sustained before `event-management`'s persistence defaults were raised (see
   the busiest server. A service with a spread of its own no longer gets the cluster's default
   spread, which places one service's replicas on different nodes and in different zones; at one
   replica, the default, that changes nothing. Above one replica the service's own pods still
-  prefer different nodes, through a second preference of the same kind, but no longer different
-  zones. Under `--ha`, `event-management` runs two pods, so this applies to it. To turn it off for
+  prefer different nodes, through a preference to avoid nodes already running one of them, but no
+  longer different zones. Under `--ha`, `event-management` runs two pods, so this applies to it. To turn it off for
   one service, set `functionalAreas.<service>.eventPathSpread: false`.
 - **The databases' primaries prefer different nodes.** In testing, a node running both the
   relational and the event-store primary ran at 94 to 98% CPU while the others ran at about

@@ -118,7 +118,7 @@ module you changed, from the repository root:
 hack/go-race.sh backend/services/event-processing   # or whichever module you touched
 ```
 
-It prints `race: COVERED <module>` and then runs `go test -race -count=1 ./...` in that module. The
+It prints `race: COVERED <module>` and then runs `go test -race -count=1 -timeout 20m ./...` in that module. The
 detector slows tests down several times over, so a test that asserts a wall-clock budget can fail
 under it without any race. Fix such a test so that its budget does not depend on how fast the
 binary runs.
@@ -133,6 +133,17 @@ machine then behaves as it does in CI, and no test can act on the cluster you ar
 test that needs a cluster sets its own `KUBECONFIG`. A new package in `backend/cli` whose tests can
 reach a cluster needs the same `TestMain`. A test in `backend/cli/internal/kubeisolation` finds such
 packages from the import graph and fails until each has one.
+
+**`backend/k8s` and `backend/cli` need a local API server for their tests.** Some of their tests
+start a real `kube-apiserver` and `etcd` as local processes (no cluster involved): the operator's
+validation rules are enforced only by an API server, and `backend/cli` installs the chart into one
+for every profile `dcctl` renders, because some pod-spec rules are invisible to a render. Without
+the binaries those tests fail rather than skip. Install them once and point the tests at them:
+
+```bash
+cd backend/k8s && make envtest
+export KUBEBUILDER_ASSETS="$(bin/setup-envtest use "$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile)" -p path)"
+```
 
 ### Fuzzing
 
