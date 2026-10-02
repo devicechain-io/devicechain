@@ -127,24 +127,27 @@ const releaseShutdownHeadroom = 6 * time.Second
 //     retries — UNTIL a stop arrives. 🔴 That case is not hypothetical: a broker blip
 //     is exactly what ends a term with the window still open (a watch or term build
 //     that failed against it), and a stop landing during that release must not wait
-//     out the rest of the window against a teardown budget shorter than it. supCtx
-//     ends on every stop, and ExecuteStop records the deadline before cancelling it,
-//     so the AfterFunc below arms the same bound the moment the stop begins.
+//     out the rest of the window against a teardown budget shorter than it.
+//     ExecuteStop records the deadline and then ends stopBegun, so the AfterFunc
+//     below arms the same bound the moment the stop begins.
 //
-// A cancel of supCtx with no deadline recorded (failProcess's) leaves the window as
-// the bound. A deadline already in the past is fine: the first attempt is
-// unconditional.
+// 🔴 It watches stopBegun, NOT supCtx. supCtx also ends with no stop under way:
+// haltStaleWriter cancels it and only then does FailNow's teardown call ExecuteStop.
+// Armed on supCtx, the release saw that edge with no deadline recorded and never
+// looked again, so a broker outage held it for the rest of the window, past the
+// teardown budget. A stop that sends no deadline leaves the window as the bound. A
+// deadline already in the past is fine: the first attempt is unconditional.
 func (rp *ResolvedEventsProcessor) releaseContext() (context.Context, context.CancelFunc) {
 	if n := rp.stopDeadline.Load(); n != 0 {
 		return context.WithDeadline(context.Background(), time.Unix(0, n).Add(-releaseShutdownHeadroom))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	if rp.supCtx == nil {
+	if rp.stopBegun == nil {
 		return ctx, cancel
 	}
 	var mu sync.Mutex
 	var timer *time.Timer
-	stop := context.AfterFunc(rp.supCtx, func() {
+	stop := context.AfterFunc(rp.stopBegun, func() {
 		n := rp.stopDeadline.Load()
 		if n == 0 {
 			return
@@ -595,8 +598,11 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	case err == nil:
 	case errors.Is(err, messaging.ErrNotHolder):
 		// Informational, like the case below: our own hold is relinquished regardless.
+		// It also covers a release that DID land and lost its reply — the retry then
+		// finds nothing of ours — so the message must not read as a failure.
 		log.Info().Err(err).Str("partition", rp.cfg.PartitionId).
-			Msg("DETECT found no lease entry of its own left to release, or its validity window closed before the broker answered")
+			Msg("DETECT found no lease entry of its own left to release (an earlier attempt may already have " +
+				"released it, or it expired), or its validity window closed before the broker answered")
 	default:
 		// A release that never landed leaves the entry to age out — the crash-path
 		// handover, no corruption.

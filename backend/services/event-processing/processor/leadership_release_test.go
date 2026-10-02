@@ -329,6 +329,33 @@ func TestReleaseContextIsTheStopDeadlineLessHeadroom(t *testing.T) {
 			t.Fatal("release context did not end after a stop arrived; the release would wait out the lease window")
 		}
 	})
+	// haltStaleWriter cancels the supervisor BEFORE the process is stopped: the term
+	// ends, its release starts with no deadline recorded, and the stop that FailNow's
+	// teardown sends arrives afterwards. A release armed on supCtx's edge saw that edge
+	// already gone, with nothing recorded, and never looked again, so the stop's
+	// deadline did not reach it and only the lease window (up to 30s) bounded it.
+	t.Run("a stop following a supervisor cancel", func(t *testing.T) {
+		rp := leasedProcessor(t)
+		require.NoError(t, rp.ExecuteInitialize(context.Background()))
+		rp.supCancel()
+		ctx, cancel := rp.releaseContext()
+		defer cancel()
+		select {
+		case <-ctx.Done():
+			t.Fatal("release context ended on a supervisor cancel with no stop deadline recorded")
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), releaseShutdownHeadroom+300*time.Millisecond)
+		defer stopCancel()
+		require.NoError(t, rp.ExecuteStop(stopCtx))
+		select {
+		case <-ctx.Done():
+		case <-time.After(3 * time.Second):
+			t.Fatal("release context did not end after a stop that followed a supervisor cancel; " +
+				"the release would wait out the lease window past the teardown budget")
+		}
+	})
 }
 
 // TestExecuteStopRecordsItsDeadline: the stop deadline reaches the release only through

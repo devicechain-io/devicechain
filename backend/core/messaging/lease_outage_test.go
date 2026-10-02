@@ -723,3 +723,75 @@ func TestHeldIsFalseWhileAReleaseIsRetrying(t *testing.T) {
 	}
 	<-done
 }
+
+// slowGetKV counts updates and holds every read for getDelay before answering it.
+type slowGetKV struct {
+	nats.KeyValue
+	getDelay time.Duration
+	updates  atomic.Int32
+}
+
+func (k *slowGetKV) Update(key string, value []byte, last uint64) (uint64, error) {
+	k.updates.Add(1)
+	return k.KeyValue.Update(key, value, last)
+}
+
+func (k *slowGetKV) Get(key string) (nats.KeyValueEntry, error) {
+	time.Sleep(k.getDelay)
+	return k.KeyValue.Get(key)
+}
+
+// TestARenewDoesNotAdoptOnceItsWindowHasClosed pins the window re-check AFTER the
+// adoption read. The window is checked before the read too, but the read is a round
+// trip: a reply slow enough to carry the lease past its window end must not be
+// followed by the adopting Update, or a Renew overruns the window by a read PLUS an
+// update rather than the one API timeout DETECT's termSlack budgets for.
+//
+// The positive control is the same setup with a read that answers at once: it adopts,
+// which proves the refused CAS really reaches the adoption path, so the second case's
+// single Update is the re-check speaking and not a path never taken.
+func TestARenewDoesNotAdoptOnceItsWindowHasClosed(t *testing.T) {
+	const windowLeft = 400 * time.Millisecond
+	run := func(t *testing.T, getDelay time.Duration) (updates int32, renewErr error) {
+		nmgr, _ := newJetStreamToggleManager(t)
+		dl, err := nmgr.NewDistributedLease(DefaultLeaseTTL)
+		if err != nil {
+			t.Fatalf("NewDistributedLease: %v", err)
+		}
+		lease, err := dl.Acquire("detect:p")
+		if err != nil {
+			t.Fatalf("Acquire: %v", err)
+		}
+		kv := &slowGetKV{KeyValue: lease.kv, getDelay: getDelay}
+		lease.kv = kv
+		// Our own entry moves past lease.rev (a renewal that landed and lost its
+		// reply), so the next Renew's CAS is refused and it reads to adopt.
+		if _, err := kv.KeyValue.Update(lease.key, []byte(lease.holder), lease.rev); err != nil {
+			t.Fatalf("raw Update of our own entry: %v", err)
+		}
+		lease.mu.Lock()
+		lease.lastRenew = time.Now().Add(-DefaultLeaseTTL + windowLeft)
+		lease.mu.Unlock()
+		renewErr = lease.Renew()
+		return kv.updates.Load(), renewErr
+	}
+
+	t.Run("positive control: a prompt read adopts", func(t *testing.T) {
+		updates, err := run(t, 0)
+		if err != nil {
+			t.Fatalf("Renew with %v of window left and a prompt read = %v, want nil (adopted)", windowLeft, err)
+		}
+		if updates != 2 {
+			t.Fatalf("updates = %d, want 2 (the refused CAS and the adopting one)", updates)
+		}
+	})
+	t.Run("a read that outlasts the window does not adopt", func(t *testing.T) {
+		updates, err := run(t, 2*windowLeft)
+		if err == nil {
+			t.Fatal("Renew whose adoption read outlasted the window = nil, want an error")
+		}
+		if updates != 1 {
+			t.Fatalf("updates = %d, want 1: no adopting Update may start after the window closed", updates)
+		}
+	})
+}

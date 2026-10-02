@@ -4913,8 +4913,8 @@ empiece a detectar enseguida. Hasta ahora, si el bróker no respondía a esa lib
 porque un servidor del bróker se estaba reiniciando en ese momento, el pod se rendía tras un
 intento. El siguiente pod esperaba entonces a que la partición expirara, hasta 30 segundos, y un
 periodo de traspaso adicional de 20 segundos antes de detectar nada. Ahora el pod reintenta la
-liberación hasta que el bróker responde, hasta poco antes de que termine su periodo de gracia de
-terminación. Una renovación o una liberación cuya respuesta se perdió mientras un servidor del
+liberación hasta que el bróker responde, mientras se lo permita su tiempo de apagado, y reserva lo
+suficiente para un tiempo de espera más del bróker y para terminar de detenerse. Una renovación o una liberación cuya respuesta se perdió mientras un servidor del
 bróker se reiniciaba tampoco le cuesta ya la partición al motor. El reintento lo hace el pod que se
 detiene, así que tiene efecto a partir de la actualización siguiente a la que instala esta versión:
 durante esa actualización, el pod que se sustituye todavía ejecuta la versión anterior y hace un

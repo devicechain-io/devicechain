@@ -515,9 +515,15 @@ type ResolvedEventsProcessor struct {
 	supCancel context.CancelFunc
 	supWG     sync.WaitGroup
 	// stopDeadline is the teardown deadline in unix nanoseconds, or 0 while the process
-	// is not stopping. ExecuteStop writes it once, BEFORE it cancels supCtx; endTerm's
+	// is not stopping. ExecuteStop writes it once, BEFORE it ends stopBegun; endTerm's
 	// release reads it (releaseContext) to know how long it may wait for the broker.
 	stopDeadline atomic.Int64
+	// stopBegun ends when ExecuteStop begins, and on nothing else. It is NOT supCtx:
+	// supCtx also ends with no stop under way (haltStaleWriter, failProcess), and a
+	// release that took that edge as "the stop is here" would read no deadline and
+	// never look again when the real stop followed. Minted in ExecuteInitialize.
+	stopBegun  context.Context
+	signalStop context.CancelFunc
 	// termBuildFailures counts CONSECUTIVE failed term builds, and only those. It is
 	// touched solely by the supervisor goroutine. See maxConsecutiveTermBuildFailures
 	// for why Acquire failures must never reach it.
@@ -673,6 +679,7 @@ func (rp *ResolvedEventsProcessor) Initialize(ctx context.Context) error {
 // ExecuteInitialize sets up the cancelable loop context.
 func (rp *ResolvedEventsProcessor) ExecuteInitialize(ctx context.Context) error {
 	rp.supCtx, rp.supCancel = context.WithCancel(ctx)
+	rp.stopBegun, rp.signalStop = context.WithCancel(context.Background())
 	rp.newTermContext()
 	return nil
 }
@@ -2660,12 +2667,15 @@ func (rp *ResolvedEventsProcessor) Stop(ctx context.Context) error {
 // The release waits for a broker that does not answer, up to ctx's deadline less
 // releaseShutdownHeadroom (core's teardown hands this stop its whole budget, the grace
 // period less the drain and a margin). So the deadline is recorded BEFORE the
-// supervisor is cancelled: a release already retrying when the stop arrives reads it
-// the moment supCtx ends, and one that starts afterwards reads it at once.
+// stop is signalled: a release already retrying when the stop arrives reads it the
+// moment stopBegun ends, and one that starts afterwards reads it at once.
 func (rp *ResolvedEventsProcessor) ExecuteStop(ctx context.Context) error {
 	if rp.leadershipEnabled() {
 		if dl, ok := ctx.Deadline(); ok {
 			rp.stopDeadline.Store(dl.UnixNano())
+		}
+		if rp.signalStop != nil {
+			rp.signalStop()
 		}
 		if rp.supCancel != nil {
 			rp.supCancel()

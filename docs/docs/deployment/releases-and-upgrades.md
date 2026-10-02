@@ -4557,8 +4557,9 @@ When the detection engine's pod stops, it releases its partition so that the nex
 detecting at once. Until now, if the broker did not answer that release, for example because a
 broker server was restarting at that moment, the pod gave up after one try. The next pod then
 waited for the partition to expire, up to 30 seconds, and for a further 20-second handover period
-before it detected anything. The pod now retries the release until the broker answers, until
-shortly before its termination grace period ends. A renewal or a release whose reply was lost
+before it detected anything. The pod now retries the release until the broker answers, for as
+long as its shutdown time allows, keeping back enough of it for one more broker timeout and to
+finish stopping. A renewal or a release whose reply was lost
 while a broker server restarted also no longer costs the engine its partition. The retry is done
 by the pod that stops, so it takes effect from the upgrade after the one that installs this
 release: during that upgrade, the pod being replaced still runs the previous release and makes
