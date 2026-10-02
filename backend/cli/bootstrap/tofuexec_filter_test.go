@@ -80,6 +80,14 @@ func TestTheOutputsFilterDropsOnlyTheBlock(t *testing.T) {
 			want: "      - input  = \"Changes to Outputs:\" -> null\n  - kept = 1 -> null\nnext\n",
 		},
 		{
+			// The match is exact and at column 0: an indented or differently capitalised
+			// copy of the header, alone on its line, is not the header, so it and the
+			// indented line after it are kept.
+			name: "the header text alone but indented, or in other capitals, is not the header",
+			in:   "  Changes to Outputs:\n  - kept = 1 -> null\nchanges to outputs:\n  - also kept = 2 -> null\n",
+			want: "  Changes to Outputs:\n  - kept = 1 -> null\nchanges to outputs:\n  - also kept = 2 -> null\n",
+		},
+		{
 			name: "a header ending in CRLF is the header",
 			in:   "Changes to Outputs:\r\n  - a = 1 -> null\r\nnext\r\n",
 			want: r + "next\r\n",
