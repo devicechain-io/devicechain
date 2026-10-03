@@ -204,7 +204,7 @@ mosquitto_pub \
 
 The credential authenticates the connection (broker) and the event (pipeline). The TLS host, CA source and port exposure depend on how the instance is deployed; see [Deployment](../deployment/kubernetes-operator.md).
 
-### Quality of service
+### Quality of service {#quality-of-service}
 
 Publish telemetry at **QoS 0** unless you have a specific reason not to. The examples above do, because `mosquitto_pub` defaults to it.
 
@@ -232,6 +232,16 @@ Publish at QoS 0, or QoS 1 with `altId` and `occurredTime`. An operator who genu
 
 - `POST` returns **202 Accepted** once the event is queued.
 - It returns **429 Too Many Requests** if the tenant is over its HTTP ingest ceiling, counted in readings, so a message carrying many readings costs more than one carrying a single reading. The MQTT path drops over-limit messages instead of answering.
+- It returns **400 Bad Request** when the body cannot be read or decoded, or the tenant in the path
+  is not a valid token. Sending the same request again gets the same answer.
+- It returns **503 Service Unavailable** when the event was not accepted. With a `Retry-After`
+  header, the platform is refusing new events
+  ([backpressure](../deployment/observability.md#ingest-backpressure)) and the event was not
+  stored: wait that many seconds and send it again. Without one, the publish failed and the event
+  may have been stored anyway, so a resend stores it twice unless it carries an `altId` and an
+  `occurredTime` (see [Quality of service](#quality-of-service)). Retry it either way. The
+  tenant's own ceiling is checked first, so a tenant over it gets `429`, not this `503`. The
+  [transport matrix](../reference/transport-matrix.md#http) has the full list.
 
 HTTP ingest has a per-tenant allowance of its own, separate from the one the tenant's MQTT traffic spends, so HTTP requests naming a tenant cannot use up that tenant's MQTT telemetry (see [unconfirmed tenant names](../concepts/governance.md#unconfirmed-tenants)).
 

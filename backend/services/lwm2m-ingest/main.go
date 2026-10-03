@@ -368,7 +368,8 @@ func buildMetrics() {
 			"SenML records skipped because the resolved name was empty. Always a device fault: "+
 				"a sample with no resource path has no series to belong to."),
 		IngestDropped: Microservice.NewCounter("notify_ingest_dropped_total",
-			"LwM2M Notify samples dropped on a retryable ingest error (no retry in the notify path; the next Notify supersedes)."),
+			"LwM2M Notify messages whose samples were dropped because ingest failed or refused them, backpressure included "+
+				"(no retry in the notify path; the next Notify supersedes)."),
 		ActiveObservations: Microservice.NewGauge("active_observations",
 			"Live LwM2M observations currently held across all sessions."),
 	}

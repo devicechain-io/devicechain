@@ -192,6 +192,14 @@ Conviene tener prevista la consecuencia. Un inquilino apretado contra su techo t
 
 Esto se aplica a la toma MQTT del broker de la plataforma. Sparkplug cobra sus lecturas DATA contra el techo del inquilino, pero no las transiciones de presencia que afirman sus nacimientos y muertes. LwM2M usa su propio límite, configurado por separado.
 
+**La contrapresión es distinta.** Mientras la plataforma rechaza eventos nuevos (consulta
+[Contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)), las
+transiciones de conexión y desconexión de todos los transportes se siguen admitiendo, porque una
+transición rechazada dejaría el dispositivo en un estado incorrecto hasta que una pasada de
+reconciliación lo reparase. Nada limita cuántas se admiten, así que una flota que se reconecta en
+bucle todavía puede llenar el stream hasta su techo, y el stream descarta entonces sus eventos más
+antiguos.
+
 ### Reducir el clúster del broker exige reiniciar `event-sources` {#resizing-the-broker-cluster}
 
 La comparación de reparación se niega a marcar nada como fuera de línea si no puede dar cuenta de todos los nodos del clúster del broker. Decide qué significa «todos los nodos» a partir del clúster más grande que ha visto jamás. Esa marca solo sube, y eso es lo que impide que una partición de red provoque desconexiones falsas masivas: un broker aislado por rutas se declara a sí mismo como el clúster entero y, de otro modo, cumpliría su propia comprobación.

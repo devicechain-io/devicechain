@@ -513,6 +513,13 @@ transitions births and deaths assert are not metered either. A runaway edge node
 messages as fast as the broker delivers them. Bound it at the broker, or by the groups you subscribe
 to.
 
+**Readings are also dropped while the platform applies backpressure.** While the platform is
+refusing new events (see [Backpressure on the ingest path](./observability.md#ingest-backpressure)),
+the readings of a message that are not yet stored are dropped at once, without the in-handler retry,
+and counted in `ingest_failures_total`. That includes a birth's metric values, which the ceiling
+never sheds: a slow-changing metric lost this way is missing until it next changes or the node is
+reborn. The connect and disconnect transitions that births and deaths assert are still accepted.
+
 **The reading limit is applied by splitting.** The
 [per-event reading limit](../guides/connecting-a-device.md#how-much-one-message-may-carry) is applied
 on this path by splitting a message, not refusing it. A DDATA carrying thousands of metrics becomes
@@ -654,7 +661,8 @@ Prefix: `devicechain_sparkplugingest_`.
 | `rebirth_requests_total` | Nodes being asked to re-announce. Steadily rising means a node is failing to resynchronise. |
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths the session machine asked for, and the ones its publish queue was too full to take. A drop is a latency signal rather than a failure — the request is re-made on the node's next window — but a standing drop rate means rebirths are going out slower than they are being asked for. Read it against `rebirth_requests_total`, which counts only what reached the wire and is therefore capped by the publisher rather than by demand: **drops while `rebirth_requests_total` climbs to a steady ceiling** is fan-out outrunning a publisher that is otherwise healthy; **drops while it is flat** is the publishes themselves stalling, which points at the broker connection. |
 | `unknown_device_dropped_total` | Traffic from identities with no device, with auto-registration off. |
-| `decode_errors_total` / `ingest_failures_total` | Malformed payloads, and failures publishing onward. |
+| `decode_errors_total` | Malformed payloads. |
+| `ingest_failures_total` | Accepted messages whose readings, or the connect and disconnect transitions their births and deaths assert, were dropped, plus batches of disconnects that presence reconciliation declared and could not store: readings at once while the platform applies backpressure, and either one after the in-handler retry ran out (device-management or the broker unreachable) or while the connection was shutting down. A message split across several events may have stored its leading events. A clean-session Host gets no redelivery, so each one is lost. |
 | `ingest_samples_shed_total` | DATA readings dropped because a tenant is over its ingest ceiling. A tenant shedding here sends more readings than its tier allows. |
 | `tenant_deleted_dropped_total` | Traffic refused because its tenant is being deleted. |
 | `samples_too_old_dropped_total` | Readings dropped because their timestamp is more than 366 days before the host received them; the rest of their message is stored. A metric whose value has not changed for that long is dropped from every birth, and a node with no clock set (times near 1970) has all its readings dropped. The service logs a warning naming the device. |
@@ -678,6 +686,7 @@ Prefix: `devicechain_lwm2mingest_`.
 | `observation_overflow_total` | A registration exceeding the 32-observation cap. Some of its resources are not observed. |
 | `telemetry_too_old_dropped_total` | Readings dropped because their time is more than 366 days before the adapter received them; the rest of their Notify is stored. The service logs a warning naming the device. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling, in Notify messages and in readings. |
+| `notify_ingest_dropped_total` | Notify messages whose readings were dropped because the platform refused them or could not take them, including while it applies backpressure. There is no retry; the next Notify supersedes what was lost. A Notify split across several events may have stored its leading events. |
 | `shadows_reconstructed_total` | Presence rebuilt after a leadership change. A spike is the fingerprint of a failover. |
 | `commands_failed_total` / `commands_not_served_total` | Downlink commands that did not land. |
 | `command_live_claim_errors_total` | Commands **not carried out** because command-delivery could not confirm them. Each command is confirmed with command-delivery immediately before it reaches the device, and without that confirmation it is never sent. A sustained rate means no LwM2M command is reaching its device: **this is the one to alert on.** The commands are retried, not lost. |

@@ -204,7 +204,7 @@ mosquitto_pub \
 
 La credencial autentica la conexión (broker) y el evento (pipeline). El host TLS, el origen de la CA y la exposición del puerto dependen de cómo se despliegue la instancia; consulta [Despliegue](../deployment/kubernetes-operator.md).
 
-### Calidad de servicio
+### Calidad de servicio {#quality-of-service}
 
 Publica la telemetría con **QoS 0** salvo que tengas una razón concreta para no hacerlo. Los ejemplos anteriores lo hacen, porque `mosquitto_pub` lo usa por defecto.
 
@@ -232,6 +232,17 @@ Publica con QoS 0, o con QoS 1 con `altId` y `occurredTime`. Un operador que rea
 
 - `POST` devuelve **202 Accepted** una vez que el evento está en cola.
 - Devuelve **429 Too Many Requests** si el inquilino supera su techo de ingesta HTTP, contado en lecturas, así que un mensaje que lleva muchas lecturas cuesta más que uno que lleva una sola. La ruta MQTT descarta los mensajes que exceden el límite en lugar de responder.
+- Devuelve **400 Bad Request** cuando el cuerpo no puede leerse o decodificarse, o el inquilino de la
+  ruta no es un token válido. Enviar de nuevo la misma petición recibe la misma respuesta.
+- Devuelve **503 Service Unavailable** cuando el evento no se aceptó. Con una cabecera
+  `Retry-After`, la plataforma está rechazando eventos nuevos
+  ([contrapresión](../deployment/observability.md#ingest-backpressure)) y el evento no se
+  almacenó: espera esos segundos y vuelve a enviarlo. Sin ella, la publicación falló y puede que el
+  evento se haya almacenado igualmente, así que un reenvío lo almacena dos veces salvo que lleve
+  `altId` y `occurredTime` (consulta [Calidad de servicio](#quality-of-service)). Reinténtalo en
+  ambos casos. El techo propio del inquilino se comprueba primero, así que un inquilino por encima
+  recibe `429`, no este `503`. La [matriz de transportes](../reference/transport-matrix.md#http)
+  tiene la lista completa.
 
 La ingesta HTTP tiene una asignación por inquilino propia, separada de la que consume el tráfico MQTT del inquilino, así que las peticiones HTTP que nombran a un inquilino no pueden agotar su telemetría MQTT (consulta [nombres de inquilino que no se pueden confirmar](../concepts/governance.md#unconfirmed-tenants)).
 

@@ -110,7 +110,7 @@ type Metrics struct {
 	UnknownContentFormat    prometheus.Counter // a Notify in a content format this slice does not decode (e.g. TLV)
 	ObserveEstablishRefused prometheus.Counter // an Observe GET refused/failed (dominant cause: a 1.0-only client's 4.06)
 	TerminalNotifications   prometheus.Counter // a non-2.05 notification that terminated an observation (RFC 7641)
-	IngestDropped           prometheus.Counter // a Notify dropped on a retryable ingest error (no retry in the callback)
+	IngestDropped           prometheus.Counter // a Notify whose samples were dropped on any ingest error, a backpressure refusal included (no retry in the callback)
 	ActiveObservations      prometheus.Gauge   // live observations currently held across all sessions
 
 	// The decode's own skip accounting (decode.Skips). Without these a Notify that
@@ -424,9 +424,11 @@ func (m *Manager) onNotify(identity string, epoch uint64, conn mux.Conn, path st
 	ctx, cancel := context.WithTimeout(context.Background(), m.ingestTimeout)
 	defer cancel()
 	if err := m.ingester.Ingest(ctx, target.Tenant, target.Policy, target.ExternalId, samples); err != nil {
-		// A Notify is best-effort telemetry: on a retryable infra error (device-management/NATS
-		// down) we count and drop; the next Notify supersedes. NO retry budget here — a 3s×N
-		// retry would stall this conn's Updates behind one slow publish.
+		// A Notify is best-effort telemetry: on any ingest error (device-management/NATS down,
+		// or inbound-events refusing under backpressure) we count and drop; the next Notify
+		// supersedes. A Notify split across several events may have stored its leading ones.
+		// NO retry budget here — a 3s×N retry would stall this conn's Updates behind one
+		// slow publish.
 		incr(m.metrics.IngestDropped, 1)
 	}
 }
