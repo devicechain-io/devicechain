@@ -318,9 +318,15 @@ func TestAReaderHandsEachAnswerToOneErrorOnly(t *testing.T) {
 // 🔴 AN EMPTY FETCH IS NOT AN ANSWER. nats.go reports one from its own client-side deadline
 // while disconnected, so an idle reader whose broker is gone keeps "succeeding" at empty
 // fetches. Counting them would excuse a dead broker forever, and the loop would never give
-// up. The read is held long enough for several empty fetches and a probe, and it is
-// asserted AFTER the first error has been handed out — that error takes the evidence the
-// bind left, so an assertion before it would pass for the wrong reason.
+// up. The read is held long enough for several empty fetches and a probe.
+//
+// The bind's evidence is taken first, the way an error takes it, so that whatever is found
+// afterwards can only have been gathered with the broker down. It is not left to the stop to
+// hand out an error that takes it: a stop reaches the reader as an error only when it lands
+// on a fetch in flight, and a client that sees the broker gone before the read starts gives
+// it nothing but empty fetches. Every error handed out during the hold is checked as well,
+// since each one takes the evidence with it and a check of the reader alone would then pass
+// for the wrong reason.
 func TestAnIdleReaderWithItsBrokerDownGathersNoAnswer(t *testing.T) {
 	srv, _, nmgr := singleBroker(t)
 	reader, err := nmgr.NewReader(streams.InboundEvents)
@@ -328,28 +334,28 @@ func TestAnIdleReaderWithItsBrokerDownGathersNoAnswer(t *testing.T) {
 		t.Fatalf("reader: %v", err)
 	}
 	r := reader.(*natsReader)
+	if !answeredOn(t, r.readError(errors.New("take the bind's evidence"))) {
+		t.Fatal("the bind left no broker answer on the reader")
+	}
 
 	srv.Shutdown()
 	srv.WaitForShutdown()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := r.ReadMessage(ctx); err == nil || errors.Is(err, io.EOF) {
-		t.Fatalf("ReadMessage returned %v with the broker going down, want the fetch's disconnect error", err)
-	}
-	if r.answered.Load() {
-		t.Fatal("the evidence survived the error that reported it")
-	}
+	waitFor(t, "the client to see the broker gone", func() bool { return !nmgr.nc.IsConnected() })
 
 	hold := time.Duration(livenessProbeAfterTimeouts+2)*fetchTimeout + 6*time.Second
-	ctx2, cancel2 := context.WithTimeout(context.Background(), hold)
-	defer cancel2()
+	ctx, cancel := context.WithTimeout(context.Background(), hold)
+	defer cancel()
 	for {
-		_, err := r.ReadMessage(ctx2)
+		_, err := r.ReadMessage(ctx)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err == nil {
 			t.Fatal("a message was read with the broker down")
+		}
+		if answeredOn(t, err) {
+			t.Fatalf("the read error %q, handed out with the broker down, carried a broker answer: a "+
+				"dead broker would then never end the loop", err)
 		}
 	}
 	if r.answered.Load() {
@@ -358,8 +364,6 @@ func TestAnIdleReaderWithItsBrokerDownGathersNoAnswer(t *testing.T) {
 	}
 }
 
-// And the positive half: on a live, idle stream the probe IS an answer, so a reader that
-// receives nothing still gathers evidence the broker is there.
 func TestAnIdleReaderWithItsBrokerUpGathersAnAnswerFromItsProbe(t *testing.T) {
 	_, _, nmgr := singleBroker(t)
 	reader, err := nmgr.NewReader(streams.InboundEvents)
