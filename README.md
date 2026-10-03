@@ -91,13 +91,19 @@ separated by a tenant column that every query is scoped to, and by per-tenant me
 All tenants share one set of services
 ([multi-tenancy](https://docs.devicechain.io/concepts/multi-tenancy)).
 
-A default install is sized for one tenant sending at the default ingest limit of 1,000 messages a
-second, one reading per message. At that rate `device-management` uses about one CPU core and
-`event-management` about half of one. More tenants at their limits, or messages that carry many
-readings, need more ([service sizing](https://docs.devicechain.io/deployment/bootstrap#service-sizing)).
+A default install sizes the CPU request of each service on the event path from measurement
+([service sizing](https://docs.devicechain.io/deployment/bootstrap#service-sizing)). On
+Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service
+nodes, a default HA install accepted 6,000 events a second for 10 minutes, twice, and stored every
+accepted event exactly once. That was measured on the release candidate with event-management at
+one pod, before `--ha` began running it as two. See
+[measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput). Each
+tenant is allowed 1,000 readings a second by default
+([governance](https://docs.devicechain.io/concepts/governance)).
 
 The `--ha` flag on `dcctl install` runs the message broker as a three-node cluster with every
-stream replicated, and both databases as three-instance clusters. It needs three schedulable
+stream replicated, and both databases as three-instance clusters. Without `--compact`, it also
+runs `event-management` as two pods. It needs three schedulable
 nodes (on kind, three workers). An `--ha` install keeps running when any one node is lost; a
 second node lost at the same time stops writes. `dcctl ha verify` checks that the broker holds
 the replication the install declares ([high availability](https://docs.devicechain.io/deployment/bootstrap#ha)).
@@ -121,7 +127,8 @@ you upgrade.
 
 `dcctl install local` and `dcctl bootstrap local` are tested end to end on kind. To use another
 cluster, pass `--kube-context <ctx>` to both commands; that path is not part of the end-to-end
-tests.
+tests. For Google Kubernetes Engine, [`deploy/gke`](deploy/gke/README.md) creates a cluster sized
+for DeviceChain and walks through installing onto it.
 
 ## Install
 

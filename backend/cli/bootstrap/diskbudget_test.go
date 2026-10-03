@@ -607,6 +607,29 @@ func TestGKEGuideShapeIsTheDefaults(t *testing.T) {
 		}
 	}
 
+	// The guide quotes the published throughput measurement with the cluster it was
+	// measured on, and says that cluster is this configuration's defaults. The
+	// measurement is history and stays as it was measured; the claim that ties it to
+	// the defaults is not. When a default moves, the shape below must not be edited
+	// to follow it: drop the "Those nodes are this configuration's defaults" sentence
+	// and this check together, because the guide no longer creates what was measured.
+	for _, m := range figures("the measured shape", "on ([a-z]+) ([0-9]+)-vCPU, ([0-9]+) GB database nodes and "+
+		"([a-z]+) ([0-9]+)-vCPU, ([0-9]+) GB service nodes, a default HA install accepted [^.]+\\. "+
+		"[^.]+\\. Those nodes are this configuration's defaults") {
+		for i, pool := range []string{"database", "services"} {
+			mt, vcpu, gb := shape(pool)
+			n := tofuNumberDefault(t, gkeTF, pool+"_node_count")
+			got := m[1+3*i : 4+3*i]
+			if num(got[0]) != n || num(got[1]) != vcpu || num(got[2]) != gb {
+				t.Errorf("the GKE README says the throughput was measured on %s %s-vCPU, %s GB %s nodes and that "+
+					"those are this configuration's defaults; the %s pool defaults to %d × %s (%d vCPU, %d GB). "+
+					"If the README misquotes the measurement, fix it; if the default moved, drop the sentence "+
+					"tying the measurement to the defaults, not the measured shape", got[0], got[1], got[2], pool,
+					pool, n, mt, vcpu, gb)
+			}
+		}
+	}
+
 	for _, m := range figures("node sizes", "the `database` pool has ([0-9]+) GB nodes and the `services` pool ([0-9]+) GB ones") {
 		expect("the database pool's GB per node", num(m[1]), gbOf["database"])
 		expect("the services pool's GB per node", num(m[2]), gbOf["services"])

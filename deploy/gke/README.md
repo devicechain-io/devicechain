@@ -36,22 +36,35 @@ second; NATS alone used about 0.7 GiB per server. The databases want memory:
 Postgres keeps a small buffer cache of its own and leans on the node's page cache
 for the rest, so memory on a database node buys speed. That is why the `database`
 pool has 16 GB nodes and the `services` pool 8 GB ones, with the same 4 vCPU each.
+On those 8 GB services nodes, in runs offered up to 9,200 events a second, every
+node kept at least 5.2 GiB available, which leaves CPU as the services pool's limit.
 The services shape is a custom one, `n2-custom-4-8192`, because no predefined N2
 type has 4 vCPU and 8 GB. For more throughput, `n2-highcpu-8` adds CPU, which is
 what binds first. It needs 12 more vCPUs, which takes the cluster past a new
 project's 32 (see below).
 
-The busiest pod is the event store's primary together with its write-ahead-log
-archiver. When a database pod is scheduled it prefers a node without the other
-database's primary, but that is a preference, and a failover, or the switchover
-that a node upgrade causes, can put both primaries on one node. In our runs on
-8-vCPU nodes the two primaries together used about five cores at 4,000 events a
-second, which is more than a 4-vCPU node has. See
+The busiest pod is the NATS server that leads the incoming-event stream. In runs
+offered 6,800 events a second and more, it used 1.6 to 1.8 cores against its 500m
+request, and the services node it shared with `device-state` and
+`event-management` ran at 94 to 95% CPU: that node, not the databases, is what
+bound first. At 6,000 events a second the same node ran at about 90%.
+
+The database pool had room. At 6,000 events a second the event store's primary,
+with its write-ahead-log archiver, used about 1.5 cores, and the relational store's
+primary about 1.2. When a database pod is scheduled it prefers a node without the
+other database's primary, but that is a preference, and a failover, or the
+switchover that a node upgrade causes, can put both primaries on one node. Together
+the two used about 2.7 cores, about two-thirds of a 4-vCPU node; both on one node
+was not measured. See
 [Where the database primaries run](https://docs.devicechain.io/deployment/bootstrap#ha-database-primaries)
 for how to check, and how to move one.
 
-We have not measured DeviceChain's throughput on this shape. The published
-throughput figures were measured on three 8-vCPU nodes.
+On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU,
+8 GB service nodes, a default HA install accepted 6,000 events a second for 10
+minutes, twice, and stored every accepted event exactly once. That was measured on
+the release candidate with event-management at one pod, before `--ha` began running
+it as two. Those nodes are this configuration's defaults, on its standard boot disks.
+See [Measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput).
 
 The defaults use 24 vCPUs, and 28 with a load-generator node. The extra node GKE
 adds to a pool while it upgrades it takes 4 more, which reaches 32. A larger shape
@@ -63,8 +76,9 @@ everything running on them.
 ## Before you start
 
 You need `gcloud`, `kubectl`, `tofu` (or `terraform`) and `dcctl` on your `PATH`,
-and a Google Cloud project with billing linked. The configuration needs OpenTofu
-or Terraform 1.8 or newer.
+and a Google Cloud project with billing linked. You need OpenTofu or Terraform 1.9
+or newer. This configuration accepts 1.8, but `dcctl bootstrap`, which you run
+after it, needs 1.9, and `dcctl` does not check the version before it starts.
 
 1. Sign in. The first command is for `gcloud` itself, and the second gives
    OpenTofu credentials:
@@ -113,9 +127,9 @@ or Terraform 1.8 or newer.
    [upgrades it](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pool-upgrade-strategies#surge)
    add 100 GB each, and a regional cluster (`location` set to a region) triples
    the boot disks, so check `DISKS_TOTAL_GB` too. A standard disk's speed grows
-   with its size, which is why the boot disks are not smaller. We have not
-   measured DeviceChain's nodes on standard boot disks, including how long a new
-   node takes to pull its images.
+   with its size, which is why the boot disks are not smaller. The measurement of
+   6,000 events a second above was taken on these standard boot disks. How long a
+   new node takes to pull its images from one has not been measured.
 
    A second instance needs more SSD: each further instance claims 144 GB more,
    and one that ingests continuously also wants about 160 GB more backup store.
@@ -370,7 +384,7 @@ dcctl bootstrap local my-instance --kube-context "$CTX" --host "$IP.nip.io" \
 ```
 
 `dcctl` refuses a version containing `-dev.`, because it treats that as a build
-nobody published. Tag your images with something else, such as `v0.18.1-bench.<sha>`.
+nobody published. Tag your images with something else, such as `v0.19.1-bench.<sha>`.
 
 ### Long sessions
 
