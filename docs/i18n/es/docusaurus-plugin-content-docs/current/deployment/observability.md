@@ -320,9 +320,27 @@ los que ese consumidor aún no ha leído.
 
 - Cuando la cola **sin leer** de ese consumidor alcanza el **90%** de lo que cabe en el flujo, los
   servicios que escriben en él empiezan a rechazar eventos nuevos. Vuelven a aceptarlos cuando la
-  cola baja del **80%**. Solo cuenta la cola sin leer. Los eventos ya procesados que el flujo
-  conserva durante una semana no cuentan, así que un flujo lleno cuyo consumidor va al día no
-  rechaza nada.
+  cola baja del **80%**. Para este umbral solo cuenta la cola sin leer: los eventos ya procesados
+  que el flujo conserva durante una semana no cuentan.
+- Un flujo lleno descarta primero sus eventos más antiguos, así que los eventos ya procesados que
+  conserva por delante de los no leídos del consumidor son lo que se agota antes de que se pierda
+  un evento sin leer. Los servicios también rechazan cuando ese historial procesado se descartaría
+  entero en **30 segundos** al ritmo al que el flujo lo está descartando. Lo que dura no depende del
+  tamaño de los eventos, así que una ráfaga de eventos grandes sobre un historial de eventos
+  pequeños se rechaza aquí aunque la cola sin leer esté muy por debajo del 90%. Vuelven a aceptar
+  eventos cuando ese historial duraría **un minuto**, o el consumidor lo ha leído todo. Un flujo
+  lleno cuyo consumidor mantiene el ritmo no rechaza nada: lo que el flujo descarta se sustituye
+  por eventos que el consumidor ya ha terminado. La excepción es un flujo lleno que contiene menos
+  de un minuto aproximadamente de su propio tráfico: un consumidor que se retrasa unos segundos
+  puede hacer que rechace, y entonces solo vuelve a aceptar cuando ese consumidor lo ha leído todo.
+  Es más probable con límites de flujo pequeños, como en una instalación creada con `--compact`, y
+  eventos grandes que llegan deprisa.
+- Un evento que el consumidor recibió pero no ha confirmado cuenta como no leído, también uno que
+  espera a entregarse de nuevo tras un fallo. Mientras un evento así está cerca del principio de un
+  flujo lleno, el flujo puede rechazar eventos nuevos hasta que se confirme o se abandone, en lugar
+  de descartarlo.
+- Cada servicio mide el flujo cada 5 segundos, y también en cuanto él mismo ha escrito alrededor de
+  una milésima parte del límite del flujo desde su última medición, como mucho cada 100 ms.
 - Un servicio que no puede medir la cola durante 30 segundos trata el flujo como lleno y también
   rechaza.
 - `device-management` deja de leer `inbound-events` mientras `resolved-events` rechaza, y
@@ -338,9 +356,18 @@ los que ese consumidor aún no ha leído.
   techo, cualquier inquilino en un clúster más pequeño y un cliente que publica por HTTP con muchos
   nombres de inquilino, porque un nombre se mide antes de comprobar su credencial. Entonces la
   compuerta rechaza a todos.
-- El broker sigue descartando el mensaje más antiguo cuando un flujo está lleno. Ahora eso solo
-  ocurre si los eventos llegan más rápido de lo que la compuerta puede actuar, y las alertas de
-  [Mensajes que un consumidor nunca leyó](#unread-loss) lo siguen informando.
+- El broker sigue descartando el mensaje más antiguo cuando un flujo está lleno, así que aún se
+  puede perder un evento sin leer en tres casos. Los servicios que escriben en el flujo pueden
+  gastar, entre dos de sus mediciones, más historial procesado del que se vio descartar al flujo en
+  los 30 segundos anteriores. Un flujo puede llegar a su límite por primera vez casi sin historial
+  procesado, antes de que se haya medido ningún ritmo de descarte. Y las transiciones de conexión
+  y desconexión se admiten mientras el flujo rechaza (ver más abajo). Las alertas de
+  [Mensajes que un consumidor nunca leyó](#unread-loss) lo informan.
+- Eliminar un inquilino quita sus eventos de los dos flujos. Eso libera espacio, así que por sí
+  solo no hace que el flujo rechace, con una excepción: un inquilino cuyos eventos son los más
+  antiguos que conserva un flujo lleno, y tan pocos que el flujo sigue lleno sin ellos. Quitarlos
+  parece lo mismo que un flujo que descarta su historial deprisa, así que el flujo puede rechazar
+  hasta que el consumidor se ponga al día. No se pierde nada.
 
 Qué hace cada transporte mientras el flujo rechaza:
 
@@ -365,7 +392,7 @@ de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo rechaza eventos nuevos para todos los inquilinos: los dispositivos HTTP reciben `503` con `Retry-After`, los eventos de los dispositivos MQTT esperan en el flujo de captura, y las lecturas de Sparkplug y LwM2M, y los eventos de un broker MQTT externo, se descartan y se cuentan. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
-| `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80%. |
+| `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos: la cola sin leer de un consumidor está cerca del límite, o el flujo lleno descarta el historial procesado por delante de ella tan deprisa que se agotaría en 30 segundos. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. Si `JetStreamUnreadBacklogNearFull` no se dispara, es el segundo caso: `jetstream_backpressure_history_runway_seconds` lo muestra, y el registro del servicio que escribe indica el consumidor y el ritmo. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80% y, si la causa era el historial, cuando ese historial duraría un minuto o el consumidor lo ha leído todo. |
 
 Los servicios que escriben en los dos flujos exportan estas series:
 
@@ -373,6 +400,12 @@ Los servicios que escriben en los dos flujos exportan estas series:
   del consumidor (pendientes más sin confirmar) dividida entre lo que cabe en el flujo, en mensajes
   o en bytes, según qué límite sea más estricto. No aparece mientras no se puede medir. Combine los
   pods con `max`.
+- **`devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`**: cuánto
+  durarían los eventos procesados que quedan por delante de los no leídos del consumidor al ritmo
+  al que el flujo lleno los ha estado descartando. `+Inf` mientras el flujo no está en su límite,
+  no descarta ninguno, o el consumidor lo ha leído todo. El flujo empieza a rechazar por debajo de
+  30 y vuelve a aceptar a partir de 60. No aparece mientras no se puede medir. Combine los pods con
+  `min`.
 - **`devicechain_<area>_jetstream_backpressure_engaged{stream}`**: 1 mientras el servicio rechaza,
   también mientras no puede medir la cola. Se lee cuando Prometheus hace el scrape, así que no
   puede mostrar 0 cuando el servicio de hecho está rechazando.

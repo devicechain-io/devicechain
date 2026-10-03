@@ -44,6 +44,11 @@ const (
 type orderedWriter struct {
 	nmgr   *NatsManager
 	suffix string
+	// gate is the stream's backpressure gate, nil for a stream that applies none. The writer
+	// never refuses on it (see NewOrderedWriter), but it counts what it publishes against it:
+	// a forwarding hop's volume spends the same margin as any other writer's, and brings the
+	// next measurement forward in the same way.
+	gate *gateState
 	// js is this writer's OWN JetStream context, not the manager's shared one. It carries
 	// PublishAsyncTimeout so the library forgets a publish nobody answered instead of
 	// holding it forever — the manager's context has no such timeout, and an async publish
@@ -131,8 +136,12 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, window int) (OrderedWri
 	nmgr.metrics.initPublish(suffix, publishModePipelined)
 	log.Info().Str("suffix", suffix).Int("window", window).Msg("Added new ordered NATS writer")
 	return &orderedWriter{
-		nmgr:     nmgr,
-		suffix:   suffix,
+		nmgr:   nmgr,
+		suffix: suffix,
+		// Registering is idempotent, and a service that forwards into a gated stream has
+		// normally registered its gate already, through the reader that parks on it; here it
+		// is fetched so the writer can count its volume.
+		gate:     nmgr.registerBackpressure(suffix),
 		js:       js,
 		slots:    make(chan struct{}, window),
 		pending:  make(chan orderedPending, window),
@@ -190,11 +199,16 @@ func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(erro
 	// here is a reorder. A failure is instead reported in order and backed off in the settle
 	// loop. (The library also refuses a context or a per-publish timeout on this path; the
 	// deadline is enforced by awaitPubAck.)
-	fut, err := o.js.PublishMsgAsync(natsMsg(subject, msg))
+	nm := natsMsg(subject, msg)
+	fut, err := o.js.PublishMsgAsync(nm)
 	if err != nil {
 		o.pending <- orderedPending{err: err, brokerFailed: true, sent: sent, done: done}
 		return
 	}
+	// Counted when sent, not when acknowledged: the measurement it paces is of what the
+	// broker holds, and a publish in flight is about to be held.
+	// Subject, headers and data, as sent: what natsWriter counts.
+	o.gate.notePublished(nm.Size())
 	o.pending <- orderedPending{fut: fut, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
 }
 

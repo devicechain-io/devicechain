@@ -311,9 +311,26 @@ read yet.
 
 - When that consumer's **unread** backlog reaches **90%** of what the stream can hold, the
   services that write to the stream start refusing new events. They accept events again once the
-  backlog is below **80%**. Only the unread backlog counts. The events already processed that
-  the stream keeps for a week do not, so a full stream whose consumer is caught up refuses
-  nothing.
+  backlog is below **80%**. For this threshold only the unread backlog counts: the events already
+  processed that the stream keeps for a week do not.
+- A full stream discards its oldest events first, so the events already processed that it still
+  holds ahead of the consumer's unread ones are what runs out before an unread event is lost. The
+  services also refuse when that processed history would all be discarded within **30 seconds** at
+  the rate the stream is discarding it. How long it lasts does not depend on how large the events
+  are, so a burst of large events over a history of small ones is refused here while the unread
+  backlog is still far below 90%. They accept events again once that history would last **a
+  minute**, or the consumer has read everything. A full stream whose consumer keeps pace refuses
+  nothing: what the stream discards is replaced by events the consumer has finished with. A full
+  stream that holds less than about a minute of its own traffic is the exception: a consumer that
+  falls behind for a few seconds can make it refuse, and it then accepts again only once that
+  consumer has read everything. That is most likely with small stream ceilings, such as an
+  installation bootstrapped with `--compact`, and large events arriving fast.
+- An event the consumer received but has not acknowledged counts as unread, including one waiting
+  to be delivered again after a failure. While such an event sits near the front of a full stream,
+  the stream can refuse new events until it is acknowledged or given up on, rather than discard
+  it.
+- Each service measures the stream every 5 seconds, and also as soon as it has itself written
+  about a thousandth of the stream's ceiling since its last measurement, at most every 100 ms.
 - A service that cannot measure the backlog for 30 seconds treats the stream as full and refuses
   too.
 - `device-management` stops reading `inbound-events` while `resolved-events` is refusing, and
@@ -327,9 +344,18 @@ read yet.
   replica. Tenants together still can, and so can a tenant whose tier raises its ceiling, any
   tenant on a smaller cluster, and a client posting over HTTP under many tenant names, since a
   name is metered before its credential is checked. The gate then refuses everyone.
-- The broker still discards the oldest message when a stream is full. That now happens only if
-  events arrive faster than the gate can act, and the alerts in
-  [Messages a consumer never read](#unread-loss) still report it.
+- The broker still discards the oldest message when a stream is full, so an unread event can
+  still be lost in three cases. The services writing to the stream can, between two of their
+  measurements, use up more processed history than the stream was seen to discard in the
+  30 seconds before. A stream can reach its ceiling for the first time holding almost no processed
+  history, before any rate of discarding has been measured. And connect and disconnect transitions
+  are admitted while the stream refuses (see below). The alerts in
+  [Messages a consumer never read](#unread-loss) report it.
+- Deleting a tenant removes its events from both streams. That frees room, so it does not by
+  itself make the stream refuse, with one exception: a tenant whose events are the oldest a full
+  stream holds, and few enough that the stream stays full without them. Removing those looks the
+  same as the stream discarding its history quickly, so the stream can refuse until the consumer
+  catches up. Nothing is lost.
 
 What each transport does while the stream is refusing:
 
@@ -354,7 +380,7 @@ which the gate does not see. `ReplayCoveredDeliveriesExhausted` watches that.
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | A gating consumer has been more than 80% of its stream behind for 5 minutes. At 90% the stream refuses new events for every tenant: HTTP devices get `503` with a `Retry-After`, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. |
-| `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The likeliest cause is that the consumer's service is not running: scaled to zero replicas or crash-looping. A deployed service that is not running still holds ingest back, on purpose. The refusal lifts on its own once that consumer's backlog is below 80%. |
+| `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant: a consumer's unread backlog is near the ceiling, or the full stream is discarding the processed history ahead of it fast enough to run out within 30 seconds. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The likeliest cause is that the consumer's service is not running: scaled to zero replicas or crash-looping. A deployed service that is not running still holds ingest back, on purpose. If `JetStreamUnreadBacklogNearFull` is quiet, it is the second case: `jetstream_backpressure_history_runway_seconds` shows it, and the writing service's log names the consumer and the rate. The refusal lifts on its own once that consumer's backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything. |
 
 The services that write to the two streams export these series:
 
@@ -362,6 +388,12 @@ The services that write to the two streams export these series:
   unread backlog (pending plus unacknowledged) divided by what the stream can hold, in messages or
   bytes, whichever limit is tighter. It is absent while it cannot be measured. Combine the pods
   with `max`.
+- **`devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`**: how long
+  the processed events still ahead of the consumer's unread ones would last at the rate the full
+  stream has recently been discarding them. `+Inf` while the stream is not at its ceiling, is not
+  discarding any, or the consumer has read everything. The stream starts refusing below 30 and
+  accepts again at 60 or more. It is absent while it cannot be measured. Combine the pods with
+  `min`.
 - **`devicechain_<area>_jetstream_backpressure_engaged{stream}`**: 1 while the service is refusing,
   including while it cannot measure the backlog. It is read when Prometheus scrapes, so it cannot
   show 0 when the service is in fact refusing.

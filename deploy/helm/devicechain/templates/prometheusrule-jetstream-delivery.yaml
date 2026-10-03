@@ -52,7 +52,9 @@ BACKPRESSURE is the exception to "discards its oldest". On the two ingest stream
 unread loss is device data (inbound-events, gated on device-management's consumer, and
 resolved-events, gated on event-management's), the services that write the stream refuse
 new events while that consumer's UNREAD backlog is at 90% of the ceiling, until it is
-below 80% (core/messaging/backpressure.go; the declaration is core/streams'
+below 80%, and, on a full stream, while the history that consumer has already read (which
+DiscardOld removes first) would all be discarded within 30 s at the rate the stream is
+discarding it (core/messaging/backpressure.go; the declaration is core/streams'
 BackpressureReaders). The broker still discards old as the backstop, so the loss rules
 above still apply there if the gate is ever outrun. JetStreamUnreadBacklogNearFull and
 JetStreamIngestBackpressureEngaged watch it: a gating consumer's backlog nearing the gate,
@@ -248,7 +250,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "The platform is refusing new events so as not to lose unread ones"
-            description: "Stream {{ "{{ $labels.stream }}" }} is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; the refusal lifts once its backlog is below 80%."
+            description: "Stream {{ "{{ $labels.stream }}" }} is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, the events it has already processed that the full stream still holds ahead of its unread ones would be discarded within 30 seconds at the rate the stream is discarding them, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; when it is quiet, it is the second case, and jetstream_backpressure_history_runway_seconds and the writing service's log name the consumer. The refusal lifts once the backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything."
         # A capacity-bounded reader held a message past its AckWait. Selected by name
         # like the rules above: core builds the counter for every capacity reader, under
         # the adopting service's own subsystem.

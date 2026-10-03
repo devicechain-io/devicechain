@@ -3796,8 +3796,9 @@ que nadie había procesado todavía. Al dispositivo ya se le había dicho que se
 Ahora, cuando la cola sin leer de `device-management` en `inbound-events`, o la de
 `event-management` en `resolved-events`, alcanza el 90% de lo que cabe en el stream, la plataforma
 deja de aceptar eventos nuevos hasta que la cola baja del 80%. Los dos streams conservan su semana
-de eventos ya procesados, y ese historial no cuenta para el límite. Solo cuentan los eventos sin
-leer.
+de eventos ya procesados, y ese historial no cuenta para el 90%: solo cuentan los eventos sin
+leer. Un stream lleno también rechaza antes de descartar ese historial tan deprisa que alcance
+eventos sin leer; consulta [más abajo](#next-ingest-history-runway).
 
 - La ingesta **HTTP** responde `503` con `Retry-After: 10` mientras rechaza. Reintenta ante un
   `503`. Un `503` sin `Retry-After` sigue significando que la publicación en sí falló.
@@ -5058,6 +5059,46 @@ esta versión con una tabla que ya tiene demasiados.
 - El almacén local del agente de borde no tiene límite de antigüedad propio; consulta
   [el almacén local](./edge-services.md#the-spool).
 - El límite es fijo. No hay ningún ajuste para él.
+
+#### Un stream de ingesta lleno también rechaza antes de que los eventos grandes expulsen a los no leídos {#next-ingest-history-runway}
+
+El rechazo de ingesta añadido en esta versión valoraba cada evento sin leer al tamaño medio del
+stream, porque el bróker informa de los bytes totales de un stream y no de los de los eventos que un
+consumidor no ha leído. En un stream lleno eso es la parte sin leer del NÚMERO de eventos. Una ráfaga
+de eventos grandes sobre un historial de eventos pequeños ya procesados podía, por tanto, llenar
+`inbound-events` o `resolved-events` mientras la cola sin leer marcaba más o menos la mitad del
+límite, y el stream descartaba entonces eventos que nadie había procesado. Medir después de cada
+publicación no lo habría evitado.
+
+- **El stream también rechaza cuando se le agota el historial procesado.** Un stream lleno descarta
+  primero sus eventos más antiguos, así que los eventos ya procesados que aún conserva por delante
+  de los no leídos son lo que se agota antes de que se pierda uno sin leer. Los servicios que
+  escriben en el stream rechazan ahora eventos nuevos cuando ese historial se descartaría entero en
+  30 segundos al ritmo al que el stream lo está descartando, y vuelven a aceptarlos cuando duraría
+  un minuto, o el consumidor lo ha leído todo. Las dos magnitudes se calculan a partir de números
+  de secuencia que informa el bróker, así que la regla no depende del tamaño de los eventos. Un
+  stream lleno cuyo consumidor mantiene el ritmo no rechaza nada. Eliminar un inquilino tampoco hace
+  por sí solo que un stream rechace, salvo que sus eventos sean los más antiguos que conserva un
+  stream lleno: entonces el stream puede rechazar, sin perder nada, hasta que el consumidor se ponga
+  al día. Consulta [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure) para
+  ese caso y para un stream lleno que contiene menos de un minuto de su propio tráfico.
+- **Un evento que el consumidor recibió pero no ha confirmado cuenta como no leído**, también uno
+  que espera a entregarse de nuevo tras un fallo. Mientras un evento así está cerca del principio de
+  un stream lleno, el stream puede rechazar eventos nuevos hasta que se confirme o se abandone.
+- **Cada servicio mide también el stream en cuanto él mismo ha escrito alrededor de una milésima
+  parte del límite del stream** desde su última medición, como mucho cada 100 ms, además de cada
+  5 segundos.
+- Una serie nueva,
+  `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`, muestra
+  cuánto duraría ese historial. `JetStreamIngestBackpressureEngaged` también se dispara por este
+  rechazo, y su descripción explica ahora cómo distinguir las dos causas. Consulta
+  [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure).
+- Aún se puede perder un evento sin leer cuando los servicios que escriben en un stream gastan,
+  entre dos de sus mediciones, más historial procesado del que se vio descartar al stream en los
+  30 segundos anteriores, o cuando un stream llega a su límite por primera vez casi sin historial
+  procesado.
+
+No hay nada que hacer al actualizar. Ningún stream se reconfigura y no se añade ningún ajuste.
 
 ### La transición única a la ingesta duradera
 

@@ -135,7 +135,11 @@ type timeLeadingKeysTiming struct {
 // redelivery is idempotent. Events arriving meanwhile wait unread in the resolved-events
 // stream: at 6,000 events/s a 45 s pause is 270,000 of them, which stays under 90% of the
 // default 1 GiB per hot stream (where ingest is refused) unless an event averages more
-// than about 3.5 KB on the stream.
+// than about 3.5 KB on the stream. On a stream already at its ceiling, the pause also
+// discards already-stored events from the front at the arrival rate, and ingest is refused
+// once fewer than 30 s of them (180,000 at 6,000/s) would be left ahead of the unread ones:
+// a full 1 GiB stream holds that many and 270,000 more only while an event averages under
+// about 2.4 KB on the stream (1 GiB / 450,000).
 var timeLeadingKeysDefaultTiming = timeLeadingKeysTiming{
 	lockTimeout:  3 * time.Second,
 	lockAttempt:  5 * time.Second,

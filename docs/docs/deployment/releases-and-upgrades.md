@@ -3537,7 +3537,9 @@ nobody had processed yet. The device had already been told they were accepted.
 Now, when `device-management`'s unread backlog on `inbound-events`, or `event-management`'s on
 `resolved-events`, reaches 90% of what the stream can hold, the platform stops accepting new
 events until the backlog drops below 80%. The two streams keep their week of already-processed
-events, and that history does not count towards the limit. Only unread events do.
+events, and that history does not count towards the 90%: only unread events do. A full stream also
+refuses before it would discard that history fast enough to reach unread events; see
+[below](#next-ingest-history-runway).
 
 - **HTTP** ingest answers `503` with `Retry-After: 10` while it refuses. Retry on `503`. A `503`
   without a `Retry-After` still means the publish itself failed.
@@ -4695,6 +4697,43 @@ upgrade does about a table that already has too many.
   so one dated more than 366 days before that is refused by the new release.
 - The edge agent's spool has no age limit of its own; see [the spool](./edge-services.md#the-spool).
 - The limit is fixed. There is no setting for it.
+
+#### A full ingest stream also refuses before large events push out unread ones {#next-ingest-history-runway}
+
+The ingest refusal added in this release priced every unread event at the stream's average size,
+because the broker reports a stream's total bytes and not those of the events a consumer has not
+read. On a full stream that is the unread share of the event COUNT. A burst of large events over a
+history of small, already-processed ones could therefore fill `inbound-events` or
+`resolved-events` while the unread backlog read about half of the ceiling, and the stream then
+discarded events nobody had processed. Measuring after every publish would not have caught it.
+
+- **The stream also refuses when its processed history is running out.** A full stream discards
+  its oldest events first, so the events already processed that it still holds ahead of the
+  unread ones are what runs out before an unread one is lost. The services that write to the
+  stream now refuse new events when that history would all be discarded within 30 seconds at the
+  rate the stream is discarding it, and accept them again once it would last a minute, or the
+  consumer has read everything. Both are built from sequence numbers the broker reports, so the
+  rule does not depend on how large the events are. A full stream whose consumer keeps pace
+  refuses nothing. Deleting a tenant does not by itself make a stream refuse either, unless its
+  events are the oldest a full stream holds: then the stream can refuse, losing nothing, until the
+  consumer catches up. See [Backpressure on the ingest path](./observability.md#ingest-backpressure)
+  for that case and for a full stream that holds under a minute of its own traffic.
+- **An event the consumer received but has not acknowledged counts as unread**, including one
+  waiting to be delivered again after a failure. While such an event sits near the front of a full
+  stream, the stream can refuse new events until it is acknowledged or given up on.
+- **Each service also measures the stream as soon as it has itself written about a thousandth of
+  the stream's ceiling** since its last measurement, at most every 100 ms, as well as every
+  5 seconds.
+- A new series, `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`,
+  shows how long that history would last. `JetStreamIngestBackpressureEngaged` fires for this
+  refusal too, and its description now says how to tell the two causes apart. See
+  [Backpressure on the ingest path](./observability.md#ingest-backpressure).
+- An unread event can still be lost when the services writing to a stream use up, between two of
+  their measurements, more processed history than the stream was seen to discard in the 30 seconds
+  before, or when a stream reaches its ceiling for the first time holding almost no processed
+  history.
+
+Nothing to do at upgrade. No stream is reconfigured and no setting is added.
 
 ### The one-time durable-ingest cutover
 
