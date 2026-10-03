@@ -888,7 +888,10 @@ deleted. On a database that carries these settings, rolling out a configuration 
 not restart the primary in place: the standbys restart first, then the primary role is switched
 over to an up-to-date standby, and the old primary restarts as a standby. In testing, that
 switchover interrupted writes for about ten seconds. An event store created before these
-settings were introduced keeps the in-place restart until it is patched as described in the
+settings were introduced keeps the in-place restart until `dcctl upgrade` applies its
+instance's infrastructure
+([What an upgrade applies to the infrastructure](./releases-and-upgrades.md#upgrade-infrastructure)),
+or until it is patched as described in the
 [release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds).
 
 A single-instance install has no standby to promote. Its database is unavailable until the
@@ -914,8 +917,9 @@ PostgreSQL down cleanly and then fail to exit: its log ends with
 `failed waiting for all runnables to end within grace period of 30s`, and its pod stays
 `Terminating` although the database has stopped. Nothing is wrong with the data, and the pod is
 removed when the two minutes are up. A pod that does not yet carry this limit (one created before
-it was introduced, or any instance of an event store that has not been patched as the release notes
-describe) still carries thirty minutes; the
+it was introduced, or any instance of an event store that predates the limit and has not yet
+been reached by an upgrade or by the patch the release notes describe) still carries thirty
+minutes; the
 [release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds) say how to
 recognise that case and clear it.
 
@@ -1024,13 +1028,20 @@ that node ran at 94 to 98% CPU while the other two ran at 45 to 51%.
   relational primary. A [failover](#ha-database-failover), a switchover, or the switchover that
   ends a rolling update of a database can still leave both primaries on one node, and the
   preference does not move them back.
-- **An event store created before this preference was introduced does not take part.** Its pods
-  neither carry the label the other databases look for nor prefer anything, and nothing
-  re-applies it. On an installation that predates it, the preference applies only to instances
-  bootstrapped since.
+- **An event store created before this preference gains it when its instance is upgraded.**
+  Until then its pods carry neither the label the other databases look for nor the preference.
+  `dcctl upgrade` applies the instance's event store
+  ([What an upgrade applies to the infrastructure](./releases-and-upgrades.md#upgrade-infrastructure))
+  and adds both. The label reaches the running pods without a restart. The preference changes the
+  pods' specification, so the store's instances restart once for it: under `--ha` the standbys
+  first, then a switchover to one of them; without `--ha` the one instance restarts, and events
+  wait in the ingest stream until it is back. An upgrade run with `--skip-infrastructure` leaves
+  the event store without either until an upgrade without that flag applies it. Gaining the
+  preference does not move a primary: under `--ha` that restart ends with a switchover to a
+  standby that is already placed, so the primaries can still share a node afterwards. Check, and
+  move one if they do, as below.
 
-To see where the primaries are (this lists every database's primary, including one created
-before the preference was introduced):
+To see where the primaries are:
 
 ```bash
 kubectl get pods -A -l cnpg.io/instanceRole=primary -o wide

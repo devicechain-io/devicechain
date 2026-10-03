@@ -958,8 +958,10 @@ tiene esta configuración, desplegar un cambio de configuración no reinicia la 
 sitio: primero se reinician las réplicas en espera, después el papel de primaria se traspasa a
 una réplica al día, y la antigua primaria se reinicia como réplica. En las pruebas, ese
 traspaso interrumpió las escrituras durante unos diez segundos. Un almacén de eventos creado
-antes de que existiera esta configuración mantiene el reinicio en su sitio hasta que se le
-aplica el parche descrito en las
+antes de que existiera esta configuración mantiene el reinicio en su sitio hasta que
+`dcctl upgrade` aplica la infraestructura de su instancia
+([Qué aplica una actualización a la infraestructura](./releases-and-upgrades.md#upgrade-infrastructure)),
+o hasta que se le aplica el parche descrito en las
 [notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds).
 
 Una instalación de una sola instancia no tiene ninguna réplica que promover. Su base de datos
@@ -988,8 +990,10 @@ instancia puede apagar PostgreSQL correctamente y después no terminar: su regis
 `failed waiting for all runnables to end within grace period of 30s`, y su pod se queda en
 `Terminating` aunque la base de datos ya se ha detenido. Los datos no tienen ningún problema, y
 el pod se elimina al cumplirse los dos minutos. Un pod que aún no tiene este límite (uno creado
-antes de que se introdujera, o cualquier instancia de un almacén de eventos que no se haya
-modificado como describen las notas de la versión) sigue teniendo treinta minutos; las
+antes de que se introdujera, o cualquier instancia de un almacén de eventos creado antes de que
+existiera ese límite y que aún no haya recibido ni una actualización ni el parche que describen
+las notas de la versión) sigue
+teniendo treinta minutos; las
 [notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds) explican
 cómo reconocer ese caso y resolverlo.
 
@@ -1111,13 +1115,21 @@ eventos en el mismo nodo, ese nodo funcionó al 94-98 % de CPU mientras los otro
   un traspaso, o el traspaso con el que termina una actualización progresiva de una base de
   datos, todavía pueden dejar las dos primarias en un mismo nodo, y la preferencia no las vuelve
   a separar.
-- **Un almacén de eventos creado antes de que existiera esta preferencia no participa.** Sus pods
-  no llevan la etiqueta que buscan las demás bases de datos ni prefieren nada, y nada lo vuelve a
-  aplicar. En una instalación anterior, la preferencia solo se aplica a las instancias creadas
-  después.
+- **Un almacén de eventos creado antes de que existiera esta preferencia la adquiere cuando se
+  actualiza su instancia.** Hasta entonces sus pods no llevan la etiqueta que buscan las demás
+  bases de datos ni la preferencia. `dcctl upgrade` aplica el almacén de eventos de la instancia
+  ([Qué aplica una actualización a la infraestructura](./releases-and-upgrades.md#upgrade-infrastructure))
+  y añade ambas. La etiqueta llega a los pods en ejecución sin reiniciarlos. La preferencia cambia
+  la especificación de los pods, así que las instancias del almacén se reinician una vez por ella:
+  con `--ha`, primero las réplicas en espera y después un traspaso a una de ellas; sin `--ha`, la
+  única instancia se reinicia y los eventos esperan en el stream de ingesta hasta que vuelve. Una
+  actualización con `--skip-infrastructure` deja el almacén de eventos sin ninguna de las dos
+  hasta que una actualización sin esa opción lo aplique. Adquirir la preferencia no mueve una
+  primaria: con `--ha`, ese reinicio termina con un traspaso a una réplica en espera que ya está
+  ubicada, así que las primarias pueden seguir compartiendo un nodo después. Compruébalo y, si es
+  así, mueve una como se indica a continuación.
 
-Para ver dónde están las primarias (esto lista la primaria de cada base de datos, incluida una
-creada antes de que existiera la preferencia):
+Para ver dónde están las primarias:
 
 ```bash
 kubectl get pods -A -l cnpg.io/instanceRole=primary -o wide
