@@ -156,6 +156,10 @@ export KUBEBUILDER_ASSETS="$(bin/setup-envtest use "$(sed -n 's/^ENVTEST_K8S_VER
 cd -
 ```
 
+On Windows neither suite is built: envtest does not compile there at the pinned controller-runtime,
+so `apiserver_render_test.go` carries `//go:build !windows` (the rest of `bootstrap` still builds,
+and CI's `go vet (windows)` step keeps it that way), and `backend/k8s/controllers` does not build.
+
 Full sweep before committing — the workspace enumerates its own modules, so this needs no list to
 keep in step with `go.work`. **Save it to a file and run it; do not paste it into your shell** (it
 ends in `exit`). The details below are load-bearing, and they are the same trap in different
