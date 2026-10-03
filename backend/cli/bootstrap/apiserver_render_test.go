@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build !windows
+
 package bootstrap
 
 import (
@@ -29,6 +31,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/yaml"
 )
+
+// This file is built everywhere except Windows. envtest does not compile on Windows at
+// the controller-runtime this module pins: its internal process package declares
+// signalProcess twice there (v0.25.0 through v0.25.2; fixed upstream, not yet released).
+// Unconstrained, it took every test in the package down with it on Windows, the ones
+// that never start an API server included. Linux CI runs these suites unchanged, and
+// TestTheAPIServerSuitesAreBuiltOffWindows fails if the constraint ever drops them where
+// they should run. Drop the constraint once the pinned controller-runtime ships the fix;
+// CI's Windows vet of this module keeps it honest. Helpers the rest of the package uses
+// live in apiserver_render_common_test.go, which builds on every platform.
+func init() { apiServerSuiteBuilt = true }
 
 // envtestVersionHint is how to get the binaries, printed when they are missing. The
 // version is backend/k8s/Makefile's ENVTEST_K8S_VERSION, which CI reads for both
@@ -203,22 +216,6 @@ func everyObjectIsThere(t *testing.T, c client.Client, manifest string) []string
 		}
 	}
 	return missing
-}
-
-// renderedDeployment returns the named Deployment from manifest, decoded.
-func renderedDeployment(t *testing.T, manifest, name string) *appsv1.Deployment {
-	t.Helper()
-	for _, doc := range releaseutil.SplitManifests(manifest) {
-		var d appsv1.Deployment
-		if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
-			t.Fatalf("decoding a rendered document: %v\n%s", err, doc)
-		}
-		if d.Kind == "Deployment" && d.Name == name {
-			return &d
-		}
-	}
-	t.Fatalf("the manifest renders no Deployment %q", name)
-	return nil
 }
 
 // TestEveryRenderedProfileIsAcceptedByAnAPIServer installs the chart, as dcctl

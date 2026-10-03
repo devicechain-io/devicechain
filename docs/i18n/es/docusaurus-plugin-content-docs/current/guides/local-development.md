@@ -150,6 +150,11 @@ cd backend/k8s && make envtest
 export KUBEBUILDER_ASSETS="$(bin/setup-envtest use "$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile)" -p path)"
 ```
 
+En Windows, las pruebas de `backend/cli` que inician un servidor de API no se compilan: la
+biblioteca de pruebas que lo inicia no compila allí en la versión que fija este repositorio. El
+resto de las pruebas de ese paquete sigue compilando. Las pruebas de `backend/k8s/controllers` no
+se compilan en Windows.
+
 ### Fuzzing
 
 `go test` sin más solo ejecuta las entradas semilla de cada prueba de fuzzing. Para hacer fuzzing,

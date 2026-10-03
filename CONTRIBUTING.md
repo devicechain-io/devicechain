@@ -106,6 +106,10 @@ cd -
 The version is the one `backend/k8s/Makefile` pins, which CI uses for both modules.
 `setup-envtest` prints an absolute path, so the variable holds in every module.
 
+On Windows, the `backend/cli` tests that start an API server are not built: the test library that
+starts it does not compile there at the version this repository pins. The rest of that package's
+tests still compile. The tests in `backend/k8s/controllers` do not build on Windows.
+
 To sweep every module before pushing, **save this to a file and run it** — it ends in
 `exit`, so pasting it into your shell will close it. The workspace enumerates its own
 modules, so the script never falls out of step with `go.work`:

@@ -145,6 +145,10 @@ cd backend/k8s && make envtest
 export KUBEBUILDER_ASSETS="$(bin/setup-envtest use "$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile)" -p path)"
 ```
 
+On Windows, the `backend/cli` tests that start an API server are not built: the test library that
+starts it does not compile there at the version this repository pins. The rest of that package's
+tests still compile. The tests in `backend/k8s/controllers` do not build on Windows.
+
 ### Fuzzing
 
 Plain `go test` runs each fuzz test's seed inputs only. To fuzz, use the wrapper. It finds every
