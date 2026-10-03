@@ -4,9 +4,13 @@
 package test
 
 import (
+	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
+
+	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
 // localAddrConn is a connection that reports a local address of the test's choosing, so
@@ -157,5 +161,101 @@ func TestAClosedMeshRecordsNoDialledConnection(t *testing.T) {
 	}
 	if why := f.attribute(1, "n1", out.LocalAddr().String(), []string{"n1", "n2"}); why == "" {
 		t.Fatal("a connection a closed mesh refused to record was attributed to it")
+	}
+}
+
+// routeInfoAt is a route Routez could list: server peer's route over a connection whose
+// remote address is addr ("" for a connection that is closing).
+func routeInfoAt(t *testing.T, peer, addr string) *natsserver.RouteInfo {
+	t.Helper()
+	if addr == "" {
+		return &natsserver.RouteInfo{RemoteName: peer}
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &natsserver.RouteInfo{RemoteName: peer, IP: host, Port: p}
+}
+
+// classifyRoutes puts a route with no address (its connection is closing) among the
+// unaddressed and NEVER among the bypasses, leaves a route the mesh carries out of both,
+// and names a route around the proxies once however many connections of its pool report
+// the same address.
+func TestClassifyRoutesKeepsAClosingRouteOutOfTheBypasses(t *testing.T) {
+	f, err := newRouteMesh(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.close()
+	names := []string{"n1", "n2", "n3"}
+
+	routeListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer routeListener.Close()
+	direct := routeListener.Addr().String()
+
+	for _, row := range []struct {
+		name            string
+		routes          []*natsserver.RouteInfo
+		wantBypasses    int
+		wantUnaddressed int
+	}{
+		{"a route whose connection is closing", []*natsserver.RouteInfo{routeInfoAt(t, "n2", "")}, 0, 1},
+		{"a route the mesh carries", []*natsserver.RouteInfo{routeInfoAt(t, "n2", f.proxyAddr(0, 1))}, 0, 0},
+		{"a carried route beside a closing one", []*natsserver.RouteInfo{
+			routeInfoAt(t, "n2", f.proxyAddr(0, 1)), routeInfoAt(t, "n3", ""),
+		}, 0, 1},
+		{"a route around the proxies, listed for three connections of its pool", []*natsserver.RouteInfo{
+			routeInfoAt(t, "n3", direct), routeInfoAt(t, "n3", direct), routeInfoAt(t, "n3", direct),
+		}, 1, 0},
+	} {
+		bypasses, unaddressed := f.classifyRoutes(0, row.routes, names)
+		if len(bypasses) != row.wantBypasses || len(unaddressed) != row.wantUnaddressed {
+			t.Errorf("%s: classifyRoutes found %d bypasses %v and %d unaddressed routes %v; want %d and %d",
+				row.name, len(bypasses), bypasses, len(unaddressed), unaddressed, row.wantBypasses, row.wantUnaddressed)
+		}
+	}
+}
+
+// settled holds only for a look at a cluster whose routes are all attributable, complete
+// and counted twice by the proxies; take away any one of those and it does not.
+func TestRouteCheckIsSettledOnlyWhenEveryConditionHolds(t *testing.T) {
+	full := 2 * routeConnsPerPeer // each of three servers, routed to two peers
+	base := func() routeCheck {
+		return routeCheck{
+			counts:  []int{full, full, full},
+			remotes: []int{2, 2, 2},
+			proxied: 3 * full / 2,
+		}
+	}
+	if !base().settled() {
+		t.Fatalf("a cluster with every route complete, attributable and carried is not settled: %+v", base())
+	}
+	for _, row := range []struct {
+		name   string
+		change func(*routeCheck)
+	}{
+		{"a route with no address", func(c *routeCheck) { c.unaddressed = []string{"n1's route to n2"} }},
+		{"one more route connection than the proxies carry", func(c *routeCheck) {
+			// a route around the proxies at both ends, with a proxied connection that is not
+			// (yet) a route: the counts stay complete, and only the total disagrees.
+			c.proxied--
+		}},
+		{"a reading error", func(c *routeCheck) { c.err = errors.New("routez failed") }},
+		{"a server short of its complete set", func(c *routeCheck) { c.counts[1]-- }},
+		{"a server not routed to every other one", func(c *routeCheck) { c.remotes[2] = 1 }},
+	} {
+		c := base()
+		row.change(&c)
+		if c.settled() {
+			t.Errorf("%s: settled answered true for %+v", row.name, c)
+		}
 	}
 }

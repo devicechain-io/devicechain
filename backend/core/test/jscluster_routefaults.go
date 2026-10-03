@@ -372,13 +372,8 @@ func (f *RouteFaults) attribute(i int, peer, remote string, names []string) stri
 
 // unproxiedRoutes reads every route each of servers holds, with Routez (which lists the
 // same routes NumRoutes counts: both walk forEachRoute), and returns each route this mesh
-// does not carry, and each route it could not attribute because it has no address.
-//
-// A route with no address is one whose connection is closing: the server lets go of the
-// connection before it takes the route off its list, and routes do close while a cluster
-// starts (a duplicate, a redial). It is NOT a bypass, since a route around the proxies is
-// a live connection whose dialling end reports a real address; it is a route not yet
-// settled either way.
+// does not carry, and each route it could not attribute because it has no address
+// (classifyRoutes decides which is which).
 func (f *RouteFaults) unproxiedRoutes(servers []*natsserver.Server) (bypasses []routeBypass, unaddressed []string, err error) {
 	names := make([]string, len(servers))
 	for k, srv := range servers {
@@ -389,18 +384,82 @@ func (f *RouteFaults) unproxiedRoutes(servers []*natsserver.Server) (bypasses []
 		if err != nil {
 			return nil, nil, fmt.Errorf("routez of %s: %w", srv.Name(), err)
 		}
-		for _, ri := range rz.Routes {
-			if ri.IP == "" {
-				unaddressed = append(unaddressed, fmt.Sprintf("%s's route to %s", srv.Name(), ri.RemoteName))
-				continue
-			}
-			remote := net.JoinHostPort(ri.IP, strconv.Itoa(ri.Port))
-			if why := f.attribute(i, ri.RemoteName, remote, names); why != "" {
-				bypasses = append(bypasses, routeBypass{server: srv.Name(), peer: ri.RemoteName, remote: remote, why: why})
+		b, u := f.classifyRoutes(i, rz.Routes, names)
+		bypasses = append(bypasses, b...)
+		unaddressed = append(unaddressed, u...)
+	}
+	return bypasses, unaddressed, nil
+}
+
+// classifyRoutes sorts the routes server i lists (names[k] is server k's name) into the
+// ones this mesh does not carry and the ones it cannot attribute because they have no
+// address. A route the mesh carries is in neither.
+//
+// A route with no address is one whose connection is closing: Routez takes the address
+// from the route's connection, and the server lets go of the connection before it takes
+// the route off its list, and routes do close while a cluster starts (a duplicate, a
+// redial). It is NOT a bypass, since a route around the proxies is a live connection
+// whose dialling end reports a real address; it is a route not yet settled either way,
+// and attribute, which fails closed on an empty address, is never asked about it.
+//
+// A bypass is reported once per server, peer and address. Routez reports each route
+// connection's remote address, and at the dialling end every connection of a pool to one
+// peer reports the same one, the address it dialled, so one route around the proxies would
+// otherwise be named once for every connection of its pool.
+func (f *RouteFaults) classifyRoutes(i int, routes []*natsserver.RouteInfo, names []string) (
+	bypasses []routeBypass, unaddressed []string,
+) {
+	server := fmt.Sprintf("server %d", i)
+	if i >= 0 && i < len(names) {
+		server = names[i]
+	}
+	seen := make(map[routeBypass]bool)
+	for _, ri := range routes {
+		if ri.IP == "" {
+			unaddressed = append(unaddressed, fmt.Sprintf("%s's route to %s", server, ri.RemoteName))
+			continue
+		}
+		remote := net.JoinHostPort(ri.IP, strconv.Itoa(ri.Port))
+		if why := f.attribute(i, ri.RemoteName, remote, names); why != "" {
+			b := routeBypass{server: server, peer: ri.RemoteName, remote: remote, why: why}
+			if !seen[b] {
+				seen[b] = true
+				bypasses = append(bypasses, b)
 			}
 		}
 	}
-	return bypasses, unaddressed, nil
+	return bypasses, unaddressed
+}
+
+// routeCheck is one look at a cluster's routes, as awaitAllRoutesProxied takes it.
+type routeCheck struct {
+	err         error    // reading the servers' routes failed
+	unaddressed []string // routes with no address to attribute (classifyRoutes)
+	counts      []int    // each server's NumRoutes
+	remotes     []int    // each server's NumRemotes
+	proxied     int      // the route connections the proxies carry
+}
+
+// settled reports whether c shows every route of a cluster of len(c.counts) servers
+// complete and at rest: every route attributable, every server routed to every other one
+// with its complete set of route connections, and the servers' route connections exactly
+// twice the proxied ones (each proxied connection is one route connection at each of its
+// two ends), which holds once no handshake is under way and no duplicate is being closed.
+// It does not decide a bypass; classifyRoutes does.
+func (c routeCheck) settled() bool {
+	size := len(c.counts)
+	want := (size - 1) * routeConnsPerPeer
+	if c.err != nil || len(c.unaddressed) != 0 || len(c.remotes) != size {
+		return false
+	}
+	routes := 0
+	for k, n := range c.counts {
+		if n != want || c.remotes[k] != size-1 {
+			return false
+		}
+		routes += n
+	}
+	return routes == 2*c.proxied
 }
 
 // awaitAllRoutesProxied waits until every server holds its complete set of route
@@ -430,8 +489,7 @@ func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within
 	deadline := began.Add(within)
 	want := (len(servers) - 1) * routeConnsPerPeer
 	stable := 0
-	var routes, proxied int
-	var each, unaddressed []string
+	var c routeCheck
 	var last error
 	for {
 		bypasses, unaddr, err := f.unproxiedRoutes(servers)
@@ -441,23 +499,13 @@ func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within
 		if err != nil {
 			last = err
 		}
-		unaddressed = unaddr
-		routes = 0
-		meshed, complete := true, true
-		each = each[:0]
+		c = routeCheck{err: err, unaddressed: unaddr}
 		for _, srv := range servers {
-			n := srv.NumRoutes()
-			routes += n
-			each = append(each, fmt.Sprintf("%s %d", srv.Name(), n))
-			if srv.NumRemotes() != len(servers)-1 {
-				meshed = false
-			}
-			if n != want {
-				complete = false
-			}
+			c.counts = append(c.counts, srv.NumRoutes())
+			c.remotes = append(c.remotes, srv.NumRemotes())
 		}
-		proxied = f.LiveRouteConnections()
-		if err == nil && len(unaddr) == 0 && meshed && complete && routes == 2*proxied {
+		c.proxied = f.LiveRouteConnections()
+		if c.settled() {
 			stable++
 			if stable == 5 {
 				return nil
@@ -466,16 +514,22 @@ func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within
 			stable = 0
 		}
 		if time.Now().After(deadline) {
+			routes := 0
+			each := make([]string, len(servers))
+			for k, srv := range servers {
+				routes += c.counts[k]
+				each[k] = fmt.Sprintf("%s %d", srv.Name(), c.counts[k])
+			}
 			detail := ""
-			if len(unaddressed) > 0 {
-				detail += fmt.Sprintf("; routes with no address to attribute: %s", strings.Join(unaddressed, ", "))
+			if len(c.unaddressed) > 0 {
+				detail += fmt.Sprintf("; routes with no address to attribute: %s", strings.Join(c.unaddressed, ", "))
 			}
 			if last != nil {
 				detail += fmt.Sprintf("; last error: %v", last)
 			}
 			return fmt.Errorf("routes are not all complete and carried by the proxies: the servers report %d route "+
 				"connections (%s; each should hold %d), the proxies carry %d (each should be counted twice)%s",
-				routes, strings.Join(each, ", "), want, proxied, detail)
+				routes, strings.Join(each, ", "), want, c.proxied, detail)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
