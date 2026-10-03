@@ -27,10 +27,10 @@
 // will NOT resolve under `node16`/`nodenext`. That is a documented limit of shipping
 // ESM for bundlers, not an oversight.
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import * as esbuild from 'esbuild';
+import { LaunchError, runSync, tscCommand } from './launch.mjs';
 
 const pkgDir = process.cwd();
 const srcDir = path.join(pkgDir, 'src');
@@ -158,24 +158,22 @@ if (Object.keys(result.metafile.inputs).length < entries.length) {
 // ---------------------------------------------------------------------------
 // Declarations, from the pinned compiler. See the header for why this is a
 // separate step rather than `--dts` on the bundler.
+//
+// Launched as `node <typescript>/bin/tsc`, found through the package's own
+// node_modules chain and the compiler's own manifest, not by spawning the
+// `tsc` shim npm links into .bin — which on Windows is a `.cmd` a shell-less spawn
+// cannot start. scripts/launch.mjs has the reasoning.
 // ---------------------------------------------------------------------------
-function resolveTsc() {
-  let dir = pkgDir;
-  for (;;) {
-    const candidate = path.join(dir, 'node_modules', '.bin', 'tsc');
-    if (existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
+let tscRun;
+try {
+  tscRun = runSync(tscCommand(['-p', 'tsconfig.build.json'], { from: pkgDir }), { stdio: 'inherit', cwd: pkgDir });
+} catch (err) {
+  if (!(err instanceof LaunchError)) throw err;
+  fail(`declaration emit could not run: ${err.message}`);
 }
-
-const tsc = resolveTsc();
-if (!tsc) fail('could not find node_modules/.bin/tsc — run `npm ci` in frontend/');
-
-const tscRun = spawnSync(tsc, ['-p', 'tsconfig.build.json'], { stdio: 'inherit', cwd: pkgDir });
 if (tscRun.status !== 0) {
-  fail(`declaration emit failed (tsc exited ${tscRun.status})`);
+  const signal = tscRun.signal ? `, signal ${tscRun.signal}` : '';
+  fail(`declaration emit failed (tsc exited ${tscRun.status}${signal})`);
 }
 
 // 🔴 Asserted rather than assumed. This compiler will report an error and emit in

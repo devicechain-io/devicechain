@@ -16,10 +16,10 @@
 //
 // Pass --force to rebuild regardless of the freshness check below.
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LaunchError, describeCommand, nodeCommand, npmCommand, runSync } from './launch.mjs';
 import { PackageError, resolvePackages } from './packages.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -32,10 +32,19 @@ function fail(message) {
   process.exit(1);
 }
 
-function run(command, args, cwd) {
-  const result = spawnSync(command, args, { stdio: 'inherit', cwd });
+// Every launch goes through scripts/launch.mjs — see its header for why npm and tsc
+// are started through Node rather than by name.
+function run(command, cwd) {
+  let result;
+  try {
+    result = runSync(command, { stdio: 'inherit', cwd });
+  } catch (err) {
+    if (!(err instanceof LaunchError)) throw err;
+    fail(err.message);
+  }
   if (result.status !== 0) {
-    fail(`\`${command} ${args.join(' ')}\` failed in ${path.relative(frontend, cwd)} (exit ${result.status})`);
+    const signal = result.signal ? `, signal ${result.signal}` : '';
+    fail(`\`${describeCommand(command)}\` failed in ${path.relative(frontend, cwd) || '.'} (exit ${result.status}${signal})`);
   }
 }
 
@@ -70,8 +79,9 @@ function inputManifest(pkgDir) {
     }
   }
   // The builders themselves are inputs: change how the bundle is produced and every
-  // package is stale, even though not one of their own files moved.
-  for (const script of ['build-package.mjs', 'build-packages.mjs']) {
+  // package is stale, even though not one of their own files moved. launch.mjs decides
+  // how the compiler is started, so it is one of them.
+  for (const script of ['build-package.mjs', 'build-packages.mjs', 'launch.mjs']) {
     const stat = statSync(path.join(here, script));
     files[`../../scripts/${script}`] = `${stat.size}:${stat.mtimeMs}`;
   }
@@ -131,7 +141,7 @@ for (const { name, dir: pkgDir, pkg } of packages) {
     // have drifted. It emits no `dist`, so it is not part of the freshness scheme
     // either — it is cheap, and it always runs.
     builtAny = true;
-    run('npm', ['run', 'build', '-w', '@devicechain/brand'], frontend);
+    run(npmCommand(['run', 'build', '-w', '@devicechain/brand']), frontend);
     continue;
   }
 
@@ -139,7 +149,7 @@ for (const { name, dir: pkgDir, pkg } of packages) {
   if (!force && isFresh(name, pkgDir, pkg, manifest)) continue;
 
   builtAny = true;
-  run(process.execPath, [path.join(here, 'build-package.mjs')], pkgDir);
+  run(nodeCommand(path.join(here, 'build-package.mjs')), pkgDir);
   mkdirSync(stampDir, { recursive: true });
   writeFileSync(path.join(stampDir, `${name}.json`), JSON.stringify(manifest));
 }

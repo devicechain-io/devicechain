@@ -20,10 +20,10 @@
 # it costs a few minutes of a slower runner, and a Windows runner hiccup must not
 # block merges of changes that have nothing to do with it.
 #
-# SCOPE, so it is not overclaimed. It runs `npm ci`, `build:packages` and
-# `typecheck`. It does NOT run lint (the apps' lint
-# scripts single-quote their glob, which cmd.exe passes through literally), the
-# unit tests, codegen, the production build or `verify:packages` (which links
+# SCOPE, so it is not overclaimed. It runs `npm ci`, `build:packages`, the
+# launcher's own tests (scripts/launch.test.mjs, on native Windows paths) and
+# `typecheck`. It does NOT run lint (the apps' lint scripts single-quote their
+# glob, which cmd.exe passes through literally), the unit tests, codegen, the production build or `verify:packages` (which links
 # with directory symlinks, a privilege Windows does not grant by default). None
 # of those is claimed to work on Windows by this check.
 name: frontend-windows
@@ -73,6 +73,13 @@ jobs:
       # build failure it is rather than as some later step's confusing symptom.
       - name: Build publishable packages
         run: npm run build:packages
+
+      # Only the launcher's tests, not all of `test:scripts`: the rest cover release
+      # plumbing that runs on Linux only. Run by node directly, so npm_execpath is
+      # unset and the npm bundled beside node.exe is the one these tests find and
+      # launch: the Windows branch of the resolver, exercised natively.
+      - name: Launcher tests
+        run: node --test scripts/launch.test.mjs
 
       - name: Typecheck
         run: npm run typecheck
