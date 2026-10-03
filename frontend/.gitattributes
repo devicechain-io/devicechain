@@ -1,0 +1,6 @@
+# The brand package's build is a byte-for-byte comparison of these generated files
+# against what packages/brand/tools/generate.mjs emits, which is LF. A CRLF checkout
+# (Git for Windows' default is core.autocrlf=true) would otherwise report every one
+# of them as stale before anything had changed. Kept to exactly the compared outputs.
+packages/brand/css/*.css             text eol=lf
+packages/brand/tokens.generated.json text eol=lf
