@@ -3814,8 +3814,9 @@ eventos sin leer; consulta [más abajo](#next-ingest-history-runway).
 - Se añaden dos alertas: `JetStreamUnreadBacklogNearFull` (warning) y
   `JetStreamIngestBackpressureEngaged` (critical). Consulta
   [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure).
-- El simulador y el arnés de carga cuentan un `503` con `Retry-After` como descartado (shed), no
-  como fallido.
+- El simulador y el arnés de carga cuentan un `503` con `Retry-After` como rechazo, no como
+  fallo. Consulta [la entrada sobre los informes de las pruebas de carga](#next-loadtest-refusals)
+  para ver cómo lo informan.
 
 No hay nada que hacer al actualizar. Ningún stream se reconfigura, y un servicio que siga en la
 versión anterior conserva su comportamiento anterior hasta que se actualice.
@@ -5173,6 +5174,32 @@ Consulta la [Matriz de transportes](../reference/transport-matrix.md#external-mq
   `devicechain_eventsources_total_msg_not_owner{source}`, para los mensajes que un pod descarta
   porque acaba de perder la fuente. Nueva alerta: `ExternalMqttSourceNotReadByOnePod` (aviso),
   cuando una fuente lleva dos minutos sin que la lea ningún pod, o leída por más de uno.
+
+#### Los informes de las pruebas de carga cuentan los eventos rechazados {#next-loadtest-refusals}
+
+El simulador y el arnés de las pruebas de carga cuentan ahora por separado las dos formas en que la
+ingesta rechaza un evento:
+
+- `shed` es un `429`, rechazado en el techo de ingesta del inquilino.
+- `backpressured` es un `503` con `Retry-After`, rechazado porque la plataforma va retrasada. Este
+  rechazo afecta a todos los inquilinos.
+
+Un `503` sin `Retry-After` se sigue contando como `failed`. El `GET /status` del simulador y todos
+los informes de las pruebas de carga muestran `accepted`, `shed`, `backpressured` y `failed`
+juntos.
+
+Qué cambia:
+
+- Antes, la mayoría de los informes de las pruebas de carga mostraban siempre `shed 0`, por muchos
+  eventos que rechazara la ingesta. Ahora muestran el recuento real.
+- El `stats.shed` del simulador cuenta ahora solo los `429`. Antes incluía los `503`.
+- La prueba de contención falla una ejecución en la que la contrapresión rechazó al inquilino que
+  nunca se descarta, o a cualquiera de los dos inquilinos cuando no hay un suelo de contención.
+  Esa ejecución no dice nada sobre la prioridad de descarte. Antes, la prueba la informaba como un
+  descarte del inquilino que nunca se descarta. Con un suelo, también podía aprobar una ejecución
+  en la que el suelo no rechazó nada.
+
+No hay nada que hacer al actualizar.
 
 ### La transición única a la ingesta duradera
 

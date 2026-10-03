@@ -600,8 +600,8 @@ func TestSitepulseTickEmitsNothingBecauseUnityIsTheDevice(t *testing.T) {
 			"other and the low-fuel rule fires against the tank nobody can see", n)
 	}
 	snap := rt.Stats.Snapshot(time.Now())
-	if snap.Emitted != 0 || snap.Failed != 0 || snap.Shed != 0 {
-		t.Errorf("Tick moved the emit counters (emitted %d, failed %d, shed %d)",
-			snap.Emitted, snap.Failed, snap.Shed)
+	if snap.Emitted != 0 || snap.Failed != 0 || snap.Shed != 0 || snap.Backpressured != 0 {
+		t.Errorf("Tick moved the emit counters (emitted %d, failed %d, shed %d, backpressured %d)",
+			snap.Emitted, snap.Failed, snap.Shed, snap.Backpressured)
 	}
 }

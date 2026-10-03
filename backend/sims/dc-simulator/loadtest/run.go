@@ -98,20 +98,12 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	}
 
 	report := &Report{
-		Manifest:   p.Manifest,
-		Seed:       p.Seed,
-		Tenant:     hs.Tenant,
-		StartedAt:  start.UTC(),
-		FinishedAt: time.Now().UTC(),
-		Drive: DriveStats{
-			Devices:        len(rt.Devices),
-			TargetRatePS:   rt.Load.TargetRate(len(rt.Devices)),
-			AchievedRatePS: snap.Rate,
-			Accepted:       snap.Emitted,
-			Failed:         snap.Failed,
-			Ticks:          snap.Ticks,
-			HoldSeconds:    end.Sub(start).Seconds(),
-		},
+		Manifest:      p.Manifest,
+		Seed:          p.Seed,
+		Tenant:        hs.Tenant,
+		StartedAt:     start.UTC(),
+		FinishedAt:    time.Now().UTC(),
+		Drive:         newDriveStats(len(rt.Devices), rt.Load.TargetRate(len(rt.Devices)), snap, start, end),
 		PersistedSeen: qr.Persisted,
 		Reached:       qr.Reached,
 		QuiesceSecs:   qr.Elapsed.Seconds(),

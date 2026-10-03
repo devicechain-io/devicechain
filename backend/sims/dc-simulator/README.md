@@ -163,11 +163,13 @@ success over content the platform is not serving.
 
 ### Telling a governed device from a quiet one
 
-`GET /status` reports `stats.lastTickShed` beside the cumulative `stats.shed`, and
-the runner logs a warning the first tick that sheds (and an info line when it stops).
+`GET /status` reports `stats.lastTickShed` beside the cumulative `stats.shed` (429s
+at the tenant's rate ceiling) and `stats.backpressured` (503s with a `Retry-After`
+from the platform's backpressure gate); `lastTickShed` counts both. The runner logs a
+warning the first tick that is refused (and an info line when it stops).
 
-A shed is not an emit failure — the ingress refuses it cleanly at the per-tenant rate
-ceiling, and a governed load run expects them — so the emit loop deliberately does not
+A refusal is not an emit failure — the ingress refuses cleanly, at the per-tenant rate
+ceiling or under backpressure, and a governed load run expects them — so the emit loop deliberately does not
 treat one as an error. But on a scenario being *watched* rather than measured, that
 silence is the problem: a device whose events are being refused looks exactly like a
 device that has nothing to say, and on a board built to show what a widget does with

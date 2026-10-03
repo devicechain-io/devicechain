@@ -683,8 +683,8 @@ func (r *CommandReport) Human() string {
 		verdict = "PASS"
 	}
 	fmt.Fprintf(&b, "command-roundtrip-probes %s (seed %d, tenant %s)\n", verdict, r.Seed, r.Tenant)
-	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — accepted %d, failed %d\n",
-		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.Accepted, r.Drive.Failed)
+	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — %s\n",
+		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.outcome())
 	fmt.Fprintf(&b, "  probes: %d safety, %d command × K=%d cycles, %d emit failure(s); commands reached-target %v in %.0fs (oracle readable: %v)\n",
 		r.SafetyProbes, r.CommandProbes, r.Cycles, r.ProbeFailures, r.CommandsReached, r.CommandSecs, r.OracleReadOK)
 	fmt.Fprintf(&b, "  mqtt receive (NON-authoritative evidence): %d raw / %d distinct across cohort, %d blind device(s)\n",
@@ -903,15 +903,7 @@ func RunCommandProbes(ctx context.Context, hs *sim.Handshake, cfg CommandConfig)
 		ProbeCommands:   summarizeCommands(probeStates),
 		Receiver:        receiverReport,
 		Invariants:      invs,
-		Drive: DriveStats{
-			Devices:        len(background),
-			TargetRatePS:   rt.Load.TargetRate(len(background)),
-			AchievedRatePS: snap.Rate,
-			Accepted:       snap.Emitted,
-			Failed:         snap.Failed,
-			Ticks:          snap.Ticks,
-			HoldSeconds:    end.Sub(start).Seconds(),
-		},
+		Drive:           newDriveStats(len(background), rt.Load.TargetRate(len(background)), snap, start, end),
 	}
 	return report, nil
 }

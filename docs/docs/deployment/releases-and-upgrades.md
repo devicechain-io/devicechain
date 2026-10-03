@@ -3554,7 +3554,8 @@ refuses before it would discard that history fast enough to reach unread events;
 - Two alerts are added: `JetStreamUnreadBacklogNearFull` (warning) and
   `JetStreamIngestBackpressureEngaged` (critical). See
   [Backpressure on the ingest path](./observability.md#ingest-backpressure).
-- The simulator and load harness count a `503` with a `Retry-After` as shed, not failed.
+- The simulator and load harness count a `503` with a `Retry-After` as a refusal, not a failure.
+  See [the load-test reports entry](#next-loadtest-refusals) for how they report it.
 
 Nothing to do at upgrade. No stream is reconfigured, and a service still on the previous release
 keeps its previous behaviour until it is upgraded.
@@ -4804,6 +4805,30 @@ broker. The others connect nothing for that source until it is released. See
   for messages a pod drops because it has just lost the source. New alert:
   `ExternalMqttSourceNotReadByOnePod` (warning), when a source has been read by no pod, or by more
   than one, for two minutes.
+
+#### The load-test reports count refused events {#next-loadtest-refusals}
+
+The simulator and the load-test harness now count the two ways the ingress refuses an event
+separately:
+
+- `shed` is a `429`, refused at the tenant's ingest ceiling.
+- `backpressured` is a `503` with a `Retry-After`, refused because the platform is behind. This
+  refusal applies to every tenant.
+
+A `503` without a `Retry-After` is still counted as `failed`. The simulator's `GET /status` and
+every load-test report show `accepted`, `shed`, `backpressured` and `failed` side by side.
+
+What changes:
+
+- Before, most load-test reports always showed `shed 0`, however many events the ingress refused.
+  They now show the real count.
+- The simulator's `stats.shed` now counts `429`s only. It used to include the `503`s.
+- The contention test fails a run in which the backpressure refused the never-shed tenant, or
+  refused either tenant when no contention floor is set. Such a run says nothing about shed
+  priority. Before, the test reported it as the never-shed tenant being shed. With a floor set, it
+  could also pass a run in which the floor refused nothing.
+
+Nothing to do at upgrade.
 
 ### The one-time durable-ingest cutover
 

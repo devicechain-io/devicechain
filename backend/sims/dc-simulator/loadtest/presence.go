@@ -1062,8 +1062,8 @@ func (r *PresenceReport) Human() string {
 		r.Disposition, r.Seed, r.Tenant, r.ExitCode())
 	fmt.Fprintf(&b, "  %s\n", r.Reason)
 	fmt.Fprintf(&b, "  tap: live=%v source=%q\n", r.TapLive, r.PresenceSourceId)
-	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — accepted %d, shed %d, failed %d\n",
-		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.Accepted, r.Drive.Shed, r.Drive.Failed)
+	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — %s\n",
+		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.outcome())
 	fmt.Fprintf(&b, "  cohorts: %d steady (%d clean poll(s), %d read error(s)), %d churn × %d round(s), %d departed; asserted walk %d row(s) over %d page(s)\n",
 		r.SteadyDevices, r.CleanSteadyPolls, r.SteadyReadErrors, r.ChurnDevices, r.ChurnRounds, r.DepartedDevices, r.AssertedCount, r.AssertedPages)
 	if r.Control != "" {
@@ -1408,16 +1408,7 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 	invs := classifyPresence(obs, steadyTokens, churnTokens, departedTokens, cfg, snap.Emitted)
 
 	report.FinishedAt = time.Now().UTC()
-	report.Drive = DriveStats{
-		Devices:        len(background),
-		TargetRatePS:   rt.Load.TargetRate(len(background)),
-		AchievedRatePS: snap.Rate,
-		Accepted:       snap.Emitted,
-		Shed:           snap.Shed,
-		Failed:         snap.Failed,
-		Ticks:          snap.Ticks,
-		HoldSeconds:    driveEnd.Sub(driveStart).Seconds(),
-	}
+	report.Drive = newDriveStats(len(background), rt.Load.TargetRate(len(background)), snap, driveStart, driveEnd)
 	report.CleanSteadyPolls = obs.CleanSteadyPolls
 	report.SteadyReadErrors = obs.SteadyReadErrors
 	report.ChurnSessions = summarizeSessions(obs.ChurnSessions)
@@ -1431,28 +1422,29 @@ func RunPresence(ctx context.Context, hs *sim.Handshake, cfg PresenceConfig) (*P
 
 	// 🔴 THE TWO DRIVER SIGNALS, AND THEY MEAN DIFFERENT THINGS.
 	//
-	// SHED is a governed 429 at the per-tenant ingest ceiling — and presence
-	// transitions pass through that SAME gate object (the tap is constructed with it),
-	// metered against the same live bucket. So a shed run is one where a transition
-	// this harness did not see may have been REFUSED rather than lost, and no presence
-	// verdict can be told apart from a governance one.
+	// REFUSED is a governed 429 at the per-tenant ingest ceiling (shed) or a 503 with a
+	// Retry-After from the platform's backpressure gate (backpressured) — and presence
+	// transitions pass through that SAME ingress (the tap is constructed with the
+	// ceiling's gate object, metered against the same live bucket). So a refused run is
+	// one where a transition this harness did not see may have been REFUSED rather than
+	// lost, and no presence verdict can be told apart from a governance one.
 	//
 	// 🔴 THAT IS AN INFERENCE, NOT A MEASUREMENT, AND IT IS STATED AS ONE. The direct
 	// count of refused presence transitions is a server-side metric this harness has
 	// no business reading — it is an untrusted external client. What it observes is
-	// that the tenant's ceiling was refusing traffic during the run, which makes the
+	// that the ingress was refusing the tenant's traffic during the run, which makes the
 	// presence half unmeasurable by the same argument. It also cannot see a refusal
-	// that happened with no HTTP 429 alongside it, so `shed == 0` narrows the risk
-	// rather than eliminating it.
+	// that happened with no HTTP 429 or 503 alongside it, so zero refusals narrows the
+	// risk rather than eliminating it.
 	//
 	// FAILED is different and was previously unhandled: real transport errors. The
 	// common cause at this gate is the shared kubectl port-forward dropping, which
 	// stops the background load, sinks the accepted count below the floor, and would
 	// otherwise print "presence defect" for a tunnel.
-	if snap.Shed > 0 {
-		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the ingress (the per-tenant ingest ceiling, or backpressure), and presence "+
-			"transitions pass through that same ceiling — so a transition this run did not see may have been refused rather "+
-			"than lost. Lower the background load (--bg-devices / --bg-interval) or raise the tenant's ingest ceiling, and re-run", snap.Shed)
+	if refused, ok := backgroundRefusals(snap); ok {
+		report.cannotMeasure.cannot("the background fleet was %s, and presence "+
+			"transitions pass through that same ingress — so a transition this run did not see may have been refused rather "+
+			"than lost. Lower the background load (--bg-devices / --bg-interval) or raise the tenant's ingest ceiling, and re-run", refused)
 	}
 	if snap.Failed > 0 && snap.Failed*10 >= snap.Emitted {
 		report.cannotMeasure.cannot("%d of %d background emit(s) failed outright (not shed — real transport errors), so the load this "+

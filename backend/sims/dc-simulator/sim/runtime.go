@@ -26,24 +26,32 @@ const httpTimeout = 15 * time.Second
 // actually applied instead of the one it asked for.
 type Stats struct {
 	// Emitted counts accepted emits (HTTP 202). Shed counts emits rejected at the
-	// per-tenant ingest ceiling (HTTP 429, ADR-023/063) or under the platform's
-	// backpressure (HTTP 503 with a Retry-After) — each a DEFINITIVE clean non-accept:
-	// the ingress refuses before anything is published, so the event provably never
-	// entered the pipeline and is not persisted. Failed counts every OTHER non-202 (a
-	// 400, a bare 503, a transport error) — outcomes that are INDETERMINATE (a timeout
-	// may have persisted server-side) or are real errors.
+	// per-tenant ingest ceiling (HTTP 429, ADR-023/063). Backpressured counts emits
+	// refused under the platform's shared backpressure gate (HTTP 503 with a
+	// Retry-After). Both are DEFINITIVE clean non-accepts: the ingress refuses before
+	// anything is published, so the event provably never entered the pipeline and is
+	// not persisted. They are counted apart because they answer different questions —
+	// a 429 is the tenant's own ceiling (and, under a contention floor, shed
+	// priority), a 503 is the platform being behind for every tenant alike. Failed
+	// counts every OTHER non-202 (a 400, a bare 503, a transport error) — outcomes
+	// that are INDETERMINATE (a timeout may have persisted server-side) or are real
+	// errors.
 	//
-	// Separating shed from failed is what makes a governed run reconcilable (ADR-064
-	// L3): under a contention floor a best-effort tenant is EXPECTED to shed, and a
-	// shed is not a failure — persisted == emitted still holds, with the shed events
-	// correctly absent. A run that must be clean asserts Failed == 0; it may still
-	// carry sheds.
-	Emitted atomic.Int64
-	Shed    atomic.Int64
-	Failed  atomic.Int64
+	// Separating both refusals from failed is what makes a governed run reconcilable
+	// (ADR-064 L3): under a contention floor a best-effort tenant is EXPECTED to shed,
+	// and a shed is not a failure — persisted == emitted still holds, with the
+	// refused events correctly absent. A run that must be clean asserts Failed == 0;
+	// it may still carry sheds and backpressure refusals.
+	Emitted       atomic.Int64
+	Shed          atomic.Int64
+	Backpressured atomic.Int64
+	Failed        atomic.Int64
 
-	// LastTickShed is how many emits the MOST RECENT tick had shed, as opposed to
-	// how many the run has shed in total.
+	// LastTickShed is how many emits the MOST RECENT tick had refused at the ingress
+	// — shed at the tenant's ceiling OR backpressured — as opposed to how many the
+	// run has refused in total. It counts both because the question it answers
+	// ("empty because governed, or empty on purpose?") has the same answer for both:
+	// the device offered and was refused.
 	//
 	// 🔴 It exists because a cumulative counter cannot answer the question a shed
 	// actually raises: "is this widget empty right now because the device is quiet,
@@ -107,6 +115,7 @@ type Stats struct {
 func (s *Stats) Reset(now time.Time) {
 	s.Emitted.Store(0)
 	s.Shed.Store(0)
+	s.Backpressured.Store(0)
 	s.Failed.Store(0)
 	s.LastTickShed.Store(0)
 	s.Overruns.Store(0)
@@ -114,6 +123,9 @@ func (s *Stats) Reset(now time.Time) {
 	s.frozenNanos.Store(0)
 	s.sinceNanos.Store(now.UnixNano())
 }
+
+// refused is every clean non-accept so far: the 429s and the backpressure 503s.
+func (s *Stats) refused() int64 { return s.Shed.Load() + s.Backpressured.Load() }
 
 // Freeze fixes the elapsed time at the moment a run stopped.
 //
@@ -137,11 +149,14 @@ func (s *Stats) Freeze(now time.Time) {
 // achieved rate over the run so far, alongside the raw totals.
 type Snapshot struct {
 	Emitted int64 `json:"emitted"`
-	Shed    int64 `json:"shed"`
-	// LastTickShed answers "is it being shed NOW", which the cumulative Shed above
-	// cannot. Non-zero means the most recent tick had emits refused at the per-tenant
-	// ingest ceiling, so a widget showing nothing is showing a governed device rather
-	// than a quiet one.
+	// Shed is the 429s (the tenant's ceiling); Backpressured the 503s carrying a
+	// Retry-After (the platform's shared gate). Refused() is their sum.
+	Shed          int64 `json:"shed"`
+	Backpressured int64 `json:"backpressured"`
+	// LastTickShed answers "is it being refused NOW", which the cumulative counters
+	// above cannot. Non-zero means the most recent tick had emits refused at the
+	// ingress — by the per-tenant ceiling or by backpressure — so a widget showing
+	// nothing is showing a governed device rather than a quiet one.
 	LastTickShed int64   `json:"lastTickShed"`
 	Failed       int64   `json:"failed"`
 	Overruns     int64   `json:"overruns"`
@@ -155,12 +170,13 @@ type Snapshot struct {
 // that skew is far below the precision anyone should read into the rate.
 func (s *Stats) Snapshot(now time.Time) Snapshot {
 	snap := Snapshot{
-		Emitted:      s.Emitted.Load(),
-		Shed:         s.Shed.Load(),
-		LastTickShed: s.LastTickShed.Load(),
-		Failed:       s.Failed.Load(),
-		Overruns:     s.Overruns.Load(),
-		Ticks:        s.Ticks.Load(),
+		Emitted:       s.Emitted.Load(),
+		Shed:          s.Shed.Load(),
+		Backpressured: s.Backpressured.Load(),
+		LastTickShed:  s.LastTickShed.Load(),
+		Failed:        s.Failed.Load(),
+		Overruns:      s.Overruns.Load(),
+		Ticks:         s.Ticks.Load(),
 	}
 	// A frozen elapsed wins: once a run has stopped, its rate is a fact about a
 	// finished window and must not keep being divided by wall-clock.
@@ -174,6 +190,10 @@ func (s *Stats) Snapshot(now time.Time) Snapshot {
 	}
 	return snap
 }
+
+// Refused is every clean non-accept in the snapshot: Shed (429) plus
+// Backpressured (503 with a Retry-After).
+func (s Snapshot) Refused() int64 { return s.Shed + s.Backpressured }
 
 // Runtime is the shared handle every Sim implementation's Bootstrap/Tick
 // receives: the authenticated tenant session, the resolved endpoints, and the

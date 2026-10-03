@@ -932,6 +932,10 @@ jobs:
       #      the positive run's attribution ("the floor caused the sheds").
       #   2. POSITIVE at floor 1: gold rides through (zero sheds, zero loss) while
       #      the best-effort probe sheds (429) yet persists everything it accepted.
+      # In both, the platform's shared backpressure gate (a 503 with Retry-After)
+      # must not have refused gold -- nor, at floor 0, the best-effort probe -- since
+      # that gate refuses every tenant alike and its refusals say nothing about
+      # shed priority.
       # The floor is event-sources instance config, set LIVE between the regimes by
       # patching the per-service ConfigMap + a rollout (the GA "static floor" path;
       # the NATS-KV runtime knob is the deferred auto path). The rollout replaces the
@@ -1001,7 +1005,7 @@ jobs:
           if [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && [ -z "$pf_errors" ]; then
             echo "shared device-plane port-forward survived the floor-0 probes cleanly (pid $PF_PID)."
           else
-            echo "::warning::shared device-plane port-forward did not survive cleanly -- any floor-0 probe red (self-test, L1, detection, command, presence, batch, L3-neg) may be a kubectl port-forward drop, not a platform correctness failure. A dropped tunnel produces FAILED emits, NOT shed ones (shed is a governed 429 at the ingest ceiling and is a different signal); the presence and batch harnesses treat a large failed share as inconclusive for exactly this reason, so prefer exit 2 over exit 1 as the sign that this is what happened. Log tail:"
+            echo "::warning::shared device-plane port-forward did not survive cleanly -- any floor-0 probe red (self-test, L1, detection, command, presence, batch, L3-neg) may be a kubectl port-forward drop, not a platform correctness failure. A dropped tunnel produces FAILED emits, NOT shed or backpressured ones (shed is a governed 429 at the ingest ceiling, backpressured a 503 with Retry-After from the platform's shared gate; both are reported apart from failed); the presence and batch harnesses treat a large failed share as inconclusive for exactly this reason, so prefer exit 2 over exit 1 as the sign that this is what happened. Log tail:"
             tail -30 "$RUNNER_TEMP/pf-eventsources.log" 2>/dev/null || true
           fi
           kill "$PF_PID" 2>/dev/null || true
@@ -1197,6 +1201,8 @@ jobs:
                 achievedRatePerSec: .drive.achievedRatePerSec,
                 accepted:  .drive.accepted,
                 persisted: .persistedEvents,
+                shed:      .drive.shed,
+                backpressured: .drive.backpressured,
                 failed:    .drive.failed,
                 stateCaughtUp:   .stateCaughtUp,
                 stateLagSeconds: .stateLagSeconds,
@@ -1205,6 +1211,8 @@ jobs:
               detection: ($det | if . == null then null else {
                 achievedRatePerSec: .drive.achievedRatePerSec,
                 accepted:           .drive.accepted,
+                shed:               .drive.shed,
+                backpressured:      .drive.backpressured,
                 edgeProbes:         .edgeProbes,
                 safetyProbes:       .safetyProbes,
                 alarmSettleSeconds: .alarmSettleSeconds,
@@ -1213,6 +1221,8 @@ jobs:
               command: ($cmd | if . == null then null else {
                 achievedRatePerSec: .drive.achievedRatePerSec,
                 accepted:           .drive.accepted,
+                shed:               .drive.shed,
+                backpressured:      .drive.backpressured,
                 commandProbes:      .commandProbes,
                 cycles:             .cycles,
                 commandsReached:    .commandsReachedTarget,
@@ -1226,6 +1236,7 @@ jobs:
                 achievedRatePerSec: .drive.achievedRatePerSec,
                 accepted:           .drive.accepted,
                 shed:               .drive.shed,
+                backpressured:      .drive.backpressured,
                 disposition:        .disposition,
                 tapLive:            .tapLive,
                 presenceSourceId:   .presenceSourceId,
@@ -1236,6 +1247,8 @@ jobs:
               batch: ($bat | if . == null then null else {
                 achievedRatePerSec: .drive.achievedRatePerSec,
                 accepted:           .drive.accepted,
+                shed:               .drive.shed,
+                backpressured:      .drive.backpressured,
                 targetDevices:      .targetDevices,
                 batchAccepted:      .batchAccepted,
                 concurrentReplays:  .concurrentReplays,
@@ -1246,9 +1259,11 @@ jobs:
               contentionFloor1: ($pos | if . == null then null else {
                 goldAccepted:  .gold.Accepted,
                 goldShed:      .gold.Shed,
+                goldBackpressured: .gold.Backpressured,
                 goldPersisted: .gold.Persisted,
                 shedAccepted:  .shed.Accepted,
                 shedShed:      .shed.Shed,
+                shedBackpressured: .shed.Backpressured,
                 shedPersisted: .shed.Persisted,
                 passed:        verdict
               } end)
@@ -1258,38 +1273,38 @@ jobs:
             echo ""
             echo "## ADR-064 load-test baseline (run ${GITHUB_RUN_ID})"
             echo ""
-            echo "| probe | achieved ev/s | accepted | persisted | shed | verdict |"
-            echo "| --- | ---: | ---: | ---: | ---: | :---: |"
+            echo "| probe | achieved ev/s | accepted | persisted | shed | backpressured | verdict |"
+            echo "| --- | ---: | ---: | ---: | ---: | ---: | :---: |"
             # 🔴 The verdict column takes a STRING, not a boolean, because two probes
             # here have three states. Folding INCONCLUSIVE into FAIL in the one artifact
             # a human reads at a glance would undo the whole reason those probes carry a
             # third disposition -- "we could not measure this" would record identically
             # to "this is broken", months later, to someone who was not here.
             jq -r '
-              def row($name; $rate; $acc; $per; $shed; $ok):
-                "| \($name) | \($rate // "-") | \($acc // "-") | \($per // "-") | \($shed // "-") | \($ok // "-") |";
+              def row($name; $rate; $acc; $per; $shed; $bp; $ok):
+                "| \($name) | \($rate // "-") | \($acc // "-") | \($per // "-") | \($shed // "-") | \($bp // "-") | \($ok // "-") |";
               def verdictOf($b): if $b == true then "PASS" elif $b == false then "FAIL" else null end;
               [ row("L1 aggregate";
                     (.l1.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .l1.accepted; .l1.persisted; null; verdictOf(.l1.passed)),
+                    .l1.accepted; .l1.persisted; .l1.shed; .l1.backpressured; verdictOf(.l1.passed)),
                 row("detection";
                     (.detection.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .detection.accepted; null; null; verdictOf(.detection.passed)),
+                    .detection.accepted; null; .detection.shed; .detection.backpressured; verdictOf(.detection.passed)),
                 row("command round-trip";
                     (.command.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .command.accepted; null; null; verdictOf(.command.passed)),
+                    .command.accepted; null; .command.shed; .command.backpressured; verdictOf(.command.passed)),
                 row("L4 presence";
                     (.presence.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .presence.accepted; null; .presence.shed; .presence.disposition),
+                    .presence.accepted; null; .presence.shed; .presence.backpressured; .presence.disposition),
                 row("L2d-4 fleet write";
                     (.batch.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .batch.accepted; null; null; .batch.disposition),
+                    .batch.accepted; null; .batch.shed; .batch.backpressured; .batch.disposition),
                 row("L3 floor1 gold";
                     null; .contentionFloor1.goldAccepted; .contentionFloor1.goldPersisted;
-                    .contentionFloor1.goldShed; verdictOf(.contentionFloor1.passed)),
+                    .contentionFloor1.goldShed; .contentionFloor1.goldBackpressured; verdictOf(.contentionFloor1.passed)),
                 row("L3 floor1 best-effort";
                     null; .contentionFloor1.shedAccepted; .contentionFloor1.shedPersisted;
-                    .contentionFloor1.shedShed; verdictOf(.contentionFloor1.passed))
+                    .contentionFloor1.shedShed; .contentionFloor1.shedBackpressured; verdictOf(.contentionFloor1.passed))
               ] | .[]' "$baseline"
             echo ""
             if [ "$BUILD" = "true" ]; then

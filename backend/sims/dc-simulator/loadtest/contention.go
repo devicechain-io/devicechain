@@ -25,7 +25,12 @@ import (
 //
 // The oracle is fidelity-pure and needs no server counter: a shed is an HTTP 429 the
 // driver SEES directly (Stats.Shed), returned before the body is read, so a shed event
-// provably never entered the pipeline. The gate therefore reconciles, per tenant:
+// provably never entered the pipeline. A 503 with a Retry-After from the platform's
+// shared backpressure gate is ALSO a clean refusal, but it is counted apart
+// (Stats.Backpressured): that gate refuses every tenant alike, so it says nothing about
+// shed priority, and a run where it refused gold — or, at floor 0, the shed probe —
+// fails as unattributable rather than being read as a shed. The gate therefore
+// reconciles, per tenant:
 //   - GOLD rides through — zero sheds AND persisted == accepted (zero loss);
 //   - the SHED probe loses ONLY what it was told it lost — persisted == accepted with
 //     the 429s correctly absent (shedding may drop, it must never corrupt), and it
@@ -45,6 +50,9 @@ const (
 	InvShedEngaged         = "shed-mechanism-engaged"
 	InvShedNoCorruption    = "shed-no-corruption"
 	InvContentionLoadFloor = "contention-load-floor"
+	// InvContentionUnbackpressured: the platform's shared backpressure gate did not
+	// refuse a tenant whose refusals the verdict attributes to shed priority.
+	InvContentionUnbackpressured = "contention-not-backpressured"
 )
 
 // ContentionConfig is one contention-profile run's configuration. The Profile sizes
@@ -90,15 +98,18 @@ func (c ContentionConfig) Validate() error {
 // tenantOutcome is one probe tenant's drive ledger and reconciliation, the raw input
 // to the pure classifier.
 type tenantOutcome struct {
-	Role      string
-	Tenant    string
-	Devices   int
-	Accepted  int64 // HTTP 202
-	Shed      int64 // HTTP 429 (governed, clean non-accept)
-	Failed    int64 // real errors / indeterminate outcomes
-	Persisted int64 // oracle-observed persisted count over the window
-	Reached   bool  // whether persisted reached the accepted target within the quiesce timeout
-	Rate      float64
+	Role     string
+	Tenant   string
+	Devices  int
+	Accepted int64 // HTTP 202
+	Shed     int64 // HTTP 429 at the (floor-reduced) per-tenant ceiling: governed, clean non-accept
+	// Backpressured is HTTP 503 with a Retry-After: the platform's shared gate, a clean
+	// non-accept that is NOT shed priority.
+	Backpressured int64
+	Failed        int64 // real errors / indeterminate outcomes
+	Persisted     int64 // oracle-observed persisted count over the window
+	Reached       bool  // whether persisted reached the accepted target within the quiesce timeout
+	Rate          float64
 }
 
 // runOneTenant drives one probe tenant through the full L1 path — clean-tenant
@@ -139,17 +150,27 @@ func runOneTenant(ctx context.Context, role string, hs *sim.Handshake, p Profile
 	if err != nil {
 		return nil, fmt.Errorf("%s oracle read-back: %w", role, err)
 	}
+	return outcomeOf(role, hs.Tenant, len(rt.Devices), snap, qr), nil
+}
+
+// outcomeOf maps one tenant's driver snapshot and oracle read-back into the
+// classifier's input. It is pure, and separate from runOneTenant (which needs a live
+// cluster), because this mapping is where a 503 would be re-filed as a 429 — the one
+// line that decides whether backpressure reads as "gold was shed".
+func outcomeOf(role, tenant string, devices int, snap sim.Snapshot, qr QuiesceResult) *tenantOutcome {
+	l := ledgerOf(snap)
 	return &tenantOutcome{
-		Role:      role,
-		Tenant:    hs.Tenant,
-		Devices:   len(rt.Devices),
-		Accepted:  snap.Emitted,
-		Shed:      snap.Shed,
-		Failed:    snap.Failed,
-		Persisted: qr.Persisted,
-		Reached:   qr.Reached,
-		Rate:      snap.Rate,
-	}, nil
+		Role:          role,
+		Tenant:        tenant,
+		Devices:       devices,
+		Accepted:      l.Accepted,
+		Shed:          l.Shed,
+		Backpressured: l.Backpressured,
+		Failed:        l.Failed,
+		Persisted:     qr.Persisted,
+		Reached:       qr.Reached,
+		Rate:          l.AchievedRatePS,
+	}
 }
 
 // RunContentionProbes drives the gold and shed probe tenants concurrently and returns
@@ -240,8 +261,8 @@ func (r *ContentionReport) Human() string {
 	}
 	fmt.Fprintf(&b, "contention %s — %s, seed %d — %s\n", verdict, r.Manifest, r.Seed, regime)
 	line := func(o tenantOutcome) {
-		fmt.Fprintf(&b, "  %-4s %q: accepted %d, shed %d, failed %d, persisted %d (%.0f ev/s)\n",
-			o.Role, o.Tenant, o.Accepted, o.Shed, o.Failed, o.Persisted, o.Rate)
+		fmt.Fprintf(&b, "  %-4s %q: accepted %d, shed %d, backpressured %d, failed %d, persisted %d (%.0f ev/s)\n",
+			o.Role, o.Tenant, o.Accepted, o.Shed, o.Backpressured, o.Failed, o.Persisted, o.Rate)
 	}
 	line(r.Gold)
 	line(r.Shed)
@@ -261,13 +282,16 @@ func (r *ContentionReport) Human() string {
 //
 // The regime is set by ExpectFloor:
 //   - ExpectFloor == 0 (negative control): the mechanism is OFF, so NEITHER tenant may
-//     shed. If the shed probe shed here, the sheds are an ADR-023 base-ceiling artifact,
-//     not ADR-063 — the whole positive test would be measuring the wrong thing.
+//     shed. If the shed probe shed (429) here, the sheds are an ADR-023 base-ceiling
+//     artifact, not ADR-063 — the whole positive test would be measuring the wrong
+//     thing. A backpressure 503 is not counted as a shed; it fails the run through
+//     contention-not-backpressured instead.
 //   - ExpectFloor >= 1: the best-effort shed probe MUST shed (the mechanism engaged —
 //     else "gold rode through" is vacuous), while gold must not.
 //
-// In BOTH regimes: gold never sheds, and each tenant's accepted events all persist
-// (shedding drops, it must never corrupt what it let through).
+// In BOTH regimes: gold never sheds, gold is never backpressured, and each tenant's
+// accepted events all persist (shedding drops, it must never corrupt what it let
+// through).
 func classifyContention(cfg ContentionConfig, gold, shed *tenantOutcome) []Invariant {
 	var inv []Invariant
 	add := func(name string, passed bool, detail string) {
@@ -280,6 +304,18 @@ func classifyContention(cfg ContentionConfig, gold, shed *tenantOutcome) []Invar
 		fmt.Sprintf("gold %q had %d real emit failures (need 0; a shed is not a failure)", gold.Tenant, gold.Failed))
 	add(InvContentionCleanShed, shed.Failed == 0,
 		fmt.Sprintf("shed %q had %d real emit failures (need 0; a shed is not a failure)", shed.Tenant, shed.Failed))
+
+	// Backpressure is the platform's shared gate, which refuses every tenant alike, so
+	// a refusal it caused cannot be attributed to shed priority. Gold refused by it at
+	// any floor would otherwise read as "gold was shed" (a misattributed red), and the
+	// shed probe refused by it at floor 0 as a base-ceiling artifact — both runs
+	// measured the platform being behind, not the mechanism. At floor >= 1 the shed
+	// probe being backpressured too does not void the verdict: gold-never-shed and
+	// shed-mechanism-engaged read 429s only, so its 503s cannot satisfy engagement.
+	add(InvContentionUnbackpressured, gold.Backpressured == 0 && (cfg.ExpectFloor >= 1 || shed.Backpressured == 0),
+		fmt.Sprintf("gold %q was refused %d and shed %q %d time(s) by the platform's backpressure (503 with Retry-After) "+
+			"at floor %d — the shared gate refuses every tenant alike, so this run cannot attribute those refusals to shed "+
+			"priority; re-run on a stack that is keeping up", gold.Tenant, gold.Backpressured, shed.Tenant, shed.Backpressured, cfg.ExpectFloor))
 
 	// The promise: gold is NEVER shed, at any floor.
 	add(InvGoldNeverShed, gold.Shed == 0,
@@ -298,7 +334,7 @@ func classifyContention(cfg ContentionConfig, gold, shed *tenantOutcome) []Invar
 		// Negative control: no floor ⇒ no shedding. A shed here is an ADR-023 base-ceiling
 		// artifact and would invalidate the positive test's attribution.
 		add(InvShedEngaged, shed.Shed == 0,
-			fmt.Sprintf("shed %q shed %d events at floor 0 — the negative control requires ZERO shedding (a shed here is a base-ceiling artifact, not ADR-063)", shed.Tenant, shed.Shed))
+			fmt.Sprintf("shed %q shed %d events at floor 0 — the negative control requires ZERO shedding (a shed here is a base-ceiling artifact, not ADR-063; 429s only, backpressure is reported separately)", shed.Tenant, shed.Shed))
 	}
 
 	// No corruption: everything the shed probe DID get accepted persisted. This is the
@@ -309,9 +345,11 @@ func classifyContention(cfg ContentionConfig, gold, shed *tenantOutcome) []Invar
 
 	// Load floor: gold must apply real load (it is the zero-loss tenant, and a trivial
 	// drive proves nothing), and the shed probe must have ATTEMPTED real load
-	// (accepted + shed) so its shedding is meaningful rather than a no-op.
-	add(InvContentionLoadFloor, gold.Accepted >= cfg.MinAccepted && (shed.Accepted+shed.Shed) >= cfg.MinAccepted,
-		fmt.Sprintf("gold accepted %d, shed attempted %d (floor %d each — a gate must apply real load)", gold.Accepted, shed.Accepted+shed.Shed, cfg.MinAccepted))
+	// (accepted + shed + backpressured: everything it offered) so its shedding is
+	// meaningful rather than a no-op.
+	shedAttempted := shed.Accepted + shed.Shed + shed.Backpressured
+	add(InvContentionLoadFloor, gold.Accepted >= cfg.MinAccepted && shedAttempted >= cfg.MinAccepted,
+		fmt.Sprintf("gold accepted %d, shed attempted %d (floor %d each — a gate must apply real load)", gold.Accepted, shedAttempted, cfg.MinAccepted))
 
 	// Tenant isolation is covered by the exact per-tenant completeness checks above:
 	// each persisted count is read on its OWN tenant-scoped session, and a cross-tenant

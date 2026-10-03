@@ -319,8 +319,9 @@ func (emittingSim) Tick(ctx context.Context, rt *Runtime) error {
 // shedSim sheds a fixed number of emits per tick, so the lifecycle's attribution of
 // sheds TO A TICK is testable without an ingress.
 type shedSim struct {
-	shedPerTick atomic.Int64
-	ticks       atomic.Int64
+	shedPerTick          atomic.Int64
+	backpressuredPerTick atomic.Int64
+	ticks                atomic.Int64
 }
 
 func (s *shedSim) Manifest() SimManifest                     { return SimManifest{Name: "shed-fake"} }
@@ -328,7 +329,35 @@ func (s *shedSim) Bootstrap(context.Context, *Runtime) error { return nil }
 func (s *shedSim) Tick(_ context.Context, rt *Runtime) error {
 	s.ticks.Add(1)
 	rt.Stats.Shed.Add(s.shedPerTick.Load())
+	rt.Stats.Backpressured.Add(s.backpressuredPerTick.Load())
 	return nil
+}
+
+// A device whose events the platform's backpressure gate refuses is as silent on a
+// board as one shed at its tenant's ceiling, so LastTickShed — the "governed, not
+// quiet" signal — counts both kinds of refusal, while the cumulative counters keep them
+// apart.
+func TestLastTickShedCountsBackpressure(t *testing.T) {
+	s := &shedSim{}
+	s.backpressuredPerTick.Store(3)
+	rt := &Runtime{Tenant: "acme", InstanceId: "dc", Load: Load{EmitInterval: 10 * time.Millisecond}}
+	lc := NewLifecycle(s, rt)
+	if err := lc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if err := lc.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = lc.Stop() }()
+
+	waitFor(t, func() bool { return rt.Stats.LastTickShed.Load() == 3 },
+		"LastTickShed never reached the 3 backpressure refusals each tick produces")
+	if shed := rt.Stats.Shed.Load(); shed != 0 {
+		t.Errorf("shed = %d, want 0 (every refusal was backpressure)", shed)
+	}
+	if bp := rt.Stats.Backpressured.Load(); bp < 3 {
+		t.Errorf("backpressured = %d, want at least one tick's 3", bp)
+	}
 }
 
 // 🔴 A shed device and a deliberately-silent one look identical on a board: both
