@@ -5129,6 +5129,51 @@ fallida nunca llegó. Una vez retirada la anotación, una nueva ejecución se re
   actualización posterior con él que falle puede dejarla en vigor sobre una instancia en marcha,
   y un `dcctl bootstrap` sin más se ejecutaría entonces sobre esa instancia.
 
+#### Una fuente MQTT sobre tu propio bróker se conecta con su propio identificador de cliente, desde un solo pod a la vez {#next-external-mqtt-client-id}
+
+Una fuente de eventos que lee de un bróker MQTT que tú operas se conectaba con el identificador de
+cliente `devicechain`, fuera cual fuera la instancia, la fuente o el pod. Un bróker mantiene una
+sesión por identificador de cliente y corta la conexión más antigua cuando llega una segunda. Así
+que, cada vez que dos conexiones usaban ese identificador, cada una le quitaba la sesión a la otra
+en bucle, y los mensajes que llegaban mientras cualquiera de las dos se reconectaba se perdían sin
+contarse. Ocurría con dos pods de `event-sources`, en cada actualización progresiva (el pod nuevo
+arranca antes de que se detenga el viejo), con dos fuentes así sobre un mismo bróker y con dos
+instancias que leían un mismo bróker. La fuente de pasarela de la instalación por defecto lee el
+flujo de la plataforma y no se veía afectada.
+
+Ahora cada fuente se conecta como `devicechain:<instancia>:<fuente>:<pod>`, y solo un pod lee una
+fuente dada a la vez. Los pods acuerdan cuál mediante un arrendamiento guardado en el bróker de
+mensajería de la plataforma. Los demás no conectan nada para esa fuente hasta que se libera.
+Consulta la [Matriz de transportes](../reference/transport-matrix.md#external-mqtt-broker).
+
+- **Antes de actualizar, si la ACL, la lista de permitidos o la regla de identificadores de tu
+  bróker nombra `devicechain`,** permite los identificadores que empiezan por `devicechain:`. El
+  identificador además supera los 23 caracteres, el límite más corto que MQTT exige aceptar a un
+  bróker. Un bróker que rechaza el nuevo identificador hace que el pod nuevo no arranque, con el
+  motivo del bróker en su registro, y la actualización se detiene con los pods viejos aún en
+  marcha y leyendo la fuente como antes.
+- **Mientras avanza la actualización, una fuente puede leerse dos veces.** Hasta que se detiene el
+  último pod de la versión anterior, ese pod sigue leyendo la fuente con el identificador viejo,
+  junto al pod nuevo que tiene la fuente, y cada uno almacena lo que recibe. Los mensajes que
+  llegan en esa ventana pueden almacenarse dos veces. Ocurre una sola vez, y lo mismo pasa al
+  volver a la versión anterior. Para evitarlo, pausa a los publicadores de tu bróker mientras dura
+  el despliegue. Los arrendamientos que deja una versión revertida caducan solos en 30 segundos.
+- Un pod que se detiene cede la fuente a otro pod en unos dos segundos. Tras una pérdida abrupta
+  (un fallo de nodo, un `SIGKILL`, una terminación por falta de memoria), la fuente queda sin leer
+  unos 30 segundos más lo que tarde en reconectarse. La fuente sigue siendo como mucho una vez: tu
+  bróker no conserva lo que entrega en ninguno de esos huecos.
+- Un pod que toma una fuente y no puede llegar a tu bróker la libera y vuelve a intentarlo cada 15
+  segundos, en lugar de detener el servicio. Un bróker que rechaza la suscripción sigue deteniendo
+  el servicio.
+- Ejecutar más pods de `event-sources` ya no significa más lectores de una fuente externa. Antes
+  tampoco añadía capacidad, porque los pods se quitaban una misma sesión. Ahora añade pods en
+  espera.
+- Nuevo indicador: `devicechain_eventsources_external_mqtt_owner{source}`, que vale 1 en el pod que
+  lee la fuente y 0 en los demás, y un nuevo contador,
+  `devicechain_eventsources_total_msg_not_owner{source}`, para los mensajes que un pod descarta
+  porque acaba de perder la fuente. Nueva alerta: `ExternalMqttSourceNotReadByOnePod` (aviso),
+  cuando una fuente lleva dos minutos sin que la lea ningún pod, o leída por más de uno.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

@@ -42,12 +42,12 @@ func (m *fakeMqttMessage) Ack()              {}
 func newTestMqttSource(t *testing.T, allow RateGate) (*MqttEventSource, *int) {
 	t.Helper()
 	receivedCount := 0
-	es, err := NewMqttEventSource("mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": GatewayTopic("inst-1")},
+	es, err := NewMqttEventSource("mqtt-test", "cid-mqtt-test", map[string]string{"host": "h", "port": "1883", "topic": GatewayTopic("inst-1")},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) { receivedCount++ },
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
-		allow, admitAllReadings, admitAll, func(err error) { t.Errorf("the source asked to end the process: %v", err) })
+		allow, admitAllReadings, admitAll, alwaysOwns, func(err error) { t.Errorf("the source asked to end the process: %v", err) })
 	assert.NoError(t, err)
 	es.messages = make(chan rawMessage, 8)
 	return es, &receivedCount

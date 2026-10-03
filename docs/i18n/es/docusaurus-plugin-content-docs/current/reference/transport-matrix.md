@@ -132,7 +132,7 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   credenciales del dispositivo viajan en el cuerpo del evento. Donde necesites TLS, lo aporta lo
   que pongas por delante del servicio.
 
-### MQTT — un bróker externo, propiedad del operador
+### MQTT — un bróker externo, propiedad del operador {#external-mqtt-broker}
 
 La plataforma también puede actuar como cliente en un bróker que ya operes, para ingerir de él.
 
@@ -158,6 +158,38 @@ La plataforma también puede actuar como cliente en un bróker que ya operes, pa
   un error en lugar de dejarlo conectado sin ingerir nada. Eso incluye la ingesta desde el bróker de
   la plataforma y por HTTP, no solo esta fuente: el servicio se reinicia y sigue fallando hasta que
   el bróker vuelva a conceder la suscripción.
+
+  **Un solo pod lee cada fuente, con un identificador de cliente propio.** La plataforma se
+  conecta a tu bróker como `devicechain:<instancia>:<fuente>:<pod>`, así que dos instancias, dos
+  fuentes o dos pods de `event-sources` nunca comparten una sesión. Un bróker mantiene una sesión
+  por identificador de cliente y corta la conexión más antigua cuando llega una segunda, y el
+  identificador único compartido que usaban las versiones anteriores perdía mensajes por esa vía.
+  Corran los pods de `event-sources` que corran, solo uno lee una fuente dada a la vez, porque
+  nada en esta vía distingue un mensaje entregado a dos pods de dos mensajes. Los demás no
+  conectan nada para esa fuente, quedan a la espera y siguen atendiendo todo lo demás. Si la ACL,
+  la lista de permitidos o la regla de identificadores de tu bróker se basa en el identificador de
+  cliente, permite los que empiezan por `devicechain:`. El identificador supera los 23 caracteres,
+  el límite más corto que MQTT exige aceptar a un bróker, así que un bróker que aplica ese límite
+  lo rechaza.
+
+  - **Relevo.** Un pod que se detiene libera la fuente al salir, y otro pod se conecta en unos dos
+    segundos. Tras una pérdida abrupta (un fallo de nodo, un `SIGKILL`, una terminación por falta
+    de memoria), la fuente queda sin leer unos 30 segundos más lo que tarde en reconectarse. Tu
+    bróker no conserva lo que entrega en ninguno de esos huecos, porque la sesión no es
+    persistente.
+  - **Un pod que toma una fuente y no puede conectarse** registra el motivo, libera la fuente y
+    vuelve a intentarlo cada 15 segundos. No detiene el servicio. Si tu bróker rechaza su
+    suscripción, el servicio se detiene, como se describe arriba. El pod que lee una fuente cuando
+    el servicio arranca sigue haciendo fallar ese arranque en ambos casos, como antes.
+  - **Escalar no reparte la carga.** Añadir pods de `event-sources` añade pods en espera, no
+    lectores de una fuente externa.
+  - **Vigílalo.** `devicechain_eventsources_external_mqtt_owner{source}` vale 1 en el pod que lee
+    la fuente y 0 en los demás. La alerta `ExternalMqttSourceNotReadByOnePod` salta cuando una
+    fuente lleva dos minutos sin que la lea ningún pod, o leída por más de uno.
+  - **Solapamiento.** Un pod que pierde la fuente mientras sigue conectado descarta lo que todavía
+    le llega, y lo cuenta en `devicechain_eventsources_total_msg_not_owner{source}`, en lugar de
+    almacenarlo. La ventana en la que dos pods pueden almacenar el mismo mensaje es de una
+    fracción de segundo, no el arrendamiento de 30 segundos.
 - **Escritura ○ / Lectura ○**: esta integración es solo de ingesta. Un comando emitido a un
   dispositivo que llega por esta vía se comporta exactamente igual que en HTTP, más arriba:
   publicado, `SENT` y luego `TIMEOUT`.

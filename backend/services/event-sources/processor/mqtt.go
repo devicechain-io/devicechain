@@ -5,11 +5,14 @@ package processor
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -62,11 +65,85 @@ func GatewayTopic(instanceId string) string {
 	return messaging.SubjectToMqttTopic(messaging.DeviceEventsWildcard(instanceId))
 }
 
+// externalClientIDPrefix starts every external-broker source's MQTT client id, so a broker
+// operator can still recognise the platform's sessions (the id used to be exactly this).
+const externalClientIDPrefix = "devicechain"
+
+// externalClientIDSeparator joins the parts of an external source's client id.
+//
+// 🔴 ":" AND NOT ".", AND THE DIFFERENCE IS A REFUSED CONNECTION. nats-server refuses a
+// client id containing "." (or "*", ">" or whitespace) with CONNACK "identifier rejected",
+// so a "."-joined id would fail every source whose broker is a NATS server — including the
+// platform's own broker reached by an address the gateway branch does not recognise. ":" is
+// legal there, and it is outside the token grammar, which is what makes the split
+// unambiguous (messaging's deviceClientIDSeparator is ":" for the same two reasons).
+const externalClientIDSeparator = ":"
+
+// errEmptyClientIDPart is what ExternalMqttClientID returns when a part is empty.
+var errEmptyClientIDPart = errors.New("an external MQTT source's client id needs every part")
+
+// ExternalMqttClientID is the MQTT client id an external-broker source connects with:
+// devicechain:<instance>:<source>:<replica>. A broker keeps ONE session per client id and
+// closes the older connection when a second arrives, so the id must differ for every
+// instance, every source and every pod. It used to be the literal "devicechain" for all of
+// them, and two pods (which every rolling update creates), two sources or two instances on
+// one broker took the session from each other in a loop, losing what arrived meanwhile.
+//
+// The separator cannot occur inside a part: instanceId and replica must already be in the
+// token grammar (letters, digits, '-', '_'), and the source id is reduced to it by
+// clientIDPart. That makes the mapping injective, so distinct inputs cannot meet on one id.
+//
+// It refuses an empty part rather than producing an id that collides with a sibling's.
+func ExternalMqttClientID(instanceId, sourceId, replica string) (string, error) {
+	for _, part := range []struct{ name, value string }{
+		{"instance id", instanceId}, {"source id", sourceId}, {"replica", replica},
+	} {
+		if part.value == "" {
+			return "", fmt.Errorf("%w: the %s is empty", errEmptyClientIDPart, part.name)
+		}
+	}
+	for _, part := range []struct{ name, value string }{{"instance id", instanceId}, {"replica", replica}} {
+		if err := core.ValidateToken(part.value); err != nil {
+			return "", fmt.Errorf("refusing to build an external MQTT client id from an invalid %s: %w", part.name, err)
+		}
+	}
+	return strings.Join([]string{externalClientIDPrefix, instanceId, clientIDPart(sourceId), replica},
+		externalClientIDSeparator), nil
+}
+
+// clientIDPart reduces a source id to the token grammar. When that changes the id, it
+// appends '-' and the first 8 hex digits of sha256(original), so "a:b" and "a-b" (both
+// "a-b" after reduction) stay distinct. An id already in the grammar is returned unchanged,
+// so the common case ("mqtt1") stays readable in the broker's logs.
+func clientIDPart(s string) string {
+	if core.ValidateToken(s) == nil {
+		return s
+	}
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			out = append(out, r)
+		default:
+			out = append(out, '-')
+		}
+	}
+	sum := sha256.Sum256([]byte(s))
+	return string(out) + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
 type MqttEventSource struct {
 	Id         string
 	BrokerHost string
 	BrokerPort int
 	Topic      string
+
+	// opts is the paho configuration, built by the constructor and connected with by
+	// ExecuteInitialize. ClientID reads the id from HERE, not from a copy kept beside it,
+	// so the id the source reports is the id paho connects with: an owned source refuses a
+	// term built with any other id than its own, and that check would watch nothing if it
+	// read a field paho never sees.
+	opts *mqtt.ClientOptions
 
 	// tlsConfig, when non-nil, dials the broker over TLS (ssl://) and verifies its
 	// certificate — the client side of the ADR-025 TLS'd MQTT gateway. nil leaves
@@ -83,8 +160,22 @@ type MqttEventSource struct {
 	Client  mqtt.Client
 	Decoder Decoder
 
-	messages  chan rawMessage
-	workers   []*DecodeWorker
+	messages chan rawMessage
+	// sendMu makes "is the channel still open?" and the send onto it one step. paho can
+	// still be running a message callback when ExecuteStop closes the channel: Disconnect
+	// returns on its own quiesce timer, not when paho's workers have stopped, and an owned
+	// source's ownership gate still answers yes until the lease is released, which is AFTER
+	// Stop. Without this, that callback panics the process with a send on a closed channel,
+	// and an owned source stops on every handover, not only at process exit. A send holds
+	// the read lock; the close takes the write lock and sets closed.
+	sendMu  sync.RWMutex
+	closed  bool
+	workers []*DecodeWorker
+	// workersDone is joined by ExecuteStop, so a stopped source has finished handing on
+	// every message it had already taken. An owned source releases its lease after Stop,
+	// and a message of this term must not be published after the next owner has begun.
+	workersDone sync.WaitGroup
+
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
 	decoded   func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
@@ -99,6 +190,11 @@ type MqttEventSource struct {
 	// admit reports whether the ingest pipeline is accepting events (see
 	// HttpEventSource.admit). Asked after the tenant's own ceiling. Never nil.
 	admit func(source string) error
+	// owns reports whether this pod still owns the source (see OwnedMqttSource), and is
+	// asked FIRST for every message: a message delivered to a pod that has lost the source
+	// is dropped, because the pod that took it over is reading the same messages and this
+	// path carries no id to store a duplicate once. Never nil.
+	owns func() bool
 
 	// fail ends the process for a cause found after startup: a broker that refuses
 	// this source's subscription on a reconnect. It must not block its caller, which is
@@ -139,17 +235,32 @@ var errNoAdmit = errors.New("an event source needs to ask whether the ingest pip
 var errNoReadingGate = errors.New("an event source needs a reading gate to charge each decoded " +
 	"message's readings against its tenant's ingest ceiling; none was given")
 
+// errNoClientID is what NewMqttEventSource returns for an empty client id.
+var errNoClientID = errors.New("an MQTT event source needs its own client id: a broker keeps one " +
+	"session per id, so a shared or empty one is taken over by every other connection that uses it")
+
+// errNoOwnerGate is what NewMqttEventSource returns for a nil owns. A source that could not
+// ask whether it still owns its broker would go on storing what a pod that took it over is
+// storing too.
+var errNoOwnerGate = errors.New("an MQTT event source needs to ask whether this pod still owns it; " +
+	"none was given")
+
 // Create a new MQTT event source based on the given configuration. tlsConfig is
 // non-nil when the broker terminates TLS on the MQTT gateway (ADR-025), in which
 // case the client dials ssl:// and verifies the server; nil dials plaintext.
 // username/password present the shared service credential when broker auth is on
-// (empty = anonymous). fail ends the process when a reconnect's subscription is
-// refused (see onConnect); it must return promptly, and nil is refused.
-func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Config, username, password string, decoder Decoder,
+// (empty = anonymous). clientID is the MQTT client id it connects with (see
+// ExternalMqttClientID); empty is refused. owns is asked for every message whether this
+// pod still owns the source (see OwnedMqttSource); nil is refused. fail ends the process
+// when a reconnect's subscription is refused (see onConnect); it must return promptly,
+// and nil is refused.
+func NewMqttEventSource(id string, clientID string, config map[string]string, tlsConfig *tls.Config,
+	username, password string, decoder Decoder,
 	received func(string, []byte),
 	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
 	failed func(string, string, []byte, error) error,
-	allow RateGate, readings ReadingGate, admit func(source string) error, fail func(error)) (*MqttEventSource, error) {
+	allow RateGate, readings ReadingGate, admit func(source string) error, owns func() bool,
+	fail func(error)) (*MqttEventSource, error) {
 	if fail == nil {
 		return nil, errNoFailHook
 	}
@@ -158,6 +269,12 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	}
 	if readings == nil {
 		return nil, errNoReadingGate
+	}
+	if clientID == "" {
+		return nil, errNoClientID
+	}
+	if owns == nil {
+		return nil, errNoOwnerGate
 	}
 	port, err := strconv.Atoi(config["port"])
 	if err != nil {
@@ -184,8 +301,40 @@ func NewMqttEventSource(id string, config map[string]string, tlsConfig *tls.Conf
 	es.allow = allow
 	es.readings = readings
 	es.admit = admit
+	es.owns = owns
+	es.opts = es.clientOptions(clientID)
 	return es, nil
 }
+
+// clientOptions is the paho configuration the source connects with.
+func (es *MqttEventSource) clientOptions(clientID string) *mqtt.ClientOptions {
+	opts := mqtt.NewClientOptions()
+	// ssl:// + a verified TLS config when the gateway terminates TLS (ADR-025),
+	// otherwise plaintext tcp://.
+	scheme := "tcp"
+	if es.tlsConfig != nil {
+		scheme = "ssl"
+		opts.SetTLSConfig(es.tlsConfig)
+	}
+	opts.AddBroker(fmt.Sprintf("%s://%s:%d", scheme, es.BrokerHost, es.BrokerPort))
+	opts.SetClientID(clientID)
+	// Present the service credential when broker auth is enabled (ADR-025) so the
+	// gateway authenticates this connection statically rather than routing it
+	// through the device callout.
+	if es.username != "" {
+		opts.SetUsername(es.username)
+		opts.SetPassword(es.password)
+	}
+	opts.SetDefaultPublishHandler(es.onMessage)
+	// Every connection subscribes, the first included; see onConnect.
+	opts.OnConnect = es.onConnect
+	opts.OnConnectionLost = es.onConnectionLost
+	return opts
+}
+
+// ClientID is the MQTT client id this source connects with, read from the options paho
+// is given.
+func (es *MqttEventSource) ClientID() string { return es.opts.ClientID }
 
 // tenantFromTopic derives the tenant from an inbound MQTT topic of the form
 // "{instanceId}/{tenant}/..." (ADR-006/ADR-048): the tenant is the second of at
@@ -273,6 +422,13 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 		log.Debug().Str("topic", msg.Topic()).Int("bytes", len(msg.Payload())).
 			Msg("Received MQTT message")
 	}
+	// First, before anything is metered or counted: a pod that no longer owns this source
+	// drops what it is still being delivered, because the pod that has taken the source
+	// over receives the same messages, and nothing on this path could store the second
+	// copy once. The gate counts the drop itself.
+	if !es.owns() {
+		return
+	}
 	// Derive the per-message tenant from the topic up front; a message whose topic
 	// carries no tenant cannot be published to a tenant-scoped subject, so it is
 	// dropped (fail-closed) rather than decoded and published unscoped.
@@ -327,6 +483,12 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	// accounts after the gate). A message the reading stage sheds after decode WAS
 	// received: it is counted as inbound and on the reading-shed counters, never on the
 	// message stage's rate-limited counter.
+	es.sendMu.RLock()
+	defer es.sendMu.RUnlock()
+	if es.closed {
+		// Stop has closed the channel under a callback paho was still running; see sendMu.
+		return
+	}
 	es.received(es.Id, msg.Payload())
 	es.messages <- rawMessage{
 		tenant:  tenant,
@@ -405,9 +567,8 @@ const (
 // attempt does not wait. So by the time this goroutine wakes with its error, paho may
 // already be connected again, and "is the connection open?" answers yes for a
 // connection that is not the one the SUBSCRIBE went out on. Read that way, a benign drop
-// would end the process — and with more than one replica sharing a client id on the
-// same broker, where each replica's connect evicts the other's, it would do so on every
-// eviction.
+// would end the process — and any connection that evicts this one (another client using
+// its id, or a broker restart) would end the process with it.
 //
 //   - A REFUSAL is fatal whatever else has happened. It is the broker's answer about
 //     this credential and this filter, and a newer connection will be given the same one.
@@ -455,31 +616,10 @@ func (es *MqttEventSource) Initialize(ctx context.Context) error {
 
 // Initialize event source (as called by lifecycle manager)
 func (es *MqttEventSource) ExecuteInitialize(ctx context.Context) error {
-	opts := mqtt.NewClientOptions()
-	// ssl:// + a verified TLS config when the gateway terminates TLS (ADR-025),
-	// otherwise plaintext tcp://.
-	scheme := "tcp"
-	if es.tlsConfig != nil {
-		scheme = "ssl"
-		opts.SetTLSConfig(es.tlsConfig)
-	}
-	opts.AddBroker(fmt.Sprintf("%s://%s:%d", scheme, es.BrokerHost, es.BrokerPort))
-	opts.SetClientID("devicechain")
-	// Present the service credential when broker auth is enabled (ADR-025) so the
-	// gateway authenticates this connection statically rather than routing it
-	// through the device callout.
-	if es.username != "" {
-		opts.SetUsername(es.username)
-		opts.SetPassword(es.password)
-	}
-	opts.SetDefaultPublishHandler(es.onMessage)
-	// Every connection subscribes, the first included; see onConnect.
-	opts.OnConnect = es.onConnect
-	opts.OnConnectionLost = es.onConnectionLost
 	// Built, not connected. The connection is made in ExecuteStart, AFTER the decode
 	// workers exist: the first connection subscribes at once, and a message delivered
 	// on it would otherwise find no channel to go to.
-	es.Client = mqtt.NewClient(opts)
+	es.Client = mqtt.NewClient(es.opts)
 	log.Info().Str("source", es.Id).Msg("MQTT event source initialized; it connects when started.")
 	return nil
 }
@@ -497,7 +637,11 @@ func (es *MqttEventSource) initializeDecodeWorkers() {
 	for w := 1; w <= DECODE_WORKER_COUNT; w++ {
 		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.readings, Inline(es.decoded), es.failed)
 		es.workers = append(es.workers, worker)
-		go worker.Process()
+		es.workersDone.Add(1)
+		go func() {
+			defer es.workersDone.Done()
+			worker.Process()
+		}()
 	}
 }
 
@@ -507,18 +651,26 @@ func (es *MqttEventSource) ExecuteStart(ctx context.Context) error {
 	// exists before the first connection can deliver anything.
 	es.initializeDecodeWorkers()
 
-	if token := es.Client.Connect(); token.Wait() && token.Error() != nil {
-		return token.Error()
-	}
-
-	// The first connection subscribes in onConnect, like every later one; wait for its
-	// confirmed result. It is bounded by subscribeTimeout, and a refusal or any other
-	// error fails the start, as it always has.
+	// The connect is waited for under ctx, not with a bare Wait: an owned source starts
+	// a term under a context its lease cancels, and a start that outlived the lease would
+	// connect a second reader beside the pod that took the source over.
 	var err error
+	token := es.Client.Connect()
 	select {
-	case err = <-es.ready:
+	case <-token.Done():
+		err = token.Error()
 	case <-ctx.Done():
 		err = ctx.Err()
+	}
+	if err == nil {
+		// The first connection subscribes in onConnect, like every later one; wait for its
+		// confirmed result. It is bounded by subscribeTimeout, and a refusal or any other
+		// error fails the start, as it always has.
+		select {
+		case err = <-es.ready:
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
 	}
 	if err != nil {
 		// Do not leave a live, auto-reconnecting client behind a start that failed: its
@@ -540,19 +692,32 @@ func (es *MqttEventSource) Stop(ctx context.Context) error {
 // Stop event source (as called by lifecycle manager)
 func (es *MqttEventSource) ExecuteStop(ctx context.Context) error {
 	// Quiesce inbound traffic before tearing down the channel: unsubscribe and
-	// disconnect the broker client so paho can no longer invoke onMessage, then
-	// close the channel the decode workers drain. Closing first would race a
-	// late-arriving message into a send-on-closed-channel panic.
+	// disconnect the broker client, then close the channel the decode workers drain.
+	// The disconnect does not guarantee that paho has stopped calling onMessage (it
+	// returns on its own quiesce timer), so the close is made under sendMu, which a
+	// late callback finds closed and drops.
 	if es.Client != nil {
 		// Before the disconnect: a re-subscribe in flight fails when we close the
 		// connection, and that is not something to end the process over.
 		es.stopping.Store(true)
-		if token := es.Client.Unsubscribe(es.Topic); token.Wait() && token.Error() != nil {
+		// Bounded: a broker that has stopped answering must not hold the stop, and with it
+		// an owned source's lease, for the life of the pod.
+		if token := es.Client.Unsubscribe(es.Topic); !token.WaitTimeout(subscribeTimeout) {
+			log.Warn().Str("source", es.Id).
+				Msg("MQTT event source's broker did not answer the unsubscribe on stop; disconnecting.")
+		} else if token.Error() != nil {
 			log.Warn().Err(token.Error()).Msg("MQTT event source failed to unsubscribe on stop.")
 		}
 		es.Client.Disconnect(250)
 	}
-	close(es.messages)
+	es.sendMu.Lock()
+	es.closed = true
+	if es.messages != nil {
+		close(es.messages)
+	}
+	es.sendMu.Unlock()
+	// Join the decode workers: they finish what was already queued, then return.
+	es.workersDone.Wait()
 	return nil
 }
 

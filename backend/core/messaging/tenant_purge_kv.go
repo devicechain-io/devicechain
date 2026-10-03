@@ -230,7 +230,8 @@ func KvPurgeExemptions() []string {
 			"connects are refused before they are counted",
 		kv.BucketLocks + " and " + kv.BucketLeases + ": coordination state keyed by functional area " +
 			"and partition. No tenant is expressible in either today — the partitions in use are " +
-			"fixed names — and both expire in seconds. 🔴 That first clause has a known expiry " +
+			"fixed names, or name an operator-configured event source, never a tenant — and both " +
+			"expire in seconds. 🔴 That first clause has a known expiry " +
 			"date: the lease package's own doc names a per-tenant partition shape for the DETECT " +
 			"engine, and the day one is taken this exemption is stale with nothing to fail on. The " +
 			"seconds-long TTL is what bounds the residue either way",

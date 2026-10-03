@@ -819,7 +819,8 @@ func mqttGatewayURL(cfg config.NatsConfiguration) string {
 	return fmt.Sprintf("%s://%s:%d", scheme, cfg.Hostname, natsauth.MqttGatewayPort)
 }
 
-// replicaName distinguishes this pod's canary from its siblings'. A duplicate MQTT
+// replicaName distinguishes this pod's MQTT client ids (the presence canary's and every
+// external source's, see processor.ExternalMqttClientID) from its siblings'. A duplicate MQTT
 // client id is a takeover, so replicas sharing one would evict each other in a loop and
 // each read the eviction as its own failure. The pod name is the natural per-replica
 // identity; the fallback keeps a single-process run (a dev box) working.

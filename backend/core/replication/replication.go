@@ -145,12 +145,14 @@ type Expectation struct {
 	LeaseBucket string
 	// LeaseBucketRequired states whether the lease bucket must EXIST.
 	//
-	// It only exists once something takes a lease, and the only lease holders are
-	// Class-3 operators (ADR-070) that not every deployment runs. Requiring it
-	// unconditionally makes the check red on a healthy install; dropping the
+	// It only exists once something takes a lease. It is required only where a
+	// Class-3 operator (ADR-070) keeps its partition fence in it, and not every
+	// deployment runs one; other lease users (event-processing's DETECT term, an
+	// event-sources external MQTT source) may create it too, or may not have yet.
+	// Requiring it unconditionally makes the check red on a healthy install; dropping the
 	// assertion when it is absent makes the check silently stop covering the
 	// highest-consequence object in it. So the bucket is ALWAYS checked when
-	// present, required only when a holder is deployed, and a run that could not
+	// present, required only when such an operator is deployed, and a run that could not
 	// exercise it SAYS SO — see Report.Skipped.
 	LeaseBucketRequired bool
 	// StateBuckets are the other KV backing streams required present by name.

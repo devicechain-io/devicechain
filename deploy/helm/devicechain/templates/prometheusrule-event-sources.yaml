@@ -1,0 +1,52 @@
+{{/*
+Alerting rules for event-sources' external MQTT sources.
+
+WHY THIS GROUP EXISTS. A source that reads an operator's own MQTT broker is read by ONE
+event-sources pod at a time, chosen by a per-source lease: the broker gives every session
+on a filter every message and that path carries no dedup id, so a second reading pod would
+store everything twice. The other pods stand by and stay Ready, because they still serve
+HTTP ingest, the platform gateway and presence. So "nobody is reading this source" is a
+state the platform can be in WITHOUT anything failing: the operator's broker is down and
+the pod that took the source over could not connect (it releases the source and tries
+again rather than taking the rest of ingest down with it), or the lease bucket cannot be
+reached. This alert is how that state is seen.
+
+Every pod exports devicechain_eventsources_external_mqtt_owner{source} for every external
+source from the moment it starts: 1 on the pod reading it, 0 on the others. Per source,
+the sum across pods is 1 when the source is healthy, 0 when nobody reads it, and 2 or more
+when more than one pod does.
+
+NO absent() ARM, deliberately, unlike DetectHasNoLeader. An install with no external
+source exports no series at all, and an absent() arm would fire on every such install.
+The chart cannot tell which installs have one: the sources are free-form service
+configuration. A crash-looping event-sources exports nothing either, and that is a pod
+failing loudly in its own right.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: event-sources
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.event-sources
+      rules:
+        - alert: ExternalMqttSourceNotReadByOnePod
+          # `sum`, not `max`: the question is how many pods read the source, and each pod
+          # reports only itself. `for: 2m` rides out a handover, where the source is
+          # briefly read by nobody (a graceful one takes about two seconds, an abrupt one
+          # about the lease's 30 seconds plus a reconnect).
+          expr: sum by (source) (devicechain_eventsources_external_mqtt_owner{namespace="{{ $ns }}"}) != 1
+          for: 2m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "An external MQTT source is not being read by exactly one pod"
+            description: "External MQTT source {{ "{{ $labels.source }}" }} has been read by {{ "{{ $value }}" }} event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker."
+{{- end }}

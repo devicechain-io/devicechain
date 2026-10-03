@@ -89,7 +89,7 @@ type PartitionLease interface {
 const termSlack = 20 * time.Second
 
 // renewInterval is DETECT's own KeepAlive cadence, and it is a TENTH of what the
-// other two lease users take (both pass DefaultLeaseTTL/3 = 10s).
+// other lease users take (each passes DefaultLeaseTTL/3 = 10s).
 //
 // It is not a robustness dial — it is the third input to termSlack. With no
 // successor, an expired window is invisible until KeepAlive's next tick, so the

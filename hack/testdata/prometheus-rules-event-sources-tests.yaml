@@ -1,0 +1,128 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the event-sources alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# ExternalMqttSourceNotReadByOnePod counts, per external MQTT source, the pods that report
+# reading it. Every event-sources pod exports the gauge for every external source from
+# start, so a standby reports 0 rather than nothing: a healthy source sums to exactly 1.
+# The quiet cases carry as much weight as the firing ones:
+#
+#   - a healthy source with a standby beside its reader must not page;
+#   - a HANDOVER, where the source is read by nobody for a scrape or two and then by the
+#     standby, must not page (the `for: 2m`);
+#   - an install with no external source exports no series and must not page.
+#
+# THE SERIES:
+#
+#   - devicechain_eventsources_external_mqtt_owner{source} -- a GaugeVec, set to 0 at
+#     start on every pod and to 1 on the pod reading the source.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # Healthy: pod a reads ext-a, pod b stands by. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-a"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", source="ext-a"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExternalMqttSourceNotReadByOnePod
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A handover: pod a stops reading at 10m, pod b reads from 11m. One minute with
+  # nobody reading is shorter than the pending period. Quiet throughout.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-a"}'
+        values: '1x9 0x20'
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", source="ext-a"}'
+        values: '0x10 1x19'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ExternalMqttSourceNotReadByOnePod
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ExternalMqttSourceNotReadByOnePod
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 NOBODY READS THE SOURCE: the operator's broker went down at 10m and the pods stand
+  # by. Every pod still reports, at 0, so the sum is 0 and the alert fires once the
+  # pending period has passed. The other source on the same pods is healthy and must not
+  # be named.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-a"}'
+        values: '1x9 0x20'
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", source="ext-a"}'
+        values: '0x30'
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-b"}'
+        values: '0x30'
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", source="ext-b"}'
+        values: '1x30'
+    alert_rule_test:
+      # Inside the pending period.
+      - eval_time: 11m
+        alertname: ExternalMqttSourceNotReadByOnePod
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ExternalMqttSourceNotReadByOnePod
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              source: ext-a
+            exp_annotations:
+              summary: "An external MQTT source is not being read by exactly one pod"
+              description: "External MQTT source ext-a has been read by 0 event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker."
+
+  # ------------------------------------------------------------------
+  # Two pods both report reading the source, for longer than a renewal could explain.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-a"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_external_mqtt_owner{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", source="ext-a"}'
+        values: '0x9 1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ExternalMqttSourceNotReadByOnePod
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              source: ext-a
+            exp_annotations:
+              summary: "An external MQTT source is not being read by exactly one pod"
+              description: "External MQTT source ext-a has been read by 2 event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker."
+
+  # ------------------------------------------------------------------
+  # An install with no external source exports no owner series at all. Quiet; any other
+  # event-sources series is present, to show the rule is not quiet only because the
+  # whole service is missing.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_total_inbound_messages{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="gateway"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ExternalMqttSourceNotReadByOnePod
+        exp_alerts: []

@@ -4762,6 +4762,49 @@ before.
   leave the record in force over a running instance, and a plain `dcctl bootstrap` would then
   run over that instance.
 
+#### An MQTT source on your own broker connects under its own client id, from one pod at a time {#next-external-mqtt-client-id}
+
+An event source that reads from an MQTT broker you run connected with the client id `devicechain`,
+whatever instance, source or pod it belonged to. A broker keeps one session per client id and drops
+the older connection when a second one arrives. So whenever two connections used that id, each took
+the session from the other in a loop, and messages that arrived while either side reconnected were
+lost without being counted. That happened with two `event-sources` pods, during every rolling
+update (the new pod starts before the old one stops), with two such sources on one broker, and with
+two instances reading one broker. The default install's own gateway source reads the platform's
+stream and was not affected.
+
+Each source now connects as `devicechain:<instance>:<source>:<pod>`, and only one pod reads a given
+source at a time. The pods agree on which one through a lease held in the platform's message
+broker. The others connect nothing for that source until it is released. See
+[Transport matrix](../reference/transport-matrix.md#external-mqtt-broker).
+
+- **Before you upgrade, if your broker's ACL, allowlist or client-id rule names `devicechain`,**
+  allow ids that begin with `devicechain:`. The id is also longer than 23 characters, the shortest
+  limit MQTT requires a broker to accept. A broker that refuses the new id makes the new pod fail
+  to start with the broker's reason in its log, and the upgrade stalls with the old pods still
+  running and reading the source as before.
+- **While the upgrade rolls, a source can be read twice.** Until the last pod of the previous
+  release stops, it still reads the source under the old id, beside the new pod that holds the
+  source, and each stores what it receives. Messages arriving in that window can be stored twice.
+  This happens once, and the same happens on a rollback. To avoid it, pause the publishers on
+  your broker for the length of the rollout. Leases a rolled-back release leaves behind expire on
+  their own within 30 seconds.
+- A pod that stops hands the source to another pod within about two seconds. After an abrupt loss
+  (a node failure, a `SIGKILL`, an out-of-memory kill), the source is unread for about 30 seconds
+  plus the time to reconnect. The source remains at-most-once: your broker does not keep what it
+  delivers in either gap.
+- A pod that takes a source over and cannot reach your broker releases it and tries again every
+  15 seconds, instead of stopping the service. A broker that refuses the subscription still stops
+  the service.
+- Running more `event-sources` pods no longer means more readers of an external source. It did not
+  add throughput before either, because the pods took one session from each other. It now adds
+  standbys.
+- New gauge: `devicechain_eventsources_external_mqtt_owner{source}`, 1 on the pod reading the
+  source and 0 elsewhere, and a new counter, `devicechain_eventsources_total_msg_not_owner{source}`,
+  for messages a pod drops because it has just lost the source. New alert:
+  `ExternalMqttSourceNotReadByOnePod` (warning), when a source has been read by no pod, or by more
+  than one, for two minutes.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

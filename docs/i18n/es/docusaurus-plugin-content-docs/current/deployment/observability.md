@@ -412,6 +412,27 @@ Los servicios que escriben en los dos flujos exportan estas series:
 - **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: mensajes que el servicio no
   publicó porque el flujo estaba rechazando.
 
+## Una fuente MQTT externa que nadie lee {#external-mqtt-owner}
+
+Una fuente que lee de un bróker MQTT que tú operas la lee un solo pod de `event-sources` a la vez;
+los demás quedan a la espera y siguen listos, porque siguen atendiendo todo lo demás (consulta la
+[Matriz de transportes](../reference/transport-matrix.md#external-mqtt-broker)). Así que una
+fuente que nadie lee no es un pod caído: es un pod que tomó la fuente y no pudo llegar a tu
+bróker, y lo vuelve a intentar cada 15 segundos, o pods que no pueden acordar cuál la lee porque
+no llegan al bróker de mensajería de la plataforma.
+
+- **`devicechain_eventsources_external_mqtt_owner{source}`**: 1 en el pod que lee la fuente, 0 en
+  todos los demás. Cada pod lo exporta para cada fuente externa desde que arranca, así que combina
+  los pods con `sum`: 1 es lo sano.
+- **`devicechain_eventsources_total_msg_not_owner{source}`**: mensajes que a un pod le seguían
+  llegando después de perder la fuente, descartados en lugar de almacenados, porque el pod que la
+  tomó recibe los mismos mensajes.
+
+`ExternalMqttSourceNotReadByOnePod` (aviso) salta cuando esa suma lleva dos minutos sin valer 1.
+En 0, nadie lee la fuente y lo que tu bróker entrega mientras tanto se pierde; el registro del
+último pod que tomó la fuente dice por qué. Una instalación sin fuentes externas no exporta esa
+serie, y la alerta no salta.
+
 ## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
 
 El broker da a un servicio una ventana fija para confirmar cada mensaje que le entrega. Un
