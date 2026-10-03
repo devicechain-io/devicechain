@@ -4922,9 +4922,11 @@ solo pierde su partición si sus renovaciones fallan durante 30 segundos.
   (warning), cuando un consumidor lleva 5 minutos sin haber leído más del 80% de lo que cabe en su
   stream; las tres [alertas de respaldo](#v0190-backup-alerts); las tres
   [alertas de instantáneas](#v0190-snapshot-backups); `ExternalMqttSourceNotReadByOnePod`
-  (warning) para [una fuente MQTT sobre tu propio bróker](#v0190-external-mqtt-client-id); y
+  (warning) para [una fuente MQTT sobre tu propio bróker](#v0190-external-mqtt-client-id);
   `BrokerConnectionDiedSilently` (warning) para
-  [una conexión con el bróker que murió sin cerrarse](#v0190-broker-liveness).
+  [una conexión con el bróker que murió sin cerrarse](#v0190-broker-liveness); y
+  `InstanceContainerRestarted` (warning) para
+  [un contenedor que Kubernetes reinició](#v0190-read-loop-restarts).
 - **Cambia:** `JetStreamStreamNearFull` pasa a `info`, solo se dispara para streams que guardan
   registros para un operador (`failed-decode`, `failed-events`, `connector-dispatch.dead`,
   `max-deliveries`, y `dead-letters` mientras `user-management` no informe de que lo lee), y tiene en
@@ -5025,21 +5027,7 @@ la ingesta durante unos cinco minutos y medio.
 
 No hay nada que hacer al actualizar.
 
-#### Rendimiento {#v0190-performance}
-
-En Google Kubernetes Engine, en tres nodos de base de datos de 4 vCPU y 16 GB y tres nodos de
-servicios de 4 vCPU y 8 GB, una instalación HA predeterminada aceptó 6000 eventos por segundo
-durante 10 minutos, dos veces, y almacenó exactamente una vez cada evento aceptado. Se midió con la
-versión candidata y con `event-management` en un solo pod, antes de que `--ha` empezara a
-ejecutarlo en dos.
-
-La resolución, el almacenamiento y el estado en vivo de los dispositivos siguieron cada uno el ritmo
-durante esos 10 minutos, y la cola se había vaciado en los 5 segundos siguientes al fin de la
-carga. La detección, que esa comprobación no cubre, siguió el ritmo a 6000 (cola máxima por debajo
-de 1000) y se quedó atrás a partir de 7600 ofrecidos. No se afirma ningún ritmo sostenido por encima
-de 6000. Consulta [Rendimiento medido](./bootstrap.md#measured-throughput).
-
-#### Una perturbación del bróker minutos después de otra ya no reinicia servicios, y un reinicio dispara una alerta {#next-read-loop-restarts}
+###### Una perturbación del bróker minutos después de otra ya no reinicia servicios, y un reinicio dispara una alerta {#v0190-read-loop-restarts}
 
 Un servicio termina por sí mismo, para que Kubernetes lo reinicie, cuando uno de sus bucles de
 lectura de mensajes sigue fallando (consulta
@@ -5070,7 +5058,21 @@ corte de la ingesta.
   que sigue reiniciándose a los 15 minutos. La alerta lee kube-state-metrics, que instala la pila
   de monitoreo incluida. Consulta [Un contenedor que se reinició](./observability.md#container-restarts).
 
-No hay nada que hacer.
+No hay nada que hacer al actualizar.
+
+#### Rendimiento {#v0190-performance}
+
+En Google Kubernetes Engine, en tres nodos de base de datos de 4 vCPU y 16 GB y tres nodos de
+servicios de 4 vCPU y 8 GB, una instalación HA predeterminada aceptó 6000 eventos por segundo
+durante 10 minutos, dos veces, y almacenó exactamente una vez cada evento aceptado. Se midió con la
+versión candidata y con `event-management` en un solo pod, antes de que `--ha` empezara a
+ejecutarlo en dos.
+
+La resolución, el almacenamiento y el estado en vivo de los dispositivos siguieron cada uno el ritmo
+durante esos 10 minutos, y la cola se había vaciado en los 5 segundos siguientes al fin de la
+carga. La detección, que esa comprobación no cubre, siguió el ritmo a 6000 (cola máxima por debajo
+de 1000) y se quedó atrás a partir de 7600 ofrecidos. No se afirma ningún ritmo sostenido por encima
+de 6000. Consulta [Rendimiento medido](./bootstrap.md#measured-throughput).
 
 ### La transición única a la ingesta duradera
 

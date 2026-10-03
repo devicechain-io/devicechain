@@ -4561,9 +4561,11 @@ its partition only if its renewals fail for 30 seconds.
   when a consumer has not read more than 80% of what its stream can hold, for 5 minutes; the three
   [backup alerts](#v0190-backup-alerts); the three [snapshot alerts](#v0190-snapshot-backups);
   `ExternalMqttSourceNotReadByOnePod` (warning) for
-  [an MQTT source on your own broker](#v0190-external-mqtt-client-id); and
+  [an MQTT source on your own broker](#v0190-external-mqtt-client-id);
   `BrokerConnectionDiedSilently` (warning) for
-  [a broker connection that died without closing](#v0190-broker-liveness).
+  [a broker connection that died without closing](#v0190-broker-liveness); and
+  `InstanceContainerRestarted` (warning) for
+  [a container that Kubernetes restarted](#v0190-read-loop-restarts).
 - **Changed:** `JetStreamStreamNearFull` is now `info`, fires only for streams that hold records for
   an operator (`failed-decode`, `failed-events`, `connector-dispatch.dead`, `max-deliveries`, and
   `dead-letters` while `user-management` does not report reading it), and counts a stream's message
@@ -4658,19 +4660,7 @@ holding `event-sources`' broker connection stopped ingest for about five and a h
 
 Nothing to do at upgrade.
 
-#### Performance {#v0190-performance}
-
-On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service
-nodes, a default HA install accepted 6,000 events a second for 10 minutes, twice, and stored every
-accepted event exactly once. That was measured on the release candidate with `event-management` at
-one pod, before `--ha` began running it as two.
-
-Resolution, storage and live device state each kept pace over those 10 minutes, and the backlog
-had drained within 5 seconds of the load stopping. Detection, which that check does not cover, kept
-up at 6,000 (peak backlog under 1,000), and fell behind from 7,600 offered. No sustained rate above
-6,000 is claimed. See [Measured throughput](./bootstrap.md#measured-throughput).
-
-#### A broker disturbance minutes after another no longer restarts services, and a restart raises an alert {#next-read-loop-restarts}
+###### A broker disturbance minutes after another no longer restarts services, and a restart raises an alert {#v0190-read-loop-restarts}
 
 A service ends itself, so that Kubernetes restarts it, when one of its message-read loops keeps
 failing (see [Read loops that keep failing now restart their service](#v0180-read-loops)). A loop
@@ -4698,7 +4688,19 @@ Stopping two of the three broker servers at once restarted several services toge
   restarting after 15 minutes. The alert reads kube-state-metrics, which the bundled monitoring
   stack installs. See [A container that restarted](./observability.md#container-restarts).
 
-Nothing needs doing.
+Nothing to do at upgrade.
+
+#### Performance {#v0190-performance}
+
+On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service
+nodes, a default HA install accepted 6,000 events a second for 10 minutes, twice, and stored every
+accepted event exactly once. That was measured on the release candidate with `event-management` at
+one pod, before `--ha` began running it as two.
+
+Resolution, storage and live device state each kept pace over those 10 minutes, and the backlog
+had drained within 5 seconds of the load stopping. Detection, which that check does not cover, kept
+up at 6,000 (peak backlog under 1,000), and fell behind from 7,600 offered. No sustained rate above
+6,000 is claimed. See [Measured throughput](./bootstrap.md#measured-throughput).
 
 ### The one-time durable-ingest cutover
 
