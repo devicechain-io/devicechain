@@ -46,8 +46,10 @@ import (
 //
 // BOUNDED OBSERVATION, the same as the count's: the check sees what was stored by the
 // moment the final tenant total was read (observedUntilAfterDriveSeconds in the report).
-// A redelivered copy can land up to the broker's ackWait (60s) after a lost ack, so a run
-// whose evidence is to be published must settle past that (--quiesce-settle 60s or more).
+// A redelivered copy is SENT no sooner than the broker's ackWait (60s) after the delivery
+// whose ack was lost, and is stored after that plus its processing time, later still if
+// the redelivery loses its ack too. 60s is a floor, not a bound: a run whose evidence is
+// to be published should settle with a margin above it (--quiesce-settle 90s, say).
 
 // InvIdentity is the identity reconciliation's invariant key.
 const InvIdentity = "ingest-identity"
@@ -60,9 +62,14 @@ const (
 	// identityReadWorkers bounds how many devices are read at once.
 	identityReadWorkers = 8
 	// identityReadAttempts is how many times one device is read before a stored set that
-	// keeps moving under the read is reported as unstable.
+	// keeps moving under the read is reported as unstable, or a request that keeps
+	// failing in transport is reported as a failed read-back.
 	identityReadAttempts = 3
 )
+
+// identityRetryDelay is the pause before re-sending a read whose request failed in
+// transport. A variable so tests do not wait for it.
+var identityRetryDelay = 2 * time.Second
 
 // identityMethod is the report's statement of what was compared and how it was read,
 // including what the read costs, so a published figure can cite it.
@@ -384,6 +391,12 @@ type identityReader interface {
 // failing the run with no report.
 var errSetMoved = errors.New("the stored set moved during the read")
 
+// errReadTransport marks a read whose REQUEST failed (a connection reset, a 5xx, a
+// GraphQL error) as opposed to one whose response was malformed. One transient failure
+// in a read-back of millions of rows must not cost the run its evidence, so it is retried
+// a bounded number of times, with a pause.
+var errReadTransport = errors.New("the identity read request failed")
+
 const identityEventsQuery = `query LoadTestIdentities($c: EventSearchCriteria!) {
   events(criteria: $c) { results { deviceToken occurredTime } pagination { totalRecords } }
 }`
@@ -429,7 +442,7 @@ func (g *graphqlIdentityReader) DeviceIdentities(ctx context.Context, device str
 			} `json:"events"`
 		}
 		if err := g.session.Query(ctx, g.endpoint, identityEventsQuery, vars, &out); err != nil {
-			return nil, pages, fmt.Errorf("read identities of %q: %w", device, err)
+			return nil, pages, fmt.Errorf("read identities of %q: %w: %w", device, errReadTransport, err)
 		}
 		pages++
 		total := out.Events.Pagination.TotalRecords
@@ -468,8 +481,9 @@ func (g *graphqlIdentityReader) DeviceIdentities(ctx context.Context, device str
 }
 
 // readStoredIdentities reads every device's stored identities with a bounded pool. A
-// device whose set keeps moving is retried and then listed as unstable; any other error
-// stops the read and is returned.
+// device whose set keeps moving is retried and then listed as unstable; a request that
+// failed in transport is retried after identityRetryDelay; any other error, or a
+// transport failure that outlasts the attempts, stops the read and is returned.
 func readStoredIdentities(ctx context.Context, r identityReader, devices []string, w Window) (storedIdentities, error) {
 	started := time.Now()
 	out := storedIdentities{Times: make(map[string][]int64, len(devices))}
@@ -493,10 +507,16 @@ func readStoredIdentities(ctx context.Context, r identityReader, devices []strin
 					err   error
 				)
 				for attempt := 0; attempt < identityReadAttempts; attempt++ {
+					if errors.Is(err, errReadTransport) {
+						select {
+						case <-time.After(identityRetryDelay):
+						case <-ctx.Done():
+						}
+					}
 					var p int
 					times, p, err = r.DeviceIdentities(ctx, dev, w)
 					pages += p
-					if !errors.Is(err, errSetMoved) {
+					if !errors.Is(err, errSetMoved) && !errors.Is(err, errReadTransport) {
 						break
 					}
 				}
@@ -539,18 +559,41 @@ feed:
 // checkIdentity runs the identity reconciliation after the count has quiesced: read every
 // driven device, THEN re-count the window, so a row that arrives during the read shows as
 // unattributed rather than hiding, then decide. driveEnd anchors the report's observation
-// horizon. A transport or protocol failure is an error; a stored set that will not hold
-// still is an inconclusive verdict, so the run still produces its report.
+// horizon. A stored set that will not hold still is an inconclusive verdict.
+//
+// A read-back that FAILS (a transport error that outlasted its retries, or a malformed
+// response) returns the error AND a failing, inconclusive report that records it, so a
+// caller can choose: the L1 and contention runs keep the report (the count verdict and the
+// rest of a long run's evidence survive one failed read), while the self-test, which must
+// not read a failed read as a detected or missed defect, treats it as an error.
 func checkIdentity(ctx context.Context, counter eventCounter, reader identityReader, led *sim.IdentityLedger,
 	devices []string, drive sim.Snapshot, w Window, driveEnd time.Time, settle time.Duration) (IdentityReport, Invariant, error) {
 	readStarted := time.Since(driveEnd)
+	failed := func(stored storedIdentities, err error) (IdentityReport, Invariant, error) {
+		err = fmt.Errorf("identity read-back: %w", err)
+		meas := led.Snapshot().Measurements()
+		rep := IdentityReport{
+			Method:                      identityMethod,
+			Accepted:                    meas.Accepted,
+			Refused:                     meas.Refused,
+			Ambiguous:                   meas.Ambiguous,
+			DevicesRead:                 len(stored.Times),
+			PagesRead:                   stored.Pages,
+			ReadSeconds:                 stored.Elapsed.Seconds(),
+			SettleSeconds:               settle.Seconds(),
+			ReadStartedAfterDriveSecs:   readStarted.Seconds(),
+			ObservedUntilAfterDriveSecs: time.Since(driveEnd).Seconds(),
+			Inconclusive:                []string{err.Error()},
+		}
+		return rep, Invariant{Name: InvIdentity, Passed: false, Detail: "inconclusive: " + err.Error() + "; no identity verdict"}, err
+	}
 	stored, err := readStoredIdentities(ctx, reader, devices, w)
 	if err != nil {
-		return IdentityReport{}, Invariant{}, fmt.Errorf("identity read-back: %w", err)
+		return failed(stored, err)
 	}
 	total, err := counter.Count(ctx, w)
 	if err != nil {
-		return IdentityReport{}, Invariant{}, fmt.Errorf("identity read-back: tenant total: %w", err)
+		return failed(stored, fmt.Errorf("tenant total: %w", err))
 	}
 	observedUntil := time.Since(driveEnd)
 	rep, inv := ReconcileIdentity(led.Snapshot(), stored, total, drive, devices)

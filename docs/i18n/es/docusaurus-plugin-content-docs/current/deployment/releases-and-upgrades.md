@@ -5084,8 +5084,10 @@ Dónde aparece:
   uno, cuánto tiempo después de la ejecución miró la comprobación por última vez
   (`observedUntilAfterDriveSeconds`) y un veredicto `reconciled`. Una nueva comprobación,
   `ingest-identity`, falla la ejecución cuando alguno de los tres primeros no es cero, o cuando las
-  pruebas no permiten decidir, por ejemplo porque seguían llegando eventos mientras se leían. Un
-  informe sin esta sección ya no se aprueba.
+  pruebas no permiten decidir, por ejemplo porque seguían llegando eventos mientras se leían. Una
+  petición de relectura que falla se reintenta dos veces, con dos segundos entre intentos; si sigue
+  fallando, `ingest-identity` falla como no concluyente con el error anotado en el informe, y el
+  informe se escribe igualmente. Un informe sin esta sección ya no se aprueba.
 - El informe de contención tiene la misma sección para cada inquilino de prueba, comprobada como
   `gold-identity` y `shed-identity`.
 - La autocomprobación ahora también elimina un evento almacenado e inserta un duplicado de otro, de
@@ -5094,9 +5096,11 @@ Dónde aparece:
 - La comprobación `ingest-completeness` sigue comparando los totales, y su mensaje dice ahora que es
   lo único que compara.
 
-Una copia reentregada de un evento puede almacenarse hasta un minuto después de la primera, así que
-una ejecución cuyo resultado se vaya a publicar debe asentarse al menos ese tiempo
-(`--quiesce-settle 60s`).
+Una copia reentregada de un evento se almacena al menos un minuto después de la primera: el broker
+reenvía un evento 60 segundos después de una entrega cuyo acuse de recibo se perdió, la copia aún
+tiene que procesarse, y una copia cuyo propio acuse se pierde se reenvía de nuevo. Un minuto es, por
+tanto, lo mínimo que puede tardar una copia, no lo máximo. Una ejecución cuyo resultado se vaya a
+publicar debe asentarse con margen por encima de ese tiempo, por ejemplo `--quiesce-settle 90s`.
 
 El simulador no envía `altId`. Un `altId` haría que el almacén de eventos descartara una segunda
 copia antes de almacenarla, lo que ocultaría los duplicados que busca esta comprobación y cambiaría

@@ -4714,7 +4714,9 @@ Where it appears:
   how long after the run the check last looked (`observedUntilAfterDriveSeconds`), and a
   `reconciled` verdict. A new `ingest-identity` check fails the run when any of the first three is
   not zero, or when the evidence cannot decide, for example because events were still arriving
-  while they were read. A report without this section no longer passes.
+  while they were read. A read-back request that fails is retried twice, two seconds apart; if it
+  still fails, `ingest-identity` fails as inconclusive with the error recorded in the report, and
+  the report is still written. A report without this section no longer passes.
 - The contention report has the same section for each probe tenant, checked as `gold-identity` and
   `shed-identity`.
 - The self-test now also removes one stored event and inserts a duplicate of another, so the totals
@@ -4723,8 +4725,11 @@ Where it appears:
 - The `ingest-completeness` check still compares the totals, and its message now says that this is
   all it compares.
 
-A redelivered copy of an event can be stored up to a minute after the first one, so a run whose
-result is to be published should settle for at least that long (`--quiesce-settle 60s`).
+A redelivered copy of an event is stored at least a minute after the first one: the broker resends
+an event 60 seconds after a delivery whose acknowledgement was lost, the copy then still has to be
+processed, and a copy whose own acknowledgement is lost is resent again. A minute is therefore the
+least a copy can take, not the most. A run whose result is to be published should settle with a
+margin above it, for example `--quiesce-settle 90s`.
 
 The simulator does not send an `altId`. An `altId` would make the event store skip a second copy
 before storing it, which would hide the duplicates this check looks for and change the work being

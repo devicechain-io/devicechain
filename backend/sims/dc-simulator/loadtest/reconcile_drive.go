@@ -28,6 +28,9 @@ type driveVerdict struct {
 // total it uses is read after the device reads. Report.Passed also refuses a report with
 // no ingest-identity invariant, so a caller that skipped this step fails closed.
 //
+// A failed identity read-back does not lose the report either: ingest-identity fails as
+// inconclusive and records the error.
+//
 // Identity is decided even when the drive had failed emits: the ambiguous ledger is what
 // makes that sound, and it is the evidence a chaos run reads. The count invariants still
 // fail such a run through clean-drive, so the gate's zero-failure rule does not move.
@@ -39,9 +42,9 @@ func reconcileDrive(ctx context.Context, counter eventCounter, reader identityRe
 		return driveVerdict{}, fmt.Errorf("oracle read-back: %w", err)
 	}
 	invariants := Reconcile(snap.Emitted, snap.Failed, qr.Persisted, p.MinAccepted)
-	rep, inv, err := checkIdentity(ctx, counter, reader, led, devices, snap, w, driveEnd, p.QuiesceSettle)
-	if err != nil {
-		return driveVerdict{}, err
-	}
+	// A failed identity read-back still returns a failing, inconclusive report that records
+	// the error; it is kept rather than returned, so the run's report (the count verdict
+	// included) is still written.
+	rep, inv, _ := checkIdentity(ctx, counter, reader, led, devices, snap, w, driveEnd, p.QuiesceSettle)
 	return driveVerdict{Quiesce: qr, Invariants: append(invariants, inv), Identity: rep}, nil
 }

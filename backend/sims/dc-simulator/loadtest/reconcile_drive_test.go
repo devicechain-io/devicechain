@@ -5,6 +5,7 @@ package loadtest
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -190,5 +191,35 @@ func TestReconcileDriveRecordsTheObservationHorizon(t *testing.T) {
 	if id.ReadStartedAfterDriveSecs < 2 || id.ObservedUntilAfterDriveSecs < id.ReadStartedAfterDriveSecs {
 		t.Errorf("read started %.3fs and observed until %.3fs after the drive; want >= 2 and in that order",
 			id.ReadStartedAfterDriveSecs, id.ObservedUntilAfterDriveSecs)
+	}
+}
+
+// A read-back that fails outright does not lose the run's report: the count invariants
+// are still decided, and ingest-identity fails as inconclusive, naming the error.
+func TestReconcileDriveFailedReadStillReports(t *testing.T) {
+	led := sim.NewIdentityLedger()
+	recordAll(led, sim.OutcomeAccepted, "d1", idA)
+	recordAll(led, sim.OutcomeAccepted, "d2", idB)
+	store := &storeFake{rows: map[string][]int64{"d1": {idA}, "d2": {idB}}}
+	reader := &scriptedReader{rows: store.rows, hard: map[string]error{"d2": errors.New("connection reset by peer")}}
+	v, err := reconcileDrive(context.Background(), store, reader, led, []string{"d1", "d2"},
+		sim.Snapshot{Emitted: 2}, Window{}, time.Now(), driveProfile(2))
+	if err != nil {
+		t.Fatalf("a failed identity read must not lose the report: %v", err)
+	}
+	if got, want := strings.Join(invariantNames(v.Invariants), ","), "load-applied,clean-drive,ingest-completeness,ingest-identity"; got != want {
+		t.Fatalf("invariants = %s; want %s", got, want)
+	}
+	if !invByName(t, v.Invariants, InvCompleteness).Passed {
+		t.Error("the count invariants should still be decided")
+	}
+	id := invByName(t, v.Invariants, InvIdentity)
+	if id.Passed || v.Identity.Reconciled || !strings.Contains(id.Detail, "connection reset by peer") ||
+		len(v.Identity.Inconclusive) != 1 || !strings.Contains(v.Identity.Inconclusive[0], "connection reset by peer") {
+		t.Errorf("identity passed=%v reconciled=%v detail %q inconclusive %q; want an inconclusive failure recording the error",
+			id.Passed, v.Identity.Reconciled, id.Detail, v.Identity.Inconclusive)
+	}
+	if v.Identity.Accepted != 2 {
+		t.Errorf("accepted = %d; want the ledger's 2 kept in the failed report", v.Identity.Accepted)
 	}
 }

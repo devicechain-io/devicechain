@@ -325,6 +325,10 @@ func identityServer(t *testing.T, page func(n int, device string) string) (*grap
 		mu     sync.Mutex
 		bodies []string
 	)
+	// A reader that stops recognising the end of a device's rows would page forever and
+	// surface only as go test's package timeout. Cap the requests one test may send, so
+	// that regression fails by name instead.
+	const maxEventRequests = 20
 	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 	pageRe := regexp.MustCompile(`"pageNumber":(\d+)`)
 	devRe := regexp.MustCompile(`"deviceToken":"([^"]*)"`)
@@ -340,7 +344,13 @@ func identityServer(t *testing.T, page func(n int, device string) string) (*grap
 		case strings.Contains(body, "events("):
 			mu.Lock()
 			bodies = append(bodies, body)
+			sent := len(bodies)
 			mu.Unlock()
+			if sent > maxEventRequests {
+				t.Errorf("the reader sent more than %d events requests: it does not stop paging", maxEventRequests)
+				w.WriteHeader(http.StatusTeapot)
+				return
+			}
 			pm, dm := pageRe.FindStringSubmatch(body), devRe.FindStringSubmatch(body)
 			if pm == nil || dm == nil {
 				t.Errorf("events query without a page number or device token: %s", body)
@@ -472,22 +482,49 @@ func TestGraphqlIdentityReader(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r, _ := identityServer(t, c.page)
 			_, _, err := r.DeviceIdentities(ctx, "d1", w)
-			if err == nil || errors.Is(err, errSetMoved) {
-				t.Fatalf("err = %v; want a hard error, not a pass and not a retryable move", err)
+			if err == nil || errors.Is(err, errSetMoved) || errors.Is(err, errReadTransport) {
+				t.Fatalf("err = %v; want a hard error, not a pass, not a retryable move and not a retryable transport failure", err)
 			}
 		})
 	}
+
+	// A request that fails (here a 502 from a proxy) is a transport failure, which the
+	// caller retries, not a malformed response and not a set that moved.
+	t.Run("a request that fails is a transport failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(raw), "events(") {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(string(raw), "login(") {
+				_, _ = w.Write([]byte(`{"data":{"login":{"identityToken":"id","expiresAt":"` + future + `","superuser":true,"memberships":[{"tenant":"t","roles":["r"]}]}}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"selectTenant":{"accessToken":"acc","refreshToken":"ref","expiresAt":"` + future + `"}}}`))
+		}))
+		t.Cleanup(srv.Close)
+		r := &graphqlIdentityReader{session: userclient.NewTenantSession(srv.Client(), srv.URL, "e@x", "pw", "t"), endpoint: srv.URL}
+		_, _, err := r.DeviceIdentities(ctx, "d1", w)
+		if !errors.Is(err, errReadTransport) || errors.Is(err, errSetMoved) {
+			t.Fatalf("err = %v; want a transport failure", err)
+		}
+	})
 }
 
 // scriptedReader answers per device: a number of errSetMoved before a stable read, or a
 // hard error.
 type scriptedReader struct {
-	mu     sync.Mutex
-	rows   map[string][]int64
-	moves  map[string]int // errSetMoved answers before a stable one; -1 = always
-	hard   map[string]error
-	calls  map[string]int
-	before func() // runs on every call (used to observe ordering)
+	mu    sync.Mutex
+	rows  map[string][]int64
+	moves map[string]int // errSetMoved answers before a stable one; -1 = always
+	// transport: errReadTransport answers before a stable one; -1 = always
+	transport map[string]int
+	hard      map[string]error
+	calls     map[string]int
+	before    func() // runs on every call (used to observe ordering)
 }
 
 func (s *scriptedReader) DeviceIdentities(_ context.Context, dev string, _ Window) ([]int64, int, error) {
@@ -502,6 +539,9 @@ func (s *scriptedReader) DeviceIdentities(_ context.Context, dev string, _ Windo
 	s.calls[dev]++
 	if err := s.hard[dev]; err != nil {
 		return nil, 1, err
+	}
+	if m := s.transport[dev]; m < 0 || s.calls[dev] <= m {
+		return nil, 0, fmt.Errorf("%s: %w: connection reset", dev, errReadTransport)
 	}
 	if m := s.moves[dev]; m < 0 || s.calls[dev] <= m {
 		return nil, 1, fmt.Errorf("%s: %w", dev, errSetMoved)
@@ -540,5 +580,44 @@ func TestReadStoredIdentities(t *testing.T) {
 	r = &scriptedReader{rows: map[string][]int64{"d1": {idA}}, hard: map[string]error{"d2": boom}}
 	if _, err := readStoredIdentities(ctx, r, []string{"d1", "d2"}, Window{}); !errors.Is(err, boom) {
 		t.Fatalf("err = %v; want the hard error", err)
+	}
+	if r.calls["d2"] != 1 {
+		t.Errorf("d2's hard error was read %d times; want once (a malformed response is not retried)", r.calls["d2"])
+	}
+}
+
+// One transient request failure in a read-back of millions of rows must not cost the run
+// its evidence: it is retried after a pause. One that outlasts the attempts is an error.
+func TestReadStoredIdentitiesRetriesTransportFailures(t *testing.T) {
+	saved := identityRetryDelay
+	identityRetryDelay = time.Millisecond
+	t.Cleanup(func() { identityRetryDelay = saved })
+	ctx := context.Background()
+
+	r := &scriptedReader{
+		rows:      map[string][]int64{"d1": {idA}, "d2": {idB}},
+		transport: map[string]int{"d1": identityReadAttempts - 1},
+	}
+	got, err := readStoredIdentities(ctx, r, []string{"d1", "d2"}, Window{})
+	if err != nil {
+		t.Fatalf("a transport failure that clears within the attempts must not fail the read: %v", err)
+	}
+	if !reflect.DeepEqual(got.Times, map[string][]int64{"d1": {idA}, "d2": {idB}}) || len(got.Unstable) != 0 {
+		t.Errorf("times = %v unstable = %v; want both devices read", got.Times, got.Unstable)
+	}
+	if r.calls["d1"] != identityReadAttempts {
+		t.Errorf("d1 was read %d times; want %d", r.calls["d1"], identityReadAttempts)
+	}
+
+	r = &scriptedReader{
+		rows:      map[string][]int64{"d1": {idA}},
+		transport: map[string]int{"d1": -1},
+	}
+	got, err = readStoredIdentities(ctx, r, []string{"d1"}, Window{})
+	if !errors.Is(err, errReadTransport) {
+		t.Fatalf("err = %v; want the transport failure once the attempts ran out", err)
+	}
+	if r.calls["d1"] != identityReadAttempts || len(got.Unstable) != 0 {
+		t.Errorf("d1 read %d times, unstable %v; want %d attempts and not reported as unstable", r.calls["d1"], got.Unstable, identityReadAttempts)
 	}
 }

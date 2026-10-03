@@ -162,10 +162,9 @@ func runOneTenant(ctx context.Context, role string, hs *sim.Handshake, p Profile
 		return nil, fmt.Errorf("%s oracle read-back: %w", role, err)
 	}
 	reader := &graphqlIdentityReader{session: rt.Session, endpoint: eventEndpoint}
-	id, _, err := checkIdentity(ctx, counter, reader, rt.Identity, deviceTokens(rt.Devices), snap, w, end, p.QuiesceSettle)
-	if err != nil {
-		return nil, fmt.Errorf("%s %w", role, err)
-	}
+	// A failed read-back yields a failing, inconclusive identity report that records the
+	// error; the tenant's outcome keeps it, so the contention report is still written.
+	id, _, _ := checkIdentity(ctx, counter, reader, rt.Identity, deviceTokens(rt.Devices), snap, w, end, p.QuiesceSettle)
 	return outcomeOf(role, hs.Tenant, len(rt.Devices), snap, qr, id), nil
 }
 

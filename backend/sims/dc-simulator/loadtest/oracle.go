@@ -171,8 +171,8 @@ type QuiesceResult struct {
 // the target so it never enters the settle phase.
 //
 // BOUNDED OBSERVATION: this catches a prompt over-persist, NOT the full
-// redelivery-window class — a redelivery double-persist lands up to ackWait (60s)
-// later, and that induced-redelivery exactly-once proof is the durability rig's
+// redelivery-window class — a redelivery double-persist lands no SOONER than
+// ackWait (60s) later (plus processing, plus another ackWait per lost ack), and that induced-redelivery exactly-once proof is the durability rig's
 // job (ADR-030), not this settle (see DefaultQuiesceSettle). The same
 // bounded-window caveat the detection/command settles carry.
 //

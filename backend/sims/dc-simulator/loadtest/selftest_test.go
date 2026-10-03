@@ -5,8 +5,10 @@ package loadtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -433,5 +435,38 @@ func TestSelfTestReportSound(t *testing.T) {
 				t.Fatalf("Sound()=%v want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// failingAfterReader answers through the store for its first ok device reads, then fails
+// every read with a malformed-response error.
+type failingAfterReader struct {
+	*storeFake
+	mu sync.Mutex
+	ok int
+}
+
+func (f *failingAfterReader) DeviceIdentities(ctx context.Context, device string, w Window) ([]int64, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ok <= 0 {
+		return nil, 1, errors.New("malformed response")
+	}
+	f.ok--
+	return f.storeFake.DeviceIdentities(ctx, device, w)
+}
+
+// The run keeps a failed identity read as an inconclusive report; the self-test must not.
+// A read that fails after the drop would otherwise read as "the drop was not detected",
+// an UNSOUND verdict about the oracle caused by the read, so it is an error instead.
+func TestEvaluateControlsFailedReadIsAnError(t *testing.T) {
+	in, store := selfTestFixture(t, 4, 15)
+	in.reader = &failingAfterReader{storeFake: store, ok: len(in.devices)} // the positive control's reads only
+	out, err := evaluateControls(context.Background(), in)
+	if err == nil || !strings.Contains(err.Error(), "malformed response") {
+		t.Fatalf("err = %v (negative=%v %s); want the failed read-back as an error", err, out.negative.Passed, out.negative.Detail)
+	}
+	if !store.deleteCalled || store.dupCalled {
+		t.Errorf("delete called=%v dup called=%v; want the failure after the drop, before the swap", store.deleteCalled, store.dupCalled)
 	}
 }
