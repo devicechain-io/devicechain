@@ -259,7 +259,11 @@ type drain struct {
 //     middle of the stream: the history falls in one step while FirstSeq barely moves, and
 //     the space is freed rather than used, so it must not read as a discard rate. An
 //     interval that starts or ends below the ceiling (a purge, an expiry, the first fill)
-//     adds nothing.
+//     adds nothing. 🔴 One purge is indistinguishable from discarding: a tenant whose
+//     messages are the OLDEST a full stream holds, and few enough to leave it at its ceiling.
+//     FirstSeq then moves as far as the history falls, the interval reads as a high rate, and
+//     the gate can close until the reader catches up. That refuses for a while; it loses
+//     nothing.
 func nextDrain(d drain, at time.Time, history, firstSeq uint64, full, unread, refusing bool) drain {
 	next := drain{at: at, history: history, firstSeq: firstSeq, full: full}
 	switch {

@@ -320,7 +320,11 @@ read yet.
   are, so a burst of large events over a history of small ones is refused here while the unread
   backlog is still far below 90%. They accept events again once that history would last **a
   minute**, or the consumer has read everything. A full stream whose consumer keeps pace refuses
-  nothing: what the stream discards is replaced by events the consumer has finished with.
+  nothing: what the stream discards is replaced by events the consumer has finished with. A full
+  stream that holds less than about a minute of its own traffic is the exception: a consumer that
+  falls behind for a few seconds can make it refuse, and it then accepts again only once that
+  consumer has read everything. That is most likely with small stream ceilings, such as an
+  installation bootstrapped with `--compact`, and large events arriving fast.
 - An event the consumer received but has not acknowledged counts as unread, including one waiting
   to be delivered again after a failure. While such an event sits near the front of a full stream,
   the stream can refuse new events until it is acknowledged or given up on, rather than discard
@@ -348,7 +352,10 @@ read yet.
   are admitted while the stream refuses (see below). The alerts in
   [Messages a consumer never read](#unread-loss) report it.
 - Deleting a tenant removes its events from both streams. That frees room, so it does not by
-  itself make the stream refuse.
+  itself make the stream refuse, with one exception: a tenant whose events are the oldest a full
+  stream holds, and few enough that the stream stays full without them. Removing those looks the
+  same as the stream discarding its history quickly, so the stream can refuse until the consumer
+  catches up. Nothing is lost.
 
 What each transport does while the stream is refusing:
 

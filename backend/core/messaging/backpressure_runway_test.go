@@ -353,7 +353,8 @@ func TestAFullStreamWhoseReaderKeepsUpIsNotRefused(t *testing.T) {
 // Deleting a tenant purges its messages from the middle of the stream: the history the reader
 // had read falls in one step, and the stream has more room, not less. Neither a stream below
 // its ceiling, nor a full one losing a small share, may read that as a discard rate and refuse
-// every other tenant.
+// every other tenant. (A tenant whose messages are the oldest a full stream holds is the case
+// that can: see nextDrain.)
 func TestATenantPurgeDoesNotCloseTheGate(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -530,5 +531,176 @@ func TestPublishingVolumeTriggersAMeasurement(t *testing.T) {
 	if n < 2 || n > most {
 		t.Fatalf("a burst measured over %s made %d measurements; want between 2 and %d (one per %s)",
 			took, n, most, backpressureKickMinGap)
+	}
+}
+
+// A gate the runway rule closed stays closed while its reader does not move: the remembered
+// discard rate does not fade while the gate refuses. If it faded as it does while the gate is
+// open (a 60 s e-folding time), the history, which a stalled reader leaves constant, would
+// outlast the faded rate within about a minute; the gate would reopen, admit a measurement's
+// worth of large events, close again, and spend the history a step at a time until it reached
+// the unread events: the defect, slowed down.
+func TestARunwayRefusalHoldsWhileTheReaderDoesNotMove(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	bounds := bpBounds{maxMsgs: 1_000_000, maxBytes: largeOverSmallMaxBytes}
+	dm := newBPService(t, srv, "device-management", bounds)
+	r := inboundReader(t, dm)
+	es := newBPService(t, srv, "event-sources", bounds)
+	clk := newTestClock()
+	measuredByHand(es, clk)
+	w := es.writer(t, streams.InboundEvents)
+
+	publishOK(t, w, tenantCtx(), largeOverSmallHistory, smallEvent)
+	readAndAck(t, r, largeOverSmallHistory)
+	awaitAckFloor(t, dm.nmgr, r, largeOverSmallHistory)
+	es.sample(t, streams.InboundEvents)
+
+	var bpe *BackpressureError
+	for i := 0; i < largeOverSmallAttempts && bpe == nil; i++ {
+		if err := w.WriteMessages(tenantCtx(), Message{Value: largeEvent}); err != nil {
+			if !errors.As(err, &bpe) {
+				t.Fatalf("large publish %d failed for a reason that is not backpressure: %v", i+1, err)
+			}
+			break
+		}
+		clk.advance(5 * time.Second)
+		es.sample(t, streams.InboundEvents)
+	}
+	if bpe == nil || !bpe.Runway || bpe.History == 0 || bpe.Rate <= 0 {
+		t.Fatalf("precondition: the runway rule did not close the gate with history left: %#v", bpe)
+	}
+	// How long a fading rate would take to reopen it (history >= rate * 60 s): the hold below
+	// must outlast that by a margin, or it cannot tell a frozen rate from a fading one.
+	reopen := time.Duration(backpressureDrainMemory.Seconds()*
+		math.Log(bpe.Rate*backpressureRunwayOpen.Seconds()/float64(bpe.History))) * time.Second
+	const hold = 10 * time.Minute
+	if reopen <= 0 || 2*reopen > hold {
+		t.Fatalf("precondition: a fading rate would reopen the gate after %s (history %d, rate %.1f/s); "+
+			"the %s hold cannot tell it from a frozen one", reopen, bpe.History, bpe.Rate, hold)
+	}
+
+	for held := time.Duration(0); held < hold; held += 5 * time.Second {
+		clk.advance(5 * time.Second)
+		es.sample(t, streams.InboundEvents)
+		err := es.nmgr.Backpressure(streams.InboundEvents)
+		var now *BackpressureError
+		if !errors.As(err, &now) || !now.Runway {
+			t.Fatalf("%s after the runway rule closed the gate, with the reader stalled, it reads %v; "+
+				"want it still refusing on the runway rule (a fading rate reopens it after %s)", held+5*time.Second, err, reopen)
+		}
+	}
+}
+
+// What a writer publishes while a sample is in flight counts toward the NEXT measurement: the
+// volume is reset when a sample starts, not when it finishes. Reset at the finish, a burst
+// written during a slow measurement would be forgotten, and the next volume-triggered
+// measurement would come that much late.
+func TestPublishingDuringASampleCountsTowardTheNext(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	bounds := bpBounds{maxMsgs: 1_000_000, maxBytes: 64 << 20}
+	dm := newBPService(t, srv, "device-management", bounds)
+	inboundReader(t, dm)
+	es := newBPService(t, srv, "event-sources", bounds)
+	withoutSamplingLoop(es) // volume is counted; nothing consumes the requests it makes
+	g := es.nmgr.backpressure()
+	answer := g.consumerInfo
+	var stall atomic.Bool
+	entered, release := make(chan struct{}), make(chan struct{})
+	g.consumerInfo = func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error) {
+		if stall.CompareAndSwap(true, false) {
+			close(entered)
+			<-release
+		}
+		return answer(ctx, stream, durable)
+	}
+	w := es.writer(t, streams.InboundEvents)
+	g.mu.Lock()
+	gs := g.gates[streams.InboundEvents]
+	g.mu.Unlock()
+	if gs.pubBytes.Load() != 0 || gs.pubMsgs.Load() != 0 {
+		t.Fatalf("precondition: %d bytes, %d messages counted before anything was published",
+			gs.pubBytes.Load(), gs.pubMsgs.Load())
+	}
+
+	stall.Store(true)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		es.sampleUnsettled(streams.InboundEvents)
+	}()
+	<-entered
+	publishOK(t, w, tenantCtx(), 3, smallEvent)
+	close(release)
+	<-done
+	if gs.pubMsgs.Load() != 3 || gs.pubBytes.Load() <= int64(3*len(smallEvent)) {
+		t.Fatalf("after 3 publishes during a sample, %d messages and %d bytes are counted toward the next one; "+
+			"want 3 messages and more than %d bytes", gs.pubMsgs.Load(), gs.pubBytes.Load(), 3*len(smallEvent))
+	}
+}
+
+// Every writer into a gated stream asks for a measurement by its volume: the plain writer, and
+// the ordered writer a forwarding hop publishes with, which is the only writer into
+// resolved-events (device-management's) and one of event-sources' into inbound-events. The
+// volume is the message as sent, headers included: here a one-byte event's subject and data
+// stay under the threshold and its headers take it over.
+func TestEveryWriterAsksForAMeasurementByVolume(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		publish func(t *testing.T, es *bpService)
+	}{
+		{name: "writer", publish: func(t *testing.T, es *bpService) {
+			publishOK(t, es.writer(t, streams.InboundEvents), tenantCtx(), 1, []byte("x"))
+		}},
+		{name: "ordered writer", publish: func(t *testing.T, es *bpService) {
+			ow, err := es.nmgr.NewOrderedWriter(streams.InboundEvents, 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			ow.Publish(tenantCtx(), Message{Value: []byte("x")}, func(err error) { done <- err })
+			if err := <-done; err != nil {
+				t.Fatalf("ordered publish: %v", err)
+			}
+			ow.Close()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := startEmbeddedServer(t)
+			bounds := bpBounds{maxMsgs: 1_000_000, maxBytes: 64 << 10} // a 64-byte threshold
+			es := newBPService(t, srv, "event-sources", bounds)
+			g := es.nmgr.backpressure()
+			g.tick = time.Hour                  // only volume measures
+			es.writer(t, streams.InboundEvents) // registers the gate
+			g.mu.Lock()
+			gs := g.gates[streams.InboundEvents]
+			base := gs.started
+			g.mu.Unlock()
+
+			subject, err := es.nmgr.tenantSubject(tenantCtx(), streams.InboundEvents, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			threshold := gs.kickBytes.Load()
+			if bare, sent := int64(len(subject)+1), int64(natsMsg(subject, Message{Value: []byte("x")}).Size()); bare >= threshold || sent < threshold {
+				t.Fatalf("precondition: subject and data are %d bytes and the message as sent %d, against a %d-byte "+
+					"threshold; want the headers to be what crosses it", bare, sent, threshold)
+			}
+
+			tc.publish(t, es)
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				g.mu.Lock()
+				n := gs.started
+				g.mu.Unlock()
+				if n != base && gs.pubBytes.Load() == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("a publish over the volume threshold was not measured within 2 s "+
+						"(%d measurements started, %d bytes uncounted)", n-base, gs.pubBytes.Load())
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		})
 	}
 }

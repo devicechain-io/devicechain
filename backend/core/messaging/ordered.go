@@ -207,7 +207,8 @@ func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(erro
 	}
 	// Counted when sent, not when acknowledged: the measurement it paces is of what the
 	// broker holds, and a publish in flight is about to be held.
-	o.gate.notePublished(len(nm.Subject) + len(nm.Data))
+	// Subject, headers and data, as sent: what natsWriter counts.
+	o.gate.notePublished(nm.Size())
 	o.pending <- orderedPending{fut: fut, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
 }
 

@@ -4712,9 +4712,12 @@ discarded events nobody had processed. Measuring after every publish would not h
   unread ones are what runs out before an unread one is lost. The services that write to the
   stream now refuse new events when that history would all be discarded within 30 seconds at the
   rate the stream is discarding it, and accept them again once it would last a minute, or the
-  consumer has read everything. Both quantities are counts the broker reports exactly, so the rule
-  does not depend on how large the events are. A full stream whose consumer keeps pace refuses
-  nothing, and deleting a tenant does not by itself make a stream refuse.
+  consumer has read everything. Both are built from sequence numbers the broker reports, so the
+  rule does not depend on how large the events are. A full stream whose consumer keeps pace
+  refuses nothing. Deleting a tenant does not by itself make a stream refuse either, unless its
+  events are the oldest a full stream holds: then the stream can refuse, losing nothing, until the
+  consumer catches up. See [Backpressure on the ingest path](./observability.md#ingest-backpressure)
+  for that case and for a full stream that holds under a minute of its own traffic.
 - **An event the consumer received but has not acknowledged counts as unread**, including one
   waiting to be delivered again after a failure. While such an event sits near the front of a full
   stream, the stream can refuse new events until it is acknowledged or given up on.

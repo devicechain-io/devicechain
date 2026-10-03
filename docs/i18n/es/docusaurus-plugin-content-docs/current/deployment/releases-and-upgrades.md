@@ -5075,10 +5075,13 @@ publicación no lo habría evitado.
   de los no leídos son lo que se agota antes de que se pierda uno sin leer. Los servicios que
   escriben en el stream rechazan ahora eventos nuevos cuando ese historial se descartaría entero en
   30 segundos al ritmo al que el stream lo está descartando, y vuelven a aceptarlos cuando duraría
-  un minuto, o el consumidor lo ha leído todo. Las dos magnitudes son recuentos que el bróker
-  informa con exactitud, así que la regla no depende del tamaño de los eventos. Un stream lleno cuyo
-  consumidor mantiene el ritmo no rechaza nada, y eliminar un inquilino no hace por sí solo que un
-  stream rechace.
+  un minuto, o el consumidor lo ha leído todo. Las dos magnitudes se calculan a partir de números
+  de secuencia que informa el bróker, así que la regla no depende del tamaño de los eventos. Un
+  stream lleno cuyo consumidor mantiene el ritmo no rechaza nada. Eliminar un inquilino tampoco hace
+  por sí solo que un stream rechace, salvo que sus eventos sean los más antiguos que conserva un
+  stream lleno: entonces el stream puede rechazar, sin perder nada, hasta que el consumidor se ponga
+  al día. Consulta [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure) para
+  ese caso y para un stream lleno que contiene menos de un minuto de su propio tráfico.
 - **Un evento que el consumidor recibió pero no ha confirmado cuenta como no leído**, también uno
   que espera a entregarse de nuevo tras un fallo. Mientras un evento así está cerca del principio de
   un stream lleno, el stream puede rechazar eventos nuevos hasta que se confirme o se abandone.

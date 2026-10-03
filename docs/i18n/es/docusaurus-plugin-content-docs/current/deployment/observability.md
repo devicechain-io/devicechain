@@ -330,7 +330,11 @@ los que ese consumidor aún no ha leído.
   pequeños se rechaza aquí aunque la cola sin leer esté muy por debajo del 90%. Vuelven a aceptar
   eventos cuando ese historial duraría **un minuto**, o el consumidor lo ha leído todo. Un flujo
   lleno cuyo consumidor mantiene el ritmo no rechaza nada: lo que el flujo descarta se sustituye
-  por eventos que el consumidor ya ha terminado.
+  por eventos que el consumidor ya ha terminado. La excepción es un flujo lleno que contiene menos
+  de un minuto aproximadamente de su propio tráfico: un consumidor que se retrasa unos segundos
+  puede hacer que rechace, y entonces solo vuelve a aceptar cuando ese consumidor lo ha leído todo.
+  Es más probable con límites de flujo pequeños, como en una instalación creada con `--compact`, y
+  eventos grandes que llegan deprisa.
 - Un evento que el consumidor recibió pero no ha confirmado cuenta como no leído, también uno que
   espera a entregarse de nuevo tras un fallo. Mientras un evento así está cerca del principio de un
   flujo lleno, el flujo puede rechazar eventos nuevos hasta que se confirme o se abandone, en lugar
@@ -360,7 +364,10 @@ los que ese consumidor aún no ha leído.
   y desconexión se admiten mientras el flujo rechaza (ver más abajo). Las alertas de
   [Mensajes que un consumidor nunca leyó](#unread-loss) lo informan.
 - Eliminar un inquilino quita sus eventos de los dos flujos. Eso libera espacio, así que por sí
-  solo no hace que el flujo rechace.
+  solo no hace que el flujo rechace, con una excepción: un inquilino cuyos eventos son los más
+  antiguos que conserva un flujo lleno, y tan pocos que el flujo sigue lleno sin ellos. Quitarlos
+  parece lo mismo que un flujo que descarta su historial deprisa, así que el flujo puede rechazar
+  hasta que el consumidor se ponga al día. No se pierde nada.
 
 Qué hace cada transporte mientras el flujo rechaza:
 
