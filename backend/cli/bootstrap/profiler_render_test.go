@@ -276,8 +276,7 @@ func TestAnUpgradeDoesNotCarryAProfilerForward(t *testing.T) {
 	lwm2m := previous["functionalAreas"].(map[string]interface{})["lwm2m-ingest"].(map[string]interface{})
 	lwm2m["profiler"] = map[string]interface{}{"enabled": true}
 
-	vals := map[string]interface{}{}
-	carryReleaseValues(vals, previous)
+	vals := upgradeReleaseValues(t, previous)
 
 	carried, _ := vals["functionalAreas"].(map[string]interface{})["lwm2m-ingest"].(map[string]interface{})
 	if carried == nil || carried["config"] == nil {

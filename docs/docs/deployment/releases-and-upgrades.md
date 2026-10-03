@@ -4587,12 +4587,14 @@ Above one replica, each of the five event-path services (`device-management`, `e
 another of its own pods. A service with [the event-path spread](#next-event-path-requests) no
 longer gets the cluster's default spread, and this gives back the half of it that keeps one
 service's replicas on different nodes; the other half, different zones, is not given back. It is a
-preference the scheduler weighs with the service's others (fewer event-path services on a node, no
-event-store primary), not a guarantee.
+preference the scheduler weighs with the service's others (fewer event-path services on a node and,
+for `device-management`, `event-sources` and `event-management`, no event-store primary), not a
+guarantee.
 
 - Under `--ha`, it applies to `event-management`'s two pods.
 - **If you install the chart yourself**, it applies to any of the five you run with `replicas`
-  above one, and it sits in the pod's anti-affinity beside the event-store primary preference. A
+  above one, and it sits in the pod's anti-affinity, beside the event-store primary preference on
+  the three services that carry one. A
   service with `eventPathSpread: false` keeps the cluster's default spread instead, which also
   prefers different zones, and gets no such preference.
 

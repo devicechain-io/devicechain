@@ -65,7 +65,10 @@ ROOT="$(cd "$HACK/.." && pwd)"
 # of its 600 under -race on main's CI (and 57 s without it), so the next test added
 # there would have failed this step by timing out with no race in sight: the
 # API-server suites it gained (every chart profile installed into envtest) cost about
-# 150 s more under the detector. A real hang still fails, after 20 minutes.
+# 150 s more under the detector. With them, an independent local run of the
+# package took 605 s under -race: already past the old default, and about half of
+# the 20 minutes. Measure it again before adding slow tests there. A real hang still
+# fails, after 20 minutes.
 RACE_TEST=(go test -race -count=1 -timeout 20m)
 race_test() { "${RACE_TEST[@]}" "$@"; }
 

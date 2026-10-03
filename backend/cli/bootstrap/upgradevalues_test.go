@@ -143,3 +143,65 @@ func TestNothingIsCarriedFromAReleaseThatHeldNothing(t *testing.T) {
 		t.Errorf("carrying from an empty release produced %v", vals)
 	}
 }
+
+// upgradeReleaseValues returns the values helmInstall would install when moving an
+// existing instance whose release holds previous: the same sequence helmInstall runs
+// (carryForwardFromRelease into the State, then releaseValues), so a test reading the
+// result sees what an upgrade installs and not a second copy of the composition.
+func upgradeReleaseValues(t *testing.T, previous map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	st := profileState(false, false, "default")("dci-upgrade")
+	st.Evolving = true
+	carryForwardFromRelease(st, previous)
+	vals, _, err := releaseValues(t.Context(), chartForTest(t), st, previous)
+	if err != nil {
+		t.Fatalf("composing the upgrade's release values: %v", err)
+	}
+	return vals
+}
+
+// 🔴 THE CARRY HAS TO HAPPEN IN THE FUNCTION HELMINSTALL CALLS. carryReleaseValues is
+// tested on its own above; this pins that releaseValues — the one composition both
+// helmInstall and the rendered-profile checks use — actually applies it when the State
+// is moving an instance. Without it, an upgrade would compute fresh values, drop the
+// provisioned LwM2M Secret from the manifest, and Helm would delete it.
+func TestReleaseValuesCarriesThePreviousReleaseOnAnUpgrade(t *testing.T) {
+	vals := upgradeReleaseValues(t, aPreviousRelease())
+
+	secrets, _ := vals["extraSecrets"].([]interface{})
+	if len(secrets) != 1 {
+		t.Fatalf("extraSecrets = %v, want the previous release's one Secret: an upgrade "+
+			"would delete the Secret every LwM2M device authenticates with", vals["extraSecrets"])
+	}
+	if name, _ := secrets[0].(map[string]interface{})["name"].(string); name != "dci-devicechain-lwm2m-psk" {
+		t.Errorf("carried Secret name = %q, want dci-devicechain-lwm2m-psk", name)
+	}
+	areas, _ := vals["functionalAreas"].(map[string]interface{})
+	lwm2m, _ := areas["lwm2m-ingest"].(map[string]interface{})
+	cfg, _ := lwm2m["config"].(map[string]interface{})
+	sec, _ := cfg["security"].(map[string]interface{})
+	ids, _ := sec["identities"].([]interface{})
+	if len(ids) != 1 {
+		t.Fatalf("lwm2m-ingest identities = %v, want the previous release's one binding", ids)
+	}
+	if id, _ := ids[0].(map[string]interface{})["identity"].(string); id != "sensor-1" {
+		t.Errorf("carried identity = %q, want sensor-1", id)
+	}
+}
+
+// ...and the counterweight: a run that is BUILDING an instance carries nothing, even
+// handed a release map, because there is no release whose values it may inherit.
+func TestReleaseValuesCarriesNothingOnAFreshInstall(t *testing.T) {
+	st := profileState(false, false, "default")("dci-fresh")
+	vals, _, err := releaseValues(t.Context(), chartForTest(t), st, aPreviousRelease())
+	if err != nil {
+		t.Fatalf("composing the release values: %v", err)
+	}
+	if v, ok := vals["extraSecrets"]; ok {
+		t.Errorf("a fresh install carried extraSecrets %v from a release it does not have", v)
+	}
+	areas, _ := vals["functionalAreas"].(map[string]interface{})
+	if lwm2m, ok := areas["lwm2m-ingest"].(map[string]interface{}); ok && lwm2m["config"] != nil {
+		t.Errorf("a fresh install carried an lwm2m-ingest config: %v", lwm2m["config"])
+	}
+}
