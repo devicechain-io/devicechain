@@ -59,6 +59,25 @@ func TestDialSystemAccountAcceptsAReachableBroker(t *testing.T) {
 	require.Less(t, time.Since(start), 5*time.Second, "the wait must cost nothing on a healthy broker")
 }
 
+// TestTheSystemAccountConnectionCarriesTheLivenessOptions: the presence connection is as
+// long-lived as the service's main one, and a server that stops answering without closing
+// it must be given up as quickly. Literals, so this fails by value on a dial that carries
+// the library's defaults (a 2-minute ping, a 1-minute write deadline that drops nothing).
+func TestTheSystemAccountConnectionCarriesTheLivenessOptions(t *testing.T) {
+	port := runPlainBroker(t)
+	cfg := config.NatsConfiguration{Hostname: "127.0.0.1", Port: uint32(port)}
+	cfg.Auth.SysUser = "sys"
+	cfg.Auth.SysPassword = "sys"
+
+	conn, err := dialSystemAccount(context.Background(), cfg, 10*time.Second, nil)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.Equal(t, 10*time.Second, conn.Opts.PingInterval, "PingInterval")
+	require.Equal(t, 2, conn.Opts.MaxPingsOut, "MaxPingsOut")
+	require.Equal(t, 10*time.Second, conn.Opts.FlusherTimeout, "FlusherTimeout")
+	require.NotNil(t, conn.Opts.CustomDialer, "a write that times out must close the connection")
+}
+
 // TestTheDialWindowsAreTheOnesEveryCommentQuotes is the pin the rest of this file cannot
 // be.
 //

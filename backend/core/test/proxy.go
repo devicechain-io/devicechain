@@ -4,8 +4,8 @@
 package test
 
 import (
-	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,11 +30,35 @@ import (
 // the subscription. That window is normally microseconds wide — real often enough to
 // break CI, rare enough that a fix looks like it worked whether or not it did. Hold()
 // makes it as wide as a test wants, which turns the failure into a measurement.
+//
+// # Freeze: a peer that stops answering
+//
+// Freeze is the other failure, and the one a lost machine produces: every connection
+// open at that moment stops being read in BOTH directions, and nothing is closed. The
+// client's writes then back up as against a peer that stopped acknowledging, its pings
+// are never answered, and no FIN or RST ever arrives, so only the client's own liveness
+// checks can notice. Connections accepted AFTER Freeze relay normally, which stands in
+// for the network routing a reconnect to a server that is still up.
 type TCPProxy struct {
 	ln    net.Listener
 	delay atomic.Int64 // nanoseconds applied per chunk, client→server
 	drop  atomic.Bool  // discard client→server entirely
+
+	stop  chan struct{} // closed when the test ends; frozen pumps park on it
+	mu    sync.Mutex
+	pairs []*proxyPair
 }
+
+// proxyPair is one relayed connection.
+type proxyPair struct {
+	client, server net.Conn
+	frozen         atomic.Bool
+}
+
+// proxyReadBuffer is the receive buffer the proxy sets on each client connection. Small,
+// so that a frozen connection's client fills it, and its own send buffer, within seconds
+// rather than after the megabytes a loopback socket would otherwise absorb.
+const proxyReadBuffer = 64 << 10
 
 // StartTCPProxy listens on an ephemeral port and relays to target ("host:port"),
 // passing everything through until told otherwise. It stops with the test.
@@ -44,8 +68,17 @@ func StartTCPProxy(t *testing.T, target string) *TCPProxy {
 	if err != nil {
 		t.Fatalf("proxy listen: %v", err)
 	}
-	p := &TCPProxy{ln: ln}
-	t.Cleanup(func() { _ = ln.Close() })
+	p := &TCPProxy{ln: ln, stop: make(chan struct{})}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		close(p.stop)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, pr := range p.pairs {
+			_ = pr.client.Close()
+			_ = pr.server.Close()
+		}
+	})
 
 	go func() {
 		for {
@@ -63,33 +96,48 @@ func StartTCPProxy(t *testing.T, target string) *TCPProxy {
 				_ = client.Close()
 				continue
 			}
-			go p.pump(client, server)
-			go func() {
-				_, _ = io.Copy(client, server)
-				_ = client.Close()
-			}()
+			if tc, ok := client.(*net.TCPConn); ok {
+				_ = tc.SetReadBuffer(proxyReadBuffer)
+			}
+			pr := &proxyPair{client: client, server: server}
+			p.mu.Lock()
+			p.pairs = append(p.pairs, pr)
+			p.mu.Unlock()
+			go p.pump(pr, client, server, true)
+			go p.pump(pr, server, client, false)
 		}
 	}()
 	return p
 }
 
-// pump copies client→server, applying the current delay/drop before each write. Both
-// are read per chunk rather than captured once, so a test can open and close the
-// window on a connection that is already live.
-func (p *TCPProxy) pump(from, to net.Conn) {
-	defer func() { _ = to.Close() }()
+// pump copies one direction of a pair, closing the destination when the source ends.
+// Client→server (held) applies the current delay/drop before each write; both are read
+// per chunk rather than captured once, so a test can open and close the window on a
+// connection that is already live. A frozen pair's pumps stop reading, drop whatever
+// chunk they had in hand, and close nothing until the test ends.
+func (p *TCPProxy) pump(pr *proxyPair, from, to net.Conn, held bool) {
 	buf := make([]byte, 4096)
 	for {
+		if pr.frozen.Load() {
+			<-p.stop
+			return
+		}
 		n, err := from.Read(buf)
-		if n > 0 && !p.drop.Load() {
-			if d := time.Duration(p.delay.Load()); d > 0 {
+		if pr.frozen.Load() {
+			<-p.stop
+			return
+		}
+		if n > 0 && !(held && p.drop.Load()) {
+			if d := time.Duration(p.delay.Load()); held && d > 0 {
 				time.Sleep(d)
 			}
 			if _, werr := to.Write(buf[:n]); werr != nil {
+				_ = to.Close()
 				return
 			}
 		}
 		if err != nil {
+			_ = to.Close()
 			return
 		}
 	}
@@ -105,6 +153,30 @@ func (p *TCPProxy) Hold(d time.Duration) { p.delay.Store(int64(d)) }
 // talking, so the client sees a live connection that has silently stopped being heard
 // — which is what makes a round trip time out rather than fail fast.
 func (p *TCPProxy) Drop() { p.drop.Store(true) }
+
+// Freeze stops relaying, in both directions, on every connection open now, and closes
+// none of them. Connections accepted afterwards relay normally.
+func (p *TCPProxy) Freeze() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pr := range p.pairs {
+		pr.frozen.Store(true)
+	}
+}
+
+// Sever closes, in both directions, every connection open now that is not frozen: an
+// ordinary disconnect, which the client sees at once as the end of its stream. Frozen
+// connections are left as they are. Connections accepted afterwards relay normally.
+func (p *TCPProxy) Sever() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pr := range p.pairs {
+		if !pr.frozen.Load() {
+			_ = pr.client.Close()
+			_ = pr.server.Close()
+		}
+	}
+}
 
 // Release restores straight-through relaying in both directions.
 func (p *TCPProxy) Release() {

@@ -947,13 +947,29 @@ so that a pass over an empty set is not mistaken for a pass.
 happens:
 
 - **The broker elects new leaders within seconds.** Streams led from the lost node pick a new
-  leader, and in testing acknowledged writes resumed within about ten seconds. Publishes in flight
-  at that moment fail, and a device posting over HTTP can see some `503` responses and should
-  retry. A `503` without a `Retry-After` header means the publish failed and the event may have
-  been stored anyway, so a retry stores it twice unless it carries an `altId` and an
-  `occurredTime` (see [quality of service](../guides/connecting-a-device.md#quality-of-service)).
-  New connections through the broker's service can keep failing intermittently for about
-  45 seconds, until Kubernetes marks the node as lost and stops routing to the server on it.
+  leader, and in testing acknowledged writes resumed within about ten seconds for services whose
+  own broker connection was to a surviving server. Publishes in flight at that moment fail, and a
+  device posting over HTTP can see some `503` responses and should retry. A `503` without a
+  `Retry-After` header means the publish failed and the event may have been stored anyway, so a
+  retry stores it twice unless it carries an `altId` and an `occurredTime` (see
+  [quality of service](../guides/connecting-a-device.md#quality-of-service)). New connections
+  through the broker's service can keep failing intermittently for about 45 seconds, until the
+  server on that node is back or Kubernetes marks the node as lost and stops routing to it.
+- **A service connected to the lost server reconnects within about a minute.** A machine that
+  stops abruptly closes nothing, so a service whose own broker connection was to the server on
+  that node finds out only when that server stops answering. Each service pings its server every
+  10 seconds and gives the connection up after three unanswered intervals (30 seconds), or once a
+  write to it has made no progress for 10 seconds; together those notice a dead connection within
+  40 seconds. The service then reconnects, which takes a few seconds, or longer while the broker's
+  service still routes some new connections to the lost server (see the previous point). Until
+  then it can neither publish nor receive. If it is `event-sources`, HTTP ingest is refused or
+  times out meanwhile, so devices posting over HTTP should retry `503` responses and timeouts. A
+  request that timed out may have been stored too, so the same `altId` and `occurredTime` rule
+  applies to its retry.
+- **Kubernetes may report nothing.** A machine that restarts within the node grace period
+  (roughly 40 to 50 seconds) is never marked `NotReady`, so no node event and no Kubernetes alert
+  records the loss. When the chart's alerts are installed, `BrokerConnectionDiedSilently` does;
+  see [A broker connection that died silently](./observability.md#broker-connection-dead).
 - **Event processing can pause for about a minute.** If the lost node's broker server led the
   stream of incoming events, devices' events keep being accepted, but resolving them can stall
   for about a minute, with no error reported, before it resumes and works through the backlog.

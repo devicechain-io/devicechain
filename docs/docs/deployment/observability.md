@@ -381,7 +381,7 @@ which the gate does not see. `ReplayCoveredDeliveriesExhausted` watches that.
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | A gating consumer has been more than 80% of its stream behind for 5 minutes. At 90% the stream refuses new events for every tenant: HTTP devices get `503` with a `Retry-After`, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. | Find out why the consumer is slow: its service's logs, its database, `JetStreamDurableFallingBehind`. If the traffic has outgrown the stream, raise its ceiling and the JetStream volume with it. |
-| `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant: a consumer's unread backlog is near the ceiling, or the full stream is discarding the processed history ahead of it fast enough to run out within 30 seconds. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The likeliest cause is that the consumer's service is not running: scaled to zero replicas or crash-looping. A deployed service that is not running still holds ingest back, on purpose. If `JetStreamUnreadBacklogNearFull` is quiet, it is the second case: `jetstream_backpressure_history_runway_seconds` shows it, and the writing service's log names the consumer and the rate. The refusal lifts on its own once that consumer's backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything. |
+| `JetStreamIngestBackpressureEngaged` | critical | A stream has been refusing new events for a minute, for every tenant: a consumer's unread backlog is near the ceiling, or the full stream is discarding the processed history ahead of it fast enough to run out within 30 seconds, or a service writing to it has not been able to measure that backlog for 30 seconds. | `JetStreamUnreadBacklogNearFull` names the consumer that is behind. The likeliest cause is that the consumer's service is not running: scaled to zero replicas or crash-looping. A deployed service that is not running still holds ingest back, on purpose. If `JetStreamUnreadBacklogNearFull` is quiet, it is the second case: `jetstream_backpressure_history_runway_seconds` shows it, and the writing service's log names the consumer and the rate. The refusal lifts on its own once that consumer's backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything. If neither names a consumer, the writing service may not be reaching the broker at all: see [A broker connection that died silently](#broker-connection-dead). |
 
 The services that write to the two streams export these series:
 
@@ -400,6 +400,37 @@ The services that write to the two streams export these series:
   show 0 when the service is in fact refusing.
 - **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: messages the service did not
   publish because the stream was refusing.
+
+## A broker connection that died silently {#broker-connection-dead}
+
+A broker server whose machine stops or restarts abruptly, or that a network partition cuts off,
+closes nothing: its clients' connections stay open and simply stop being answered. Every service
+pings its broker server every 10 seconds and gives a connection up after three unanswered
+intervals (30 seconds), or once a write to it has made no progress for 10 seconds, so a dead
+connection is noticed within 40 seconds. A server that stops reading for 10 seconds while the
+service is writing to it is given up the same way. The service then reconnects, usually within a
+few seconds. While it is cut off it can neither publish nor receive: for `event-sources`, HTTP
+ingest is refused (`503`) or times out, and the
+[backpressure gate](#ingest-backpressure) reports itself engaged because it cannot measure the
+backlog.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `BrokerConnectionDiedSilently` | warning | A service gave up a broker connection that had stopped answering, within the last 15 minutes, and reconnected. | Check whether a node was lost or restarted: `kubectl get nodes`, and your cloud provider's VM events, because Kubernetes records nothing for a machine that restarts within the node grace period (roughly 40 to 50 seconds). Run `dcctl ha verify`. Repeats for one service with no node event point at the network between that service and the broker. |
+
+- **`devicechain_<area>_nats_connection_dead_total{detected_by}`**: connections this service gave
+  up. `detected_by="ping"` means the server left its pings unanswered; `detected_by="write"` means
+  a write made no progress for 10 seconds. Combine the pods with `sum`.
+- **`devicechain_<area>_nats_connection_dead_last_timestamp_seconds`**: when the service last gave
+  one up, in Unix seconds, or 0 if it has not since it started. The alert reads this one, so it
+  still fires when Prometheus itself was on the lost node and missed the moment the counter moved.
+
+The service's log says the same thing and names the server: `Disconnected from NATS: the server
+left 2 pings sent 10s apart unanswered…` or `Disconnected from NATS: a write to the server made no
+progress for 10s…`, then `Reconnected to NATS`. The second broker connection `event-sources`
+holds, the one that observes device connections to the broker, is bounded the same way but is
+not counted: its log says `A write to the NATS server made no progress` or `Lost the NATS
+system-account connection`.
 
 ## An external MQTT source nobody reads {#external-mqtt-owner}
 

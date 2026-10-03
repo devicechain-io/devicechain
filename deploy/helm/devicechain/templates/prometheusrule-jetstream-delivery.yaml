@@ -250,7 +250,30 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "The platform is refusing new events so as not to lose unread ones"
-            description: "Stream {{ "{{ $labels.stream }}" }} is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, the events it has already processed that the full stream still holds ahead of its unread ones would be discarded within 30 seconds at the rate the stream is discarding them, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; when it is quiet, it is the second case, and jetstream_backpressure_history_runway_seconds and the writing service's log name the consumer. The refusal lifts once the backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything."
+            description: "Stream {{ "{{ $labels.stream }}" }} is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, the events it has already processed that the full stream still holds ahead of its unread ones would be discarded within 30 seconds at the rate the stream is discarding them, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; when it is quiet, it is the second case, and jetstream_backpressure_history_runway_seconds and the writing service's log name the consumer. If neither names a consumer, the writing service may not be reaching the broker at all: look in its log for \"Disconnected from NATS\" or a write to the NATS server that \"made no progress\", and for BrokerConnectionDiedSilently; the refusal then lifts once it has reconnected. The refusal lifts once the backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything."
+        # A service gave up a broker connection that had died WITHOUT being closed: the
+        # server left its pings unanswered, or a write to it made no progress for 10 s
+        # (core/messaging/broker_liveness.go). That is the trace of a lost or restarted
+        # node, a partition, or a server that stopped reading, and it is often the ONLY
+        # trace: a machine that restarts inside the node-monitor grace period is never
+        # marked NotReady. The service reconnected on its own; this records that it was cut
+        # off meanwhile.
+        #
+        # 🔑 A TIMESTAMP, NOT increase() OVER THE COUNTER. A lost node is where Prometheus
+        # itself may have been running, and increase() misses an event whose first sample it
+        # never scraped (a counter that first appears at 1 has nothing to increase from).
+        # The gauge holds the time of the last one, so any single sample within the 15
+        # minutes fires the alert. It is 0 until the first event, hence `> 0` before the
+        # max: a pod that never lost a connection is not one that lost it at the epoch.
+        # `max by (job)`: the latest event among the job's pods.
+        - alert: BrokerConnectionDiedSilently
+          expr: time() - max by (job) ({__name__=~"devicechain_[a-z0-9]+_nats_connection_dead_last_timestamp_seconds", namespace="{{ $ns }}"} > 0) < 900
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A service's connection to the message broker died without being closed"
+            description: "{{ "{{ $labels.job }}" }} gave up a connection to the message broker {{ "{{ $value | humanizeDuration }}" }} ago, because the server had stopped answering without closing it, and reconnected. A machine that stops or restarts abruptly, a network partition, or a broker server that stopped reading looks like this. Until it gave the connection up, for up to 40 seconds, and then reconnected, that service could neither publish nor receive: if it is event-sources, HTTP ingest was refused or timed out. nats_connection_dead_total says how often, and whether pings or a stalled write detected it. Check whether a node was lost or restarted: kubectl get nodes, and the cloud provider's VM events, because Kubernetes records nothing for a machine that restarts within its node grace period (roughly 40 to 50 seconds). Run dcctl ha verify. Repeats for the same job with no node event point at the network between that service and the broker."
         # A capacity-bounded reader held a message past its AckWait. Selected by name
         # like the rules above: core builds the counter for every capacity reader, under
         # the adopting service's own subsystem.

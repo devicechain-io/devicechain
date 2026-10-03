@@ -4559,9 +4559,11 @@ its partition only if its renewals fail for 30 seconds.
   (critical) for [backpressure](#v0190-backpressure), which also fires for
   [the history refusal](#v0190-ingest-history-runway); `JetStreamDurableUnreadNearFull` (warning),
   when a consumer has not read more than 80% of what its stream can hold, for 5 minutes; the three
-  [backup alerts](#v0190-backup-alerts); the three [snapshot alerts](#v0190-snapshot-backups); and
+  [backup alerts](#v0190-backup-alerts); the three [snapshot alerts](#v0190-snapshot-backups);
   `ExternalMqttSourceNotReadByOnePod` (warning) for
-  [an MQTT source on your own broker](#v0190-external-mqtt-client-id).
+  [an MQTT source on your own broker](#v0190-external-mqtt-client-id); and
+  `BrokerConnectionDiedSilently` (warning) for
+  [a broker connection that died without closing](#v0190-broker-liveness).
 - **Changed:** `JetStreamStreamNearFull` is now `info`, fires only for streams that hold records for
   an operator (`failed-decode`, `failed-events`, `connector-dispatch.dead`, `max-deliveries`, and
   `dead-letters` while `user-management` does not report reading it), and counts a stream's message
@@ -4581,7 +4583,10 @@ its partition only if its renewals fail for 30 seconds.
     ([Old readings](#v0190-event-age-limit));
   - `devicechain_eventsources_external_mqtt_owner{source}` and
     `devicechain_eventsources_total_msg_not_owner{source}`
-    ([MQTT client id](#v0190-external-mqtt-client-id)).
+    ([MQTT client id](#v0190-external-mqtt-client-id));
+  - `devicechain_<area>_nats_connection_dead_total{detected_by}` and
+    `devicechain_<area>_nats_connection_dead_last_timestamp_seconds`
+    ([A broker server that stopped answering](#v0190-broker-liveness)).
 
   **Removed:** `devicechain_lwm2mingest_notify_samples_truncated_total`.
 
@@ -4628,6 +4633,28 @@ What changes:
   refused either tenant when no contention floor is set. Such a run says nothing about shed
   priority. Before, the test reported it as the never-shed tenant being shed. With a floor set, it
   could also pass a run in which the floor refused nothing.
+
+Nothing to do at upgrade.
+
+###### Services notice a broker server that stopped answering within 40 seconds {#v0190-broker-liveness}
+
+When a broker server's machine stopped abruptly (a node that was reset or lost its power), the
+services connected to that server could take up to six minutes to notice, because nothing closed
+their connections. If one of them was `event-sources`, HTTP ingest stopped for that long, and if
+the machine came back quickly Kubernetes recorded nothing. In testing, a hard reset of the node
+holding `event-sources`' broker connection stopped ingest for about five and a half minutes.
+
+- Each service now pings its broker server every 10 seconds and gives the connection up after
+  three unanswered intervals, or once a write to it has made no progress for 10 seconds, so a dead
+  connection is noticed within 40 seconds; the service then reconnects to a server that answers.
+  The second broker connection `event-sources` holds, for device presence, is bounded the same way.
+- New counter `devicechain_<area>_nats_connection_dead_total{detected_by}` and gauge
+  `devicechain_<area>_nats_connection_dead_last_timestamp_seconds`, and a new alert,
+  `BrokerConnectionDiedSilently` (warning). See
+  [A broker connection that died silently](./observability.md#broker-connection-dead).
+- The `JetStreamIngestBackpressureEngaged` runbook now covers a writing service that cannot reach
+  the broker, and the [node-loss](./bootstrap.md#ha-node-loss) description states how long a
+  service connected to the lost server takes to reconnect.
 
 Nothing to do at upgrade.
 

@@ -529,7 +529,14 @@ jobs:
         # into CI — a PR touching only a fixture is precisely the shape that would
         # replay someone else's green. This disables result caching only; the BUILD
         # cache (the expensive part) is untouched.
-        run: go test -count=1 ./...
+        #
+        # -timeout 20m, the race step's figure, because go's own default is 10 minutes
+        # PER PACKAGE and backend/core's messaging package runs real-time broker
+        # failure scenarios (a connection frozen until its pings go unanswered, among
+        # others) that already take about 8 minutes locally. Under the default, a
+        # slower runner would fail it as a panic in whichever test was running, which
+        # reads as that test hanging rather than the package being long.
+        run: go test -count=1 -timeout 20m ./...
 
       # Data-race detection, on every module except the exempt ones.
       #

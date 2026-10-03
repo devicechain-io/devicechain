@@ -244,6 +244,27 @@ type NatsManager struct {
 	// which is exactly the field an operator needs to know WHICH server was lost.
 	connectedServer atomic.Value
 
+	// writeStalled is set by the connection's stall closer (BrokerLivenessOptions) when it
+	// closes a connection whose write made no progress, and taken by the
+	// DisconnectErrHandler that nats.go calls after it. The handler is the ONE place a dead
+	// connection is counted: when a stalled write and a stale ping race to give up the same
+	// connection, nats.go reports whichever reached the lock first, and counting at both
+	// sites would count one death twice.
+	//
+	// It is ALSO dropped by the connect and reconnect handlers. A stall can close a
+	// connection that never became the live one (its CONNECT, or the reconnect's flush of
+	// buffered publishes), and nats.go calls no DisconnectErrHandler for that one, so the
+	// flag would otherwise survive to the next, unrelated disconnect (a broker rolling
+	// restart, say) and label it a write death, counting it and firing
+	// BrokerConnectionDiedSilently. nats.go queues every one of these callbacks on ONE
+	// ordered queue, so by the time a (re)connect handler runs, the disconnect handler of
+	// the connection before has already taken any flag that was its own. What is left is
+	// the residual race the ordering does not cover: a NEW connection whose write stalls
+	// for a whole write timeout before its own reconnect handler has been dispatched loses
+	// its label (it is then reported by the ping, or as an ordinary disconnect), which
+	// under-reports a death rather than inventing one.
+	writeStalled atomic.Bool
+
 	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
 	// where ackWait() answers the AckWait constant. Read it through ackWait(), never
 	// directly: the durable's configured AckWait and the AckDeadline a capacity reader
@@ -2367,9 +2388,16 @@ func (nmgr *NatsManager) Initialize(ctx context.Context) error {
 // which reports the same events from the server's view; a disconnect visible in
 // one and not the other localizes the fault to the network between them.
 //
+// A server that STOPS ANSWERING closes nothing, so none of these handlers fires for it
+// until the client gives the connection up on its own. That is what
+// BrokerLivenessOptions bounds, and why every connection carries those options too:
+// without them a lost node's clients stayed CONNECTED, and silent, for minutes.
+//
 // requested is the connection's closeRequested flag; see that field.
 func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.Option {
 	area := nmgr.Microservice.FunctionalArea
+	const consequence = "Publishes are buffered up to the client's pending limit and then fail; " +
+		"consumers stop receiving until the connection is restored"
 	return []nats.Option{
 		// The error is NON-nil for everything that actually loses a broker — io.EOF,
 		// connection reset, a stale connection — and nil only when the client itself
@@ -2377,11 +2405,31 @@ func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.
 		// the socket, and the read loop surfaces io.EOF like any other drop. (An
 		// earlier version of this comment had that backwards.) Logged at warn either
 		// way: the client is not connected, which is the fact that matters.
+		//
+		// A connection that died WITHOUT being closed is told apart, counted and given
+		// a message of its own, because it is the trace of a lost node that Kubernetes
+		// may never report. The stall closer's flag is taken first: a stale ping that
+		// wins the race to give up a connection a stalled write had already closed is
+		// still that write's doing.
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			log.Warn().Str("area", area).Err(err).Str("server", nmgr.lastConnectedServer()).
-				Msg("Disconnected from NATS; retrying indefinitely (MaxReconnects is unlimited). " +
-					"Publishes are buffered up to the client's pending limit and then fail; " +
-					"consumers stop receiving until the connection is restored")
+			rec := log.Warn().Str("area", area).Err(err).Str("server", nmgr.lastConnectedServer())
+			switch {
+			case nmgr.writeStalled.Swap(false):
+				nmgr.metrics.countDeadConnection(deadByWrite)
+				rec.Msg(fmt.Sprintf("Disconnected from NATS: a write to the server made no progress for %s, "+
+					"so the connection had died without being closed (a lost or restarted node, a network "+
+					"partition, or a server that stopped reading). Reconnecting. %s",
+					BrokerWriteTimeout, consequence))
+			case errors.Is(err, nats.ErrStaleConnection):
+				nmgr.metrics.countDeadConnection(deadByPing)
+				rec.Msg(fmt.Sprintf("Disconnected from NATS: the server left %d pings sent %s apart "+
+					"unanswered, so the connection had died without being closed (a lost or restarted node, "+
+					"a network partition, or a server that stopped reading). Reconnecting. %s",
+					BrokerMaxPingsOutstanding, BrokerPingInterval, consequence))
+			default:
+				rec.Msg("Disconnected from NATS; retrying indefinitely (MaxReconnects is unlimited). " +
+					consequence)
+			}
 		}),
 		// The recovery, and the one that carries the interesting datum: which server
 		// the client came back on. In a clustered broker a reconnect to a DIFFERENT
@@ -2396,12 +2444,14 @@ func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.
 		// to end, in the one case (a cold start of the whole instance, where NATS and
 		// the services race) that A0's own rollout makes routine.
 		nats.ConnectHandler(func(nc *nats.Conn) {
+			nmgr.writeStalled.Store(false) // see writeStalled
 			nmgr.connectedServer.Store(nc.ConnectedUrl())
 			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
 				Str("cluster", nc.ConnectedClusterName()).
 				Msg("Connected to NATS")
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
+			nmgr.writeStalled.Store(false) // see writeStalled
 			nmgr.connectedServer.Store(nc.ConnectedUrl())
 			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
 				Str("cluster", nc.ConnectedClusterName()).
@@ -2467,6 +2517,10 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
 	}
+	// Before the handlers: these bound how long a connection that died without being
+	// closed stays in use, which is what makes the disconnect handler fire for one at all.
+	opts = append(opts, BrokerLivenessOptions(nmgr.Microservice.FunctionalArea,
+		func() { nmgr.writeStalled.Store(true) })...)
 	requested := new(atomic.Bool)
 	opts = append(opts, nmgr.connectionEventHandlers(requested)...)
 	// When the broker terminates TLS (ADR-025) every client must dial over TLS or

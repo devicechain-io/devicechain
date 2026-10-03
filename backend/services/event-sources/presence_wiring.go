@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	nats "github.com/nats-io/nats.go"
@@ -716,6 +717,10 @@ func dialSystemAccount(ctx context.Context, cfg config.NatsConfiguration, wait t
 			log.Info().Msg("Reconnected to the NATS system account; broker presence is being observed again.")
 		}),
 	}
+	// The same bound on a connection that died without being closed as every service's main
+	// connection carries, from the same place. No metrics manager here: the stall closer's own
+	// log line, and the DisconnectErrHandler above, are this connection's signal.
+	opts = append(opts, messaging.BrokerLivenessOptions("event-sources-presence", nil)...)
 	tlsCfg, err := cfg.TLSConfig(cfg.Hostname)
 	if err != nil {
 		return nil, err

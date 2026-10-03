@@ -73,6 +73,14 @@
 #     abandoned deliveries nobody has recorded; every area samples it, so it arrives
 #     from several pods at once with the same value.
 #
+#   - devicechain_<area>_nats_connection_dead_last_timestamp_seconds -- a gauge every
+#     service exports, at 0 from its start, set to the Unix time each time the service
+#     gives up a broker connection that died without being closed. promtool's clock starts
+#     at the epoch, so the scenarios below write small timestamps (60 = 1m) and the 0 a
+#     healthy pod reports must stay quiet even though time() - 0 is "recent" at eval 1m.
+#     BrokerConnectionDiedSilently reads it rather than increase() over the counter beside
+#     it, so a series FIRST SEEN at a nonzero value (Prometheus was on the lost node and
+#     missed the 0) still fires: that scenario is the one the alert exists for.
 #   - devicechain_<area>_jetstream_backpressure_unread_ratio{stream,durable} -- a GaugeVec
 #     exported by every service that WRITES a gated stream, for the consumers that gate
 #     it (core/messaging/backpressure.go). Absent while not measured. Every writer pod
@@ -916,7 +924,7 @@ tests:
               stream: devicechain_inbound-events
             exp_annotations:
               summary: "The platform is refusing new events so as not to lose unread ones"
-              description: "Stream devicechain_inbound-events is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, the events it has already processed that the full stream still holds ahead of its unread ones would be discarded within 30 seconds at the rate the stream is discarding them, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; when it is quiet, it is the second case, and jetstream_backpressure_history_runway_seconds and the writing service's log name the consumer. The refusal lifts once the backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything."
+              description: "Stream devicechain_inbound-events is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, the events it has already processed that the full stream still holds ahead of its unread ones would be discarded within 30 seconds at the rate the stream is discarding them, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; when it is quiet, it is the second case, and jetstream_backpressure_history_runway_seconds and the writing service's log name the consumer. If neither names a consumer, the writing service may not be reaching the broker at all: look in its log for \"Disconnected from NATS\" or a write to the NATS server that \"made no progress\", and for BrokerConnectionDiedSilently; the refusal then lifts once it has reconnected. The refusal lifts once the backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything."
 
   # ------------------------------------------------------------------
   # Quiet: an open gate at 0, and another instance's engaged gate.
@@ -931,4 +939,69 @@ tests:
     alert_rule_test:
       - eval_time: 4m
         alertname: JetStreamIngestBackpressureEngaged
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A broker connection that died without being closed: warns at once, per job, for 15m.
+  # The gauge sits at 0 (never) and then holds the event's time, 120 (2m).
+  # ------------------------------------------------------------------
+  - name: a connection given up as dead warns per job for 15 minutes
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_nats_connection_dead_last_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources"}'
+        values: '0 0 0 120x20'
+      - series: 'devicechain_eventsources_nats_connection_dead_last_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-sources-7c9f-bbbbb", job="devicechain/event-sources"}'
+        values: '0x22'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: BrokerConnectionDiedSilently
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: BrokerConnectionDiedSilently
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/event-sources
+            exp_annotations:
+              summary: "A service's connection to the message broker died without being closed"
+              description: "devicechain/event-sources gave up a connection to the message broker 2m 0s ago, because the server had stopped answering without closing it, and reconnected. A machine that stops or restarts abruptly, a network partition, or a broker server that stopped reading looks like this. Until it gave the connection up, for up to 40 seconds, and then reconnected, that service could neither publish nor receive: if it is event-sources, HTTP ingest was refused or timed out. nats_connection_dead_total says how often, and whether pings or a stalled write detected it. Check whether a node was lost or restarted: kubectl get nodes, and the cloud provider's VM events, because Kubernetes records nothing for a machine that restarts within its node grace period (roughly 40 to 50 seconds). Run dcctl ha verify. Repeats for the same job with no node event point at the network between that service and the broker."
+      - eval_time: 20m
+        alertname: BrokerConnectionDiedSilently
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Prometheus missed the 0: it was on the node that was lost, and first sees the gauge
+  # at the event's time. Still warns. increase() over the counter would read nothing here.
+  # ------------------------------------------------------------------
+  - name: a connection given up while Prometheus was away still warns
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_nats_connection_dead_last_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources"}'
+        values: '_ _ _ 60x5'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BrokerConnectionDiedSilently
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/event-sources
+            exp_annotations:
+              summary: "A service's connection to the message broker died without being closed"
+              description: "devicechain/event-sources gave up a connection to the message broker 3m 0s ago, because the server had stopped answering without closing it, and reconnected. A machine that stops or restarts abruptly, a network partition, or a broker server that stopped reading looks like this. Until it gave the connection up, for up to 40 seconds, and then reconnected, that service could neither publish nor receive: if it is event-sources, HTTP ingest was refused or timed out. nats_connection_dead_total says how often, and whether pings or a stalled write detected it. Check whether a node was lost or restarted: kubectl get nodes, and the cloud provider's VM events, because Kubernetes records nothing for a machine that restarts within its node grace period (roughly 40 to 50 seconds). Run dcctl ha verify. Repeats for the same job with no node event point at the network between that service and the broker."
+
+  # ------------------------------------------------------------------
+  # Quiet: pods that never lost a connection, and another instance's event.
+  # ------------------------------------------------------------------
+  - name: no dead connection, and another instance's, are quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_nats_connection_dead_last_timestamp_seconds{namespace="dci-devicechain", pod="dc-device-management-7c9f-aaaaa", job="devicechain/device-management"}'
+        values: '0x5'
+      - series: 'devicechain_eventsources_nats_connection_dead_last_timestamp_seconds{namespace="dci-other", pod="dc-event-sources-7c9f-zzzzz", job="other/event-sources"}'
+        values: '0 60x4'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BrokerConnectionDiedSilently
         exp_alerts: []
