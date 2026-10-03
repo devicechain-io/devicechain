@@ -12,15 +12,17 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
-// leaseHolderAreas are the functional areas that take an ADR-070 partition lease,
-// and therefore the ones whose presence causes the dc_leases bucket to exist at
-// all. Nothing else creates it.
+// leaseHolderAreas are the functional areas whose deployment makes the dc_leases
+// bucket REQUIRED: the ADR-070 Class-3 operators that keep their partition fence in
+// it. A deployment running none of them has no such fence to keep, which is why the
+// bucket's ABSENCE is not automatically a defect.
 //
-// This is why the bucket's ABSENCE is not automatically a defect: a deployment
-// running none of these has no fence substrate because it has nothing to fence.
-// It is also worth reading as a statement of fact about the platform — on a
-// `default` profile, which runs neither of these, the ADR-070 lease bucket does
-// not exist, and any alert defined on its replication has no series to evaluate.
+// They are NOT the only areas that create it. event-processing takes its DETECT
+// lease there, and event-sources takes one per external MQTT source whenever such a
+// source is configured. So the bucket's PRESENCE says nothing about whether any area
+// listed here runs, and it is checked whenever it is present (see
+// replication.Expectation.LeaseBucketRequired). Adding those two here would make the
+// bucket required on installs where nothing has created it yet.
 var leaseHolderAreas = []string{"lwm2m-ingest", "sparkplug-ingest"}
 
 // leaseHolderDeployed reports whether the lease bucket must exist. Unknown areas

@@ -47,16 +47,23 @@ func (f *failRecorder) requireNone(t *testing.T) {
 func newExternalMqttSource(t *testing.T, host string, port int, topic string, received func(string, []byte),
 	fail func(error)) *MqttEventSource {
 	t.Helper()
+	return newExternalMqttSourceAs(t, "devicechain:inst-1:ext:pod-a", host, port, topic, received, fail)
+}
+
+// newExternalMqttSourceAs is newExternalMqttSource connecting under a given client id.
+func newExternalMqttSourceAs(t *testing.T, clientID, host string, port int, topic string,
+	received func(string, []byte), fail func(error)) *MqttEventSource {
+	t.Helper()
 	if received == nil {
 		received = func(string, []byte) {}
 	}
-	es, err := NewMqttEventSource("ext", map[string]string{
+	es, err := NewMqttEventSource("ext", clientID, map[string]string{
 		"host": host, "port": strconv.Itoa(port), "topic": topic,
 	}, nil, "", "", NewJsonDecoder(map[string]string{}),
 		received,
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
-		nil, admitAllReadings, admitAll, fail)
+		nil, admitAllReadings, admitAll, alwaysOwns, fail)
 	require.NoError(t, err)
 	return es
 }
@@ -397,12 +404,12 @@ func TestClassifyResubscribe(t *testing.T) {
 
 // A source with no way to end the process would have to swallow a refused re-subscribe.
 func TestAnMqttSourceWithoutAFailHookIsRefused(t *testing.T) {
-	_, err := NewMqttEventSource("ext", map[string]string{"host": "h", "port": "1883", "topic": "t"},
+	_, err := NewMqttEventSource("ext", "cid", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
 		func(string, string, []byte, error) error { return nil },
-		nil, admitAllReadings, admitAll, nil)
+		nil, admitAllReadings, admitAll, alwaysOwns, nil)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "end the process"), "unexpected error: %v", err)
 }

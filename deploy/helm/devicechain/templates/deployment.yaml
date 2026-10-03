@@ -123,7 +123,9 @@ spec:
   Its capture consumer is a durable scoped to instance+area+suffix, so every replica shares
   one consumer and each message is delivered to exactly one of them (core/messaging NewReader)
   — which is also why event-sources may scale past one replica once cut over, something the
-  MQTT-client path it replaces could never do.
+  MQTT-client path it replaces could never do. Its one single-owner piece, an
+  external-broker MQTT source, is fenced by a per-source lease (one pod reads each such
+  source, the others stand by) and needs no rollout strategy.
   */}}
   {{- $strategy := get $areaCfg "strategy" | default "RollingUpdate" }}
   {{- $replicas := int (get $areaCfg "replicas" | default $root.Values.replicas) }}

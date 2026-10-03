@@ -125,7 +125,7 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   device credentials ride in the event body. Where you need TLS, it comes from whatever fronts the
   service.
 
-### MQTT — an external, operator-owned broker
+### MQTT — an external, operator-owned broker {#external-mqtt-broker}
 
 The platform can also act as a client on a broker you already run, to ingest from it.
 
@@ -150,6 +150,36 @@ The platform can also act as a client on a broker you already run, to ingest fro
   with an error, rather than leaving it connected and ingesting nothing. That includes ingest from
   the platform broker and HTTP, not just this source: the service restarts and keeps failing until
   the broker grants the subscription again.
+
+  **One pod reads each source, under a client id of its own.** The platform connects to your
+  broker as `devicechain:<instance>:<source>:<pod>`, so two instances, two sources or two
+  `event-sources` pods never share a session. A broker keeps one session per client id and drops
+  the older connection when a second arrives, and the single shared id that earlier releases used
+  lost messages that way. However many `event-sources` pods run, only one reads a given source at
+  a time, because nothing on this path can tell a message delivered to two pods from two messages.
+  The others connect nothing for that source and stand by, and still serve everything else. If
+  your broker's ACL, allowlist or client-id rule matches on the client id, allow ids that begin
+  with `devicechain:`. The id is longer than 23 characters, the shortest limit MQTT requires a
+  broker to accept, so a broker that enforces that limit refuses it.
+
+  - **Handover.** A pod that stops releases the source as it goes, and another pod connects
+    within about two seconds. After an abrupt loss (a node failure, a `SIGKILL`, an
+    out-of-memory kill), the source is unread for about 30 seconds plus the time to reconnect.
+    Your broker does not keep what it delivers in either gap, because the session is not
+    persistent.
+  - **A pod that takes a source over and cannot connect** logs why, releases the source and
+    tries again every 15 seconds. It does not stop the service. If your broker refuses its
+    subscription, the service stops, as described above. The pod that reads a source when the
+    service starts still fails that start on either, as before.
+  - **Scaling does not spread the load.** Adding `event-sources` pods adds standbys, not readers
+    of an external source.
+  - **Watch it.** `devicechain_eventsources_external_mqtt_owner{source}` is 1 on the pod reading
+    the source and 0 on the others. The `ExternalMqttSourceNotReadByOnePod` alert fires when a
+    source has been read by no pod, or by more than one, for two minutes.
+  - **Overlap.** A pod that loses the source while it is still connected drops what it is still
+    delivered, and counts it in `devicechain_eventsources_total_msg_not_owner{source}`, rather
+    than storing it. The window in which two pods can both store a message is a fraction of a
+    second, not the 30-second lease.
 - **Write ○ / Read ○** — this integration is ingest only. A command issued to a device that
   arrives this way behaves exactly as it does for HTTP above: published, `SENT`, then `TIMEOUT`.
 

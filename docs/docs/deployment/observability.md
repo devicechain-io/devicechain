@@ -400,6 +400,27 @@ The services that write to the two streams export these series:
 - **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: messages the service did not
   publish because the stream was refusing.
 
+## An external MQTT source nobody reads {#external-mqtt-owner}
+
+A source that reads from an MQTT broker you run is read by one `event-sources` pod at a time; the
+others stand by and stay Ready, because they still serve everything else (see
+[Transport matrix](../reference/transport-matrix.md#external-mqtt-broker)). So a source that
+nobody is reading is not a failed pod: it is a pod that took the source over and could not reach
+your broker, and is trying again every 15 seconds, or pods that cannot agree which of them reads
+it because they cannot reach the platform's message broker.
+
+- **`devicechain_eventsources_external_mqtt_owner{source}`**: 1 on the pod reading the source, 0
+  on every other pod. Every pod exports it for every external source from the moment it starts,
+  so combine the pods with `sum`: 1 is healthy.
+- **`devicechain_eventsources_total_msg_not_owner{source}`**: messages a pod was still delivered
+  after it lost the source, dropped rather than stored, because the pod that took over receives
+  the same messages.
+
+`ExternalMqttSourceNotReadByOnePod` (warning) fires when that sum has not been 1 for two minutes.
+At 0, nothing is reading the source and what your broker delivers meanwhile is lost; the log of
+the pod that last took the source over says why. An install with no external source exports no
+such series, and the alert stays quiet.
+
 ## Messages held past their acknowledgement window {#held-past-ack-wait}
 
 The broker gives a service a fixed window to acknowledge each message it hands out. A

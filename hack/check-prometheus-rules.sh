@@ -19,9 +19,10 @@
 # JetStream delivery rules (unread loss, stream fill, messages held past AckWait and
 # the max-delivery record), the database backup rules (ADR-028, ADR-020 A2.5), the
 # database storage rules (ADR-020 A2), the database control-plane rules (ADR-020
-# A1.5), the command-delivery rules, the tenant-purge rules, the sign-in rules and the
-# governance rules. A break in any one takes its neighbours with it. (No count is
-# written here: the run prints how many alerts and files it read.)
+# A1.5), the command-delivery rules, the tenant-purge rules, the sign-in rules, the
+# external MQTT source rules and the governance rules. A break in any one takes its
+# neighbours with it. (No count is written here: the run prints how many alerts and
+# files it read.)
 #
 # 🔴 THIS SCRIPT CANNOT SEE A MISSPELLED SERIES NAME. promtool parses PromQL; it
 # has no idea whether `devicechain_commanddelivery_batch_refusals_total` is a
@@ -1148,7 +1149,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing)
+required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -1250,6 +1251,7 @@ declare -A rule_tests=(
   [dead-letter]="$repo_root/hack/testdata/prometheus-rules-dead-letter-tests.yaml"
   [event-processing]="$repo_root/hack/testdata/prometheus-rules-event-processing-tests.yaml"
   [jetstream-replication]="$repo_root/hack/testdata/prometheus-rules-replication-tests.yaml"
+  [event-sources]="$repo_root/hack/testdata/prometheus-rules-event-sources-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop

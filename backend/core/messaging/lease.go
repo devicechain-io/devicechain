@@ -70,7 +70,12 @@ var (
 // of a leader, kept alive by renewal and carrying a fence token so a handover
 // race cannot corrupt downstream state (ADR-070). Only Class-3 stateful operators
 // (DETECT, the Sparkplug adapter) take leases; Class 1/2 services must not — a
-// lease there is pure SPOF and a throughput ceiling.
+// lease there is pure SPOF and a throughput ceiling. The one exception is
+// event-sources' external MQTT source, which is single-owner per SOURCE rather than
+// per service: one MQTT session receives every message on its filter and that path
+// carries no dedup id, so a second reader would store everything twice. A pod that
+// does not own the source still serves everything else, and one session was that
+// source's throughput ceiling already.
 //
 // Acquisition is a KV Create, which fails when the key already exists, so exactly
 // one replica per partition wins; the bucket's TTL auto-expires a lease whose

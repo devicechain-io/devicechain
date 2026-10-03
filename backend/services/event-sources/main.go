@@ -183,6 +183,13 @@ var (
 	// attribute a cut-off device to. Labelled by SOURCE only — a connection that never
 	// sent a request named no tenant.
 	EarlyCloseCounter *prometheus.CounterVec
+
+	// ExternalMqttOwnerGauge is 1 on the pod that reads an external MQTT source and 0 on
+	// every other, per source; see processor.OwnedMqttSource.
+	ExternalMqttOwnerGauge *prometheus.GaugeVec
+	// NotOwnerCounter counts messages an external broker delivered to a pod that had
+	// already lost the source, which are dropped rather than stored a second time.
+	NotOwnerCounter *prometheus.CounterVec
 )
 
 func main() {
@@ -274,6 +281,15 @@ func initializeMetrics() {
 	TenantGoneCounter = Microservice.NewCounterVec(
 		"total_msg_tenant_deleted",
 		"Count of inbound messages refused because their tenant has been deleted and its data is being reclaimed",
+		[]string{"source"})
+	ExternalMqttOwnerGauge = Microservice.NewGaugeVec(
+		"external_mqtt_owner",
+		"1 on the pod that reads an external MQTT broker source, 0 on the others; per source, the sum across pods should be 1",
+		[]string{"source"})
+	NotOwnerCounter = Microservice.NewCounterVec(
+		"total_msg_not_owner",
+		"Count of messages from an external MQTT broker dropped because this pod no longer owns the source "+
+			"(another pod has taken it over and reads the same messages)",
 		[]string{"source"})
 	initializePresenceMetrics()
 }
@@ -504,13 +520,30 @@ func buildEventSources() error {
 			// concern, so this dials plaintext and anonymous.
 			// failProcess, because a broker that refuses this source's subscription on a
 			// reconnect is a post-startup failure; see the source's onConnect.
-			mqtt, err := processor.NewMqttEventSource(source.Id, source.Configuration, nil, "", "",
-				decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
-				ingestGate, readingGate, admitInbound, failProcess)
+			//
+			// OWNED, so that exactly one pod reads the source at a time, under a client id
+			// of its own (see processor.OwnedMqttSource). One MQTT session receives every
+			// message on its filter and this path publishes no dedup id (see
+			// inboundEventMessage), so a second reading pod would store every event twice;
+			// and a shared client id has the pods take one session from each other.
+			owned, err := processor.NewOwnedMqttSource(source.Id, Microservice.InstanceId, replicaName(),
+				func(clientID string, owns func() bool) (processor.TermSource, error) {
+					// Never return the *MqttEventSource itself on error: a nil pointer in a
+					// non-nil interface.
+					mqtt, err := processor.NewMqttEventSource(source.Id, clientID, source.Configuration, nil, "", "",
+						decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
+						ingestGate, readingGate, admitInbound, owns, failProcess)
+					if err != nil {
+						return nil, err
+					}
+					return mqtt, nil
+				},
+				externalSourceLeases,
+				processor.OwnerHooks{Fail: failProcess, SetOwner: onExternalMqttOwner, NotOwner: onExternalMqttNotOwner})
 			if err != nil {
 				return err
 			}
-			created = append(created, mqtt)
+			created = append(created, owned)
 		case processor.TYPE_HTTP:
 			http, err := processor.NewHttpEventSource(source.Id, source.Configuration, Microservice.InstanceId,
 				Configuration.HttpIngest,
@@ -526,6 +559,41 @@ func buildEventSources() error {
 	}
 	EventSources = created
 	return nil
+}
+
+// externalSourceLeases is the lease bucket the pods agree through on which one reads each
+// external MQTT source. Called when such a source starts, by which time the platform
+// broker is connected.
+func externalSourceLeases() (processor.SourceLeases, error) {
+	if NatsManager == nil {
+		return nil, errors.New("no connection to the platform broker")
+	}
+	l, err := NatsManager.NewDistributedLease(messaging.DefaultLeaseTTL)
+	if err != nil {
+		return nil, err
+	}
+	return processor.DistributedSourceLeases(l), nil
+}
+
+// onExternalMqttOwner records whether this pod reads an external MQTT source.
+func onExternalMqttOwner(source string, owned bool) {
+	if ExternalMqttOwnerGauge == nil {
+		return
+	}
+	v := 0.0
+	if owned {
+		v = 1
+	}
+	ExternalMqttOwnerGauge.WithLabelValues(source).Set(v)
+}
+
+// onExternalMqttNotOwner counts a message an external broker delivered to a pod that no
+// longer owns the source.
+func onExternalMqttNotOwner(source string) {
+	if NotOwnerCounter == nil {
+		return
+	}
+	NotOwnerCounter.WithLabelValues(source).Inc()
 }
 
 // Handle accounting for received messages.

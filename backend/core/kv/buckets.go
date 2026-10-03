@@ -141,7 +141,8 @@ var All = []Bucket{
 		Name: BucketLeases,
 		Tier: State,
 		Why: "One entry per HELD partition lease (ADR-070) — a handful at a time, one " +
-			"per Class-3 partition (DETECT per tenant, Sparkplug per Instance), TTL'd " +
+			"per Class-3 partition (DETECT per tenant, Sparkplug and LwM2M per Instance, an " +
+			"event-sources external MQTT source per source), TTL'd " +
 			"so a crashed owner's partition fails over. A full bucket fails Acquire, " +
 			"so a standby cannot take a partition: it degrades to no active owner, " +
 			"never two — the same fail-closed shape as the lock bucket above.",
