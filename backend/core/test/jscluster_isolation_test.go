@@ -286,7 +286,8 @@ func readFor(c net.Conn, d time.Duration) []byte {
 }
 
 // A cluster started by the plain fixture runs on the proxy mesh too: every route its
-// servers report is one a proxy carries.
+// servers report is one a proxy carries, by the count and by the connection each runs
+// over.
 func TestEveryRouteOfAPlainClusterIsCarriedByAProxy(t *testing.T) {
 	c := startedCluster(t, 3)
 	for k := 0; k < 5; k++ {
@@ -297,30 +298,123 @@ func TestEveryRouteOfAPlainClusterIsCarriedByAProxy(t *testing.T) {
 		if proxied := c.faults.LiveRouteConnections(); routes == 0 || routes != 2*proxied {
 			t.Fatalf("the servers report %d route connections and the proxies carry %d; want twice as many", routes, proxied)
 		}
+		bypasses, _, err := c.faults.unproxiedRoutes(c.servers)
+		if err != nil || len(bypasses) != 0 {
+			t.Fatalf("a route of a plain cluster is not attributed to a proxy: %v %v", bypasses, err)
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-// A cluster whose routes go around the proxies fails to start, as a route that bypasses
-// them. Advertise is what keeps gossiped routes off the servers' real route listeners in
-// every other construction; without it, the servers gossip those addresses and dial them
-// directly, and only awaitAllRoutesProxied stands between that cluster and a test whose
-// Silence would silence nothing.
+// hubRoutes gives server 0 a route to every other server and every other server a route
+// to server 0 alone: the others can learn of each other only from server 0's gossip.
+func hubRoutes(i, size int) []int {
+	if i != 0 {
+		return []int{0}
+	}
+	peers := make([]int, 0, size-1)
+	for j := 1; j < size; j++ {
+		peers = append(peers, j)
+	}
+	return peers
+}
+
+// A cluster with a route around its proxies fails to start, naming that route, as soon as
+// it is seen. The bypass is built, not hoped for: n2 and n3 are each given a route to n1
+// alone, and advertise their real route listeners, so they learn of each other only from
+// n1's gossip and dial each other directly. With every server given a route to every
+// other, the configured routes usually register before any gossip arrives, no bypass
+// forms, and a test built that way passed or failed on that race. n1 is NOT an end of the
+// n2-n3 route, so a check that read only one server's routes would miss it.
 func TestAClusterWhoseRoutesBypassTheProxiesFailsToStart(t *testing.T) {
 	rec := &recordingTB{TB: t}
 	defer rec.runCleanups()
 	h := defaultClusterHooks()
+	h.routesTo = hubRoutes
 	h.configure = func(_ int, o *natsserver.Options) { o.Cluster.Advertise = "" }
 
 	c, err := startCluster(rec, 3, h, clusterStartBudget)
 	if err == nil {
 		defer c.faults.close()
 		defer shutdownServers(c.servers)
-		t.Fatal("a cluster that advertises its real route listeners was reported started, so routes that " +
-			"bypass the proxies go unnoticed")
+		t.Fatal("a cluster whose n2 and n3 route to each other around the proxies was reported started")
 	}
-	if !errors.Is(err, errRoutesBypassProxies) {
+	var b *routeBypassError
+	if !errors.As(err, &b) || !errors.Is(err, errRoutesBypassProxies) {
 		t.Fatalf("the start failed, but not as a route that bypasses the proxies: %v", err)
+	}
+	t.Logf("reported: %v", b)
+	// Other routes may be reported with it (a route a server dials from gossip about a
+	// third one is a real bypass too), but the n2-n3 route is the one this cluster is
+	// built to make, and it is there before anything else can go around the proxies.
+	found := false
+	for _, r := range b.bypasses {
+		if pair := r.server + "-" + r.peer; pair == "n2-n3" || pair == "n3-n2" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the bypasses reported do not include the route between n2 and n3, which this cluster "+
+			"cannot carry through a proxy: %v", err)
+	}
+	if b.after >= clusterRoutesBudget/2 {
+		t.Fatalf("the bypass was reported %s after the route wait began, of a budget of %s: it was waited out, "+
+			"not seen", b.after, clusterRoutesBudget)
+	}
+}
+
+// The negative control for the test above: the same topology with the advertised address
+// left as the fixture sets it forms no route around the proxies. The address gossip
+// carries refuses, so n2 and n3 never reach each other, and the start fails as routes
+// that never completed, NOT as a bypass. Without this, a check that called every cluster
+// of this shape a bypass would pass the test above.
+func TestTheSameTopologyAdvertisingTheRefusingAddressIsNoBypass(t *testing.T) {
+	rec := &recordingTB{TB: t}
+	defer rec.runCleanups()
+	h := defaultClusterHooks()
+	h.routesTo = hubRoutes
+	// The route wait is bounded on its own, so this costs seconds and not the whole
+	// clusterRoutesBudget; the listening wait keeps its budget.
+	h.routesWithin = 10 * time.Second
+
+	c, err := startCluster(rec, 3, h, clusterStartBudget)
+	if err == nil {
+		defer c.faults.close()
+		defer shutdownServers(c.servers)
+		t.Fatal("n2 and n3 meshed although neither was given a route to the other and the address each " +
+			"advertises refuses")
+	}
+	if errors.Is(err, errRoutesBypassProxies) {
+		t.Fatalf("a cluster with no route around its proxies was reported as one: %v", err)
+	}
+	if !strings.Contains(err.Error(), "routes are not all complete") {
+		t.Fatalf("the start failed for another reason than incomplete routes: %v", err)
+	}
+}
+
+// A construction whose routes name a server that is not in it, the server itself, or one
+// server twice is refused before any server is made.
+func TestRoutesToAServerOutsideTheClusterAreRefused(t *testing.T) {
+	for want, routesTo := range map[string]func(i, size int) []int{
+		"a route to itself":              func(i, _ int) []int { return []int{i} },
+		"to server 3 of a cluster of 3":  func(int, int) []int { return []int{3} },
+		"to server -1 of a cluster of 3": func(int, int) []int { return []int{-1} },
+		"a route to server 2 twice":      func(i, _ int) []int { return []int{2, 2} },
+	} {
+		rec := &recordingTB{TB: t}
+		h := defaultClusterHooks()
+		h.routesTo = routesTo
+		c, err := startCluster(rec, 3, h, 10*time.Second)
+		if err == nil {
+			shutdownServers(c.servers)
+			c.faults.close()
+			rec.runCleanups()
+			t.Fatalf("routes %q: the cluster was reported started", want)
+		}
+		rec.runCleanups()
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("routes %q: the start failed, but not by refusing them: %v", want, err)
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +61,25 @@ type RouteFaults struct {
 	// live counts the proxied connection pairs that are open: one per route connection
 	// the servers can have made through a proxy.
 	live int
+
+	// listenerPair maps each proxy listener's address to the ordered pair (from, to) it
+	// carries: the address server from dials to reach server to. Fixed by newRouteMesh.
+	listenerPair map[string][2]int
+	// dialedPair maps every connection a proxy has dialled to a server's route listener,
+	// by its local address and the server it reached, to the pair (from, to) it carries.
+	// The server it reached is part of the key because the operating system can give two
+	// connections to DIFFERENT destinations the same local address at once. An entry is
+	// added before the connection's first byte is copied, and is never removed (see
+	// attribute).
+	dialedPair map[dialKey][2]int
+}
+
+// dialKey names a connection a proxy dialled as the server it reached sees it: the
+// connection's local address, which that server reports as the route's remote address,
+// and the index of that server.
+type dialKey struct {
+	local string
+	to    int
 }
 
 // newRouteMesh makes the mesh for size servers: a proxy listener for every ordered pair
@@ -72,6 +92,9 @@ func newRouteMesh(size int) (*RouteFaults, error) {
 		conns:    map[net.Conn][2]int{},
 		listened: map[int]bool{},
 		proxies:  make([][]net.Listener, size),
+
+		listenerPair: map[string][2]int{},
+		dialedPair:   map[dialKey][2]int{},
 	}
 	f.cond = sync.NewCond(&f.mu)
 	for i := 0; i < size; i++ {
@@ -86,6 +109,7 @@ func newRouteMesh(size int) (*RouteFaults, error) {
 				return nil, fmt.Errorf("proxy listener: %w", err)
 			}
 			f.proxies[i][j] = l
+			f.listenerPair[l.Addr().String()] = [2]int{i, j}
 			go f.accept(l, i, j)
 		}
 		r, err := holdRefusingAddr()
@@ -245,16 +269,16 @@ func (f *RouteFaults) close() {
 // keep that from happening. Each server advertises a held address that refuses
 // connections (refuserAddr), so a gossiped address is refused and the only routes that
 // can form are the configured ones through the proxies. And readiness is not taken on
-// trust: every route connection every server reports must be matched by a proxied
-// connection (awaitAllRoutesProxied), or the fixture fails the test.
+// trust: every route connection every server reports must run over a connection a proxy
+// carries for that pair of servers (awaitAllRoutesProxied), or the fixture fails the test.
 func StartJetStreamClusterWithRouteFaults(tb testing.TB, size int) ([]*natsserver.Server, *RouteFaults) {
 	tb.Helper()
 	c := startedCluster(tb, size)
 	return c.servers, c.faults
 }
 
-// errRoutesBypassProxies marks a cluster whose servers hold more route connections than
-// the proxies carry: some route went around them, so Silence would not silence it.
+// errRoutesBypassProxies marks a route a server holds over a connection no proxy of the
+// mesh carries for that pair of servers: Silence would not silence it.
 var errRoutesBypassProxies = errors.New("a route bypasses the proxies")
 
 // routeConnsPerPeer is how many route connections a server holds to each other server
@@ -263,45 +287,225 @@ var errRoutesBypassProxies = errors.New("a route bypasses the proxies")
 // own route tests count them.
 const routeConnsPerPeer = natsserver.DEFAULT_ROUTE_POOL_SIZE + 1
 
-// awaitAllRoutesProxied waits until every server holds its complete set of route
-// connections to every other one, and every route connection the servers report is
-// carried by a proxy.
+// routeBypass is one route a server holds over a connection that no proxy of the mesh
+// carries for that pair of servers.
+type routeBypass struct {
+	server string // the server that holds the route
+	peer   string // the server at its other end, as the route names it
+	remote string // the route connection's remote address, as the server reports it
+	why    string
+}
+
+func (b routeBypass) String() string {
+	return fmt.Sprintf("%s holds a route to %s over a connection from %q, %s", b.server, b.peer, b.remote, b.why)
+}
+
+// routeBypassError is every route around the proxies that one look at the servers found.
+type routeBypassError struct {
+	bypasses []routeBypass
+	// after is how long after awaitAllRoutesProxied began the bypasses were seen.
+	after time.Duration
+}
+
+func (e *routeBypassError) Error() string {
+	each := make([]string, len(e.bypasses))
+	for k, b := range e.bypasses {
+		each[k] = b.String()
+	}
+	return fmt.Sprintf("%v, seen %s after the route wait began: %s", errRoutesBypassProxies,
+		e.after.Round(time.Millisecond), strings.Join(each, "; "))
+}
+
+func (e *routeBypassError) Unwrap() error { return errRoutesBypassProxies }
+
+// attribute reports why the route that server i holds to the server named peer, whose
+// connection has the remote address remote, is not carried by this mesh for that pair of
+// servers; "" when it is. names[k] is server k's name.
 //
-// Each proxied connection is one route connection at each of its two ends, so the sum of
-// the servers' route counts must be exactly twice the proxied connections. A route that
-// went around the proxies is counted by the servers and not by the proxies, and breaks
-// the equality for as long as it lives. The equality has to hold on consecutive checks,
-// because a route handshake or a duplicate being closed breaks it for a moment.
+// A route connection has two ends, and each end reports the OTHER end's address:
+//   - the end that dialled reports the address it dialled, which for a proxied route is a
+//     proxy listener: listenerPair[remote] must be (i, k) with names[k] == peer;
+//   - the end that accepted reports the dialler's local address, which for a proxied
+//     route is a connection a proxy dialled to server i: dialedPair[(remote, i)] must be
+//     (k, i) with names[k] == peer.
+//
+// A direct route is seen at its dialling end, whatever its other end shows: the address it
+// dialled is a server's route listener, which is neither a proxy listener nor a
+// connection a proxy dialled.
+//
+// dialedPair keeps the connections a proxy has closed: a server still lists a route for
+// a moment after its connection was closed, and that route was carried by the mesh.
+// Forgetting it would report a bypass that never existed.
+//
+// An empty remote, which is not an address, fails closed here; unproxiedRoutes does not
+// ask about one (see there).
+func (f *RouteFaults) attribute(i int, peer, remote string, names []string) string {
+	nameOf := func(k int) string {
+		if k < 0 || k >= len(names) {
+			return fmt.Sprintf("server %d", k)
+		}
+		return names[k]
+	}
+	if remote == "" {
+		return "which is not a TCP address the mesh can recognize"
+	}
+	f.mu.Lock()
+	byListener, isListener := f.listenerPair[remote]
+	byDial, isDial := f.dialedPair[dialKey{local: remote, to: i}]
+	f.mu.Unlock()
+	switch {
+	case isListener:
+		if byListener[0] != i || nameOf(byListener[1]) != peer {
+			return fmt.Sprintf("which is the proxy for %s to %s, not for this pair",
+				nameOf(byListener[0]), nameOf(byListener[1]))
+		}
+		return ""
+	case isDial:
+		if nameOf(byDial[0]) != peer {
+			return fmt.Sprintf("which a proxy dialled to carry %s's route to %s, not this pair",
+				nameOf(byDial[0]), nameOf(byDial[1]))
+		}
+		return ""
+	}
+	return "which is neither a proxy of this cluster nor a connection one dialled"
+}
+
+// unproxiedRoutes reads every route each of servers holds, with Routez (which lists the
+// same routes NumRoutes counts: both walk forEachRoute), and returns each route this mesh
+// does not carry, and each route it could not attribute because it has no address
+// (classifyRoutes decides which is which).
+func (f *RouteFaults) unproxiedRoutes(servers []*natsserver.Server) (bypasses []routeBypass, unaddressed []string, err error) {
+	names := make([]string, len(servers))
+	for k, srv := range servers {
+		names[k] = srv.Name()
+	}
+	for i, srv := range servers {
+		rz, err := srv.Routez(&natsserver.RoutezOptions{})
+		if err != nil {
+			return nil, nil, fmt.Errorf("routez of %s: %w", srv.Name(), err)
+		}
+		b, u := f.classifyRoutes(i, rz.Routes, names)
+		bypasses = append(bypasses, b...)
+		unaddressed = append(unaddressed, u...)
+	}
+	return bypasses, unaddressed, nil
+}
+
+// classifyRoutes sorts the routes server i lists (names[k] is server k's name) into the
+// ones this mesh does not carry and the ones it cannot attribute because they have no
+// address. A route the mesh carries is in neither.
+//
+// A route with no address is one whose connection is closing: Routez takes the address
+// from the route's connection, and the server lets go of the connection before it takes
+// the route off its list, and routes do close while a cluster starts (a duplicate, a
+// redial). It is NOT a bypass, since a route around the proxies is a live connection
+// whose dialling end reports a real address; it is a route not yet settled either way,
+// and attribute, which fails closed on an empty address, is never asked about it.
+//
+// A bypass is reported once per server, peer and address. Routez reports each route
+// connection's remote address, and at the dialling end every connection of a pool to one
+// peer reports the same one, the address it dialled, so one route around the proxies would
+// otherwise be named once for every connection of its pool.
+func (f *RouteFaults) classifyRoutes(i int, routes []*natsserver.RouteInfo, names []string) (
+	bypasses []routeBypass, unaddressed []string,
+) {
+	server := fmt.Sprintf("server %d", i)
+	if i >= 0 && i < len(names) {
+		server = names[i]
+	}
+	seen := make(map[routeBypass]bool)
+	for _, ri := range routes {
+		if ri.IP == "" {
+			unaddressed = append(unaddressed, fmt.Sprintf("%s's route to %s", server, ri.RemoteName))
+			continue
+		}
+		remote := net.JoinHostPort(ri.IP, strconv.Itoa(ri.Port))
+		if why := f.attribute(i, ri.RemoteName, remote, names); why != "" {
+			b := routeBypass{server: server, peer: ri.RemoteName, remote: remote, why: why}
+			if !seen[b] {
+				seen[b] = true
+				bypasses = append(bypasses, b)
+			}
+		}
+	}
+	return bypasses, unaddressed
+}
+
+// routeCheck is one look at a cluster's routes, as awaitAllRoutesProxied takes it.
+type routeCheck struct {
+	err         error    // reading the servers' routes failed
+	unaddressed []string // routes with no address to attribute (classifyRoutes)
+	counts      []int    // each server's NumRoutes
+	remotes     []int    // each server's NumRemotes
+	proxied     int      // the route connections the proxies carry
+}
+
+// settled reports whether c shows every route of a cluster of len(c.counts) servers
+// complete and at rest: every route attributable, every server routed to every other one
+// with its complete set of route connections, and the servers' route connections exactly
+// twice the proxied ones (each proxied connection is one route connection at each of its
+// two ends), which holds once no handshake is under way and no duplicate is being closed.
+// It does not decide a bypass; classifyRoutes does.
+func (c routeCheck) settled() bool {
+	size := len(c.counts)
+	want := (size - 1) * routeConnsPerPeer
+	if c.err != nil || len(c.unaddressed) != 0 || len(c.remotes) != size {
+		return false
+	}
+	routes := 0
+	for k, n := range c.counts {
+		if n != want || c.remotes[k] != size-1 {
+			return false
+		}
+		routes += n
+	}
+	return routes == 2*c.proxied
+}
+
+// awaitAllRoutesProxied waits until every server holds its complete set of route
+// connections to every other one, each carried by a proxy for that pair of servers.
+//
+// A bypass is decided by attribution, one route connection at a time (unproxiedRoutes):
+// the address each server reports for a route must be a proxy listener or a connection a
+// proxy dialled, for that pair. A route that is neither ends the wait AT ONCE, as a
+// routeBypassError naming every such route that look found: no route the mesh carries
+// can be mistaken for one, so a single sighting is a finding, not a transient.
+//
+// The count says only when the routes have settled. Each proxied connection is one route
+// connection at each of its two ends, so the sum of the servers' route counts is twice
+// the proxied connections once no handshake is under way and no duplicate is being
+// closed, and that has to hold on consecutive checks. The count alone could not decide a
+// bypass: a route around the proxies and a proxied connection that is not (yet) a route
+// cancel out.
 //
 // The complete set is waited for because route connections keep arriving after the first
 // ones are up: a server dials a route it learns of from another server's INFO at the
 // address that INFO carries, which is the advertised one (processImplicitRoute in
-// nats-server's route.go). Checked before every pool is full, the equality can hold over
-// the first connections alone, and connections made around the proxies a moment later go
-// unseen; under load that window outlasted the five checks.
+// nats-server's route.go). Checked before every pool is full, the routes can all be
+// carried while a connection made around the proxies a moment later goes unseen; under
+// load that window outlasted the five checks.
 func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within time.Duration) error {
-	deadline := time.Now().Add(within)
+	began := time.Now()
+	deadline := began.Add(within)
 	want := (len(servers) - 1) * routeConnsPerPeer
 	stable := 0
-	var routes, proxied int
-	var each []string
+	var c routeCheck
+	var last error
 	for {
-		routes = 0
-		meshed, complete := true, true
-		each = each[:0]
-		for _, srv := range servers {
-			n := srv.NumRoutes()
-			routes += n
-			each = append(each, fmt.Sprintf("%s %d", srv.Name(), n))
-			if srv.NumRemotes() != len(servers)-1 {
-				meshed = false
-			}
-			if n != want {
-				complete = false
-			}
+		bypasses, unaddr, err := f.unproxiedRoutes(servers)
+		if len(bypasses) > 0 {
+			return &routeBypassError{bypasses: bypasses, after: time.Since(began)}
 		}
-		proxied = f.LiveRouteConnections()
-		if meshed && complete && routes == 2*proxied {
+		if err != nil {
+			last = err
+		}
+		c = routeCheck{err: err, unaddressed: unaddr}
+		for _, srv := range servers {
+			c.counts = append(c.counts, srv.NumRoutes())
+			c.remotes = append(c.remotes, srv.NumRemotes())
+		}
+		c.proxied = f.LiveRouteConnections()
+		if c.settled() {
 			stable++
 			if stable == 5 {
 				return nil
@@ -310,13 +514,22 @@ func (f *RouteFaults) awaitAllRoutesProxied(servers []*natsserver.Server, within
 			stable = 0
 		}
 		if time.Now().After(deadline) {
-			err := fmt.Errorf("routes are not all carried by the proxies: the servers report %d route "+
-				"connections (%s; each should hold %d), the proxies carry %d (each should be counted twice)",
-				routes, strings.Join(each, ", "), want, proxied)
-			if meshed && routes > 2*proxied {
-				return fmt.Errorf("%w: %w", errRoutesBypassProxies, err)
+			routes := 0
+			each := make([]string, len(servers))
+			for k, srv := range servers {
+				routes += c.counts[k]
+				each[k] = fmt.Sprintf("%s %d", srv.Name(), c.counts[k])
 			}
-			return err
+			detail := ""
+			if len(c.unaddressed) > 0 {
+				detail += fmt.Sprintf("; routes with no address to attribute: %s", strings.Join(c.unaddressed, ", "))
+			}
+			if last != nil {
+				detail += fmt.Sprintf("; last error: %v", last)
+			}
+			return fmt.Errorf("routes are not all complete and carried by the proxies: the servers report %d route "+
+				"connections (%s; each should hold %d), the proxies carry %d (each should be counted twice)%s",
+				routes, strings.Join(each, ", "), want, c.proxied, detail)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -363,32 +576,51 @@ func (f *RouteFaults) forward(in net.Conn, from, to int) {
 		in.Close()
 		return
 	}
-	f.mu.Lock()
-	if f.closed {
-		f.mu.Unlock()
+	// Recorded BEFORE either pipe starts: server to registers the route only after it has
+	// read the dialling server's handshake, and those bytes reach it only through the
+	// pipe from in to out, so no route can be listed before its connection is recorded.
+	if !f.recordDialed(in, out, from, to) {
 		in.Close()
 		out.Close()
 		return
 	}
-	f.conns[in] = [2]int{from, to}
-	f.conns[out] = [2]int{from, to}
-	f.live++
-	f.mu.Unlock()
 
 	var once sync.Once
 	done := func() {
 		once.Do(func() {
 			in.Close()
 			out.Close()
-			f.mu.Lock()
-			delete(f.conns, in)
-			delete(f.conns, out)
-			f.live--
-			f.mu.Unlock()
+			f.forgetConn(in, out)
 		})
 	}
 	go f.pipe(out, in, from, to, done)
 	go f.pipe(in, out, from, to, done)
+}
+
+// recordDialed records the connection pair a proxy for (from, to) has made: in, accepted
+// from server from, and out, dialled to server to's route listener. It reports false,
+// recording nothing, when the mesh has been closed.
+func (f *RouteFaults) recordDialed(in, out net.Conn, from, to int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return false
+	}
+	f.conns[in] = [2]int{from, to}
+	f.conns[out] = [2]int{from, to}
+	f.live++
+	f.dialedPair[dialKey{local: out.LocalAddr().String(), to: to}] = [2]int{from, to}
+	return true
+}
+
+// forgetConn drops a connection pair recordDialed recorded, once its pipes have ended.
+// It keeps the pair's dialedPair entry: see attribute.
+func (f *RouteFaults) forgetConn(in, out net.Conn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.conns, in)
+	delete(f.conns, out)
+	f.live--
 }
 
 // pipe copies src to dst, holding each chunk back while either end is silenced. It never
