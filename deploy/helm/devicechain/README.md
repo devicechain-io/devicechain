@@ -212,7 +212,7 @@ ceiling.
 The five services on the event path request CPU sized from measurement, from
 `functionalAreas.<area>.measuredRequests`: `device-management` 800m,
 `event-management` 900m, `device-state` 950m and `event-sources` 1 core, what each
-used at 6,000 events a second, and `event-processing` 400m, a floor taken from a
+used at 6,000 events a second in an earlier GKE run, and `event-processing` 400m, a floor taken from a
 heavier run rather than a measure of what keeping up needs. While
 `useMeasuredRequests` is `true`, the default, a top-level `resources.requests.cpu`
 does not reach these five; set the area's own

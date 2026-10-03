@@ -10,6 +10,8 @@ import (
 	"go/token"
 	"maps"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -385,6 +387,31 @@ func TestShippedCPURequestsAreTheMeasuredUseAtTheSizingRate(t *testing.T) {
 		if inTable := slices.Sorted(maps.Keys(gkeSplitPoolCores)); !slices.Equal(inChart, inTable) {
 			t.Errorf("areas with measuredRequests in values.yaml %v, areas measured in gkeSplitPoolCores %v: "+
 				"they must be the same set", inChart, inTable)
+		}
+
+		// The chart README states each measured request. Hold it to the value, so a
+		// request that moves in values.yaml cannot leave the README quoting the old one.
+		b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "devicechain", "README.md"))
+		if err != nil {
+			t.Fatalf("reading the chart README: %v", err)
+		}
+		readme := strings.Join(strings.Fields(string(b)), " ")
+		for _, area := range inChart {
+			cpu, _ := areas[area].(map[string]interface{})["measuredRequests"].(map[string]interface{})["cpu"].(string)
+			if cpu == "" {
+				t.Fatalf("%s's measuredRequests.cpu is not a quoted quantity in values.yaml", area)
+			}
+			prose := cpu
+			if !strings.HasSuffix(cpu, "m") {
+				prose = cpu + " core"
+				if cpu != "1" {
+					prose += "s"
+				}
+			}
+			if want := "`" + area + "` " + prose; !strings.Contains(readme, want) {
+				t.Errorf("the chart README does not state %s's measured CPU request as values.yaml has it "+
+					"(%q, so the README should say %q)", area, cpu, want)
+			}
 		}
 	})
 

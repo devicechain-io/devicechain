@@ -506,6 +506,21 @@ func TestN2Shape(t *testing.T) {
 	}
 }
 
+// measuredThroughput is the published throughput measurement, in the words the
+// README and the GKE guide quote it in. It records what was measured, on the cluster
+// it was measured on, so it does not follow the defaults: a default that moves makes
+// the GKE guide's "Those nodes are this configuration's defaults" false, and that is
+// the sentence to drop. It changes only when a new measurement replaces it, and a
+// rate above 6,000 is not one this sentence may claim.
+const measuredThroughput = "On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and " +
+	"three 4-vCPU, 8 GB service nodes, a default HA install accepted 6,000 events a second for 10 " +
+	"minutes, twice, and stored every accepted event exactly once. " + measuredOnePod
+
+// measuredOnePod is the qualifier the measurement carries: it ran before `--ha`
+// began running event-management as two pods.
+const measuredOnePod = "That was measured on the release candidate with event-management at one pod, " +
+	"before `--ha` began running it as two."
+
 // The GKE guide describes the cluster its configuration creates: each pool's
 // machine type, size and node count, the vCPUs that adds up to against the quota,
 // and what a cluster from the earlier one-pool configuration needs while it is
@@ -607,26 +622,57 @@ func TestGKEGuideShapeIsTheDefaults(t *testing.T) {
 		}
 	}
 
-	// The guide quotes the published throughput measurement with the cluster it was
-	// measured on, and says that cluster is this configuration's defaults. The
-	// measurement is history and stays as it was measured; the claim that ties it to
-	// the defaults is not. When a default moves, the shape below must not be edited
-	// to follow it: drop the "Those nodes are this configuration's defaults" sentence
-	// and this check together, because the guide no longer creates what was measured.
-	for _, m := range figures("the measured shape", "on ([a-z]+) ([0-9]+)-vCPU, ([0-9]+) GB database nodes and "+
-		"([a-z]+) ([0-9]+)-vCPU, ([0-9]+) GB service nodes, a default HA install accepted [^.]+\\. "+
-		"[^.]+\\. Those nodes are this configuration's defaults") {
+	// The published throughput measurement is held to the words it was published in,
+	// in both places that quote it, and the GKE guide's claim that the cluster it was
+	// measured on is this configuration's defaults is held to the shape in those words,
+	// never to the README's copy of them. See measuredThroughput.
+	collapse := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	for _, rel := range [][]string{{"README.md"}, {"deploy", "gke", "README.md"}} {
+		text := collapse(read(rel...))
+		if !strings.Contains(text, collapse(measuredThroughput)) {
+			t.Errorf("%s no longer carries the published throughput measurement word for word:\n\n%s\n\n"+
+				"It is history, quoted as measured; edit it only when a new measurement replaces it, and then "+
+				"in this test and every surface that quotes it", filepath.Join(rel...), measuredThroughput)
+		}
+		if !strings.Contains(text, collapse(measuredOnePod)) {
+			t.Errorf("%s dropped the qualifier that the measurement ran event-management at one pod (%q); "+
+				"it stays until 6,000 events a second is re-measured with two", filepath.Join(rel...), measuredOnePod)
+		}
+	}
+	if strings.Contains(collapse(readme), "Those nodes are this configuration's defaults") {
+		ms := regexp.MustCompile(`on (\w+) ([0-9]+)-vCPU, ([0-9]+) GB database nodes and (\w+) ([0-9]+)-vCPU, ` +
+			`([0-9]+) GB service nodes`).FindStringSubmatch(measuredThroughput)
+		if ms == nil {
+			t.Fatal("measuredThroughput no longer names the database and service nodes it was measured on")
+		}
 		for i, pool := range []string{"database", "services"} {
 			mt, vcpu, gb := shape(pool)
 			n := tofuNumberDefault(t, gkeTF, pool+"_node_count")
-			got := m[1+3*i : 4+3*i]
+			got := ms[1+3*i : 4+3*i]
 			if num(got[0]) != n || num(got[1]) != vcpu || num(got[2]) != gb {
-				t.Errorf("the GKE README says the throughput was measured on %s %s-vCPU, %s GB %s nodes and that "+
-					"those are this configuration's defaults; the %s pool defaults to %d × %s (%d vCPU, %d GB). "+
-					"If the README misquotes the measurement, fix it; if the default moved, drop the sentence "+
-					"tying the measurement to the defaults, not the measured shape", got[0], got[1], got[2], pool,
-					pool, n, mt, vcpu, gb)
+				t.Errorf("the GKE README says the throughput measurement's nodes are this configuration's "+
+					"defaults; it was measured on %s %s-vCPU, %s GB %s nodes, and the %s pool defaults to "+
+					"%d × %s (%d vCPU, %d GB). Drop the sentence tying the measurement to the defaults; do "+
+					"not edit the measured shape", got[0], got[1], got[2], pool, pool, n, mt, vcpu, gb)
 			}
+		}
+	}
+
+	// The OpenTofu versions the guide gives: what this configuration accepts, and
+	// what the instance root `dcctl bootstrap` applies needs.
+	required := func(rel ...string) string {
+		m := regexp.MustCompile(`required_version\s*=\s*">=\s*([0-9]+\.[0-9]+)(?:\.0)?"`).FindStringSubmatch(read(rel...))
+		if m == nil {
+			t.Fatalf("%s has no required_version of the form \">= X.Y\"", filepath.Join(rel...))
+		}
+		return m[1]
+	}
+	for _, m := range figures("the OpenTofu versions", "You need OpenTofu or Terraform ([0-9.]+) or newer\\. "+
+		"This configuration accepts ([0-9.]+), but `dcctl bootstrap`, which you run after it, needs ([0-9.]+),") {
+		gke, instance := required("deploy", "gke", "versions.tf"), required("deploy", "opentofu", "instance", "versions.tf")
+		if m[1] != instance || m[2] != gke || m[3] != instance {
+			t.Errorf("the GKE README says you need %s, this configuration accepts %s and dcctl bootstrap needs %s; "+
+				"deploy/gke requires %s and the instance root %s", m[1], m[2], m[3], gke, instance)
 		}
 	}
 
