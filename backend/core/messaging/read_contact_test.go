@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -262,6 +263,11 @@ func TestAnIdleConsumerSurvivesTwoBrokerRestartsFarApart(t *testing.T) {
 // loop one more error. Counted as one more failure, it lands past the budget and the loop
 // gives up the instant the broker is back — every idle loop in every service at once, for a
 // restart that has nothing left to re-dial.
+//
+// This is the end-to-end view, and it does NOT pin which evidence ends the run: a reconnect
+// that lands between fetches reaches the reader as "no responders", it re-binds, and the
+// bind supplies the answer. TestTheFetchAReconnectInterruptsIsAnAnswerAndTheDisconnectIsNot
+// pins the reconnect's own evidence, deterministically.
 func TestABrokerOutageLongerThanTheBudgetDoesNotEndTheLoopWhenTheBrokerReturns(t *testing.T) {
 	srv, storeDir, nmgr := singleBroker(t)
 	reader, err := nmgr.NewReader(streams.InboundEvents)
@@ -474,7 +480,9 @@ func TestABackpressureParkCountsOnlyAFreshMeasurementAsAnAnswer(t *testing.T) {
 		bp   *BackpressureError
 		want bool
 	}{
-		{"a stale gate", &BackpressureError{Stale: true}, false},
+		// Stale with a fresh time, so the row tests the Stale term itself. Backpressure leaves a
+		// stale refusal's time zero, which the time comparison alone would also reject.
+		{"a stale gate", &BackpressureError{Stale: true, sampledAt: erred.Add(time.Second)}, false},
 		{"a measurement older than the error", &BackpressureError{sampledAt: erred.Add(-time.Second)}, false},
 		{"a fresh ratio refusal", &BackpressureError{sampledAt: erred.Add(time.Second)}, true},
 		{"a fresh runway refusal", &BackpressureError{Runway: true, sampledAt: erred.Add(time.Second)}, true},
@@ -509,5 +517,256 @@ func TestARefusingGateReportsWhenItWasMeasured(t *testing.T) {
 		if !be.sampledAt.Equal(measured) {
 			t.Errorf("%s: the refusal says it was measured at %v, want %v", c.name, be.sampledAt, measured)
 		}
+	}
+}
+
+// answeredOn reports the evidence a read error carries, failing if it carries none.
+func answeredOn(t *testing.T, err error) bool {
+	t.Helper()
+	var c core.BrokerContact
+	if !errors.As(err, &c) {
+		t.Fatalf("%v carries no broker evidence at all", err)
+	}
+	return c.AnsweredSincePreviousError()
+}
+
+// readOnce runs one ReadMessage on its own goroutine and hands back the result, so the test
+// can disturb the broker while the read's fetch is in flight.
+func readOnce(r *natsReader, d time.Duration) <-chan error {
+	out := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		_, err := r.ReadMessage(ctx)
+		out <- err
+	}()
+	return out
+}
+
+// cutProxy forwards a port to a broker and can sever the client's side of it while the
+// broker stays up, then let the client back in. Stopping the broker instead does not
+// isolate the disconnect: the server first answers the pull it holds with its own
+// `nats: Server Shutdown`, and the fetch after it starts on a connection already gone.
+type cutProxy struct {
+	t      *testing.T
+	target string
+	port   int
+	mu     sync.Mutex
+	ln     net.Listener
+	conns  []net.Conn
+}
+
+func newCutProxy(t *testing.T, target string) *cutProxy {
+	t.Helper()
+	p := &cutProxy{t: t, target: target}
+	p.open()
+	t.Cleanup(p.cut)
+	return p
+}
+
+// open listens on the proxy's port (an ephemeral one the first time) and forwards each
+// connection to the broker. Retried for the reason startBrokerKeepingStore gives.
+func (p *cutProxy) open() {
+	p.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p.port))
+		if err == nil {
+			p.mu.Lock()
+			p.ln, p.port = ln, ln.Addr().(*net.TCPAddr).Port
+			p.mu.Unlock()
+			go p.accept(ln)
+			return
+		}
+		if time.Now().After(deadline) {
+			p.t.Fatalf("re-opening the proxy on port %d: %v", p.port, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (p *cutProxy) accept(ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		b, err := net.Dial("tcp", p.target)
+		if err != nil {
+			_ = c.Close()
+			continue
+		}
+		p.mu.Lock()
+		p.conns = append(p.conns, c, b)
+		p.mu.Unlock()
+		go func() { _, _ = io.Copy(b, c); _ = b.Close() }()
+		go func() { _, _ = io.Copy(c, b); _ = c.Close() }()
+	}
+}
+
+// cut closes the listener and every forwarded connection, so the client loses the broker
+// and cannot reach it again until open.
+func (p *cutProxy) cut() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ln != nil {
+		_ = p.ln.Close()
+		p.ln = nil
+	}
+	for _, c := range p.conns {
+		_ = c.Close()
+	}
+	p.conns = nil
+}
+
+// 🔴 THE RECONNECT IS AN ANSWER; THE DISCONNECT IS NOT. A fetch is interrupted by every
+// change of connection status, and both halves of an outage hand the reader the same
+// `nats: disconnected during fetch`. Only the connection's state when the reader sees it
+// tells them apart. Counted on the disconnect side, every outage would excuse itself and a
+// broker that stays down would never end the loop; not counted on the reconnect side, an
+// outage longer than the budget ends every idle loop the moment the broker returns.
+//
+// Driven read by read, not through a loop, because the loop test above cannot tell which
+// path the reconnect took: when it lands between fetches the reader re-binds, and the bind
+// supplies the evidence instead. The evidence is cleared before each half while nothing can
+// answer, so whatever the error carries came from that one status change.
+func TestTheFetchAReconnectInterruptsIsAnAnswerAndTheDisconnectIsNot(t *testing.T) {
+	srv := startBrokerKeepingStore(t, -1, dctest.JetStreamStoreDir(t))
+	defer srv.Shutdown()
+	proxy := newCutProxy(t, srv.Addr().String())
+	nmgr := managerFor(t, srv)
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Port = uint32(proxy.port)
+	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
+		t.Fatalf("connecting through the proxy: %v", err)
+	}
+	t.Cleanup(func() { nmgr.nc.Close() })
+	reader, err := nmgr.NewReader(streams.InboundEvents)
+	if err != nil {
+		t.Fatalf("reader: %v", err)
+	}
+	r := reader.(*natsReader)
+
+	// The disconnect side. The read starts against a live broker, and its fetch is in
+	// flight when the connection is cut. Nothing can answer in the 300ms before the cut: a
+	// probe needs five empty fetches, and the stream is empty.
+	_ = r.readError(errors.New("clear the bind's evidence"))
+	res := readOnce(r, 20*time.Second)
+	time.Sleep(300 * time.Millisecond)
+	proxy.cut()
+	select {
+	case err := <-res:
+		if !errors.Is(err, nats.ErrFetchDisconnected) {
+			t.Fatalf("cutting the connection under a fetch returned %v, want `disconnected during fetch`", err)
+		}
+		if answeredOn(t, err) {
+			t.Fatalf("the cut's read error %q carried a broker answer: the disconnect side of an outage "+
+				"must not vouch for the broker it lost", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cutting the connection under a fetch did not end the read within 10s")
+	}
+
+	// The reconnect side. The client knows the broker is gone before the read starts. The
+	// read's fetches wait out their own deadline while the client retries (its reconnect wait
+	// is about two seconds, inside the five empty fetches before a probe), so the reconnect
+	// lands on a fetch in flight.
+	waitFor(t, "the client to see the broker gone", func() bool { return !nmgr.nc.IsConnected() })
+	r.consecutiveTimeouts = 0
+	if r.answered.Load() {
+		t.Fatal("the reader recorded a broker answer with its connection cut")
+	}
+	res = readOnce(r, 20*time.Second)
+	time.Sleep(200 * time.Millisecond)
+	proxy.open()
+	select {
+	case err := <-res:
+		if !errors.Is(err, nats.ErrFetchDisconnected) {
+			t.Fatalf("the reconnect returned %v, want the `disconnected during fetch` of the fetch it interrupted", err)
+		}
+		if !answeredOn(t, err) {
+			t.Fatalf("the fetch the reconnect interrupted returned %q with no broker answer: an outage "+
+				"longer than the budget would end the loop the moment the broker came back", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the reconnect did not end the read within 15s")
+	}
+}
+
+// A fetch that delivers is the plainest answer there is, and on a busy stream the only one
+// a reader needs.
+func TestADeliveredFetchIsABrokerAnswer(t *testing.T) {
+	_, _, nmgr := singleBroker(t)
+	reader, err := nmgr.NewReader(streams.InboundEvents)
+	if err != nil {
+		t.Fatalf("reader: %v", err)
+	}
+	r := reader.(*natsReader)
+	_ = r.readError(errors.New("clear the bind's evidence"))
+
+	subject := ScopedSubject(nmgr.Microservice.InstanceId, "acme", streams.InboundEvents)
+	if _, err := nmgr.js.Publish(subject, []byte(`{"n":1}`)); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	msg, err := r.ReadMessage(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	_ = msg.Ack()
+	if !r.answered.Load() {
+		t.Fatal("a fetch delivered a message and the reader recorded no broker answer")
+	}
+}
+
+// readError is what dates the reader's last error, and the date is what a backpressure
+// sample is compared against. Measured against a time taken BEFORE the call, never against
+// the field itself, which reads the same whether or not it was set.
+func TestAReadErrorRecordsWhenItWasHandedOut(t *testing.T) {
+	r := &natsReader{}
+	before := time.Now()
+	_ = r.readError(errors.New("boom"))
+	if r.lastErrorAt.Before(before) {
+		t.Fatalf("the reader's last error is dated %v, before the call made at %v", r.lastErrorAt, before)
+	}
+}
+
+// The park, through ReadMessage itself. A reader parked behind a refusing downstream gate
+// records an answer when the refusal rests on a measurement newer than its last error, and
+// none when the measurement predates it. Both times are wall-clock instants the test takes
+// itself, so neither case can pass by reading back what it is testing.
+func TestAReaderParkedBehindBackpressureCountsOnlyAFresherMeasurement(t *testing.T) {
+	clk := newTestClock()
+	nmgr, gs := gatedManager(t, clk)
+	r := &natsReader{nmgr: nmgr, durable: "parked", downstream: streams.InboundEvents}
+	r.sub.Store(&nats.Subscription{}) // never fetched from: the gate refuses before any fetch
+
+	park := func(sampled time.Time) {
+		t.Helper()
+		clk.mu.Lock()
+		clk.t = time.Now()
+		clk.mu.Unlock()
+		setGate(nmgr, gs, func() { gs.sampledAt, gs.closed = sampled, true })
+		ctx, cancel := context.WithTimeout(context.Background(), 3*termGatePoll)
+		defer cancel()
+		if _, err := r.ReadMessage(ctx); !errors.Is(err, io.EOF) {
+			t.Fatalf("a read parked behind a refusing gate returned %v, want io.EOF at the end of its context", err)
+		}
+	}
+
+	_ = r.readError(errors.New("the error before the park"))
+	park(time.Now().Add(time.Millisecond))
+	if !r.answered.Load() {
+		t.Fatal("parked behind a refusal measured after the reader's last error, the reader recorded no " +
+			"broker answer: a park that lasts as long as the backlog takes to drain gathers no other")
+	}
+
+	sampled := time.Now()
+	time.Sleep(2 * time.Millisecond)
+	_ = r.readError(errors.New("an error after the measurement"))
+	park(sampled)
+	if r.answered.Load() {
+		t.Fatal("parked behind a refusal measured BEFORE the reader's last error, the reader recorded a " +
+			"broker answer: an old measurement would excuse the error that followed it")
 	}
 }

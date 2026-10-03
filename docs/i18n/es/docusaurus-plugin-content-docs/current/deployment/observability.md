@@ -31,7 +31,9 @@ sirve las dos sondas estándar de Kubernetes:
   reintenta con una pausa creciente de hasta cinco segundos. Un bucle sobre un flujo tranquilo
   comprueba cada pocos segundos que el broker sigue respondiendo, y una reconexión al broker también
   cuenta como respuesta, así que dos fallos separados por minutos cuentan como dos y no como uno
-  largo, y una caída larga del broker no reinicia el servicio cuando el broker vuelve. Consulte
+  largo, y una caída larga del broker no reinicia el servicio cuando el broker vuelve. Un broker
+  que simplemente no es alcanzable no cuenta como lecturas fallidas: las lecturas lo esperan, el
+  servicio sigue reconectando y continúa cuando el broker vuelve. Consulte
   [Un contenedor que se reinició](#container-restarts).
 - **`/readyz`** — disponibilidad (readiness): ¿está listo para recibir tráfico? Un servicio que no está
   listo se mantiene fuera de rotación por su Service de Kubernetes (consulte

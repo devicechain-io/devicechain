@@ -32,7 +32,9 @@ serves the two standard Kubernetes probes:
   every few seconds that the broker still answers, and a reconnect to the broker counts
   as an answer too, so two failures minutes apart count as two rather than one long
   one, and a long broker outage does not restart the service when the broker comes
-  back. See [A container that restarted](#container-restarts).
+  back. A broker that is simply unreachable does not count as failing reads at all:
+  the reads wait for it, the service keeps reconnecting, and it carries on when the
+  broker returns. See [A container that restarted](#container-restarts).
 - **`/readyz`** — readiness: is it ready to take traffic? A service that isn't
   ready is held out of rotation by its Kubernetes Service (see
   [Deployment & Operator](./kubernetes-operator.md)).
