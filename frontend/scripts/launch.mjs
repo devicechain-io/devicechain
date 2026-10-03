@@ -12,11 +12,13 @@
 // Running the tool's own JavaScript entry point under the Node already running this
 // script is the same on every platform, and it is exactly what the shims themselves do.
 //
-// 🔴 A PROCESS THAT DID NOT RUN IS AN ERROR, NOT AN EXIT STATUS. spawnSync reports a
-// failed launch in `result.error` and leaves `status` null. The builders read only
-// `status`, so all a Windows contributor saw was "exit null" — and a caller that reads
-// `status !== 0` as "npm said no" turns "npm is not there" into a wrong answer.
-// runSync() throws instead, with the error code, so no caller can read past it.
+// 🔴 A PROCESS THAT DID NOT RUN TO COMPLETION IS AN ERROR, NOT AN EXIT STATUS. spawnSync
+// reports a failed launch in `result.error` and leaves `status` null; a process killed
+// by a signal also comes back with `status` null, with `signal` set and NO error. The
+// builders read only `status`, so all a Windows contributor saw was "exit null" — and a
+// caller that reads `status !== 0` as "npm said no" turns "npm is not there" (or "npm
+// was killed") into a wrong answer. runSync() throws for both instead, so every status
+// a caller sees is a number the tool itself chose to exit with.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -120,13 +122,27 @@ export function tscCommand(args, { from, execPath = process.execPath } = {}) {
   return { file: execPath, args: [path.resolve(path.dirname(manifestPath), rel), ...args] };
 }
 
+// The native programs a script may start by name. An ALLOWLIST, not a list of Node
+// CLIs to refuse: a refusal list is only as good as its author's memory of every shim
+// npm can link (npm, npx, tsc, vite, eslint...), and the name it forgets is the bug
+// this file exists to prevent — invisible on Linux, fatal on Windows. Add a program
+// here only if it is a real executable on every platform the scripts run on.
+export const NATIVE_PROGRAMS = Object.freeze(['tar']);
+
 /**
- * A NATIVE executable (tar), found on PATH. It exists so that every launch goes
- * through this file and the guard in launch.test.mjs has no exception to make. A Node
- * CLI (npm, npx, tsc, vite...) is a `.cmd` shim on Windows and must not come through
- * here — use nodeCommand / npmCommand / tscCommand.
+ * A NATIVE executable, found on PATH — and only one named in NATIVE_PROGRAMS. It exists
+ * so that every launch goes through this file and the guard in launch.test.mjs has no
+ * exception to make. A Node CLI (npm, npx, tsc, vite...) is a `.cmd` shim on Windows,
+ * so asking for one here THROWS: use nodeCommand / npmCommand / tscCommand.
  */
 export function systemCommand(file, args = []) {
+  if (!NATIVE_PROGRAMS.includes(file)) {
+    throw new LaunchError(
+      `systemCommand('${file}') refused: only ${NATIVE_PROGRAMS.join(', ')} may be started by name. ` +
+        'A Node CLI is a .cmd shim on Windows that a shell-less spawn cannot start; ' +
+        'launch it with nodeCommand, npmCommand or tscCommand instead.',
+    );
+  }
   return { file, args };
 }
 
@@ -140,16 +156,23 @@ export function describeCommand({ file, args }) {
 /**
  * spawnSync, except that a process which did not run to completion THROWS. `error` is
  * set when the launch itself failed (ENOENT, EACCES), and also when a process that did
- * start was cut off (ETIMEDOUT, ENOBUFS) — in every one of those `status` says nothing
- * about what the tool decided. The caller still owns the status check.
+ * start was cut off (ETIMEDOUT, ENOBUFS). A process killed by a signal has no `error`
+ * at all — only `status: null` and `signal`. In every one of those `status` says
+ * nothing about what the tool decided, so a returned result always carries a numeric
+ * status. The caller still owns the status check.
  */
 export function runSync(command, options = {}) {
   const result = spawnSync(command.file, command.args, options);
+  const where = options.cwd ? ` in ${options.cwd}` : '';
   if (result.error) {
-    const where = options.cwd ? ` in ${options.cwd}` : '';
     throw new LaunchError(
       `\`${describeCommand(command)}\` failed to run${where} (${command.file}): ` +
         `${result.error.code ?? 'error'}: ${result.error.message}`,
+    );
+  }
+  if (result.status === null) {
+    throw new LaunchError(
+      `\`${describeCommand(command)}\` did not run to completion${where}: killed by ${result.signal ?? 'an unknown signal'}`,
     );
   }
   return result;

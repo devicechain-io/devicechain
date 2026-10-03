@@ -14,11 +14,13 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   LaunchError,
+  NATIVE_PROGRAMS,
   describeCommand,
   nodeCommand,
   npmCommand,
   resolveNpmCli,
   runSync,
+  systemCommand,
   tscCommand,
 } from './launch.mjs';
 import { PackageError } from './packages.mjs';
@@ -37,7 +39,10 @@ function tempDir(t) {
 // ---------------------------------------------------------------------------
 // The guard. Spawning a Node CLI by name works on Linux and macOS and fails only on
 // Windows, so a new script that does it passes every Linux check there is. This is
-// what fails instead: no script but launch.mjs may reach child_process or a .bin shim.
+// what fails instead, in two halves that close each other's gap: no script but
+// launch.mjs may reach child_process or a .bin shim, and the one by-name launcher
+// launch.mjs offers, systemCommand, may only be asked for a program on its allowlist —
+// checked at every call site here, and refused at runtime as well.
 // ---------------------------------------------------------------------------
 const CHILD_PROCESS = /\bchild_process\b/;
 const BIN_SHIM = /['"]\.bin['"]|node_modules[\\/]\.bin/;
@@ -62,6 +67,49 @@ test('no frontend script launches a process except through launch.mjs', () => {
     })
     .sort();
   assert.deepEqual(offenders, []);
+});
+
+// The first argument at every systemCommand( call site, as written. Anything that is
+// not a quoted literal is reported as written, so it fails the allowlist check below
+// rather than escaping it.
+const SYSTEM_COMMAND_CALL = /\bsystemCommand\(\s*([^,)]*)/g;
+
+function systemCommandTargets(source) {
+  return [...source.matchAll(SYSTEM_COMMAND_CALL)].map((m) => {
+    const literal = /^(['"`])([^'"`$]*)\1$/.exec(m[1].trim());
+    return literal ? literal[2] : m[1].trim();
+  });
+}
+
+test('every systemCommand call site names an allowed native program', () => {
+  const scanned = readdirSync(here).filter(
+    (f) => f.endsWith('.mjs') && !f.endsWith('.test.mjs') && f !== 'launch.mjs',
+  );
+  // Reach control: the scan finds the call site known to exist (verify-packages
+  // extracting a tarball), and the extractor reports a non-literal as written.
+  const calls = scanned.flatMap((f) =>
+    systemCommandTargets(readFileSync(path.join(here, f), 'utf8')).map((target) => ({ f, target })),
+  );
+  assert.ok(
+    calls.some(({ f, target }) => f === 'verify-packages.mjs' && target === 'tar'),
+    `the scan did not see verify-packages.mjs's tar call: ${JSON.stringify(calls)}`,
+  );
+  assert.deepEqual(systemCommandTargets("runSync(systemCommand('npm', args))"), ['npm']);
+  assert.deepEqual(systemCommandTargets('systemCommand(name, [])'), ['name']);
+
+  const offenders = calls.filter(({ target }) => !NATIVE_PROGRAMS.includes(target));
+  assert.deepEqual(offenders, []);
+});
+
+test('systemCommand refuses a Node CLI, and accepts only the native allowlist', () => {
+  assert.deepEqual(systemCommand('tar', ['-xzf', 'a.tgz']), { file: 'tar', args: ['-xzf', 'a.tgz'] });
+  for (const name of ['npm', 'npx', 'tsc', 'node', 'pnpm', 'yarn', 'vite', 'node_modules/.bin/tsc', 'tar.cmd']) {
+    assert.throws(
+      () => systemCommand(name, []),
+      (err) => err instanceof LaunchError && err.message.includes(`systemCommand('${name}') refused`),
+      name,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -211,6 +259,36 @@ test('runSync throws, with the error code, when the process cannot be started', 
     () => runSync({ file: missing, args: [] }),
     (err) => err instanceof LaunchError && err.message.includes('ENOENT') && err.message.includes(missing),
   );
+});
+
+// Windows has no signals to kill with; process.kill there terminates with an exit code.
+const posixOnly = { skip: process.platform === 'win32' };
+
+test('runSync throws when the process is killed by a signal', posixOnly, () => {
+  // spawnSync reports this with status null, signal set and NO error, so it is the
+  // one cut-off a check on `error` alone would return as a result.
+  assert.throws(
+    () => runSync(nodeCommand('-e', ['process.kill(process.pid, "SIGKILL")'])),
+    (err) => err instanceof LaunchError && err.message.includes('did not run to completion') && err.message.includes('SIGKILL'),
+  );
+});
+
+// What a contributor actually reads is build-packages' own message, so the forwarding
+// of runSync's diagnostic at that call site is asserted end to end. The brand step is
+// the first launch, and npm_execpath points at a stand-in npm that kills itself, so
+// nothing is built and no dependency is needed.
+test('build:packages reports why a launch did not complete, not "exit null"', posixOnly, (t) => {
+  const fakeNpm = path.join(tempDir(t), 'npm-cli.js');
+  writeFileSync(fakeNpm, 'process.kill(process.pid, "SIGKILL");\n');
+  const result = runSync(nodeCommand(path.join(here, 'build-packages.mjs')), {
+    encoding: 'utf8',
+    cwd: path.dirname(here),
+    env: { ...process.env, npm_execpath: fakeNpm },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /`npm run build -w @devicechain\/brand` did not run to completion/);
+  assert.match(result.stderr, /killed by SIGKILL/);
+  assert.doesNotMatch(result.stderr, /exit null/);
 });
 
 test('runSync returns a started process with its exit status', () => {

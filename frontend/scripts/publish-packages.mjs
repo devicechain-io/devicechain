@@ -50,9 +50,10 @@ function fail(message) {
 }
 
 // npm, launched through Node (scripts/launch.mjs). An npm that did not run to
-// completion THROWS here (a LaunchError, which is a PackageError) rather than coming
-// back as a null status — which publishedVersions() below would otherwise read as
-// "this package is not on the registry".
+// completion — failed to launch, or was killed by a signal — THROWS here (a
+// LaunchError, which is a PackageError) rather than coming back as a null status,
+// which publishedVersions() below would otherwise read as "this package is not on
+// the registry".
 function run(args, options = {}) {
   return runSync(npmCommand(args), { encoding: 'utf8', ...options });
 }

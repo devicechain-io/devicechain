@@ -43,8 +43,7 @@ function run(command, cwd) {
     fail(err.message);
   }
   if (result.status !== 0) {
-    const signal = result.signal ? `, signal ${result.signal}` : '';
-    fail(`\`${describeCommand(command)}\` failed in ${path.relative(frontend, cwd) || '.'} (exit ${result.status}${signal})`);
+    fail(`\`${describeCommand(command)}\` failed in ${path.relative(frontend, cwd) || '.'} (exit ${result.status})`);
   }
 }
 

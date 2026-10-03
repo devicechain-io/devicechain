@@ -172,8 +172,7 @@ try {
   fail(`declaration emit could not run: ${err.message}`);
 }
 if (tscRun.status !== 0) {
-  const signal = tscRun.signal ? `, signal ${tscRun.signal}` : '';
-  fail(`declaration emit failed (tsc exited ${tscRun.status}${signal})`);
+  fail(`declaration emit failed (tsc exited ${tscRun.status})`);
 }
 
 // 🔴 Asserted rather than assumed. This compiler will report an error and emit in
