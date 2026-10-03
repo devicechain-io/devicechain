@@ -547,6 +547,15 @@ nacimiento, y con los renacimientos solicitados espaciados. Tampoco se miden las
 presencia que afirman nacimientos y muertes. Un nodo de borde desbocado aún puede enviar mensajes tan
 rápido como el broker los entregue. Acótalo en el broker, o mediante los grupos a los que te suscribes.
 
+**Las lecturas también se descartan mientras la plataforma aplica contrapresión.** Mientras la
+plataforma rechaza eventos nuevos (consulta
+[Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure)), las lecturas de un
+mensaje que aún no se han almacenado se descartan en el acto, sin el reintento dentro del manejador,
+y se cuentan en `ingest_failures_total`. Eso incluye los valores de métricas de un nacimiento, que el
+techo nunca descarta: una métrica que cambia poco y se pierde así falta hasta que vuelve a cambiar o
+el nodo renace. Las transiciones de conexión y desconexión que afirman nacimientos y muertes se
+siguen aceptando.
+
 **El límite de lecturas se aplica dividiendo.** El
 [límite de lecturas por evento](../guides/connecting-a-device.md#how-much-one-message-may-carry) se
 aplica en esta vía dividiendo el mensaje, no rechazándolo. Un DDATA que lleve miles de métricas se
@@ -699,7 +708,8 @@ Prefijo: `devicechain_sparkplugingest_`.
 | `rebirth_requests_total` | Nodos a los que se pide que se vuelvan a anunciar. Que suba de forma sostenida significa que un nodo no consigue resincronizarse. |
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths que pidió la máquina de sesión, y los que su cola de publicación estaba demasiado llena para aceptar. Un descarte es una señal de latencia más que un fallo (la petición se vuelve a hacer en la siguiente ventana del nodo), pero una tasa de descarte sostenida significa que los rebirths salen más despacio de lo que se piden. Léelo junto a `rebirth_requests_total`, que solo cuenta lo que llegó al cable y por tanto está limitado por el publicador y no por la demanda: **descartes mientras `rebirth_requests_total` sube hasta un techo estable** es un fan-out que supera a un publicador por lo demás sano; **descartes mientras está plano** son las propias publicaciones atascándose, lo que apunta a la conexión con el broker. |
 | `unknown_device_dropped_total` | Tráfico de identidades sin dispositivo, con el registro automático desactivado. |
-| `decode_errors_total` / `ingest_failures_total` | Payloads malformados, y fallos al publicar hacia adelante. |
+| `decode_errors_total` | Payloads malformados. |
+| `ingest_failures_total` | Mensajes aceptados cuyas lecturas, o las transiciones de conexión y desconexión que afirman sus nacimientos y muertes, se descartaron: las lecturas en el acto mientras la plataforma aplica contrapresión, y unas u otras cuando se agotó el reintento dentro del manejador (device-management o el broker no respondían) o mientras la conexión se cerraba. Un mensaje dividido en varios eventos puede haber almacenado sus primeros eventos. Un Host de sesión limpia no recibe reentregas, así que cada uno se pierde. |
 | `ingest_samples_shed_total` | Lecturas DATA descartadas porque un inquilino supera su techo de ingesta. Un inquilino que descarta aquí envía más lecturas de las que permite su nivel. |
 | `tenant_deleted_dropped_total` | Tráfico rechazado porque su inquilino está siendo eliminado. |
 | `samples_too_old_dropped_total` | Lecturas descartadas porque su marca de tiempo es anterior en más de 366 días al momento en que el host las recibió; el resto de su mensaje se almacena. Una métrica cuyo valor no ha cambiado en ese tiempo se descarta de cada nacimiento, y un nodo sin reloj configurado (horas cercanas a 1970) ve descartadas todas sus lecturas. El servicio registra un aviso que nombra el dispositivo. |
@@ -723,6 +733,7 @@ Prefijo: `devicechain_lwm2mingest_`.
 | `observation_overflow_total` | Un registro que supera el tope de 32 observaciones. Algunos de sus recursos no se observan. |
 | `telemetry_too_old_dropped_total` | Lecturas descartadas porque su hora es anterior en más de 366 días al momento en que el adaptador las recibió; el resto de su Notify se almacena. El servicio registra un aviso que nombra el dispositivo. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta, en mensajes Notify y en lecturas. |
+| `notify_ingest_dropped_total` | Mensajes Notify cuyas lecturas se descartaron porque la plataforma las rechazó o no pudo recibirlas, incluido mientras aplica contrapresión. No hay reintento; el siguiente Notify sustituye lo perdido. Un Notify dividido en varios eventos puede haber almacenado sus primeros eventos. |
 | `shadows_reconstructed_total` | Presencia reconstruida tras un cambio de liderazgo. Un pico es la huella de un relevo. |
 | `commands_failed_total` / `commands_not_served_total` | Comandos descendentes que no llegaron a destino. |
 | `command_live_claim_errors_total` | Comandos **no llevados a cabo** porque command-delivery no pudo confirmarlos. Cada comando se confirma con command-delivery inmediatamente antes de llegar al dispositivo, y sin esa confirmación nunca se envía. Una tasa sostenida significa que ningún comando LwM2M está llegando a su dispositivo: **es la señal sobre la que alertar.** Los comandos se reintentan, no se pierden. |

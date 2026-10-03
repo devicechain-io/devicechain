@@ -150,11 +150,14 @@ type Metrics struct {
 	// source ingests none of its groups until every one is granted. A climbing counter is
 	// therefore an ingest outage for that source, not a presence nuance.
 	SubscribeFailures prometheus.Counter
-	// IngestFailures counts accepted messages whose samples were dropped: after the
-	// in-handler retry budget was exhausted (device-management or NATS unreachable), or at
-	// once when inbound-events refused them because a reader is far behind
-	// (backpressure, not retried). A clean-session Host gets no broker redelivery, so this
-	// is real (bounded) loss — the signal that ingest, not just connectivity, is degraded.
+	// IngestFailures counts accepted messages whose samples or presence transitions were
+	// dropped (ingestWithRetry's every abandonment): samples at once when inbound-events
+	// refused them because a reader is far behind (backpressure, not retried; presence
+	// bypasses the gate), and either after the in-handler retry budget was exhausted
+	// (device-management or NATS unreachable) or on connection shutdown. One message can
+	// count twice, once for its samples and once for its transitions. A clean-session
+	// Host gets no broker redelivery, so this is real (bounded) loss — the signal that
+	// ingest, not just connectivity, is degraded.
 	IngestFailures prometheus.Counter
 }
 

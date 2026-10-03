@@ -71,14 +71,17 @@ hay ningún bróker aparte que operar.
   supera su **techo de ingesta, contado en lecturas,** se confirma al bróker y se descarta. El dispositivo ya
   recibió su PUBACK cuando el bróker lo capturó, así que nada informa al publicador; en este
   transporte no hay un `429` que enviar. Si tu flota puede superar su límite a ráfagas,
-  dimensiónala contra ese límite en lugar de confiar en una contrapresión que no existe.
+  dimensiónala contra ese límite en lugar de confiar en que se avise al dispositivo para que frene,
+  porque no se le avisa.
 
-  Lo mismo ocurre cuando la propia plataforma rechaza eventos porque un consumidor va muy atrasado
+  Tampoco se avisa al dispositivo cuando la propia plataforma rechaza eventos porque un consumidor va
+  muy atrasado
   (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)).
   El bróker ya confirmó el mensaje al dispositivo, así que no se rechaza: espera en el stream de
   captura hasta que la canalización vuelva a aceptar eventos. Si el rechazo dura lo suficiente
-  para llenar el stream de captura, se descartan sus mensajes más antiguos, y
-  `JetStreamDurableLostUnread` lo informa.
+  para llenar el stream de captura, se descartan sus mensajes más antiguos.
+  `JetStreamDurableStalledBehindStream` lo informa mientras la canalización no lee el stream de
+  captura, y `JetStreamDurableLostUnread` cuando vuelve a leerlo.
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
   confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
   instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si
@@ -109,7 +112,8 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   que tus datos quizá no llegaron. Un `503` con `Retry-After` significa que el evento no se
   almacenó con toda seguridad, así que espera ese tiempo y vuelve a enviarlo. Un `503` sin él
   significa que la publicación falló, y si falló después de que el stream almacenara el evento, un
-  reintento lo almacena dos veces. Un `429` también significa que el evento no se aceptó; lleva una
+  reintento lo almacena dos veces, salvo que el evento lleve `altId` y `occurredTime` (consulta
+  [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). Un `429` también significa que el evento no se aceptó; lleva una
   cabecera `Retry-After`, así que espera y reintenta. `202` y `400` son terminales para esa
   petición.
 - **Escritura ○ / Lectura ○**: **no hay ningún canal descendente en absoluto.** Un dispositivo que

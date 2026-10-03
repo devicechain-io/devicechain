@@ -273,8 +273,12 @@ Ya tienes un dispositivo de principio a fin: registrado, con credencial, reporta
 | `400` en el `POST` de ingesta | Un número desnudo en vez de una cadena, lecturas no envueltas en `entries`, o un segmento de inquilino que no es un token válido. |
 | `202`, pero no aparece nada | O el **inquilino** no existe (se acepta un nombre bien formado, exista o no ese inquilino), o la credencial no coincidió. El `credentialId` del cuerpo debe ser exactamente el que creaste en el paso 4. |
 | `429` en el `POST` de ingesta | El inquilino supera su techo de ingesta: estás enviando más lecturas por segundo de las que permite su nivel. El evento no se aceptó. La respuesta lleva una cabecera `Retry-After`, así que espera y vuelve a enviarlo. |
-| `503` en el `POST` de ingesta | El evento no pudo entregarse al stream, y **no** se almacenó. Reinténtalo. Aparte de `429` tras esperar, los demás estados son terminales para esa petición. |
+| `503` con cabecera `Retry-After` en el `POST` de ingesta | La plataforma está rechazando eventos nuevos de todos los inquilinos ([contrapresión](../deployment/observability.md#ingest-backpressure)). El evento **no** se almacenó. Espera los segundos que indica `Retry-After` (10) y vuelve a enviarlo. `curl -i` muestra las cabeceras de la respuesta. |
+| `503` sin cabecera `Retry-After` en el `POST` de ingesta | El evento no pudo entregarse al stream, y **puede** que se haya almacenado igualmente. Vuelve a enviarlo, pero el reenvío almacena una segunda copia salvo que el evento lleve `altId` y `occurredTime` (consulta [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). |
 | No autorizado en una llamada a la API | El token de acceso ha caducado, o estás enviando el `identityToken` de la primera llamada del paso 3 en vez del `accessToken` de la segunda. |
+
+`202`, `400` y `404` son terminales para esa petición: no la vuelvas a enviar sin cambios. Reintenta
+un `429` y cualquiera de los dos tipos de `503`, como se describe arriba.
 
 ## Adónde ir después {#where-to-go-next}
 

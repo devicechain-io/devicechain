@@ -68,14 +68,16 @@ there is no separate broker to run.
   over its **ingest ceiling, counted in readings,** is acknowledged to the broker and dropped. The
   device was PUBACKed when the broker captured it, so nothing tells the publisher; this transport has no
   `429` to send. If your fleet can burst past its limit, size it against the limit rather than
-  relying on backpressure that does not exist.
+  relying on the device being told to slow down, which it is not.
 
-  The same is true when the platform itself is refusing events because a consumer is far behind
-  (see [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)).
+  The device is not told either when the platform itself is refusing events because a consumer is
+  far behind (see
+  [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)).
   The broker has already acknowledged the device, so the message is not refused: it waits in the
   capture stream until the pipeline accepts events again. If the refusal lasts long enough to fill
-  the capture stream, its oldest messages are discarded, and `JetStreamDurableLostUnread` reports
-  it.
+  the capture stream, its oldest messages are discarded. `JetStreamDurableStalledBehindStream` reports
+  that while the pipeline is not reading the capture stream, and `JetStreamDurableLostUnread` once it
+  reads again.
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A
   publish reaches a device that is connected and subscribed at that instant. The broker does not
   hold it for a device that is not, and nothing tells the platform whether the device received
@@ -104,7 +106,9 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   Retry on `503`: it is the platform telling you, on the only transport that can, that your data
   may not have landed. A `503` with a `Retry-After` means the event was certainly not stored, so
   wait that long and send it again. A `503` without one means the publish failed, and if it
-  failed after the stream had stored the event, a retry stores it twice. A `429` also means the
+  failed after the stream had stored the event, a retry stores it twice, unless the event carries an
+  `altId` and an `occurredTime` (see
+  [quality of service](../guides/connecting-a-device.md#quality-of-service)). A `429` also means the
   event was not accepted; it carries a `Retry-After` header, so back off and retry. `202` and `400`
   are terminal for that request.
 - **Write ○ / Read ○** — **there is no downlink at all.** A device that reaches the platform only
