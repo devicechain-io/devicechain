@@ -180,8 +180,9 @@ func validateLocationEntry(index int, entry *model.UnresolvedLocationEntry) erro
 	return nil
 }
 
-// ErrInvalidEventTime marks a decode that failed because a timestamp on the wire is
-// not an RFC3339 instant — the envelope's or any entry's.
+// ErrInvalidEventTime marks a decode that failed because a timestamp on the wire — the
+// envelope's or any entry's — is not an RFC3339 instant, or is more than eventtime.MaxAge
+// before the platform received it (errors.Is(err, eventtime.ErrTooOld) then holds too).
 //
 // It exists so the caller can count clock-shaped rejections apart from malformed JSON.
 // Both are terminal decode failures and both already route to the failed-decode path;
@@ -217,7 +218,8 @@ type entryTimeProbe struct {
 // evaluated and streamed, and is then refused ONLY at the history write, which retries to
 // its delivery ceiling and dead-letters as an API failure. The result is a reading every
 // surface has except the one that stores it. Refusing it here is what keeps the sentinel a
-// sentinel; a device that means "the epoch" can say 1970.
+// sentinel. A device with no clock omits the field: the epoch is no substitute, because a
+// time more than eventtime.MaxAge before receipt is refused too (see Decode).
 func validateEntryTimes(kind string, payload []byte) error {
 	probe := &entryTimeProbe{}
 	if err := json.Unmarshal(payload, probe); err != nil {
@@ -490,6 +492,15 @@ func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.Unre
 	// failed-decode path intact.
 	if err := model.CheckReadingCount(built); err != nil {
 		return nil, nil, err
+	}
+	// 🔴 THE AGE FLOOR, at the door so HTTP can answer 400 and a broker transport dead-letters
+	// with the reason. Measured against the event's ProcessedTime, which AssembleEvent set
+	// from receivedAt: NOT against receivedAt itself, which is the zero "now" for a transport
+	// with no capture stream. device-management resolution applies the same check again, to
+	// every producer; it reads the same constant and the same ProcessedTime, so it never
+	// disagrees with this one.
+	if err := model.CheckEventAge(event.OccurredTime, event.ProcessedTime, built); err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidEventTime, err)
 	}
 	return event, built, nil
 }

@@ -202,11 +202,14 @@ func runCapturePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 		}
 	}
 
+	benchOccurred := time.Now().UTC().Add(-time.Hour).Truncate(time.Second).Format(time.RFC3339)
 	for i := 0; i < events; i++ {
 		device := i % 1000
 		subject := fmt.Sprintf("%s.acme.devices.dev-%d.events", instance, device)
-		body := fmt.Sprintf(`{"device":"dev-%d","eventType":"Measurement","occurredTime":"2026-07-20T10:30:00Z",`+
-			`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`, device)
+		// Dated from the run, not on a fixed day: a reading more than 366 days before its
+		// receipt is refused, and refused events would measure the failure path instead.
+		body := fmt.Sprintf(`{"device":"dev-%d","eventType":"Measurement","occurredTime":%q,`+
+			`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`, device, benchOccurred)
 		if _, err := js.PublishAsync(subject, []byte(body)); err != nil {
 			b.Fatal(err)
 		}

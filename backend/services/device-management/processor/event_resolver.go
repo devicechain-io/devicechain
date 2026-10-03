@@ -58,7 +58,9 @@ type EventResolver struct {
 	// slow reports resolves that take seconds. Like locationMemo it is SHARED across the
 	// pool (initializeEventResolvers replaces the private one NewEventResolver gives).
 	slow *slowResolveReporter
-	// eventTime is the platform's event-time policy, applied HERE and nowhere else.
+	// eventTime is the platform's event-time policy. The instant a reading is resolved to is
+	// decided HERE and nowhere else; the age refusal also runs upstream, from the same
+	// constant (see package eventtime).
 	eventTime EventTimePolicy
 }
 
@@ -81,6 +83,10 @@ type EventTimePolicy struct {
 	// ceiling — one increment per bounded time, entry or envelope. It is label-free
 	// (never per-tenant, ADR-023 G.3) and may be nil in tests.
 	Bounded prometheus.Counter
+	// TooOld counts events refused because a reported time is more than eventtime.MaxAge
+	// before the platform received it — one increment per refused event. Label-free like
+	// Bounded, and may be nil in tests.
+	TooOld prometheus.Counter
 }
 
 // bound applies the policy to one reported instant, counting a bite.
@@ -946,6 +952,21 @@ func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.Unre
 
 // Execute logic to resolve event.
 func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
+	// The age floor, before the device is read: it needs no device, so a stream of backdated
+	// events costs no database read. It reads the same constant and the same ProcessedTime as
+	// the event-sources decoder, so for a JSON transport it never refuses what the door let
+	// through; it is what covers every other producer (the gateway emitter drops old samples
+	// one by one before this, see adapter.Emitter.Emit) and any producer added later.
+	//
+	// Running first changes one outcome on purpose: a backdated event that would ALSO fail
+	// authentication is dead-lettered as Invalid rather than Unauthenticated. Its age alone
+	// decides that nothing will store it, and saying so costs no credential lookup.
+	if err := esmodel.CheckEventAge(unrez.OccurredTime, unrez.ProcessedTime, unrez.Payload); err != nil {
+		if rez.eventTime.TooOld != nil && errors.Is(err, eventtime.ErrTooOld) {
+			rez.eventTime.TooOld.Inc()
+		}
+		return nil, uint(dmproto.FailureReason_Invalid), err
+	}
 	device, reason, err := rez.resolveDevice(ctx, unrez)
 	if err != nil {
 		return nil, reason, err
@@ -1019,7 +1040,12 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				// delivery cap, then route to the failed-events dead-letter path, which
 				// acks the source once the record is stored so a permanently-
 				// unresolvable event stops looping (A4).
-				if unresolved.NumDelivered >= messaging.MaxDeliver {
+				//
+				// A refusal for AGE is dead-lettered on its first delivery: it compares two
+				// times the event carries immutably, so every redelivery would answer the
+				// same, and leaving it unacked only holds it in flight for minutes. ONLY that
+				// refusal: a not-yet-registered device must still get its redeliveries.
+				if unresolved.NumDelivered >= messaging.MaxDeliver || errors.Is(err, eventtime.ErrTooOld) {
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
 				} else {

@@ -88,7 +88,7 @@ func TestAMalformedEntryTimeIsRejectedAtTheDoor(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := decoder.Decode([]byte(tc.body), time.Time{})
+			_, _, err := decoder.Decode([]byte(tc.body), fixtureReceipt)
 			if err == nil {
 				t.Fatal("a malformed timestamp must fail the decode, not be substituted")
 			}
@@ -116,7 +116,7 @@ func TestAWellFormedEntryTimeSurvivesAndAbsenceStaysAbsent(t *testing.T) {
 	_, payload, err := decoder.Decode([]byte(
 		`{"device":"d1","eventType":"Measurement","payload":{"entries":[
 			{"measurements":{"t":"1"},"occurredTime":"2026-08-09T12:00:00.123456789Z"},
-			{"measurements":{"t":"2"}}]}}`), time.Time{})
+			{"measurements":{"t":"2"}}]}}`), fixtureReceipt)
 	if err != nil {
 		t.Fatalf("a well-formed body must decode: %v", err)
 	}
@@ -136,5 +136,98 @@ func TestAWellFormedEntryTimeSurvivesAndAbsenceStaysAbsent(t *testing.T) {
 	}
 	if entries[1].OccurredTime != nil {
 		t.Fatalf("an unreported sample time must stay absent; got %v", *entries[1].OccurredTime)
+	}
+}
+
+// fixtureReceipt is the receipt instant a fixture dated on a fixed day is decoded at. A zero
+// receivedAt means now, and the platform refuses a reading more than 366 days before receipt,
+// so a fixed-date fixture decoded "now" would start failing a year after it was written.
+var fixtureReceipt = time.Date(2026, 8, 9, 12, 0, 1, 0, time.UTC)
+
+// TestAnEventDatedBeforeTheAgeLimitIsRejectedAtTheDoor: a reported time more than 366 days
+// before the platform received the message is refused, on the envelope or on any entry,
+// whole, as the same terminal decode failure as a malformed time (so HTTP answers 400 and a
+// broker transport dead-letters).
+//
+// 🔴 WHY THERE IS A PAST BOUND AT ALL. A device's clock chooses which time partition of the
+// event store its reading lands in. With no floor, a few thousand messages dated a partition
+// apart create a few thousand partitions, and every later operation that touches each
+// partition (an upgrade's key rebuild, an index drop) slows with them.
+func TestAnEventDatedBeforeTheAgeLimitIsRejectedAtTheDoor(t *testing.T) {
+	decoder := NewJsonDecoder(nil)
+	receivedAt := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "an ancient envelope",
+			body: `{"device":"d1","eventType":"Measurement","occurredTime":"2000-01-01T00:00:00Z",` +
+				`"payload":{"entries":[{"measurements":{"t":"1"}}]}}`,
+			want: "envelope occurredTime",
+		},
+		{
+			// The entry the device got wrong is named by index, like every other time refusal.
+			name: "an ancient measurement entry under a fresh envelope",
+			body: `{"device":"d1","eventType":"Measurement","occurredTime":"2026-09-30T00:00:00Z","payload":{"entries":[
+				{"measurements":{"t":"1"},"occurredTime":"2026-09-30T00:00:00Z"},
+				{"measurements":{"t":"2"},"occurredTime":"2000-01-01T00:00:00Z"}]}}`,
+			want: "measurement entry 1 occurredTime",
+		},
+		{
+			name: "an ancient location entry",
+			body: `{"device":"d1","eventType":"Location","payload":{"entries":[
+				{"latitude":"33.749","longitude":"-84.388","occurredTime":"2000-01-01T00:00:00Z"}]}}`,
+			want: "location entry 0 occurredTime",
+		},
+		{
+			name: "an ancient alert entry",
+			body: `{"device":"d1","eventType":"Alert","payload":{"entries":[
+				{"type":"SENSOR_FAULT","level":3,"occurredTime":"2000-01-01T00:00:00Z"}]}}`,
+			want: "alert entry 0 occurredTime",
+		},
+		{
+			// The placeholder the device guide used to suggest for a device with no clock.
+			name: "the epoch",
+			body: `{"device":"d1","eventType":"Measurement","occurredTime":"1970-01-01T00:00:00Z",` +
+				`"payload":{"entries":[{"measurements":{"t":"1"}}]}}`,
+			want: "envelope occurredTime",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := decoder.Decode([]byte(tc.body), receivedAt)
+			if err == nil {
+				t.Fatal("a time more than 366 days before receipt must fail the decode")
+			}
+			for _, want := range []string{tc.want, "366 days"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error message:\n got: %v\nwant it to contain: %s", err, want)
+				}
+			}
+			if !errors.Is(err, ErrInvalidEventTime) {
+				t.Fatalf("error is not an ErrInvalidEventTime: %v", err)
+			}
+		})
+	}
+
+	// Negative controls: the floor is not "any past time". A reading a year old, and one
+	// exactly at the limit, decode.
+	for _, age := range []time.Duration{365 * 24 * time.Hour, 366 * 24 * time.Hour} {
+		at := receivedAt.Add(-age).Format(time.RFC3339Nano)
+		body := `{"device":"d1","eventType":"Measurement","occurredTime":"` + at + `","payload":{"entries":[
+			{"measurements":{"t":"1"},"occurredTime":"` + at + `"}]}}`
+		if _, _, err := decoder.Decode([]byte(body), receivedAt); err != nil {
+			t.Fatalf("a reading %s before receipt must decode: %v", age, err)
+		}
+	}
+
+	// The floor is measured against the event's receipt instant, which a zero receivedAt
+	// reads as now: not against the raw zero argument, which would let every time through.
+	old := time.Now().Add(-400 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	_, _, err := decoder.Decode([]byte(`{"device":"d1","eventType":"Measurement","occurredTime":"`+old+
+		`","payload":{"entries":[{"measurements":{"t":"1"}}]}}`), time.Time{})
+	if err == nil || !errors.Is(err, ErrInvalidEventTime) {
+		t.Fatalf("a time 400 days old must be refused when receipt is now: %v", err)
 	}
 }

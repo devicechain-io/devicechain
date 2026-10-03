@@ -185,7 +185,7 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	e := NewEmitter(w, fixedNow, "sp", false)
 
 	ts := int64(1_700_000_000_123)
-	err := e.Emit(context.Background(), "acme", "sparkplug:h1", "dev-1", []Sample{{Name: "temperature", Value: 21.5, Time: ts}})
+	err := emitErr(e, context.Background(), "acme", "sparkplug:h1", "dev-1", []Sample{{Name: "temperature", Value: 21.5, Time: ts}})
 	require.NoError(t, err)
 	require.Len(t, w.msgs, 1)
 
@@ -226,8 +226,8 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 func TestEmitterFormatsLargeIntegersWithoutExponent(t *testing.T) {
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "sp", false)
-	require.NoError(t, e.Emit(context.Background(), "acme", "s", "dev-1",
-		[]Sample{{Name: "count", Value: 12345678, Time: 1}}))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "s", "dev-1",
+		[]Sample{{Name: "count", Value: 12345678, Time: fixedNowMs}}))
 	require.Len(t, w.msgs, 1)
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
@@ -383,7 +383,7 @@ func TestIngesterEmitsForAKnownDevice(t *testing.T) {
 	m, read := newIngestMetrics()
 	ing := NewIngester(NewRegistrar(gql, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
 
-	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
+	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s"}, "g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}})
 	require.NoError(t, err)
 	assert.Len(t, w.msgs, 1)
 	assert.Equal(t, float64(1), read("emitted"))
@@ -396,7 +396,7 @@ func TestIngesterDropsUnknownAndCountsIt(t *testing.T) {
 	m, read := newIngestMetrics()
 	ing := NewIngester(NewRegistrar(gql, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
 
-	err := ing.Ingest(context.Background(), "acme", IngestPolicy{AutoRegister: false}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}, {Name: "u", Value: 2, Time: 1}})
+	err := ing.Ingest(context.Background(), "acme", IngestPolicy{AutoRegister: false}, "g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}, {Name: "u", Value: 2, Time: fixedNowMs}})
 	require.NoError(t, err, "a definitive drop is handled, not an error")
 	assert.Empty(t, w.msgs, "an unknown device with auto-register off must emit nothing")
 	assert.Equal(t, float64(2), read("dropped"), "drop counts the samples")
@@ -414,7 +414,7 @@ func TestIngesterCountsRegistrationThenEmits(t *testing.T) {
 	m, read := newIngestMetrics()
 	ing := NewIngester(NewRegistrar(gql, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
 
-	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s", AutoRegister: true, DeviceTypeToken: "t"}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
+	err := ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s", AutoRegister: true, DeviceTypeToken: "t"}, "g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}})
 	require.NoError(t, err)
 	assert.Equal(t, float64(1), read("registered"))
 	assert.Len(t, w.msgs, 1)
@@ -426,7 +426,7 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	w := &fakeWriter{}
 	m, _ := newIngestMetrics()
 	ing := NewIngester(NewRegistrar(gqlErr, "url", "sp-", nil), NewEmitter(w, fixedNow, "sp", false), m)
-	err := ing.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
+	err := ing.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}})
 	assert.Error(t, err)
 	assert.Empty(t, w.msgs)
 
@@ -434,7 +434,7 @@ func TestIngesterReturnsRetryableErrors(t *testing.T) {
 	gqlOK := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
 	wErr := &fakeWriter{err: errors.New("nats down")}
 	ing2 := NewIngester(NewRegistrar(gqlOK, "url", "sp-", nil), NewEmitter(wErr, fixedNow, "sp", false), m)
-	err = ing2.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
+	err = ing2.Ingest(context.Background(), "acme", IngestPolicy{}, "g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}})
 	assert.Error(t, err)
 }
 
@@ -447,7 +447,7 @@ func TestEmitterStampsAuthenticatedTransport(t *testing.T) {
 	for _, marked := range []bool{true, false} {
 		w := &fakeWriter{}
 		e := NewEmitter(w, fixedNow, "lw", marked)
-		require.NoError(t, e.Emit(context.Background(), "acme", "lwm2m", "dev-1",
+		require.NoError(t, emitErr(e, context.Background(), "acme", "lwm2m", "dev-1",
 			[]Sample{{Name: "t", Value: 1, Time: 1_700_000_000_000}}))
 		require.NoError(t, e.EmitPresence(context.Background(), "acme", "lwm2m", "dev-1",
 			PresenceEvent{Connected: true, SessionId: 1, OccurredAt: time.UnixMilli(1_700_000_000_000).UTC()}))
@@ -479,7 +479,7 @@ func TestEmitterKeepsEachSamplesInstantInABatch(t *testing.T) {
 	// time" and "the newest time SO FAR" happen to agree entry for entry — an emitter that
 	// stamped the running envelope into every entry would pass. Newest-first breaks that
 	// coincidence, and is a real upload order besides.
-	err := e.Emit(context.Background(), "acme", "sparkplug:h1", "dev-1", []Sample{
+	err := emitErr(e, context.Background(), "acme", "sparkplug:h1", "dev-1", []Sample{
 		{Name: "temperature", Value: 22.5, Time: newest},
 		{Name: "temperature", Value: 21.5, Time: oldest},
 	})

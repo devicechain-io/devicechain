@@ -94,6 +94,9 @@ type timeLeadingKeysTiming struct {
 	// maxRows is the most rows the rebuild may have to index: the rows not yet moved into
 	// a compressed chunk's columnar store, over every table whose key is still the old one.
 	maxRows int64
+	// maxChunks is the most chunks a table this start would lock may have
+	// (eventStoreMaxChunks). Zero is not "unlimited": it refuses any table with a chunk.
+	maxChunks int64
 	// buildMemory is SET LOCAL maintenance_work_mem for the swap's index sorts.
 	buildMemory string
 }
@@ -107,9 +110,13 @@ type timeLeadingKeysTiming struct {
 //     event store's own maintenance_work_mem is 64MB and the sort is about 20% slower there.
 //   - Chunks cost too, compressed or not, and the row count does not see them: on the
 //     pinned image, rebuilding events_pkey on a table of 1,000 daily chunks (950 of them
-//     compressed, nearly three years with retention off, the default) took 10.8 s, and a
-//     unique index on the same shape 0.85 s. tableBuild covers that with room; a table
-//     well past it is reported too slow (below), not left to stall every start.
+//     compressed, nearly three years at the default chunk interval with retention off, the
+//     default) took 10.8 s, and a unique index on the same shape 0.85 s (up to 28.2 s for
+//     events_pkey on slower development workstations; see eventStoreMaxChunks). maxChunks =
+//     eventStoreMaxChunks, half that shape, holds every table to where tableBuild covers the
+//     rebuild with room on slower storage: a table with more chunks is refused before anything
+//     is locked, and marks nothing. One within it whose build still runs out is reported too
+//     slow (below).
 //   - budget = 60 s for everything in one start. On an upgrade from v0.18.0 the index trim
 //     runs in the same start first; its own budget is 60 s and it takes well under a second
 //     uncontended. Expected total: seconds. Worst case: the trim's budget, this budget and
@@ -138,6 +145,7 @@ var timeLeadingKeysDefaultTiming = timeLeadingKeysTiming{
 	budget:       60 * time.Second,
 	countTimeout: 10 * time.Second,
 	maxRows:      4_000_000,
+	maxChunks:    eventStoreMaxChunks,
 	buildMemory:  "256MB",
 }
 
@@ -162,11 +170,21 @@ const timeLeadingKeysTooSlowMessage = "rebuilding the key %s of \"event-manageme
 	"slow would hold the table against ingest on every start, so it is not retried: event-management now stops " +
 	"at once on every start, without locking anything, until the instance is recreated. To carry this instance " +
 	"forward, " + recreateAdvice + ". To try once more instead (for example after moving the event store to " +
-	"faster storage), clear the marker with: COMMENT ON INDEX \"event-management\".%s IS NULL. Error: %w"
+	"faster storage), clear the marker with: COMMENT ON INDEX \"event-management\".%s IS NULL. " +
+	tooSlowChunksAdvice + " Error: %w"
 
 const timeLeadingKeysRefusedMessage = "rebuilding the key %s of \"event-management\".%s was refused: an earlier start " +
 	"found it too slow and marked it (%q). Nothing was locked or changed (%s). To carry this instance forward, " +
-	recreateAdvice + ". To try once more instead, clear the marker with: COMMENT ON INDEX \"event-management\".%s IS NULL"
+	recreateAdvice + ". To try once more instead, clear the marker with: COMMENT ON INDEX \"event-management\".%s IS NULL. " +
+	tooSlowChunksAdvice
+
+// tooSlowChunksAdvice is what both too-slow messages say about chunks: a rebuild's time grows
+// with the table's chunks, and the in-place way to have fewer is drop_chunks. chunkListQuery
+// carries no '%', so it is safe inside a format string.
+const tooSlowChunksAdvice = "If the table holds chunks of events dated far in the past (list them with: " +
+	chunkListQuery + "), removing the ones you do not need with the batched drop_chunks procedure in this " +
+	"release's upgrade notes shortens the rebuild; that deletes every tenant's events in them for good. " +
+	"Then clear the marker."
 
 const timeLeadingKeysBusyMessage = "could not lock \"event-management\".%s to rebuild its key %s: the table stayed busy " +
 	"on every attempt (%d attempts, each bounded to %s, within %s). Nothing is half-applied (%s), and this " +
@@ -226,7 +244,10 @@ type rekeyPlan struct {
 //     predicate, primary only for events_pkey); anything else ends the migration before
 //     any DDL. That reading is also what makes it re-runnable: a key already rebuilt is
 //     skipped with no lock taken.
-//  2. **Before any DDL it counts, up to maxRows + 1, the rows the rebuild would index**:
+//  2. **Before any lock it counts each table's chunks, from the catalog**, and refuses a
+//     table it would lock that has more than maxChunks, changing and marking nothing, so
+//     the next start counts again (checkChunkCeiling). Then, **before any DDL, it counts, up
+//     to maxRows + 1, the rows the rebuild would index**:
 //     the heap rows of every chunk of every table still on its old key (ONLY the chunk, so
 //     rows already moved into a compressed chunk's columnar store, which the build does
 //     not index, are not counted; rows inserted into a compressed chunk's range live in
@@ -295,12 +316,23 @@ func rekeyIdentityKeys(db *gorm.DB, timing timeLeadingKeysTiming) error {
 		plans = append(plans, rekeyPlan{k, action})
 	}
 
-	// 2. The history gate, over the tables that build.
-	var building []string
+	// 2. The chunk gate, over every table this start would lock (a drop-only table is locked
+	// whole too), then the history gate, over the tables that build. The chunk count comes
+	// first, and the order is load-bearing: it is one catalog read, while the row count is a
+	// statement per chunk, so on a table with too many chunks the row count is itself what
+	// would run out of time. Both come before step 3's first LOCK.
+	var locking, building []string
 	for _, p := range plans {
+		if p.action != rekeyDone {
+			locking = append(locking, p.key.table)
+		}
 		if p.action == rekeySwap {
 			building = append(building, p.key.table)
 		}
+	}
+	if err := checkChunkCeiling(db, "rebuilding the event store's identity keys", rekeyProgress(plans),
+		locking, timing.maxChunks, timing.countTimeout); err != nil {
+		return err
 	}
 	if len(building) > 0 {
 		rows, err := rowsToRekey(db, building, timing.maxRows, timing.countTimeout)

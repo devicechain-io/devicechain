@@ -60,7 +60,7 @@ func rekeyID() string { return NewTimeLeadingKeysSchema().ID }
 var testRekeyTiming = timeLeadingKeysTiming{
 	lockTimeout: 500 * time.Millisecond, lockAttempt: time.Second, pause: 200 * time.Millisecond,
 	tableBuild: 30 * time.Second, minBuild: 10 * time.Millisecond, budget: 60 * time.Second,
-	countTimeout: 10 * time.Second, maxRows: 1_000_000, buildMemory: "64MB",
+	countTimeout: 10 * time.Second, maxRows: 1_000_000, maxChunks: eventStoreMaxChunks, buildMemory: "64MB",
 }
 
 // assertFinalIndexes asserts every event hypertable, and every chunk of it, carries exactly
@@ -285,7 +285,7 @@ func TestIntegrationTimeLeadingKeysRefuseTooMuchHistory(t *testing.T) {
 func TestIntegrationTimeLeadingKeysWaitBoundedlyForALockAndResume(t *testing.T) {
 	timing := timeLeadingKeysTiming{lockTimeout: 200 * time.Millisecond, lockAttempt: 500 * time.Millisecond,
 		pause: 300 * time.Millisecond, tableBuild: 30 * time.Second, minBuild: 10 * time.Millisecond,
-		budget: 3 * time.Second, countTimeout: 10 * time.Second, maxRows: 1_000_000, buildMemory: "77MB"}
+		budget: 3 * time.Second, countTimeout: 10 * time.Second, maxRows: 1_000_000, maxChunks: eventStoreMaxChunks, buildMemory: "77MB"}
 
 	// Negative control: uncontended, the same migration finishes at once, so it is the lock
 	// and not the harness that makes the run below wait.
@@ -362,7 +362,7 @@ func TestIntegrationTimeLeadingKeysStartNoAttemptTheBudgetCannotHold(t *testing.
 		// Room for events' first attempt to start (a lock wait and the least swap, plus
 		// 390 ms for the catalog reads and the row count), but not for a second table once
 		// events has waited holdFirst.
-		budget: 1400 * time.Millisecond, countTimeout: 10 * time.Second, maxRows: 1_000_000, buildMemory: "64MB"}
+		budget: 1400 * time.Millisecond, countTimeout: 10 * time.Second, maxRows: 1_000_000, maxChunks: eventStoreMaxChunks, buildMemory: "64MB"}
 
 	inst := freshInstance(t, "itrekeybudget")
 	mgr := newPostgresManagerWith(t, inst, migrationsBefore(t, rekeyID()))
@@ -464,7 +464,7 @@ func TestIntegrationTimeLeadingKeysACancelledSwapIsNotTooSlow(t *testing.T) {
 func TestIntegrationTimeLeadingKeysLockChunksAndCompressedRelationsFirst(t *testing.T) {
 	timing := timeLeadingKeysTiming{lockTimeout: time.Second, lockAttempt: 1500 * time.Millisecond,
 		pause: 200 * time.Millisecond, tableBuild: 500 * time.Millisecond, minBuild: 10 * time.Millisecond,
-		budget: 2500 * time.Millisecond, countTimeout: 10 * time.Second, maxRows: 1_000_000, buildMemory: "64MB"}
+		budget: 2500 * time.Millisecond, countTimeout: 10 * time.Second, maxRows: 1_000_000, maxChunks: eventStoreMaxChunks, buildMemory: "64MB"}
 
 	for _, tc := range []struct {
 		name     string
@@ -529,7 +529,7 @@ func TestIntegrationTimeLeadingKeysTooSlowIsRolledBackAndSticks(t *testing.T) {
 
 	timing := timeLeadingKeysTiming{lockTimeout: time.Second, lockAttempt: 2 * time.Second,
 		pause: 2 * time.Second, tableBuild: 50 * time.Millisecond, minBuild: 10 * time.Millisecond,
-		budget: 20 * time.Second, countTimeout: 10 * time.Second, maxRows: 10_000_000, buildMemory: "64MB"}
+		budget: 20 * time.Second, countTimeout: 10 * time.Second, maxRows: 10_000_000, maxChunks: eventStoreMaxChunks, buildMemory: "64MB"}
 	start := time.Now()
 	err := newTimeLeadingKeysSchema(timing).Migrate(sys)
 	elapsed := time.Since(start)

@@ -403,6 +403,13 @@ reads the same already-bounded value. It is configured on the device-management 
 `maxEventFutureSkewSeconds`, in seconds, **default 300**. A reading whose reported time leads the
 moment the platform received it by more than that is stored at the ceiling rather than refused.
 
+The other direction is fixed, not configured: a reading dated more than **366 days** before the
+platform received it is refused, and is not stored or evaluated anywhere. The two directions are
+treated differently on purpose. A clock running ahead would otherwise freeze shared live state, so
+its time is capped; a time far in the past would otherwise create storage for a period nobody
+recorded, so the reading is refused rather than moved. See
+[how far back a reading may be dated](../guides/connecting-a-device.md#payload-shapes).
+
 A **negative value is rejected at startup**, and it is worth knowing what it would have meant:
 disabling the bound entirely. One event dated years into the future then pins the device's
 last-activity time — every projection here keeps only the strictly newer value — so its inactivity

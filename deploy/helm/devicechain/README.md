@@ -201,6 +201,10 @@ functionalAreas:
     replicas: 2
 ```
 
+The skew ceiling bounds only how far a timestamp may run ahead. There is no past
+setting: a reading dated more than 366 days before it arrives is refused, on every
+transport. That limit is fixed.
+
 Per-tenant rate ceilings are enforced by each replica separately: at `replicas: 2`,
 event-sources, outbound-connectors and ai-inference can admit up to twice a tenant's
 ceiling.

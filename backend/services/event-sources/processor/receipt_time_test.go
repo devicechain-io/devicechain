@@ -82,9 +82,9 @@ func TestACapturedDeviceTimeIsKeptAndReceiptIsStamped(t *testing.T) {
 	h := newCaptureHarness(t)
 	appended := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
 
-	ev := handleCaptured(t, h, validEvent, 1, appended) // occurredTime 2026-07-20T10:30:00Z
+	ev := handleCaptured(t, h, validEvent, 1, appended) // occurredTime recentFixtureTime
 
-	assert.Equal(t, time.Date(2026, 7, 20, 10, 30, 0, 0, time.UTC), ev.OccurredTime.UTC())
+	assert.Equal(t, reportedFixtureTime(t), ev.OccurredTime.UTC())
 	assert.True(t, ev.ProcessedTime.Equal(appended),
 		"ProcessedTime = %v, want the capture append time %v", ev.ProcessedTime, appended)
 }
@@ -122,7 +122,7 @@ func TestADeviceTimeIsKeptAndReceiptIsStamped(t *testing.T) {
 	ev, _, err := NewJsonDecoder(nil).Decode([]byte(validEvent), received)
 	require.NoError(t, err)
 
-	assert.Equal(t, time.Date(2026, 7, 20, 10, 30, 0, 0, time.UTC), ev.OccurredTime.UTC())
+	assert.Equal(t, reportedFixtureTime(t), ev.OccurredTime.UTC())
 	assert.Equal(t, received.UTC(), ev.ProcessedTime)
 }
 

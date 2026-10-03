@@ -600,6 +600,14 @@ almacén. Todo lo ya desalojado se da entonces por contabilizado, y un reinicio 
 la evidencia. Mantén intacto el directorio del almacén entre reinicios si el conteo de descartes te
 importa.
 
+**El almacén limita bytes, no antigüedad.** Un evento que espera en él conserva la hora que informó
+el dispositivo (a un evento JSON que no informó ninguna se le estampa la hora en que el agente lo
+guardó), así que llega a la plataforma tan antiguo como la interrupción que esperó, y más si el
+dispositivo ya lo había acumulado antes. La plataforma rechaza una lectura con más de 366 días de
+antigüedad respecto al momento en que llega, así que un evento retenido más tiempo se pierde al
+llegar. El agente no avisa de ello; la señal es `spool_oldest_age_seconds`. Una alerta sobre ella por
+encima de 335 días (28.944.000 segundos) deja un mes para restablecer el enlace ascendente.
+
 :::caution El colapso de duplicados al reconectar solo cubre payloads JSON
 Cuando el enlace ascendente vuelve, el agente reenvía todo lo que había almacenado. Para los
 **payloads de objeto JSON** estampa una identidad y un tiempo de evento estables ante reenvíos, de modo
@@ -694,6 +702,7 @@ Prefijo: `devicechain_sparkplugingest_`.
 | `decode_errors_total` / `ingest_failures_total` | Payloads malformados, y fallos al publicar hacia adelante. |
 | `ingest_samples_shed_total` | Lecturas DATA descartadas porque un inquilino supera su techo de ingesta. Un inquilino que descarta aquí envía más lecturas de las que permite su nivel. |
 | `tenant_deleted_dropped_total` | Tráfico rechazado porque su inquilino está siendo eliminado. |
+| `samples_too_old_dropped_total` | Lecturas descartadas porque su marca de tiempo es anterior en más de 366 días al momento en que el host las recibió; el resto de su mensaje se almacena. Una métrica cuyo valor no ha cambiado en ese tiempo se descarta de cada nacimiento, y un nodo sin reloj configurado (horas cercanas a 1970) ve descartadas todas sus lecturas. El servicio registra un aviso que nombra el dispositivo. |
 
 ### Métricas de la ingesta LwM2M {#lwm2m-ingestion-metrics}
 
@@ -712,6 +721,7 @@ Prefijo: `devicechain_lwm2mingest_`.
 | `notify_decode_failures_total` | Payloads malformados. |
 | `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Lecturas que traía un Notify y que no produjeron ninguna medición. **Que no sean numéricas es normal**: una lectura IPSO booleana o de texto es un dispositivo funcionando bien, y este contador es lo que distingue ese caso del de un dispositivo que se ha quedado callado, que desde aquí se ve igual. Los otros dos son fallos de firmware: un valor que resolvió a infinito o NaN, y una lectura sin ruta de recurso. |
 | `observation_overflow_total` | Un registro que supera el tope de 32 observaciones. Algunos de sus recursos no se observan. |
+| `telemetry_too_old_dropped_total` | Lecturas descartadas porque su hora es anterior en más de 366 días al momento en que el adaptador las recibió; el resto de su Notify se almacena. El servicio registra un aviso que nombra el dispositivo. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta, en mensajes Notify y en lecturas. |
 | `shadows_reconstructed_total` | Presencia reconstruida tras un cambio de liderazgo. Un pico es la huella de un relevo. |
 | `commands_failed_total` / `commands_not_served_total` | Comandos descendentes que no llegaron a destino. |

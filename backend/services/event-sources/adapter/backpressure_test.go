@@ -25,7 +25,7 @@ func TestOnlyPresenceTransitionsBypassBackpressure(t *testing.T) {
 		PresenceEvent{ExternalId: "g/n", Connected: false, Reason: "ndeath", SessionId: 7, OccurredAt: at}))
 	require.NoError(t, e.EmitPresenceDemotion(context.Background(), "acme", "s", "dev-1",
 		DemotionEvent{SessionId: 7, OccurredAt: at, Reason: "released"}))
-	require.NoError(t, e.Emit(context.Background(), "acme", "s", "dev-1",
+	require.NoError(t, emitErr(e, context.Background(), "acme", "s", "dev-1",
 		[]Sample{{Name: "t", Value: 1, Time: at.UnixMilli()}}))
 
 	require.Len(t, w.msgs, 3)

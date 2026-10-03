@@ -1137,6 +1137,10 @@ functionalAreas:
       # a strictly-newer guard driven by this value and none has a repair path: one
       # event dated years out pins a device's last-activity forever, so its inactivity
       # sweep never fires again and it can never be seen to go offline.
+      #
+      # There is no past setting: a reading dated more than 366 days before it arrives
+      # is refused, on every transport (the platform constant eventtime.MaxAge), never
+      # moved. That limit is fixed.
       maxEventFutureSkewSeconds: 300
       # Inbound event resolution (default shown). Each resolver authenticates an
       # event's credential (one database read, holding one pooled connection) and then

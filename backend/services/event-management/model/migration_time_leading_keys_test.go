@@ -59,8 +59,41 @@ func TestTimeLeadingKeysSnapshot(t *testing.T) {
 	assert.Equal(t, timeLeadingKeysTiming{
 		lockTimeout: 3 * time.Second, lockAttempt: 5 * time.Second, pause: 2 * time.Second,
 		tableBuild: 40 * time.Second, minBuild: time.Second, budget: 60 * time.Second,
-		countTimeout: 10 * time.Second, maxRows: 4_000_000, buildMemory: "256MB",
+		countTimeout: 10 * time.Second, maxRows: 4_000_000, maxChunks: 500, buildMemory: "256MB",
 	}, timeLeadingKeysDefaultTiming)
+	assert.EqualValues(t, 500, indexTrimDefaultTiming.maxChunks, "the trim gates at the same ceiling")
+	assert.Equal(t, 10*time.Second, indexTrimDefaultTiming.countTimeout)
+}
+
+// TestOverChunkCeiling: the ceiling is strict (exactly limit chunks is allowed), per table
+// (never a sum across tables), and names every table over it, with its count, in the order
+// given.
+func TestOverChunkCeiling(t *testing.T) {
+	tables := []string{"events", "measurement_events", "location_events"}
+	assert.Equal(t, "events (1001) has",
+		overChunkCeiling(map[string]int64{"events": 1001, "measurement_events": 1000, "location_events": 999}, tables, 1000))
+	assert.Equal(t, "events (1001), location_events (5000) have",
+		overChunkCeiling(map[string]int64{"location_events": 5000, "events": 1001}, tables, 1000))
+	assert.Equal(t, "", overChunkCeiling(map[string]int64{"events": 1000, "measurement_events": 1000,
+		"location_events": 1000}, tables, 1000), "3,000 chunks across three tables is not over a per-table 1,000")
+	assert.Equal(t, "", overChunkCeiling(map[string]int64{"alert_events": 5000}, tables, 1000),
+		"a table this start would not lock is not counted against it")
+	assert.Equal(t, "", overChunkCeiling(nil, tables, 1000))
+}
+
+// TestEventStoreChunksMessage: the refusal names the tables and counts, the ceiling, what this
+// start changed, how to list the chunks, the remedy and what it deletes, and the recreate.
+func TestEventStoreChunksMessage(t *testing.T) {
+	msg := fmt.Sprintf(eventStoreChunksMessage, "rebuilding the event store's identity keys", "events (1834) has",
+		1000, "no table has been re-keyed yet", chunkListQuery)
+	for _, want := range []string{"rebuilding the event store's identity keys: events (1834) has more than 1000 chunks",
+		"changed nothing (no table has been re-keyed yet)", "Nothing is marked", "lifecycle.chunkIntervalHours",
+		chunkListQuery, "revoke the device's credential", "drop_chunks", "every tenant's events",
+		"The event store's keys lead with time", "dcctl destroy", "export",
+		"previous event-management keeps storing"} {
+		assert.Contains(t, msg, want)
+	}
+	assert.NotContains(t, msg, "%!", "every verb has its argument")
 }
 
 // TestTimeoutSetting pins the one rendering of a statement_timeout: rounded UP to whole
@@ -149,9 +182,16 @@ func TestTimeLeadingKeysFailureError(t *testing.T) {
 	assert.True(t, tooSlow, "the too-slow verdict must stick")
 	for _, want := range []string{`"event-management".measurement_events`, "uq_measurement_events_idem",
 		"40s", "previous key", progress, "dcctl destroy", "dcctl bootstrap", "export",
-		`COMMENT ON INDEX "event-management".uq_measurement_events_idem IS NULL`} {
+		`COMMENT ON INDEX "event-management".uq_measurement_events_idem IS NULL`,
+		"drop_chunks", chunkListQuery, "every tenant's events"} {
 		assert.Contains(t, final.Error(), want)
 	}
+	assert.NotContains(t, final.Error(), "%!", "every verb has its argument")
+	refused := fmt.Sprintf(timeLeadingKeysRefusedMessage, k.name, k.table, "marker", progress, k.name)
+	for _, want := range []string{"drop_chunks", chunkListQuery, `COMMENT ON INDEX "event-management".uq_measurement_events_idem IS NULL`} {
+		assert.Contains(t, refused, want)
+	}
+	assert.NotContains(t, refused, "%!", "every verb has its argument")
 	var pgErr *pgconn.PgError
 	assert.True(t, errors.As(final, &pgErr), "the server error stays wrapped")
 

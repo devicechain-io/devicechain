@@ -343,6 +343,8 @@ func buildMetrics() {
 			"Telemetry samples dropped for an unregistered device (auto-registration off for the credential)."),
 		TenantGoneDropped: Microservice.NewCounter("telemetry_tenant_deleted_dropped_total",
 			"Telemetry samples dropped because the tenant has been deleted and its data is being reclaimed."),
+		TooOldDropped: Microservice.NewCounter("telemetry_too_old_dropped_total",
+			"Telemetry samples dropped because their time is more than 366 days before the adapter received them; the rest of their Notify is stored."),
 	}
 
 	obsMetrics = observe.Metrics{

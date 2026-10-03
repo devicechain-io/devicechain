@@ -50,7 +50,7 @@ func TestEmitSplitsABatchIntoEventsOfAtMost256(t *testing.T) {
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "sp", true)
 	in := numberedSamples(600)
-	require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", in))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", in))
 
 	require.Equal(t, 3, len(w.msgs), "600 samples are three events of at most 256")
 	var names []string
@@ -87,8 +87,8 @@ func TestASplitBatchIsIdempotentUnderRetry(t *testing.T) {
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "sp", true)
 	in := numberedSamples(600)
-	require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", in))
-	require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", in))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", in))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", in))
 
 	require.Equal(t, 6, len(w.msgs))
 	for i := 0; i < 3; i++ {
@@ -116,7 +116,7 @@ func TestABatchAtOrUnderTheLimitIsPublishedExactlyAsBefore(t *testing.T) {
 	} {
 		w := &fakeWriter{}
 		e := NewEmitter(w, fixedNow, "sp", true)
-		require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", numberedSamples(c.n)))
+		require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", numberedSamples(c.n)))
 		require.Equal(t, 1, len(w.msgs), "%d samples are one event", c.n)
 		assert.Equal(t, c.dedup, w.msgs[0].DedupID, "dedup id of a %d-sample batch must not drift", c.n)
 		sum := sha256.Sum256(w.msgs[0].Value)
@@ -126,7 +126,7 @@ func TestABatchAtOrUnderTheLimitIsPublishedExactlyAsBefore(t *testing.T) {
 	// 257 is the first batch that splits: 256 and 1.
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "sp", true)
-	require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", numberedSamples(257)))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", numberedSamples(257)))
 	require.Equal(t, 2, len(w.msgs))
 	_, p0 := decodeMeasurements(t, w.msgs[0])
 	_, p1 := decodeMeasurements(t, w.msgs[1])
@@ -155,13 +155,13 @@ func (w *countingWriter) WriteMessages(_ context.Context, msgs ...messaging.Mess
 func TestASplitBatchIsWrittenInOneCallAndRefusedWhole(t *testing.T) {
 	w := &countingWriter{}
 	e := NewEmitter(w, fixedNow, "sp", true)
-	require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", numberedSamples(600)))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", numberedSamples(600)))
 	require.Equal(t, 1, len(w.calls), "every piece in one WriteMessages call")
 	assert.Equal(t, 3, len(w.calls[0]))
 
 	refusing := &countingWriter{refuse: fmt.Errorf("wrapped: %w", messaging.ErrStreamBackpressure)}
 	e = NewEmitter(refusing, fixedNow, "sp", true)
-	err := e.Emit(context.Background(), "acme", "src", "dev-1", numberedSamples(600))
+	err := emitErr(e, context.Background(), "acme", "src", "dev-1", numberedSamples(600))
 	assert.True(t, errors.Is(err, messaging.ErrStreamBackpressure), "the refusal reaches the caller as the sentinel, got %v", err)
 	assert.Empty(t, refusing.calls, "nothing was written")
 }
@@ -178,8 +178,8 @@ func TestAPieceWithNoTimeOfItsOwnIsDatedFromItsBatch(t *testing.T) {
 	clock := func() time.Time { tick = tick.Add(time.Second); return tick } // a clock that moves
 	w := &fakeWriter{}
 	e := NewEmitter(w, clock, "sp", true)
-	require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", in))
-	require.NoError(t, e.Emit(context.Background(), "acme", "src", "dev-1", in))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", in))
+	require.NoError(t, emitErr(e, context.Background(), "acme", "src", "dev-1", in))
 	require.Equal(t, 4, len(w.msgs))
 	assert.Equal(t, w.msgs[1].DedupID, w.msgs[3].DedupID, "the timeless piece must dedup against its retry")
 	ev, _ := decodeMeasurements(t, w.msgs[1])

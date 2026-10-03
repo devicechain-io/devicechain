@@ -243,8 +243,25 @@ func capturedMsgAt(subject string, body string, seq uint64, appendTime time.Time
 // carrying no location — and would have kept passing if the entire coordinate
 // path were deleted. The decoder now rejects it, which is what makes this fixture
 // a specification rather than a decoration.
-const validEvent = `{"device":"sensor-001","eventType":"Location","occurredTime":"2026-07-20T10:30:00Z",` +
+//
+// It is dated two hours before the run, not on a fixed day: these messages are decoded at
+// their real receipt time, and the platform refuses a reading more than 366 days older than
+// that, so a fixed date would fail every test below a year after it was written.
+var validEvent = `{"device":"sensor-001","eventType":"Location","occurredTime":"` + recentFixtureTime + `",` +
 	`"payload":{"entries":[{"latitude":"33.74900000","longitude":"-84.38800000","elevation":"320.5"}]}}`
+
+// recentFixtureTime is two hours before the test binary started, to the second: recent, and
+// apart from the hour-old receipt times the tests below stamp, so a reported time and a
+// receipt time cannot be mistaken for each other.
+var recentFixtureTime = time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second).Format(time.RFC3339)
+
+// reportedFixtureTime is recentFixtureTime as the instant validEvent reports.
+func reportedFixtureTime(t *testing.T) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339, recentFixtureTime)
+	require.NoError(t, err)
+	return at.UTC()
+}
 
 // ============================ THE ACK TRAP ============================
 //
@@ -296,7 +313,7 @@ func TestEveryDeliberateDropAcknowledgesTheCaptureStream(t *testing.T) {
 		{
 			name:    "payload claims a device the transport did not authorize",
 			subject: captureSubject,
-			body: `{"device":"someone-else","eventType":"Location","occurredTime":"2026-07-20T10:30:00Z",` +
+			body: `{"device":"someone-else","eventType":"Location","occurredTime":"` + recentFixtureTime + `",` +
 				`"payload":{"entries":[{"latitude":"33.74900000","longitude":"-84.38800000","elevation":"320.5"}]}}`,
 		},
 	}
