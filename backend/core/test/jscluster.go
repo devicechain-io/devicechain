@@ -43,11 +43,17 @@ import (
 //     with the listener it lacks. A listener that cannot open fails the start at once, from
 //     the server's own words (errListenerFailed). Nothing is retried: with no port chosen
 //     in advance there is no race a second construction could win.
-//   - Readiness is awaitJetStreamClusterFormed: a meta leader holding statistics for every
-//     server, and a stream just placed replicated on every server. Neither a meta leader
-//     nor a meta group holding every server is enough, and that function says why. A
-//     cluster that binds but does not form is not rebuilt: it fails, naming what it lacks.
-//     Then every route the servers hold must be one a proxy carries (awaitAllRoutesProxied).
+//   - Readiness is, first, every server holding its complete set of route connections,
+//     each one attributed to the proxy that carries it (awaitAllRoutesProxied), which
+//     reports a route around the proxies the moment it sees one; then
+//     awaitJetStreamClusterFormed: a meta leader holding statistics for every server, and
+//     a stream just placed replicated on every server. Neither a meta leader nor a meta
+//     group holding every server is enough, and that function says why. A cluster that
+//     binds but does not form is not rebuilt: it fails, naming what it lacks. Routes are
+//     not attributed again once the cluster has formed, and that rests on an argument,
+//     not a test: the only route a server makes that it was not given is one it hears of
+//     from gossip, dialled at the address the gossip carries (processImplicitRoute in
+//     nats-server's route.go), and every server advertises an address that refuses.
 //
 // The isolation covers ROUTES. A client that connected to a server that is later shut
 // down keeps that server's client URL in its reconnect list, and the freed client port can
@@ -97,13 +103,15 @@ func startedCluster(tb testing.TB, size int) *cluster {
 // and route listeners to be bound.
 const clusterListenBudget = 60 * time.Second
 
-// clusterStartBudget bounds a whole construction: listening, forming, and every route
-// being carried by a proxy. Each wait is given the smaller of its own budget and what
-// is left of this one.
+// clusterStartBudget bounds a whole construction: listening, every route being carried
+// by a proxy, and forming. Each wait is given the smaller of its own budget and what is
+// left of this one.
 const clusterStartBudget = 2 * time.Minute
 
-// clusterProxiedBudget bounds awaitAllRoutesProxied inside a construction.
-const clusterProxiedBudget = 15 * time.Second
+// clusterRoutesBudget bounds awaitAllRoutesProxied inside a construction. It covers the
+// route mesh forming, from the moment every server listens, as well as the check that
+// every route is carried by a proxy.
+const clusterRoutesBudget = 30 * time.Second
 
 // errListenerFailed marks a server that reported one of its listeners could not be
 // opened. It is terminal: the operating system picks the port as the server binds, so a
@@ -117,13 +125,48 @@ type clusterHooks struct {
 	// start starts a server; the default runs Start on a goroutine of its own.
 	start        func(*natsserver.Server)
 	listenWithin time.Duration
+	// routesWithin bounds awaitAllRoutesProxied, as listenWithin bounds awaitListening.
+	routesWithin time.Duration
+	// routesTo, when set, names the servers server i is given a route to; nil gives it one
+	// to every other server.
+	routesTo func(i, size int) []int
 }
 
 func defaultClusterHooks() clusterHooks {
 	return clusterHooks{
 		start:        func(s *natsserver.Server) { go s.Start() },
 		listenWithin: clusterListenBudget,
+		routesWithin: clusterRoutesBudget,
 	}
+}
+
+// routePeers returns the servers server i of size is given a route to: every other one,
+// unless h.routesTo names them. A route to itself, to a server that does not exist, or to
+// the same server twice is refused.
+func (h clusterHooks) routePeers(i, size int) ([]int, error) {
+	if h.routesTo == nil {
+		peers := make([]int, 0, size-1)
+		for j := 0; j < size; j++ {
+			if j != i {
+				peers = append(peers, j)
+			}
+		}
+		return peers, nil
+	}
+	peers := h.routesTo(i, size)
+	seen := map[int]bool{}
+	for _, j := range peers {
+		switch {
+		case j == i:
+			return nil, fmt.Errorf("server %d is given a route to itself", i)
+		case j < 0 || j >= size:
+			return nil, fmt.Errorf("server %d is given a route to server %d of a cluster of %d", i, j, size)
+		case seen[j]:
+			return nil, fmt.Errorf("server %d is given a route to server %d twice", i, j)
+		}
+		seen[j] = true
+	}
+	return peers, nil
 }
 
 // clusters counts the constructions this process has made, so each gets its own name.
@@ -137,8 +180,8 @@ func clusterName() string {
 	return fmt.Sprintf("dctest-%d-%d", os.Getpid(), clusters.Add(1))
 }
 
-// startCluster makes ONE construction and returns it once it is listening, formed, and
-// every route is carried by a proxy. On an error it has shut everything down, and the
+// startCluster makes ONE construction and returns it once it is listening, every route is
+// carried by a proxy, and it is formed. On an error it has shut everything down, and the
 // error carries each server's last lines. Nothing is retried.
 func startCluster(tb testing.TB, size int, h clusterHooks, within time.Duration) (*cluster, error) {
 	if size < 2 {
@@ -146,6 +189,14 @@ func startCluster(tb testing.TB, size int, h clusterHooks, within time.Duration)
 			"to at least one other", size)
 	}
 	deadline := time.Now().Add(within)
+	peers := make([][]int, size)
+	for i := range peers {
+		p, err := h.routePeers(i, size)
+		if err != nil {
+			return nil, err
+		}
+		peers[i] = p
+	}
 	name := clusterName()
 	faults, err := newRouteMesh(size)
 	if err != nil {
@@ -162,11 +213,9 @@ func startCluster(tb testing.TB, size int, h clusterHooks, within time.Duration)
 		// proxies one route is often still being re-made when the first votes go out,
 		// so most starts waited out a whole election timeout (several seconds). With
 		// two, the first leader is elected by any two servers, and the third joins it.
-		routes := make([]string, 0, size-1)
-		for j := 0; j < size; j++ {
-			if j != i {
-				routes = append(routes, "nats-route://"+faults.proxyAddr(i, j))
-			}
+		routes := make([]string, 0, len(peers[i]))
+		for _, j := range peers[i] {
+			routes = append(routes, "nats-route://"+faults.proxyAddr(i, j))
 		}
 		opts[i] = &natsserver.Options{
 			Host:       "127.0.0.1",
@@ -196,10 +245,10 @@ func startCluster(tb testing.TB, size int, h clusterHooks, within time.Duration)
 	if err != nil {
 		return fail(err)
 	}
-	if err := awaitJetStreamClusterFormed(servers, min(clusterFormBudget, time.Until(deadline))); err != nil {
+	if err := faults.awaitAllRoutesProxied(servers, min(h.routesWithin, time.Until(deadline))); err != nil {
 		return fail(err)
 	}
-	if err := faults.awaitAllRoutesProxied(servers, min(clusterProxiedBudget, time.Until(deadline))); err != nil {
+	if err := awaitJetStreamClusterFormed(servers, min(clusterFormBudget, time.Until(deadline))); err != nil {
 		return fail(err)
 	}
 	return &cluster{servers: servers, logs: logs, faults: faults, opts: opts, name: name}, nil
