@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,6 +39,11 @@ import (
 //   - "applied, reply lost". A write lands on the server and the client never sees the
 //     acknowledgement. An interposer that applies the real write and then returns
 //     nats.ErrTimeout reproduces it.
+//
+// The one exception is TestReleaseWithinDoesNotRetryOnceItsWindowClosesDuringTheBackoff,
+// which runs against downKV, a broker-free fake that never answers a delete: it needs a
+// validity window that closes within one backoff, and a real broker cannot be made to
+// time a 20 ms window out deterministically.
 
 // outageBroker is one embedded server that a test can stop and start again on the
 // same port and store directory.
@@ -367,6 +373,148 @@ func TestReleaseWithinDoesNotRetryPastAnEndedWindow(t *testing.T) {
 		}
 		if clean, acquireErr := successorView(t, b, "detect:p"); acquireErr != nil || !clean {
 			t.Fatalf("successor = (clean %v, Acquire %v), want (true, nil)", clean, acquireErr)
+		}
+	})
+}
+
+// downKV is a broker that never answers a delete. It records when each attempt
+// started, so a test can tell whether an attempt began after a bound had closed.
+type downKV struct {
+	nats.KeyValue // nil: any call other than Delete panics, which is the point
+	mu            sync.Mutex
+	starts        []time.Time
+}
+
+func (k *downKV) Delete(string, ...nats.DeleteOpt) error {
+	k.mu.Lock()
+	k.starts = append(k.starts, time.Now())
+	k.mu.Unlock()
+	return nats.ErrTimeout
+}
+
+func (k *downKV) attempts() []time.Time {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return append([]time.Time(nil), k.starts...)
+}
+
+// releasingLease is a held lease over kv whose window opened at lastRenew. rev is
+// non-zero only so the literal looks like a real acquisition: downKV ignores it, and
+// its ErrTimeout is not a refused CAS, so ownRevision (and the nil embedded KeyValue
+// behind it) is never reached.
+func releasingLease(kv nats.KeyValue, ttl time.Duration, lastRenew time.Time) *Lease {
+	return &Lease{kv: kv, key: "detect:p", holder: "h", ttl: ttl, rev: 1, lastRenew: lastRenew}
+}
+
+// TestReleaseWithinDoesNotRetryOnceItsWindowClosesDuringTheBackoff pins the bounds as
+// checked AFTER each backoff, immediately before the retry starts, and the backoff
+// itself as ending when the window does. Before, both bounds were checked only before
+// the backoff, so a window that closed during it still got one more delete — with the
+// broker down, one more API timeout spent after the lease had expired.
+func TestReleaseWithinDoesNotRetryOnceItsWindowClosesDuringTheBackoff(t *testing.T) {
+	t.Run("window closes inside the first backoff: no second attempt", func(t *testing.T) {
+		start := time.Now()
+		const ttl = 20 * time.Millisecond // less than releaseRetryMin, so it closes mid-backoff
+		windowEnd := start.Add(ttl)
+		kv := &downKV{}
+		lease := releasingLease(kv, ttl, start)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // ctx stays live
+		defer cancel()
+
+		err := lease.ReleaseWithin(ctx)
+		el := time.Since(start)
+		got := kv.attempts()
+		if len(got) == 0 {
+			t.Fatalf("no delete attempt was made (err=%v): the first attempt is unconditional", err)
+		}
+		for i := 1; i < len(got); i++ {
+			if !got[i].Before(windowEnd) {
+				t.Fatalf("attempt %d started %v after the window closed (attempts=%d, elapsed=%v, err=%v)",
+					i+1, got[i].Sub(windowEnd), len(got), el, err)
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("delete attempts = %d, want 1: the unconditional first, then none once the window closed", len(got))
+		}
+		if !errors.Is(err, ErrNotHolder) || errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the window-closed ErrNotHolder, not the caller's deadline", err)
+		}
+		if el >= releaseRetryMin {
+			t.Fatalf("ReleaseWithin took %v, want it back when the %v window closed, not after the %v backoff",
+				el, ttl, releaseRetryMin)
+		}
+	})
+	t.Run("positive control: an open window and a live ctx do retry", func(t *testing.T) {
+		kv := &downKV{}
+		lease := releasingLease(kv, time.Hour, time.Now())
+		ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+		defer cancel()
+		err := lease.ReleaseWithin(ctx)
+		if n := len(kv.attempts()); n < 2 {
+			t.Fatalf("delete attempts = %d, want >= 2: this fake must be seen to retry, or the one-attempt "+
+				"verdict above proves nothing", n)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the caller's deadline", err)
+		}
+	})
+	t.Run("window closing mid-backoff, long after it opened: the backoff ends with it", func(t *testing.T) {
+		// The window is an hour long but opened almost an hour ago, so ~20ms of it
+		// remain. The backoff must be clamped to what REMAINS, not to the ttl: a clamp
+		// that forgot the time already elapsed since the last renewal would sleep the
+		// whole backoff here, which the case above cannot see because its window opened
+		// at the start of the test.
+		start := time.Now()
+		kv := &downKV{}
+		lease := releasingLease(kv, time.Hour, start.Add(-time.Hour+20*time.Millisecond))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // ctx stays live
+		defer cancel()
+
+		err := lease.ReleaseWithin(ctx)
+		el := time.Since(start)
+		if n := len(kv.attempts()); n != 1 {
+			t.Fatalf("delete attempts = %d, want 1: the unconditional first, then none once the window closed", n)
+		}
+		if !errors.Is(err, ErrNotHolder) || errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the window-closed ErrNotHolder, not the caller's deadline", err)
+		}
+		if el >= releaseRetryMin {
+			t.Fatalf("ReleaseWithin took %v, want it back when the window closed (~20ms left), not after the %v backoff",
+				el, releaseRetryMin)
+		}
+	})
+	t.Run("ctx ending mid-backoff still ends the call with ctx's error", func(t *testing.T) {
+		start := time.Now()
+		kv := &downKV{}
+		lease := releasingLease(kv, time.Hour, start)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		err := lease.ReleaseWithin(ctx)
+		el := time.Since(start)
+		if n := len(kv.attempts()); n != 1 {
+			t.Fatalf("delete attempts = %d, want 1", n)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+		}
+		// The backoff must itself end when ctx does. Without this the call above would
+		// still pass after sleeping the whole backoff and only then noticing ctx.
+		if el >= releaseRetryMin {
+			t.Fatalf("ReleaseWithin took %v, want it back when the 30ms ctx ended, not after the %v backoff",
+				el, releaseRetryMin)
+		}
+	})
+	t.Run("both bounds already ended: ctx's error wins, and the first attempt is still made", func(t *testing.T) {
+		kv := &downKV{}
+		lease := releasingLease(kv, 10*time.Millisecond, time.Now().Add(-time.Second))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := lease.ReleaseWithin(ctx)
+		if n := len(kv.attempts()); n != 1 {
+			t.Fatalf("delete attempts = %d, want exactly 1 (the unconditional first)", n)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled (ctx is checked before the window)", err)
 		}
 	})
 }

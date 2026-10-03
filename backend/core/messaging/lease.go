@@ -395,9 +395,21 @@ func (lease *Lease) withinWindow() bool {
 	return lease.withinWindowLocked()
 }
 
-// withinWindowLocked is the one spelling of the window arithmetic; mu must be held.
-func (lease *Lease) withinWindowLocked() bool {
-	return time.Since(lease.lastRenew) < lease.ttl
+// windowRemaining is how long until the validity window closes (<= 0 once it has).
+// A retrying release sleeps no longer than this, so a window closing mid-backoff ends
+// the backoff.
+func (lease *Lease) windowRemaining() time.Duration {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return lease.windowRemainingLocked()
+}
+
+// withinWindowLocked reports whether the validity window is still open; mu must be held.
+func (lease *Lease) withinWindowLocked() bool { return lease.windowRemainingLocked() > 0 }
+
+// windowRemainingLocked is the one spelling of the window arithmetic; mu must be held.
+func (lease *Lease) windowRemainingLocked() time.Duration {
+	return lease.ttl - time.Since(lease.lastRenew)
 }
 
 // ownRevision answers, after a CAS write was refused, whether the entry on the server
@@ -428,7 +440,9 @@ func (lease *Lease) ownRevision() (rev uint64, ours bool, err error) {
 
 // releaseRetryMin and releaseRetryMax pace ReleaseWithin's retries while the broker
 // does not answer. They are not a correctness input: every attempt is a CAS on a
-// revision that carries our own holder id.
+// revision that carries our own holder id. The tests of a bound ending mid-backoff use
+// releaseRetryMin as their "returned before the backoff elapsed" limit against bounds of
+// 20-30 ms, so shrinking it narrows their margin over a loaded runner's scheduling.
 const (
 	releaseRetryMin = 100 * time.Millisecond
 	releaseRetryMax = time.Second
@@ -472,8 +486,11 @@ func (lease *Lease) Release() error { return lease.release(nil) }
 // lease whose window has closed may still have an entry of ours on the server (a
 // renewal applied with its reply lost leaves the entry fresher than our window),
 // which that attempt can still find and delete. Only the RETRIES are bounded, by ctx
-// and by the window: once the window has closed, the entry has expired or is about
-// to, outside that lost-reply case, which the first attempt has already covered.
+// and by the window, and both are checked immediately before EACH retry starts, after
+// its backoff: either can end during the backoff, which itself ends at whichever comes
+// first. Once the window has closed, the entry has expired or is about to, outside
+// that lost-reply case, which the first attempt has already covered — so a retry that
+// would start after it is not made, even if the broker has come back by then.
 //
 // 🔴 WHAT IT MUST NEVER DO: delete an entry that is not ours. Every attempt is a CAS
 // on a revision whose value carried this acquisition's holder id (ownRevision). An
@@ -497,7 +514,8 @@ func (lease *Lease) ReleaseWithin(ctx context.Context) error {
 }
 
 // release is Release (ctx == nil: one attempt) and ReleaseWithin (retries bounded by
-// ctx and by the validity window).
+// ctx and by the validity window, both checked after each backoff, right before the
+// retry).
 func (lease *Lease) release(ctx context.Context) error {
 	// renewMu covers reading rev AND the delete: taking it only around the delete
 	// would move the race rather than close it, since a rev read outside it can
@@ -523,18 +541,22 @@ func (lease *Lease) release(ctx context.Context) error {
 		if err == nil || errors.Is(err, ErrNotHolder) || ctx == nil {
 			return err
 		}
-		// The broker did not answer. Retry only while both bounds allow it.
+		// The broker did not answer. Back off, for no longer than the window has left
+		// (an ended ctx or a closed window ends the pause at once), then retry only
+		// while both bounds still allow it. They are checked HERE, after the pause and
+		// immediately before the retry, because either can end during the pause.
+		// ctx is checked first, so a caller whose deadline passed is told so even when
+		// the window closed as well.
+		select {
+		case <-ctx.Done():
+		case <-time.After(min(backoff, lease.windowRemaining())):
+		}
 		if ctx.Err() != nil {
 			return releaseNotConfirmed(ctx.Err(), err)
 		}
 		if !lease.withinWindow() {
 			return fmt.Errorf("%w: the validity window closed before the broker confirmed the release, so the "+
 				"entry has expired or is about to; the broker's last answer was: %v", ErrNotHolder, err)
-		}
-		select {
-		case <-ctx.Done():
-			return releaseNotConfirmed(ctx.Err(), err)
-		case <-time.After(backoff):
 		}
 		if backoff *= 2; backoff > releaseRetryMax {
 			backoff = releaseRetryMax
