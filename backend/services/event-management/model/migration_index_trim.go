@@ -73,6 +73,11 @@ type indexTrimTiming struct {
 	pause time.Duration
 	// budget bounds the whole migration, every index and every attempt included.
 	budget time.Duration
+	// maxChunks is the most chunks a table with an index still to drop may have
+	// (eventStoreMaxChunks). Zero is not "unlimited": it refuses any table with a chunk.
+	maxChunks int64
+	// countTimeout bounds the chunk count (SET LOCAL statement_timeout).
+	countTimeout time.Duration
 }
 
 // indexTrimDefaultTiming: an attempt holds up the table for at most 5 s; the whole
@@ -81,12 +86,15 @@ type indexTrimTiming struct {
 //
 // The 5 s statement bound has room for a real instance: on the pinned TimescaleDB image
 // an uncontended DROP INDEX on a hypertable of 1,000 daily chunks — nearly three years
-// with retention off, the default — took 0.54 s.
+// with retention off, the default — took 0.54 s. A table with more chunks than
+// eventStoreMaxChunks (half that shape) is refused before any index is dropped.
 var indexTrimDefaultTiming = indexTrimTiming{
 	lockTimeout:      3 * time.Second,
 	statementTimeout: 5 * time.Second,
 	pause:            2 * time.Second,
 	budget:           60 * time.Second,
+	maxChunks:        eventStoreMaxChunks,
+	countTimeout:     chunkCountTimeout,
 }
 
 // indexTrimBusyMessage is the error a busy table ends the migration with. It is
@@ -162,6 +170,12 @@ const indexTrimLockTableFullMessage = "drop index %s on \"event-management\".%s:
 //  4. **It is individually re-runnable.** IF EXISTS on every statement, and nothing
 //     depends on an earlier statement of the same pass having run.
 //
+//  5. **Before the first drop it counts each table's chunks, from the catalog**, and
+//     refuses, dropping nothing, when a table with an index still to drop has more than
+//     maxChunks (trimChunkGate). Every drop locks each chunk of its table, so past the
+//     measured shape every attempt would run out of its statement bound and be reported as
+//     a busy table, the wrong diagnosis, on every start.
+//
 // There is deliberately no Rollback: re-creating these indexes is the non-concurrent
 // index build over live chunks that this migration exists to avoid, and gormigrate
 // reports ErrRollbackImpossible for a nil Rollback, which fails loudly. The DDL of
@@ -178,6 +192,9 @@ func newIndexTrimSchema(timing indexTrimTiming) *gormigrate.Migration {
 		ID: "20260930000000",
 		Migrate: func(tx *gorm.DB) error {
 			deadline := time.Now().Add(timing.budget)
+			if err := trimChunkGate(tx, timing); err != nil {
+				return err
+			}
 			for _, idx := range indexTrimDropped {
 				if err := dropIndexBounded(tx, idx, timing, deadline); err != nil {
 					return err
@@ -186,6 +203,38 @@ func newIndexTrimSchema(timing indexTrimTiming) *gormigrate.Migration {
 			return nil
 		},
 	}
+}
+
+// trimChunkGate refuses the trim, before any index is dropped, when a table that still has an
+// index to drop has more than timing.maxChunks chunks: each drop locks every chunk of its
+// table (see eventStoreMaxChunks). Tables whose indexes are all gone are not counted, since
+// nothing would lock them, so a start after a partial trim is judged on what is left.
+func trimChunkGate(db *gorm.DB, timing indexTrimTiming) error {
+	var tables []string
+	seen := map[string]bool{}
+	gone := 0
+	for _, idx := range indexTrimDropped {
+		var present bool
+		if err := db.Raw(`SELECT to_regclass(format('%I.%I', 'event-management', ?::text)) IS NOT NULL`,
+			idx.name).Scan(&present).Error; err != nil {
+			return fmt.Errorf("look for index %s on \"event-management\".%s: %w", idx.name, idx.table, err)
+		}
+		if !present {
+			gone++
+			continue
+		}
+		if !seen[idx.table] {
+			seen[idx.table] = true
+			tables = append(tables, idx.table)
+		}
+	}
+	progress := "no index was dropped by this start"
+	if gone > 0 {
+		progress += fmt.Sprintf("; %d of the %d indexes were already dropped by an earlier start and stay dropped",
+			gone, len(indexTrimDropped))
+	}
+	return checkChunkCeiling(db, "dropping the event store's unused indexes", progress, tables,
+		timing.maxChunks, timing.countTimeout)
 }
 
 // dropIndexBounded drops one index in its own transaction under SET LOCAL lock_timeout

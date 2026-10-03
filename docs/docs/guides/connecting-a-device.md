@@ -58,7 +58,7 @@ Every inbound event, over any transport, is a JSON object:
 - `credentialType` / `credentialId` — the credential the device presents. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so a credential is expected.
 - `payload` — its shape depends on `eventType`, and every shape is `{ "entries": [ … ] }`. See below.
 
-### Payload shapes
+### Payload shapes {#payload-shapes}
 
 Every payload wraps its content in an `entries` array, and the shape fixes the JSON type of each value:
 
@@ -72,8 +72,9 @@ One entry is one reading, taken at one instant. An entry may carry its own `occu
 - An entry with no `occurredTime` takes the envelope's.
 - An envelope with no `occurredTime` is dated at the moment the platform received the message. A message that waited in the platform during an outage keeps the time it arrived, not the time it was processed.
 - `occurredTime` is RFC 3339 (`2026-08-09T12:00:00.125Z`) wherever it appears. A value that is not is rejected with the offending entry named, never quietly replaced.
+- An `occurredTime` more than **366 days** before the platform received the message is refused, on the envelope or on any entry. A buffered upload must reach the platform within that time; a reading older than that is not stored anywhere.
 
-One valid RFC 3339 value is refused anyway: **`0001-01-01T00:00:00Z`**, which the platform reserves to mean "no time was reported". A device that means the epoch should send `1970-01-01T00:00:00Z`. Like every other timestamp refusal, this is terminal and takes the **whole message** with it, including every sibling reading in the same batch. Rule it out in firmware rather than discovering it in a dead-letter queue.
+One valid RFC 3339 value is refused anyway: **`0001-01-01T00:00:00Z`**, which the platform reserves to mean "no time was reported". A device that has no clock should omit `occurredTime`, not send a placeholder: the epoch, `1970-01-01T00:00:00Z`, is refused too, as more than 366 days old. Like every other timestamp refusal, this is terminal and takes the **whole message** with it, including every sibling reading in the same batch. Rule it out in firmware rather than discovering it in a dead-letter queue.
 
 ### How much one message may carry {#how-much-one-message-may-carry}
 
@@ -93,7 +94,7 @@ How the device finds out depends on the transport:
 Operators see every refusal on the `total_msg_too_many_readings` counter. The limit is not configurable. An instance upgraded from a release that allowed more refuses, on the new limit, messages that were already captured and not yet decoded.
 
 :::caution A deeply buffered batch is stored in full, but detection may not see all of it
-Storage holds every reading at its own instant, without qualification. Detection is different: a device that was offline and then uploads its whole run at once can have its older readings discarded by rules that use a time window or a hold time, with no log or alarm. See [Buffered uploads and windowed rules](#buffered-uploads-and-windowed-rules).
+Storage holds every reading at its own instant, as long as the message arrives within [366 days](#payload-shapes) of its oldest reading; a message with an older one is refused whole. Detection is different: a device that was offline and then uploads its whole run at once can have its older readings discarded by rules that use a time window or a hold time, with no log or alarm. See [Buffered uploads and windowed rules](#buffered-uploads-and-windowed-rules).
 :::
 
 #### Buffered uploads and windowed rules {#buffered-uploads-and-windowed-rules}
@@ -110,7 +111,7 @@ If you use windowed rules on a fleet that buffers, either **upload in batches th
 
 ### Clocks that run ahead {#clocks-that-run-ahead}
 
-A reported timestamp may not run far ahead of the platform's own clock. One that does is stored at the ceiling instead. The tolerance is generous enough for ordinary clock drift, so this only affects a device whose clock is genuinely wrong. Set the clock rather than relying on the ceiling: a reading stored at the ceiling is a reading stored at the wrong time.
+A reported timestamp may not run far ahead of the platform's own clock. One that does is stored at the ceiling instead. The tolerance is generous enough for ordinary clock drift, so this only affects a device whose clock is genuinely wrong. Set the clock rather than relying on the ceiling: a reading stored at the ceiling is a reading stored at the wrong time. A clock running far behind is treated differently: a reading more than 366 days old is refused, not moved (see [Payload shapes](#payload-shapes)).
 
 ### Measurement {#measurement}
 

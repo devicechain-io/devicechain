@@ -311,18 +311,7 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest",
 		[]string{string(auth.DeviceRead), string(auth.DeviceWrite), string(auth.StateRead)})
 
-	ingestMetrics := host.IngestMetrics{
-		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
-			"Numeric Sparkplug samples durably written to the inbound-events stream."),
-		PresenceEmitted: Microservice.NewCounter("presence_emitted_total",
-			"Presence StateChange events (ADR-067) durably written on a Sparkplug BIRTH/DEATH."),
-		DevicesRegistered: Microservice.NewCounter("devices_registered_total",
-			"Devices auto-registered on first sight of their Sparkplug identity."),
-		UnknownDropped: Microservice.NewCounter("unknown_device_dropped_total",
-			"Samples/presence dropped for an unregistered device on a source with auto-registration off."),
-		TenantGoneDropped: Microservice.NewCounter("tenant_deleted_dropped_total",
-			"Samples/presence dropped because the tenant has been deleted and its data is being reclaimed."),
-	}
+	ingestMetrics := buildIngestMetrics()
 	// The ADR-077 gate. A Sparkplug publisher's devices do pass the broker auth-callout,
 	// so this is the second gate rather than the only one — but the callout stops a
 	// CONNECT, and a Sparkplug host application publishes on behalf of devices over its
@@ -335,6 +324,26 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 	log.Info().Str("deviceManagement", graphqlURL).Str("deviceState", deviceStateURL).
 		Msg("Sparkplug ingest will resolve + emit telemetry via device-management and reconcile presence via device-state (ADR-044/067).")
 	return host.NewIngester(registrar, emitter, ingestMetrics), reconciler, nil
+}
+
+// buildIngestMetrics creates the ingester's instruments. It is its own function so a test
+// builds them exactly as a start does: a field left out here is a nil counter, which the
+// ingester skips without a word, so the readings it should count are dropped uncounted.
+func buildIngestMetrics() host.IngestMetrics {
+	return host.IngestMetrics{
+		MeasurementsEmitted: Microservice.NewCounter("measurements_emitted_total",
+			"Numeric Sparkplug samples durably written to the inbound-events stream."),
+		PresenceEmitted: Microservice.NewCounter("presence_emitted_total",
+			"Presence StateChange events (ADR-067) durably written on a Sparkplug BIRTH/DEATH."),
+		DevicesRegistered: Microservice.NewCounter("devices_registered_total",
+			"Devices auto-registered on first sight of their Sparkplug identity."),
+		UnknownDropped: Microservice.NewCounter("unknown_device_dropped_total",
+			"Samples/presence dropped for an unregistered device on a source with auto-registration off."),
+		TenantGoneDropped: Microservice.NewCounter("tenant_deleted_dropped_total",
+			"Samples/presence dropped because the tenant has been deleted and its data is being reclaimed."),
+		TooOldDropped: Microservice.NewCounter("samples_too_old_dropped_total",
+			"Numeric Sparkplug samples dropped because their timestamp is more than 366 days before the host received them; the rest of their message is stored."),
+	}
 }
 
 // deviceStateEndpoint validates the infrastructure the failover reconciliation needs

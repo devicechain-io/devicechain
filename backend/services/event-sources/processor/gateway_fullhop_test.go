@@ -154,11 +154,14 @@ func TestCaptureSurvivesASourceRestartEndToEnd(t *testing.T) {
 
 	// A device event the JSON decoder accepts. The device it claims must match the
 	// one the subject addresses, or checkDeviceMatchesTransport would fail-decode it.
+	// Dated from the run, a second apart, not on a fixed day: the decoder refuses a reading
+	// more than 366 days before its receipt, which here is the real broker append time.
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Minute)
 	event := func(seq int) string {
 		return fmt.Sprintf(
-			`{"device":%q,"eventType":"Location","occurredTime":"2026-07-20T10:30:%02dZ",`+
+			`{"device":%q,"eventType":"Location","occurredTime":%q,`+
 				`"payload":{"entries":[{"latitude":"33.74900000","longitude":"-84.38800000","elevation":"320.5"}]}}`,
-			device, seq)
+			device, base.Add(time.Duration(seq)*time.Second).Format(time.RFC3339))
 	}
 	recv := func(t *testing.T, out <-chan decodedEvent, who string) decodedEvent {
 		t.Helper()

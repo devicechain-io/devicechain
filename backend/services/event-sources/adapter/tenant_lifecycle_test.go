@@ -172,7 +172,7 @@ func TestADeletedTenantsDropIsCountedApartFromAnUnknownDevice(t *testing.T) {
 
 	// An unknown device with auto-register off: the pre-existing meaning.
 	require.NoError(t, ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s"},
-		"g/n", []Sample{{Name: "t", Value: 1, Time: 1}}))
+		"g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}}))
 	assert.Equal(t, float64(1), read("dropped"))
 	assert.Equal(t, float64(0), read("tenantGone"))
 
@@ -180,7 +180,7 @@ func TestADeletedTenantsDropIsCountedApartFromAnUnknownDevice(t *testing.T) {
 	// increment the first — a shared counter would show 2 here and be indistinguishable.
 	deleted = true
 	require.NoError(t, ing.Ingest(context.Background(), "acme", IngestPolicy{Source: "s"},
-		"g/n", []Sample{{Name: "t", Value: 1, Time: 1}}))
+		"g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}}))
 	assert.Equal(t, float64(1), read("tenantGone"))
 	assert.Equal(t, float64(1), read("dropped"), "a purge must not be counted as an unknown device")
 }

@@ -58,7 +58,7 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
 - `credentialType` / `credentialId` — la credencial que presenta el dispositivo. `MQTT_BASIC` además lleva `credentialSecret`. Omítelos solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`. El valor predeterminado es `required`, así que se espera una credencial.
 - `payload` — su forma depende de `eventType`, y todas las formas son `{ "entries": [ … ] }`. Consulta a continuación.
 
-### Formas del payload
+### Formas del payload {#payload-shapes}
 
 Todo payload envuelve su contenido en un arreglo `entries`, y la forma fija el tipo JSON de cada valor:
 
@@ -72,8 +72,9 @@ Una entrada es una lectura, tomada en un instante. Una entrada puede llevar su p
 - Una entrada sin `occurredTime` toma la del sobre.
 - Un sobre sin `occurredTime` se fecha en el momento en que la plataforma recibió el mensaje. Un mensaje que esperó en la plataforma durante una caída conserva la hora en que llegó, no la hora en que se procesó.
 - `occurredTime` es RFC 3339 (`2026-08-09T12:00:00.125Z`) dondequiera que aparezca. Un valor que no lo sea se rechaza indicando la entrada culpable, nunca se sustituye en silencio.
+- Un `occurredTime` anterior en más de **366 días** al momento en que la plataforma recibió el mensaje se rechaza, tanto en el sobre como en cualquier entrada. Una subida acumulada debe llegar a la plataforma dentro de ese plazo; una lectura más antigua no se almacena en ningún sitio.
 
-Hay un valor RFC 3339 válido que se rechaza igualmente: **`0001-01-01T00:00:00Z`**, que la plataforma reserva para significar «no se informó ninguna hora». Un dispositivo que quiera indicar la época debe enviar `1970-01-01T00:00:00Z`. Como todo rechazo de marca de tiempo, es terminal y se lleva por delante **el mensaje entero**, incluidas todas las lecturas hermanas del mismo lote. Descártalo en el firmware en lugar de descubrirlo en una cola de mensajes fallidos.
+Hay un valor RFC 3339 válido que se rechaza igualmente: **`0001-01-01T00:00:00Z`**, que la plataforma reserva para significar «no se informó ninguna hora». Un dispositivo sin reloj debe omitir `occurredTime`, no enviar un valor de relleno: la época, `1970-01-01T00:00:00Z`, también se rechaza, por tener más de 366 días. Como todo rechazo de marca de tiempo, es terminal y se lleva por delante **el mensaje entero**, incluidas todas las lecturas hermanas del mismo lote. Descártalo en el firmware en lugar de descubrirlo en una cola de mensajes fallidos.
 
 ### Cuánto puede llevar un mensaje {#how-much-one-message-may-carry}
 
@@ -93,7 +94,7 @@ Cómo se entera el dispositivo depende del transporte:
 Los operadores ven todos los rechazos en el contador `total_msg_too_many_readings`. El límite no es configurable. Una instancia actualizada desde una versión que admitía más rechaza con el límite nuevo los mensajes ya capturados y aún sin decodificar.
 
 :::caution Un lote muy acumulado se almacena entero, pero la detección puede no verlo todo
-El almacenamiento guarda cada lectura en su propio instante, sin matices. La detección es otra cosa: un dispositivo que estuvo sin conexión y luego sube toda su serie de golpe puede ver cómo las reglas con ventana de tiempo o con tiempo de sostenimiento descartan sus lecturas más antiguas, sin registro ni alarma. Consulta [Subidas acumuladas y reglas con ventana](#buffered-uploads-and-windowed-rules).
+El almacenamiento guarda cada lectura en su propio instante, siempre que el mensaje llegue dentro de los [366 días](#payload-shapes) siguientes a su lectura más antigua; un mensaje con una lectura anterior se rechaza entero. La detección es otra cosa: un dispositivo que estuvo sin conexión y luego sube toda su serie de golpe puede ver cómo las reglas con ventana de tiempo o con tiempo de sostenimiento descartan sus lecturas más antiguas, sin registro ni alarma. Consulta [Subidas acumuladas y reglas con ventana](#buffered-uploads-and-windowed-rules).
 :::
 
 #### Subidas acumuladas y reglas con ventana {#buffered-uploads-and-windowed-rules}
@@ -110,7 +111,7 @@ Si usas reglas con ventana sobre una flota que acumula lecturas, **sube en lotes
 
 ### Relojes adelantados {#clocks-that-run-ahead}
 
-Una marca de tiempo informada no puede adelantarse demasiado al propio reloj de la plataforma. La que lo haga se almacena en el tope. La tolerancia es amplia para la deriva normal de reloj, así que esto solo afecta a un dispositivo cuyo reloj está realmente mal. Ajusta el reloj en lugar de confiar en el tope: una lectura almacenada en el tope es una lectura almacenada a la hora equivocada.
+Una marca de tiempo informada no puede adelantarse demasiado al propio reloj de la plataforma. La que lo haga se almacena en el tope. La tolerancia es amplia para la deriva normal de reloj, así que esto solo afecta a un dispositivo cuyo reloj está realmente mal. Ajusta el reloj en lugar de confiar en el tope: una lectura almacenada en el tope es una lectura almacenada a la hora equivocada. Un reloj muy atrasado se trata de otra forma: una lectura con más de 366 días se rechaza, no se mueve (consulta [Formas del payload](#payload-shapes)).
 
 ### Measurement {#measurement}
 

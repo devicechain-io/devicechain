@@ -560,6 +560,13 @@ progress file was removed — it is seeded from the spool's current first sequen
 evicted is then treated as accounted-for, and a restart in that state does reset the evidence. Keep
 the store directory intact across restarts if the drop count matters to you.
 
+**The spool bounds bytes, not age.** An event that waits in it keeps the time the device reported
+(a JSON event that reported none is stamped with the time the agent stored it), so it reaches the
+platform as old as the outage it sat through, and older if the device had buffered it first. The platform refuses a reading
+more than 366 days older than the moment it arrives, so an event held longer than that is lost on
+arrival. The agent does not warn about it; `spool_oldest_age_seconds` is the signal. An alert on it
+above 335 days (28,944,000 seconds) leaves a month to restore the uplink.
+
 :::caution Duplicate collapse on reconnect covers JSON payloads only
 When the uplink returns, the agent re-forwards everything it buffered. For **JSON object payloads** it
 stamps a replay-stable identity and event time, so a message already delivered folds into the
@@ -650,6 +657,7 @@ Prefix: `devicechain_sparkplugingest_`.
 | `decode_errors_total` / `ingest_failures_total` | Malformed payloads, and failures publishing onward. |
 | `ingest_samples_shed_total` | DATA readings dropped because a tenant is over its ingest ceiling. A tenant shedding here sends more readings than its tier allows. |
 | `tenant_deleted_dropped_total` | Traffic refused because its tenant is being deleted. |
+| `samples_too_old_dropped_total` | Readings dropped because their timestamp is more than 366 days before the host received them; the rest of their message is stored. A metric whose value has not changed for that long is dropped from every birth, and a node with no clock set (times near 1970) has all its readings dropped. The service logs a warning naming the device. |
 
 ### LwM2M ingestion metrics {#lwm2m-ingestion-metrics}
 
@@ -668,6 +676,7 @@ Prefix: `devicechain_lwm2mingest_`.
 | `notify_decode_failures_total` | Malformed payloads. |
 | `notify_records_non_numeric_total` / `notify_records_non_finite_total` / `notify_records_unnamed_total` | Readings a Notify carried that produced no measurement. **Non-numeric is normal** — a boolean or string IPSO reading is a device working correctly, and this counter is what tells that apart from a device that has gone quiet, which otherwise looks identical from here. The other two are firmware faults: a value that resolved to infinity or NaN, and a reading with no resource path. |
 | `observation_overflow_total` | A registration exceeding the 32-observation cap. Some of its resources are not observed. |
+| `telemetry_too_old_dropped_total` | Readings dropped because their time is more than 366 days before the adapter received them; the rest of their Notify is stored. The service logs a warning naming the device. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling, in Notify messages and in readings. |
 | `shadows_reconstructed_total` | Presence rebuilt after a leadership change. A spike is the fingerprint of a failover. |
 | `commands_failed_total` / `commands_not_served_total` | Downlink commands that did not land. |

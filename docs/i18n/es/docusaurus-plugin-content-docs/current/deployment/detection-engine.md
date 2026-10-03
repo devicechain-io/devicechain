@@ -443,6 +443,13 @@ device-management como `maxEventFutureSkewSeconds`, en segundos, **con 300 por d
 cuya hora informada adelanta al momento en que la plataforma la recibió más que eso se almacena en
 el techo, no se rechaza.
 
+La otra dirección es fija, no configurable: una lectura fechada más de **366 días** antes de que la
+plataforma la recibiera se rechaza, y no se almacena ni se evalúa en ningún sitio. Las dos
+direcciones se tratan de forma distinta a propósito. Un reloj adelantado congelaría el estado
+compartido en vivo, así que su hora se limita; una hora muy en el pasado crearía almacenamiento para
+un periodo que nadie registró, así que la lectura se rechaza en vez de moverse. Consulta
+[hasta cuándo puede fecharse una lectura](../guides/connecting-a-device.md#payload-shapes).
+
 Un **valor negativo se rechaza al arrancar**, y conviene saber qué habría significado: desactivar el
 límite por completo. Un evento fechado años en el futuro fija entonces la hora de última actividad
 del dispositivo — todas las proyecciones de aquí conservan solo el valor estrictamente más nuevo —,

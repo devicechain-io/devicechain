@@ -21,9 +21,76 @@
 //
 // The value travels immutably from resolution onward, so live evaluation, a replay a week
 // later and a stored row agree even across a configuration change.
+//
+// The AGE refusal (CheckAge) is the one part applied at more than one call site, and that
+// does not contradict the rule above, because it decides no time: it refuses a reading
+// outright. The event-sources decoder applies it so HTTP can answer 400; device-management
+// resolution applies it to every event, which covers every producer that does not decode
+// JSON; and the gateway emitter applies it per sample (see CheckAge). All of them read the
+// one constant MaxAge and measure against the same immutable ProcessedTime, so they cannot
+// disagree. The instant a reading is resolved TO is still decided once, at resolution.
 package eventtime
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
+
+// MaxAge is how long before the platform received it a reported time may be. A reading
+// dated earlier is refused, never moved to a later time: a clamped time would invent a
+// reading at an instant it was not taken.
+//
+// 🔴 WHY THERE IS A PAST BOUND AT ALL. A device's clock chooses which time partition (chunk)
+// of the event store its reading is stored in, and retention is off by default. With no
+// floor, one credential could create a partition for every chunk interval back to year 1
+// from a few thousand tiny messages, and every operation that touches each partition (an
+// upgrade's key rebuild, an index drop, the planner) would then scale with an attacker's
+// choice. With the floor, the history a device can create is bounded by the instance's age
+// plus MaxAge, in DAYS. How many chunks that is depends on the configured chunk interval,
+// so the floor alone keeps no table under any chunk count: the migrations that lock every
+// chunk check a ceiling of their own before they lock anything (event-management's
+// eventStoreMaxChunks).
+//
+// 366 days, so a reading exactly one calendar year old is accepted across a leap day. It is
+// far above the edge agent's documented outage horizon (hours to a day).
+const MaxAge = 366 * 24 * time.Hour
+
+// ErrTooOld marks a reported time more than MaxAge before it was received.
+var ErrTooOld = errors.New("event time is older than the platform accepts")
+
+// CheckAge refuses a reported time more than MaxAge before processed, the receipt instant.
+// occurred == processed-MaxAge is accepted; one nanosecond earlier is not. A time AFTER
+// processed is not this function's business (Effective bounds it).
+//
+// A zero processed time disables the check, exactly as it disables Effective. Every producer
+// stamps receipt: the event-sources decoder (the capture stream's append time where there is
+// one, else its own clock at decode), the gateway emitter the Sparkplug and LwM2M services
+// share (its own clock), and device-state's presence demotion (its own clock, and it dates
+// the demotion now too). So a zero is a test fixture, not a device. A producer added later
+// must stamp it as well, or none of its events is ever age-checked.
+func CheckAge(occurred, processed time.Time) error {
+	if processed.IsZero() {
+		return nil
+	}
+	floor := processed.Add(-MaxAge)
+	if occurred.Before(floor) {
+		return fmt.Errorf("%w: %s is more than %d days before the platform received it (%s); "+
+			"the earliest time accepted for it is %s",
+			ErrTooOld, occurred.UTC().Format(time.RFC3339Nano), int(MaxAge/(24*time.Hour)),
+			processed.UTC().Format(time.RFC3339Nano), floor.UTC().Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
+// Reported is the entry-versus-envelope rule on its own: a sample's own time when it
+// reported one, else the message's. ForEntry and every age check read it from here.
+func Reported(entry *time.Time, envelope time.Time) time.Time {
+	if entry != nil {
+		return *entry
+	}
+	return envelope
+}
 
 // Effective bounds a device-reported time against the server-stamped processed time plus
 // a tolerance, and reports whether the bound was applied.
@@ -43,9 +110,12 @@ import "time"
 //   - The latest-measurement and last-known-position projections are strictly-newer too, so
 //     a poisoned row can never be superseded by a real reading.
 //
-// Only FUTURE skew is bounded. A late or out-of-order reading is a normal fact about
-// store-and-forward devices and is left to each consumer's bounded-lateness handling; there
-// is no honest ceiling on how old a buffered reading may legitimately be.
+// Only FUTURE skew is CLAMPED here. A late or out-of-order reading is a normal fact about
+// store-and-forward devices and is left to each consumer's bounded-lateness handling. A
+// reading older than MaxAge is REFUSED instead, by CheckAge. The two directions differ
+// because the harms differ: a projection needs SOME instant for a reading whose clock runs
+// ahead, while a reading from far in the past would need a partition of the store all of
+// its own, so it is not kept at all rather than kept at a time it was not taken.
 //
 // The processed time is stamped by the server at ingest (the time the platform received
 // the event, identical on every redelivery of a captured message) and travels immutably
@@ -75,9 +145,5 @@ func Effective(occurred, processed time.Time, maxSkew time.Duration) (time.Time,
 // time, so no consumer has a nil to interpret — which is what stops the next consumer from
 // inventing a sixth interpretation of an absent value.
 func ForEntry(entry *time.Time, envelope, processed time.Time, maxSkew time.Duration) (time.Time, bool) {
-	occurred := envelope
-	if entry != nil {
-		occurred = *entry
-	}
-	return Effective(occurred, processed, maxSkew)
+	return Effective(Reported(entry, envelope), processed, maxSkew)
 }

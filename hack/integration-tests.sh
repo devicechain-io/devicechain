@@ -104,7 +104,11 @@ rc=0
 for m in "${modules[@]}"; do
   name=${m#"$PWD"/}
   echo "=== $name ==="
-  out=$(cd "$m" && go test -tags integration -count=1 -p 2 -v ./... 2>&1)
+  # -timeout: go test's default of 10 minutes is per PACKAGE, and event-management's model
+  # package builds tables of hundreds of chunks to test the chunk ceiling of its startup
+  # migrations, which takes several minutes on its own. A package that hits the default dies
+  # with a panic naming whichever test happened to be running, which reads as that test's fault.
+  out=$(cd "$m" && go test -tags integration -count=1 -p 2 -timeout 30m -v ./... 2>&1)
   status=$?
   ran=$(printf '%s\n' "$out" | ran_count)
   # Summaries always; PASS lines are not summaries — core alone emits 1131 of them and they

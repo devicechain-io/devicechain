@@ -191,6 +191,12 @@ if not). Beyond the cap the spool is a ring buffer that drops the **oldest** un-
 event to admit the newest (loss favours recent telemetry and is counted; it never fills the
 disk or crashes).
 
+**The spool bounds bytes, never age.** The platform refuses a reading dated more than 366 days
+before it arrives (`eventtime.MaxAge`), so an event spooled for longer than that is lost on
+arrival, uncounted here. The agent does not warn; alert on
+`devicechain_edge_spool_oldest_age_seconds > 28944000` (335 days) to leave a month to restore
+the uplink.
+
 ## 6. Upgrade / rollback
 
 - **Config changes over a populated `storeDir`:** `spoolMaxBytes` and `metricsPort` can be

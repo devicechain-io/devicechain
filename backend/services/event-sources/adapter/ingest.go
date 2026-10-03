@@ -15,6 +15,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventlimit"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -61,7 +62,7 @@ type EventWriter interface {
 // IngestMetrics are the optional Prometheus counters the ingest path updates; any nil
 // field is skipped so the ingester is usable in tests without a registry.
 type IngestMetrics struct {
-	MeasurementsEmitted prometheus.Counter // samples of batches durably written in full (see Emitter.Emit on a partial write)
+	MeasurementsEmitted prometheus.Counter // samples of batches durably written in full, less those dropped for age (see Emitter.Emit)
 	PresenceEmitted     prometheus.Counter // presence StateChange events durably written
 	DevicesRegistered   prometheus.Counter // devices auto-created on first sight
 	UnknownDropped      prometheus.Counter // samples/presence dropped: unknown device, auto-register off
@@ -73,6 +74,10 @@ type IngestMetrics struct {
 	// anywhere, since the label's values would be exactly the attacker-supplied tenant
 	// strings this path does not otherwise trust.
 	TenantGoneDropped prometheus.Counter
+	// TooOldDropped counts samples dropped because their time is more than eventtime.MaxAge
+	// before the platform received them (see Emitter.Emit). Counted once, when the rest of
+	// their batch is durably written.
+	TooOldDropped prometheus.Counter
 }
 
 // ResolveOutcome distinguishes how a device external id resolved, so the ingester can
@@ -415,16 +420,31 @@ func NewEmitter(writer EventWriter, now func() time.Time, dedupPrefix string, au
 // latest time before its samples apply, so a sample never meets a later frontier than it
 // did in one combined event (nothing is admitted as late that was on time before), but a
 // hold or absence timer can now fire between two pieces of one wide message.
-func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, samples []Sample) error {
-	pieces := eventlimit.Split(samples)
-	if len(pieces) == 0 {
-		return nil
-	}
+//
+// 🔴 A SAMPLE DATED MORE THAN eventtime.MaxAge BEFORE RECEIPT IS DROPPED ALONE, NEVER CLAMPED,
+// and the rest of the batch is emitted. Emit returns how many were dropped, for the caller to
+// count, and logs one warning per call that drops any. Device-management refuses such a time
+// whole-event, which is right for a device's own message and wrong here: a gateway batch is
+// assembled by this host, not sent by one device as a unit, so there is no atomicity to keep
+// and no client to answer. Sparkplug is report-by-exception, so a metric's timestamp is when
+// its value last changed and a birth carries every metric: a setpoint untouched for more than
+// MaxAge arrives that old on every birth, and refusing the whole birth would lose every fresh
+// metric with it on every rebirth. A node with no clock set (dates near 1970) has those
+// readings dropped the same way. The check reads the SAME instant the events are stamped with
+// as ProcessedTime, so nothing emitted here is refused downstream. (A retry is stamped anew, so
+// a sample within milliseconds of the limit can be kept on one attempt and dropped on the next;
+// its piece then hashes differently and is stored as a new event.)
+func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, samples []Sample) (tooOld int, err error) {
 	// ONE receipt instant per call, and one fallback event time for the whole batch. A piece
 	// whose samples carry no positive time of their own is dated at the BATCH's latest, not at
 	// the clock, so its dedup id is the same on a retry; only a batch with no positive time
 	// anywhere falls back to receipt, exactly as the unsplit batch always did.
 	now := e.now()
+	samples, tooOld = e.dropTooOld(tenant, source, deviceToken, samples, now)
+	pieces := eventlimit.Split(samples)
+	if len(pieces) == 0 {
+		return tooOld, nil
+	}
 	var batchLatest int64
 	for _, s := range samples {
 		if s.Time > batchLatest {
@@ -438,11 +458,53 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 	for _, piece := range pieces {
 		msg, err := e.measurementMessage(tenant, source, deviceToken, piece, now, batchLatest)
 		if err != nil {
-			return err
+			return tooOld, err
 		}
 		msgs = append(msgs, msg)
 	}
-	return e.writer.WriteMessages(core.WithTenant(ctx, tenant), msgs...)
+	return tooOld, e.writer.WriteMessages(core.WithTenant(ctx, tenant), msgs...)
+}
+
+// tooOldNamesLogged bounds how many metric names one warning lists: a birth can carry
+// thousands of metrics, and the warning's job is to name the device, not to copy its payload.
+const tooOldNamesLogged = 5
+
+// dropTooOld returns the samples whose time is within eventtime.MaxAge of now, and how many
+// were not. A sample with no positive time is kept: it is dated at receipt (measurementMessage).
+// The input is returned as is when nothing is dropped.
+func (e *Emitter) dropTooOld(tenant, source, deviceToken string, samples []Sample, now time.Time) ([]Sample, int) {
+	var kept []Sample
+	var names []string
+	dropped := 0
+	var oldest int64
+	for i, s := range samples {
+		if s.Time <= 0 || eventtime.CheckAge(time.UnixMilli(s.Time), now) == nil {
+			if kept != nil {
+				kept = append(kept, s)
+			}
+			continue
+		}
+		if kept == nil {
+			kept = append(make([]Sample, 0, len(samples)), samples[:i]...)
+		}
+		if dropped == 0 || s.Time < oldest {
+			oldest = s.Time
+		}
+		dropped++
+		if len(names) < tooOldNamesLogged {
+			names = append(names, s.Name)
+		}
+	}
+	if dropped == 0 {
+		return samples, 0
+	}
+	log.Warn().Str("tenant", tenant).Str("source", source).Str("device", deviceToken).
+		Int("dropped", dropped).Int("kept", len(kept)).Strs("metrics", names).
+		Time("oldest", time.UnixMilli(oldest).UTC()).
+		Msgf("Dropped readings dated more than %d days before they were received; the platform does not "+
+			"store a reading that old, and the rest of the message was kept. Check the device's clock, or "+
+			"the timestamp it reports for a value that has not changed.", int(eventtime.MaxAge/(24*time.Hour)))
+	return kept, dropped
 }
 
 // measurementMessage builds ONE event from a piece of at most eventlimit.MaxReadingsPerEvent
@@ -787,10 +849,12 @@ func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPol
 		log.Info().Str("tenant", tenant).Str("externalId", externalId).Str("token", token).
 			Msg("Auto-registered a device on first sight.")
 	}
-	if err := ing.emitter.Emit(ctx, tenant, policy.Source, token, samples); err != nil {
+	tooOld, err := ing.emitter.Emit(ctx, tenant, policy.Source, token, samples)
+	if err != nil {
 		return err
 	}
-	incr(ing.metrics.MeasurementsEmitted, len(samples))
+	incr(ing.metrics.TooOldDropped, tooOld)
+	incr(ing.metrics.MeasurementsEmitted, len(samples)-tooOld)
 	return nil
 }
 

@@ -336,7 +336,7 @@ func waitForLockWaiter(t *testing.T, conn *pgx.Conn, within time.Duration) {
 // retry without the pause makes about twice the attempts the pause allows.
 func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 	timing := indexTrimTiming{lockTimeout: 200 * time.Millisecond, statementTimeout: 2 * time.Second,
-		pause: 400 * time.Millisecond, budget: 4 * time.Second}
+		pause: 400 * time.Millisecond, budget: 4 * time.Second, maxChunks: eventStoreMaxChunks, countTimeout: 10 * time.Second}
 
 	// Negative control: with nothing holding a lock, the same migration on the same
 	// shape of database finishes at once — so it is the lock, not the harness, that makes
@@ -482,7 +482,7 @@ func holderPIDs(t *testing.T, conn *pgx.Conn, query string) []uint32 {
 // on the hypertable for the sum. statement_timeout bounds the whole attempt.
 func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
 	timing := indexTrimTiming{lockTimeout: 500 * time.Millisecond, statementTimeout: 700 * time.Millisecond,
-		pause: 100 * time.Millisecond, budget: time.Second}
+		pause: 100 * time.Millisecond, budget: time.Second, maxChunks: eventStoreMaxChunks, countTimeout: 10 * time.Second}
 	inst := freshInstance(t, "ittrimchunk")
 	mgr := newPostgresManagerWith(t, inst, migrationsBefore(t, NewIndexTrimSchema().ID))
 	sys := systemDB(mgr)
@@ -567,7 +567,7 @@ func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
 // that would otherwise allow many.
 func TestIntegrationIndexTrimFailsAtOnceOnAnythingButABusyTable(t *testing.T) {
 	timing := indexTrimTiming{lockTimeout: 200 * time.Millisecond, statementTimeout: 500 * time.Millisecond,
-		pause: 500 * time.Millisecond, budget: 10 * time.Second}
+		pause: 500 * time.Millisecond, budget: 10 * time.Second, maxChunks: eventStoreMaxChunks, countTimeout: 10 * time.Second}
 	mgr := newPostgresManagerWith(t, freshInstance(t, "ittrimrefuse"), migrationsBefore(t, NewIndexTrimSchema().ID))
 	sys := systemDB(mgr)
 

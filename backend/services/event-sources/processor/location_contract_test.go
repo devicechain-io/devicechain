@@ -32,7 +32,7 @@ import (
 // decodeLocation drives the real decoder, exactly as a transport does.
 func decodeLocation(t *testing.T, body string) (*model.UnresolvedLocationsPayload, error) {
 	t.Helper()
-	_, payload, err := NewJsonDecoder(map[string]string{}).Decode([]byte(body), time.Time{})
+	_, payload, err := NewJsonDecoder(map[string]string{}).Decode([]byte(body), fixtureReceipt)
 	if err != nil {
 		return nil, err
 	}

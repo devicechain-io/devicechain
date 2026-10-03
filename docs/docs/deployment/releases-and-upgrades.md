@@ -3911,7 +3911,8 @@ these counts again and gives the totals.
   the sessions holding the table or any of its chunks. If it keeps stopping, look for
   long-running SQL or BI queries against the event store. Removing an index also locks every
   chunk of its table; if the database runs out of lock slots, the error says so and names the
-  setting to raise.
+  setting to raise. A table with more than 500 chunks is refused before any index is removed:
+  see [Count the chunks too](#next-time-leading-keys-chunks).
 - Going back to `v0.18.0` leaves the indexes removed, and `v0.18.0` works without them.
 
 #### The databases' primaries prefer different nodes {#next-primary-spread}
@@ -4253,8 +4254,66 @@ then recreate it with `dcctl destroy` and `dcctl bootstrap` on the new release.
 :::caution Export first — recreation discards your data
 `dcctl destroy` removes the instance's databases: every tenant, device, device definition,
 dashboard and user, and all of its events, not only the event history. There is no in-place path
-that keeps an instance over the line across this release.
+that keeps an instance over 4,000,000 rows across this release.
 :::
+
+##### Count the chunks too {#next-time-leading-keys-chunks}
+
+The rebuild, and [the index removal above](#next-event-store-indexes), also refuse a table with
+more than **500 chunks**. Each locks every chunk of the table it changes, and 500 is half the most
+this release has been measured to rebuild within one start, which leaves room for slower storage.
+Above it, `event-management` refuses before locking anything, rather than risk a rebuild that
+cannot finish and then blocks every later start. A chunk covers one chunk interval of one table: a
+day by default (`lifecycle.chunkIntervalHours`), so at the default 500 chunks is about a year and
+four months of history with retention off. A shorter interval reaches 500 sooner, and so does a
+device that sent readings dated far in the past. Count them, on any of the event store's pods:
+
+```sql
+SELECT hypertable_name, count(*) AS chunks, min(range_start) AS oldest, max(range_end) AS newest
+FROM timescaledb_information.chunks WHERE hypertable_schema = 'event-management'
+GROUP BY 1 ORDER BY 1;
+```
+
+If a table has more than 500 and you can do without its oldest events, remove them before you
+upgrade. **This deletes every tenant's events in those chunks, for good.**
+
+1. **Stop whatever sent them.** If a device is still sending readings dated far in the past, revoke
+   its credential first: the previous release accepts them, and they would create the chunks again.
+2. **Choose a cutoff.** Chunks that end on or before it are removed whole; the chunk that spans it is
+   kept. The date the instance was installed removes only events dated before the instance existed.
+   The same cutoff applies to all six event tables, so an event is not left without its readings.
+3. **Run the removal on the event store's primary.**
+   `kubectl -n dci-<instance-id> get pods -l cnpg.io/instanceRole=primary` lists the primaries; use
+   the `dc-tsdb-` one, open `psql` on it as above, and run the statement below with your cutoff in
+   place of `2024-01-01`. Run it on its own, not inside `BEGIN`: it removes at most 100 chunks of one
+   table at a time and commits after each batch, so the database never has to lock all of them at
+   once.
+
+```sql
+DO $$
+DECLARE
+  cutoff constant timestamptz := TIMESTAMPTZ '2024-01-01';
+  tbl text;
+  step timestamptz;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY['events', 'measurement_events', 'location_events',
+                             'alert_events', 'event_anchors', 'state_change_events'] LOOP
+    LOOP
+      SELECT max(range_end) INTO step FROM (
+        SELECT range_end FROM timescaledb_information.chunks
+        WHERE hypertable_schema = 'event-management' AND hypertable_name = tbl
+          AND range_end <= cutoff
+        ORDER BY range_end LIMIT 100) oldest;
+      EXIT WHEN step IS NULL;
+      PERFORM drop_chunks(format('%I.%I', 'event-management', tbl)::regclass, older_than => step);
+      COMMIT;
+    END LOOP;
+  END LOOP;
+END $$;
+```
+
+Then count the chunks again, and upgrade. If you cannot do without those events, export what you
+need and recreate the instance, as above.
 
 ##### During the upgrade {#next-time-leading-keys-during}
 
@@ -4268,11 +4327,19 @@ that keeps an instance over the line across this release.
   and its log says why. `dcctl upgrade` then reports that it did not finish rolling out: every
   other service runs the new release, and the previous `event-management` keeps storing events
   until you recreate the instance, as above.
+- **If a table has more than 500 chunks,** `event-management` stops before locking anything, and
+  its log names the table, its chunk count and the query above, and points to
+  [the removal](#next-time-leading-keys-chunks). Nothing is marked: once the chunks are removed, the
+  next start goes ahead. The index removal stops the same way, and nothing is removed from any
+  table.
 - **If one table's rebuild takes longer than 40 seconds** once the table is locked, it is undone,
   the table keeps its previous key, and `event-management` stops with an error that says so. From
   then on it stops at once on every start without touching the table, so ingest does not stall
   again on each restart. Recreate the instance, or, to try once more (for example after moving the
-  event store to faster storage), run the `COMMENT ON INDEX` statement the error gives.
+  event store to faster storage), run the `COMMENT ON INDEX` statement the error gives. If the table
+  holds events dated far in the past, removing them as in
+  [Count the chunks too](#next-time-leading-keys-chunks) shortens the rebuild; then run the
+  `COMMENT ON INDEX` statement.
 - If another session keeps a table busy, or the minute runs out, `event-management` stops with an
   error that names the table and lists the tables already rebuilt, and continues from there when
   it restarts, as for [the index removal above](#next-event-store-indexes). The error carries a
@@ -4597,6 +4664,37 @@ guarantee.
   the three services that carry one. A
   service with `eventPathSpread: false` keeps the cluster's default spread instead, which also
   prefers different zones, and gets no such preference.
+
+#### A reading dated more than 366 days before it arrives is refused {#next-event-age-limit}
+
+A reading's `occurredTime`, on the envelope or on any entry, may now be at most 366 days before the
+platform received it. An older one is refused, never moved to a later time:
+
+- **HTTP and MQTT:** the whole message is refused, as for every other timestamp refusal. HTTP
+  answers `400`, and an MQTT publish is dead-lettered. Both are counted in
+  `total_msg_invalid_event_time` on `event-sources`.
+- **Sparkplug and LwM2M:** only the readings that are too old are dropped, and the rest of the
+  message is stored. A gateway's message is assembled by the gateway, not sent by one device as a
+  unit, and a Sparkplug metric's timestamp is when its value last changed, so a value unchanged for
+  more than 366 days is dropped from every birth until it changes. A node with no clock set, which
+  reports times near 1970, has all its readings dropped. They are counted in
+  `samples_too_old_dropped_total` on `sparkplug-ingest` and `telemetry_too_old_dropped_total` on
+  `lwm2m-ingest`, and the service logs a warning naming the device.
+- Any other event dated that far back is dead-lettered with reason `Invalid` on its first delivery,
+  and counted in `resolve_event_time_too_old_total` on `device-management`.
+
+Before, any past time was accepted, and the event store keeps one partition (chunk) per chunk
+interval, a day by default. A device could create a partition for every day back to year 1, and
+every later operation that touches each partition, such as an upgrade that rebuilds a key, slowed
+down with them. [Count the chunks too](#next-time-leading-keys-chunks) says what this release's
+upgrade does about a table that already has too many.
+
+- A device with no clock should leave `occurredTime` out; the platform then dates the reading when
+  it arrives. The epoch, `1970-01-01T00:00:00Z`, is refused.
+- Messages already waiting in the platform at the upgrade are judged against the time they arrived,
+  so one dated more than 366 days before that is refused by the new release.
+- The edge agent's spool has no age limit of its own; see [the spool](./edge-services.md#the-spool).
+- The limit is fixed. There is no setting for it.
 
 ### The one-time durable-ingest cutover
 

@@ -165,7 +165,8 @@ var (
 	// the tenant. Labelled by SOURCE only.
 	BackpressureCounter *prometheus.CounterVec
 	// InvalidEventTimeCounter counts inbound messages refused because a timestamp on
-	// them — the envelope's or any entry's — is not an RFC3339 instant. A subset of
+	// them — the envelope's or any entry's — is not an RFC3339 instant, or is more than
+	// eventtime.MaxAge (366 days) before the platform received the message. A subset of
 	// FailedDecodeCounter, kept separate because a fleet with wrong clocks is a
 	// different operational fact from a broken payload shape.
 	InvalidEventTimeCounter *prometheus.CounterVec
@@ -251,7 +252,7 @@ func initializeMetrics() {
 		[]string{"source", "shed_class"})
 	InvalidEventTimeCounter = Microservice.NewCounterVec(
 		"total_msg_invalid_event_time",
-		"Count of inbound messages refused because a timestamp on them is not an RFC3339 instant",
+		"Count of inbound messages refused because a timestamp on them is not an RFC3339 instant or is more than 366 days before the platform received the message",
 		[]string{"source"})
 	TooManyReadingsCounter = Microservice.NewCounterVec(
 		"total_msg_too_many_readings",

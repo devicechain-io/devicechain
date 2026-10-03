@@ -159,6 +159,10 @@ type ResolveMetrics struct {
 	// per-worker counter would report a fleet's clock skew as N unrelated series.
 	eventTimeBounded prometheus.Counter
 
+	// eventTimeTooOld counts events refused for a reported time more than eventtime.MaxAge
+	// before the platform received them. ONE counter for the pool, for the same reason.
+	eventTimeTooOld prometheus.Counter
+
 	// workers is the resolver pool width this pod runs. Beside red's resolve_inflight it
 	// says whether the pool is saturated. Nil in a zero ResolveMetrics.
 	workers prometheus.Gauge
@@ -178,6 +182,9 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		eventTimeBounded: ms.NewCounter(
 			"resolve_event_time_bounded_total",
 			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling"),
+		eventTimeTooOld: ms.NewCounter(
+			"resolve_event_time_too_old_total",
+			"Events refused because a reported time is more than 366 days before the platform received it; each is dead-lettered with reason Invalid"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -564,6 +571,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	eventTime := EventTimePolicy{
 		MaxFutureSkew: iproc.MaxFutureSkew,
 		Bounded:       iproc.metrics.eventTimeBounded,
+		TooOld:        iproc.metrics.eventTimeTooOld,
 	}
 	// The ONE place the pool's width is decided: the configured count, or the configuration's
 	// default when none was set. A count the configuration would refuse is refused here too,

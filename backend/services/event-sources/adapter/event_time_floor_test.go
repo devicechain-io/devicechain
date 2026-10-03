@@ -65,7 +65,7 @@ func TestEveryEntryTimeIsFloored(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &fakeWriter{}
 			e := NewEmitter(w, fixedNow, "lw", true)
-			require.NoError(t, e.Emit(context.Background(), "acme", "lwm2m", "dev-1", tc.samples))
+			require.NoError(t, emitErr(e, context.Background(), "acme", "lwm2m", "dev-1", tc.samples))
 			require.Len(t, w.msgs, 1)
 
 			ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
@@ -96,7 +96,7 @@ func TestEveryEntryTimeIsFloored(t *testing.T) {
 func TestTheEnvelopeGuardStillHoldsForATimelessBatch(t *testing.T) {
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "lw", true)
-	require.NoError(t, e.Emit(context.Background(), "acme", "lwm2m", "dev-1",
+	require.NoError(t, emitErr(e, context.Background(), "acme", "lwm2m", "dev-1",
 		[]Sample{{Name: "/3303/0/5700", Value: 1, Time: 0}, {Name: "/3303/0/5701", Value: 2, Time: -5}}))
 	require.Equal(t, 1, len(w.msgs))
 
@@ -105,7 +105,7 @@ func TestTheEnvelopeGuardStillHoldsForATimelessBatch(t *testing.T) {
 	assert.Equal(t, fixedNow().UnixMilli(), ev.OccurredTime.UnixMilli())
 
 	empty := &fakeWriter{}
-	require.NoError(t, NewEmitter(empty, fixedNow, "lw", true).Emit(context.Background(), "acme", "lwm2m", "dev-1", nil))
+	require.NoError(t, emitErr(NewEmitter(empty, fixedNow, "lw", true), context.Background(), "acme", "lwm2m", "dev-1", nil))
 	assert.Equal(t, 0, len(empty.msgs), "an empty batch publishes nothing")
 }
 
@@ -116,11 +116,11 @@ func TestFlooringAnEntryDoesNotMoveTheDedupID(t *testing.T) {
 	samples := []Sample{{Name: "/3303/0/5700", Value: 1, Time: -42}}
 
 	first := &fakeWriter{}
-	require.NoError(t, NewEmitter(first, fixedNow, "lw", true).
-		Emit(context.Background(), "acme", "lwm2m", "dev-1", samples))
+	require.NoError(t, emitErr(NewEmitter(first, fixedNow, "lw", true),
+		context.Background(), "acme", "lwm2m", "dev-1", samples))
 	second := &fakeWriter{}
-	require.NoError(t, NewEmitter(second, fixedNow, "lw", true).
-		Emit(context.Background(), "acme", "lwm2m", "dev-1", samples))
+	require.NoError(t, emitErr(NewEmitter(second, fixedNow, "lw", true),
+		context.Background(), "acme", "lwm2m", "dev-1", samples))
 
 	require.Len(t, first.msgs, 1)
 	require.Len(t, second.msgs, 1)

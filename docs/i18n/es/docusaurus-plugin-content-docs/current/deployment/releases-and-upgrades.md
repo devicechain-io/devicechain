@@ -4204,7 +4204,8 @@ versión, reduce de nuevo estas cifras y da los totales.
   tabla o cualquiera de sus fragmentos. Si se sigue deteniendo, busca consultas SQL o de BI de larga duración sobre
   el almacén de eventos. Eliminar un índice también bloquea cada fragmento de su tabla; si la base
   de datos se queda sin espacio para bloqueos, el error lo indica y nombra el ajuste que hay que
-  aumentar.
+  aumentar. Una tabla con más de 500 fragmentos se rechaza antes de eliminar ningún índice:
+  consulta [Cuenta también los fragmentos](#next-time-leading-keys-chunks).
 - Volver a `v0.18.0` deja los índices eliminados, y `v0.18.0` funciona sin ellos.
 
 #### Las primarias de las bases de datos prefieren nodos distintos {#next-primary-spread}
@@ -4578,9 +4579,70 @@ después recréala con `dcctl destroy` y `dcctl bootstrap` en la nueva versión.
 :::caution Exporta primero: recrear descarta tus datos
 `dcctl destroy` elimina las bases de datos de la instancia: todos los inquilinos, dispositivos,
 definiciones de dispositivo, paneles y usuarios, y todos sus eventos, no solo el historial de
-eventos. No hay un camino en su sitio que conserve en esta versión una instancia que supere el
-límite.
+eventos. No hay un camino en su sitio que conserve en esta versión una instancia que supere las
+4.000.000 de filas.
 :::
+
+##### Cuenta también los fragmentos {#next-time-leading-keys-chunks}
+
+La reconstrucción, y [la eliminación de índices de arriba](#next-event-store-indexes), también
+rechazan una tabla con más de **500 fragmentos**. Cada una bloquea todos los fragmentos de la tabla
+que cambia, y 500 es la mitad de lo máximo que esta versión ha medido que se reconstruye dentro de un
+arranque, lo que deja margen para un almacenamiento más lento. Por encima, `event-management` se
+niega antes de bloquear nada, en lugar de arriesgarse a una reconstrucción que no puede terminar y
+que después bloquea todos los arranques siguientes. Un fragmento cubre un intervalo de fragmento de
+una tabla: un día por defecto (`lifecycle.chunkIntervalHours`), así que con el valor por defecto 500
+fragmentos son un año y cuatro meses de historial, aproximadamente, con la retención desactivada. Un
+intervalo más corto llega antes a 500, y también un dispositivo que envió lecturas fechadas muy en el pasado. Cuéntalos, en cualquiera de
+los pods del almacén de eventos:
+
+```sql
+SELECT hypertable_name, count(*) AS chunks, min(range_start) AS oldest, max(range_end) AS newest
+FROM timescaledb_information.chunks WHERE hypertable_schema = 'event-management'
+GROUP BY 1 ORDER BY 1;
+```
+
+Si una tabla tiene más de 500 y puedes prescindir de sus eventos más antiguos, elimínalos antes de
+actualizar. **Esto borra para siempre los eventos de todos los inquilinos en esos fragmentos.**
+
+1. **Detén lo que los envió.** Si un dispositivo sigue enviando lecturas fechadas muy en el pasado,
+   revoca antes su credencial: la versión anterior las acepta, y volverían a crear los fragmentos.
+2. **Elige una fecha de corte.** Los fragmentos que terminan en ella o antes se eliminan enteros; el
+   fragmento que la abarca se conserva. La fecha en que se instaló la instancia elimina solo eventos
+   fechados antes de que la instancia existiera. La misma fecha de corte se aplica a las seis tablas
+   de eventos, para que ningún evento quede sin sus lecturas.
+3. **Ejecuta la eliminación en el primario del almacén de eventos.**
+   `kubectl -n dci-<instance-id> get pods -l cnpg.io/instanceRole=primary` lista los primarios; usa
+   el que empieza por `dc-tsdb-`, abre `psql` en él como arriba y ejecuta la sentencia de abajo con tu
+   fecha de corte en lugar de `2024-01-01`. Ejecútala sola, no dentro de `BEGIN`: elimina como mucho
+   100 fragmentos de una tabla cada vez y confirma tras cada lote, así que la base de datos nunca
+   tiene que bloquearlos todos a la vez.
+
+```sql
+DO $$
+DECLARE
+  cutoff constant timestamptz := TIMESTAMPTZ '2024-01-01';
+  tbl text;
+  step timestamptz;
+BEGIN
+  FOREACH tbl IN ARRAY ARRAY['events', 'measurement_events', 'location_events',
+                             'alert_events', 'event_anchors', 'state_change_events'] LOOP
+    LOOP
+      SELECT max(range_end) INTO step FROM (
+        SELECT range_end FROM timescaledb_information.chunks
+        WHERE hypertable_schema = 'event-management' AND hypertable_name = tbl
+          AND range_end <= cutoff
+        ORDER BY range_end LIMIT 100) oldest;
+      EXIT WHEN step IS NULL;
+      PERFORM drop_chunks(format('%I.%I', 'event-management', tbl)::regclass, older_than => step);
+      COMMIT;
+    END LOOP;
+  END LOOP;
+END $$;
+```
+
+Después vuelve a contar los fragmentos y actualiza. Si no puedes prescindir de esos eventos, exporta
+lo que necesites y recrea la instancia, como se indica arriba.
 
 ##### Durante la actualización {#next-time-leading-keys-during}
 
@@ -4595,12 +4657,19 @@ límite.
   nada, y su registro explica el motivo. `dcctl upgrade` informa entonces de que no terminó de
   desplegarse: todos los demás servicios ejecutan la nueva versión, y el `event-management`
   anterior sigue almacenando eventos hasta que recrees la instancia, como se indica arriba.
+- **Si una tabla tiene más de 500 fragmentos,** `event-management` se detiene antes de bloquear
+  nada, y su registro nombra la tabla, su número de fragmentos y la consulta de arriba, y remite a
+  [la eliminación](#next-time-leading-keys-chunks). No se marca nada: una vez eliminados los
+  fragmentos, el siguiente arranque sigue adelante. La eliminación de índices se detiene del mismo
+  modo, y no se elimina nada de ninguna tabla.
 - **Si la reconstrucción de una tabla tarda más de 40 segundos** una vez bloqueada la tabla, se
   deshace, la tabla conserva su clave anterior, y `event-management` se detiene con un error que lo
   indica. A partir de entonces se detiene de inmediato en cada arranque sin tocar la tabla, así que
   la ingesta no vuelve a detenerse en cada reinicio. Recrea la instancia o, para intentarlo una vez
   más (por ejemplo, tras mover el almacén de eventos a un almacenamiento más rápido), ejecuta la
-  sentencia `COMMENT ON INDEX` que da el error.
+  sentencia `COMMENT ON INDEX` que da el error. Si la tabla guarda eventos fechados muy en el pasado,
+  eliminarlos como en [Cuenta también los fragmentos](#next-time-leading-keys-chunks) acorta la
+  reconstrucción; después ejecuta la sentencia `COMMENT ON INDEX`.
 - Si otra sesión mantiene ocupada una tabla, o se agota el minuto, `event-management` se detiene
   con un error que nombra la tabla y lista las tablas ya reconstruidas, y continúa desde ahí al
   reiniciarse, como en [la eliminación de índices anterior](#next-event-store-indexes). El error
@@ -4953,6 +5022,42 @@ servicio (menos servicios de la ruta de eventos por nodo y, para `device-managem
   evitar la primaria del almacén de eventos en los tres servicios que la tienen. Un servicio con `eventPathSpread: false` conserva en su
   lugar el reparto predeterminado del clúster, que también prefiere zonas distintas, y no recibe
   esta preferencia.
+
+#### Se rechaza una lectura fechada más de 366 días antes de llegar {#next-event-age-limit}
+
+El `occurredTime` de una lectura, en el sobre o en cualquier entrada, puede ser ahora como mucho 366
+días anterior al momento en que la plataforma la recibió. Uno más antiguo se rechaza, nunca se mueve
+a una hora posterior:
+
+- **HTTP y MQTT:** se rechaza el mensaje entero, como en cualquier otro rechazo de marca de tiempo.
+  HTTP responde `400`, y una publicación MQTT se envía a la cola de mensajes fallidos. Ambos se
+  cuentan en `total_msg_invalid_event_time` en `event-sources`.
+- **Sparkplug y LwM2M:** solo se descartan las lecturas demasiado antiguas, y el resto del mensaje
+  se almacena. El mensaje de una pasarela lo compone la pasarela, no lo envía un dispositivo como una
+  unidad, y la marca de tiempo de una métrica de Sparkplug es cuándo cambió su valor por última vez,
+  así que un valor sin cambios durante más de 366 días se descarta de cada nacimiento hasta que
+  cambie. Un nodo sin reloj configurado, que informa horas cercanas a 1970, ve descartadas todas sus
+  lecturas. Se cuentan en `samples_too_old_dropped_total` en `sparkplug-ingest` y en
+  `telemetry_too_old_dropped_total` en `lwm2m-ingest`, y el servicio registra un aviso que nombra el
+  dispositivo.
+- Cualquier otro evento fechado tan atrás se envía a la cola de mensajes fallidos con el motivo
+  `Invalid` en su primera entrega, y se cuenta en `resolve_event_time_too_old_total` en
+  `device-management`.
+
+Antes se aceptaba cualquier hora pasada, y el almacén de eventos guarda una partición (fragmento) por
+intervalo de fragmento, un día por defecto. Un dispositivo podía crear una partición por cada día
+hasta el año 1, y toda operación posterior que recorre cada partición, como una actualización que
+reconstruye una clave, se volvía más lenta con ellas.
+[Cuenta también los fragmentos](#next-time-leading-keys-chunks) explica qué hace la actualización de
+esta versión con una tabla que ya tiene demasiados.
+
+- Un dispositivo sin reloj debe omitir `occurredTime`; la plataforma fecha entonces la lectura al
+  llegar. La época, `1970-01-01T00:00:00Z`, se rechaza.
+- Los mensajes que ya esperan en la plataforma al actualizar se juzgan según la hora en que llegaron,
+  así que la nueva versión rechaza uno fechado más de 366 días antes de esa hora.
+- El almacén local del agente de borde no tiene límite de antigüedad propio; consulta
+  [el almacén local](./edge-services.md#the-spool).
+- El límite es fijo. No hay ningún ajuste para él.
 
 ### La transición única a la ingesta duradera
 
