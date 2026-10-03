@@ -150,12 +150,13 @@ type Metrics struct {
 	// source ingests none of its groups until every one is granted. A climbing counter is
 	// therefore an ingest outage for that source, not a presence nuance.
 	SubscribeFailures prometheus.Counter
-	// IngestFailures counts accepted messages whose samples or presence transitions were
-	// dropped (ingestWithRetry's every abandonment): samples at once when inbound-events
-	// refused them because a reader is far behind (backpressure, not retried; presence
-	// bypasses the gate), and either after the in-handler retry budget was exhausted
-	// (device-management or NATS unreachable) or on connection shutdown. One message can
-	// count twice, once for its samples and once for its transitions. A clean-session
+	// IngestFailures counts ingestWithRetry's every abandonment, one per abandoned ingest
+	// call: an accepted message's samples or presence transitions, or a reconciliation
+	// sweep's synthetic DISCONNECTED batch (which comes from no message). Samples are
+	// dropped at once when inbound-events refused them under backpressure (not retried;
+	// presence bypasses the gate), and anything either after the in-handler retry budget
+	// was exhausted (device-management or NATS unreachable) or on connection shutdown.
+	// One message can count twice, once for its samples and once for its transitions. A clean-session
 	// Host gets no broker redelivery, so this is real (bounded) loss — the signal that
 	// ingest, not just connectivity, is degraded.
 	IngestFailures prometheus.Counter
@@ -891,8 +892,8 @@ func (c *Client) ingestWithRetry(attempt func(ctx context.Context) error, onDrop
 		if err == nil {
 			return
 		}
-		// Not retried: the stream is refusing because a reader is far behind, which lasts
-		// far longer than this loop's budget, and every retry would hold paho's ordered
+		// Not retried: the stream is refusing new events (backpressure), which lasts far
+		// longer than this loop's budget, and every retry would hold paho's ordered
 		// receive goroutine for nothing. Presence transitions are admitted past the gate
 		// (messaging.Message.BypassBackpressure), so what reaches here is samples.
 		if errors.Is(err, messaging.ErrStreamBackpressure) {

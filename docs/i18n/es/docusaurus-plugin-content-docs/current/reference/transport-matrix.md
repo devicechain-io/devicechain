@@ -74,8 +74,7 @@ hay ningún bróker aparte que operar.
   dimensiónala contra ese límite en lugar de confiar en que se avise al dispositivo para que frene,
   porque no se le avisa.
 
-  Tampoco se avisa al dispositivo cuando la propia plataforma rechaza eventos porque un consumidor va
-  muy atrasado
+  Tampoco se avisa al dispositivo cuando la propia plataforma rechaza eventos nuevos
   (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)).
   El bróker ya confirmó el mensaje al dispositivo, así que no se rechaza: espera en el stream de
   captura hasta que la canalización vuelva a aceptar eventos. Si el rechazo dura lo suficiente
@@ -100,11 +99,12 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
 - **Suscripción ●**: `POST /{instanceId}/{tenant}/events` devuelve:
   - `202` una vez almacenado el evento en el stream de entrada de la plataforma;
   - `400` ante un cuerpo que no puede decodificar o un inquilino sintácticamente inválido;
+  - `404` cuando el id de instancia de la ruta es incorrecto;
   - `429` cuando el inquilino supera su techo de ingesta, contado en lecturas. Se comprueba antes
     de la contrapresión, así que un inquilino por encima de su propio techo recibe `429`, nunca el
     `503` de contrapresión;
-  - **`503` con una cabecera `Retry-After` cuando la plataforma aplica contrapresión**: un
-    consumidor va tan atrasado que aceptar más desplazaría eventos que aún no ha procesado
+  - **`503` con una cabecera `Retry-After` cuando la plataforma aplica contrapresión**: rechaza
+    eventos nuevos para que no desplacen eventos que un consumidor aún no ha procesado
     (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure));
   - **`503` sin `Retry-After` cuando el evento no pudo entregarse al stream.**
 
@@ -114,8 +114,8 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   significa que la publicación falló, y si falló después de que el stream almacenara el evento, un
   reintento lo almacena dos veces, salvo que el evento lleve `altId` y `occurredTime` (consulta
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). Un `429` también significa que el evento no se aceptó; lleva una
-  cabecera `Retry-After`, así que espera y reintenta. `202` y `400` son terminales para esa
-  petición.
+  cabecera `Retry-After`, así que espera y reintenta. `202`, `400` y `404` son terminales
+  para esa petición.
 - **Escritura ○ / Lectura ○**: **no hay ningún canal descendente en absoluto.** Un dispositivo que
   llega a la plataforma solo por HTTP no puede recibir comandos. Más que una carencia a la espera
   de arreglo, es la forma de la integración: da también una conexión MQTT a un dispositivo que deba

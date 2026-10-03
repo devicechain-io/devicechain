@@ -217,7 +217,7 @@ func buildMetrics() host.Metrics {
 		SubscribeFailures: Microservice.NewCounter("subscribe_failures_total",
 			"Sessions abandoned because a Sparkplug group subscription failed after the broker accepted the connection (most often a refusal: the source's credential may not read that group). The source never announces ONLINE and ingests none of its groups while any group is refused; it retries with backoff."),
 		IngestFailures: Microservice.NewCounter("ingest_failures_total",
-			"Accepted messages whose samples or presence transitions were dropped: samples at once when inbound-events refused them under backpressure; "+
+			"Accepted messages whose samples or presence transitions were dropped, plus presence-reconciliation disconnect batches that could not be stored: samples at once when inbound-events refused them under backpressure; "+
 				"either after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable) or on connection shutdown. "+
 				"A clean-session Host gets no redelivery, so each one is lost."),
 	}

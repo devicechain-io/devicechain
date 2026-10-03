@@ -70,8 +70,7 @@ there is no separate broker to run.
   `429` to send. If your fleet can burst past its limit, size it against the limit rather than
   relying on the device being told to slow down, which it is not.
 
-  The device is not told either when the platform itself is refusing events because a consumer is
-  far behind (see
+  The device is not told either when the platform itself is refusing new events (see
   [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)).
   The broker has already acknowledged the device, so the message is not refused: it waits in the
   capture stream until the pipeline accepts events again. If the refusal lasts long enough to fill
@@ -96,10 +95,11 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
 - **Subscribe ●** — `POST /{instanceId}/{tenant}/events` returns:
   - `202` once the event is stored in the platform's inbound stream;
   - `400` on a body it cannot decode or a syntactically invalid tenant;
+  - `404` when the instance id in the path is wrong;
   - `429` when the tenant is over its ingest ceiling, counted in readings. This is checked before
     backpressure, so a tenant over its own ceiling gets `429`, never the backpressure `503`;
-  - **`503` with a `Retry-After` header when the platform is applying backpressure**: a consumer
-    is so far behind that accepting more would push out events it has not processed (see
+  - **`503` with a `Retry-After` header when the platform is applying backpressure**: it is
+    refusing new events so that they cannot push out events a consumer has not processed yet (see
     [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure));
   - **`503` without a `Retry-After` when the event could not be handed to the stream.**
 
@@ -109,8 +109,8 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   failed after the stream had stored the event, a retry stores it twice, unless the event carries an
   `altId` and an `occurredTime` (see
   [quality of service](../guides/connecting-a-device.md#quality-of-service)). A `429` also means the
-  event was not accepted; it carries a `Retry-After` header, so back off and retry. `202` and `400`
-  are terminal for that request.
+  event was not accepted; it carries a `Retry-After` header, so back off and retry. `202`, `400`
+  and `404` are terminal for that request.
 - **Write ○ / Read ○** — **there is no downlink at all.** A device that reaches the platform only
   over HTTP cannot be commanded. This is less a gap awaiting a fix than the shape of the
   integration: give a device that must receive commands an MQTT connection as well.
