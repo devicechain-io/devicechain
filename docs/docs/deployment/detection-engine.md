@@ -81,7 +81,10 @@ kill), the actions waiting to be dispatched resume when the replacement takes th
 to about 35 seconds later. Detection resumes later still: the replacement first waits out a further
 handover period, because it cannot tell a stopped pod from one that is cut off but still running,
 and then replays as described below. A graceful restart releases the partition and skips both
-waits.
+waits. If the broker is briefly unreachable while the pod stops, the pod keeps trying to release
+until shortly before its grace period ends. A broker outage longer than 30 seconds ends the hold
+even of a running pod. Once the broker is back, the engine takes the partition again, waits out
+the handover period and replays, because nothing records that it stopped cleanly.
 
 | | What happens |
 |---|---|

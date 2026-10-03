@@ -4551,6 +4551,35 @@ readings than its tier allows. Raise its tier's ingest rate, or have its devices
 Going back to the previous release restores per-message charging. No stored data or schema
 changes, and no configuration key is renamed.
 
+#### Detection retries releasing its partition when the broker does not answer {#next-detect-lease-release}
+
+When the detection engine's pod stops, it releases its partition so that the next pod can start
+detecting at once. Until now, if the broker did not answer that release, for example because a
+broker server was restarting at that moment, the pod gave up after one try. The next pod then
+waited for the partition to expire, up to 30 seconds, and for a further 20-second handover period
+before it detected anything. The pod now retries the release until the broker answers, for as
+long as its shutdown time allows, keeping back enough of it for one more broker timeout and to
+finish stopping. A renewal or a release whose reply was lost
+while a broker server restarted also no longer costs the engine its partition. The retry is done
+by the pod that stops, so it takes effect from the upgrade after the one that installs this
+release: during that upgrade, the pod being replaced still runs the previous release and makes
+one attempt.
+
+What still pauses detection:
+
+- **Without `--ha`, an upgrade that restarts the broker stops detection for the whole restart**,
+  usually about a minute (see [the broker and event store entry](#next-upgrade-infrastructure)).
+  The engine cannot keep its partition through a broker outage longer than 30 seconds, and
+  nothing records that it stopped cleanly, so once the broker is back it waits out the 20-second
+  handover period, plus up to 5 seconds before it retries, and then replays from its last
+  checkpoint as after any restart. The roll of the services that follows then moves the partition
+  to the new pod, which replays once more but does not wait.
+- **A pod that stops while the broker stays unreachable past its shutdown** still leaves its
+  partition to expire, and the next pod waits up to 30 seconds plus the handover period.
+
+Under `--ha` the broker stays available while its servers restart one at a time. The engine loses
+its partition only if its renewals fail for 30 seconds. Nothing needs doing.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

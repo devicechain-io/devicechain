@@ -4906,6 +4906,36 @@ dispositivos envíen menos.
 Volver a la versión anterior restaura el cobro por mensaje. No cambian datos almacenados ni el
 esquema, y no se renombra ninguna clave de configuración.
 
+#### La detección reintenta liberar su partición cuando el bróker no responde {#next-detect-lease-release}
+
+Cuando el pod del motor de detección se detiene, libera su partición para que el siguiente pod
+empiece a detectar enseguida. Hasta ahora, si el bróker no respondía a esa liberación, por ejemplo
+porque un servidor del bróker se estaba reiniciando en ese momento, el pod se rendía tras un
+intento. El siguiente pod esperaba entonces a que la partición expirara, hasta 30 segundos, y un
+periodo de traspaso adicional de 20 segundos antes de detectar nada. Ahora el pod reintenta la
+liberación hasta que el bróker responde, mientras se lo permita su tiempo de apagado, y reserva lo
+suficiente para un tiempo de espera más del bróker y para terminar de detenerse. Una renovación o una liberación cuya respuesta se perdió mientras un servidor del
+bróker se reiniciaba tampoco le cuesta ya la partición al motor. El reintento lo hace el pod que se
+detiene, así que tiene efecto a partir de la actualización siguiente a la que instala esta versión:
+durante esa actualización, el pod que se sustituye todavía ejecuta la versión anterior y hace un
+solo intento.
+
+Lo que todavía pausa la detección:
+
+- **Sin `--ha`, una actualización que reinicia el bróker detiene la detección durante todo el
+  reinicio**, normalmente alrededor de un minuto (consulta [la entrada del bróker y del almacén de
+  eventos](#next-upgrade-infrastructure)). El motor no puede conservar su partición durante una
+  interrupción del bróker de más de 30 segundos, y nada registra que se detuvo limpiamente, así
+  que, cuando el bróker vuelve, espera el periodo de traspaso de 20 segundos, más hasta 5 segundos
+  antes de reintentar, y después reproduce el flujo desde su último punto de control, como tras
+  cualquier reinicio. El despliegue gradual de los servicios que sigue mueve luego la partición al
+  pod nuevo, que reproduce el flujo una vez más pero no espera.
+- **Un pod que se detiene mientras el bróker sigue inaccesible más allá de su apagado** todavía deja
+  que su partición expire, y el siguiente pod espera hasta 30 segundos más el periodo de traspaso.
+
+Con `--ha` el bróker sigue disponible mientras sus servidores se reinician de uno en uno. El motor
+solo pierde su partición si sus renovaciones fallan durante 30 segundos. No hace falta hacer nada.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

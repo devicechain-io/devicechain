@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -109,6 +110,64 @@ const renewInterval = time.Second
 // CrashLoopBackOff, because the replacement meets the same outage. Acquire retries
 // forever, deliberately.
 const maxConsecutiveTermBuildFailures = 5
+
+// releaseShutdownHeadroom is what a stopping leader leaves of its teardown budget
+// after its last release attempt may START: one JetStream API timeout (5s — an attempt
+// started before the deadline can run that far past it) plus a second for the NATS and
+// database managers that stop after this processor. Spending it would trade the
+// release for a teardown that overruns its budget and abandons the same release, and
+// the log line saying so.
+const releaseShutdownHeadroom = 6 * time.Second
+
+// releaseContext bounds endTerm's release (Lease.ReleaseWithin), which retries while
+// the broker does not answer.
+//
+//   - Stopping already: the teardown deadline less releaseShutdownHeadroom.
+//   - Not stopping: no deadline of its own, so the lease's validity window bounds the
+//     retries — UNTIL a stop arrives. 🔴 That case is not hypothetical: a broker blip
+//     is exactly what ends a term with the window still open (a watch or term build
+//     that failed against it), and a stop landing during that release must not wait
+//     out the rest of the window against a teardown budget shorter than it.
+//     ExecuteStop records the deadline and then ends stopBegun, so the AfterFunc
+//     below arms the same bound the moment the stop begins.
+//
+// 🔴 It watches stopBegun, NOT supCtx. supCtx also ends with no stop under way:
+// haltStaleWriter cancels it and only then does FailNow's teardown call ExecuteStop.
+// Armed on supCtx, the release saw that edge with no deadline recorded and never
+// looked again, so a broker outage held it for the rest of the window, past the
+// teardown budget. A stop that sends no deadline leaves the window as the bound. A
+// deadline already in the past is fine: the first attempt is unconditional.
+func (rp *ResolvedEventsProcessor) releaseContext() (context.Context, context.CancelFunc) {
+	if n := rp.stopDeadline.Load(); n != 0 {
+		return context.WithDeadline(context.Background(), time.Unix(0, n).Add(-releaseShutdownHeadroom))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if rp.stopBegun == nil {
+		return ctx, cancel
+	}
+	var mu sync.Mutex
+	var timer *time.Timer
+	stop := context.AfterFunc(rp.stopBegun, func() {
+		n := rp.stopDeadline.Load()
+		if n == 0 {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if ctx.Err() == nil {
+			timer = time.AfterFunc(time.Until(time.Unix(0, n).Add(-releaseShutdownHeadroom)), cancel)
+		}
+	})
+	return ctx, func() {
+		stop()
+		cancel()
+		mu.Lock()
+		defer mu.Unlock()
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+}
 
 // acquireBackoff paces retries when the partition is held or the broker is down.
 const (
@@ -520,14 +579,37 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	//    acquirable immediately, so the successor could Load the snapshot before this
 	//    Save landed — manufacturing the stale-checkpoint exit this design says
 	//    cannot happen.
+	//
+	//    The release WAITS FOR THE BROKER, within releaseContext's bound. A leader
+	//    stopped while the broker is briefly not answering — a server restarting, a
+	//    stream leader moving — used to make one attempt and leave its entry to
+	//    expire, and its successor then waited for the expiry and for termSlack. A
+	//    release that lands leaves the marker PriorOwnerReleasedCleanly reads, so the
+	//    successor skips both.
 	rp.finalCheckpoint()
 	rp.Gate.Exit()
-	if err := handle.lease.Release(); err != nil {
-		// Informational: our own hold is relinquished regardless, and a failed delete
-		// just leaves the entry to age out — the crash-path handover, no corruption.
-		log.Warn().Err(err).Str("partition", rp.cfg.PartitionId).Msg("DETECT lease release did not land; the entry will expire")
-	}
+	// Not consuming from here on, though the entry may stay ours on the server for as
+	// long as the release retries — which is why is_leader stays up until after it.
 	rp.metrics.setDetectLive(false)
+	ctx, cancel := rp.releaseContext()
+	err := handle.lease.ReleaseWithin(ctx)
+	cancel()
+	switch {
+	case err == nil:
+	case errors.Is(err, messaging.ErrNotHolder):
+		// Informational, like the case below: our own hold is relinquished regardless.
+		// It also covers a release that DID land and lost its reply — the retry then
+		// finds nothing of ours — so the message must not read as a failure.
+		log.Info().Err(err).Str("partition", rp.cfg.PartitionId).
+			Msg("DETECT found no lease entry of its own left to release (an earlier attempt may already have " +
+				"released it, or it expired), or its validity window closed before the broker answered")
+	default:
+		// A release that never landed leaves the entry to age out — the crash-path
+		// handover, no corruption.
+		log.Warn().Err(err).Str("partition", rp.cfg.PartitionId).
+			Msg("DETECT could not release its lease before its shutdown deadline; the entry will expire and " +
+				"the next leader then waits out its handover period")
+	}
 	rp.metrics.setLeader(false)
 }
 

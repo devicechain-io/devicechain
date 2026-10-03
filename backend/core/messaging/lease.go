@@ -53,7 +53,8 @@ var (
 	// The caller must stop consuming and tear down its keyed state (ADR-070 M3
 	// self-eviction), then RELEASE this lease and Acquire a fresh one to recover
 	// (Release clears our own now-stale entry so the re-Acquire is not blocked by it).
-	// A single failed Renew is NOT this: see Renew.
+	// A single failed Renew is NOT this: see Renew. Release and ReleaseWithin also wrap
+	// it, to say there was no entry of ours left to delete.
 	ErrNotHolder = errors.New("messaging: lease is no longer held by this owner")
 	// ErrStaleEpoch is returned by Fence.RejectIfStale for a downstream write whose
 	// epoch predates the newest owner seen for the partition (ADR-070 decision 4b).
@@ -119,6 +120,11 @@ func (nmgr *NatsManager) NewDistributedLease(ttl time.Duration) (*DistributedLea
 func (l *DistributedLease) Acquire(partition string) (*Lease, error) {
 	key := kvKey(partition)
 	holder := uuid.NewString()
+	// NOT COVERED: a Create applied with its reply lost. The entry carries a uuid that
+	// no Lease remembers, so the next Acquire mints a fresh one, reads ErrLeaseHeld
+	// until the entry expires, and then pays the handover wait. ownRevision cannot
+	// claim it, because holder identity is per call. Renew and Release, whose lease
+	// knows its uuid, do recover the same lost-reply case.
 	rev, err := l.kv.Create(key, []byte(holder))
 	if errors.Is(err, nats.ErrKeyExists) {
 		return nil, ErrLeaseHeld
@@ -222,17 +228,21 @@ type Lease struct {
 	// request timeout — on each renew.
 	//
 	// The claim is now unqualified — NO Lease method holds mu across a round trip —
-	// and what enforces it is a pair of tests rather than this comment. A Lease makes
-	// exactly two KV WRITES, the two named above, and there is one test per write:
+	// and what enforces it is a pair of tests rather than this comment. A Lease has
+	// exactly two KV WRITERS, the two named above, and there is one test per writer:
 	// TestHeldDoesNotBlockOnARenewRoundTrip and TestHeldDoesNotBlockOnAReleaseRoundTrip
 	// park one each and assert Holder.Held() still answers while it is outstanding.
-	// Both fail if that write moves under mu. A third write added to this type needs
-	// its own park-and-answer case, or it is covered by review only.
+	// Both fail if that write moves under mu. A third writer added to this type needs
+	// its own park-and-answer case, or it is covered by review only. (A writer may
+	// write a second time in one call, at a revision ownRevision adopted after a
+	// refused CAS; that write is the same call, under the same renewMu and outside mu.)
 	//
-	// Writes, not round trips, is the right count to check against: WatchHolder and the
-	// rebind in Holder.run also make one (kv.Watch creates a consumer). Neither takes
-	// mu, so the claim above holds for them too — but a reader auditing "two" against
-	// the source should be counting the CAS writers, or the number will not add up.
+	// Writers, not round trips, is the right count to check against: WatchHolder and
+	// the rebind in Holder.run also make one (kv.Watch creates a consumer), and so does
+	// ownRevision's READ, which runs under renewMu only, on the refused-CAS path. None
+	// of them takes mu, so the claim above holds for them too — but a reader auditing
+	// "two" against the source should be counting the CAS writers, or the number will
+	// not add up.
 	//
 	// LOCK ORDER IS renewMu THEN mu, NEVER THE REVERSE. Only Renew and Release take
 	// renewMu, and each takes it first and releases it by defer; every other path
@@ -295,6 +305,27 @@ func (lease *Lease) Renew() error {
 	lease.mu.Unlock()
 
 	newRev, err := lease.kv.Update(lease.key, []byte(lease.holder), rev)
+	if errors.Is(err, nats.ErrKeyRevisionMismatch) && lease.withinWindow() {
+		// 🔴 A REFUSED CAS IS NOT PROOF SOMEONE ELSE OWNS THE ENTRY. A JetStream publish
+		// can be applied and then lose its reply — a server shutting JetStream down for
+		// lame-duck mode, a stream leader moving mid-request, or a write buffered across
+		// a disconnect that the client flushes on reconnect long after it gave up waiting.
+		// The write landed and rev still names the revision before it, so without this
+		// every later Renew (and the Release) fails its CAS against our OWN entry: the
+		// owner loses at its window end a partition nobody else holds, cannot release
+		// it, and the successor waits for expiry and then for its handover period.
+		//
+		// The holder id is the proof (ownRevision). Adoption runs only after a
+		// MISMATCH — a fast answer from a broker that is up — never after a timeout or a
+		// missing responder, so a Renew failing during an outage makes no extra read.
+		// The window is checked again after the read, so the adopting Update STARTS
+		// inside the window: a Renew still overruns the window end by at most one API
+		// timeout, the same bound a plain Renew has, which is what DETECT's termSlack
+		// budgets for.
+		if cur, ours, gerr := lease.ownRevision(); gerr == nil && ours && lease.withinWindow() {
+			newRev, err = lease.kv.Update(lease.key, []byte(lease.holder), cur)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -345,20 +376,76 @@ func (lease *Lease) KeepAlive(ctx context.Context, interval time.Duration) error
 func (lease *Lease) stillValid() bool {
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	return !lease.released && time.Since(lease.lastRenew) < lease.ttl
+	return !lease.released && lease.withinWindowLocked()
 }
 
-// Release relinquishes the lease. It is a revision-checked delete of exactly the
-// entry we created, so if our lease already expired and a standby took over, this
-// is a no-op that cannot drop the new owner's hold — the same guard
+// withinWindow reports whether the last successful renewal is less than a TTL old,
+// whether or not the lease has been released. Release's retries and Renew's
+// own-revision adoption ask this rather than stillValid: a release in progress has
+// already set released, and the question they need answered is whether the entry on
+// the server can still be ours, not whether we still claim it.
+func (lease *Lease) withinWindow() bool {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return lease.withinWindowLocked()
+}
+
+// withinWindowLocked is the one spelling of the window arithmetic; mu must be held.
+func (lease *Lease) withinWindowLocked() bool {
+	return time.Since(lease.lastRenew) < lease.ttl
+}
+
+// ownRevision answers, after a CAS write was refused, whether the entry on the server
+// is still OURS — carries this acquisition's holder id — and at which revision.
+//
+// 🔴 THE HOLDER ID IS THE PROOF, NOT THE REVISION. A JetStream publish can be applied
+// and lose its acknowledgement (see Renew), so a refused CAS may be refusing a
+// revision we ourselves superseded. The value is a uuid minted per Acquire: no other
+// acquisition can have written it, so an entry carrying it is ours whatever its
+// revision. Anything else — a foreign holder, a missing or deleted key — is NOT ours,
+// and an error reaching the server is reported as an error, never as an answer.
+//
+// It takes no lock. Its callers hold renewMu, and mu is never held across this round
+// trip (see the Lease type comment).
+func (lease *Lease) ownRevision() (rev uint64, ours bool, err error) {
+	entry, err := lease.kv.Get(lease.key)
+	if errors.Is(err, nats.ErrKeyNotFound) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if string(entry.Value()) != lease.holder {
+		return 0, false, nil
+	}
+	return entry.Revision(), true, nil
+}
+
+// releaseRetryMin and releaseRetryMax pace ReleaseWithin's retries while the broker
+// does not answer. They are not a correctness input: every attempt is a CAS on a
+// revision that carries our own holder id.
+const (
+	releaseRetryMin = 100 * time.Millisecond
+	releaseRetryMax = time.Second
+)
+
+// Release relinquishes the lease in ONE attempt. It is a revision-checked delete of
+// exactly the entry we created, so if our lease already expired and a standby took
+// over, this is a no-op that cannot drop the new owner's hold — the same guard
 // DistributedLock uses on release. It is idempotent (a second call is a no-op).
+//
+// A refused CAS is followed by ONE read: if the entry still carries this
+// acquisition's holder id at a newer revision — a renewal that landed and lost its
+// reply (see Renew) — the delete is made once more at that revision. An entry that is
+// gone or carries another holder's id is left alone, and Release returns an error
+// wrapping ErrNotHolder.
 //
 // Call it on BOTH the normal shutdown path and the self-eviction path (after
 // KeepAlive returns ErrNotHolder or the Holder reports loss): it clears our own
 // now-stale entry so a subsequent Acquire is not blocked by it. A returned error is
 // informational — our own hold is relinquished regardless; a transient delete
 // failure leaves the entry to age out via its TTL (the crash-path handover, no
-// corruption).
+// corruption). A caller that can afford to wait for the broker uses ReleaseWithin.
 //
 // It is safe to call while a renewer is still running: renewMu makes it WAIT for an
 // in-flight Renew rather than deleting against the revision that renew is in the
@@ -366,13 +453,55 @@ func (lease *Lease) stillValid() bool {
 // renewer first — and the Class-3 operators do, because stopping the readers and the
 // renewer before releasing is also what keeps a departing leader from overlapping its
 // successor — but correctness here no longer depends on their doing so.
-func (lease *Lease) Release() error {
+func (lease *Lease) Release() error { return lease.release(nil) }
+
+// ReleaseWithin is Release for a caller that can afford to wait for the broker — a
+// shutting-down partition owner. It retries an attempt the broker did not answer
+// until one lands, ctx ends, or the lease's validity window closes, whichever is
+// first. The point is the successor: a release that lands leaves the delete marker
+// PriorOwnerReleasedCleanly reads, so the next owner skips its handover wait instead
+// of waiting for the entry to expire and then for that wait.
+//
+// The FIRST attempt is unconditional — exactly Release's — whatever ctx or the window
+// say. A caller handed an already-expired budget does no worse than Release, and a
+// lease whose window has closed may still have an entry of ours on the server (a
+// renewal applied with its reply lost leaves the entry fresher than our window),
+// which that attempt can still find and delete. Only the RETRIES are bounded, by ctx
+// and by the window: once the window has closed, the entry has expired or is about
+// to, outside that lost-reply case, which the first attempt has already covered.
+//
+// 🔴 WHAT IT MUST NEVER DO: delete an entry that is not ours. Every attempt is a CAS
+// on a revision whose value carried this acquisition's holder id (ownRevision). An
+// entry that is gone or carries another holder's id ends it at once with ErrNotHolder;
+// that answer is never retried. Each attempt adopts a new revision at most once, so a
+// read served by a lagging replica cannot spin it outside the backoff and the bounds.
+//
+// An attempt that starts before ctx's deadline can run past it by one JetStream API
+// timeout; a caller budgets for that.
+//
+// It returns nil when the release landed; an error wrapping ErrNotHolder when nothing
+// of ours was left to delete (an earlier attempt of ours landed and lost its reply,
+// the entry expired, or another owner took the partition) or when the window closed
+// while the broker did not answer; and an error wrapping ctx's error when ctx ended
+// first. In the last two cases the entry ages out on its TTL, the crash-path handover.
+func (lease *Lease) ReleaseWithin(ctx context.Context) error {
+	if ctx == nil {
+		panic("messaging: ReleaseWithin needs a context; Release is the single attempt")
+	}
+	return lease.release(ctx)
+}
+
+// release is Release (ctx == nil: one attempt) and ReleaseWithin (retries bounded by
+// ctx and by the validity window).
+func (lease *Lease) release(ctx context.Context) error {
 	// renewMu covers reading rev AND the delete: taking it only around the delete
 	// would move the race rather than close it, since a rev read outside it can
 	// already be stale by the time the delete runs.
 	lease.renewMu.Lock()
 	defer lease.renewMu.Unlock()
 
+	// released is set BEFORE the first round trip, so Holder.Held() reads false for
+	// the whole of a release, retries included.
 	lease.mu.Lock()
 	if lease.released {
 		lease.mu.Unlock()
@@ -382,7 +511,59 @@ func (lease *Lease) Release() error {
 	rev := lease.rev
 	lease.mu.Unlock()
 
-	return lease.kv.Delete(lease.key, nats.LastRevision(rev))
+	backoff := releaseRetryMin
+	for {
+		var err error
+		rev, err = lease.deleteOwn(rev)
+		if err == nil || errors.Is(err, ErrNotHolder) || ctx == nil {
+			return err
+		}
+		// The broker did not answer. Retry only while both bounds allow it.
+		if ctx.Err() != nil {
+			return releaseNotConfirmed(ctx.Err(), err)
+		}
+		if !lease.withinWindow() {
+			return fmt.Errorf("%w: the validity window closed before the broker confirmed the release, so the "+
+				"entry has expired or is about to; the broker's last answer was: %v", ErrNotHolder, err)
+		}
+		select {
+		case <-ctx.Done():
+			return releaseNotConfirmed(ctx.Err(), err)
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > releaseRetryMax {
+			backoff = releaseRetryMax
+		}
+	}
+}
+
+func releaseNotConfirmed(ctxErr, last error) error {
+	return fmt.Errorf("messaging: lease release not confirmed before the caller's deadline (%w); "+
+		"the broker's last answer was: %v", ctxErr, last)
+}
+
+// deleteOwn makes one release attempt at rev and returns the revision the next
+// attempt should use. A refused CAS reads the entry once (ownRevision): our own entry
+// at a newer revision is deleted at that revision, once; anything else ends the
+// release with ErrNotHolder. Every other failure is returned as the broker's answer,
+// for the caller to retry or report.
+func (lease *Lease) deleteOwn(rev uint64) (uint64, error) {
+	err := lease.kv.Delete(lease.key, nats.LastRevision(rev))
+	if !errors.Is(err, nats.ErrKeyRevisionMismatch) {
+		return rev, err
+	}
+	cur, ours, gerr := lease.ownRevision()
+	if gerr != nil {
+		return rev, gerr
+	}
+	if !ours {
+		return rev, fmt.Errorf("%w: no entry of this owner's is left to delete — an earlier attempt landed "+
+			"and lost its reply, the entry expired, or another owner took the partition", ErrNotHolder)
+	}
+	lease.mu.Lock()
+	lease.rev = cur
+	lease.mu.Unlock()
+	return cur, lease.kv.Delete(lease.key, nats.LastRevision(cur))
 }
 
 // Fence is the write-side handover-race guard (ADR-070 decision 4b). It lives on a
