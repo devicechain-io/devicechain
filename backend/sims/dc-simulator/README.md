@@ -166,7 +166,8 @@ success over content the platform is not serving.
 `GET /status` reports `stats.lastTickShed` beside the cumulative `stats.shed` (429s
 at the tenant's rate ceiling) and `stats.backpressured` (503s with a `Retry-After`
 from the platform's backpressure gate); `lastTickShed` counts both. The runner logs a
-warning the first tick that is refused (and an info line when it stops).
+warning the first tick that is refused, with that tick's count of both under `refused`
+(and an info line when it stops).
 
 A refusal is not an emit failure — the ingress refuses cleanly, at the per-tenant rate
 ceiling or under backpressure, and a governed load run expects them — so the emit loop deliberately does not

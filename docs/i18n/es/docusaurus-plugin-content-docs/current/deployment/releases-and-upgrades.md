@@ -5184,9 +5184,13 @@ ingesta rechaza un evento:
 - `backpressured` es un `503` con `Retry-After`, rechazado porque la plataforma va retrasada. Este
   rechazo afecta a todos los inquilinos.
 
-Un `503` sin `Retry-After` se sigue contando como `failed`. El `GET /status` del simulador y todos
-los informes de las pruebas de carga muestran `accepted`, `shed`, `backpressured` y `failed`
-juntos.
+Un `503` sin `Retry-After` se sigue contando como `failed`. Dónde aparecen los recuentos:
+
+- El `GET /status` del simulador muestra `emitted`, `shed`, `backpressured` y `failed`.
+- La sección `drive` de los informes L1, de monitorización, de detección, de comandos, de
+  presencia y de lotes muestra `accepted`, `shed`, `backpressured` y `failed`.
+- El informe de contención muestra los cuatro para cada inquilino de prueba.
+- El informe de autocomprobación sigue mostrando solo `accepted`.
 
 Qué cambia:
 

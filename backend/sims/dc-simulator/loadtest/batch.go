@@ -1397,9 +1397,10 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 
 	// The same two driver signals the presence harness reads, and for the same reason:
 	// a refused run (shed at the tenant's ingest ceiling, or backpressured) is refused
-	// at an ingress presence transitions share — and a target the platform believes absent has its command HELD, which fails the
-	// round trip for a governance reason rather than a delivery one. A large FAILED
-	// share is the shared port-forward dropping, which is a tunnel fault.
+	// at an ingress presence transitions share — and a target the platform believes
+	// absent has its command HELD, which fails the round trip for a governance reason
+	// rather than a delivery one. A large FAILED share is the shared port-forward
+	// dropping, which is a tunnel fault.
 	if refused, ok := backgroundRefusals(snap); ok {
 		report.cannotMeasure.cannot("the background fleet was %s. Presence transitions "+
 			"share that ingress, and a target the platform believes absent has its command HELD rather than dispatched — so a failed "+

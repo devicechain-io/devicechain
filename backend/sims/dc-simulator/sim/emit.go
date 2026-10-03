@@ -365,10 +365,11 @@ func eventTimestamp() string {
 //
 // 🔴 It is a shared helper rather than a shape each emitter repeats, and the reason
 // is the refusal branches specifically. They are what keep a governed run reconcilable
-// (EmitAll routes them to Stats.Shed and Stats.Backpressured rather than Stats.Failed); a second copy of this
-// classification is a second thing to remember when the accounting changes, and the
-// copy that was forgotten reports a shed as a failure — turning an EXPECTED outcome
-// under a contention floor into a run that says it broke.
+// (EmitAll routes them to Stats.Shed and Stats.Backpressured rather than
+// Stats.Failed); a second copy of this classification is a second thing to remember
+// when the accounting changes, and the copy that was forgotten reports a shed as a
+// failure — turning an EXPECTED outcome under a contention floor into a run that
+// says it broke.
 //
 // occurredTime is passed IN rather than stamped here because the entry inside the
 // payload carries the same stamp: computing it twice would put two different times

@@ -4815,8 +4815,13 @@ separately:
 - `backpressured` is a `503` with a `Retry-After`, refused because the platform is behind. This
   refusal applies to every tenant.
 
-A `503` without a `Retry-After` is still counted as `failed`. The simulator's `GET /status` and
-every load-test report show `accepted`, `shed`, `backpressured` and `failed` side by side.
+A `503` without a `Retry-After` is still counted as `failed`. Where the counts appear:
+
+- The simulator's `GET /status` shows `emitted`, `shed`, `backpressured` and `failed`.
+- The `drive` section of the L1, monitor, detection, command, presence and batch reports shows
+  `accepted`, `shed`, `backpressured` and `failed`.
+- The contention report shows all four for each probe tenant.
+- The self-test report still shows `accepted` only.
 
 What changes:
 
