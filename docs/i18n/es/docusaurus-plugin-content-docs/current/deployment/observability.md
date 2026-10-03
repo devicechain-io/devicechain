@@ -603,20 +603,26 @@ Los valores por defecto son el lote más grande y la mitad del pool de conexione
 cola del consumidor de `event-management` sigue creciendo, el almacenamiento va retrasado, sea cual
 sea el tamaño de los lotes (ver [Un consumidor que se queda atrás](#consumer-backlog)). Añadir
 escritores no lo arregla con seguridad: reparten los mismos eventos en lotes más pequeños, y cada
-confirmación cuesta CPU al almacén de eventos. En las
+confirmación cuesta CPU al almacén de eventos. En el clúster de tres nodos de las
 [mediciones en que se basan estos valores](./bootstrap.md#measured-throughput), el almacenamiento
-dejó de crecer cerca de 6000 eventos por segundo con lotes de unos 21 eventos de media ahí y de 28 a 30 por encima, por debajo
-del límite, mientras dos de los tres nodos, uno de ellos el del almacén de eventos, estaban al
+dejó de crecer cerca de 6000 eventos por segundo con lotes de unos 21 eventos de media ahí y de 28
+a 30 por encima, por debajo del límite, mientras dos de los tres nodos, uno de ellos el del almacén de eventos, estaban al
 86-95% de CPU; no se aisló cuál de esas dos cosas limitó el ritmo. En una medición anterior, dos
 réplicas de 20 escritores cada una redujeron los lotes a unos 3 eventos, la base de datos del
 almacén de eventos usó más de 4 núcleos, y el conjunto almacenó menos que una réplica de 10. Los
 escritores son por réplica. Un valor fuera de rango impide que el servicio arranque, y el error
 nombra el ajuste. El servicio registra los valores que usa al arrancar.
 
-La espera de 10 milisegundos aún no se ha medido de extremo a extremo. Se razona a partir de una
-prueba a 6000 eventos por segundo, en la que el 59% de las transacciones almacenaba un único evento:
-la espera limita cada escritor a una confirmación cada 10 milisegundos más lo que tarda la propia
-confirmación. Si cuesta más latencia de la que ahorra, indique `persistence.lingerMillis: 0`.
+La espera de 10 milisegundos se midió en la prueba de rendimiento de la versión, en el clúster en
+la nube de seis nodos de [Rendimiento medido](./bootstrap.md#measured-throughput). A 3000 eventos
+por segundo, las transacciones por evento almacenado bajaron un 37% (de 0,126 a 0,080), el tiempo
+mediano para almacenar un evento subió unos 5 milisegundos y el 1% más lento bajó un 18%; esa
+comparación también cambió las claves del almacén de eventos y la compresión de su archivo, las solicitudes de CPU de los servicios y su colocación, los escritores de `device-state` y el límite de CPU de la detección, y las solicitudes y el límite de memoria de los servidores NATS, así que
+no aísla la espera. En una ejecución de cinco minutos con 6800 eventos por segundo ofrecidos, el
+camino que confirma un evento cada vez se llevó el 4,8% de la CPU de `event-management`, con 0,050
+transacciones por evento, frente al 24% en la prueba anterior, con la compilación previa a la espera
+y en otros nodos de servicios. Si cuesta más latencia de la que ahorra, indique
+`persistence.lingerMillis: 0`.
 
 ### Estado en vivo de los dispositivos {#live-state-projection}
 
@@ -655,8 +661,9 @@ En una base de datos replicada, lo que sostiene el rendimiento son los lotes. La
 mismo dispositivo se esperan entre sí, así que en una flota pequeña cuyos dispositivos envían por
 turnos, más escritores pueden significar más lotes esperando a los mismos dispositivos. En un
 clúster en la nube de tres nodos con unos 1700 a 1900 dispositivos, 5 escritores se quedaron atrás a
-partir de unos 6800 eventos por segundo, y 10, con la solicitud de CPU del servicio aumentada y
-`projection.maxBatch` en 64, mantuvieron el ritmo a 7600; los tres cambios se hicieron a la vez.
+partir de unos 6800 eventos por segundo. Los 10 escritores se eligieron en una ejecución que también
+aumentó la solicitud de CPU del servicio y `projection.maxBatch` a 64, así que no se separó la parte
+de cada cambio.
 El número de escritores por defecto es 10, la mitad del pool de conexiones por defecto, y
 `projection.maxBatch` sigue en 32 por defecto: en esa ejecución los lotes promediaron unos 15, así
 que 32 no limitó en promedio. Auméntelo más solo si los lotes van llenos y la base de
