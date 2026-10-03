@@ -581,18 +581,23 @@ its median sits about 10 milliseconds higher than with the wait off.
 The defaults are the largest batch and half of the default connection pool. When the
 `event-management` consumer's backlog keeps growing, storing is behind, whatever the batch size
 (see [A consumer that stays behind](#consumer-backlog)). Adding writers is not a sure fix: they
-split the same events into smaller batches, and every commit costs the event store CPU. In the
-[measurements behind these defaults](./bootstrap.md#measured-throughput), storing stopped rising
-near 6,000 events per second with batches averaging about 21 there and 28 to 30 above it, below the limit, while two of the
-three nodes, one of them the event store's, were at 86 to 95% CPU; which of those held the rate was
-not isolated. In an earlier measurement, two replicas of 20 writers each cut batches to about 3
+split the same events into smaller batches, and every commit costs the event store CPU. On the
+three-node cluster of the [measurements behind these defaults](./bootstrap.md#measured-throughput),
+storing stopped rising near 6,000 events per second with batches averaging about 21 there and 28
+to 30 above it, below the limit, while two of the three nodes, one of them the event store's, were
+at 86 to 95% CPU; which of those held the rate was not isolated. In an earlier measurement, two replicas of 20 writers each cut batches to about 3
 events, the event store's database used over 4 cores, and the whole pipeline stored less than one
 replica of 10. Writers are per replica. Out-of-range values stop the service from starting, and the
 error names the setting. The service logs the values it is using when it starts.
 
-The 10-millisecond wait has not yet been measured end to end. It is reasoned from a benchmark at
-6,000 events per second, where 59% of transactions stored a single event: the wait limits each
-writer to one commit per 10 milliseconds plus the commit itself. If it costs more latency than it
+The 10-millisecond wait was measured in the release benchmark, on the six-node cloud cluster in
+[Measured throughput](./bootstrap.md#measured-throughput). At 3,000 events per second,
+transactions per stored event fell by 37% (from 0.126 to 0.080), the median time to store an event
+rose by about 5 milliseconds, and the slowest 1% fell by 18%; that comparison also changed the
+event store's keys and its archive compression, the services' CPU requests and their placement, `device-state`'s writers and detection's CPU limit, and the NATS servers' requests and memory limit, so it does not isolate the wait. In a five-minute
+run at 6,800 events per second offered, the path that commits one event at a time took 4.8% of
+`event-management`'s CPU, at 0.050 transactions per event, against 24% in the previous benchmark,
+on the build before the wait and on different service nodes. If it costs more latency than it
 saves, set `persistence.lingerMillis: 0`.
 
 ### Live device state {#live-state-projection}
@@ -628,8 +633,8 @@ it is merged again on its own.
 Batching is what carries throughput on a replicated database. Merges for one device wait for each
 other, so on a small fleet whose devices send in turn, more writers can mean more batches waiting on
 the same devices. On a three-node cloud cluster with about 1,700 to 1,900 devices, 5 writers fell
-behind from about 6,800 events per second, and 10 writers, with the service's CPU request raised
-and `projection.maxBatch` at 64, kept pace at 7,600; the three were changed together. The default
+behind from about 6,800 events per second. 10 writers were chosen in a run that also raised the
+service's CPU request and `projection.maxBatch` to 64, so the share of each was not separated. The default
 writer count is 10, half the default connection pool, and the default `projection.maxBatch` stays
 32: batches in that run averaged about 15, so 32 did not bind on average. Raise it further only when the batches are full and the database has room to spare. The
 service logs the values it is using when it starts. If the live state still falls behind, `JetStreamDurableFallingBehind` fires for the

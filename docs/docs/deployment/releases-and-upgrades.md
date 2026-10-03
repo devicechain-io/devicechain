@@ -10,7 +10,7 @@ You do **not** need to build anything to run it — pull a released version, ins
 chart, and upgrade in place with zero downtime.
 
 :::warning Some versions cannot be upgraded into
-Three points in the history require recreating the instance rather than upgrading it:
+Four points in the history can require recreating the instance rather than upgrading it:
 
 - **`v0.9.0`** replaced every service's migration chain with a single frozen baseline, so a
   `v0.8.x` database meets it and fails on `already exists`. See
@@ -20,6 +20,10 @@ Three points in the history require recreating the instance rather than upgradin
 - **anything built by `v0.16.0` or earlier**, which recorded no declaration of what the
   instance is — the record an upgrade now reads to know what to deploy. See
   [Instances built by v0.16.0 and earlier](#pre-declaration-recreate).
+- **`v0.19.0`, for an instance whose event store holds more than 4,000,000 rows not yet
+  compressed**, or a table of more than 500 chunks whose oldest events you cannot remove: its
+  first start rebuilds the event store's keys over those rows and refuses above those bounds. See
+  [Check the row count](#v0190-row-count).
 
 If you are on any of them, read the matching section below before you do anything else.
 :::
@@ -79,6 +83,9 @@ Concretely, before v1.0.0 you should expect that a release may:
 - **stop being upgradeable onto from an older instance** for a reason that is not the schema
   at all — the release after `v0.16.0` reads a record of what an instance is that earlier
   releases never wrote, and refuses rather than guessing one
+- **refuse an in-place upgrade above a data-size bound** — `v0.19.0` refuses an event store
+  holding more than 4,000,000 rows not yet compressed, or a table of more than 500 chunks, and
+  says so at the top of its notes
 
 The "upgrade in place with zero downtime" property above describes the *mechanics* of a
 rolling upgrade. It is not a promise that your existing API calls keep the same meaning
@@ -225,11 +232,13 @@ before.
 ## Zero-downtime upgrades {#zero-downtime-upgrades}
 
 Upgrading is **two commands** — one for the cluster, then one for each instance on it — and
-the chart and services are built to roll customers forward without dropping traffic. Four
+the chart and services are built to roll customers forward without dropping traffic. Five
 exceptions are documented below: the durable-ingest cutover, which is still an ordinary
-upgrade but has a visible side effect, and **`v0.9.0`, `v0.10.0` and any instance built by
-`v0.16.0` or earlier, which cannot be upgraded into at all**. Check the release notes for
-the version you are moving to before running it:
+upgrade but has a visible side effect; **`v0.9.0`, `v0.10.0` and any instance built by
+`v0.16.0` or earlier, which cannot be upgraded into at all**; and **`v0.19.0` for an instance
+whose event store holds more than 4,000,000 rows not yet compressed**, or a table of more than
+500 chunks whose oldest events you cannot remove ([Check the row count](#v0190-row-count)).
+Check the release notes for the version you are moving to before running it:
 
 ```bash
 dcctl install local --version <new-version>
@@ -374,9 +383,8 @@ The upgrade's warnings and refusals say which case a value is in.
 
 What a running instance sees:
 
-- **NATS servers restart when their settings change.** Under `--ha` they restart one at a time.
-  Each one must be back, and caught up with the others, before the next is stopped, so two of
-  three always serve. Without `--ha` the single server restarts and the broker is unavailable
+- **NATS servers restart when their settings change.** Under `--ha` they restart one at a time;
+  each is Ready before the next stops. Without `--ha` the single server restarts and the broker is unavailable
   while it does, usually about a minute. Services and devices reconnect on their own; publishes
   made meanwhile are refused. If the node has no room for the server's new requests, the server
   stays `Pending`: under `--ha` the other two keep serving, but without `--ha` the broker stays
@@ -534,7 +542,10 @@ It said the squash described "a single release, not a new policy". Then `v0.10.0
 recreate too, for an unrelated reason. The honest version of the rule is: appending is the
 norm, and before `v1.0.0` a release may still require a recreate when a defect cannot be
 fixed any other way. **Any release that does will say so in its notes and here.** Check both
-before upgrading rather than assuming from the version number.
+before upgrading rather than assuming from the version number. `v0.19.0` is the latest, for the
+size of the data rather than its shape: an instance whose event store holds more than 4,000,000
+rows not yet compressed, or a table of more than 500 chunks whose oldest events you cannot remove
+([Check the row count](#v0190-row-count)).
 :::
 
 ### The v0.10.0 event key change {#v0100-event-key}
@@ -3501,738 +3512,92 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
-### Next release {#next-upgrade}
-
-What the release after `v0.18.0` changes, collected as it lands.
-
-#### `dcctl destroy` removes an instance's in-cluster backups, and new alerts warn before archiving stops a database
-
-**`dcctl destroy` now removes an instance's backups from the cluster's own object store.** Once
-the instance's namespace is gone, destroy deletes everything under the path its event store was
-archiving to, and checks that the path is empty. It reads that path before it changes anything,
-and prints it. Backups in an object store you supplied are never deleted: destroy prints where
-they are. Pass `--keep-backups` to keep the in-cluster backups as well — and do pass it before
-you rebuild an instance from its own backups in the same cluster with `--restore-tsdb-from`,
-because a destroy without it deletes the archive that restore reads. If the object store cannot
-be reached, destroy still finishes, and says what it left. Archives left behind by destroys run
-with an earlier release stay where they are: after removing the instance's own backups, destroy
-lists the ones under the same instance name, and [What happens to the instance's backups](./bootstrap.md#destroy-backups) shows how to remove
-them.
-
-**New alerts warn before archiving takes a database down.** `PostgresWALArchiveBacklog` fires
-when a database is holding write-ahead log it has not shipped, including when the archiver is slow
-or hung rather than failing. `BackupDestinationFillingFast` and `DatabaseVolumeFillingFast` fire
-on how fast the backup store or an event-store volume is filling, not only on a fixed threshold.
-The backup sizing guidance is corrected too: under sustained ingest, the archived log costs more
-per event than the data, so the previous 20 GiB default in-cluster store filled in hours rather
-than days; see the backup store item below. See
-[Backups that stop shipping](./observability.md#backup-archiving).
-
-#### A full ingest stream refuses new events instead of discarding unread ones
-
-When a consumer fell so far behind that its unread backlog filled `inbound-events` or
-`resolved-events`, the stream discarded its oldest events to make room, and those were events
-nobody had processed yet. The device had already been told they were accepted.
-
-Now, when `device-management`'s unread backlog on `inbound-events`, or `event-management`'s on
-`resolved-events`, reaches 90% of what the stream can hold, the platform stops accepting new
-events until the backlog drops below 80%. The two streams keep their week of already-processed
-events, and that history does not count towards the 90%: only unread events do. A full stream also
-refuses before it would discard that history fast enough to reach unread events; see
-[below](#next-ingest-history-runway).
-
-- **HTTP** ingest answers `503` with `Retry-After: 10` while it refuses. Retry on `503`. A `503`
-  without a `Retry-After` still means the publish itself failed.
-- **MQTT** devices were already acknowledged by the broker. Their messages wait in the capture
-  stream until ingest resumes.
-- **Sparkplug and LwM2M** readings, and messages from an external MQTT broker, are dropped and
-  counted, because those protocols give the platform no way to make the device retry. Connect and
-  disconnect transitions are still accepted, and nothing limits how many: a fleet that reconnects
-  in a loop can still push the stream to its ceiling, where it discards its oldest events as before.
-- The refusal applies to **every tenant**, because the streams are shared. A slow `device-state`
-  or `event-processing` does not cause it.
-- Two alerts are added: `JetStreamUnreadBacklogNearFull` (warning) and
-  `JetStreamIngestBackpressureEngaged` (critical). See
-  [Backpressure on the ingest path](./observability.md#ingest-backpressure).
-- The simulator and load harness count a `503` with a `Retry-After` as a refusal, not a failure.
-  See [the load-test reports entry](#next-loadtest-refusals) for how they report it.
-
-Nothing to do at upgrade. No stream is reconfigured, and a service still on the previous release
-keeps its previous behaviour until it is upgraded.
-
-#### device-management answers repeated lookups from memory {#next-local-cache}
-
-Nothing needs doing at the upgrade.
-
-- **Each `device-management` replica keeps what it read from its key-value caches in memory for
-  up to five seconds**, and answers repeated lookups for the same device, device type or tenant
-  from there instead of asking NATS. It asks NATS again once what it holds is five seconds old,
-  or sooner if the in-memory copy is full. A cache time to live below five seconds also shortens
-  the in-memory copy.
-- **A change can take up to five seconds longer to reach the events that other replicas
-  resolve**, on top of what the cache's time to live already allowed. A device deleted, or
-  re-created under the same token, can still resolve through its old record on another replica
-  for those seconds, and a rule whose group scope was just changed can be evaluated there against
-  the previous scope. Events that present a device credential are checked as
-  [the credential cache item](#next-credential-cache) describes, and an alarm edge for a device that was just deleted is still dropped at
-  once on every replica.
-- **Four new metrics** count lookups answered from memory, entries dropped from it, and its size.
-  `kv_cache_request_duration_seconds{op="get"}` now counts only the lookups memory could not
-  answer. See [Caches that stop answering](./observability.md#kv-caches).
-
-#### Services are sized from measured throughput {#next-service-sizing}
-
-`event-sources` and `device-state` may now use up to 2 CPU cores, like `device-management` and
-`event-management`. At 500m, `event-sources`' slower responses capped the rate devices could send,
-and `device-state` let the live device view fall minutes behind at rates the rest of an
-installation handled. The four services also **request** CPU sized from measurement instead of
-100m each; [the event-path requests item](#next-event-path-requests) gives the values.
-`device-management`, `event-management` and `event-sources` prefer a node
-that is not running the event store's primary. A new instance's event store gets a 32Gi volume
-instead of 8Gi. See [Service sizing](./bootstrap.md#service-sizing), which also records the
-measured throughput.
-
-**Before you upgrade an instance installed without `--compact`:**
-
-- **Check there is room for the larger requests**, as
-  [the event-path requests item](#next-event-path-requests) describes.
-- **A `ResourceQuota` or `LimitRange` on the instance's namespace** can refuse the new 2-core limit
-  of `event-sources` and `device-state`, or the larger requests, as it could for
-  `device-management` and `event-management` in v0.18.0.
-
-Instances installed with `--compact` keep their 25m and 64Mi requests.
-
-**If you install the chart yourself, with your own values:**
-
-- A top-level `resources.requests.cpu` no longer reaches `device-management`,
-  `event-management`, `device-state` or `event-sources`: their measured request wins over it. Set
-  theirs under `functionalAreas.<service>.resources.requests`, or set `useMeasuredRequests: false`
-  to apply the top-level requests to every service again.
-- A top-level `resources.limits.cpu` above 2 cores now lowers `event-sources` and `device-state`
-  to 2, as it already did for the other two. Set theirs under
-  `functionalAreas.<service>.resources.limits`.
-- A service's own CPU limit below its measured request (for example `100m` on `event-sources`)
-  rendered before and is now refused, naming `measuredRequests`. Raise the limit, set the
-  service's own request, or set `useMeasuredRequests: false`.
-- The chart's top-level values and a service's block under `functionalAreas` now refuse a key
-  the chart does not read, so a misspelled key fails the render instead of being ignored.
-
-**The event store volume:** nothing changes for an existing instance; only instances created by
-this release get 32Gi. To grow an existing one, see [Event store
-volume](./bootstrap.md#event-store-volume). A new cluster's backup store is now sized so that
-the event store fills first; see the backup store item below.
-
-The upgrade changes the pod templates of `device-management`, `event-management` and
-`event-sources`, so the rolling update schedules their new pods under the new placement
-preference. A preference applies only when a pod is scheduled, though: if the event store's
-primary later fails over to another node, a pod already running there stays until it is next
-rescheduled.
-
-#### event-management stores events with 10 writers and batches of up to 64 {#next-persistence-defaults}
-
-With the other per-event services sized to keep up, storing events became the first limit of a
-default installation: 5 writers committing up to 32 events each filled every batch from about
-4,400 events per second and stored no more than about 4,200. `persistence.writers` now defaults to
-`10` and `persistence.maxBatch` to `64`. Those were the settings of a tuned run that kept up to
-about 6,000 events per second with the CPU limits of `event-management` and the other per-event
-services raised to 4 cores. `event-management` used at most about 1.7 of them, and it was not
-measured under its default limit of 2, so no sustained rate is claimed for a default installation.
-That run also set `device-state`'s `projection.maxBatch` to `64` and `projection.lingerMillis` to
-`25`, which a default installation does not. Its batches averaged below 32, so it does not show the
-larger batch helping. See [Measured throughput](./bootstrap.md#measured-throughput) for the full
-settings.
-
-**Before you upgrade:** if you set `tsdbConfiguration.maxOpenConnections` for `event-management` to
-`10` or less and did not set `persistence.writers`, the new `event-management` pod refuses to
-start, and its error names `persistence.writers` and the size of the pool. The rolling update
-keeps the old pod running and storing events, and `dcctl upgrade` fails after waiting, with the
-instance partly upgraded. Set `persistence.writers` below your pool (your previous default was
-`5`), or remove the pool setting to use the default of 20, and run the upgrade again. Pools of 11
-to 19 start, and log at startup that more than half the pool is given to writers; set
-`persistence.writers` to half your pool to silence it.
-
-- An installation that sets `persistence.writers` or `persistence.maxBatch` keeps its values.
-- At rates where a writer finds one event at a time, it now waits up to
-  `persistence.lingerMillis` (10 milliseconds by default) before committing it; see
-  [the pipeline defaults item](#next-pipeline-defaults).
-- Under a backlog, up to 10 writers commit at once instead of 5, from the same pool of 20. The
-  pool's ceiling is unchanged, so the connections the event store keeps for `event-management`
-  still cover it.
-- `maxBatch` still accepts `1` to `64`.
-- `--compact` installations get the same defaults; their requests, limits and volumes do not
-  change.
-- Every measurement behind the new defaults was on a replicated (`--ha`) event store, where each
-  commit waits for a standby. An installation with a single event-store instance has not been
-  measured with them.
-
-#### Stream warnings are based on unread messages, not on history {#next-unread-alerts}
-
-`JetStreamStreamNearFull` fired for any stream over 80% of its byte ceiling. Streams keep a week of
-messages, most of them already processed, so on a busy instance it fired while nothing was at risk.
-
-- **New: `JetStreamDurableUnreadNearFull` (warning).** Fires when a consumer has not yet read more
-  than 80% of what its stream can hold, for 5 minutes. That is what happens before a stream
-  discards messages a consumer never read. Messages already read do not count. It covers every
-  consumer except the two that hold ingest back, which `JetStreamUnreadBacklogNearFull` covers.
-- **Changed: `JetStreamStreamNearFull` is now `info`, and fires only for a stream that holds
-  records for an operator:** `failed-decode`, `failed-events`, `connector-dispatch.dead`,
-  `max-deliveries`, and `dead-letters` while `user-management`, which stores its letters, does not
-  report reading it. Nothing processes what these streams hold, so near their ceiling they are
-  about to discard records nobody has looked at.
-  It now also counts a stream's message ceiling, not only its bytes. If you route or silence alerts
-  by name or severity, check those rules: the default Alertmanager configuration of
-  kube-prometheus-stack does not deliver `info` alerts.
-- New series: `devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}` and
-  `devicechain_<area>_jetstream_stream_sink{stream}`.
-
-Nothing to do at upgrade. See [Messages a consumer never read](./observability.md#unread-loss).
-
-#### device-management keeps more devices' lookups in memory, and makes an event's lookups at the same time {#next-per-device-cache}
-
-Nothing needs doing at the upgrade.
-
-- **The in-memory copy described [above](#next-local-cache) holds up to 131,072 entries, or
-  24 MiB, per replica for each of the three lookup caches kept per device** (a device by its
-  token, its tracked relationships, its group memberships), so a replica that sees a large fleet
-  within five seconds can answer its lookups from memory. The caches kept per device type and per
-  tenant hold 4,096 entries or 4 MiB. Set
-  `inMemoryCache.perDeviceCacheEntries` and `inMemoryCache.perDeviceCacheMiB` in
-  `device-management`'s configuration to change the bound, and raise the service's memory limit
-  with it. A release before this one refuses to start with either setting, so remove them before
-  going back to one.
-- **A device that reports less often than every five seconds is still not answered from memory**,
-  however large the cache: a value is kept for five seconds from when it was read, and each of
-  that device's events still reads the key-value bucket once. See
-  [Caches that stop answering](./observability.md#kv-caches) for what that costs and what to
-  raise.
-- **An event's profile, relationships and group-scope lookups are made at the same time**, and so
-  are its group-membership lookups, instead of one after another. An event that misses memory for
-  all three waits for one round trip to NATS rather than three. The database is still read one
-  lookup at a time, for whatever the caches could not answer, so `resolution.workers` still
-  counts connections as before, and a measurement that fails validation still never reads its
-  relationships from the database.
-- Two more metrics, `kv_cache_local_max_entries` and `kv_cache_local_max_bytes`, give each cache's
-  bound. `kv_cache_local_bytes` counts each entry's full size in memory.
-
-#### The backup store is sized so the event store fills first {#next-backup-store-size}
-
-A new cluster's in-cluster backup store is **160 GiB** instead of 20 GiB, and **20 GiB** instead
-of 8 GiB under `--compact` when TLS is kept. That is disk the cluster now claims on its default
-StorageClass. At 20 GiB, sustained ingest filled the store after 12 to 16 million events, well
-before a 32 GiB event store is full. Archiving then stopped, and the event store's primary filled
-its own volume with write-ahead log it could not ship. Measured on Google Kubernetes Engine, the
-archive costs up to about 1.9 KB per event for both databases, not the roughly 1 KB published
-before. The new size holds the archive of one full default event store with more than a third of
-the store free. See [Backup store size](./bootstrap.md#backup-store-size), including when one
-instance's worth is not enough: several instances ingesting, an event store that takes more than
-about a day to fill or never fills, or a grown event store.
-
-**Existing clusters keep their store's size.** The store's volume is now sized only when it is
-created: `dcctl install`, the first step of every upgrade, leaves an existing store's volume
-alone, and so does a direct `tofu apply`. Without that, the new default would ask a StorageClass
-without volume expansion to grow the volume, which it refuses, and a store you had grown by hand
-was already asked to shrink back to the default, which every provisioner refuses. Setting
-`backup_object_store_storage` on an existing store now does nothing. To give an existing cluster
-the new size, grow the volume yourself, on a StorageClass that allows expansion, as that page
-shows. On kind the size is not enforced, so nothing needs doing.
-
-#### Each database keeps its own recovery window: 30 days for core data, 7 for event data {#next-backup-retention}
-
-The `backup_retention` setting, which each OpenTofu configuration declared under the same name, is
-replaced by one setting per database: `backup_retention_rdb` in the cluster configuration, default
-`30d`, and `backup_retention_tsdb` in the instance configuration, default `7d`. The relational
-database holds tenants, users, devices, rules, secrets and each device's last-known state, and it
-can now be recovered to any point in the last 30 days instead of 7. The event store keeps 7 days,
-as before. A window must be a whole number and a unit, `d` for days, `w` for weeks or `m` for
-months, and anything else is refused before the apply starts. See
-[Recovery windows](./bootstrap.md#backup-retention).
-
-A deleted tenant's core data now also stays restorable from backups for 30 days rather than 7,
-until it ages out of the window. See [What is deliberately kept](./tenant-deletion.md#retained).
-
-**At upgrade**, `dcctl install` gives the relational database the new window. The change is to
-that database's backup configuration; the database cluster's own specification does not change.
-Backups already taken are kept. Nothing ages out of a 30-day window until it is 30 days old, so for
-about three weeks after the upgrade the relational database's share of the backup store grows:
-toward about four times the log it keeps today, plus about 23 more nightly base backups. Then it
-levels off.
-
-**Before you upgrade, check the store's headroom.** An existing cluster keeps its store's size (see
-the previous item), so a store created before this release is still 20 GiB unless you grew it, and
-so is the store under `--compact`. Where the event store never fills because a retention window
-bounds it, the sustained ingest rate that fills a 20 GiB store falls from about 19 to about 13
-events per second, and the default 160 GiB store's from about 150 to about 100. Those figures use
-the relational database's share of the log measured once, about 14% for a small fleet reporting
-fast. It is not measured for larger or slower fleets, where it is likely higher; if the relational
-log were all of it, the 160 GiB figure would be about 35. If the store has little room to spare,
-grow its volume first, as [Backup store size](./bootstrap.md#backup-store-size) shows. If you apply
-the OpenTofu configuration yourself, you can instead keep the old window with
-`backup_retention_rdb = "7d"`; `dcctl install` has no option for it.
-
-**If you set `backup_retention`, rename it**: `backup_retention_rdb` in the cluster configuration,
-`backup_retention_tsdb` in the instance configuration. How the old name fails depends on where it
-is set. A `-var backup_retention=…` is refused. A `backup_retention` line in a `.tfvars` file draws
-only a warning, and the store then gets its new default instead of your value: 30 days for the
-relational database, 7 for the event store. A `TF_VAR_backup_retention` environment variable is
-ignored without any warning.
-
-#### Any service can serve Go runtime profiles, off by default {#next-profiling}
-
-Every service can now serve Go runtime profiles (CPU, heap, allocations, goroutines and the
-execution trace), so you can measure where a service spends its time instead of inferring it.
-It is off unless you turn it on for a service with
-`functionalAreas.<service>.profiler.enabled: true`. Only that service's pods restart. The
-profiles are served on a listener of their own, on the pod's loopback address by default, so
-you reach them with `kubectl port-forward`. That listener is never a container port, a Service
-port or an ingress route. Nothing changes for an instance that does not set it, and nothing
-needs doing. See [Profiling a service](./observability.md#profiling).
-
-#### Database base backups can be volume snapshots {#next-snapshot-backups}
-
-On a cluster whose storage driver takes CSI volume snapshots, `dcctl install
---backup-snapshot-class <class>` takes each database's daily base backup as a volume snapshot
-instead of a full copy in the backup store. Nothing changes unless you pass the flag. See
-[Volume-snapshot base backups](./bootstrap.md#snapshot-base-backups).
-
-- Log archiving does not change, and a full base backup still goes to the backup store once a
-  week, on Sunday at 04:00. The store prunes archived log only against the base backups it holds,
-  and every restore reads the store.
-- The class must exist, have `deletionPolicy: Delete`, and belong to the driver that provisions
-  the database volumes. `dcctl install` checks all three before it changes anything, and so does
-  each `dcctl bootstrap`. Google Kubernetes Engine and Azure AKS include a snapshot controller;
-  on Amazon EKS, install the snapshot controller add-on first.
-- CloudNativePG does not delete old snapshots. The DeviceChain operator now does, every ten
-  minutes: it keeps every snapshot inside the database's recovery window and the newest one
-  before it. To do that, the operator's ClusterRole gains, in every namespace: `get` on
-  namespaces; `get`, `list` and `delete` on CloudNativePG Backups; `get`, `list` and `patch` on
-  CloudNativePG ScheduledBackups, to record each pass; and `create` and `patch` on
-  `events.k8s.io` Events, to report what it pruned. It acts only in namespaces DeviceChain
-  created, on the ScheduledBackups its own configuration renders. Each pass records its time on
-  the schedule as the `devicechain.io/snapshot-retention-checked-at` annotation, so
-  `kubectl get scheduledbackup -A -o yaml` shows when pruning last ran.
-- A restore (`--restore-rdb-from`, `--restore-tsdb-from`) still reads the backup store, not the
-  snapshots: the newest weekly base backup and the log since, so it can replay up to a week of
-  log. An instance's snapshots are deleted with it.
-- The snapshots are kept at your cloud provider and outlive the cluster.
-  [Volume-snapshot base backups](./bootstrap.md#snapshot-base-backups) says what to check
-  before and after deleting one.
-- The backup store keeps up to a week more log for each database, so it fills sooner where log
-  is most of what it holds: with the default windows and store, at about 60 events per second of
-  sustained ingest rather than about 100.
-- `PostgresNoRecentSnapshotBackup`, `DatabaseSnapshotPruningStalled` and
-  `DatabaseSnapshotBackupsUnobserved` are new, and on such a cluster `PostgresNoRecentBaseBackup`
-  waits 8.5 days instead of 36 hours. The monitoring stack's kube-state-metrics now also reads
-  CloudNativePG Backups and ScheduledBackups, which those alerts need.
-- The setting belongs to the cluster: every instance follows it, and changing it is refused
-  while instances run on the cluster.
-
-**Re-run `dcctl install` with this release before any bootstrap, upgrade or destroy.** The
-install record has a new field, and this `dcctl` refuses a record written by an earlier one:
-`dcctl bootstrap` and `dcctl upgrade` stop and say so, and `dcctl destroy` still removes the
-instance but leaves its database and login in the shared relational database and its backups in
-the in-cluster store, and says it did.
-Re-running install is already the first step of every upgrade.
-
-#### An event carries at most 256 readings, and gateways split larger messages
-
-**One event now carries at most 256 readings, on every transport, and the limit is not
-configurable.** A reading is one metric value of a measurement, or one location or alert entry.
-Before this release, the JSON device event on HTTP and MQTT accepted up to 1000 readings by
-default, and an operator could raise that without an upper bound, or lower it.
-
-**Before you upgrade,** you can apply the new limit early: set `maxReadingsPerMessage: 256` in
-the event-sources configuration on your current release and watch `total_msg_too_many_readings`.
-Every message it counts is one this release refuses, so change those devices' firmware to send at
-most 256 readings per message.
-
-- **HTTP and MQTT:** a message with more than 256 readings is refused whole, never trimmed. HTTP
-  answers `400`, naming the count and the limit. On MQTT the device is not told, because the
-  broker acknowledges before decoding. The refusal is counted on `total_msg_too_many_readings`
-  and the message goes to the failed-decode stream. A device that batches more than 256 readings
-  must split them across messages. Messages captured before the upgrade and decoded after it,
-  including any still spooled at an edge agent, are judged on the new limit.
-- **The `maxReadingsPerMessage` setting is retired.** If your event-sources configuration still
-  sets it, the service starts, logs a warning and ignores it. A value you had set lower than 256
-  is no longer honoured either: the limit is 256. Remove the key.
-- **Sparkplug B:** a message with more than 256 metric values used to become one event. It now
-  becomes consecutive events of at most 256, with every value at its own timestamp. Queries that
-  count *events* see more of them for wide Sparkplug messages; the stored readings are the same.
-  Rules see each event on its own, so a hold-time or absence rule can now fire between two events
-  of one wide message.
-- **LwM2M:** a Notify with more than 256 numeric values used to keep the first 256 and drop the
-  rest. It is now stored as several events, and the tenant's sample budget is charged one event
-  at a time: a Notify larger than the budget can admit at once keeps the events it admits, and
-  the rest are counted on `ingest_samples_shed_total`. The `notify_samples_truncated_total` metric
-  is removed. Remove it from any dashboard or alert.
-
-#### An event carrying thousands of readings is stored {#next-large-events}
-
-An event with more readings than fit in one database statement (more than about 5,950
-measurements, 5,450 locations or 6,550 alerts, or 9,350 relationship anchors) could never be
-stored. The database driver refused the statement, `event-management` retried the event until
-its deliveries ran out, and then recorded it on the `failed-events` stream as a downstream
-failure rather than as a problem with the event. Before the 256-reading limit above, such an
-event could come from a Sparkplug message with thousands of metrics, or from a JSON transport
-whose `maxReadingsPerMessage` had been raised above its default of 1000. The event store now writes a large event in as many
-statements as it needs, inside the same transaction, so it is stored whole or not at all like
-any other, and a redelivery of it adds nothing. The same retry-then-downstream-failure path
-was taken by a state-change event whose session id is too large for the database's signed
-64-bit column; that event is now recorded as invalid on its first delivery. Nothing needs doing.
-
-#### The event store updates fewer indexes for each event {#next-event-store-indexes}
-
-`event-management` removes twelve indexes from the event store. Each one either repeated what
-another index already gave the same queries, or was read by no query the platform makes. Each
-stored row now updates fewer indexes: a base event row three instead of five (four instead of six
-when it carries an alternate id), a measurement row four instead of five, a location, alert or
-relationship-anchor row two instead of four, and a presence-change row one instead of four. A
-measurement event with one reading and no anchors, for example, updates seven indexes instead of
-ten. [The event store's keys lead with time](#next-time-leading-keys), also in this release, lowers
-these counts again and gives the totals.
-
-- Every read `event-management` serves is still served by an index. The indexes that stop an
-  event being stored twice are rebuilt by [that change](#next-time-leading-keys).
-- **A device's event list does more work on recent data.** The total shown with a device's
-  event list, and a list of a device's events filtered by event type, now visit every one of the
-  device's rows that is not yet compressed (the last week of data, by default) instead of only
-  the rows they count or return. That includes the rows of a device with the same token in any
-  other tenant, so a busy device named `gateway-1` in one tenant also slows the total for
-  `gateway-1` in another. Compressed data is read per device and tenant, as before. A device that
-  sends events at a high rate shows this most.
-- **SQL and BI access.** A query on `analytics.state_change_events` that filters on time alone
-  now reads all of your tenant's rows in each not-yet-compressed chunk the range touches (a day of
-  data per chunk, by default), rather than only the rows in the range. Add a device filter
-  (`device_token`) and it is served by an index as before. The other views are unaffected.
-- **At the upgrade.** The first time the new `event-management` starts, it removes the indexes
-  one at a time. Removing one needs a moment when no other transaction is using that table, and
-  while it waits, reads and writes of that table wait with it. Each attempt gives up after at
-  most 5 seconds, and a busy table is retried every 2 seconds for up to a minute. If a long
-  query, a tenant erasure, or the database's own compression or retention job keeps a table busy
-  longer, `event-management` stops with an error
-  that names the table and the index, and continues from there when it restarts; the previous
-  `event-management` keeps storing events meanwhile. The error also carries a query that lists
-  the sessions holding the table or any of its chunks. If it keeps stopping, look for
-  long-running SQL or BI queries against the event store. Removing an index also locks every
-  chunk of its table; if the database runs out of lock slots, the error says so and names the
-  setting to raise. A table with more than 500 chunks is refused before any index is removed:
-  see [Count the chunks too](#next-time-leading-keys-chunks).
-- Going back to `v0.18.0` leaves the indexes removed, and `v0.18.0` works without them.
-
-#### The databases' primaries prefer different nodes {#next-primary-spread}
-
-Each database now prefers a node that is not running another DeviceChain database's primary. In
-testing on three 8-vCPU nodes, the relational and the event-store primary had been placed on the
-same node, which ran at 94 to 98% CPU while the other two ran at 45 to 51%.
-
-- It is a preference, not a requirement: a cluster with fewer nodes still schedules every
-  database instance.
-- It acts when a database pod is scheduled, which in practice means when an instance's event
-  store is created. A failover, a switchover, or the switchover that ends a rolling update can
-  still leave both primaries on one node. [Where the database primaries
-  run](./bootstrap.md#ha-database-primaries) shows how to check and how to move one.
-
-**Before you upgrade, check for a quota on cross-namespace placement.** The database pods now
-carry a placement preference that looks at other namespaces. A `ResourceQuota` with the
-`CrossNamespacePodAffinity` scope refuses such pods, preferred or not, in a namespace where it
-forbids them: the relational database's restarted instances in the cluster's namespace
-(`dc-system` by default), and a new instance's event store in its own namespace. Nothing
-DeviceChain installs creates one. To list any that exist:
-
-```bash
-kubectl get resourcequota -A \
-  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
-```
-
-An empty list does not settle it. The API server's quota admission configuration can name
-`CrossNamespacePodAffinity` under `limitedResources`, and then such pods are refused in every
-namespace that has **no** quota with that scope admitting them. That configuration lives in the
-control plane, not in a `kubectl` object, so ask whoever runs the cluster whether it is set; if it
-is, give `dc-system` and each instance's namespace a quota with that scope before upgrading.
-
-**At the upgrade.** The relational database takes the new setting the next time you run `dcctl
-install` with this release, and its instances restart once. Under `--ha` the standbys restart
-first and the primary role is then switched over to one of them, which is on another node. If
-the two primaries shared a node before the upgrade, that switchover moves them apart; if they did
-not, it can put them on one node, so check where they are afterwards. A single-instance
-installation restarts its only instance in place, and the relational database is unavailable
-until it has restarted; writes made meanwhile are retried.
-
-`dcctl upgrade` with this release gives an existing instance's event store the preference and the
-label the other databases look for, and restarts its instances once to do it: under `--ha` the
-standbys first, then a switchover. Because `dcctl install` runs first, the relational database
-already carries its label when the event store restarts. Check where the two primaries are
-afterwards, as above. The event store's pods carry the same cross-namespace preference, so the
-quota check above applies to each instance's namespace before you upgrade it: a pod the quota
-refuses leaves that instance's event store short of an instance, or, without `--ha`, down. Run
-`dcctl install` before you bootstrap a new instance, too, so that the relational database's pods
-carry the label the new event store looks for.
-
-#### Services keep their database connections open between uses {#next-warm-pool}
-
-A service's connection pool used to keep only half of its connections open between uses: 10 of
-the default 20. Whenever more than half the pool was in use at once, every connection over that
-half was closed when it was released and opened again for the next query, which costs the service
-and the database a new login each time. `device-management` reaches that point when
-`resolution.workers` is raised above 10, since its resolvers share the pool with its GraphQL API,
-its MQTT connect checks and its alarm consumer. In a CPU profile with 16 resolvers on the default
-pool, at about 5,200 events per second on three 8-vCPU nodes, logging in again took 14–15% of
-`device-management`'s CPU, against 0.2% with the default 10 resolvers.
-
-- **Every connection a pool opens now stays open between uses**, up to the pool size. A
-  connection is still closed an hour after it was opened, as before, and opened again when it is
-  next needed. Raising `resolution.workers`, `persistence.writers` or `projection.writers` towards
-  the pool size no longer makes a service reconnect.
-- **The database can show more idle connections from each service after a busy period**: up to
-  the size of its pool. At the default configuration nothing needs doing: an instance's
-  [connection budget](./bootstrap.md#connection-budget) allows each area one pod with a full pool
-  of the default size, plus one more pod during a rollout. If you run a service at `replicas`
-  above 1, or have raised its `maxOpenConnections`, its pods now keep those connections after a
-  busy period instead of giving back all but half of them, so check that the instance's connection
-  limit still covers them.
-- `maxIdleConnections` is still honoured when set, up to `maxOpenConnections`. Setting it lower
-  holds fewer connections on the database, at the cost of a new connection and login for every
-  query that finds more than that many in use.
-
-#### event-management writes each batch with one statement per table {#next-grouped-writes}
-
-`event-management` stored a batch of events with separate statements for every event in it: one
-for the event, one for its readings, locations or alerts, and one for its relationship anchors,
-each a round trip to the event store while the batch's transaction stayed open. It now writes the
-batch with one statement per table for each tenant in it, inside the same single transaction, so a
-batch makes a few round trips instead of several per event. What is stored is unchanged, an event
-is still acknowledged only after its batch commits, and a redelivered event still adds nothing.
-
-- When the database refuses a row in one of those statements that carries several events, such as
-  a value too large for its column, it does not say which event the row belongs to. The batch is
-  then written again in a new transaction, one event at a time, to find the refused event, which
-  is handled as before. That event costs its batch one more transaction, and
-  `persist_batch_fallbacks_total` counts both. An event refused before anything is sent, such as a
-  reading that is not a number, and the events of a deleted tenant are still set aside at once.
-- Connect and disconnect events are still written one at a time within the batch.
-- Going back to `v0.18.0` needs nothing: it reads and writes the same rows.
-
-Nothing needs doing. See [Event persistence](./observability.md#event-persistence).
-
-#### device-state writes a batch's device states in one statement per tenant {#next-state-batch-writes}
-
-`device-state` merges the events waiting for each writer in one transaction. It wrote the state
-of each device in that batch with a statement of its own; on a three-node cloud cluster at about
-4,400 events a second, those statements were about half of `device-state`'s CPU. It now writes
-the state of every device that already has one in a single statement for each tenant in the
-batch. What a batch leaves is unchanged, and a device's `updatedAt` still advances whenever its
-state is written. A device seen for the first time is still created on its own. Nothing needs
-doing: there is no schema change, and the previous `device-state` can run beside the new one
-during the upgrade.
-
-#### Check the disk quota before a new `--ha` install on a cloud provider {#next-disk-quota}
-
-With the larger [backup store](#next-backup-store-size), a default `dcctl install --ha` and one
-instance claim more persistent volume than a new Google Cloud project's regional SSD quota
-comfortably holds once the nodes' boot disks are counted too: in testing on Google Kubernetes
-Engine, an event-store volume stayed `Pending` with `QUOTA_EXCEEDED`. Before a new install on a
-cloud provider, check the disk quota. [Prerequisites](./bootstrap.md#prerequisites) gives the
-volume sizes, and the Google Kubernetes Engine guide in `deploy/gke` gives the quota to request.
-Taking base backups as [volume snapshots](./bootstrap.md#snapshot-base-backups) does not change
-the backup store's default size.
-
-Nothing to do at upgrade: an existing cluster keeps the volumes it has.
-
-#### New event stores compress their write-ahead log {#next-wal-compression}
-
-An event store created with this release compresses the page images in its write-ahead log
-(`wal_compression = lz4`). In one comparison on a development build, at 5,200 events per second
-offered, that cut the log written per stored event from about 3.0 KB to about 1.7 KB. Less log means fewer checkpoints forced by its
-size, less for the standbys to replay, and less for the archiver to compress and ship. See
-[Event store volume](./bootstrap.md#event-store-volume). The relational store is unchanged.
-
-`dcctl upgrade` with this release turns it on for an existing instance's event store. The setting
-reloads without a restart; on an instance created by `v0.18.0` the same upgrade restarts the
-store's instances once, for [the placement preference](#next-primary-spread). The release's
-database image is the one new event stores already start on with `lz4`. If you replaced the event
-store's database image yourself, check first that it can use `lz4`, because on an image that
-cannot, an instance that restarts may not start. This runs `psql` in the store's database pods,
-where it needs no password:
-
-```bash
-pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
-for p in $pods; do
-  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc \
-    "SELECT 'lz4' = ANY (enumvals) FROM pg_settings WHERE name = 'wal_compression'"
-done
-```
-
-Upgrade only if every line prints `t`.
-
-#### device-management checks a repeated device credential from memory {#next-credential-cache}
-
-Nothing needs doing at the upgrade.
-
-- **Each `device-management` replica keeps a device credential it has just verified in memory
-  for up to five seconds**, and checks the device's next events against that copy instead of
-  reading the database. In a CPU profile of a loaded replica, that read was most of the service's
-  CPU. The copy is checked exactly as the stored credential is: an `MQTT_BASIC` password is still
-  compared on every event, and an expiry still takes effect at its time. A credential that failed
-  to verify is never kept.
-- **A revocation can now take up to five seconds on a replica that missed the news.** Each of
-  these drops the copy on the replica that made the change before it returns, and tells the other
-  replicas to drop theirs:
-  - disabling, deleting or re-pointing a credential, or changing anything else about it
-  - replacing, editing or deleting its device
-
-  If that message is lost, for example while a replica is reconnecting to NATS or while some
-  replicas still run the previous release during the upgrade, that replica's copy expires within
-  five seconds of the change. Until now a revocation took effect on the next event on every
-  replica. See [How quickly a revocation takes effect](../guides/device-credentials.md#revocation-timing).
-- **MQTT connects still read the database every time**, with a password or an access token, so a
-  revoked credential cannot open a new connection on any replica.
-- **Each replica keeps at most 65,536 credentials or 16 MiB.** The bound is fixed, and at the
-  defaults the service's in-memory caches now hold at most 96 MiB rather than 80. **New metrics**
-  count the checks answered from the copy, the credentials dropped from it, its size, and the
-  messages each replica sent and received to drop copies. See
-  [Caches that stop answering](./observability.md#kv-caches).
-
-#### The Google Kubernetes Engine guide creates a database pool and a services pool {#next-gke-node-pools}
-
-The configuration in `deploy/gke` used to create one pool of three 8-vCPU, 32 GB nodes. It now
-creates a `database` pool of three 4-vCPU, 16 GB nodes and a `services` pool of three 4-vCPU,
-8 GB nodes, the same 24 vCPUs in all. The `database` pool is tainted, so no DeviceChain pod runs
-there unless it is placed there; `dcctl install --database-node-selector` and
-`--database-toleration` place the databases there (see
-[The databases can run on nodes you choose](#next-database-placement)). Every node boots from a
-100 GB standard persistent disk, which counts against the region's `DISKS_TOTAL_GB` quota rather
-than `SSD_TOTAL_GB`, so a default `--ha` install with one instance fits a new Google Cloud
-project's SSD quota; the guide gives the quota to request for more instances.
-
-Nothing changes for an installed instance. Applying the new configuration to a cluster created by
-the old one removes its node pool and creates the two new ones in no guaranteed order, which can
-need more vCPU quota than the project has. Recreate the cluster instead: take it down as the
-guide describes, then create it again and install.
-
-The variables `node_machine_type`, `node_count`, `node_disk_type` and `node_disk_size_gb` are gone,
-replaced by `database_*`, `services_*` and `loadgen_*` variables for each pool. OpenTofu only warns
-about an old name left in a `terraform.tfvars` and ignores its value, so a cluster recreated from an
-unchanged file is built with the defaults: a `node_machine_type` or `node_disk_type` choice is
-dropped. Move each setting to the new names before you apply.
-
-#### The databases can run on nodes you choose {#next-database-placement}
-
-`dcctl install` takes `--database-node-selector` and `--database-toleration`. They place the shared
-relational store, and the event store of every instance bootstrapped on the cluster, on the nodes
-that carry a label, including nodes tainted to keep other workloads off. `dcctl bootstrap` has no
-such flags: every instance follows the install. Install refuses, before it installs anything, a
-placement with fewer usable nodes than a database has instances, and each bootstrap checks again.
-NATS, the services and the backup object store are not placed. See
-[Database placement](./bootstrap.md#database-placement).
-
-Nothing changes on a cluster installed without these flags. The install record changes again:
-re-run `dcctl install` with this release before any bootstrap, upgrade or destroy, as
-[Database base backups can be volume snapshots](#next-snapshot-backups) already requires. Adding a
-placement to a cluster that already runs instances is refused, like any other change to its
-settings. With no instance running it is not refused, but it moves the relational store, whose
-volumes may not be able to follow: see
-[Database placement](./bootstrap.md#database-placement) before you change it.
-
-If you built `dcctl` from source after these flags were added, `dcctl install` with a placement could
-fail in its OpenTofu step with `argument must not be null`, because the placement check read a node
-that had never been cordoned, or carried no taint, as an error. This release counts those nodes. The
-failed run created or changed no database: re-run the install with this release.
-
-#### The event-path services request what they use at 6,000 events per second, and spread across nodes {#next-event-path-requests}
-
-The five services that handle every event now **request** the CPU they were measured to use at
-6,000 events per second: `device-management` 800m, `event-management` 900m, `device-state` 950m,
-`event-sources` 1 core and `event-processing` 400m. Sized for a tenant's default ceiling of 1,000
-events per second, they requested between 15% and 66% of what they used at the rate a default
-`--ha` installation sustains, and the scheduler, which places pods by their requests, put the
-busiest of them together. They also prefer to run on different nodes; on three nodes they usually
-run no more than two to a node. `functionalAreas.<service>.eventPathSpread: false` turns that off
-for one service. A new instance's NATS servers request 500m of CPU and 768Mi of memory and are
-limited to 2Gi of memory; before, they requested nothing, which made them the first pods evicted
-when a node ran short of memory. See [Service sizing](./bootstrap.md#service-sizing) and
-[The message broker](./bootstrap.md#broker-sizing).
-
-**Before you upgrade an instance installed without `--compact`:**
-
-- **Check there is room for the larger requests.** Once upgraded, the five services request about
-  3.6 CPU more than in v0.18.0. During the rolling update four of them run their new pod beside the
-  old one (`event-processing` stops its old pod first), so the nodes need about 3.65 CPU free for
-  the new pods, and each new pod needs up to one core free on a single node. Compare the nodes'
-  free allocatable CPU (`kubectl describe nodes`, "Allocated resources") with the table in Service
-  sizing. A kind cluster on a laptop is the most likely not to have it. If a new pod cannot be
-  placed, it stays `Pending` and the upgrade fails after waiting, with the instance partly
-  upgraded: services whose new pods started are on the new release, and the rest are still on the
-  old one. Make room and run `dcctl upgrade` again to finish. An instance built with `dcctl` has no
-  way to keep the old requests; the remedy is capacity, or recreating it with `--compact`.
-
-Instances installed with `--compact` keep their 25m and 64Mi requests, and a new compact
-instance's NATS servers request the same.
-
-**`dcctl upgrade` gives an existing instance's NATS servers these requests and this limit**, and
-restarts them to do it. See [the broker and event store entry](#next-upgrade-infrastructure) for
-what that looks like, and for the room each node needs.
-
-**If you install the chart yourself, with your own values:**
-
-- `event-processing` now has a measured request, so a top-level `resources.requests.cpu` no longer
-  reaches it either. Set its own under `functionalAreas.event-processing.resources.requests`, or
-  set `useMeasuredRequests: false`.
-- `event-processing` now has a CPU limit of its own, so a top-level `resources.limits.cpu` no
-  longer reaches it; see [the pipeline defaults item](#next-pipeline-defaults).
-- A new key, `eventPathSpread`, is on for the five services. A values file that sets it on another
-  service spreads that service with them.
-
-#### The event store's keys lead with time {#next-time-leading-keys}
-
-The keys that stop an event being stored twice now start with the tenant and the event's time,
-instead of the tenant and a digest of the event. A new event's key then lands next to the previous
-one instead of at a random place in the index, so the database rewrites far fewer index pages. With
-the time first, the same keys also answer every read of a tenant's events by time, so four more
-indexes are removed: the tenant-and-time index of base events, measurements, locations and alerts.
-
-Together with [the indexes removed above](#next-event-store-indexes), each row stored by this
-release updates fewer indexes than in `v0.18.0`: a base event row two instead of five (three instead
-of six when it carries an alternate id), a measurement row three instead of five, a location or
-alert row one instead of four, a relationship-anchor row two instead of four, and a presence-change
-row one instead of four. A measurement event with one reading and no anchors updates five indexes
-instead of ten. In one comparison on a development build at 6,000 events per second, which rebuilt
-the base event and measurement keys and removed their two tenant-and-time indexes, the write-ahead
-log per stored event fell from about 2.3 KB to about 1.3 KB, and the slowest 1% of the event
-store's write batches took about 50 ms instead of about 170 ms.
-
-- Events are still stored once, and every read `event-management` serves is still served by an
-  index.
-- **A device's event list, when the event store holds few devices.** When there are few distinct
-  device tokens across all tenants (in our tests, 40 rather than 100), the database may now read a
-  device's newest events by walking its tenant's newest events until it has a page of them. That is
-  quick while the device is active. For a device that has been quiet while the others kept sending,
-  the first page can take noticeably longer than before. The total shown with the list is not
-  affected.
-- **SQL and BI access.** A query on a tenant's events, readings, locations, alerts or anchors that
-  filters on time alone is served by an index. To join `analytics.event_anchors` to
-  `analytics.events`, join on both `event_id` and `occurred_time`: on `event_id` alone the database
-  can no longer look each event up directly. See [Practical notes](../guides/sql-and-bi-access.md#practical-notes).
-
-##### Check before you upgrade {#next-time-leading-keys-check}
-
-The first start of the new `event-management` rebuilds the keys over every row of the five tables
-that is not yet compressed: by default, the last week or so. **An instance with more than 4,000,000
-such rows cannot be upgraded in place.** A base event is one row, plus one row for each reading,
-location or alert it carries, plus one for each relationship anchor. At one reading and one anchor
-an event, 4 million rows is a week at an average of about 2 events per second, so most instances
-with real traffic are over the line.
-
-Count yours before you upgrade. Open `psql` on the event store (the namespace is `dci-` plus the
-instance id; the database is the instance id on its own):
+### v0.19.0 — sized from measurement at 6,000 events a second; a full stream refuses {#v0190-upgrade}
+
+`v0.19.0` is an in-place upgrade from `v0.18.0`: `dcctl install` for the cluster, then `dcctl
+upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). **Count your event store
+before you run this release's `dcctl install`.** An instance whose event store holds more than
+4,000,000 rows that are not yet compressed
+cannot take it in place and has to be recreated, which discards its data, and most instances with
+real traffic are over that line ([Check the row count](#v0190-row-count)). A table with more than
+500 chunks is refused too, unless you first remove its oldest events
+([Count the chunks](#v0190-chunk-count)). An instance built by `v0.16.0` or earlier still has to be
+[destroyed and built again](#pre-declaration-recreate).
+
+Most of this release is about keeping up. The services that handle every event now request the CPU
+they were measured to use, spread across nodes, store and merge events in fewer statements, and
+answer repeated lookups from memory; under `--ha` without `--compact`, `event-management` runs as
+two pods. On Google
+Kubernetes Engine, a default HA install accepted 6,000 events a second for 10 minutes, twice, and
+stored every accepted event exactly once; that was measured on the release candidate with
+`event-management` at one pod ([Performance](#v0190-performance)). Two failure paths change from
+silent to visible: a full ingest stream now refuses new events instead of discarding unread ones,
+and the backup alerts warn before archiving can stop a database. And `dcctl upgrade` now applies an
+instance's message broker and event store settings, which it never did before, so an upgraded
+instance gets the same broker and event store as a new one.
+
+**Who has to do something:**
+
+- **Every instance with real traffic:** count the event store's uncompressed rows and its chunks
+  before you upgrade. Over 4,000,000 rows, the instance must be recreated, and recreating discards
+  its data ([Check the row count](#v0190-row-count)).
+- **Every cluster:** re-run `dcctl install` with this release before any `bootstrap`, `upgrade` or
+  `destroy`. This `dcctl` refuses an install record written by an earlier one. Upgrade every copy
+  of `dcctl` you use too: an earlier one can leave an instance this release built marked as
+  unfinished, and a plain `dcctl bootstrap` would then run over it
+  ([Finishing a failed bootstrap](#v0190-bootstrap-resume)).
+- **Every instance installed without `--compact`:** the nodes need room for larger CPU requests
+  and for the message broker's first requests ([Make room](#v0190-room)).
+- **Anyone with devices that send more than 256 readings in one message:** those messages are now
+  refused ([256 readings](#v0190-reading-limit)).
+- **Any tenant that sends more than 1,000 readings a second**, including a fleet that puts several
+  readings in one message, and **every LwM2M tenant**: the ingest ceiling now counts readings, and
+  readings over it are refused with `429` over HTTP and dropped, without telling the device, on
+  every other transport ([Readings, not messages](#v0190-ingest-readings)).
+- **Anyone with devices that send readings dated more than 366 days back**, or that report times
+  near 1970 because their clock is not set: those readings are now refused
+  ([Old readings](#v0190-event-age-limit)).
+- **Anyone who set `backup_retention`, `tsdbConfiguration.maxOpenConnections`,
+  `rdbConfiguration.maxOpenConnections`, `maxReadingsPerMessage`, or analytics readers' connection
+  limits:** see [Before you upgrade](#v0190-before).
+- **Anyone who relies on revoking a device credential taking effect at once:** a revocation can
+  now take up to five seconds on one `device-management` replica
+  ([Credential checks](#v0190-credential-cache)).
+- **Anyone who calls the HTTP ingest API:** retry on `503` with `Retry-After`
+  ([Backpressure](#v0190-backpressure)).
+- **Anyone with an event source that reads from their own MQTT broker:** the source connects under
+  a new client id, which the broker must allow, and can be read twice while the upgrade rolls
+  ([Your own MQTT broker](#v0190-mqtt-client-id)).
+- **Anyone who routes or silences alerts by name or severity:** alerts are added, and
+  `JetStreamStreamNearFull` is now `info` ([Alerts](#v0190-alerts)).
+- **Anyone who installs the chart with their own values:** several top-level resource values no
+  longer reach the event-path services ([Your own chart values](#v0190-chart-values)).
+
+Everything else is under [What changed](#v0190-what-changed), by area.
+
+#### Before you upgrade {#v0190-before}
+
+Do these in order.
+
+##### 1. Check the row count {#v0190-row-count}
+
+The first start of the new `event-management` rebuilds the event store's keys over every row
+of five tables that is not yet compressed: by default, the last week or so. **An instance with
+more than 4,000,000 such rows cannot be upgraded in place.** A base event is one row, plus one
+for each reading, location or alert it carries, plus one for each relationship anchor. At one
+reading and one anchor an event, 4 million rows is a week at an average of about 2 events per
+second, so most instances with real traffic are over the line.
+
+Open `psql` on the event store (the namespace is `dci-` plus the instance id; the database is
+the instance id on its own). The count only reads, so any of the store's pods will do; if
+`dc-tsdb-1` is not there, `kubectl -n dci-<instance-id> get pods` lists the others:
 
 ```bash
 kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
 ```
 
-The count only reads, so any of the event store's pods will do, the primary or a replica. If
-`dc-tsdb-1` is not there, `kubectl -n dci-<instance-id> get pods` lists the other `dc-tsdb-` pods.
-
-Then run the same count the upgrade makes. It reads every row that is not yet compressed, so on a
-large store it takes a while:
+Then run the count the upgrade makes. It reads every uncompressed row, so on a large store it
+takes a while:
 
 ```sql
 DO $$
@@ -4251,18 +3616,52 @@ BEGIN
 END $$;
 ```
 
-If it prints more than `4000000`, do not upgrade this instance in place: export what you need,
-then recreate it with `dcctl destroy` and `dcctl bootstrap` on the new release.
+If it prints more than `4000000`, do not upgrade this instance in place: take what you need out
+of it, then recreate it with `dcctl destroy` and `dcctl bootstrap` on the new release. Count while
+the cluster still runs `v0.18.0`, before this release's `dcctl install`, so that an instance over
+the line can still be read and destroyed with the `dcctl` that built it.
 
-:::caution Export first — recreation discards your data
+:::caution Recreating discards the instance's data
 `dcctl destroy` removes the instance's databases: every tenant, device, device definition,
-dashboard and user, and all of its events, not only the event history. There is no in-place path
-that keeps an instance over 4,000,000 rows across this release.
+dashboard and user, and all of its events. DeviceChain has no export tool. Take what you need
+before you destroy. A tenant's events, readings, locations and alerts can be read through
+[SQL and BI access](../guides/sql-and-bi-access.md). PostgreSQL's `pg_dump` can copy the instance's
+two databases, each named after the instance id: one on the event store, in the instance's own
+namespace, and one on the shared relational database (`dc-rdb`, in `dc-system`), which holds every
+instance's data, so dump only that database. Write the dump to your own machine, for example
+`kubectl -n dc-system exec dc-rdb-1 -c postgres -- pg_dump -U postgres -Fc <instance-id> > rdb.dump`,
+and the same with `-n dci-<instance-id>` and `dc-tsdb-1` for the event store. Secrets in the dump
+stay sealed by the instance's root key. A dump is a copy to read, or to load into a database of
+your own: no `dcctl` loads it into the new instance.
+
+Keep the backups, so that you can go back. Destroy with the `v0.18.0` `dcctl` before you run this
+release's `dcctl install`: it leaves the in-cluster backups in place. After the install, use this
+release's `dcctl destroy --keep-backups`; without the flag it deletes the instance's event-store
+archive. Either way, what is kept is the **event store's** archive, beside the cluster's relational
+archive, which destroy never deletes. In the same cluster, the event-store archive brings back only
+the instance's event history, under an empty control plane with no tenants, devices, users or
+secrets. Getting the whole instance back on `v0.18.0` means recovering onto a
+new cluster, from the relational archive at a time before the destroy (`--restore-rdb-at`), which
+rewinds every instance on that cluster, with the instance's root-key escrow and its event-store
+archive, as [Recovering an instance](./disaster-recovery.md#recover) describes. Restoring the
+event-store archive onto `v0.19.0` is not a way forward: it brings back the same rows, and the
+upgrade refuses them again.
+
+The kept event-store archive holds the events of every tenant the instance had, including tenants
+deleted within its recovery window, and nothing prunes it once the instance is gone. Remove it
+when you no longer need it, as
+[What happens to the instance's backups](./bootstrap.md#destroy-backups) shows.
+
+Before you run `dcctl bootstrap` under the same name, move the instance's root-key escrow artifact
+(`~/.devicechain/escrow/<instance>-rootkey.escrow`) aside and keep it: bootstrap will not overwrite
+it, and it is the only key to the relational backups taken before the destroy.
+
+No in-place path has been tested for an instance over the line.
 :::
 
-##### Count the chunks too {#next-time-leading-keys-chunks}
+##### 2. Count the chunks {#v0190-chunk-count}
 
-The rebuild, and [the index removal above](#next-event-store-indexes), also refuse a table with
+The rebuild, and the [index removal](#v0190-event-store-keys), also refuse a table with
 more than **500 chunks**. Each locks every chunk of the table it changes, and 500 is half the most
 this release has been measured to rebuild within one start, which leaves room for slower storage.
 Above it, `event-management` refuses before locking anything, rather than risk a rebuild that
@@ -4315,250 +3714,310 @@ BEGIN
 END $$;
 ```
 
-Then count the chunks again, and upgrade. If you cannot do without those events, export what you
-need and recreate the instance, as above.
+Then count the chunks again, and upgrade. If you cannot do without those events, recreate the
+instance as in [Check the row count](#v0190-row-count).
 
-##### During the upgrade {#next-time-leading-keys-during}
+##### 3. Run the upgrade where the instance was bootstrapped {#v0190-where}
 
-- The new `event-management` rebuilds the keys one table at a time. While it rebuilds a table,
-  reads and writes of that table wait: a few seconds in the expected case, and at most 45 seconds
-  for each table (up to 5 seconds to lock it, then up to 40 to rebuild). The previous
-  `event-management` keeps receiving events; a batch it was writing waits with the table, and a
-  batch held long enough is delivered again and stored once. The whole rebuild stops after a
-  minute and continues on the next start.
-- **If there is too much to rebuild,** the new `event-management` stops before changing anything,
-  and its log says why. `dcctl upgrade` then reports that it did not finish rolling out: every
-  other service runs the new release, and the previous `event-management` keeps storing events
-  until you recreate the instance, as above.
-- **If a table has more than 500 chunks,** `event-management` stops before locking anything, and
-  its log names the table, its chunk count and the query above, and points to
-  [the removal](#next-time-leading-keys-chunks). Nothing is marked: once the chunks are removed, the
-  next start goes ahead. The index removal stops the same way, and nothing is removed from any
-  table.
-- **If one table's rebuild takes longer than 40 seconds** once the table is locked, it is undone,
-  the table keeps its previous key, and `event-management` stops with an error that says so. From
-  then on it stops at once on every start without touching the table, so ingest does not stall
-  again on each restart. Recreate the instance, or, to try once more (for example after moving the
-  event store to faster storage), run the `COMMENT ON INDEX` statement the error gives. If the table
-  holds events dated far in the past, removing them as in
-  [Count the chunks too](#next-time-leading-keys-chunks) shortens the rebuild; then run the
-  `COMMENT ON INDEX` statement.
-- If another session keeps a table busy, or the minute runs out, `event-management` stops with an
-  error that names the table and lists the tables already rebuilt, and continues from there when
-  it restarts, as for [the index removal above](#next-event-store-indexes). The error carries a
-  query that lists the sessions holding the table. Rebuilding a table also locks every chunk of it;
-  if the database runs out of lock slots, the error says so and names the setting to raise.
-- Going back to `v0.18.0` keeps the new keys, and `v0.18.0` stores and reads events with them.
-  One read is slower there: `v0.18.0` lists the events recorded against a relationship anchor by
-  looking each one up by its digest alone, which the new base-event key cannot do directly, so that
-  list reads through the tenant's events in the time range asked for, compressed ones included.
-  The same applies while the previous `event-management` keeps running because a rebuild stopped
-  after the base events table was already rebuilt. The new release reads that list on the key.
+`dcctl upgrade` now applies the instance's OpenTofu configuration, so it needs the instance's
+state: run it on the machine that bootstrapped it, or copy `~/.devicechain/instances/<instance>/`
+there first and keep it private (mode `0700`), because it holds credentials. It also needs `tofu`
+on `PATH`, at OpenTofu 1.9 or later (or Terraform 1.9 or later). Without the state, the upgrade
+refuses and changes nothing. `--skip-infrastructure` moves only the services, as before, and says
+what it left.
 
-#### The archived write-ahead log is compressed with zstd {#next-archive-zstd}
+##### 4. Make room {#v0190-room}
 
-Both databases now compress the write-ahead log they archive with zstd instead of gzip. Under
-sustained ingest the archiver runs beside the event store's primary, and it used about as much CPU
-as the database itself. In a local benchmark on write-ahead log shaped like the event store's,
-zstd took 29% to 39% less archiver CPU for each archived segment, end to end. On that log, and on
-uncompressed log shaped like the relational store's, its output was 2% to 16% smaller than gzip's.
-Base backups are still compressed with gzip, and the
-[backup store sizing](./bootstrap.md#backup-store-size) is unchanged.
+Once upgraded, an instance installed without `--compact` requests more CPU, and the rolling update
+needs more still while old and new pods run side by side:
 
-Restores read both. Each archived segment is named by its compression (`.gz` or `.zst`) and is
-decompressed by that name, so an archive that changes compression part-way restores as before.
-Expiring old backups reads both the same way.
+| | More CPU requested once upgraded | Free CPU the services' rolling update needs at once |
+| --- | --- | --- |
+| `--ha` | 4.45 for the services, plus 500m and 768Mi of memory on each of the three nodes running a NATS server | 4.85, beyond the NATS servers': 4.55 for the pods that start beside their old ones (`device-management`, both `event-management` pods, `device-state` and `event-sources`), and 0.3 for `event-processing`, whose new pod starts after its old one stops |
+| without `--ha` | 3.55 for the services, plus 500m and 768Mi for the one NATS server | 3.95 (3.65 and 0.3), beyond the NATS server's |
+| `--compact` | none for the services; 25m and 64Mi on each node running a NATS server | 0.1, as before (25m for each pod that starts beside its old one), beyond the NATS servers' |
 
-Re-running `dcctl install` with this release switches the relational store, and `dcctl upgrade`
-switches the instance's event store. The backup plugin reads its destination again for each
-segment it archives, so segments archived from then on are compressed with zstd. No database
-restarts for it, and segments already in the archive stay as they are.
+These figures are for an instance that runs all five of these services. The services' new requests
+are `device-management` 800m, `event-management` 900m (two pods under `--ha`, which also adds the
+second pod's 128Mi of memory), `device-state` 950m, `event-sources` 1 core and `event-processing`
+400m; in `v0.18.0` each requested 100m. Each new pod needs its whole request free on a single
+node. Each NATS server now requests 500m of CPU and 768Mi of memory and is limited to 2Gi of
+memory; before, it requested nothing. Compare the nodes' free allocatable CPU and memory
+(`kubectl describe nodes`, "Allocated resources") with [Service sizing](./bootstrap.md#service-sizing).
+A kind cluster on a laptop is the most likely not to have it.
 
-#### device-state merges with 10 writers, event-management waits up to 10 ms to fill a batch, and detection gets a full core {#next-pipeline-defaults}
+A pod that cannot be placed stays `Pending`, and the upgrade fails after waiting (up to 15
+minutes for the broker), with the instance partly upgraded: services whose new pods started are
+on the new release, and the rest are still on the old one. A NATS server left `Pending` without
+`--ha` leaves the broker down until there is room. Make room and run `dcctl upgrade` again to
+finish. An instance built with `dcctl` has no way to keep the old requests; the remedy is
+capacity, or recreating it with `--compact`. Instances installed with `--compact` keep their 25m
+and 64Mi requests, and their NATS servers request the same.
 
-Three defaults change for the stages that fell behind first in a benchmark on a three-node cloud
-cluster at 6,000 to 7,600 events per second.
+A `ResourceQuota` or `LimitRange` on the instance's namespace can refuse the larger requests,
+the 2-core limits of `event-sources` and `device-state`, or `event-processing`'s 1-core limit.
 
-- **`device-state` runs 10 projection writers instead of 5** (`projection.writers`). With 5, live
-  device state kept 95.7% of an offered 6,800 events per second over three minutes and fell
-  further behind above it. With 10, the service's CPU request raised to what it uses (as this
-  release ships it) and `projection.maxBatch` raised to 64, it kept pace at 7,600. The three
-  changes were made together, so their shares were not separated, and this release ships
-  `projection.maxBatch` at `32`, not 64: batches in that run averaged about 15 events, so the cap
-  of 32 did not bind on average, but an average does not show that it never would. In the same
-  runs `event-management`, sharing a node with `device-state`, stored fewer events than with the
-  earlier defaults: 6,280 against 6,796 per second at 6,800 offered, 5,252 against 7,463 at
-  7,600, and 5,624 over a five-minute hold at 6,800. That was not separated from the other changes
-  either, and those runs followed the deletion of about 10 million stored events, so new inserts
-  refilled freed space and wrote more to the write-ahead log than usual, which understates what
-  persistence can store.
-- **`event-management` waits up to 10 milliseconds to fill a batch** (`persistence.lingerMillis`,
-  previously `0`). In the same benchmark, 59% of its transactions stored a single event, each with
-  its own commit and its own wait for the standby. A writer that finds fewer events than a full
-  batch now waits up to 10 milliseconds for more; a writer that finds events already waiting takes
-  them at once, so under a backlog nothing changes. The wait saves commits only when every writer
-  is busy: below roughly a few hundred events per second per replica, each event is still
-  committed alone, up to 10 milliseconds later than before, and `persist_duration_seconds` rises
-  by about that much. The new default is reasoned, not yet measured end to end. Set
-  `persistence.lingerMillis: 0` to turn the wait off.
-- **`event-processing`'s CPU limit is 1 core instead of 500m.** At 500m it was held back in about
-  5% of scheduling periods at 6,000 events per second, and its backlog reached about 41,000 and
-  93,000 events in two 10-minute runs there. With a 1-core limit, a raised request and different
-  placement, its backlog after three minutes at 6,800 was about a third of what it had been at
-  500m; with the 1-core limit alone, on a busier node, it was larger. What caused the lag was not
-  isolated, and detection is not claimed to keep pace at these rates.
+##### 5. Check for a quota on cross-namespace placement {#v0190-quota}
 
-**Before you upgrade:** if you set `rdbConfiguration.maxOpenConnections` for `device-state` to `10`
-or less and did not set `projection.writers`, the new `device-state` pod refuses to start, and its
-error names `projection.writers` and the size of the pool. The rolling update keeps the old pod
-running and merging live state, and `dcctl upgrade` fails after waiting, with the instance partly
-upgraded. Set `projection.writers` below your pool (your previous default was `5`), or remove the
-pool setting to use the default of 20, and run the upgrade again. Pools of 11 to 19 start, and log
-at startup that more than half the pool is given to writers.
+The database pods now carry a placement preference that looks at other namespaces
+([Database primaries](#v0190-primary-spread)). A `ResourceQuota` with the
+`CrossNamespacePodAffinity` scope refuses such pods, preferred or not: the relational database's
+restarted instances in `dc-system`, and each instance's event store in its own namespace. Nothing
+DeviceChain installs creates one. To list any that exist:
 
-- An installation that sets `projection.writers`, `persistence.lingerMillis` or
-  `functionalAreas.event-processing.resources.limits.cpu` keeps its value. An explicit
-  `persistence.lingerMillis: 0` still means no wait.
-- A `ResourceQuota` or `LimitRange` on the instance's namespace can refuse `event-processing`'s
-  new 1-core limit.
-- `--compact` installations get the same defaults. Their requests do not change, and a CPU limit
-  reserves nothing on a node.
-- No stored data or schema changes, so going back to the previous release needs nothing.
+```bash
+kubectl get resourcequota -A \
+  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
+```
 
-**If you install the chart yourself, with your own values:**
+An empty list does not settle it. The API server's quota admission configuration can name
+`CrossNamespacePodAffinity` under `limitedResources`, and then such pods are refused in every
+namespace that has **no** quota with that scope admitting them. That configuration lives in the
+control plane, so ask whoever runs the cluster; if it is set, give `dc-system` and each
+instance's namespace a quota with that scope before upgrading. A refused event-store pod leaves
+the store short of an instance, or, without `--ha`, down.
 
-- A top-level `resources.limits.cpu` no longer reaches `event-processing`. One above 1 core now
-  lowers it to 1, and one below 1 core now raises it to 1. Set its own under
-  `functionalAreas.event-processing.resources.limits`.
-- With `useMeasuredRequests: false`, a top-level `resources.requests.cpu` above 1 core still
-  reaches `event-processing`, and is now refused when the chart renders because it is above that
-  service's own limit. Set `event-processing`'s own limit or request.
+##### 6. Check the settings that now stop a service from starting {#v0190-settings}
 
-#### `dcctl upgrade` applies an instance's message broker and event store settings {#next-upgrade-infrastructure}
-
-`dcctl upgrade` now applies the instance's own infrastructure, its NATS servers and its event
-store, from the OpenTofu configuration this release ships, before it moves the services. Until now
-only `dcctl bootstrap` applied it. So a release that changed the broker or the event store changed
-only instances created after it, and an upgraded instance kept its old settings without saying so.
-See [What an upgrade applies to the infrastructure](#upgrade-infrastructure).
-
-Upgrading an instance created by `v0.18.0` gives it what the earlier entries here describe for new
-instances:
-
-- [the NATS servers' requests and memory limit](#next-event-path-requests);
-- [the compressed write-ahead log](#next-wal-compression);
-- [zstd for the archived log](#next-archive-zstd);
-- [the primaries' placement preference](#next-primary-spread).
-
-**During the upgrade**, such an instance's NATS servers restart, one at a time under `--ha`.
-Without `--ha` the broker is unavailable while its one server restarts, usually about a minute.
-Its event store's instances also restart once, for the placement preference: standbys first, then
-a switchover under `--ha`. Without `--ha`, events are not stored until the one instance is back,
-and they wait in the ingest stream meanwhile. The broker and the event store can restart at the
-same time. The upgrade waits for both before it moves the services.
-
-**Before you upgrade:**
-
-- **Run it where the instance was bootstrapped**, or copy
-  `~/.devicechain/instances/<instance>/` there first and keep it private (mode `0700`): it holds
-  credentials. Without that state the upgrade refuses and changes nothing. It also needs `tofu` on
-  `PATH`. `--skip-infrastructure` moves only the services, as before, and says what it left.
-- **Check that each node running a NATS server has 500m CPU and 768Mi memory free for it**: 25m
-  and 64Mi on an instance installed with `--compact`. A server that cannot be placed stays
-  `Pending`. Under `--ha` the other two keep serving; **without `--ha` the broker is down** until
-  there is room. Either way the upgrade fails after up to 15 minutes; make room and run
-  `dcctl upgrade` again.
-- **Check each instance's namespace for a cross-namespace placement quota**, as
-  [the placement preference](#next-primary-spread) describes. A refused event store pod leaves
-  the store short of an instance, or, without `--ha`, down.
-- **Keep the settings you gave the instance's OpenTofu configuration yourself.** The upgrade keeps
-  a value declared in a `terraform.tfvars` beside the instance's state
-  (`~/.devicechain/instances/<instance>/infra/instance/`) or in `TF_VAR_<name>`, and not one you
-  passed with `-var`. It refuses rather than shorten the event store's recovery window
-  (`backup_retention_tsdb`) or stop declaring an analytics reader (`timescale_analytics_readers`),
-  and it prints a warning for a broker request or limit it would lower. Move such values into
-  that file before you upgrade. The file does not reach a variable `dcctl` passes itself: on an
-  instance installed with `--compact` that includes the broker's two requests. See
-  [Values you set on the configuration yourself](#upgrade-infrastructure).
-
-The volume sizes are kept. An instance created with an 8Gi event store keeps it, and the upgrade
-says that this release creates 32Gi.
-
-The new 2Gi memory limit on each NATS server was sized from steady ingest. A server catching up
-after its restart was not measured; if one is killed for memory during the upgrade
-(`OOMKilled` in `kubectl describe pod`), raise `nats_memory_limit` in that `terraform.tfvars` and
-run `dcctl upgrade` again. The upgrade accepts a broker whose roll did not finish, so the re-run
-applies the new limit and waits for it to roll out. The same goes for a server left `Pending`
-when you lower `nats_cpu_request` or `nats_memory_request` instead of making room, except on a
-`--compact` instance, where `dcctl` sets the requests itself.
-
-#### `dcctl destroy` no longer prints output values that are not the instance's {#next-destroy-outputs}
-
-`dcctl destroy` streams the output of `tofu destroy`, which begins with OpenTofu's plan. That plan
-ended with a **Changes to Outputs** list in which several values were the defaults of
-DeviceChain's OpenTofu configuration rather than the instance's: an HA instance's broker showed as
-one server, its event store as not replicating synchronously, and a restored instance's backups
-under the default path rather than the one they were written to. Destroy removed the right
-things; only that list was wrong. A destroy works those values out without the instance's
-settings, so destroy now leaves the list out and prints a line saying so. When destroy removes
-the instance's backups, it still prints their path before it changes anything, read from the
-running event store. Nothing needs doing.
-
-#### Under `--ha`, event-management runs two pods {#next-ha-persistence-replicas}
-
-An instance installed with `--ha` now runs `event-management`, the service that stores every
-event, as two pods instead of one. In a benchmark on three 4-vCPU service nodes, the scheduler put
-its one pod on the node running the NATS server that leads the incoming-event stream, together with
-`device-state`. That node ran at 94 to 95% CPU, and from 6,800 events per second offered, storing
-was the first stage to fall behind: 6,592 per second over three minutes. With a second pod added,
-every stage kept 6,800 in the same three-minute runs, and the backlog drained in 3 seconds. The
-sustained rate published for a default `--ha` installation, 6,000 events per second, was measured
-with one pod and is unchanged.
-
-- The two pods prefer different nodes. That is a preference the scheduler weighs with others, not
-  a guarantee.
-- Each pod fills its own batches, so a batch holds about half as many events, and the event store
-  commits about twice as many transactions per event. Its node stayed below 70% CPU.
-- Each pod holds its own connections to the event store, and an upgrade can briefly run four
-  pools, so these instances keep 80 of the store's connections for the platform instead of 40.
-  Analytics readers' `connection_limit` values together may take at most 17 instead of 57. See
+- If you set `tsdbConfiguration.maxOpenConnections` for `event-management`, or
+  `rdbConfiguration.maxOpenConnections` for `device-state`, to `10` or less and did not set
+  `persistence.writers` or `projection.writers`, the new pod refuses to start, naming the
+  setting and the pool size. Set the writers below your pool (the previous default was `5`), or
+  remove the pool setting to use the default of 20. Pools of 11 to 19 start and log that more
+  than half the pool is given to writers.
+- **Analytics readers** (`--ha` instances): their `connection_limit` values together may now
+  take at most 17 of the event store's connections, not 57, because the platform keeps 80 for
+  two `event-management` pods instead of 40. Above 17 the upgrade stops before it changes
+  anything. If you raised `timescale_analytics_reserved_connections` to run a second
+  `event-management` pod yourself, set it back to 40: it is now the reserve for each pod. See
   [Connection cap](../guides/sql-and-bi-access.md#connection-cap).
-- Without `--ha`, with `--compact --ha`, and on an instance that runs no `event-management`,
-  it stays at one pod and nothing changes.
+- **`maxReadingsPerMessage`** is retired: the service ignores it with a warning. See
+  [256 readings](#v0190-reading-limit) to find the devices it would refuse.
 
-**Before you upgrade an instance installed with `--ha` and without `--compact`:**
+##### 7. Check what your devices send {#v0190-device-traffic}
 
-- **Check there is room for 1.8 cores more during the upgrade, and 900m more afterwards.** Until
-  the new pods are ready, both run beside the old one. A pod that cannot be placed stays
-  `Pending`, and the upgrade fails after waiting, with the instance partly upgraded. Make room and
-  run `dcctl upgrade` again.
-- **If you declared analytics readers, add up their `connection_limit` values.** Above 17, the
-  upgrade stops when it plans the infrastructure, before it changes anything, with an error naming
-  the readers' total and the platform's reserve. Lower a reader's limit in the `terraform.tfvars`
-  beside the instance's state and run the upgrade again.
-- **If you raised `timescale_analytics_reserved_connections` to run a second `event-management`
-  pod, set it back to 40.** It is now the reserve for each pod, and is multiplied by the pod count,
-  so a raised value is counted twice and the upgrade may refuse.
-- With `--skip-infrastructure` the services move and the reserve does not, and the upgrade says
-  so. Keep readers' limits at 17 or less in total until an upgrade applies the infrastructure.
+- **More than 256 readings in one message** are refused. Find those devices as
+  [256 readings](#v0190-reading-limit) shows.
+- **More than 1,000 readings a second from one tenant** is now over the default ceiling, which
+  counts readings rather than messages. Find those tenants and raise the ingest rate on their tier
+  first, as [Readings, not messages](#v0190-ingest-readings) shows. Readings over the ceiling are
+  dropped, not delayed: HTTP answers `429`, MQTT, LwM2M and Sparkplug devices are not told, and an
+  MQTT message dropped this way was already acknowledged.
+- **Readings dated more than 366 days before they arrive** are refused. A device with no clock
+  should leave `occurredTime` out. Messages already waiting in the platform are judged against the
+  time they arrived; an edge agent's spool has no age limit of its own
+  ([Old readings](#v0190-event-age-limit)).
 
-During the upgrade the two new pods start together. One applies
-[the event store's key change](#next-time-leading-keys) while the other waits for it, and the
-waiting pod may be restarted once by its startup check before it comes up. That is expected.
+##### 8. Rename `backup_retention` {#v0190-rename-retention}
 
-Going back to the previous release returns `event-management` to one pod. No stored data or schema
-changes.
+If you set it: `backup_retention_rdb` in the cluster configuration, `backup_retention_tsdb` in the
+instance configuration. A `-var backup_retention=…` is refused; a `.tfvars` line draws only a
+warning and the default is used instead of your value; a `TF_VAR_backup_retention` is ignored
+without a warning.
 
-**If you install the chart yourself:** nothing changes. The chart's default is still one replica.
-To run two, set `functionalAreas.event-management.replicas: 2`, and on an event store built from
-this repository's OpenTofu set `event_management_replicas = 2` with it, which reserves the second
-pod's connections.
+##### 9. Check the backup store's headroom {#v0190-headroom}
 
-The instance's OpenTofu configuration now declares that it needs OpenTofu 1.9 or later (or
-Terraform 1.9 or later). It already needed 1.9 to load, so an older version now fails with a
-clearer message rather than a different one.
+The relational database now keeps 30 days of backups instead of 7
+([Recovery windows](#v0190-backup-retention)), and an existing store keeps its size, so a store
+created before this release is still 20 GiB unless you grew it. Grow it first if it has little
+room, as [Backup store size](./bootstrap.md#backup-store-size) shows.
 
-#### A tenant's ingest ceiling counts readings, and HTTP checks it before the shared backpressure gate {#next-ingest-readings}
+##### 10. Keep the OpenTofu values you set yourself {#v0190-tfvars}
+
+The upgrade keeps a value declared in a `terraform.tfvars` beside the instance's state
+(`~/.devicechain/instances/<instance>/infra/instance/`) or in `TF_VAR_<name>`, and not one you
+passed with `-var`. It refuses rather than shorten the event store's recovery window or stop
+declaring an analytics reader, and warns for a broker request or limit it would lower. Move such
+values into that file first. See
+[Values you set on the configuration yourself](#upgrade-infrastructure).
+
+##### 11. If you replaced the event store's database image {#v0190-image}
+
+Check it can use `lz4` for [write-ahead log compression](#v0190-wal); an instance that restarts on
+an image that cannot may not start. Upgrade only if every line prints `t`:
+
+```bash
+pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
+for p in $pods; do
+  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc \
+    "SELECT 'lz4' = ANY (enumvals) FROM pg_settings WHERE name = 'wal_compression'"
+done
+```
+
+##### 12. If an event source reads from your own MQTT broker {#v0190-mqtt-client-id}
+
+Each such source now connects as `devicechain:<instance>:<source>:<pod>` instead of `devicechain`
+([Its own client id](#v0190-external-mqtt-client-id)). If your broker's ACL, allowlist or client-id
+rule names `devicechain`, allow ids that begin with `devicechain:`. The id is also longer than 23
+characters, the shortest limit MQTT requires a broker to accept. A broker that refuses the new id
+makes the new pod fail to start with the broker's reason in its log, and the upgrade stalls with
+the old pods still running and reading the source as before.
+
+To avoid storing messages twice while the upgrade rolls (see [During the upgrade](#v0190-during)),
+plan to pause the publishers on your broker for the length of the rollout.
+
+#### During the upgrade {#v0190-during}
+
+**`dcctl install`** gives the shared relational database a 30-day recovery window, zstd for its
+archived log and the placement label, and restarts its instances once: under `--ha` the standbys
+first, then a switchover to one of them on another node. A single-instance relational database is
+unavailable until it has restarted; writes made meanwhile are retried.
+
+**`dcctl upgrade`** then applies the instance's NATS servers and event store before it moves the
+services ([details](#v0190-upgrade-infrastructure)):
+
+- The NATS servers restart for their new requests and limit, one at a time under `--ha`. Without
+  `--ha` the broker is unavailable while its one server restarts, usually about a minute.
+- Without `--ha`, detection stops while the broker restarts, for about that minute plus up to 25
+  seconds, and then replays from its last checkpoint
+  ([Detection's partition](#v0190-detect-lease-release)).
+- On an instance created by `v0.18.0`, the event store's instances can restart once for the
+  placement preference: standbys first, then a switchover under `--ha`. Without `--ha`, events are
+  not stored until the one instance is back, and wait in the ingest stream meanwhile. Its
+  write-ahead log compression and zstd archiving need no restart.
+- The broker and event store can restart at the same time; the upgrade waits for both.
+
+**While `event-sources` rolls, a source on your own MQTT broker can be read twice.** Until the last
+pod of the previous release stops, it still reads the source under the old id, beside the new pod
+that holds the source, and each stores what it receives. Messages arriving in that window can be
+stored twice. This happens once, and the same happens on a rollback; pausing the publishers on
+your broker for the length of the rollout avoids it. Leases a rolled-back release leaves behind
+expire on their own within 30 seconds.
+
+**The new `event-management`, on its first start,** removes sixteen indexes and rebuilds the
+event store's keys, one table at a time ([The event store's keys](#v0190-event-store-keys)).
+While it works on a table, reads and writes of that table wait: a few seconds in the expected
+case, and at most 45 seconds a table for the key rebuild. The previous `event-management` keeps
+receiving and storing events; a batch held long enough is delivered again and stored once. Under
+`--ha`, both new pods start together: one does the work while the other waits, and the waiting pod
+may be restarted once by its startup check. That is expected. If the work stops (a table kept busy,
+a minute run out, too many rows, more than 500 chunks, a table that takes more than 40 seconds),
+`event-management` stops with an error that names the table and what to do, every other service
+runs the new release, and the previous `event-management` keeps storing events. See
+[If the event store's change stops](#v0190-event-store-keys-stops).
+
+##### If the event store's change stops {#v0190-event-store-keys-stops}
+
+- **Too many rows:** `event-management` stops before changing anything, and says why.
+  `dcctl upgrade` reports that it did not finish rolling out; recreate the instance as in
+  [Check the row count](#v0190-row-count).
+- **A table with more than 500 chunks:** `event-management` stops before locking anything; its log
+  names the table, its chunk count and the query in [Count the chunks](#v0190-chunk-count). That
+  start changes nothing and marks nothing (its log lists what earlier starts already did): once the
+  chunks are removed, the next start goes ahead.
+- **A table busy, or the minute run out:** each lock attempt gives up after at most 5 seconds and a
+  busy table is retried every 2 seconds for up to a minute. `event-management` then stops with an
+  error that names the table, lists what is already done, and carries a query that lists the
+  sessions holding it; it continues from there when it restarts. If it keeps stopping, look for
+  long-running SQL or BI queries, a tenant erasure, or the store's compression or retention job.
+- **One table's key rebuild takes longer than 40 seconds** once locked: it is undone, the table
+  keeps its previous key, and `event-management` stops at once on every later start without touching
+  it, so ingest does not stall on each restart. Recreate the instance, or to try once more (for
+  example on faster storage), run the `COMMENT ON INDEX` statement the error gives. If the table
+  holds events dated far in the past, removing them as in [Count the chunks](#v0190-chunk-count)
+  shortens the rebuild; then run the `COMMENT ON INDEX` statement.
+- **Out of lock slots:** removing an index or rebuilding a key locks every chunk of its table; the
+  error says so and names the setting to raise.
+
+#### After the upgrade {#v0190-after}
+
+- **Check where the two database primaries are.** The switchovers above can leave both on one node.
+  [Where the database primaries run](./bootstrap.md#ha-database-primaries) shows how to check and
+  move one.
+- **Watch the backup store for three weeks.** Nothing ages out of the relational database's new
+  30-day window until it is 30 days old, so its share of the store grows for about three weeks,
+  toward about four times the log it keeps today plus about 23 more nightly base backups, then
+  levels off.
+- **Watch the readings refused at each tenant's ceiling:**
+  `devicechain_eventsources_total_readings_rate_limited`,
+  `devicechain_lwm2mingest_ingest_samples_shed_total` and
+  `devicechain_sparkplugingest_ingest_samples_shed_total`. A tenant that sheds there is sending
+  more readings than its tier allows. Raise its tier's ingest rate, or have its devices send less.
+- **An existing instance keeps its volume sizes.** The upgrade says that this release creates a
+  32Gi event store; to grow an 8Gi one, see [Event store volume](./bootstrap.md#event-store-volume).
+  An existing backup store keeps its size too.
+
+Going back to `v0.18.0` needs no data change: it stores and reads events with the new keys and
+without the removed indexes, and returns `event-management` to one pod and the ingest ceiling to
+counting messages. One read is slower there: `v0.18.0` lists the events recorded against a
+relationship anchor by reading through the tenant's events in the time range asked for, compressed
+ones included. A `device-management` configuration that sets `inMemoryCache.perDeviceCacheEntries`
+or `inMemoryCache.perDeviceCacheMiB` must drop them first: `v0.18.0` refuses to start with either.
+
+#### What changed {#v0190-what-changed}
+
+##### Ingest {#v0190-ingest}
+
+###### A full ingest stream refuses new events instead of discarding unread ones {#v0190-backpressure}
+
+When a consumer fell so far behind that its unread backlog filled `inbound-events` or
+`resolved-events`, the stream discarded its oldest events to make room, and those were events
+nobody had processed yet. The device had already been told they were accepted.
+
+Now, when `device-management`'s unread backlog on `inbound-events`, or `event-management`'s on
+`resolved-events`, reaches 90% of what the stream can hold, the platform stops accepting new
+events until the backlog drops below 80%. The two streams keep their week of already-processed
+events, and that history does not count towards the 90%: only unread events do. A full stream also
+refuses before it would discard that history fast enough to reach unread events; see
+[A full stream also refuses before large events push out unread ones](#v0190-ingest-history-runway).
+
+- **HTTP** ingest answers `503` with `Retry-After: 10` while it refuses. Retry on `503`. A `503`
+  without a `Retry-After` still means the publish itself failed. A request over its tenant's own
+  ceiling gets `429` first; only one within it can get the `503`
+  ([Readings, not messages](#v0190-ingest-readings)).
+- **MQTT** devices were already acknowledged by the broker. Their messages wait in the capture
+  stream until ingest resumes.
+- **Sparkplug and LwM2M** readings, and messages from an external MQTT broker, are dropped and
+  counted, because those protocols give the platform no way to make the device retry. Connect and
+  disconnect transitions are still accepted. The backpressure gate does not limit how many it
+  admits (the tenant ceiling still applies to the broker tap), so a fleet that reconnects in a loop
+  can still push the stream to its ceiling, where it discards its oldest events as before.
+- The refusal applies to **every tenant**, because the streams are shared. A slow `device-state`
+  or `event-processing` does not cause it.
+- The simulator and load harness count a `503` with a `Retry-After` as a refusal, not a failure.
+  See [the load-test reports entry](#v0190-loadtest-refusals) for how they report it.
+
+See [Backpressure on the ingest path](./observability.md#ingest-backpressure). No stream is
+reconfigured, and a service still on the previous release keeps its previous behaviour until it is
+upgraded.
+
+###### A full stream also refuses before large events push out unread ones {#v0190-ingest-history-runway}
+
+The refusal above priced every unread event at the stream's average size, because the broker
+reports a stream's total bytes and not those of the events a consumer has not read. On a full
+stream that is the unread share of the event COUNT. A burst of large events over a history of
+small, already-processed ones could therefore fill `inbound-events` or `resolved-events` while the
+unread backlog read about half of the ceiling, and the stream then discarded events nobody had
+processed. Measuring after every publish would not have caught it.
+
+- **The stream also refuses when its processed history is running out.** A full stream discards
+  its oldest events first, so the events already processed that it still holds ahead of the
+  unread ones are what runs out before an unread one is lost. The services that write to the
+  stream now refuse new events when that history would all be discarded within 30 seconds at the
+  rate the stream is discarding it, and accept them again once it would last a minute, or the
+  consumer has read everything. Both are built from sequence numbers the broker reports, so the
+  rule does not depend on how large the events are. A full stream whose consumer keeps pace
+  refuses nothing. Deleting a tenant does not by itself make a stream refuse either, unless its
+  events are the oldest a full stream holds: then the stream can refuse, losing nothing, until the
+  consumer catches up. See [Backpressure on the ingest path](./observability.md#ingest-backpressure)
+  for that case and for a full stream that holds under a minute of its own traffic.
+- **An event the consumer received but has not acknowledged counts as unread**, including one
+  waiting to be delivered again after a failure. While such an event sits near the front of a full
+  stream, the stream can refuse new events until it is acknowledged or given up on.
+- **Each service also measures the stream as soon as it has itself written about a thousandth of
+  the stream's ceiling** since its last measurement, at most every 100 ms, as well as every
+  5 seconds.
+- A new series, `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`,
+  shows how long that history would last. `JetStreamIngestBackpressureEngaged` fires for this
+  refusal too, and its description now says how to tell the two causes apart.
+- An unread event can still be lost when the services writing to a stream use up, between two of
+  their measurements, more processed history than the stream was seen to discard in the 30 seconds
+  before, or when a stream reaches its ceiling for the first time holding almost no processed
+  history.
+
+No stream is reconfigured and no setting is added.
+
+###### A tenant's ingest ceiling counts readings, and HTTP checks it before the shared backpressure gate {#v0190-ingest-readings}
 
 The per-tenant ingest ceiling now counts **readings** on every device transport. A reading is one
 stored value: one key of a measurement entry, one location or one alert. Before, HTTP and MQTT
@@ -4596,13 +4055,11 @@ store, and the backpressure gate then refused every tenant's events.
 
 At the default, a tenant's own devices are admitted at most 5,000 readings per second, even with a
 backlog draining and both edge services running, which is below the 6,000 per second a default
-high-availability installation was measured to store on the cluster described in
-[what the default allows](../concepts/governance.md#ingest-default). On a smaller cluster, or with
-more than one `event-sources` replica, lower the default.
+high-availability installation was measured to store, with `event-management` at one pod, on the
+cluster described in [what the default allows](../concepts/governance.md#ingest-default). On a
+smaller cluster, or with more than one `event-sources` replica, lower the default.
 
-**Before you upgrade:** find any tenant that sends more than 1000 readings per second, and raise
-the ingest rate on its tier first. Readings over the ceiling are dropped, not delayed: MQTT, LwM2M
-and Sparkplug devices are not told, and an MQTT message dropped this way was already acknowledged.
+To find the tenants that send more than 1000 readings per second before you upgrade:
 
 - For JSON devices over MQTT and HTTP, count the tenant's stored measurements per second over a
   busy hour.
@@ -4613,62 +4070,53 @@ and Sparkplug devices are not told, and an MQTT message dropped this way was alr
   as it can after a reconnect. A site that batches several readings into a message can exceed its
   tenant's ceiling while it catches up.
 
-**After you upgrade:** watch `devicechain_eventsources_total_readings_rate_limited`,
-`devicechain_lwm2mingest_ingest_samples_shed_total` and
-`devicechain_sparkplugingest_ingest_samples_shed_total`. A tenant that sheds there is sending more
-readings than its tier allows. Raise its tier's ingest rate, or have its devices send less.
-
 Going back to the previous release restores per-message charging. No stored data or schema
 changes, and no configuration key is renamed.
 
-#### Detection retries releasing its partition when the broker does not answer {#next-detect-lease-release}
+###### An event carries at most 256 readings, and gateways split larger messages {#v0190-reading-limit}
 
-When the detection engine's pod stops, it releases its partition so that the next pod can start
-detecting at once. Until now, if the broker did not answer that release, for example because a
-broker server was restarting at that moment, the pod gave up after one try. The next pod then
-waited for the partition to expire, up to 30 seconds, and for a further 20-second handover period
-before it detected anything. The pod now retries the release until the broker answers, for as
-long as its shutdown time allows, keeping back enough of it for one more broker timeout and to
-finish stopping. A renewal or a release whose reply was lost
-while a broker server restarted also no longer costs the engine its partition. The retry is done
-by the pod that stops, so it takes effect from the upgrade after the one that installs this
-release: during that upgrade, the pod being replaced still runs the previous release and makes
-one attempt.
+**One event now carries at most 256 readings, on every transport, and the limit is not
+configurable.** A reading is one metric value of a measurement, or one location or alert entry.
+Before, the JSON device event on HTTP and MQTT accepted up to 1000 by default, and an operator
+could raise or lower that.
 
-What still pauses detection:
+To find the devices it affects before you upgrade, set `maxReadingsPerMessage: 256` in the
+event-sources configuration on `v0.18.0` and watch `total_msg_too_many_readings`: every message it
+counts is one this release refuses. Change those devices to send at most 256 readings per message.
 
-- **Without `--ha`, an upgrade that restarts the broker stops detection for the whole restart**,
-  usually about a minute (see [the broker and event store entry](#next-upgrade-infrastructure)).
-  The engine cannot keep its partition through a broker outage longer than 30 seconds, and
-  nothing records that it stopped cleanly, so once the broker is back it waits out the 20-second
-  handover period, plus up to 5 seconds before it retries, and then replays from its last
-  checkpoint as after any restart. The roll of the services that follows then moves the partition
-  to the new pod, which replays once more but does not wait.
-- **A pod that stops while the broker stays unreachable past its shutdown** still leaves its
-  partition to expire, and the next pod waits up to 30 seconds plus the handover period.
+- **HTTP and MQTT:** a message with more than 256 readings is refused whole, never trimmed. HTTP
+  answers `400`, naming the count and the limit. On MQTT the device is not told, because the broker
+  acknowledges before decoding; the refusal is counted on `total_msg_too_many_readings` and the
+  message goes to the failed-decode stream. Messages captured before the upgrade and decoded after
+  it, including any still spooled at an edge agent, are judged on the new limit.
+- **`maxReadingsPerMessage` is retired.** The service starts, logs a warning and ignores it; a
+  value lower than 256 is no longer honoured either. Remove the key.
+- **Sparkplug B:** a message with more than 256 metric values used to become one event. It now
+  becomes consecutive events of at most 256, each value at its own timestamp. Queries that count
+  *events* see more of them; the stored readings are the same. Rules see each event on its own, so
+  a hold-time or absence rule can now fire between two events of one wide message.
+- **LwM2M:** a Notify with more than 256 numeric values used to keep the first 256 and drop the
+  rest. It is now stored as several events, and the tenant's sample budget is charged one event at
+  a time; events it cannot admit are counted on `ingest_samples_shed_total`.
+  `notify_samples_truncated_total` is removed: take it out of any dashboard or alert.
 
-Under `--ha` the broker stays available while its servers restart one at a time. The engine loses
-its partition only if its renewals fail for 30 seconds. Nothing needs doing.
+###### An event already queued with thousands of readings is stored {#v0190-large-events}
 
-#### A service that runs more than one pod keeps its pods on different nodes {#next-own-pods-apart}
+An event with more readings than fit in one database statement (more than about 5,950
+measurements, 5,450 locations or 6,550 alerts, or 9,350 relationship anchors) could never be
+stored. The database driver refused the statement, `event-management` retried the event until
+its deliveries ran out, and then recorded it on the `failed-events` stream as a downstream
+failure rather than as a problem with the event. Before the
+[256-reading limit](#v0190-reading-limit), such an event could come from a Sparkplug message with
+thousands of metrics, or from a JSON transport whose `maxReadingsPerMessage` had been raised above
+its default of 1000, and one may still be waiting in a stream at the upgrade. The event store now
+writes a large event in as many statements as it needs, inside the same transaction, so it is
+stored whole or not at all like any other, and a redelivery of it adds nothing. The same
+retry-then-downstream-failure path was taken by a state-change event whose session id is too large
+for the database's signed 64-bit column; that event is now recorded as invalid on its first
+delivery.
 
-Above one replica, each of the five event-path services (`device-management`, `event-management`,
-`device-state`, `event-sources` and `event-processing`) prefers a node that is not already running
-another of its own pods. A service with [the event-path spread](#next-event-path-requests) no
-longer gets the cluster's default spread, and this gives back the half of it that keeps one
-service's replicas on different nodes; the other half, different zones, is not given back. It is a
-preference the scheduler weighs with the service's others (fewer event-path services on a node and,
-for `device-management`, `event-sources` and `event-management`, no event-store primary), not a
-guarantee.
-
-- Under `--ha`, it applies to `event-management`'s two pods.
-- **If you install the chart yourself**, it applies to any of the five you run with `replicas`
-  above one, and it sits in the pod's anti-affinity, beside the event-store primary preference on
-  the three services that carry one. A
-  service with `eventPathSpread: false` keeps the cluster's default spread instead, which also
-  prefers different zones, and gets no such preference.
-
-#### A reading dated more than 366 days before it arrives is refused {#next-event-age-limit}
+###### A reading dated more than 366 days before it arrives is refused {#v0190-event-age-limit}
 
 A reading's `occurredTime`, on the envelope or on any entry, may now be at most 366 days before the
 platform received it. An older one is refused, never moved to a later time:
@@ -4689,8 +4137,8 @@ platform received it. An older one is refused, never moved to a later time:
 Before, any past time was accepted, and the event store keeps one partition (chunk) per chunk
 interval, a day by default. A device could create a partition for every day back to year 1, and
 every later operation that touches each partition, such as an upgrade that rebuilds a key, slowed
-down with them. [Count the chunks too](#next-time-leading-keys-chunks) says what this release's
-upgrade does about a table that already has too many.
+down with them. [Count the chunks](#v0190-chunk-count) says what this release's upgrade does about
+a table that already has too many.
 
 - A device with no clock should leave `occurredTime` out; the platform then dates the reading when
   it arrives. The epoch, `1970-01-01T00:00:00Z`, is refused.
@@ -4699,44 +4147,359 @@ upgrade does about a table that already has too many.
 - The edge agent's spool has no age limit of its own; see [the spool](./edge-services.md#the-spool).
 - The limit is fixed. There is no setting for it.
 
-#### A full ingest stream also refuses before large events push out unread ones {#next-ingest-history-runway}
+###### An MQTT source on your own broker connects under its own client id, from one pod at a time {#v0190-external-mqtt-client-id}
 
-The ingest refusal added in this release priced every unread event at the stream's average size,
-because the broker reports a stream's total bytes and not those of the events a consumer has not
-read. On a full stream that is the unread share of the event COUNT. A burst of large events over a
-history of small, already-processed ones could therefore fill `inbound-events` or
-`resolved-events` while the unread backlog read about half of the ceiling, and the stream then
-discarded events nobody had processed. Measuring after every publish would not have caught it.
+An event source that reads from an MQTT broker you run connected with the client id `devicechain`,
+whatever instance, source or pod it belonged to. A broker keeps one session per client id and drops
+the older connection when a second one arrives. So whenever two connections used that id, each took
+the session from the other in a loop, and messages that arrived while either side reconnected were
+lost without being counted. That happened with two `event-sources` pods, during every rolling
+update (the new pod starts before the old one stops), with two such sources on one broker, and with
+two instances reading one broker. The default install's own gateway source reads the platform's
+stream and was not affected.
 
-- **The stream also refuses when its processed history is running out.** A full stream discards
-  its oldest events first, so the events already processed that it still holds ahead of the
-  unread ones are what runs out before an unread one is lost. The services that write to the
-  stream now refuse new events when that history would all be discarded within 30 seconds at the
-  rate the stream is discarding it, and accept them again once it would last a minute, or the
-  consumer has read everything. Both are built from sequence numbers the broker reports, so the
-  rule does not depend on how large the events are. A full stream whose consumer keeps pace
-  refuses nothing. Deleting a tenant does not by itself make a stream refuse either, unless its
-  events are the oldest a full stream holds: then the stream can refuse, losing nothing, until the
-  consumer catches up. See [Backpressure on the ingest path](./observability.md#ingest-backpressure)
-  for that case and for a full stream that holds under a minute of its own traffic.
-- **An event the consumer received but has not acknowledged counts as unread**, including one
-  waiting to be delivered again after a failure. While such an event sits near the front of a full
-  stream, the stream can refuse new events until it is acknowledged or given up on.
-- **Each service also measures the stream as soon as it has itself written about a thousandth of
-  the stream's ceiling** since its last measurement, at most every 100 ms, as well as every
-  5 seconds.
-- A new series, `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`,
-  shows how long that history would last. `JetStreamIngestBackpressureEngaged` fires for this
-  refusal too, and its description now says how to tell the two causes apart. See
-  [Backpressure on the ingest path](./observability.md#ingest-backpressure).
-- An unread event can still be lost when the services writing to a stream use up, between two of
-  their measurements, more processed history than the stream was seen to discard in the 30 seconds
-  before, or when a stream reaches its ceiling for the first time holding almost no processed
-  history.
+Each source now connects as `devicechain:<instance>:<source>:<pod>`, and only one pod reads a given
+source at a time. The pods agree on which one through a lease held in the platform's message
+broker. The others connect nothing for that source until it is released. See
+[Transport matrix](../reference/transport-matrix.md#external-mqtt-broker). What to allow on your
+broker first is in [step 12](#v0190-mqtt-client-id), and the one double read during the rollout
+under [During the upgrade](#v0190-during).
 
-Nothing to do at upgrade. No stream is reconfigured and no setting is added.
+- A pod that stops hands the source to another pod within about two seconds. After an abrupt loss
+  (a node failure, a `SIGKILL`, an out-of-memory kill), the source is unread for about 30 seconds
+  plus the time to reconnect. The source remains at-most-once: your broker does not keep what it
+  delivers in either gap.
+- A pod that takes a source over and cannot reach your broker releases it and tries again every
+  15 seconds, instead of stopping the service. A broker that refuses the subscription still stops
+  the service.
+- Running more `event-sources` pods no longer means more readers of an external source. It did not
+  add throughput before either, because the pods took one session from each other. It now adds
+  standbys.
+- New gauge: `devicechain_eventsources_external_mqtt_owner{source}`, 1 on the pod reading the
+  source and 0 elsewhere, and a new counter, `devicechain_eventsources_total_msg_not_owner{source}`,
+  for messages a pod drops because it has just lost the source. New alert:
+  `ExternalMqttSourceNotReadByOnePod` (warning), when a source has been read by no pod, or by more
+  than one, for two minutes. See [An external MQTT source nobody reads](./observability.md#external-mqtt-owner).
 
-#### Running `dcctl bootstrap` again finishes an instance whose first bootstrap failed late {#next-bootstrap-resume}
+##### Resolution {#v0190-resolution}
+
+###### device-management answers repeated lookups from memory {#v0190-local-cache}
+
+- **Each `device-management` replica keeps what it read from its key-value caches in memory for up
+  to five seconds**, and answers repeated lookups for the same device, device type or tenant from
+  there. A cache time to live below five seconds shortens it too.
+- **A change can take up to five seconds longer to reach events other replicas resolve.** A device
+  deleted, or re-created under the same token, can still resolve through its old record on another
+  replica for those seconds, and a rule whose group scope just changed can be evaluated there
+  against the previous scope. An alarm edge for a just-deleted device is still dropped at once on
+  every replica.
+- **Up to 131,072 entries or 24 MiB per replica** for each of the three caches kept per device (a
+  device by token, its tracked relationships, its group memberships); 4,096 entries or 4 MiB for
+  the per-device-type and per-tenant caches. `inMemoryCache.perDeviceCacheEntries` and
+  `inMemoryCache.perDeviceCacheMiB` change the bound; raise the service's memory limit with them.
+- **A device that reports less often than every five seconds is not answered from memory**,
+  however large the cache.
+- **An event's profile, relationships and group-scope lookups are made at the same time**, and so
+  are its group-membership lookups, so an event that misses memory waits for one round trip to
+  NATS instead of three. The database is still read one lookup at a time, so `resolution.workers`
+  still counts connections as before.
+- **New metrics** count lookups answered from memory, entries dropped, size and bounds
+  (`kv_cache_local_max_entries`, `kv_cache_local_max_bytes`); `kv_cache_request_duration_seconds{op="get"}`
+  now counts only the lookups memory could not answer. See
+  [Caches that stop answering](./observability.md#kv-caches).
+
+###### device-management checks a repeated device credential from memory {#v0190-credential-cache}
+
+- **Each replica keeps a device credential it has just verified in memory for up to five seconds**,
+  and checks the device's next events against that copy instead of reading the database. The copy
+  is checked exactly as the stored credential is: an `MQTT_BASIC` password is still compared on
+  every event, and an expiry still takes effect at its time. A credential that failed to verify is
+  never kept.
+- **A revocation can now take up to five seconds on a replica that missed the news.** Disabling,
+  deleting, re-pointing or otherwise changing a credential, and replacing, editing or deleting its
+  device, drop the copy on the replica that made the change before it returns, and tell the other
+  replicas to drop theirs. If that message is lost (a replica reconnecting to NATS, or replicas
+  still on the previous release during the upgrade), that replica's copy expires within five
+  seconds. Until now a revocation took effect on the next event on every replica. See
+  [How quickly a revocation takes effect](../guides/device-credentials.md#revocation-timing).
+- **MQTT connects still read the database every time**, so a revoked credential cannot open a new
+  connection on any replica.
+- **At most 65,536 credentials or 16 MiB per replica**, a fixed bound; at the defaults the
+  service's in-memory caches hold at most 96 MiB rather than 80. New metrics count checks answered
+  from the copy, credentials dropped, its size, and the drop messages sent and received.
+
+##### Storage {#v0190-storage}
+
+###### The event store's keys lead with time, and sixteen indexes are gone {#v0190-event-store-keys}
+
+The keys that stop an event being stored twice now start with the tenant and the event's time,
+instead of the tenant and a digest of the event, so a new key lands next to the previous one and
+the database rewrites far fewer index pages. Sixteen indexes are removed: twelve that repeated
+another index or were read by no query, and the tenant-and-time indexes of base events,
+measurements, locations and alerts, which the new keys now answer. Each stored row updates fewer
+indexes than in `v0.18.0`: a base event row two instead of five (three instead of six with an
+alternate id), a measurement row three instead of five, a location or alert row one instead of
+four, a relationship-anchor row two instead of four, and a presence-change row one instead of four.
+A measurement event with one reading and no anchors updates five indexes instead of ten.
+
+If `event-management` refused to start because a table has more than 500 chunks, the batched
+`drop_chunks` procedure its log points to is under [Count the chunks](#v0190-chunk-count).
+
+- Events are still stored once, and every read `event-management` serves is still served by an
+  index.
+- **A device's event list does more work on recent data.** The total shown with the list, and a
+  list filtered by event type, now visit every one of the device's rows that is not yet compressed
+  (the last week, by default), including the rows of a device with the same token in another
+  tenant. When the store holds few distinct device tokens (in our tests, 40 rather than 100), the
+  first page for a device that has been quiet while others kept sending can take noticeably longer.
+- **SQL and BI access.** A query on a tenant's events, readings, locations, alerts or anchors that
+  filters on time alone is served by an index. A time-only query on
+  `analytics.state_change_events` reads all of your tenant's rows in each uncompressed chunk it
+  touches; add `device_token` to use an index. To join `analytics.event_anchors` to
+  `analytics.events`, join on both `event_id` and `occurred_time`. See
+  [Practical notes](../guides/sql-and-bi-access.md#practical-notes).
+
+###### Batches are written in fewer statements {#v0190-batch-writes}
+
+- **`event-management` writes each batch with one statement per table for each tenant in it**,
+  inside the same transaction, instead of several per event. What is stored is unchanged, an event
+  is still acknowledged only after its batch commits, and a redelivered event adds nothing. When
+  the database refuses a row in a statement that carries several events, the batch is written again
+  one event at a time to find it; `persist_batch_fallbacks_total` counts that. Connect and
+  disconnect events are still written one at a time. See
+  [Event persistence](./observability.md#event-persistence).
+- **`device-state` writes the state of every device that already has one in a single statement for
+  each tenant in the batch.** A device seen for the first time is still created on its own, and
+  `updatedAt` still advances whenever its state is written.
+- **Every pooled database connection now stays open between uses**, up to the pool size; before,
+  only half the pool did, and a service using more than half reconnected for every query. A
+  connection is still closed an hour after it was opened. The database can show more idle
+  connections from each service after a busy period; at the default configuration the
+  [connection budget](./bootstrap.md#connection-budget) covers it, but if you run a service at
+  `replicas` above 1 or raised its `maxOpenConnections`, check the instance's connection limit.
+  `maxIdleConnections` is still honoured when set.
+
+###### New pipeline defaults {#v0190-pipeline-defaults}
+
+| Setting | `v0.18.0` | `v0.19.0` |
+| --- | --- | --- |
+| `event-management` `persistence.writers` | 5 | 10 |
+| `event-management` `persistence.maxBatch` | 32 | 64 |
+| `event-management` `persistence.lingerMillis` | 0 | 10 |
+| `device-state` `projection.writers` | 5 | 10 |
+| `event-processing` CPU limit | 500m | 1 core |
+| `event-management` pods under `--ha` (not `--compact --ha`) | 1 | 2 |
+
+An installation that sets any of these keeps its value; `persistence.lingerMillis: 0` still means
+no wait. A writer that finds fewer events than a full batch now waits up to 10 milliseconds for
+more, so below a few hundred events per second per pod each event is committed up to 10
+milliseconds later than before and `persist_duration_seconds` rises by about that much; under a
+backlog nothing changes. In the release benchmark at 3,000 events per second, transactions per
+stored event fell by 37% (from 0.126 to 0.080), the median time to store an event rose by about 5
+milliseconds, and the slowest 1% fell by 18%. That comparison also changed the event store's keys
+and its archive compression, the services' CPU requests and their placement, `device-state`'s writers and detection's CPU limit, and the NATS servers' requests and memory limit, so it does not isolate the wait. In a five-minute run at 6,800 events
+per second offered, the path that commits one event at a time took 4.8% of `event-management`'s
+CPU, at 0.050 transactions per event, against 24% in the previous benchmark, on the build before
+the wait and on different service nodes. `--compact` installations get the same defaults except
+the second pod; their requests do not change.
+
+**Two `event-management` pods under `--ha`.** On a three-node services pool, one node also runs the
+NATS server that leads the incoming-event stream. In the release benchmark the scheduler put the
+single `event-management` pod there with `device-state`; that node ran at 94 to 95% CPU, and with
+one pod, storage fell to 6,592 events a second at 6,800 offered, the first stage to fall behind. A
+second pod lets storing use another node's CPU. The figure under [Performance](#v0190-performance)
+was measured with one pod, and has not been measured again with two. The pods prefer different nodes,
+but that is a preference, not a guarantee. Each fills its own batches, so the event store commits
+about twice as many transactions per event; its node stayed below 70% CPU. If you install the chart
+yourself, its default is still one replica: set `functionalAreas.event-management.replicas: 2`,
+and on an event store built from this repository's OpenTofu set `event_management_replicas = 2`,
+which reserves the second pod's connections.
+
+##### Sizing and placement {#v0190-sizing}
+
+###### The event-path services request what they use, and spread across nodes {#v0190-service-sizing}
+
+The five services that handle every event request the CPU they were measured to use at 6,000
+events per second (values under [Make room](#v0190-room)); before, at 100m each, they requested far
+less than that, and the scheduler, which places pods by their requests, put the busiest together.
+`event-sources` and `device-state` may now use up to 2 cores, like `device-management` and
+`event-management`. The five prefer different nodes (on three nodes, usually no more than two to a
+node); `functionalAreas.<service>.eventPathSpread: false` turns that off for one service.
+`device-management`, `event-management` and `event-sources` also prefer a node not running the
+event store's primary. A preference applies only when a pod is scheduled: after a failover, a pod
+already running on the new primary's node stays until it is next rescheduled.
+
+A new instance's event store gets a 32Gi volume instead of 8Gi. Its NATS servers request 500m of
+CPU and 768Mi of memory and are limited to 2Gi; before, they requested nothing, which made them the
+first pods evicted when a node ran short of memory. The 2Gi limit was sized from steady ingest; a
+server catching up after a restart was not measured, so if one is `OOMKilled` during the upgrade,
+raise `nats_memory_limit` in the instance's `terraform.tfvars` and run `dcctl upgrade` again. See
+[Service sizing](./bootstrap.md#service-sizing) and [The message broker](./bootstrap.md#broker-sizing).
+
+###### A service that runs more than one pod keeps its pods on different nodes {#v0190-own-pods-apart}
+
+Above one replica, each of the five event-path services (`device-management`, `event-management`,
+`device-state`, `event-sources` and `event-processing`) prefers a node that is not already running
+another of its own pods. A service with [the event-path spread](#v0190-service-sizing) no
+longer gets the cluster's default spread, and this gives back the half of it that keeps one
+service's replicas on different nodes; the other half, different zones, is not given back. It is a
+preference the scheduler weighs with the service's others (fewer event-path services on a node and,
+for `device-management`, `event-sources` and `event-management`, no event-store primary), not a
+guarantee.
+
+- Under `--ha`, it applies to `event-management`'s two pods.
+- **If you install the chart yourself**, it applies to any of the five you run with `replicas`
+  above one, and it sits in the pod's anti-affinity, beside the event-store primary preference on
+  the three services that carry one. A service with `eventPathSpread: false` keeps the cluster's
+  default spread instead, which also prefers different zones, and gets no such preference.
+
+###### Your own chart values {#v0190-chart-values}
+
+If you install the chart yourself:
+
+- A top-level `resources.requests.cpu` no longer reaches `device-management`, `event-management`,
+  `device-state`, `event-sources` or `event-processing`: their measured request wins. Set theirs
+  under `functionalAreas.<service>.resources.requests`, or set `useMeasuredRequests: false` to apply
+  the top-level requests to every service again. With `useMeasuredRequests: false`, a top-level
+  request above 1 core now fails the render for `event-processing`, because it is above that
+  service's own limit.
+- A top-level `resources.limits.cpu` above 2 cores now lowers `event-sources` and `device-state` to
+  2, and no longer reaches `event-processing`, which is always 1 core unless set under
+  `functionalAreas.event-processing.resources.limits`.
+- A service's own CPU limit below its measured request is now refused, naming `measuredRequests`.
+- The chart's top-level values and each service's block under `functionalAreas` now refuse a key
+  the chart does not read, so a misspelled key fails the render.
+- `eventPathSpread` is on for the five services; setting it on another service spreads it with them.
+- A service you run with `replicas` above one prefers nodes not running another of its own pods
+  ([Own pods apart](#v0190-own-pods-apart)).
+
+###### The database primaries prefer different nodes {#v0190-primary-spread}
+
+Each database prefers a node that is not running another DeviceChain database's primary. In
+testing on three 8-vCPU nodes, the node running both primaries was at 94 to 98% CPU while the other
+two were at 45 to 51%. It is a preference: a smaller cluster still schedules every database
+instance. It acts when a database pod is scheduled, so a failover or switchover can still put both
+primaries on one node; see [Where the database primaries run](./bootstrap.md#ha-database-primaries).
+A quota that limits cross-namespace placement can refuse these pods: see [step 5](#v0190-quota).
+
+###### The databases can run on nodes you choose {#v0190-database-placement}
+
+`dcctl install` takes `--database-node-selector` and `--database-toleration`. They place the shared
+relational store and every instance's event store on labelled nodes, including nodes tainted to
+keep other workloads off. `dcctl bootstrap` has no such flags: every instance follows the install.
+Install refuses, before it installs anything, a placement with fewer usable nodes than a database
+has instances, and each bootstrap checks again. NATS, the services and the backup object store are
+not placed. Adding a placement to a cluster that already runs instances is refused; with none
+running it moves the relational store, whose volumes may not follow. See
+[Database placement](./bootstrap.md#database-placement).
+
+##### Backups {#v0190-backups}
+
+###### `dcctl destroy` removes an instance's in-cluster backups {#v0190-destroy-backups}
+
+Once the instance's namespace is gone, destroy deletes everything under the path its event store
+was archiving to in the cluster's own object store, and checks the path is empty. It reads and
+prints that path before it changes anything. Backups in an object store you supplied are never
+deleted: destroy prints where they are. Pass `--keep-backups` to keep the in-cluster backups too,
+and do pass it before you rebuild an instance from its own backups with `--restore-tsdb-from`,
+because a destroy without it deletes the archive that restore reads. If the store cannot be
+reached, destroy still finishes and says what it left. An archive destroy did not write in this
+run (one left by an earlier release, or kept with `--keep-backups` and then restored from) is
+listed, not removed; [What happens to the instance's backups](./bootstrap.md#destroy-backups) shows
+how to remove it. Destroy no longer prints OpenTofu's **Changes to Outputs** list, whose values were
+the configuration's defaults rather than the instance's.
+
+###### Backups that stop shipping now warn first {#v0190-backup-alerts}
+
+`PostgresWALArchiveBacklog` fires when a database holds write-ahead log it has not shipped,
+including when the archiver is slow or hung. `BackupDestinationFillingFast` and
+`DatabaseVolumeFillingFast` fire on how fast the backup store or an event-store volume is filling.
+See [Backups that stop shipping](./observability.md#backup-archiving).
+
+###### The backup store is sized so the event store fills first {#v0190-backup-store-size}
+
+A new cluster's in-cluster backup store is **160 GiB** instead of 20 GiB, and **20 GiB** instead of
+8 GiB under `--compact` when TLS is kept. At 20 GiB, sustained ingest filled the store after 12 to
+16 million events, well before a 32 GiB event store; archiving then stopped and the event store's
+primary filled its own volume. The sizing assumes up to about 1.9 KB of archive per event for both
+databases, measured before this release compressed the write-ahead log, re-keyed the event store
+and archived with zstd, so it errs large: in the release benchmark the event store's archive alone
+took about 0.47 KB per stored event. **An existing cluster keeps its store's size**: the volume is
+sized only when it is created, and `backup_object_store_storage` on an existing store does nothing.
+To give an existing cluster the new size, grow the volume on a StorageClass that allows expansion;
+see [Backup store size](./bootstrap.md#backup-store-size).
+
+###### Each database keeps its own recovery window: 30 days for core data, 7 for event data {#v0190-backup-retention}
+
+`backup_retention` is replaced by `backup_retention_rdb` in the cluster configuration (default
+`30d`) and `backup_retention_tsdb` in the instance configuration (default `7d`). The relational
+database, which holds tenants, users, devices, rules, secrets and last-known state, can now be
+recovered to any point in the last 30 days instead of 7, and a deleted tenant's core data stays
+restorable for 30 days ([What is deliberately kept](./tenant-deletion.md#retained)). A window is a
+whole number and `d`, `w` or `m`; anything else is refused before the apply. Where a retention
+window bounds the event store, the sustained ingest rate that fills a 20 GiB store falls from about
+19 to about 13 events per second, and the 160 GiB store's from about 150 to about 100. Those rates
+come from the per-event cost measured before this release's log compression, new keys and zstd,
+so on that count they err low. They also use the relational database's share of the log measured
+once, about 14% for a small fleet reporting fast; for larger or slower fleets it is likely higher,
+and if the relational log were all of it, the 160 GiB figure would be about 35. To keep 7 days, set
+`backup_retention_rdb = "7d"` if you apply the OpenTofu configuration yourself; `dcctl install` has
+no option for it. See [Recovery windows](./bootstrap.md#backup-retention).
+
+###### Database base backups can be volume snapshots {#v0190-snapshot-backups}
+
+On a cluster whose storage driver takes CSI volume snapshots, `dcctl install
+--backup-snapshot-class <class>` takes each database's daily base backup as a volume snapshot
+instead of a full copy in the backup store. Nothing changes unless you pass it. See
+[Volume-snapshot base backups](./bootstrap.md#snapshot-base-backups).
+
+- Log archiving is unchanged, and a full base backup still goes to the backup store every Sunday at
+  04:00. Every restore reads the store, not the snapshots, so it can replay up to a week of log.
+- The snapshots are kept at your cloud provider and outlive the cluster.
+  [Volume-snapshot base backups](./bootstrap.md#snapshot-base-backups) says what to check before
+  and after deleting one.
+- The class must exist, have `deletionPolicy: Delete`, and belong to the driver that provisions the
+  database volumes; install and each bootstrap check all three first. GKE and AKS include a
+  snapshot controller; on EKS install the snapshot controller add-on first.
+- The DeviceChain operator prunes old snapshots every ten minutes, keeping every snapshot inside
+  the recovery window and the newest one before it. Its ClusterRole gains, in every namespace:
+  `get` on namespaces; `get`, `list` and `delete` on CloudNativePG Backups; `get`, `list` and
+  `patch` on CloudNativePG ScheduledBackups; and `create` and `patch` on `events.k8s.io` Events. It
+  acts only in namespaces DeviceChain created, on the schedules its own configuration renders, and
+  records each pass as the `devicechain.io/snapshot-retention-checked-at` annotation.
+- The backup store keeps up to a week more log for each database, so it fills sooner: with the
+  default windows and store, at about 60 events per second of sustained ingest rather than about
+  100 (from the same measurement made before compression, so conservative).
+- `PostgresNoRecentSnapshotBackup`, `DatabaseSnapshotPruningStalled` and
+  `DatabaseSnapshotBackupsUnobserved` are new, and `PostgresNoRecentBaseBackup` waits 8.5 days
+  instead of 36 hours on such a cluster.
+- The setting belongs to the cluster; changing it is refused while instances run on it.
+
+###### The write-ahead log is compressed, and archived with zstd {#v0190-wal}
+
+New and upgraded event stores compress the page images in their write-ahead log
+(`wal_compression = lz4`), which reloads without a restart. Both databases now archive their log
+with zstd instead of gzip; base backups stay gzip. Restores and backup expiry read both, by each
+segment's name (`.gz` or `.zst`), so an archive that changes compression part-way restores as
+before; the release's upgrade test restored such an archive and got every event back. In the release
+benchmark at 3,000 events per second, this release's key change and zstd archiving together cut the
+event store's log per stored event by 22% and its archiver's CPU by 53%, against the development
+build before them. See [Event store volume](./bootstrap.md#event-store-volume).
+
+##### Operations {#v0190-operations}
+
+###### `dcctl upgrade` applies an instance's message broker and event store settings {#v0190-upgrade-infrastructure}
+
+`dcctl upgrade` now applies the instance's NATS servers and event store from the OpenTofu
+configuration this release ships, before it moves the services. Until now only `dcctl bootstrap`
+applied them, so an upgraded instance kept its old broker and event store settings without saying
+so. This upgrade gives an instance created by `v0.18.0` the NATS requests and limit, the
+compressed write-ahead log, zstd archiving and the primaries' placement preference; on such an
+instance the event store's instances can restart once for the placement preference. Volume sizes
+are kept. See [What an upgrade applies to the infrastructure](#upgrade-infrastructure). The
+instance's OpenTofu configuration now declares that it needs OpenTofu or Terraform 1.9 or later.
+
+###### Running `dcctl bootstrap` again finishes an instance whose first bootstrap failed late {#v0190-bootstrap-resume}
 
 A bootstrap that failed after it had written the instance's configuration document (while
 installing the chart, or while waiting for the services to become ready) left an instance that
@@ -4754,59 +4517,92 @@ before.
 - If a run ends successfully but cannot remove the record (the write is refused, or the cluster
   lock was taken over first), it exits with an error that says to run the same command again,
   rather than reporting success over an instance a later bootstrap would run over.
-- Nothing to do at upgrade. An instance whose first bootstrap was started by an earlier release
-  has no record, so it is treated as running, exactly as before; the refusal names
-  `dcctl upgrade` and `dcctl destroy`. See
-  [Finishing a bootstrap that failed partway](./disaster-recovery.md#resuming-a-bootstrap).
+- An instance whose first bootstrap was started by an earlier release has no record, so it is
+  treated as running, exactly as before; the refusal names `dcctl upgrade` and `dcctl destroy`.
+  See [Finishing a bootstrap that failed partway](./disaster-recovery.md#resuming-a-bootstrap).
 - Upgrade every copy of `dcctl` you use before running it against an instance this release
   built. An earlier `dcctl` does not remove the record, so a later upgrade with it that fails can
   leave the record in force over a running instance, and a plain `dcctl bootstrap` would then
   run over that instance.
 
-#### An MQTT source on your own broker connects under its own client id, from one pod at a time {#next-external-mqtt-client-id}
+###### Detection retries releasing its partition when the broker does not answer {#v0190-detect-lease-release}
 
-An event source that reads from an MQTT broker you run connected with the client id `devicechain`,
-whatever instance, source or pod it belonged to. A broker keeps one session per client id and drops
-the older connection when a second one arrives. So whenever two connections used that id, each took
-the session from the other in a loop, and messages that arrived while either side reconnected were
-lost without being counted. That happened with two `event-sources` pods, during every rolling
-update (the new pod starts before the old one stops), with two such sources on one broker, and with
-two instances reading one broker. The default install's own gateway source reads the platform's
-stream and was not affected.
+When the detection engine's pod stops, it releases its partition so that the next pod can start
+detecting at once. Until now, if the broker did not answer that release, for example because a
+broker server was restarting at that moment, the pod gave up after one try. The next pod then
+waited for the partition to expire, up to 30 seconds, and for a further 20-second handover period
+before it detected anything. The pod now retries the release until the broker answers, for as
+long as its shutdown time allows, keeping back enough of it for one more broker timeout and to
+finish stopping. A renewal or a release whose reply was lost while a broker server restarted also
+no longer costs the engine its partition. The retry is done by the pod that stops, so it takes
+effect from the upgrade after the one that installs this release: during that upgrade, the pod
+being replaced still runs the previous release and makes one attempt.
 
-Each source now connects as `devicechain:<instance>:<source>:<pod>`, and only one pod reads a given
-source at a time. The pods agree on which one through a lease held in the platform's message
-broker. The others connect nothing for that source until it is released. See
-[Transport matrix](../reference/transport-matrix.md#external-mqtt-broker).
+What still pauses detection:
 
-- **Before you upgrade, if your broker's ACL, allowlist or client-id rule names `devicechain`,**
-  allow ids that begin with `devicechain:`. The id is also longer than 23 characters, the shortest
-  limit MQTT requires a broker to accept. A broker that refuses the new id makes the new pod fail
-  to start with the broker's reason in its log, and the upgrade stalls with the old pods still
-  running and reading the source as before.
-- **While the upgrade rolls, a source can be read twice.** Until the last pod of the previous
-  release stops, it still reads the source under the old id, beside the new pod that holds the
-  source, and each stores what it receives. Messages arriving in that window can be stored twice.
-  This happens once, and the same happens on a rollback. To avoid it, pause the publishers on
-  your broker for the length of the rollout. Leases a rolled-back release leaves behind expire on
-  their own within 30 seconds.
-- A pod that stops hands the source to another pod within about two seconds. After an abrupt loss
-  (a node failure, a `SIGKILL`, an out-of-memory kill), the source is unread for about 30 seconds
-  plus the time to reconnect. The source remains at-most-once: your broker does not keep what it
-  delivers in either gap.
-- A pod that takes a source over and cannot reach your broker releases it and tries again every
-  15 seconds, instead of stopping the service. A broker that refuses the subscription still stops
-  the service.
-- Running more `event-sources` pods no longer means more readers of an external source. It did not
-  add throughput before either, because the pods took one session from each other. It now adds
-  standbys.
-- New gauge: `devicechain_eventsources_external_mqtt_owner{source}`, 1 on the pod reading the
-  source and 0 elsewhere, and a new counter, `devicechain_eventsources_total_msg_not_owner{source}`,
-  for messages a pod drops because it has just lost the source. New alert:
-  `ExternalMqttSourceNotReadByOnePod` (warning), when a source has been read by no pod, or by more
-  than one, for two minutes.
+- **Without `--ha`, an upgrade that restarts the broker stops detection for the whole restart**,
+  usually about a minute (see [the broker and event store entry](#v0190-upgrade-infrastructure)).
+  The engine cannot keep its partition through a broker outage longer than 30 seconds, and
+  nothing records that it stopped cleanly, so once the broker is back it waits out the 20-second
+  handover period, plus up to 5 seconds before it retries, and then replays from its last
+  checkpoint as after any restart. The roll of the services that follows then moves the partition
+  to the new pod, which replays once more but does not wait.
+- **A pod that stops while the broker stays unreachable past its shutdown** still leaves its
+  partition to expire, and the next pod waits up to 30 seconds plus the handover period.
 
-#### The load-test reports count refused events {#next-loadtest-refusals}
+Under `--ha` the broker stays available while its servers restart one at a time. The engine loses
+its partition only if its renewals fail for 30 seconds.
+
+###### Alerts {#v0190-alerts}
+
+- **New:** `JetStreamUnreadBacklogNearFull` (warning) and `JetStreamIngestBackpressureEngaged`
+  (critical) for [backpressure](#v0190-backpressure), which also fires for
+  [the history refusal](#v0190-ingest-history-runway); `JetStreamDurableUnreadNearFull` (warning),
+  when a consumer has not read more than 80% of what its stream can hold, for 5 minutes; the three
+  [backup alerts](#v0190-backup-alerts); the three [snapshot alerts](#v0190-snapshot-backups); and
+  `ExternalMqttSourceNotReadByOnePod` (warning) for
+  [an MQTT source on your own broker](#v0190-external-mqtt-client-id).
+- **Changed:** `JetStreamStreamNearFull` is now `info`, fires only for streams that hold records for
+  an operator (`failed-decode`, `failed-events`, `connector-dispatch.dead`, `max-deliveries`, and
+  `dead-letters` while `user-management` does not report reading it), and counts a stream's message
+  ceiling as well as its bytes. The default Alertmanager configuration of kube-prometheus-stack does
+  not deliver `info` alerts. See [Messages a consumer never read](./observability.md#unread-loss).
+- **New series:** `devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}` and
+  `devicechain_<area>_jetstream_stream_sink{stream}`, plus those named in the items above, among
+  them, by their full names:
+  - `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`
+    ([the history refusal](#v0190-ingest-history-runway));
+  - `devicechain_eventsources_total_msg_reading_limited` and
+    `devicechain_eventsources_total_readings_rate_limited`
+    ([Readings, not messages](#v0190-ingest-readings));
+  - `devicechain_sparkplugingest_samples_too_old_dropped_total`,
+    `devicechain_lwm2mingest_telemetry_too_old_dropped_total` and
+    `devicechain_devicemanagement_resolve_event_time_too_old_total`
+    ([Old readings](#v0190-event-age-limit));
+  - `devicechain_eventsources_external_mqtt_owner{source}` and
+    `devicechain_eventsources_total_msg_not_owner{source}`
+    ([MQTT client id](#v0190-external-mqtt-client-id)).
+
+  **Removed:** `devicechain_lwm2mingest_notify_samples_truncated_total`.
+
+###### Any service can serve Go runtime profiles, off by default {#v0190-profiling}
+
+`functionalAreas.<service>.profiler.enabled: true` serves CPU, heap, allocation, goroutine and
+execution-trace profiles for that service, on a listener of its own on the pod's loopback address,
+reached with `kubectl port-forward`. It is never a container port, Service port or ingress route.
+Only that service's pods restart. See [Profiling a service](./observability.md#profiling).
+
+###### A Google Kubernetes Engine configuration (new) {#v0190-gke}
+
+`deploy/gke` is new: an OpenTofu configuration that creates a GKE cluster for DeviceChain, with a
+tainted `database` pool of three 4-vCPU, 16 GB nodes and a `services` pool of three 4-vCPU, 8 GB
+nodes, each booting from a standard persistent disk. Install with `--database-node-selector` and
+`--database-toleration` to place the databases on the `database` pool. A default `--ha` install with
+one instance fits a new Google Cloud project's SSD quota; for more instances, or a cluster built
+another way on any cloud, check the disk quota first: [Prerequisites](./bootstrap.md#prerequisites)
+gives the volume sizes and the guide in `deploy/gke` the quota to request.
+
+###### The load-test reports count refused events {#v0190-loadtest-refusals}
 
 The simulator and the load-test harness now count the two ways the ingress refuses an event
 separately:
@@ -4834,6 +4630,18 @@ What changes:
   could also pass a run in which the floor refused nothing.
 
 Nothing to do at upgrade.
+
+#### Performance {#v0190-performance}
+
+On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service
+nodes, a default HA install accepted 6,000 events a second for 10 minutes, twice, and stored every
+accepted event exactly once. That was measured on the release candidate with `event-management` at
+one pod, before `--ha` began running it as two.
+
+Resolution, storage and live device state each kept pace over those 10 minutes, and the backlog
+had drained within 5 seconds of the load stopping. Detection, which that check does not cover, kept
+up at 6,000 (peak backlog under 1,000), and fell behind from 7,600 offered. No sustained rate above
+6,000 is claimed. See [Measured throughput](./bootstrap.md#measured-throughput).
 
 ### The one-time durable-ingest cutover
 

@@ -10,7 +10,7 @@ más un chart de Helm. **No** necesita compilar nada para ejecutarlo: descargue 
 instale el chart y actualice in situ sin tiempo de inactividad.
 
 :::warning Hay versiones a las que no se puede actualizar
-Hasta ahora, tres puntos de la historia exigen recrear la instancia en lugar de actualizarla:
+Hasta ahora, cuatro puntos de la historia pueden exigir recrear la instancia en lugar de actualizarla:
 
 - La **`v0.9.0`** reemplazó la cadena de migraciones de cada servicio por una única línea base
   congelada, por lo que una base de datos `v0.8.x` falla con `already exists` al encontrarla.
@@ -22,6 +22,11 @@ Hasta ahora, tres puntos de la historia exigen recrear la instancia en lugar de 
   ninguna declaración de lo que es la instancia: el registro que una actualización lee ahora
   para saber qué desplegar. Consulte
   [Instancias creadas por la v0.16.0 y anteriores](#pre-declaration-recreate).
+- La **`v0.19.0`, para una instancia cuyo almacén de eventos guarda más de 4 000 000 de filas aún
+  sin comprimir**, o una tabla de más de 500 fragmentos cuyos eventos más antiguos no se pueden
+  eliminar: su primer arranque reconstruye las claves del almacén de eventos sobre esas filas y se
+  niega por encima de esos límites. Consulte
+  [Comprueba el número de filas](#v0190-row-count).
 
 Si está en cualquiera de ellos, lea la sección correspondiente más abajo antes de hacer nada más.
 :::
@@ -83,6 +88,9 @@ En concreto, antes de la v1.0.0 debe esperar que una versión pueda:
   tiene nada que ver con el esquema: la versión posterior a la `v0.16.0` lee un registro de lo
   que es una instancia que las versiones anteriores nunca escribieron, y se niega en lugar de
   inventárselo
+- **negarse a una actualización in situ por encima de un límite de tamaño de los datos**: la
+  `v0.19.0` rechaza un almacén de eventos con más de 4 000 000 de filas aún sin comprimir, o una
+  tabla de más de 500 fragmentos, y lo indica al principio de sus notas
 
 La propiedad de "actualizar in situ sin tiempo de inactividad" descrita arriba describe la *mecánica* de una
 actualización progresiva. No es una promesa de que sus llamadas a la API existentes conserven el mismo significado
@@ -233,10 +241,13 @@ correspondiéndole a usted reproducirlas, como hasta ahora.
 
 Actualizar consiste en **dos comandos** —uno para el clúster y luego uno por cada instancia
 que haya en él—, y el chart y los servicios están diseñados para hacer avanzar a los clientes sin
-perder tráfico. Hay cuatro excepciones, todas documentadas más abajo: la transición a la
+perder tráfico. Hay cinco excepciones, todas documentadas más abajo: la transición a la
 ingesta duradera, que sigue siendo una actualización corriente pero tiene un efecto secundario
-visible, y la **`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una
-versión anterior, a las que no se puede actualizar en absoluto**. Consulte las notas de la
+visible; la **`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una
+versión anterior, a las que no se puede actualizar en absoluto**; y la **`v0.19.0` para una
+instancia cuyo almacén de eventos guarda más de 4 000 000 de filas aún sin comprimir**, o una
+tabla de más de 500 fragmentos cuyos eventos más antiguos no se pueden eliminar
+([Comprueba el número de filas](#v0190-row-count)). Consulte las notas de la
 versión a la que va a migrar antes de ejecutarlo:
 
 ```bash
@@ -396,8 +407,7 @@ Los avisos y rechazos de la actualización indican en qué caso está cada valor
 Lo que ve una instancia en marcha:
 
 - **Los servidores NATS se reinician cuando cambian sus ajustes.** Con `--ha` se reinician de
-  uno en uno. Cada uno debe volver, y ponerse al día con los demás, antes de que se detenga el
-  siguiente, así que siempre atienden dos de tres. Sin `--ha` se reinicia el único servidor y el
+  uno en uno; cada uno está Ready antes de que se detenga el siguiente. Sin `--ha` se reinicia el único servidor y el
   bróker no está disponible mientras tanto, normalmente alrededor de un minuto. Los servicios y
   los dispositivos se reconectan solos; las publicaciones hechas entretanto se rechazan. Si el
   nodo no tiene sitio para las nuevas solicitudes del servidor, este queda en `Pending`: con
@@ -560,7 +570,10 @@ Decía que la compactación describía «una única versión, no una nueva polí
 regla es: añadir migraciones es lo normal y, antes de la `v1.0.0`, una versión todavía puede exigir
 recrear la instancia cuando un defecto no se puede corregir de otra forma. **Toda versión que lo
 exija lo indicará en sus notas y aquí.** Consulte ambas antes de actualizar, en lugar de deducirlo
-del número de versión.
+del número de versión. La `v0.19.0` es la más reciente, por el tamaño de los datos y no por su
+forma: una instancia cuyo almacén de eventos guarda más de 4 000 000 de filas aún sin comprimir,
+o una tabla de más de 500 fragmentos cuyos eventos más antiguos no se pueden eliminar
+([Comprueba el número de filas](#v0190-row-count)).
 :::
 
 ### El cambio de clave de eventos de la v0.10.0 {#v0100-event-key}
@@ -3758,805 +3771,96 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
-### Próxima versión {#next-upgrade}
-
-Lo que cambia la versión posterior a `v0.18.0`, reunido a medida que llega.
-
-#### `dcctl destroy` elimina los respaldos internos de una instancia, y nuevas alertas avisan antes de que el archivado detenga una base de datos
-
-**`dcctl destroy` ahora elimina los respaldos de una instancia del almacén de objetos propio del
-clúster.** Cuando el namespace de la instancia ya no existe, destroy borra todo lo que hay bajo la
-ruta a la que archivaba su almacén de eventos, y comprueba que la ruta ha quedado vacía. Lee esa
-ruta antes de cambiar nada, y la muestra. Los respaldos en un almacén de objetos que tú
-proporcionaste no se borran nunca: destroy indica dónde están. Pasa `--keep-backups` para
-conservar también los respaldos internos, y pásalo sin falta antes de reconstruir una instancia a
-partir de sus propios respaldos en el mismo clúster con `--restore-tsdb-from`, porque un destroy
-sin esa opción borra el archivo que lee esa restauración. Si no se puede acceder al almacén de
-objetos, destroy termina igualmente e indica qué dejó. Los archivos que dejaron destroys
-ejecutados con una versión anterior siguen donde están: después de eliminar los respaldos de la
-propia instancia, destroy enumera los que tienen el mismo nombre de instancia, y [Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups)
-explica cómo eliminarlos.
-
-**Nuevas alertas avisan antes de que el archivado detenga una base de datos.**
-`PostgresWALArchiveBacklog` se dispara cuando una base de datos retiene log de escritura
-anticipada sin enviar, también cuando el archivador es lento o está bloqueado en lugar de fallar.
-`BackupDestinationFillingFast` y `DatabaseVolumeFillingFast` se disparan según lo rápido que se
-llena el almacén de respaldos o un volumen del almacén de eventos, no solo por un umbral fijo.
-También se corrige la guía de dimensionamiento de respaldos: con ingesta sostenida, el log
-archivado cuesta más por evento que los datos, así que el anterior almacén interno predeterminado
-de 20 GiB se llenaba en horas, no en días; consulta la nota sobre el almacén de respaldos más
-abajo. Consulta [Respaldos que dejan de enviarse](./observability.md#backup-archiving).
-
-#### Un stream de ingesta lleno rechaza eventos nuevos en lugar de descartar los no leídos
-
-Cuando un consumidor se atrasaba tanto que su cola sin leer llenaba `inbound-events` o
-`resolved-events`, el stream descartaba sus eventos más antiguos para hacer sitio, y eran eventos
-que nadie había procesado todavía. Al dispositivo ya se le había dicho que se aceptaron.
-
-Ahora, cuando la cola sin leer de `device-management` en `inbound-events`, o la de
-`event-management` en `resolved-events`, alcanza el 90% de lo que cabe en el stream, la plataforma
-deja de aceptar eventos nuevos hasta que la cola baja del 80%. Los dos streams conservan su semana
-de eventos ya procesados, y ese historial no cuenta para el 90%: solo cuentan los eventos sin
-leer. Un stream lleno también rechaza antes de descartar ese historial tan deprisa que alcance
-eventos sin leer; consulta [más abajo](#next-ingest-history-runway).
-
-- La ingesta **HTTP** responde `503` con `Retry-After: 10` mientras rechaza. Reintenta ante un
-  `503`. Un `503` sin `Retry-After` sigue significando que la publicación en sí falló.
-- Los dispositivos **MQTT** ya recibieron el acuse del bróker. Sus mensajes esperan en el stream de
-  captura hasta que se reanuda la ingesta.
-- Las lecturas de **Sparkplug y LwM2M**, y los mensajes de un bróker MQTT externo, se descartan y se
-  cuentan, porque esos protocolos no dan a la plataforma forma de hacer que el dispositivo
-  reintente. Las transiciones de conexión y desconexión se siguen aceptando, y nada limita
-  cuántas: una flota que se reconecta en bucle aún puede llevar el stream a su techo, donde descarta
-  sus eventos más antiguos como antes.
-- El rechazo afecta a **todos los inquilinos**, porque los streams son compartidos. Un
-  `device-state` o un `event-processing` lentos no lo provocan.
-- Se añaden dos alertas: `JetStreamUnreadBacklogNearFull` (warning) y
-  `JetStreamIngestBackpressureEngaged` (critical). Consulta
-  [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure).
-- El simulador y el arnés de carga cuentan un `503` con `Retry-After` como rechazo, no como
-  fallo. Consulta [la entrada sobre los informes de las pruebas de carga](#next-loadtest-refusals)
-  para ver cómo lo informan.
-
-No hay nada que hacer al actualizar. Ningún stream se reconfigura, y un servicio que siga en la
-versión anterior conserva su comportamiento anterior hasta que se actualice.
-
-#### device-management responde las búsquedas repetidas desde memoria {#next-local-cache}
-
-No hay que hacer nada en la actualización.
-
-- **Cada réplica de `device-management` guarda en memoria lo que leyó de sus cachés de
-  clave-valor durante hasta cinco segundos** y responde desde ahí las búsquedas repetidas del
-  mismo dispositivo, tipo de dispositivo o tenant, en lugar de preguntar a NATS. Vuelve a
-  preguntar a NATS cuando lo que guarda tiene cinco segundos, o antes si la copia en memoria está
-  llena. Un tiempo de vida de caché menor de cinco segundos también acorta la copia en memoria.
-- **Un cambio puede tardar hasta cinco segundos más en llegar a los eventos que resuelven las
-  demás réplicas**, además de lo que ya permitía el tiempo de vida de la caché. Un dispositivo
-  borrado, o vuelto a crear con el mismo token, puede seguir resolviéndose a través de su registro
-  anterior en otra réplica durante esos segundos, y una regla cuyo alcance de grupo acaba de
-  cambiar puede evaluarse allí con el alcance anterior. Los eventos que presentan una credencial
-  de dispositivo se comprueban como describe
-  [el apartado de la caché de credenciales](#next-credential-cache), y un flanco de alarma
-  para un dispositivo recién borrado se sigue descartando de inmediato en todas las réplicas.
-- **Cuatro métricas nuevas** cuentan las búsquedas respondidas desde memoria, las entradas
-  descartadas de ella y su tamaño. `kv_cache_request_duration_seconds{op="get"}` ahora cuenta solo
-  las búsquedas que la memoria no pudo responder. Consulte [Cachés que dejan de
-  responder](./observability.md#kv-caches).
-
-#### Los servicios se dimensionan según el rendimiento medido {#next-service-sizing}
-
-`event-sources` y `device-state` pueden usar ahora hasta 2 núcleos de CPU, como
-`device-management` y `event-management`. Con 500m, las respuestas más lentas de `event-sources`
-limitaban el ritmo al que podían enviar los dispositivos, y `device-state` dejaba que la vista en
-vivo de los dispositivos se retrasara minutos a ritmos que el resto de la instalación soportaba.
-Los cuatro servicios también **solicitan** CPU dimensionada a partir de mediciones en lugar de
-100m cada uno; [la nota sobre las solicitudes de la ruta de eventos](#next-event-path-requests)
-indica los valores. `device-management`, `event-management` y `event-sources` prefieren un nodo
-que no ejecute el primario del almacén de eventos. El almacén de eventos de una instancia nueva
-recibe un volumen de 32Gi en lugar de 8Gi. Consulta
-[Dimensionamiento de los servicios](./bootstrap.md#service-sizing), que también recoge el
-rendimiento medido.
-
-**Antes de actualizar una instancia instalada sin `--compact`:**
-
-- **Comprueba que hay espacio para las solicitudes mayores**, como explica
-  [la nota sobre las solicitudes de la ruta de eventos](#next-event-path-requests).
-- **Un `ResourceQuota` o `LimitRange` en el namespace de la instancia** puede rechazar el nuevo
-  límite de 2 núcleos de `event-sources` y `device-state`, o las solicitudes mayores, como podía
-  hacerlo con `device-management` y `event-management` en v0.18.0.
-
-Las instancias instaladas con `--compact` conservan sus solicitudes de 25m y 64Mi.
-
-**Si instalas el chart tú mismo, con tus propios valores:**
-
-- Un `resources.requests.cpu` de nivel superior ya no llega a `device-management`,
-  `event-management`, `device-state` ni `event-sources`: su solicitud medida prevalece. Define las
-  suyas en `functionalAreas.<servicio>.resources.requests`, o establece
-  `useMeasuredRequests: false` para que las solicitudes de nivel superior vuelvan a aplicarse a
-  todos los servicios.
-- Un `resources.limits.cpu` de nivel superior por encima de 2 núcleos ahora baja
-  `event-sources` y `device-state` a 2, como ya hacía con los otros dos. Define los suyos en
-  `functionalAreas.<servicio>.resources.limits`.
-- Un límite de CPU propio de un servicio por debajo de su solicitud medida (por ejemplo `100m` en
-  `event-sources`) antes se generaba y ahora se rechaza, nombrando `measuredRequests`. Aumenta el
-  límite, define la solicitud propia del servicio o establece `useMeasuredRequests: false`.
-- Los valores de nivel superior del chart y el bloque de un servicio en `functionalAreas` ahora
-  rechazan una clave que el chart no lee, así que una clave mal escrita hace fallar la generación
-  en lugar de ignorarse.
-
-**El volumen del almacén de eventos:** nada cambia en una instancia existente; solo las
-instancias creadas por esta versión reciben 32Gi. Para ampliar una existente, consulta
-[Volumen del almacén de eventos](./bootstrap.md#event-store-volume). El almacén de respaldos de
-un clúster nuevo se dimensiona ahora para que se llene primero el almacén de eventos; consulta la
-nota sobre el almacén de respaldos más abajo.
-
-La actualización cambia las plantillas de pod de `device-management`, `event-management` y
-`event-sources`, así que la actualización gradual planifica sus pods nuevos con la nueva
-preferencia de ubicación. Pero una preferencia solo se aplica cuando se planifica un pod: si el
-primario del almacén de eventos cambia después a otro nodo, un pod que ya se ejecuta allí se queda
-hasta que se vuelva a planificar.
-
-#### event-management almacena los eventos con 10 escritores y lotes de hasta 64 {#next-persistence-defaults}
-
-Con los demás servicios por evento dimensionados para seguir el ritmo, almacenar los eventos pasó a
-ser el primer límite de una instalación predeterminada: 5 escritores que confirmaban hasta 32
-eventos cada uno llenaban todos los lotes desde unos 4400 eventos por segundo y no almacenaban más
-de unos 4200. `persistence.writers` pasa a valer `10` por defecto y `persistence.maxBatch` `64`.
-Eran los ajustes de una ejecución ajustada que siguió el ritmo hasta unos 6000 eventos por segundo
-con los límites de CPU de `event-management` y de los demás servicios por evento aumentados a 4
-núcleos. `event-management` usó como mucho unos 1,7 de ellos, y no se midió con su límite por
-defecto de 2, así que no se afirma un ritmo sostenido para una instalación predeterminada. Esa
-ejecución también fijó `projection.maxBatch` de `device-state` en `64` y `projection.lingerMillis`
-en `25`, que una instalación predeterminada no tiene. Sus lotes quedaron por debajo de 32 de media,
-así que no muestra que el lote más grande ayude. Ver [Rendimiento
-medido](./bootstrap.md#measured-throughput) para los ajustes completos.
-
-**Antes de actualizar:** si fijó `tsdbConfiguration.maxOpenConnections` de `event-management` en
-`10` o menos y no fijó `persistence.writers`, el nuevo pod de `event-management` no arranca, y su
-error nombra `persistence.writers` y el tamaño del pool. La actualización progresiva mantiene el
-pod anterior en marcha almacenando eventos, y `dcctl upgrade` falla tras esperar, con la instancia
-actualizada a medias. Fije `persistence.writers` por debajo de su pool (su valor por defecto
-anterior era `5`), o quite el ajuste del pool para usar el valor por defecto de 20, y vuelva a
-ejecutar la actualización. Los pools de 11 a 19 arrancan, y registran al arrancar que más de la
-mitad del pool se da a los escritores; fije `persistence.writers` en la mitad de su pool para
-evitarlo.
-
-- Una instalación que fija `persistence.writers` o `persistence.maxBatch` conserva sus valores.
-- A ritmos en los que un escritor encuentra un evento cada vez, ahora espera hasta
-  `persistence.lingerMillis` (10 milisegundos por defecto) antes de confirmarlo; consulte
-  [el apartado de los valores del flujo de eventos](#next-pipeline-defaults).
-- Con cola acumulada, confirman a la vez hasta 10 escritores en lugar de 5, del mismo pool de 20.
-  El techo del pool no cambia, así que las conexiones que el almacén de eventos reserva para
-  `event-management` siguen cubriéndolo.
-- `maxBatch` sigue aceptando de `1` a `64`.
-- Las instalaciones con `--compact` reciben los mismos valores por defecto; sus solicitudes,
-  límites y volúmenes no cambian.
-- Todas las mediciones en que se basan los nuevos valores se hicieron con un almacén de eventos
-  replicado (`--ha`), en el que cada confirmación espera a una réplica. Una instalación con una
-  sola instancia del almacén de eventos no se ha medido con ellos.
-
-#### Los avisos de flujo se basan en los mensajes sin leer, no en el historial {#next-unread-alerts}
-
-`JetStreamStreamNearFull` se disparaba para cualquier flujo por encima del 80% de su límite de bytes.
-Los flujos conservan una semana de mensajes, casi todos ya procesados, así que en una instancia con
-carga se disparaba sin que nada estuviera en riesgo.
-
-- **Nueva: `JetStreamDurableUnreadNearFull` (warning).** Se dispara cuando un consumidor lleva
-  5 minutos sin haber leído más del 80% de lo que cabe en su flujo. Es lo que ocurre antes de que un
-  flujo descarte mensajes que un consumidor nunca leyó. Los mensajes ya leídos no cuentan. Cubre a
-  todos los consumidores salvo los dos que frenan la ingesta, que cubre
-  `JetStreamUnreadBacklogNearFull`.
-- **Cambia: `JetStreamStreamNearFull` pasa a `info`, y solo se dispara para un flujo que guarda
-  registros para un operador:** `failed-decode`, `failed-events`, `connector-dispatch.dead`,
-  `max-deliveries`, y `dead-letters` mientras `user-management`, que guarda sus cartas muertas, no
-  informe de que lo lee. Nada procesa lo que contienen estos flujos, así que cerca de su límite
-  están a punto de descartar registros que nadie ha mirado. Ahora también tiene en cuenta el límite
-  de mensajes de un flujo, no solo el de bytes. Si enruta o silencia alertas por nombre o por
-  severidad, revise esas reglas: la configuración predeterminada de Alertmanager de
-  kube-prometheus-stack no entrega las alertas `info`.
-- Series nuevas: `devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}` y
-  `devicechain_<area>_jetstream_stream_sink{stream}`.
-
-No hay nada que hacer en la actualización. Consulte
-[Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
-
-#### device-management guarda en memoria las búsquedas de más dispositivos, y hace a la vez las búsquedas de un evento {#next-per-device-cache}
-
-No hay que hacer nada en la actualización.
-
-- **La copia en memoria descrita [más arriba](#next-local-cache) guarda hasta 131.072 entradas, o
-  24 MiB, por réplica para cada una de las tres cachés de búsqueda que se guardan por
-  dispositivo** (un dispositivo por su token, sus relaciones seguidas y sus pertenencias a
-  grupos), así que una réplica que ve una flota grande en cinco segundos puede responder sus
-  búsquedas desde memoria. Las cachés que se guardan por tipo de dispositivo y por inquilino
-  guardan 4096 entradas o 4 MiB. Configure `inMemoryCache.perDeviceCacheEntries`
-  e `inMemoryCache.perDeviceCacheMiB` en la configuración de `device-management` para cambiar el
-  límite, y suba con él el límite de memoria del servicio. Una versión anterior a esta no arranca
-  con ninguno de los dos ajustes, así que quítelos antes de volver a una.
-- **Un dispositivo que informa con menos frecuencia que cada cinco segundos sigue sin responderse
-  desde memoria**, por grande que sea la caché: un valor se guarda cinco segundos desde que se
-  leyó, y cada evento de ese dispositivo sigue leyendo el bucket de clave-valor una vez. Consulte
-  [Cachés que dejan de responder](./observability.md#kv-caches) para ver cuánto cuesta y qué
-  subir.
-- **Las búsquedas de perfil, relaciones y alcance de grupos de un evento se hacen a la vez**, y
-  también sus búsquedas de pertenencia a grupos, en lugar de una tras otra. Un evento que no
-  encuentra en memoria ninguna de las tres espera una sola ida y vuelta a NATS en lugar de tres.
-  La base de datos se sigue leyendo una consulta tras otra, para lo que las cachés no pudieron
-  responder, así que `resolution.workers` sigue contando las conexiones como antes, y una medida
-  que no pasa la validación sigue sin leer sus relaciones de la base de datos.
-- Dos métricas más, `kv_cache_local_max_entries` y `kv_cache_local_max_bytes`, dan el límite de
-  cada caché. `kv_cache_local_bytes` cuenta el tamaño completo en memoria de cada entrada.
-
-#### El almacén de respaldos se dimensiona para que el almacén de eventos se llene primero {#next-backup-store-size}
-
-El almacén de respaldos interno de un clúster nuevo tiene **160 GiB** en lugar de 20 GiB, y
-**20 GiB** en lugar de 8 GiB con `--compact` cuando se mantiene TLS. Es disco que el clúster
-reclama ahora en su StorageClass predeterminada. Con 20 GiB, una ingesta sostenida llenaba el
-almacén tras entre 12 y 16 millones de eventos, mucho antes de que se llene un almacén de eventos de
-32 GiB. Entonces el archivado se detenía, y el primario del almacén de eventos llenaba su propio
-volumen con log de escritura anticipada que no podía enviar. Medido en Google Kubernetes Engine,
-el archivo cuesta hasta unos 1,9 KB por evento para las dos bases de datos, no el
-aproximadamente 1 KB publicado antes. El nuevo tamaño guarda el archivo de un almacén de eventos
-predeterminado lleno con más de un tercio del almacén libre. Consulta
-[Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size), incluido cuándo no
-basta con el de una instancia: varias instancias con ingesta, un almacén de eventos que tarda más
-de aproximadamente un día en llenarse o no se llena nunca, o un almacén de eventos ampliado.
-
-**Los clústeres existentes conservan el tamaño de su almacén.** El volumen del almacén se
-dimensiona ahora solo al crearlo: `dcctl install`, el primer paso de toda actualización, deja
-intacto el volumen de un almacén existente, y lo mismo hace un `tofu apply` directo. Sin eso, el
-nuevo valor predeterminado pediría a una StorageClass sin expansión de volúmenes que ampliara el
-volumen, lo que rechaza, y a un almacén que hubieras ampliado a mano ya se le pedía reducirse al
-valor predeterminado, lo que rechaza todo aprovisionador. Establecer `backup_object_store_storage`
-en un almacén existente ya no hace nada. Para dar el nuevo tamaño a un clúster existente, amplía
-tú el volumen, en una StorageClass que lo permita, como muestra esa página. En kind el tamaño no
-se aplica, así que no hace falta nada.
-
-#### Cada base de datos conserva su propia ventana de recuperación: 30 días para los datos de núcleo, 7 para los de eventos {#next-backup-retention}
-
-El ajuste `backup_retention`, que cada configuración de OpenTofu declaraba con el mismo nombre, se
-sustituye por uno por base de datos: `backup_retention_rdb` en la configuración del clúster, por
-defecto `30d`, y `backup_retention_tsdb` en la de la instancia, por defecto `7d`. La base de datos
-relacional guarda inquilinos, usuarios, dispositivos, reglas, secretos y el último estado conocido
-de cada dispositivo, y ahora se puede recuperar a cualquier punto de los últimos 30 días en lugar
-de 7. El almacén de eventos conserva 7 días, como antes. Una ventana tiene que ser un número entero
-y una unidad, `d` para días, `w` para semanas o `m` para meses, y cualquier otra forma se rechaza
-antes de empezar la aplicación. Consulta [Ventanas de recuperación](./bootstrap.md#backup-retention).
-
-Los datos de núcleo de un inquilino eliminado también siguen siendo restaurables desde los
-respaldos durante 30 días en lugar de 7, hasta que salen de la ventana. Consulta
-[Qué se conserva deliberadamente](./tenant-deletion.md#retained).
-
-**Al actualizar**, `dcctl install` aplica la nueva ventana a la base de datos relacional. El cambio
-afecta a la configuración de respaldos de esa base de datos; la especificación del propio clúster
-de base de datos no cambia. Los respaldos ya tomados se conservan. Nada sale de una ventana de 30
-días hasta que tiene 30 días, así que durante unas tres semanas después de la actualización la
-parte de la base de datos relacional en el almacén de respaldos crece: hacia unas cuatro veces el
-log que conserva hoy, más unos 23 respaldos base nocturnos más. Después se estabiliza.
-
-**Antes de actualizar, comprueba el margen del almacén.** Un clúster existente conserva el tamaño
-de su almacén (consulta el apartado anterior), así que un almacén creado antes de esta versión
-sigue teniendo 20 GiB salvo que lo hayas ampliado, y lo mismo el almacén con `--compact`. Cuando el
-almacén de eventos no se llena nunca porque lo limita una ventana de retención, el ritmo de ingesta
-sostenido que llena un almacén de 20 GiB baja de unos 19 a unos 13 eventos por segundo, y el del
-almacén predeterminado de 160 GiB de unos 150 a unos 100. Esas cifras usan la parte del log de la
-base de datos relacional medida una sola vez, aproximadamente un 14 % para una flota pequeña que
-informa con frecuencia. No está medida para flotas más grandes o más lentas, donde probablemente es
-mayor; si el log relacional fuera todo el archivo, la cifra de 160 GiB sería de unos 35. Si el
-almacén tiene poco margen, amplía primero su volumen, como muestra
-[Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size). Si aplicas tú mismo
-la configuración de OpenTofu, puedes conservar en su lugar la ventana anterior con
-`backup_retention_rdb = "7d"`; `dcctl install` no tiene ninguna opción para ello.
-
-**Si configuraste `backup_retention`, cámbiale el nombre**: `backup_retention_rdb` en la
-configuración del clúster, `backup_retention_tsdb` en la de la instancia. Cómo falla el nombre
-anterior depende de dónde esté. Un `-var backup_retention=…` se rechaza. Una línea
-`backup_retention` en un archivo `.tfvars` solo produce un aviso, y el almacén recibe entonces su
-nuevo valor predeterminado en lugar del tuyo: 30 días para la base de datos relacional, 7 para el
-almacén de eventos. Una variable de entorno `TF_VAR_backup_retention` se ignora sin ningún aviso.
-
-#### Cualquier servicio puede servir perfiles del runtime de Go, desactivado por defecto {#next-profiling}
-
-Cada servicio puede servir ahora perfiles del runtime de Go (CPU, memoria, asignaciones,
-goroutines y la traza de ejecución), para que puedas medir en qué gasta su tiempo un servicio en
-lugar de deducirlo. Está desactivado salvo que lo actives para un servicio con
-`functionalAreas.<service>.profiler.enabled: true`. Solo se reinician los pods de ese servicio.
-Los perfiles se sirven en un listener propio, por defecto en la dirección de loopback del pod, así
-que se accede a ellos con `kubectl port-forward`. Ese listener nunca es un puerto del contenedor,
-un puerto del Service ni una ruta del ingress. Nada cambia en una instancia que no lo configure, y
-no hay que hacer nada. Consulta [Perfilar un servicio](./observability.md#profiling).
-
-#### Los respaldos base de las bases de datos pueden ser instantáneas de volumen {#next-snapshot-backups}
-
-En un clúster cuyo controlador de almacenamiento toma instantáneas de volumen CSI, `dcctl install
---backup-snapshot-class <class>` toma el respaldo base diario de cada base de datos como una
-instantánea de volumen en lugar de una copia completa en el almacén de respaldos. No cambia nada
-si no pasas la opción. Consulta
-[Respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups).
-
-- El archivado del log no cambia, y un respaldo base completo sigue yendo al almacén de respaldos
-  una vez por semana, el domingo a las 04:00. El almacén solo poda el log archivado en relación con
-  los respaldos base que guarda, y toda restauración lee el almacén.
-- La clase tiene que existir, tener `deletionPolicy: Delete` y pertenecer al controlador que
-  aprovisiona los volúmenes de las bases de datos. `dcctl install` comprueba las tres cosas antes
-  de cambiar nada, y lo mismo hace cada `dcctl bootstrap`. Google Kubernetes Engine y Azure AKS
-  incluyen un controlador de instantáneas; en Amazon EKS, instala antes el complemento del
-  controlador de instantáneas.
-- CloudNativePG no borra las instantáneas antiguas. Ahora lo hace el operador de DeviceChain, cada
-  diez minutos: conserva todas las instantáneas dentro de la ventana de recuperación de la base de
-  datos y la más reciente anterior a ella. Para ello, el ClusterRole del operador gana, en todos
-  los namespaces: `get` sobre namespaces; `get`, `list` y `delete` sobre los Backups de
-  CloudNativePG; `get`, `list` y `patch` sobre los ScheduledBackups de CloudNativePG, para
-  registrar cada pasada; y `create` y `patch` sobre los Events de `events.k8s.io`, para informar
-  de lo que ha podado. Solo actúa en namespaces que creó DeviceChain, sobre los ScheduledBackups
-  que genera su propia configuración. Cada pasada registra su hora en la programación, en la
-  anotación `devicechain.io/snapshot-retention-checked-at`, así que
-  `kubectl get scheduledbackup -A -o yaml` muestra cuándo se podó por última vez.
-- Una restauración (`--restore-rdb-from`, `--restore-tsdb-from`) sigue leyendo el almacén de
-  respaldos, no las instantáneas: el respaldo base semanal más reciente y el log desde entonces,
-  así que puede reproducir hasta una semana de log. Las instantáneas de una instancia se borran con
-  ella.
-- Las instantáneas se guardan en tu proveedor de nube y sobreviven al clúster.
-  [Respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups) explica
-  qué comprobar antes y después de borrar uno.
-- El almacén de respaldos guarda hasta una semana más de log de cada base de datos, así que se
-  llena antes donde el log es la mayor parte de lo que guarda: con las ventanas y el almacén
-  predeterminados, a unos 60 eventos por segundo de ingesta sostenida en lugar de unos 100.
-- `PostgresNoRecentSnapshotBackup`, `DatabaseSnapshotPruningStalled` y
-  `DatabaseSnapshotBackupsUnobserved` son nuevas, y en un clúster así `PostgresNoRecentBaseBackup`
-  espera 8,5 días en lugar de 36 horas. El kube-state-metrics de la pila de monitorización lee
-  ahora también los Backups y ScheduledBackups de CloudNativePG, que esas alertas necesitan.
-- El ajuste pertenece al clúster: todas las instancias lo siguen, y cambiarlo se rechaza mientras
-  haya instancias en el clúster.
-
-**Vuelve a ejecutar `dcctl install` con esta versión antes de cualquier bootstrap, upgrade o
-destroy.** El registro de instalación tiene un campo nuevo, y este `dcctl` rechaza un registro
-escrito por uno anterior: `dcctl bootstrap` y `dcctl upgrade` se detienen y lo dicen, y
-`dcctl destroy` sigue eliminando la instancia pero deja su base de datos y su login en la base de
-datos relacional compartida y sus respaldos en el almacén interno, y dice que lo hizo. Volver a
-ejecutar install ya es el primer paso de toda actualización.
-
-#### Un evento lleva como máximo 256 lecturas, y las pasarelas dividen los mensajes mayores
-
-**Un evento lleva ahora como máximo 256 lecturas, en todos los transportes, y el límite no es
-configurable.** Una lectura es un valor de métrica de una medición, o una entrada de ubicación o
-de alerta. Antes de esta versión, el evento JSON de dispositivo en HTTP y MQTT admitía hasta 1000
-lecturas por defecto, y un operador podía subir ese valor sin límite superior, o bajarlo.
-
-**Antes de actualizar,** puedes aplicar el límite nuevo por adelantado: establece
-`maxReadingsPerMessage: 256` en la configuración de event-sources de tu versión actual y vigila
-`total_msg_too_many_readings`. Cada mensaje que cuente es uno que esta versión rechaza, así que
-cambia el firmware de esos dispositivos para que envíen como máximo 256 lecturas por mensaje.
-
-- **HTTP y MQTT:** un mensaje con más de 256 lecturas se rechaza entero, nunca se recorta. HTTP
-  responde `400`, indicando el número de lecturas y el límite. En MQTT no se avisa al
-  dispositivo, porque el broker confirma antes de decodificar. El rechazo se cuenta en
-  `total_msg_too_many_readings` y el mensaje va al flujo de decodificación fallida. Un
-  dispositivo que agrupe más de 256 lecturas debe repartirlas entre varios mensajes. Los
-  mensajes capturados antes de la actualización y decodificados después, incluidos los que sigan
-  en la cola de un agente de borde, se evalúan con el límite nuevo.
-- **El ajuste `maxReadingsPerMessage` queda retirado.** Si tu configuración de event-sources aún
-  lo incluye, el servicio arranca, registra un aviso y lo ignora. Un valor que hubieras fijado por
-  debajo de 256 tampoco se respeta ya: el límite es 256. Elimina la clave.
-- **Sparkplug B:** un mensaje con más de 256 valores de métrica se convertía en un solo evento.
-  Ahora se convierte en eventos consecutivos de como máximo 256, cada valor con su propia marca de
-  tiempo. Las consultas que cuentan *eventos* verán más en los mensajes Sparkplug anchos; las
-  lecturas almacenadas son las mismas. Las reglas ven cada evento por separado, así que una regla
-  de tiempo de retención o de ausencia puede dispararse ahora entre dos eventos de un mismo
-  mensaje ancho.
-- **LwM2M:** un Notify con más de 256 valores numéricos conservaba los 256 primeros y descartaba
-  el resto. Ahora se almacena como varios eventos, y el presupuesto de muestras del inquilino se
-  cobra evento a evento: un Notify mayor de lo que el presupuesto puede admitir de una vez conserva
-  los eventos que admite, y el resto se cuenta en `ingest_samples_shed_total`. Se elimina la
-  métrica `notify_samples_truncated_total`. Quítala de cualquier panel o alerta.
-
-#### Se almacena un evento que lleva miles de lecturas {#next-large-events}
-
-Un evento con más lecturas de las que caben en una sola sentencia de la base de datos (más de
-unas 5.950 mediciones, 5.450 ubicaciones o 6.550 alertas, o 9.350 anclajes de relación) no se
-podía almacenar nunca. El controlador de la base de datos rechazaba la sentencia,
-`event-management` reintentaba el evento hasta agotar sus entregas y después lo registraba en el
-stream `failed-events` como un fallo posterior, no como un problema del propio evento. Antes del
-límite de 256 lecturas descrito arriba, un evento así podía venir de un mensaje Sparkplug con
-miles de métricas, o de un transporte JSON cuyo `maxReadingsPerMessage` se hubiera subido por
-encima de su valor predeterminado de 1000. Ahora el
-almacén de eventos escribe un evento grande en tantas sentencias como necesite, dentro de la misma
-transacción, así que se almacena entero o no se almacena, como cualquier otro, y una reentrega
-suya no añade nada. El mismo camino de reintentos y fallo posterior lo seguía un evento de cambio
-de estado cuyo identificador de sesión es demasiado grande para la columna de 64 bits con signo de
-la base de datos; ese evento se registra ahora como inválido en su primera entrega. No hay que
-hacer nada.
-
-#### El almacén de eventos actualiza menos índices por cada evento {#next-event-store-indexes}
-
-`event-management` elimina doce índices del almacén de eventos. Cada uno repetía lo que otro
-índice ya ofrecía a las mismas consultas, o ninguna consulta de la plataforma lo leía. Cada fila
-almacenada actualiza ahora menos índices: una fila de evento base, tres en lugar de cinco (cuatro
-en lugar de seis si lleva un id alternativo); una fila de medición, cuatro en lugar de cinco; una
-fila de ubicación, de alerta o de anclaje de relación, dos en lugar de cuatro; y una fila de
-cambio de presencia, uno en lugar de cuatro. Un evento de medición con una lectura y sin anclajes,
-por ejemplo, actualiza siete índices en lugar de diez.
-[Las claves del almacén de eventos empiezan por el tiempo](#next-time-leading-keys), también en esta
-versión, reduce de nuevo estas cifras y da los totales.
-
-- Toda lectura que sirve `event-management` sigue usando un índice. Los índices que impiden
-  almacenar un evento dos veces los reconstruye [ese cambio](#next-time-leading-keys).
-- **La lista de eventos de un dispositivo trabaja más sobre los datos recientes.** El total que
-  acompaña a la lista de eventos de un dispositivo, y una lista de los eventos de un dispositivo
-  filtrada por tipo de evento, recorren ahora todas las filas del dispositivo que aún no están
-  comprimidas (la última semana de datos, por defecto) en lugar de solo las filas que cuentan o
-  devuelven. Eso incluye las filas de un dispositivo con el mismo token en cualquier otro
-  inquilino, así que un dispositivo muy activo llamado `gateway-1` en un inquilino también
-  ralentiza el total de `gateway-1` en otro. Los datos comprimidos se leen por dispositivo e
-  inquilino, como antes. Donde más se nota es en un
-  dispositivo que envía eventos a un ritmo alto.
-- **Acceso por SQL y BI.** Una consulta sobre `analytics.state_change_events` que filtra solo por
-  tiempo lee ahora todas las filas de tu inquilino en cada fragmento aún sin comprimir que toca el
-  rango (un día de datos por fragmento, por defecto), en lugar de solo las filas del rango. Si
-  añades un filtro por dispositivo (`device_token`), usa un índice como antes. Las demás vistas no
-  cambian.
-- **Durante la actualización.** La primera vez que arranca el nuevo `event-management`, elimina
-  los índices uno a uno. Eliminar uno necesita un momento en que ninguna otra transacción use esa
-  tabla, y mientras espera, las lecturas y escrituras de esa tabla esperan con él. Cada intento
-  desiste como máximo a los 5 segundos, y una tabla ocupada se reintenta cada 2 segundos durante
-  un minuto como máximo. Si una consulta larga, el borrado de un inquilino o el propio trabajo de
-  compresión o de retención de la base de datos la mantiene ocupada más tiempo, `event-management` se detiene con un error que nombra la tabla y el índice, y
-  continúa desde ahí al reiniciarse; mientras tanto, el `event-management` anterior sigue
-  almacenando eventos. El error incluye además una consulta que lista las sesiones que retienen la
-  tabla o cualquiera de sus fragmentos. Si se sigue deteniendo, busca consultas SQL o de BI de larga duración sobre
-  el almacén de eventos. Eliminar un índice también bloquea cada fragmento de su tabla; si la base
-  de datos se queda sin espacio para bloqueos, el error lo indica y nombra el ajuste que hay que
-  aumentar. Una tabla con más de 500 fragmentos se rechaza antes de eliminar ningún índice:
-  consulta [Cuenta también los fragmentos](#next-time-leading-keys-chunks).
-- Volver a `v0.18.0` deja los índices eliminados, y `v0.18.0` funciona sin ellos.
-
-#### Las primarias de las bases de datos prefieren nodos distintos {#next-primary-spread}
-
-Cada base de datos prefiere ahora un nodo que no ejecute la primaria de otra base de datos de
-DeviceChain. En las pruebas, con tres nodos de 8 vCPU, las primarias relacional y del almacén de
-eventos habían quedado en el mismo nodo, que funcionó al 94-98 % de CPU mientras los otros dos
-estaban al 45-51 %.
-
-- Es una preferencia, no un requisito: un clúster con menos nodos sigue planificando todas las
-  instancias de base de datos.
-- Actúa cuando se planifica un pod de base de datos, lo que en la práctica significa cuando se crea
-  el almacén de eventos de una instancia. Una conmutación por error, un traspaso, o el traspaso con
-  el que termina una actualización progresiva, todavía pueden dejar las dos primarias en un mismo
-  nodo. [Dónde se ejecutan las primarias de las bases de
-  datos](./bootstrap.md#ha-database-primaries) explica cómo comprobarlo y cómo mover una.
-
-**Antes de actualizar, comprueba si hay una cuota sobre la ubicación entre espacios de nombres.**
-Los pods de base de datos llevan ahora una preferencia de ubicación que tiene en cuenta otros
-espacios de nombres. Un `ResourceQuota` con el ámbito `CrossNamespacePodAffinity` rechaza esos
-pods, sea preferencia o no, en un espacio de nombres donde los prohíba: las instancias reiniciadas
-de la base de datos relacional en el espacio de nombres del clúster (`dc-system` por defecto), y
-el almacén de eventos de una instancia nueva en su propio espacio de nombres. Nada de lo que
-instala DeviceChain crea uno. Para listar los que existan:
-
-```bash
-kubectl get resourcequota -A \
-  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
-```
-
-Una lista vacía no lo zanja. La configuración de admisión de cuotas del servidor de API puede
-nombrar `CrossNamespacePodAffinity` en `limitedResources`, y entonces esos pods se rechazan en todo
-espacio de nombres que **no** tenga una cuota con ese ámbito que los admita. Esa configuración vive
-en el plano de control, no en un objeto de `kubectl`, así que pregunta a quien administre el clúster
-si está activa; si lo está, da a `dc-system` y al espacio de nombres de cada instancia una cuota con
-ese ámbito antes de actualizar.
-
-**En la actualización.** La base de datos relacional adopta la nueva configuración la próxima vez
-que ejecutes `dcctl install` con esta versión, y sus instancias se reinician una vez. Con `--ha`
-primero se reinician las réplicas en espera y después el papel de primaria se traspasa a una de
-ellas, que está en otro nodo. Si las dos primarias compartían nodo antes de la actualización, ese
-traspaso las separa; si no, puede dejarlas en un mismo nodo, así que comprueba dónde están
-después. Una instalación de una sola instancia reinicia su única instancia en su sitio, y la base
-de datos relacional no está disponible hasta que termina de reiniciarse; las escrituras hechas
-mientras tanto se reintentan.
-
-`dcctl upgrade` con esta versión da al almacén de eventos de una instancia existente la
-preferencia y la etiqueta que buscan las otras bases de datos, y reinicia una vez sus instancias
-para hacerlo: con `--ha`, primero las réplicas en espera y después un cambio de primaria. Como
-`dcctl install` se ejecuta antes, la base de datos relacional ya lleva su etiqueta cuando se
-reinicia el almacén de eventos. Comprueba después dónde están las dos primarias, como se indica
-arriba. Los pods del almacén de eventos llevan la misma preferencia entre espacios de nombres, así
-que la comprobación de cuotas de arriba se aplica al espacio de nombres de cada instancia antes de
-actualizarla: un pod que la cuota rechaza deja el almacén de eventos de esa instancia con una
-instancia menos o, sin `--ha`, caído. Ejecuta también `dcctl install` antes de crear una instancia
-nueva, para que los pods de la base de datos relacional lleven la etiqueta que busca el nuevo
-almacén de eventos.
-
-#### Los servicios mantienen abiertas sus conexiones a la base de datos entre usos {#next-warm-pool}
-
-El pool de conexiones de un servicio solo mantenía abiertas entre usos la mitad de sus
-conexiones: 10 de las 20 predeterminadas. Cada vez que había más de la mitad del pool en uso a la
-vez, cada conexión por encima de esa mitad se cerraba al liberarse y se volvía a abrir para la
-siguiente consulta, lo que cuesta al servicio y a la base de datos un nuevo inicio de sesión cada
-vez. `device-management` llega a ese punto cuando se sube `resolution.workers` por encima de 10,
-porque sus resolvedores comparten el pool con su API GraphQL, sus comprobaciones de conexión MQTT
-y su consumidor de alarmas. En un perfil de CPU con 16 resolvedores sobre el pool predeterminado,
-a unos 5.200 eventos por segundo en tres nodos de 8 vCPU, volver a iniciar sesión se llevaba el
-14–15% de la CPU de `device-management`, frente al 0,2% con los 10 resolvedores predeterminados.
-
-- **Cada conexión que abre un pool sigue abierta entre usos**, hasta el tamaño del pool. Una
-  conexión se sigue cerrando una hora después de abrirse, como antes, y se vuelve a abrir cuando
-  se necesita. Subir `resolution.workers`, `persistence.writers` o `projection.writers` hacia el
-  tamaño del pool ya no hace que un servicio se reconecte.
-- **La base de datos puede mostrar más conexiones inactivas de cada servicio después de un
-  periodo de mucha carga**: hasta el tamaño de su pool. Con la configuración predeterminada no hay
-  que hacer nada: el [presupuesto de conexiones](./bootstrap.md#connection-budget) de una
-  instancia permite a cada área un pod con un pool completo del tamaño predeterminado, más otro
-  pod durante un despliegue. Si ejecutas un servicio con `replicas` por encima de 1, o has subido
-  su `maxOpenConnections`, sus pods mantienen ahora esas conexiones después de un periodo de mucha
-  carga en lugar de devolver todas menos la mitad, así que comprueba que el límite de conexiones
-  de la instancia todavía las cubre.
-- `maxIdleConnections` se sigue respetando cuando se fija, hasta `maxOpenConnections`. Fijarlo más
-  bajo mantiene menos conexiones en la base de datos, a costa de una conexión e inicio de sesión
-  nuevos para cada consulta que encuentra más que esas en uso.
-
-#### event-management escribe cada lote con una sentencia por tabla {#next-grouped-writes}
-
-`event-management` almacenaba un lote de eventos con sentencias separadas para cada evento: una
-para el evento, otra para sus lecturas, ubicaciones o alertas, y otra para sus anclajes de relación,
-cada una un viaje de ida y vuelta al almacén de eventos mientras la transacción del lote seguía
-abierta. Ahora escribe el lote con una sentencia por tabla para cada inquilino que contiene, dentro
-de la misma transacción, así que un lote hace unos pocos viajes en lugar de varios por evento. Lo
-que se almacena no cambia, un evento se sigue reconociendo solo después de que su lote se confirme,
-y un evento reentregado sigue sin añadir nada.
-
-- Cuando la base de datos rechaza una fila de una de esas sentencias que lleva varios eventos, por
-  ejemplo un valor demasiado grande para su columna, no indica a qué evento pertenece. El lote se
-  vuelve a escribir entonces en una transacción nueva, evento a evento, para encontrar el evento
-  rechazado, que se trata como antes. Ese evento le cuesta a su lote una transacción más, y
-  `persist_batch_fallbacks_total` cuenta las dos. Un evento rechazado antes de enviar nada, como
-  una lectura que no es un número, y los eventos de un inquilino eliminado se siguen apartando de
-  inmediato.
-- Los eventos de conexión y desconexión se siguen escribiendo uno a uno dentro del lote.
-- Volver a `v0.18.0` no requiere nada: lee y escribe las mismas filas.
-
-No hay que hacer nada. Consulte [Persistencia de eventos](./observability.md#event-persistence).
-
-#### device-state escribe el estado de los dispositivos de un lote en una sola sentencia por inquilino {#next-state-batch-writes}
-
-`device-state` fusiona en una sola transacción los eventos que esperan a cada escritor. Escribía
-el estado de cada dispositivo del lote con una sentencia propia; en un clúster de tres nodos en
-la nube, a unos 4.400 eventos por segundo, esas sentencias eran cerca de la mitad de la CPU de
-`device-state`. Ahora escribe el estado de todos los dispositivos que ya tienen uno en una sola
-sentencia por cada inquilino del lote. Lo que deja un lote no cambia, y el `updatedAt` de un
-dispositivo sigue avanzando cada vez que se escribe su estado. Un dispositivo que aparece por
-primera vez se sigue creando por separado. No hay que hacer nada: no hay cambio de esquema, y el
-`device-state` anterior puede funcionar junto al nuevo durante la actualización.
-
-#### Comprueba la cuota de disco antes de una instalación `--ha` nueva en un proveedor de nube {#next-disk-quota}
-
-Con el [almacén de respaldos](#next-backup-store-size) más grande, un `dcctl install --ha`
-predeterminado y una instancia reclaman más volumen persistente del que cabe con holgura en la
-cuota regional de SSD de un proyecto nuevo de Google Cloud una vez que se cuentan también los
-discos de arranque de los nodos: en las pruebas en Google Kubernetes Engine, un volumen del
-almacén de eventos se quedó en `Pending` con `QUOTA_EXCEEDED`. Antes de una instalación nueva en un
-proveedor de nube, comprueba la cuota de disco. [Prerrequisitos](./bootstrap.md#prerequisites)
-indica los tamaños de los volúmenes, y la guía de Google Kubernetes Engine en `deploy/gke` indica
-la cuota que hay que solicitar. Tomar los respaldos base como
-[instantáneas de volumen](./bootstrap.md#snapshot-base-backups) no cambia el tamaño
-predeterminado del almacén de respaldos.
-
-No hay nada que hacer en la actualización: un clúster existente conserva los volúmenes que tiene.
-
-#### Los almacenes de eventos nuevos comprimen su registro de escritura anticipada {#next-wal-compression}
-
-Un almacén de eventos creado con esta versión comprime las imágenes de página de su registro de
-escritura anticipada (`wal_compression = lz4`). En una comparación en una versión de desarrollo, a
-5200 eventos por segundo ofrecidos, eso redujo el registro escrito por evento almacenado de unos
-3,0 KB a unos 1,7 KB. Menos registro significa menos puntos de control forzados por su tamaño,
-menos que reproducir en las réplicas en espera y menos que comprimir y enviar al archivado.
-Consulta [Volumen del almacén de eventos](./bootstrap.md#event-store-volume). El almacén
-relacional no cambia.
-
-`dcctl upgrade` con esta versión la activa en el almacén de eventos de una instancia existente. El
-ajuste se recarga sin reinicio; en una instancia creada con `v0.18.0` la misma actualización
-reinicia una vez las instancias del almacén, por [la preferencia de ubicación](#next-primary-spread).
-La imagen de base de datos de la versión es la misma con la que los almacenes de eventos nuevos ya
-arrancan con `lz4`. Si sustituiste tú mismo la imagen de base de datos del almacén de eventos,
-comprueba primero que puede usar `lz4`, porque en una imagen que no puede, una instancia que se
-reinicie puede no arrancar. Esto ejecuta `psql` en los pods de base de datos del almacén, donde no
-necesita contraseña:
-
-```bash
-pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
-for p in $pods; do
-  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc \
-    "SELECT 'lz4' = ANY (enumvals) FROM pg_settings WHERE name = 'wal_compression'"
-done
-```
-
-Actualiza solo si cada línea imprime `t`.
-
-#### device-management comprueba desde memoria una credencial de dispositivo repetida {#next-credential-cache}
-
-No hay que hacer nada en la actualización.
-
-- **Cada réplica de `device-management` guarda en memoria, durante hasta cinco segundos, una
-  credencial de dispositivo que acaba de verificar**, y comprueba los siguientes eventos del
-  dispositivo contra esa copia en lugar de leer la base de datos. En un perfil de CPU de una
-  réplica con carga, esa lectura era la mayor parte de la CPU del servicio. La copia se comprueba
-  exactamente igual que la credencial almacenada: la contraseña de `MQTT_BASIC` se sigue
-  comparando en cada evento, y una expiración sigue surtiendo efecto en su momento. Una credencial
-  que no se pudo verificar nunca se guarda.
-- **Una revocación puede tardar ahora hasta cinco segundos en una réplica que no recibió el
-  aviso.** Cada uno de estos cambios descarta la copia en la réplica que lo hace antes de
-  responder, y avisa a las demás réplicas para que descarten la suya:
-  - deshabilitar, borrar o reasignar una credencial, o cambiar cualquier otra cosa de ella
-  - reemplazar, editar o borrar su dispositivo
-
-  Si ese aviso se pierde, por ejemplo mientras una réplica se reconecta a NATS o mientras algunas
-  réplicas aún ejecutan la versión anterior durante la actualización, la copia de esa réplica
-  caduca en cinco segundos como máximo desde el cambio. Hasta ahora una revocación surtía efecto
-  en el siguiente evento en todas las réplicas. Consulte
-  [Cuánto tarda en aplicarse una revocación](../guides/device-credentials.md#revocation-timing).
-- **Las conexiones MQTT siguen leyendo la base de datos cada vez**, con contraseña o con token de
-  acceso, así que una credencial revocada no puede abrir una conexión nueva en ninguna réplica.
-- **Cada réplica guarda como máximo 65.536 credenciales o 16 MiB.** El límite es fijo, y con los
-  valores por defecto las cachés en memoria del servicio guardan ahora como máximo 96 MiB en lugar
-  de 80. **Métricas nuevas** cuentan las comprobaciones respondidas desde la copia, las
-  credenciales descartadas de ella, su tamaño y los mensajes que cada réplica envió y recibió para
-  descartar copias. Consulte [Cachés que dejan de responder](./observability.md#kv-caches).
-
-#### La guía de Google Kubernetes Engine crea un grupo de nodos para las bases de datos y otro para los servicios {#next-gke-node-pools}
-
-La configuración de `deploy/gke` creaba un único grupo de tres nodos de 8 vCPU y 32 GB. Ahora crea
-un grupo `database` de tres nodos de 4 vCPU y 16 GB y un grupo `services` de tres nodos de 4 vCPU y
-8 GB, las mismas 24 vCPU en total. El grupo `database` tiene un taint, así que ningún pod de
-DeviceChain se ejecuta en él si no se coloca allí; `dcctl install --database-node-selector` y
-`--database-toleration` colocan allí las bases de datos (consulta
-[Las bases de datos pueden ejecutarse en los nodos que elijas](#next-database-placement)). Cada nodo
-arranca desde un disco persistente estándar de 100 GB, que cuenta para la cuota regional
-`DISKS_TOTAL_GB` y no para `SSD_TOTAL_GB`, así que una instalación `--ha` predeterminada con una
-instancia cabe en la cuota de SSD de un proyecto nuevo de Google Cloud; la guía indica la cuota que
-hay que solicitar para más instancias.
-
-No cambia nada para una instancia instalada. Aplicar la configuración nueva a un clúster creado con
-la anterior elimina su grupo de nodos y crea los dos nuevos sin un orden garantizado, lo que puede
-necesitar más cuota de vCPU de la que tiene el proyecto. Vuelve a crear el clúster en su
-lugar: desmóntalo como indica la guía, créalo de nuevo e instala.
-
-Las variables `node_machine_type`, `node_count`, `node_disk_type` y `node_disk_size_gb` ya no
-existen: las sustituyen las variables `database_*`, `services_*` y `loadgen_*` de cada grupo. OpenTofu
-solo avisa de un nombre antiguo que quede en un `terraform.tfvars` e ignora su valor, así que un
-clúster recreado con ese archivo sin cambios se crea con los valores predeterminados: se descarta lo
-elegido en `node_machine_type` o `node_disk_type`. Pasa cada ajuste a los nombres nuevos antes de
-aplicar.
-
-#### Las bases de datos pueden ejecutarse en los nodos que elijas {#next-database-placement}
-
-`dcctl install` admite `--database-node-selector` y `--database-toleration`. Colocan el almacén
-relacional compartido, y el almacén de eventos de cada instancia arrancada en el clúster, en los
-nodos que llevan una etiqueta, incluidos nodos con un taint que mantiene fuera otras cargas.
-`dcctl bootstrap` no tiene esos flags: cada instancia sigue a la instalación. Antes de instalar nada,
-install rechaza una ubicación con menos nodos utilizables que instancias tiene una base de datos, y
-cada bootstrap vuelve a comprobarlo. NATS, los servicios y el almacén de objetos de respaldo no se
-colocan. Consulta [Ubicación de las bases de datos](./bootstrap.md#database-placement).
-
-No cambia nada en un clúster instalado sin estos flags. El registro de instalación cambia de nuevo:
-vuelve a ejecutar `dcctl install` con esta versión antes de cualquier bootstrap, upgrade o destroy,
-como ya exige
-[Los respaldos base de las bases de datos pueden ser instantáneas de volumen](#next-snapshot-backups).
-Añadir una ubicación a un clúster que ya ejecuta instancias se rechaza, como cualquier otro cambio en
-sus ajustes. Sin ninguna instancia en marcha no se rechaza, pero mueve el almacén relacional, cuyos
-volúmenes quizá no puedan seguirlo: consulta
-[Ubicación de las bases de datos](./bootstrap.md#database-placement) antes de cambiarla.
-
-Si compilaste `dcctl` desde el código fuente después de que se añadieran estos flags, `dcctl install`
-con una ubicación podía fallar en su paso de OpenTofu con `argument must not be null`, porque la
-comprobación de ubicación trataba como un error un nodo que nunca se había acordonado o que no tenía
-ningún taint. Esta versión cuenta esos nodos. La ejecución fallida no creó ni cambió ninguna base de
-datos: vuelve a ejecutar la instalación con esta versión.
-
-#### Los servicios de la ruta de eventos solicitan lo que usan a 6000 eventos por segundo y se reparten entre los nodos {#next-event-path-requests}
-
-Los cinco servicios que procesan cada evento ahora **solicitan** la CPU que se midió que usan a
-6000 eventos por segundo: `device-management` 800m, `event-management` 900m, `device-state` 950m,
-`event-sources` 1 núcleo y `event-processing` 400m. Dimensionados para el techo predeterminado de un
-inquilino, 1000 eventos por segundo, solicitaban entre el 15% y el 66% de lo que usaban al ritmo que
-sostiene una instalación `--ha` predeterminada, y el planificador, que ubica los pods según sus
-solicitudes, juntaba a los más ocupados. Además prefieren ejecutarse en nodos distintos; con tres
-nodos suelen ejecutarse no más de dos por nodo. `functionalAreas.<servicio>.eventPathSpread: false`
-lo desactiva para un servicio. Los servidores NATS de una instancia nueva solicitan 500m de CPU y
-768Mi de memoria y tienen un límite de 2Gi de memoria; antes no solicitaban nada, lo que los
-convertía en los primeros pods desalojados cuando un nodo se quedaba sin memoria. Consulta
-[Dimensionamiento de los servicios](./bootstrap.md#service-sizing) y
-[El intermediario de mensajes](./bootstrap.md#broker-sizing).
-
-**Antes de actualizar una instancia instalada sin `--compact`:**
-
-- **Comprueba que hay espacio para las solicitudes más grandes.** Una vez actualizados, los cinco
-  servicios solicitan unas 3,6 CPU más que en v0.18.0. Durante la actualización progresiva, cuatro
-  de ellos ejecutan su pod nuevo junto al antiguo (`event-processing` detiene primero el antiguo),
-  así que los nodos necesitan unas 3,65 CPU libres para los pods nuevos, y cada pod nuevo necesita
-  hasta un núcleo libre en un solo nodo. Compara la CPU asignable libre de los nodos
-  (`kubectl describe nodes`, "Allocated resources") con la tabla de Dimensionamiento de los
-  servicios. Un clúster kind en un portátil es el que más probablemente no la tenga. Si un pod nuevo
-  no se puede ubicar, se queda en `Pending` y la actualización falla tras esperar, con la instancia
-  actualizada a medias: los servicios cuyos pods nuevos arrancaron están en la nueva versión, y el
-  resto sigue en la antigua. Haz espacio y vuelve a ejecutar `dcctl upgrade` para terminar. Una
-  instancia creada con `dcctl` no tiene forma de conservar las solicitudes antiguas; el remedio es
-  la capacidad, o volver a crearla con `--compact`.
-
-Las instancias instaladas con `--compact` conservan sus solicitudes de 25m y 64Mi, y los servidores
-NATS de una instancia compacta nueva solicitan lo mismo.
-
-**`dcctl upgrade` da a los servidores NATS de una instancia existente estas solicitudes y este
-límite**, y los reinicia para hacerlo. Consulta [la entrada del bróker y el almacén de
-eventos](#next-upgrade-infrastructure) para ver cómo se nota y el sitio que necesita cada nodo.
-
-**Si instalas el chart tú mismo, con tus propios valores:**
-
-- `event-processing` tiene ahora una solicitud medida, así que un `resources.requests.cpu` de nivel
-  superior tampoco le llega ya. Define la suya en
-  `functionalAreas.event-processing.resources.requests`, o establece `useMeasuredRequests: false`.
-- `event-processing` tiene ahora un límite de CPU propio, así que un `resources.limits.cpu` de
-  nivel superior ya no le llega; consulta
-  [el apartado de los valores del flujo de eventos](#next-pipeline-defaults).
-- Una clave nueva, `eventPathSpread`, está activada en los cinco servicios. Un archivo de valores
-  que la active en otro servicio lo reparte junto con ellos.
-
-#### Las claves del almacén de eventos empiezan por el tiempo {#next-time-leading-keys}
-
-Las claves que impiden almacenar un evento dos veces empiezan ahora por el inquilino y el instante
-del evento, en lugar del inquilino y un resumen criptográfico del evento. La clave de un evento nuevo
-queda así junto a la anterior, en lugar de en un lugar al azar del índice, y la base de datos
-reescribe muchas menos páginas de índice. Con el tiempo en primer lugar, esas mismas claves
-responden también a toda lectura por tiempo de los eventos de un inquilino, así que se eliminan
-cuatro índices más: el índice por inquilino y tiempo de los eventos base, las mediciones, las
-ubicaciones y las alertas.
-
-Junto con [los índices eliminados más arriba](#next-event-store-indexes), cada fila que almacena
-esta versión actualiza menos índices que en `v0.18.0`: una fila de evento base, dos en lugar de
-cinco (tres en lugar de seis si lleva un id alternativo); una fila de medición, tres en lugar de
-cinco; una fila de ubicación o de alerta, uno en lugar de cuatro; una fila de anclaje de relación,
-dos en lugar de cuatro; y una fila de cambio de presencia, uno en lugar de cuatro. Un evento de
-medición con una lectura y sin anclajes actualiza cinco índices en lugar de diez. En una comparación
-sobre una compilación de desarrollo a 6.000 eventos por segundo, que reconstruyó las claves de los
-eventos base y de las mediciones y eliminó sus dos índices por inquilino y tiempo, el registro de
-escritura anticipada por evento almacenado bajó de unos 2,3 KB a unos 1,3 KB, y el 1 % más lento de
-los lotes de escritura del almacén de eventos tardó unos 50 ms en lugar de unos 170 ms.
-
-- Los eventos se siguen almacenando una sola vez, y toda lectura que sirve `event-management`
-  sigue usando un índice.
-- **La lista de eventos de un dispositivo, cuando el almacén de eventos tiene pocos
-  dispositivos.** Cuando hay pocos tokens de dispositivo distintos entre todos los inquilinos (en
-  nuestras pruebas, 40 en lugar de 100), la base de datos puede leer ahora los eventos más recientes
-  de un dispositivo recorriendo los eventos más recientes de su inquilino hasta reunir una página.
-  Eso es rápido mientras el dispositivo está activo. Para un dispositivo que lleva un tiempo en
-  silencio mientras los demás siguen enviando, la primera página puede tardar bastante más que
-  antes. El total que acompaña a la lista no cambia.
-- **Acceso por SQL y BI.** Una consulta sobre los eventos, lecturas, ubicaciones, alertas o
-  anclajes de un inquilino que filtra solo por tiempo usa un índice. Para unir
-  `analytics.event_anchors` con `analytics.events`, une por `event_id` y por `occurred_time`: solo
-  por `event_id`, la base de datos ya no puede localizar cada evento directamente. Consulta
-  [Notas prácticas](../guides/sql-and-bi-access.md#practical-notes).
-
-##### Comprueba antes de actualizar {#next-time-leading-keys-check}
-
-El primer arranque del nuevo `event-management` reconstruye las claves sobre todas las filas de las
-cinco tablas que aún no están comprimidas: por defecto, más o menos la última semana. **Una
-instancia con más de 4.000.000 de esas filas no se puede actualizar en su sitio.** Un evento base es
-una fila, más una fila por cada lectura, ubicación o alerta que lleva, más una por cada anclaje de
-relación. Con una lectura y un anclaje por evento, 4 millones de filas son una semana a una media de
-unos 2 eventos por segundo, así que la mayoría de las instancias con tráfico real superan el límite.
-
-Cuenta las tuyas antes de actualizar. Abre `psql` en el almacén de eventos (el espacio de nombres es
-`dci-` más el id de la instancia; la base de datos es el id de la instancia solo):
+### v0.19.0 — dimensionada a partir de lo medido a 6000 eventos por segundo; un stream lleno rechaza {#v0190-upgrade}
+
+`v0.19.0` es una actualización en su sitio desde `v0.18.0`: `dcctl install` para el clúster y
+después `dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade).
+**Cuenta tu almacén de eventos antes de ejecutar el `dcctl install` de esta versión.** Una
+instancia cuyo almacén de eventos guarda más de
+4 000 000 de filas aún sin comprimir no puede recibirla en su sitio y hay que recrearla, lo que
+descarta sus datos, y la mayoría de las instancias con tráfico real superan ese límite
+([Comprueba el número de filas](#v0190-row-count)). También se rechaza una tabla con más de 500
+fragmentos, salvo que antes elimines sus eventos más antiguos
+([Cuenta los fragmentos](#v0190-chunk-count)). Una instancia creada por la `v0.16.0` o una versión
+anterior sigue teniendo que [destruirse y crearse de nuevo](#pre-declaration-recreate).
+
+La mayor parte de esta versión trata de seguir el ritmo. Los servicios que procesan cada evento
+solicitan ahora la CPU que se midió que usan, se reparten entre los nodos, almacenan y fusionan los
+eventos en menos sentencias y responden desde memoria las búsquedas repetidas; con `--ha` sin
+`--compact`, `event-management` se ejecuta en dos pods. En Google Kubernetes Engine, una instalación HA
+predeterminada aceptó 6000 eventos por segundo durante 10 minutos, dos veces, y almacenó
+exactamente una vez cada evento aceptado; se midió con la versión candidata y con
+`event-management` en un solo pod ([Rendimiento](#v0190-performance)). Dos caminos de fallo dejan
+de ser silenciosos: un stream de ingesta lleno rechaza ahora los eventos nuevos en lugar de
+descartar los no leídos, y las alertas de respaldo avisan antes de que el archivado pueda detener
+una base de datos. Y `dcctl upgrade` aplica ahora los ajustes del bróker de mensajería y del almacén
+de eventos de una instancia, algo que antes no hacía nunca, así que una instancia actualizada recibe
+el mismo bróker y el mismo almacén de eventos que una nueva.
+
+**Quién tiene que hacer algo:**
+
+- **Toda instancia con tráfico real:** cuenta las filas sin comprimir y los fragmentos del almacén
+  de eventos antes de actualizar. Por encima de 4 000 000 de filas hay que recrear la instancia, y
+  recrearla descarta sus datos ([Comprueba el número de filas](#v0190-row-count)).
+- **Todo clúster:** vuelve a ejecutar `dcctl install` con esta versión antes de cualquier
+  `bootstrap`, `upgrade` o `destroy`. Este `dcctl` rechaza un registro de instalación escrito por
+  uno anterior. Actualiza también todas las copias de `dcctl` que uses: una anterior puede dejar
+  marcada como sin terminar una instancia creada por esta versión, y un `dcctl bootstrap` sin más
+  se ejecutaría entonces sobre ella
+  ([Terminar un arranque inicial fallido](#v0190-bootstrap-resume)).
+- **Toda instancia instalada sin `--compact`:** los nodos necesitan sitio para unas solicitudes de
+  CPU mayores y para las primeras solicitudes del bróker de mensajería ([Haz sitio](#v0190-room)).
+- **Quien tenga dispositivos que envían más de 256 lecturas en un mensaje:** esos mensajes se
+  rechazan ahora ([256 lecturas](#v0190-reading-limit)).
+- **Todo inquilino que envíe más de 1000 lecturas por segundo**, incluida una flota que pone varias
+  lecturas en un mensaje, y **todo inquilino LwM2M**: el techo de ingesta cuenta ahora lecturas, y
+  las que lo superan se rechazan con `429` por HTTP y se descartan, sin avisar al dispositivo, en
+  todos los demás transportes ([Lecturas, no mensajes](#v0190-ingest-readings)).
+- **Quien tenga dispositivos que envían lecturas fechadas más de 366 días atrás**, o que informan
+  horas cercanas a 1970 porque no tienen el reloj configurado: esas lecturas se rechazan ahora
+  ([Lecturas antiguas](#v0190-event-age-limit)).
+- **Quien haya configurado `backup_retention`, `tsdbConfiguration.maxOpenConnections`,
+  `rdbConfiguration.maxOpenConnections`, `maxReadingsPerMessage` o los límites de conexión de los
+  lectores de analítica:** consulta [Antes de actualizar](#v0190-before).
+- **Quien dependa de que revocar una credencial de dispositivo surta efecto al instante:** una
+  revocación puede tardar ahora hasta cinco segundos en una réplica de `device-management`
+  ([Comprobación de credenciales](#v0190-credential-cache)).
+- **Quien llame a la API de ingesta HTTP:** reintenta ante un `503` con `Retry-After`
+  ([Contrapresión](#v0190-backpressure)).
+- **Quien tenga una fuente de eventos que lee de su propio bróker MQTT:** la fuente se conecta con
+  un identificador de cliente nuevo, que el bróker tiene que permitir, y puede leerse dos veces
+  mientras avanza la actualización ([Tu propio bróker MQTT](#v0190-mqtt-client-id)).
+- **Quien enrute o silencie alertas por nombre o por severidad:** se añaden alertas, y
+  `JetStreamStreamNearFull` pasa a `info` ([Alertas](#v0190-alerts)).
+- **Quien instale el chart con sus propios valores:** varios valores de recursos de nivel superior
+  ya no llegan a los servicios de la ruta de eventos ([Tus propios valores del chart](#v0190-chart-values)).
+
+Todo lo demás está en [Qué cambia](#v0190-what-changed), por áreas.
+
+#### Antes de actualizar {#v0190-before}
+
+Hazlo en este orden.
+
+##### 1. Comprueba el número de filas {#v0190-row-count}
+
+El primer arranque del nuevo `event-management` reconstruye las claves del almacén de eventos sobre
+todas las filas de cinco tablas que aún no están comprimidas: por defecto, más o menos la última
+semana. **Una instancia con más de 4 000 000 de esas filas no se puede actualizar en su sitio.** Un
+evento base es una fila, más una por cada lectura, ubicación o alerta que lleva, más una por cada
+anclaje de relación. Con una lectura y un anclaje por evento, 4 millones de filas son una semana a
+una media de unos 2 eventos por segundo, así que la mayoría de las instancias con tráfico real
+superan el límite.
+
+Abre `psql` en el almacén de eventos (el espacio de nombres es `dci-` más el id de la instancia; la
+base de datos es el id de la instancia solo). El recuento solo lee, así que sirve cualquiera de los
+pods del almacén; si `dc-tsdb-1` no existe, `kubectl -n dci-<instance-id> get pods` lista los demás:
 
 ```bash
 kubectl -n dci-<instance-id> exec -it dc-tsdb-1 -c postgres -- psql -U postgres -d <instance-id>
 ```
 
-El recuento solo lee, así que sirve cualquiera de los pods del almacén de eventos, el primario o
-una réplica. Si `dc-tsdb-1` no existe, `kubectl -n dci-<instance-id> get pods` lista los demás pods
-`dc-tsdb-`.
-
-Después ejecuta el mismo recuento que hace la actualización. Lee todas las filas aún sin comprimir,
-así que en un almacén grande tarda un rato:
+Después ejecuta el recuento que hace la actualización. Lee todas las filas sin comprimir, así que en
+un almacén grande tarda un rato:
 
 ```sql
 DO $$
@@ -4575,28 +3879,65 @@ BEGIN
 END $$;
 ```
 
-Si imprime más de `4000000`, no actualices esta instancia en su sitio: exporta lo que necesites y
-después recréala con `dcctl destroy` y `dcctl bootstrap` en la nueva versión.
+Si imprime más de `4000000`, no actualices esta instancia en su sitio: saca de ella lo que
+necesites y después recréala con `dcctl destroy` y `dcctl bootstrap` en la nueva versión. Cuenta
+mientras el clúster sigue en la `v0.18.0`, antes del `dcctl install` de esta versión, para que una
+instancia por encima del límite aún se pueda leer y destruir con el `dcctl` que la creó.
 
-:::caution Exporta primero: recrear descarta tus datos
+:::caution Recrear descarta los datos de la instancia
 `dcctl destroy` elimina las bases de datos de la instancia: todos los inquilinos, dispositivos,
-definiciones de dispositivo, paneles y usuarios, y todos sus eventos, no solo el historial de
-eventos. No hay un camino en su sitio que conserve en esta versión una instancia que supere las
-4.000.000 de filas.
+definiciones de dispositivo, paneles y usuarios, y todos sus eventos. DeviceChain no tiene ninguna
+herramienta de exportación. Saca lo que necesites antes de destruirla. Los eventos, lecturas,
+ubicaciones y alertas de un inquilino se pueden leer mediante el
+[acceso por SQL y BI](../guides/sql-and-bi-access.md). `pg_dump` de PostgreSQL puede copiar las dos
+bases de datos de la instancia, cada una con el id de la instancia como nombre: una en el almacén de
+eventos, en el espacio de nombres de la propia instancia, y otra en la base de datos relacional
+compartida (`dc-rdb`, en `dc-system`), que guarda los datos de todas las instancias, así que vuelca
+solo esa base de datos. Escribe el volcado en tu propia máquina, por ejemplo
+`kubectl -n dc-system exec dc-rdb-1 -c postgres -- pg_dump -U postgres -Fc <instance-id> > rdb.dump`,
+y lo mismo con `-n dci-<instance-id>` y `dc-tsdb-1` para el almacén de eventos. Los secretos del
+volcado siguen sellados con la clave raíz de la instancia. Un volcado es una copia para leer, o
+para cargar en una base de datos tuya: ningún `dcctl` lo carga en la instancia nueva.
+
+Conserva los respaldos, para poder volver atrás. Destruye la instancia con el `dcctl` de la
+`v0.18.0` antes de ejecutar el `dcctl install` de esta versión: deja en su sitio los respaldos
+internos. Después de la instalación, usa el `dcctl destroy --keep-backups` de esta versión; sin esa
+opción borra el archivo del almacén de eventos de la instancia. En ambos casos, lo que se conserva
+es el archivo del **almacén de eventos**, junto al archivo relacional del clúster, que destroy no
+borra nunca. En el mismo clúster, el archivo del almacén de eventos solo devuelve el historial de
+eventos de la instancia, bajo un plano de control vacío, sin inquilinos, dispositivos, usuarios ni
+secretos. Recuperar la instancia entera en la `v0.18.0` significa recuperarla en un clúster nuevo, a
+partir del archivo relacional en un momento anterior al destroy (`--restore-rdb-at`), lo que
+rebobina todas las instancias de ese clúster, con el respaldo en custodia de la clave raíz de la
+instancia y el archivo de su almacén de eventos, como describe
+[Recuperar una instancia](./disaster-recovery.md#recover). Restaurar el archivo del almacén de
+eventos en la `v0.19.0` no es un camino hacia delante: devuelve las mismas filas, y la
+actualización las vuelve a rechazar.
+
+El archivo conservado del almacén de eventos guarda los eventos de todos los inquilinos que tuvo la
+instancia, incluidos los inquilinos eliminados dentro de su ventana de recuperación, y nada lo poda
+una vez que la instancia ya no existe. Elimínalo cuando ya no lo necesites, como muestra
+[Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups).
+
+Antes de ejecutar `dcctl bootstrap` con el mismo nombre, aparta el artefacto de custodia de la clave
+raíz de la instancia (`~/.devicechain/escrow/<instance>-rootkey.escrow`) y consérvalo: bootstrap no
+lo sobrescribe, y es la única clave de los respaldos relacionales tomados antes del destroy.
+
+No se ha probado ningún camino en su sitio para una instancia por encima del límite.
 :::
 
-##### Cuenta también los fragmentos {#next-time-leading-keys-chunks}
+##### 2. Cuenta los fragmentos {#v0190-chunk-count}
 
-La reconstrucción, y [la eliminación de índices de arriba](#next-event-store-indexes), también
-rechazan una tabla con más de **500 fragmentos**. Cada una bloquea todos los fragmentos de la tabla
-que cambia, y 500 es la mitad de lo máximo que esta versión ha medido que se reconstruye dentro de un
-arranque, lo que deja margen para un almacenamiento más lento. Por encima, `event-management` se
-niega antes de bloquear nada, en lugar de arriesgarse a una reconstrucción que no puede terminar y
-que después bloquea todos los arranques siguientes. Un fragmento cubre un intervalo de fragmento de
-una tabla: un día por defecto (`lifecycle.chunkIntervalHours`), así que con el valor por defecto 500
-fragmentos son un año y cuatro meses de historial, aproximadamente, con la retención desactivada. Un
-intervalo más corto llega antes a 500, y también un dispositivo que envió lecturas fechadas muy en el pasado. Cuéntalos, en cualquiera de
-los pods del almacén de eventos:
+La reconstrucción, y la [eliminación de índices](#v0190-event-store-keys), también rechazan una
+tabla con más de **500 fragmentos**. Cada una bloquea todos los fragmentos de la tabla que cambia, y
+500 es la mitad de lo máximo que esta versión ha medido que se reconstruye dentro de un arranque, lo
+que deja margen para un almacenamiento más lento. Por encima, `event-management` se niega antes de
+bloquear nada, en lugar de arriesgarse a una reconstrucción que no puede terminar y que después
+bloquea todos los arranques siguientes. Un fragmento cubre un intervalo de fragmento de una tabla:
+un día por defecto (`lifecycle.chunkIntervalHours`), así que con el valor por defecto 500 fragmentos
+son un año y cuatro meses de historial, aproximadamente, con la retención desactivada. Un intervalo
+más corto llega antes a 500, y también un dispositivo que envió lecturas fechadas muy en el pasado.
+Cuéntalos, en cualquiera de los pods del almacén de eventos:
 
 ```sql
 SELECT hypertable_name, count(*) AS chunks, min(range_start) AS oldest, max(range_end) AS newest
@@ -4643,270 +3984,337 @@ BEGIN
 END $$;
 ```
 
-Después vuelve a contar los fragmentos y actualiza. Si no puedes prescindir de esos eventos, exporta
-lo que necesites y recrea la instancia, como se indica arriba.
+Después vuelve a contar los fragmentos y actualiza. Si no puedes prescindir de esos eventos, recrea
+la instancia como en [Comprueba el número de filas](#v0190-row-count).
 
-##### Durante la actualización {#next-time-leading-keys-during}
+##### 3. Ejecuta la actualización donde se creó la instancia {#v0190-where}
 
-- El nuevo `event-management` reconstruye las claves tabla a tabla. Mientras reconstruye una
-  tabla, las lecturas y escrituras de esa tabla esperan: unos segundos en el caso habitual, y como
-  máximo 45 segundos por tabla (hasta 5 segundos para bloquearla y después hasta 40 para
-  reconstruirla). El `event-management` anterior sigue recibiendo eventos; un lote que estaba
-  escribiendo espera con la tabla, y un lote retenido el tiempo suficiente se entrega de nuevo y se
-  almacena una sola vez. La reconstrucción completa se detiene al cabo de un minuto y continúa en
-  el siguiente arranque.
-- **Si hay demasiado que reconstruir,** el nuevo `event-management` se detiene antes de cambiar
-  nada, y su registro explica el motivo. `dcctl upgrade` informa entonces de que no terminó de
-  desplegarse: todos los demás servicios ejecutan la nueva versión, y el `event-management`
-  anterior sigue almacenando eventos hasta que recrees la instancia, como se indica arriba.
-- **Si una tabla tiene más de 500 fragmentos,** `event-management` se detiene antes de bloquear
-  nada, y su registro nombra la tabla, su número de fragmentos y la consulta de arriba, y remite a
-  [la eliminación](#next-time-leading-keys-chunks). No se marca nada: una vez eliminados los
-  fragmentos, el siguiente arranque sigue adelante. La eliminación de índices se detiene del mismo
-  modo, y no se elimina nada de ninguna tabla.
-- **Si la reconstrucción de una tabla tarda más de 40 segundos** una vez bloqueada la tabla, se
-  deshace, la tabla conserva su clave anterior, y `event-management` se detiene con un error que lo
-  indica. A partir de entonces se detiene de inmediato en cada arranque sin tocar la tabla, así que
-  la ingesta no vuelve a detenerse en cada reinicio. Recrea la instancia o, para intentarlo una vez
-  más (por ejemplo, tras mover el almacén de eventos a un almacenamiento más rápido), ejecuta la
+`dcctl upgrade` aplica ahora la configuración de OpenTofu de la instancia, así que necesita su
+estado: ejecútala en la máquina que creó la instancia, o copia antes allí
+`~/.devicechain/instances/<instancia>/` y mantenlo privado (modo `0700`), porque contiene
+credenciales. También necesita `tofu` en el `PATH`, con OpenTofu 1.9 o posterior (o Terraform 1.9 o
+posterior). Sin el estado, la actualización se niega y no cambia nada. `--skip-infrastructure`
+mueve solo los servicios, como antes, y dice lo que dejó sin aplicar.
+
+##### 4. Haz sitio {#v0190-room}
+
+Una vez actualizada, una instancia instalada sin `--compact` solicita más CPU, y la actualización
+progresiva necesita aún más mientras los pods antiguos y los nuevos se ejecutan a la vez:
+
+| | CPU solicitada de más una vez actualizada | CPU libre que la actualización progresiva de los servicios necesita a la vez |
+| --- | --- | --- |
+| `--ha` | 4,45 para los servicios, más 500m y 768Mi de memoria en cada uno de los tres nodos que ejecutan un servidor NATS | 4,85, además de la de los servidores NATS: 4,55 para los pods que arrancan junto a los antiguos (`device-management`, los dos pods de `event-management`, `device-state` y `event-sources`) y 0,3 para `event-processing`, cuyo pod nuevo arranca después de que se detenga el antiguo |
+| sin `--ha` | 3,55 para los servicios, más 500m y 768Mi para el único servidor NATS | 3,95 (3,65 y 0,3), además de la del servidor NATS |
+| `--compact` | nada para los servicios; 25m y 64Mi en cada nodo que ejecuta un servidor NATS | 0,1, como antes (25m por cada pod que arranca junto al antiguo), además de la de los servidores NATS |
+
+Estas cifras son para una instancia que ejecuta los cinco servicios. Las nuevas solicitudes de los
+servicios son `device-management` 800m, `event-management` 900m (dos pods con `--ha`, lo que añade
+también los 128Mi de memoria del segundo pod), `device-state` 950m, `event-sources` 1 núcleo y
+`event-processing` 400m; en `v0.18.0` cada uno solicitaba 100m. Cada pod nuevo necesita su solicitud
+entera libre en un solo nodo. Cada servidor NATS solicita ahora 500m de CPU y 768Mi de memoria y
+tiene un límite de 2Gi de memoria; antes no solicitaba nada. Compara la CPU y la memoria asignables
+libres de los nodos (`kubectl describe nodes`, "Allocated resources") con
+[Dimensionamiento de los servicios](./bootstrap.md#service-sizing). Un clúster kind en un portátil
+es el que más probablemente no las tenga.
+
+Un pod que no se puede colocar queda en `Pending`, y la actualización falla tras esperar (hasta 15
+minutos para el bróker), con la instancia actualizada a medias: los servicios cuyos pods nuevos
+arrancaron están en la nueva versión, y el resto sigue en la antigua. Un servidor NATS que queda en
+`Pending` sin `--ha` deja el bróker caído hasta que haya sitio. Haz sitio y vuelve a ejecutar
+`dcctl upgrade` para terminar. Una instancia creada con `dcctl` no tiene forma de conservar las
+solicitudes antiguas; el remedio es la capacidad, o volver a crearla con `--compact`. Las instancias
+instaladas con `--compact` conservan sus solicitudes de 25m y 64Mi, y sus servidores NATS solicitan
+lo mismo.
+
+Un `ResourceQuota` o `LimitRange` en el espacio de nombres de la instancia puede rechazar las
+solicitudes mayores, los límites de 2 núcleos de `event-sources` y `device-state`, o el límite de 1
+núcleo de `event-processing`.
+
+##### 5. Comprueba si hay una cuota sobre la ubicación entre espacios de nombres {#v0190-quota}
+
+Los pods de base de datos llevan ahora una preferencia de ubicación que tiene en cuenta otros
+espacios de nombres ([Primarias de las bases de datos](#v0190-primary-spread)). Un `ResourceQuota`
+con el ámbito `CrossNamespacePodAffinity` rechaza esos pods, sea preferencia o no: las instancias
+reiniciadas de la base de datos relacional en `dc-system`, y el almacén de eventos de cada instancia
+en su propio espacio de nombres. Nada de lo que instala DeviceChain crea uno. Para listar los que
+existan:
+
+```bash
+kubectl get resourcequota -A \
+  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,SCOPES:.spec.scopeSelector
+```
+
+Una lista vacía no lo zanja. La configuración de admisión de cuotas del servidor de API puede
+nombrar `CrossNamespacePodAffinity` en `limitedResources`, y entonces esos pods se rechazan en todo
+espacio de nombres que **no** tenga una cuota con ese ámbito que los admita. Esa configuración vive
+en el plano de control, así que pregunta a quien administre el clúster; si está activa, da a
+`dc-system` y al espacio de nombres de cada instancia una cuota con ese ámbito antes de actualizar.
+Un pod del almacén de eventos rechazado deja el almacén con una instancia menos o, sin `--ha`, caído.
+
+##### 6. Comprueba los ajustes que ahora impiden que un servicio arranque {#v0190-settings}
+
+- Si fijaste `tsdbConfiguration.maxOpenConnections` de `event-management`, o
+  `rdbConfiguration.maxOpenConnections` de `device-state`, en `10` o menos y no fijaste
+  `persistence.writers` ni `projection.writers`, el pod nuevo no arranca, y nombra el ajuste y el
+  tamaño del pool. Fija los escritores por debajo de tu pool (el valor por defecto anterior era
+  `5`), o quita el ajuste del pool para usar el valor por defecto de 20. Los pools de 11 a 19
+  arrancan y registran que más de la mitad del pool se da a los escritores.
+- **Lectores de analítica** (instancias `--ha`): sus valores de `connection_limit` pueden sumar
+  ahora como máximo 17 de las conexiones del almacén de eventos, no 57, porque la plataforma reserva
+  80 para dos pods de `event-management` en lugar de 40. Por encima de 17 la actualización se
+  detiene antes de cambiar nada. Si subiste `timescale_analytics_reserved_connections` para ejecutar
+  por tu cuenta un segundo pod de `event-management`, devuélvelo a 40: ahora es la reserva de cada
+  pod. Consulta [Límite de conexiones](../guides/sql-and-bi-access.md#connection-cap).
+- **`maxReadingsPerMessage`** queda retirado: el servicio lo ignora con un aviso. Consulta
+  [256 lecturas](#v0190-reading-limit) para localizar los dispositivos que rechazaría.
+
+##### 7. Comprueba lo que envían tus dispositivos {#v0190-device-traffic}
+
+- **Más de 256 lecturas en un mensaje** se rechazan. Localiza esos dispositivos como indica
+  [256 lecturas](#v0190-reading-limit).
+- **Más de 1000 lecturas por segundo de un inquilino** superan ahora el techo predeterminado, que
+  cuenta lecturas en lugar de mensajes. Localiza esos inquilinos y eleva primero la tasa de ingesta
+  de su nivel, como indica [Lecturas, no mensajes](#v0190-ingest-readings). Las lecturas por encima
+  del techo se descartan, no se retrasan: HTTP responde `429`, los dispositivos MQTT, LwM2M y
+  Sparkplug no reciben aviso, y un mensaje MQTT descartado así ya estaba confirmado.
+- **Las lecturas fechadas más de 366 días antes de llegar** se rechazan. Un dispositivo sin reloj
+  debe omitir `occurredTime`. Los mensajes que ya esperan en la plataforma se juzgan según la hora en
+  que llegaron; el almacén local de un agente de borde no tiene límite de antigüedad propio
+  ([Lecturas antiguas](#v0190-event-age-limit)).
+
+##### 8. Cambia el nombre de `backup_retention` {#v0190-rename-retention}
+
+Si lo configuraste: `backup_retention_rdb` en la configuración del clúster, `backup_retention_tsdb`
+en la de la instancia. Un `-var backup_retention=…` se rechaza; una línea en un `.tfvars` solo
+produce un aviso, y se usa el valor predeterminado en lugar del tuyo; una variable
+`TF_VAR_backup_retention` se ignora sin ningún aviso.
+
+##### 9. Comprueba el margen del almacén de respaldos {#v0190-headroom}
+
+La base de datos relacional conserva ahora 30 días de respaldos en lugar de 7
+([Ventanas de recuperación](#v0190-backup-retention)), y un almacén existente conserva su tamaño,
+así que un almacén creado antes de esta versión sigue teniendo 20 GiB salvo que lo hayas ampliado.
+Amplíalo primero si tiene poco margen, como muestra
+[Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size).
+
+##### 10. Conserva los valores de OpenTofu que fijaste tú mismo {#v0190-tfvars}
+
+La actualización conserva un valor declarado en un `terraform.tfvars` junto al estado de la
+instancia (`~/.devicechain/instances/<instancia>/infra/instance/`) o en `TF_VAR_<nombre>`, y no uno
+que pasaste con `-var`. Se niega antes que acortar la ventana de recuperación del almacén de eventos
+o dejar de declarar un lector de analítica, y avisa de una solicitud o un límite del bróker que
+bajaría. Pasa esos valores a ese archivo primero. Consulta
+[Valores que usted mismo dio a la configuración](#upgrade-infrastructure).
+
+##### 11. Si sustituiste la imagen de base de datos del almacén de eventos {#v0190-image}
+
+Comprueba que puede usar `lz4` para la
+[compresión del registro de escritura anticipada](#v0190-wal); una instancia que se reinicie en una
+imagen que no puede puede no arrancar. Actualiza solo si cada línea imprime `t`:
+
+```bash
+pods=$(kubectl -n dci-<instance> get pods -l cnpg.io/cluster=dc-tsdb,cnpg.io/podRole=instance -o name)
+for p in $pods; do
+  kubectl -n dci-<instance> exec "$p" -c postgres -- psql -U postgres -tAc \
+    "SELECT 'lz4' = ANY (enumvals) FROM pg_settings WHERE name = 'wal_compression'"
+done
+```
+
+##### 12. Si una fuente de eventos lee de tu propio bróker MQTT {#v0190-mqtt-client-id}
+
+Cada fuente así se conecta ahora como `devicechain:<instancia>:<fuente>:<pod>` en lugar de
+`devicechain` ([Su propio identificador de cliente](#v0190-external-mqtt-client-id)). Si la ACL, la
+lista de permitidos o la regla de identificadores de tu bróker nombra `devicechain`, permite los
+identificadores que empiezan por `devicechain:`. El identificador además supera los 23 caracteres,
+el límite más corto que MQTT exige aceptar a un bróker. Un bróker que rechaza el nuevo
+identificador hace que el pod nuevo no arranque, con el motivo del bróker en su registro, y la
+actualización se detiene con los pods viejos aún en marcha y leyendo la fuente como antes.
+
+Para no almacenar mensajes dos veces mientras avanza la actualización (consulta
+[Durante la actualización](#v0190-during)), prevé pausar a los publicadores de tu bróker mientras
+dura el despliegue.
+
+#### Durante la actualización {#v0190-during}
+
+**`dcctl install`** da a la base de datos relacional compartida una ventana de recuperación de 30
+días, zstd para su registro archivado y la etiqueta de ubicación, y reinicia una vez sus instancias:
+con `--ha`, primero las réplicas en espera y después un traspaso a una de ellas, en otro nodo. Una
+base de datos relacional de una sola instancia no está disponible hasta que termina de reiniciarse;
+las escrituras hechas mientras tanto se reintentan.
+
+**`dcctl upgrade`** aplica después los servidores NATS y el almacén de eventos de la instancia antes
+de mover los servicios ([detalles](#v0190-upgrade-infrastructure)):
+
+- Los servidores NATS se reinician por sus nuevas solicitudes y su límite, de uno en uno con
+  `--ha`. Sin `--ha` el bróker no está disponible mientras se reinicia su único servidor,
+  normalmente alrededor de un minuto.
+- Sin `--ha`, la detección se detiene mientras se reinicia el bróker, durante ese minuto más hasta
+  25 segundos, y después reproduce el flujo desde su último punto de control
+  ([La partición de la detección](#v0190-detect-lease-release)).
+- En una instancia creada con `v0.18.0`, las instancias del almacén de eventos pueden reiniciarse
+  una vez por la preferencia de ubicación: primero las réplicas en espera y después un cambio de
+  primaria con `--ha`. Sin `--ha`, los eventos no se almacenan hasta que vuelve la única instancia,
+  y mientras tanto esperan en el stream de ingesta. Su compresión del registro de escritura
+  anticipada y el archivado con zstd no necesitan reinicio.
+- El bróker y el almacén de eventos pueden reiniciarse a la vez; la actualización espera a ambos.
+
+**Mientras se despliega `event-sources`, una fuente sobre tu propio bróker MQTT puede leerse dos
+veces.** Hasta que se detiene el último pod de la versión anterior, ese pod sigue leyendo la fuente
+con el identificador viejo, junto al pod nuevo que tiene la fuente, y cada uno almacena lo que
+recibe. Los mensajes que llegan en esa ventana pueden almacenarse dos veces. Ocurre una sola vez, y
+lo mismo pasa al volver a la versión anterior; pausar a los publicadores de tu bróker mientras dura
+el despliegue lo evita. Los arrendamientos que deja una versión revertida caducan solos en 30
+segundos.
+
+**El nuevo `event-management`, en su primer arranque,** elimina dieciséis índices y reconstruye las
+claves del almacén de eventos, tabla a tabla
+([Las claves del almacén de eventos](#v0190-event-store-keys)). Mientras trabaja en una tabla, las
+lecturas y escrituras de esa tabla esperan: unos segundos en el caso habitual, y como máximo 45
+segundos por tabla para la reconstrucción de la clave. El `event-management` anterior sigue
+recibiendo y almacenando eventos; un lote retenido el tiempo suficiente se entrega de nuevo y se
+almacena una sola vez. Con `--ha`, los dos pods nuevos arrancan a la vez: uno hace el trabajo
+mientras el otro espera, y el que espera puede ser reiniciado una vez por su comprobación de
+arranque. Es lo esperado. Si el trabajo se detiene (una tabla ocupada, el minuto agotado, demasiadas
+filas, más de 500 fragmentos, una tabla que tarda más de 40 segundos), `event-management` se detiene
+con un error que nombra la tabla y qué hacer, todos los demás servicios ejecutan la nueva versión, y
+el `event-management` anterior sigue almacenando eventos. Consulta
+[Si el cambio del almacén de eventos se detiene](#v0190-event-store-keys-stops).
+
+##### Si el cambio del almacén de eventos se detiene {#v0190-event-store-keys-stops}
+
+- **Demasiadas filas:** `event-management` se detiene antes de cambiar nada, y explica el motivo.
+  `dcctl upgrade` informa de que no terminó de desplegarse; recrea la instancia como en
+  [Comprueba el número de filas](#v0190-row-count).
+- **Una tabla con más de 500 fragmentos:** `event-management` se detiene antes de bloquear nada; su
+  registro nombra la tabla, su número de fragmentos y la consulta de
+  [Cuenta los fragmentos](#v0190-chunk-count). Ese arranque no cambia ni marca nada (su registro
+  lista lo que ya hicieron arranques anteriores): una vez eliminados los fragmentos, el siguiente
+  arranque sigue adelante.
+- **Una tabla ocupada, o el minuto agotado:** cada intento de bloqueo desiste como máximo a los 5
+  segundos, y una tabla ocupada se reintenta cada 2 segundos durante un minuto como máximo.
+  `event-management` se detiene entonces con un error que nombra la tabla, lista lo que ya está
+  hecho e incluye una consulta que lista las sesiones que la retienen; continúa desde ahí al
+  reiniciarse. Si se sigue deteniendo, busca consultas SQL o de BI de larga duración, el borrado de
+  un inquilino o el trabajo de compresión o de retención del almacén.
+- **La reconstrucción de la clave de una tabla tarda más de 40 segundos** una vez bloqueada: se
+  deshace, la tabla conserva su clave anterior, y `event-management` se detiene de inmediato en cada
+  arranque posterior sin tocarla, así que la ingesta no se atasca en cada reinicio. Recrea la
+  instancia o, para intentarlo una vez más (por ejemplo, en un almacenamiento más rápido), ejecuta la
   sentencia `COMMENT ON INDEX` que da el error. Si la tabla guarda eventos fechados muy en el pasado,
-  eliminarlos como en [Cuenta también los fragmentos](#next-time-leading-keys-chunks) acorta la
-  reconstrucción; después ejecuta la sentencia `COMMENT ON INDEX`.
-- Si otra sesión mantiene ocupada una tabla, o se agota el minuto, `event-management` se detiene
-  con un error que nombra la tabla y lista las tablas ya reconstruidas, y continúa desde ahí al
-  reiniciarse, como en [la eliminación de índices anterior](#next-event-store-indexes). El error
-  incluye una consulta que lista las sesiones que retienen la tabla. Reconstruir una tabla también
-  bloquea cada uno de sus fragmentos; si la base de datos se queda sin espacio para bloqueos, el
-  error lo indica y nombra el ajuste que hay que aumentar.
-- Volver a `v0.18.0` mantiene las claves nuevas, y `v0.18.0` guarda y lee eventos con ellas. Una
-  lectura es más lenta allí: `v0.18.0` lista los eventos registrados contra un anclaje de relación
-  buscando cada uno solo por su resumen, algo que la nueva clave de los eventos base no permite
-  directamente, así que esa lista recorre los eventos del tenant en el rango de tiempo pedido,
-  comprimidos incluidos. Lo mismo ocurre mientras el `event-management` anterior sigue en marcha
-  porque una reconstrucción se detuvo después de reconstruir ya la tabla de eventos base. La nueva
-  versión lee esa lista sobre la clave.
+  eliminarlos como en [Cuenta los fragmentos](#v0190-chunk-count) acorta la reconstrucción; después
+  ejecuta la sentencia `COMMENT ON INDEX`.
+- **Sin espacio para bloqueos:** eliminar un índice o reconstruir una clave bloquea cada fragmento
+  de su tabla; el error lo indica y nombra el ajuste que hay que aumentar.
 
-#### El registro de escritura anticipada archivado se comprime con zstd {#next-archive-zstd}
+#### Después de actualizar {#v0190-after}
 
-Las dos bases de datos comprimen ahora con zstd, en lugar de gzip, el registro de escritura
-anticipada que archivan. Con una ingesta sostenida, el archivador se ejecuta junto a la primaria
-del almacén de eventos, y usaba aproximadamente tanta CPU como la propia base de datos. En una
-prueba local sobre un registro con la forma del del almacén de eventos, zstd usó entre un 29 % y
-un 39 % menos de CPU del archivador por segmento archivado, de principio a fin. Sobre ese registro,
-y sobre un registro sin comprimir con la forma del del almacén relacional, su salida fue entre un
-2 % y un 16 % menor que la de gzip. Los respaldos base se siguen comprimiendo con gzip, y el
-[tamaño del almacén de respaldos](./bootstrap.md#backup-store-size) no cambia.
+- **Comprueba dónde están las dos primarias de las bases de datos.** Los traspasos de arriba pueden
+  dejar las dos en un mismo nodo.
+  [Dónde se ejecutan las primarias de las bases de datos](./bootstrap.md#ha-database-primaries)
+  explica cómo comprobarlo y cómo mover una.
+- **Vigila el almacén de respaldos durante tres semanas.** Nada sale de la nueva ventana de 30 días
+  de la base de datos relacional hasta que tiene 30 días, así que su parte del almacén crece durante
+  unas tres semanas, hacia unas cuatro veces el registro que conserva hoy más unos 23 respaldos base
+  nocturnos más, y después se estabiliza.
+- **Vigila las lecturas rechazadas en el techo de cada inquilino:**
+  `devicechain_eventsources_total_readings_rate_limited`,
+  `devicechain_lwm2mingest_ingest_samples_shed_total` y
+  `devicechain_sparkplugingest_ingest_samples_shed_total`. Un inquilino que descarta ahí está
+  enviando más lecturas de las que permite su nivel. Eleva la tasa de ingesta de su nivel, o haz que
+  sus dispositivos envíen menos.
+- **Una instancia existente conserva los tamaños de sus volúmenes.** La actualización indica que
+  esta versión crea un almacén de eventos de 32Gi; para ampliar uno de 8Gi, consulta
+  [Volumen del almacén de eventos](./bootstrap.md#event-store-volume). Un almacén de respaldos
+  existente también conserva su tamaño.
 
-Las restauraciones leen ambos formatos. Cada segmento archivado lleva en el nombre su compresión
-(`.gz` o `.zst`) y se descomprime según ese nombre, así que un archivo que cambia de compresión a
-mitad se restaura como antes. La caducidad de los respaldos antiguos los lee igual.
+Volver a `v0.18.0` no necesita ningún cambio de datos: guarda y lee eventos con las claves nuevas y
+sin los índices eliminados, y devuelve `event-management` a un pod y el techo de ingesta a contar
+mensajes. Una lectura es más lenta allí: `v0.18.0` lista los eventos registrados contra un anclaje de
+relación recorriendo los eventos del inquilino en el rango de tiempo pedido, comprimidos incluidos.
+Una configuración de `device-management` que fije `inMemoryCache.perDeviceCacheEntries` o
+`inMemoryCache.perDeviceCacheMiB` tiene que quitarlos antes: `v0.18.0` no arranca con ninguno de los
+dos.
 
-Volver a ejecutar `dcctl install` con esta versión cambia el almacén relacional, y `dcctl upgrade`
-cambia el almacén de eventos de la instancia. El plugin de respaldo vuelve a leer su destino para
-cada segmento que archiva, así que los segmentos archivados a partir de ese momento se comprimen
-con zstd. Ninguna base de datos se reinicia por ello, y los segmentos que ya están en el archivo
-se quedan como están.
+#### Qué cambia {#v0190-what-changed}
 
-#### device-state fusiona con 10 escritores, event-management espera hasta 10 ms para llenar un lote y la detección dispone de un núcleo completo {#next-pipeline-defaults}
+##### Ingesta {#v0190-ingest}
 
-Cambian tres valores predeterminados de las etapas que primero se quedaron atrás en una prueba en un
-clúster en la nube de tres nodos, a entre 6000 y 7600 eventos por segundo.
+###### Un stream de ingesta lleno rechaza eventos nuevos en lugar de descartar los no leídos {#v0190-backpressure}
 
-- **`device-state` ejecuta 10 escritores de proyección en lugar de 5** (`projection.writers`). Con
-  5, el estado en vivo de los dispositivos mantuvo el 95,7% de 6800 eventos por segundo ofrecidos
-  durante tres minutos y se retrasó más por encima de ese ritmo. Con 10, la solicitud de CPU del
-  servicio elevada a lo que usa (como la incluye esta versión) y `projection.maxBatch` elevado a
-  64, mantuvo el ritmo a 7600. Los tres cambios se hicieron a la vez, así que no se separó la
-  parte de cada uno, y esta versión incluye `projection.maxBatch` en `32`, no en 64: en esa
-  ejecución los lotes promediaron unos 15 eventos, así que el tope de 32 no limitó en promedio,
-  pero un promedio no demuestra que nunca vaya a limitar. En las mismas ejecuciones,
-  `event-management`, que compartía nodo con `device-state`, almacenó menos eventos que con los
-  valores anteriores: 6280 frente a 6796 por segundo con 6800 ofrecidos, 5252 frente a 7463 con
-  7600, y 5624 durante una prueba sostenida de cinco minutos a 6800. Tampoco eso se separó de los
-  demás cambios, y esas ejecuciones siguieron al borrado de unos 10 millones de eventos
-  almacenados, así que las nuevas inserciones rellenaron espacio liberado y escribieron en el
-  registro de escritura anticipada más de lo habitual, lo que subestima lo que la persistencia
-  puede almacenar.
-- **`event-management` espera hasta 10 milisegundos para llenar un lote**
-  (`persistence.lingerMillis`, antes `0`). En la misma prueba, el 59% de sus transacciones
-  almacenaba un único evento, cada una con su propia confirmación y su propia espera a la réplica.
-  Un escritor que encuentra menos eventos que un lote completo espera ahora hasta 10 milisegundos a
-  que lleguen más; uno que encuentra eventos ya esperando los toma enseguida, así que con cola
-  acumulada no cambia nada. La espera ahorra confirmaciones solo cuando todos los escritores están
-  ocupados: por debajo de unos pocos cientos de eventos por segundo por réplica, cada evento se
-  sigue confirmando solo, hasta 10 milisegundos más tarde que antes, y `persist_duration_seconds`
-  sube más o menos eso. El nuevo valor se ha razonado, aún no se ha medido de extremo a extremo.
-  Indica `persistence.lingerMillis: 0` para desactivar la espera.
-- **El límite de CPU de `event-processing` es de 1 núcleo en lugar de 500m.** Con 500m, su límite
-  lo frenó en un 5% de los periodos de planificación a 6000 eventos por segundo, y su cola llegó a
-  unos 41 000 y 93 000 eventos en dos ejecuciones de 10 minutos a ese ritmo. Con un límite de 1
-  núcleo, una solicitud mayor y otra ubicación, su cola tras tres minutos a 6800 fue un tercio de
-  la que tenía con 500m; con solo el límite de 1 núcleo, en un nodo más ocupado, fue mayor. No se
-  aisló qué causó el retraso, y no se afirma que la detección mantenga el ritmo a estos niveles.
+Cuando un consumidor se atrasaba tanto que su cola sin leer llenaba `inbound-events` o
+`resolved-events`, el stream descartaba sus eventos más antiguos para hacer sitio, y eran eventos
+que nadie había procesado todavía. Al dispositivo ya se le había dicho que se aceptaron.
 
-**Antes de actualizar:** si indicaste `rdbConfiguration.maxOpenConnections` para `device-state` en
-`10` o menos y no indicaste `projection.writers`, el nuevo pod de `device-state` no arranca, y su
-error nombra `projection.writers` y el tamaño del pool. La actualización progresiva mantiene el pod
-anterior en marcha fusionando el estado en vivo, y `dcctl upgrade` falla tras esperar, con la
-instancia actualizada a medias. Indica `projection.writers` por debajo de tu pool (tu valor
-predeterminado anterior era `5`), o quita el ajuste del pool para usar el predeterminado de 20, y
-vuelve a ejecutar la actualización. Los pools de 11 a 19 arrancan y registran al iniciar que más de
-la mitad del pool se dedica a escritores.
+Ahora, cuando la cola sin leer de `device-management` en `inbound-events`, o la de
+`event-management` en `resolved-events`, alcanza el 90% de lo que cabe en el stream, la plataforma
+deja de aceptar eventos nuevos hasta que la cola baja del 80%. Los dos streams conservan su semana
+de eventos ya procesados, y ese historial no cuenta para el 90%: solo cuentan los eventos sin
+leer. Un stream lleno también rechaza antes de descartar ese historial tan deprisa que alcance
+eventos sin leer; consulta
+[Un stream lleno también rechaza antes de que los eventos grandes expulsen a los no leídos](#v0190-ingest-history-runway).
 
-- Una instalación que indica `projection.writers`, `persistence.lingerMillis` o
-  `functionalAreas.event-processing.resources.limits.cpu` conserva su valor. Un
-  `persistence.lingerMillis: 0` explícito sigue significando sin espera.
-- Un `ResourceQuota` o `LimitRange` en el espacio de nombres de la instancia puede rechazar el nuevo
-  límite de 1 núcleo de `event-processing`.
-- Las instalaciones con `--compact` reciben los mismos valores. Sus solicitudes no cambian, y un
-  límite de CPU no reserva nada en un nodo.
-- No cambian ni los datos almacenados ni el esquema, así que volver a la versión anterior no requiere
-  nada.
+- La ingesta **HTTP** responde `503` con `Retry-After: 10` mientras rechaza. Reintenta ante un
+  `503`. Un `503` sin `Retry-After` sigue significando que la publicación en sí falló. Una solicitud
+  por encima del techo de su propio inquilino recibe antes un `429`; solo una que esté dentro de él
+  puede recibir el `503` ([Lecturas, no mensajes](#v0190-ingest-readings)).
+- Los dispositivos **MQTT** ya recibieron el acuse del bróker. Sus mensajes esperan en el stream de
+  captura hasta que se reanuda la ingesta.
+- Las lecturas de **Sparkplug y LwM2M**, y los mensajes de un bróker MQTT externo, se descartan y se
+  cuentan, porque esos protocolos no dan a la plataforma forma de hacer que el dispositivo
+  reintente. Las transiciones de conexión y desconexión se siguen aceptando. La compuerta de
+  contrapresión no limita cuántas admite (el techo del inquilino sigue aplicándose a la toma del
+  broker), así que una flota que se reconecta en bucle aún puede llevar el stream a su techo, donde
+  descarta sus eventos más antiguos como antes.
+- El rechazo afecta a **todos los inquilinos**, porque los streams son compartidos. Un
+  `device-state` o un `event-processing` lentos no lo provocan.
+- El simulador y el arnés de carga cuentan un `503` con `Retry-After` como rechazo, no como
+  fallo. Consulta [la entrada sobre los informes de las pruebas de carga](#v0190-loadtest-refusals)
+  para ver cómo lo informan.
 
-**Si instalas el chart tú mismo, con tus propios valores:**
+Consulta [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure). Ningún
+stream se reconfigura, y un servicio que siga en la versión anterior conserva su comportamiento
+anterior hasta que se actualice.
 
-- Un `resources.limits.cpu` de nivel superior ya no llega a `event-processing`. Uno por encima de 1
-  núcleo ahora lo baja a 1, y uno por debajo de 1 núcleo ahora lo sube a 1. Define el suyo en
-  `functionalAreas.event-processing.resources.limits`.
-- Con `useMeasuredRequests: false`, un `resources.requests.cpu` de nivel superior por encima de 1
-  núcleo sigue llegando a `event-processing`, y ahora se rechaza al generar el chart porque supera
-  el límite propio de ese servicio. Define el límite o la solicitud propios de `event-processing`.
+###### Un stream lleno también rechaza antes de que los eventos grandes expulsen a los no leídos {#v0190-ingest-history-runway}
 
-#### `dcctl upgrade` aplica los ajustes del bróker de mensajería y del almacén de eventos de una instancia {#next-upgrade-infrastructure}
+El rechazo de arriba valoraba cada evento sin leer al tamaño medio del stream, porque el bróker
+informa de los bytes totales de un stream y no de los de los eventos que un consumidor no ha leído.
+En un stream lleno eso es la parte sin leer del NÚMERO de eventos. Una ráfaga de eventos grandes
+sobre un historial de eventos pequeños ya procesados podía, por tanto, llenar `inbound-events` o
+`resolved-events` mientras la cola sin leer marcaba más o menos la mitad del límite, y el stream
+descartaba entonces eventos que nadie había procesado. Medir después de cada publicación no lo
+habría evitado.
 
-`dcctl upgrade` ahora aplica la infraestructura propia de la instancia, sus servidores NATS y su
-almacén de eventos, desde la configuración de OpenTofu que trae esta versión, antes de mover los
-servicios. Hasta ahora solo la aplicaba `dcctl bootstrap`. Así, una versión que cambiaba el bróker
-o el almacén de eventos solo cambiaba las instancias creadas después, y una instancia actualizada
-conservaba sus ajustes antiguos sin decirlo. Consulta
-[Qué aplica una actualización a la infraestructura](#upgrade-infrastructure).
+- **El stream también rechaza cuando se le agota el historial procesado.** Un stream lleno descarta
+  primero sus eventos más antiguos, así que los eventos ya procesados que aún conserva por delante
+  de los no leídos son lo que se agota antes de que se pierda uno sin leer. Los servicios que
+  escriben en el stream rechazan ahora eventos nuevos cuando ese historial se descartaría entero en
+  30 segundos al ritmo al que el stream lo está descartando, y vuelven a aceptarlos cuando duraría
+  un minuto, o el consumidor lo ha leído todo. Las dos magnitudes se calculan a partir de números
+  de secuencia que informa el bróker, así que la regla no depende del tamaño de los eventos. Un
+  stream lleno cuyo consumidor mantiene el ritmo no rechaza nada. Eliminar un inquilino tampoco hace
+  por sí solo que un stream rechace, salvo que sus eventos sean los más antiguos que conserva un
+  stream lleno: entonces el stream puede rechazar, sin perder nada, hasta que el consumidor se ponga
+  al día. Consulta [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure) para
+  ese caso y para un stream lleno que contiene menos de un minuto de su propio tráfico.
+- **Un evento que el consumidor recibió pero no ha confirmado cuenta como no leído**, también uno
+  que espera a entregarse de nuevo tras un fallo. Mientras un evento así está cerca del principio de
+  un stream lleno, el stream puede rechazar eventos nuevos hasta que se confirme o se abandone.
+- **Cada servicio mide también el stream en cuanto él mismo ha escrito alrededor de una milésima
+  parte del límite del stream** desde su última medición, como mucho cada 100 ms, además de cada
+  5 segundos.
+- Una serie nueva,
+  `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`, muestra
+  cuánto duraría ese historial. `JetStreamIngestBackpressureEngaged` también se dispara por este
+  rechazo, y su descripción explica ahora cómo distinguir las dos causas.
+- Aún se puede perder un evento sin leer cuando los servicios que escriben en un stream gastan,
+  entre dos de sus mediciones, más historial procesado del que se vio descartar al stream en los
+  30 segundos anteriores, o cuando un stream llega a su límite por primera vez casi sin historial
+  procesado.
 
-Actualizar una instancia creada con `v0.18.0` le da lo que las entradas anteriores describen para
-las instancias nuevas:
+Ningún stream se reconfigura y no se añade ningún ajuste.
 
-- [las solicitudes y el límite de memoria de los servidores NATS](#next-event-path-requests);
-- [el registro de escritura anticipada comprimido](#next-wal-compression);
-- [zstd para el registro archivado](#next-archive-zstd);
-- [la preferencia de ubicación de las primarias](#next-primary-spread).
-
-**Durante la actualización**, los servidores NATS de esa instancia se reinician, de uno en uno con
-`--ha`. Sin `--ha` el bróker no está disponible mientras se reinicia su único servidor, normalmente
-alrededor de un minuto. Las instancias de su almacén de eventos también se reinician una vez, por
-la preferencia de ubicación: primero las réplicas en espera y después un cambio de primaria con
-`--ha`. Sin `--ha`, los eventos no se almacenan hasta que vuelve la única instancia, y mientras
-tanto esperan en el stream de ingesta. El bróker y el almacén de eventos pueden reiniciarse a la
-vez. La actualización espera a ambos antes de mover los servicios.
-
-**Antes de actualizar:**
-
-- **Ejecútala donde se creó la instancia**, o copia antes allí
-  `~/.devicechain/instances/<instancia>/` y mantenlo privado (modo `0700`): contiene credenciales.
-  Sin ese estado la actualización se niega y no cambia nada. También necesita `tofu` en el `PATH`.
-  `--skip-infrastructure` mueve solo los servicios, como antes, y dice lo que dejó sin aplicar.
-- **Comprueba que cada nodo con un servidor NATS tiene libres 500m de CPU y 768Mi de memoria para
-  él**: 25m y 64Mi en una instancia instalada con `--compact`. Un servidor que no se puede colocar
-  queda en `Pending`. Con `--ha` los otros dos siguen atendiendo; **sin `--ha` el bróker está
-  caído** hasta que haya sitio. En ambos casos la actualización falla tras hasta 15 minutos; haz
-  sitio y vuelve a ejecutar `dcctl upgrade`.
-- **Comprueba si el espacio de nombres de cada instancia tiene una cuota de ubicación entre
-  espacios de nombres**, como describe [la preferencia de ubicación](#next-primary-spread). Un pod
-  del almacén de eventos rechazado deja el almacén con una instancia menos o, sin `--ha`, caído.
-- **Conserva los ajustes que diste tú mismo a la configuración de OpenTofu de la instancia.** La
-  actualización conserva un valor declarado en un `terraform.tfvars` junto al estado de la
-  instancia (`~/.devicechain/instances/<instancia>/infra/instance/`) o en `TF_VAR_<nombre>`, y no
-  uno que pasaste con `-var`. Se niega antes que acortar la ventana de recuperación del almacén de
-  eventos (`backup_retention_tsdb`) o dejar de declarar un lector de analítica
-  (`timescale_analytics_readers`), y muestra un aviso para una solicitud o un límite del bróker que
-  bajaría. Pasa esos valores a ese archivo antes de actualizar. El archivo no alcanza a una
-  variable que `dcctl` pasa por sí mismo: en una instancia instalada con `--compact` eso incluye
-  las dos solicitudes del bróker. Consulta
-  [Valores que usted mismo dio a la configuración](#upgrade-infrastructure).
-
-Los tamaños de los volúmenes se conservan. Una instancia creada con un almacén de eventos de 8Gi
-lo conserva, y la actualización indica que esta versión crea 32Gi.
-
-El nuevo límite de memoria de 2Gi de cada servidor NATS se dimensionó con ingesta sostenida. No se
-midió un servidor poniéndose al día tras su reinicio; si uno muere por memoria durante la
-actualización (`OOMKilled` en `kubectl describe pod`), sube `nats_memory_limit` en ese
-`terraform.tfvars` y vuelve a ejecutar `dcctl upgrade`. La actualización acepta un bróker cuyo
-despliegue gradual no terminó, así que la nueva ejecución aplica el límite nuevo y espera a que se
-despliegue. Lo mismo vale para un servidor que queda `Pending` cuando, en lugar de hacer sitio,
-bajas `nats_cpu_request` o `nats_memory_request`, salvo en una instancia `--compact`, donde
-`dcctl` fija las solicitudes por sí mismo.
-
-#### `dcctl destroy` ya no muestra valores de salida que no son los de la instancia {#next-destroy-outputs}
-
-`dcctl destroy` muestra la salida de `tofu destroy`, que empieza con el plan de OpenTofu. Ese plan
-terminaba con una lista **Changes to Outputs** en la que varios valores eran los predeterminados
-de la configuración de OpenTofu de DeviceChain en lugar de los de la instancia: el bróker de una
-instancia HA aparecía con un solo servidor, su almacén de eventos como si no replicara de forma
-síncrona, y los respaldos de una instancia restaurada bajo la ruta predeterminada en lugar de la
-ruta en la que se escribieron. Destroy eliminaba lo correcto; solo esa lista era errónea. Un
-destroy calcula esos valores sin los ajustes de la instancia, así que destroy ahora omite la lista
-y muestra una línea que lo indica. Cuando destroy elimina los respaldos de la instancia, sigue
-mostrando su ruta antes de cambiar nada, leída del almacén de eventos en ejecución. No hay que
-hacer nada.
-
-#### Con `--ha`, event-management se ejecuta en dos pods {#next-ha-persistence-replicas}
-
-Una instancia instalada con `--ha` ejecuta ahora `event-management`, el servicio que almacena cada
-evento, en dos pods en lugar de uno. En una prueba de rendimiento con tres nodos de servicios de 4
-vCPU, el planificador puso su único pod en el nodo que ejecutaba el servidor NATS que lidera el
-stream de eventos entrantes, junto con `device-state`. Ese nodo funcionó al 94-95% de CPU y, a
-partir de 6800 eventos por segundo ofrecidos, almacenar fue la primera etapa en quedarse atrás:
-6592 por segundo durante tres minutos. Con un segundo pod, todas las etapas mantuvieron 6800 en las
-mismas ejecuciones de tres minutos, y la cola se vació en 3 segundos. El ritmo sostenido publicado
-para una instalación `--ha` predeterminada, 6000 eventos por segundo, se midió con un pod y no
-cambia.
-
-- Los dos pods prefieren nodos distintos. Es una preferencia que el planificador pondera junto con
-  otras, no una garantía.
-- Cada pod llena sus propios lotes, así que un lote contiene más o menos la mitad de eventos y el
-  almacén de eventos confirma más o menos el doble de transacciones por evento. Su nodo se mantuvo
-  por debajo del 70% de CPU.
-- Cada pod tiene sus propias conexiones al almacén de eventos, y una actualización puede tener
-  brevemente cuatro pools, así que estas instancias reservan 80 de las conexiones del almacén para
-  la plataforma en lugar de 40. Los `connection_limit` de los lectores analíticos pueden sumar como
-  máximo 17 en lugar de 57. Consulta
-  [Límite de conexiones](../guides/sql-and-bi-access.md#connection-cap).
-- Sin `--ha`, con `--compact --ha` y en una instancia que no ejecuta `event-management`, sigue en
-  un pod y nada cambia.
-
-**Antes de actualizar una instancia instalada con `--ha` y sin `--compact`:**
-
-- **Comprueba que hay sitio para 1,8 núcleos más durante la actualización, y 900m más después.**
-  Hasta que los pods nuevos están listos, los dos se ejecutan junto al antiguo. Un pod que no se
-  puede colocar queda en `Pending`, y la actualización falla tras esperar, con la instancia
-  actualizada a medias. Haz sitio y vuelve a ejecutar `dcctl upgrade`.
-- **Si declaraste lectores analíticos, suma sus `connection_limit`.** Por encima de 17, la
-  actualización se detiene al planificar la infraestructura, antes de cambiar nada, con un error
-  que indica el total de los lectores y la reserva de la plataforma. Reduce el límite de un lector
-  en el `terraform.tfvars` junto al estado de la instancia y vuelve a ejecutar la actualización.
-- **Si subiste `timescale_analytics_reserved_connections` para ejecutar un segundo pod de
-  `event-management`, devuélvelo a 40.** Ahora es la reserva de cada pod y se multiplica por el
-  número de pods, así que un valor subido se cuenta dos veces y la actualización puede negarse.
-- Con `--skip-infrastructure` se mueven los servicios y la reserva no, y la actualización lo dice.
-  Mantén los límites de los lectores en 17 o menos en total hasta que una actualización aplique la
-  infraestructura.
-
-Durante la actualización los dos pods nuevos arrancan a la vez. Uno aplica
-[el cambio de claves del almacén de eventos](#next-time-leading-keys) mientras el otro lo espera, y
-el que espera puede ser reiniciado una vez por su comprobación de arranque antes de quedar listo. Es
-lo esperado.
-
-Volver a la versión anterior devuelve `event-management` a un pod. No cambian los datos almacenados
-ni el esquema.
-
-**Si instalas el chart por tu cuenta:** nada cambia. El valor predeterminado del chart sigue siendo
-una réplica. Para ejecutar dos, establece `functionalAreas.event-management.replicas: 2` y, en un
-almacén de eventos creado con el OpenTofu de este repositorio, establece también
-`event_management_replicas = 2`, que reserva las conexiones del segundo pod.
-
-La configuración de OpenTofu de la instancia declara ahora que necesita OpenTofu 1.9 o posterior
-(o Terraform 1.9 o posterior). Ya necesitaba la 1.9 para cargarse, así que una versión anterior
-falla ahora con un mensaje más claro en lugar de con otro.
-
-#### El techo de ingesta de un inquilino cuenta lecturas, y HTTP lo comprueba antes de la compuerta de contrapresión compartida {#next-ingest-readings}
+###### El techo de ingesta de un inquilino cuenta lecturas, y HTTP lo comprueba antes de la compuerta de contrapresión compartida {#v0190-ingest-readings}
 
 El techo de ingesta por inquilino cuenta ahora **lecturas** en todos los transportes de dispositivo.
 Una lectura es un valor almacenado: una clave de una entrada de medición, una ubicación o una
@@ -4949,14 +4357,11 @@ acababa rechazando los eventos de todos los inquilinos.
 Con el valor por defecto, los dispositivos de un inquilino se admiten como máximo a 5000 lecturas
 por segundo, incluso con un atraso vaciándose y ambos servicios de borde en marcha, lo que queda por
 debajo de las 6000 por segundo que se midió que almacena una instalación de alta disponibilidad por
-defecto en el clúster descrito en
+defecto, con `event-management` en un solo pod, en el clúster descrito en
 [qué permite el valor por defecto](../concepts/governance.md#ingest-default). En un clúster más
 pequeño, o con más de una réplica de `event-sources`, baja el valor por defecto.
 
-**Antes de actualizar:** localiza cualquier inquilino que envíe más de 1000 lecturas por segundo y
-eleva primero la tasa de ingesta de su nivel. Las lecturas por encima del techo se descartan, no se
-retrasan: los dispositivos MQTT, LwM2M y Sparkplug no reciben aviso, y un mensaje MQTT descartado así
-ya estaba confirmado.
+Para localizar antes de actualizar los inquilinos que envían más de 1000 lecturas por segundo:
 
 - Para dispositivos JSON por MQTT y HTTP, cuenta las mediciones almacenadas por segundo del
   inquilino durante una hora de mucha actividad.
@@ -4968,64 +4373,57 @@ ya estaba confirmado.
   rápido como puede tras una reconexión. Un sitio que agrupa varias lecturas en un mensaje puede
   superar el techo de su inquilino mientras se pone al día.
 
-**Después de actualizar:** vigila `devicechain_eventsources_total_readings_rate_limited`,
-`devicechain_lwm2mingest_ingest_samples_shed_total` y
-`devicechain_sparkplugingest_ingest_samples_shed_total`. Un inquilino que descarta ahí está enviando
-más lecturas de las que permite su nivel. Eleva la tasa de ingesta de su nivel, o haz que sus
-dispositivos envíen menos.
-
 Volver a la versión anterior restaura el cobro por mensaje. No cambian datos almacenados ni el
 esquema, y no se renombra ninguna clave de configuración.
 
-#### La detección reintenta liberar su partición cuando el bróker no responde {#next-detect-lease-release}
+###### Un evento lleva como máximo 256 lecturas, y las pasarelas dividen los mensajes mayores {#v0190-reading-limit}
 
-Cuando el pod del motor de detección se detiene, libera su partición para que el siguiente pod
-empiece a detectar enseguida. Hasta ahora, si el bróker no respondía a esa liberación, por ejemplo
-porque un servidor del bróker se estaba reiniciando en ese momento, el pod se rendía tras un
-intento. El siguiente pod esperaba entonces a que la partición expirara, hasta 30 segundos, y un
-periodo de traspaso adicional de 20 segundos antes de detectar nada. Ahora el pod reintenta la
-liberación hasta que el bróker responde, mientras se lo permita su tiempo de apagado, y reserva lo
-suficiente para un tiempo de espera más del bróker y para terminar de detenerse. Una renovación o una liberación cuya respuesta se perdió mientras un servidor del
-bróker se reiniciaba tampoco le cuesta ya la partición al motor. El reintento lo hace el pod que se
-detiene, así que tiene efecto a partir de la actualización siguiente a la que instala esta versión:
-durante esa actualización, el pod que se sustituye todavía ejecuta la versión anterior y hace un
-solo intento.
+**Un evento lleva ahora como máximo 256 lecturas, en todos los transportes, y el límite no es
+configurable.** Una lectura es un valor de métrica de una medición, o una entrada de ubicación o de
+alerta. Antes, el evento JSON de dispositivo en HTTP y MQTT admitía hasta 1000 por defecto, y un
+operador podía subir o bajar ese valor.
 
-Lo que todavía pausa la detección:
+Para localizar antes de actualizar los dispositivos afectados, establece
+`maxReadingsPerMessage: 256` en la configuración de event-sources de `v0.18.0` y vigila
+`total_msg_too_many_readings`: cada mensaje que cuente es uno que esta versión rechaza. Cambia esos
+dispositivos para que envíen como máximo 256 lecturas por mensaje.
 
-- **Sin `--ha`, una actualización que reinicia el bróker detiene la detección durante todo el
-  reinicio**, normalmente alrededor de un minuto (consulta [la entrada del bróker y del almacén de
-  eventos](#next-upgrade-infrastructure)). El motor no puede conservar su partición durante una
-  interrupción del bróker de más de 30 segundos, y nada registra que se detuvo limpiamente, así
-  que, cuando el bróker vuelve, espera el periodo de traspaso de 20 segundos, más hasta 5 segundos
-  antes de reintentar, y después reproduce el flujo desde su último punto de control, como tras
-  cualquier reinicio. El despliegue gradual de los servicios que sigue mueve luego la partición al
-  pod nuevo, que reproduce el flujo una vez más pero no espera.
-- **Un pod que se detiene mientras el bróker sigue inaccesible más allá de su apagado** todavía deja
-  que su partición expire, y el siguiente pod espera hasta 30 segundos más el periodo de traspaso.
+- **HTTP y MQTT:** un mensaje con más de 256 lecturas se rechaza entero, nunca se recorta. HTTP
+  responde `400`, indicando el número de lecturas y el límite. En MQTT no se avisa al dispositivo,
+  porque el bróker confirma antes de decodificar; el rechazo se cuenta en
+  `total_msg_too_many_readings` y el mensaje va al stream de decodificación fallida. Los mensajes
+  capturados antes de la actualización y decodificados después, incluidos los que sigan en la cola
+  de un agente de borde, se evalúan con el límite nuevo.
+- **`maxReadingsPerMessage` queda retirado.** El servicio arranca, registra un aviso y lo ignora;
+  un valor por debajo de 256 tampoco se respeta ya. Elimina la clave.
+- **Sparkplug B:** un mensaje con más de 256 valores de métrica se convertía en un solo evento.
+  Ahora se convierte en eventos consecutivos de como máximo 256, cada valor con su propia marca de
+  tiempo. Las consultas que cuentan *eventos* verán más; las lecturas almacenadas son las mismas. Las
+  reglas ven cada evento por separado, así que una regla de tiempo de retención o de ausencia puede
+  dispararse ahora entre dos eventos de un mismo mensaje ancho.
+- **LwM2M:** un Notify con más de 256 valores numéricos conservaba los 256 primeros y descartaba el
+  resto. Ahora se almacena como varios eventos, y el presupuesto de muestras del inquilino se cobra
+  evento a evento; los eventos que no puede admitir se cuentan en `ingest_samples_shed_total`. Se
+  elimina `notify_samples_truncated_total`: quítala de cualquier panel o alerta.
 
-Con `--ha` el bróker sigue disponible mientras sus servidores se reinician de uno en uno. El motor
-solo pierde su partición si sus renovaciones fallan durante 30 segundos. No hace falta hacer nada.
+###### Se almacena un evento que ya estaba en cola con miles de lecturas {#v0190-large-events}
 
-#### Un servicio que ejecuta más de un pod mantiene sus pods en nodos distintos {#next-own-pods-apart}
+Un evento con más lecturas de las que caben en una sola sentencia de la base de datos (más de
+unas 5950 mediciones, 5450 ubicaciones o 6550 alertas, o 9350 anclajes de relación) no se podía
+almacenar nunca. El controlador de la base de datos rechazaba la sentencia, `event-management`
+reintentaba el evento hasta agotar sus entregas y después lo registraba en el stream
+`failed-events` como un fallo posterior, no como un problema del propio evento. Antes del
+[límite de 256 lecturas](#v0190-reading-limit), un evento así podía venir de un mensaje Sparkplug
+con miles de métricas, o de un transporte JSON cuyo `maxReadingsPerMessage` se hubiera subido por
+encima de su valor predeterminado de 1000, y puede que alguno siga esperando en un stream al
+actualizar. Ahora el almacén de eventos escribe un evento grande en tantas sentencias como necesite,
+dentro de la misma transacción, así que se almacena entero o no se almacena, como cualquier otro, y
+una reentrega suya no añade nada. El mismo camino de reintentos y fallo posterior lo seguía un
+evento de cambio de estado cuyo identificador de sesión es demasiado grande para la columna de 64
+bits con signo de la base de datos; ese evento se registra ahora como inválido en su primera
+entrega.
 
-Con más de una réplica, cada uno de los cinco servicios de la ruta de eventos (`device-management`,
-`event-management`, `device-state`, `event-sources` y `event-processing`) prefiere un nodo que no
-ejecute ya otro de sus propios pods. Un servicio con [el reparto de la ruta de
-eventos](#next-event-path-requests) deja de recibir el reparto predeterminado del clúster, y esto le
-devuelve la mitad que mantiene las réplicas de un servicio en nodos distintos; la otra mitad, zonas
-distintas, no se devuelve. Es una preferencia que el planificador pondera junto con las demás del
-servicio (menos servicios de la ruta de eventos por nodo y, para `device-management`,
-`event-sources` y `event-management`, sin la primaria del almacén de eventos), no una garantía.
-
-- Con `--ha`, se aplica a los dos pods de `event-management`.
-- **Si instalas el chart por tu cuenta**, se aplica a cualquiera de los cinco que ejecutes con
-  `replicas` por encima de uno, y figura en la antiafinidad del pod, junto a la preferencia por
-  evitar la primaria del almacén de eventos en los tres servicios que la tienen. Un servicio con `eventPathSpread: false` conserva en su
-  lugar el reparto predeterminado del clúster, que también prefiere zonas distintas, y no recibe
-  esta preferencia.
-
-#### Se rechaza una lectura fechada más de 366 días antes de llegar {#next-event-age-limit}
+###### Se rechaza una lectura fechada más de 366 días antes de llegar {#v0190-event-age-limit}
 
 El `occurredTime` de una lectura, en el sobre o en cualquier entrada, puede ser ahora como mucho 366
 días anterior al momento en que la plataforma la recibió. Uno más antiguo se rechaza, nunca se mueve
@@ -5049,9 +4447,8 @@ a una hora posterior:
 Antes se aceptaba cualquier hora pasada, y el almacén de eventos guarda una partición (fragmento) por
 intervalo de fragmento, un día por defecto. Un dispositivo podía crear una partición por cada día
 hasta el año 1, y toda operación posterior que recorre cada partición, como una actualización que
-reconstruye una clave, se volvía más lenta con ellas.
-[Cuenta también los fragmentos](#next-time-leading-keys-chunks) explica qué hace la actualización de
-esta versión con una tabla que ya tiene demasiados.
+reconstruye una clave, se volvía más lenta con ellas. [Cuenta los fragmentos](#v0190-chunk-count)
+explica qué hace la actualización de esta versión con una tabla que ya tiene demasiados.
 
 - Un dispositivo sin reloj debe omitir `occurredTime`; la plataforma fecha entonces la lectura al
   llegar. La época, `1970-01-01T00:00:00Z`, se rechaza.
@@ -5061,76 +4458,7 @@ esta versión con una tabla que ya tiene demasiados.
   [el almacén local](./edge-services.md#the-spool).
 - El límite es fijo. No hay ningún ajuste para él.
 
-#### Un stream de ingesta lleno también rechaza antes de que los eventos grandes expulsen a los no leídos {#next-ingest-history-runway}
-
-El rechazo de ingesta añadido en esta versión valoraba cada evento sin leer al tamaño medio del
-stream, porque el bróker informa de los bytes totales de un stream y no de los de los eventos que un
-consumidor no ha leído. En un stream lleno eso es la parte sin leer del NÚMERO de eventos. Una ráfaga
-de eventos grandes sobre un historial de eventos pequeños ya procesados podía, por tanto, llenar
-`inbound-events` o `resolved-events` mientras la cola sin leer marcaba más o menos la mitad del
-límite, y el stream descartaba entonces eventos que nadie había procesado. Medir después de cada
-publicación no lo habría evitado.
-
-- **El stream también rechaza cuando se le agota el historial procesado.** Un stream lleno descarta
-  primero sus eventos más antiguos, así que los eventos ya procesados que aún conserva por delante
-  de los no leídos son lo que se agota antes de que se pierda uno sin leer. Los servicios que
-  escriben en el stream rechazan ahora eventos nuevos cuando ese historial se descartaría entero en
-  30 segundos al ritmo al que el stream lo está descartando, y vuelven a aceptarlos cuando duraría
-  un minuto, o el consumidor lo ha leído todo. Las dos magnitudes se calculan a partir de números
-  de secuencia que informa el bróker, así que la regla no depende del tamaño de los eventos. Un
-  stream lleno cuyo consumidor mantiene el ritmo no rechaza nada. Eliminar un inquilino tampoco hace
-  por sí solo que un stream rechace, salvo que sus eventos sean los más antiguos que conserva un
-  stream lleno: entonces el stream puede rechazar, sin perder nada, hasta que el consumidor se ponga
-  al día. Consulta [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure) para
-  ese caso y para un stream lleno que contiene menos de un minuto de su propio tráfico.
-- **Un evento que el consumidor recibió pero no ha confirmado cuenta como no leído**, también uno
-  que espera a entregarse de nuevo tras un fallo. Mientras un evento así está cerca del principio de
-  un stream lleno, el stream puede rechazar eventos nuevos hasta que se confirme o se abandone.
-- **Cada servicio mide también el stream en cuanto él mismo ha escrito alrededor de una milésima
-  parte del límite del stream** desde su última medición, como mucho cada 100 ms, además de cada
-  5 segundos.
-- Una serie nueva,
-  `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`, muestra
-  cuánto duraría ese historial. `JetStreamIngestBackpressureEngaged` también se dispara por este
-  rechazo, y su descripción explica ahora cómo distinguir las dos causas. Consulta
-  [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure).
-- Aún se puede perder un evento sin leer cuando los servicios que escriben en un stream gastan,
-  entre dos de sus mediciones, más historial procesado del que se vio descartar al stream en los
-  30 segundos anteriores, o cuando un stream llega a su límite por primera vez casi sin historial
-  procesado.
-
-No hay nada que hacer al actualizar. Ningún stream se reconfigura y no se añade ningún ajuste.
-
-#### Volver a ejecutar `dcctl bootstrap` termina una instancia cuyo primer arranque inicial falló al final {#next-bootstrap-resume}
-
-Un arranque inicial que fallaba después de escribir el documento de configuración de la
-instancia (mientras instalaba el chart, o mientras esperaba a que los servicios estuvieran
-listos) dejaba una instancia sobre la que `dcctl bootstrap` se negaba a volver a ejecutarse,
-como si ya estuviera en marcha.
-
-Ahora, cuando `dcctl bootstrap` declara una instancia que está construyendo, deja anotado en la
-declaración que el primer arranque inicial no ha terminado (la anotación
-`core.devicechain.io/bootstrap-unfinished`). Un arranque inicial o una actualización que termina
-con éxito la retira, en la misma escritura que registra la instancia como `Ready`. Hasta
-entonces, volver a ejecutar el mismo `dcctl bootstrap` termina la instancia. Reutiliza la clave
-raíz, las credenciales del broker y las contraseñas de las bases de datos que dejó en el clúster
-la ejecución anterior, y muestra la contraseña generada del superusuario, a la que la ejecución
-fallida nunca llegó. Una vez retirada la anotación, una nueva ejecución se rechaza como antes.
-
-- Si una ejecución termina con éxito pero no puede retirar la anotación (la escritura se rechaza,
-  o el bloqueo del clúster se reclamó antes), sale con un error que indica que vuelvas a ejecutar
-  el mismo comando, en lugar de informar de un éxito sobre una instancia sobre la que un arranque
-  inicial posterior se ejecutaría.
-- No hay nada que hacer al actualizar. Una instancia cuyo primer arranque inicial empezó con una
-  versión anterior no tiene esa anotación, así que se trata como en marcha, igual que antes; la
-  negativa nombra `dcctl upgrade` y `dcctl destroy`. Consulta
-  [Terminar un bootstrap que falló a mitad de camino](./disaster-recovery.md#resuming-a-bootstrap).
-- Actualiza todas las copias de `dcctl` que uses antes de ejecutarlas sobre una instancia
-  construida con esta versión. Un `dcctl` anterior no retira la anotación, así que una
-  actualización posterior con él que falle puede dejarla en vigor sobre una instancia en marcha,
-  y un `dcctl bootstrap` sin más se ejecutaría entonces sobre esa instancia.
-
-#### Una fuente MQTT sobre tu propio bróker se conecta con su propio identificador de cliente, desde un solo pod a la vez {#next-external-mqtt-client-id}
+###### Una fuente MQTT sobre tu propio bróker se conecta con su propio identificador de cliente, desde un solo pod a la vez {#v0190-external-mqtt-client-id}
 
 Una fuente de eventos que lee de un bróker MQTT que tú operas se conectaba con el identificador de
 cliente `devicechain`, fuera cual fuera la instancia, la fuente o el pod. Un bróker mantiene una
@@ -5145,20 +4473,10 @@ flujo de la plataforma y no se veía afectada.
 Ahora cada fuente se conecta como `devicechain:<instancia>:<fuente>:<pod>`, y solo un pod lee una
 fuente dada a la vez. Los pods acuerdan cuál mediante un arrendamiento guardado en el bróker de
 mensajería de la plataforma. Los demás no conectan nada para esa fuente hasta que se libera.
-Consulta la [Matriz de transportes](../reference/transport-matrix.md#external-mqtt-broker).
+Consulta la [Matriz de transportes](../reference/transport-matrix.md#external-mqtt-broker). Lo que
+hay que permitir antes en tu bróker está en el [paso 12](#v0190-mqtt-client-id), y la única doble
+lectura durante el despliegue, en [Durante la actualización](#v0190-during).
 
-- **Antes de actualizar, si la ACL, la lista de permitidos o la regla de identificadores de tu
-  bróker nombra `devicechain`,** permite los identificadores que empiezan por `devicechain:`. El
-  identificador además supera los 23 caracteres, el límite más corto que MQTT exige aceptar a un
-  bróker. Un bróker que rechaza el nuevo identificador hace que el pod nuevo no arranque, con el
-  motivo del bróker en su registro, y la actualización se detiene con los pods viejos aún en
-  marcha y leyendo la fuente como antes.
-- **Mientras avanza la actualización, una fuente puede leerse dos veces.** Hasta que se detiene el
-  último pod de la versión anterior, ese pod sigue leyendo la fuente con el identificador viejo,
-  junto al pod nuevo que tiene la fuente, y cada uno almacena lo que recibe. Los mensajes que
-  llegan en esa ventana pueden almacenarse dos veces. Ocurre una sola vez, y lo mismo pasa al
-  volver a la versión anterior. Para evitarlo, pausa a los publicadores de tu bróker mientras dura
-  el despliegue. Los arrendamientos que deja una versión revertida caducan solos en 30 segundos.
 - Un pod que se detiene cede la fuente a otro pod en unos dos segundos. Tras una pérdida abrupta
   (un fallo de nodo, un `SIGKILL`, una terminación por falta de memoria), la fuente queda sin leer
   unos 30 segundos más lo que tarde en reconectarse. La fuente sigue siendo como mucho una vez: tu
@@ -5173,9 +4491,482 @@ Consulta la [Matriz de transportes](../reference/transport-matrix.md#external-mq
   lee la fuente y 0 en los demás, y un nuevo contador,
   `devicechain_eventsources_total_msg_not_owner{source}`, para los mensajes que un pod descarta
   porque acaba de perder la fuente. Nueva alerta: `ExternalMqttSourceNotReadByOnePod` (aviso),
-  cuando una fuente lleva dos minutos sin que la lea ningún pod, o leída por más de uno.
+  cuando una fuente lleva dos minutos sin que la lea ningún pod, o leída por más de uno. Consulta
+  [Una fuente MQTT externa que nadie lee](./observability.md#external-mqtt-owner).
 
-#### Los informes de las pruebas de carga cuentan los eventos rechazados {#next-loadtest-refusals}
+##### Resolución {#v0190-resolution}
+
+###### device-management responde las búsquedas repetidas desde memoria {#v0190-local-cache}
+
+- **Cada réplica de `device-management` guarda en memoria lo que leyó de sus cachés de clave-valor
+  durante hasta cinco segundos**, y responde desde ahí las búsquedas repetidas del mismo
+  dispositivo, tipo de dispositivo o inquilino. Un tiempo de vida de caché menor de cinco segundos
+  también lo acorta.
+- **Un cambio puede tardar hasta cinco segundos más en llegar a los eventos que resuelven las demás
+  réplicas.** Un dispositivo borrado, o vuelto a crear con el mismo token, puede seguir
+  resolviéndose a través de su registro anterior en otra réplica durante esos segundos, y una regla
+  cuyo alcance de grupo acaba de cambiar puede evaluarse allí con el alcance anterior. Un flanco de
+  alarma para un dispositivo recién borrado se sigue descartando de inmediato en todas las réplicas.
+- **Hasta 131 072 entradas o 24 MiB por réplica** para cada una de las tres cachés que se guardan
+  por dispositivo (un dispositivo por token, sus relaciones seguidas, sus pertenencias a grupos);
+  4096 entradas o 4 MiB para las cachés por tipo de dispositivo y por inquilino.
+  `inMemoryCache.perDeviceCacheEntries` e `inMemoryCache.perDeviceCacheMiB` cambian el límite; sube
+  con ellos el límite de memoria del servicio.
+- **Un dispositivo que informa con menos frecuencia que cada cinco segundos no se responde desde
+  memoria**, por grande que sea la caché.
+- **Las búsquedas de perfil, relaciones y alcance de grupos de un evento se hacen a la vez**, y
+  también sus búsquedas de pertenencia a grupos, así que un evento que no encuentra nada en memoria
+  espera una sola ida y vuelta a NATS en lugar de tres. La base de datos se sigue leyendo una
+  consulta tras otra, así que `resolution.workers` sigue contando las conexiones como antes.
+- **Métricas nuevas** cuentan las búsquedas respondidas desde memoria, las entradas descartadas, el
+  tamaño y los límites (`kv_cache_local_max_entries`, `kv_cache_local_max_bytes`);
+  `kv_cache_request_duration_seconds{op="get"}` cuenta ahora solo las búsquedas que la memoria no
+  pudo responder. Consulta [Cachés que dejan de responder](./observability.md#kv-caches).
+
+###### device-management comprueba desde memoria una credencial de dispositivo repetida {#v0190-credential-cache}
+
+- **Cada réplica guarda en memoria, durante hasta cinco segundos, una credencial de dispositivo que
+  acaba de verificar**, y comprueba los siguientes eventos del dispositivo contra esa copia en lugar
+  de leer la base de datos. La copia se comprueba exactamente igual que la credencial almacenada: la
+  contraseña de `MQTT_BASIC` se sigue comparando en cada evento, y una expiración sigue surtiendo
+  efecto en su momento. Una credencial que no se pudo verificar nunca se guarda.
+- **Una revocación puede tardar ahora hasta cinco segundos en una réplica que no recibió el
+  aviso.** Deshabilitar, borrar, reasignar o cambiar de cualquier otra forma una credencial, y
+  reemplazar, editar o borrar su dispositivo, descartan la copia en la réplica que hace el cambio
+  antes de responder, y avisan a las demás réplicas para que descarten la suya. Si ese aviso se
+  pierde (una réplica que se reconecta a NATS, o réplicas que aún ejecutan la versión anterior
+  durante la actualización), la copia de esa réplica caduca en cinco segundos como máximo. Hasta
+  ahora una revocación surtía efecto en el siguiente evento en todas las réplicas. Consulta
+  [Cuánto tarda en aplicarse una revocación](../guides/device-credentials.md#revocation-timing).
+- **Las conexiones MQTT siguen leyendo la base de datos cada vez**, así que una credencial revocada
+  no puede abrir una conexión nueva en ninguna réplica.
+- **Como máximo 65 536 credenciales o 16 MiB por réplica**, un límite fijo; con los valores por
+  defecto las cachés en memoria del servicio guardan como máximo 96 MiB en lugar de 80. Métricas
+  nuevas cuentan las comprobaciones respondidas desde la copia, las credenciales descartadas, su
+  tamaño y los avisos de descarte enviados y recibidos.
+
+##### Almacenamiento {#v0190-storage}
+
+###### Las claves del almacén de eventos empiezan por el tiempo, y desaparecen dieciséis índices {#v0190-event-store-keys}
+
+Las claves que impiden almacenar un evento dos veces empiezan ahora por el inquilino y el instante
+del evento, en lugar del inquilino y un resumen criptográfico del evento, así que la clave de un
+evento nuevo queda junto a la anterior y la base de datos reescribe muchas menos páginas de índice.
+Se eliminan dieciséis índices: doce que repetían otro índice o que ninguna consulta leía, y los
+índices por inquilino y tiempo de los eventos base, las mediciones, las ubicaciones y las alertas,
+a los que ahora responden las claves nuevas. Cada fila almacenada actualiza menos índices que en
+`v0.18.0`: una fila de evento base, dos en lugar de cinco (tres en lugar de seis con un id
+alternativo); una fila de medición, tres en lugar de cinco; una fila de ubicación o de alerta, uno
+en lugar de cuatro; una fila de anclaje de relación, dos en lugar de cuatro; y una fila de cambio de
+presencia, uno en lugar de cuatro. Un evento de medición con una lectura y sin anclajes actualiza
+cinco índices en lugar de diez.
+
+Si `event-management` se negó a arrancar porque una tabla tiene más de 500 fragmentos, el
+procedimiento de `drop_chunks` por lotes al que remite su registro está en
+[Cuenta los fragmentos](#v0190-chunk-count).
+
+- Los eventos se siguen almacenando una sola vez, y toda lectura que sirve `event-management`
+  sigue usando un índice.
+- **La lista de eventos de un dispositivo trabaja más sobre los datos recientes.** El total que
+  acompaña a la lista, y una lista filtrada por tipo de evento, recorren ahora todas las filas del
+  dispositivo que aún no están comprimidas (la última semana, por defecto), incluidas las de un
+  dispositivo con el mismo token en otro inquilino. Cuando el almacén tiene pocos tokens de
+  dispositivo distintos (en nuestras pruebas, 40 en lugar de 100), la primera página de un
+  dispositivo que lleva un tiempo en silencio mientras los demás siguen enviando puede tardar
+  bastante más.
+- **Acceso por SQL y BI.** Una consulta sobre los eventos, lecturas, ubicaciones, alertas o anclajes
+  de un inquilino que filtra solo por tiempo usa un índice. Una consulta solo por tiempo sobre
+  `analytics.state_change_events` lee todas las filas de tu inquilino en cada fragmento sin
+  comprimir que toca; añade `device_token` para usar un índice. Para unir `analytics.event_anchors`
+  con `analytics.events`, une por `event_id` y por `occurred_time`. Consulta
+  [Notas prácticas](../guides/sql-and-bi-access.md#practical-notes).
+
+###### Los lotes se escriben en menos sentencias {#v0190-batch-writes}
+
+- **`event-management` escribe cada lote con una sentencia por tabla para cada inquilino que
+  contiene**, dentro de la misma transacción, en lugar de varias por evento. Lo que se almacena no
+  cambia, un evento se sigue reconociendo solo después de que su lote se confirme, y un evento
+  reentregado no añade nada. Cuando la base de datos rechaza una fila de una sentencia que lleva
+  varios eventos, el lote se vuelve a escribir evento a evento para encontrarlo;
+  `persist_batch_fallbacks_total` lo cuenta. Los eventos de conexión y desconexión se siguen
+  escribiendo uno a uno. Consulta [Persistencia de eventos](./observability.md#event-persistence).
+- **`device-state` escribe el estado de todos los dispositivos que ya tienen uno en una sola
+  sentencia por cada inquilino del lote.** Un dispositivo que aparece por primera vez se sigue
+  creando por separado, y `updatedAt` sigue avanzando cada vez que se escribe su estado.
+- **Cada conexión del pool a la base de datos sigue abierta entre usos**, hasta el tamaño del pool;
+  antes solo lo hacía la mitad, y un servicio que usaba más de la mitad se reconectaba en cada
+  consulta. Una conexión se sigue cerrando una hora después de abrirse. La base de datos puede
+  mostrar más conexiones inactivas de cada servicio después de un periodo de mucha carga; con la
+  configuración predeterminada lo cubre el
+  [presupuesto de conexiones](./bootstrap.md#connection-budget), pero si ejecutas un servicio con
+  `replicas` por encima de 1 o subiste su `maxOpenConnections`, comprueba el límite de conexiones de
+  la instancia. `maxIdleConnections` se sigue respetando cuando se fija.
+
+###### Nuevos valores por defecto del flujo de eventos {#v0190-pipeline-defaults}
+
+| Ajuste | `v0.18.0` | `v0.19.0` |
+| --- | --- | --- |
+| `event-management` `persistence.writers` | 5 | 10 |
+| `event-management` `persistence.maxBatch` | 32 | 64 |
+| `event-management` `persistence.lingerMillis` | 0 | 10 |
+| `device-state` `projection.writers` | 5 | 10 |
+| Límite de CPU de `event-processing` | 500m | 1 núcleo |
+| Pods de `event-management` con `--ha` (no con `--compact --ha`) | 1 | 2 |
+
+Una instalación que fija alguno de estos valores conserva el suyo; `persistence.lingerMillis: 0`
+sigue significando sin espera. Un escritor que encuentra menos eventos que un lote completo espera
+ahora hasta 10 milisegundos a que lleguen más, así que por debajo de unos pocos cientos de eventos
+por segundo por pod cada evento se confirma hasta 10 milisegundos más tarde que antes y
+`persist_duration_seconds` sube más o menos eso; con cola acumulada no cambia nada. En la prueba de
+rendimiento de la versión a 3000 eventos por segundo, las transacciones por evento almacenado
+bajaron un 37% (de 0,126 a 0,080), el tiempo mediano para almacenar un evento subió unos 5
+milisegundos y el 1% más lento bajó un 18%. Esa comparación también cambió las claves del almacén
+de eventos y la compresión de su archivo, las solicitudes de CPU de los servicios y su colocación, los escritores de `device-state` y el límite de CPU de la detección, y las solicitudes y el límite de memoria de los servidores NATS, así que no aísla la espera. En una ejecución de cinco
+minutos con 6800 eventos por segundo ofrecidos, el camino que confirma un evento cada vez se llevó
+el 4,8% de la CPU de `event-management`, con 0,050 transacciones por evento, frente al 24% en la
+prueba anterior, con la compilación previa a la espera y en otros nodos de servicios. Las
+instalaciones con `--compact` reciben los mismos valores salvo el segundo pod; sus solicitudes no
+cambian.
+
+**Dos pods de `event-management` con `--ha`.** En un grupo de servicios de tres nodos, uno de ellos
+ejecuta también el servidor NATS que lidera el stream de eventos entrantes. En la prueba de
+rendimiento de la versión, el planificador puso allí el único pod de `event-management` junto con
+`device-state`; ese nodo funcionó al 94-95% de CPU y, con un solo pod, el almacenamiento bajó a 6592
+eventos por segundo con 6800 ofrecidos, la primera etapa en quedarse atrás. Un segundo pod permite
+almacenar usando la CPU de otro nodo. La cifra de [Rendimiento](#v0190-performance) se midió con un
+pod, y no se ha vuelto a medir con dos. Los pods prefieren nodos distintos, pero es una preferencia, no
+una garantía. Cada uno llena sus propios lotes, así que el almacén de eventos confirma más o menos
+el doble de transacciones por evento; su nodo se mantuvo por debajo del 70% de CPU. Si instalas el
+chart por tu cuenta, su valor predeterminado sigue siendo una réplica: establece
+`functionalAreas.event-management.replicas: 2` y, en un almacén de eventos creado con el OpenTofu
+de este repositorio, establece `event_management_replicas = 2`, que reserva las conexiones del
+segundo pod.
+
+##### Dimensionamiento y ubicación {#v0190-sizing}
+
+###### Los servicios de la ruta de eventos solicitan lo que usan y se reparten entre los nodos {#v0190-service-sizing}
+
+Los cinco servicios que procesan cada evento solicitan la CPU que se midió que usan a 6000 eventos
+por segundo (los valores están en [Haz sitio](#v0190-room)); antes, con 100m cada uno, solicitaban
+mucho menos que eso, y el planificador, que ubica los pods según sus solicitudes, juntaba a los más
+ocupados. `event-sources` y `device-state` pueden usar ahora hasta 2 núcleos, como
+`device-management` y `event-management`. Los cinco prefieren nodos distintos (con tres nodos,
+normalmente no más de dos por nodo); `functionalAreas.<servicio>.eventPathSpread: false` lo
+desactiva para un servicio. `device-management`, `event-management` y `event-sources` prefieren
+además un nodo que no ejecute el primario del almacén de eventos. Una preferencia solo se aplica
+cuando se planifica un pod: tras una conmutación por error, un pod que ya se ejecuta en el nodo del
+nuevo primario se queda hasta que se vuelva a planificar.
+
+El almacén de eventos de una instancia nueva recibe un volumen de 32Gi en lugar de 8Gi. Sus
+servidores NATS solicitan 500m de CPU y 768Mi de memoria y tienen un límite de 2Gi; antes no
+solicitaban nada, lo que los convertía en los primeros pods desalojados cuando un nodo se quedaba
+sin memoria. El límite de 2Gi se dimensionó con ingesta sostenida; no se midió un servidor
+poniéndose al día tras un reinicio, así que si uno queda `OOMKilled` durante la actualización, sube
+`nats_memory_limit` en el `terraform.tfvars` de la instancia y vuelve a ejecutar `dcctl upgrade`.
+Consulta [Dimensionamiento de los servicios](./bootstrap.md#service-sizing) y
+[El intermediario de mensajes](./bootstrap.md#broker-sizing).
+
+###### Un servicio que ejecuta más de un pod mantiene sus pods en nodos distintos {#v0190-own-pods-apart}
+
+Con más de una réplica, cada uno de los cinco servicios de la ruta de eventos (`device-management`,
+`event-management`, `device-state`, `event-sources` y `event-processing`) prefiere un nodo que no
+ejecute ya otro de sus propios pods. Un servicio con [el reparto de la ruta de
+eventos](#v0190-service-sizing) deja de recibir el reparto predeterminado del clúster, y esto le
+devuelve la mitad que mantiene las réplicas de un servicio en nodos distintos; la otra mitad, zonas
+distintas, no se devuelve. Es una preferencia que el planificador pondera junto con las demás del
+servicio (menos servicios de la ruta de eventos por nodo y, para `device-management`,
+`event-sources` y `event-management`, sin la primaria del almacén de eventos), no una garantía.
+
+- Con `--ha`, se aplica a los dos pods de `event-management`.
+- **Si instalas el chart por tu cuenta**, se aplica a cualquiera de los cinco que ejecutes con
+  `replicas` por encima de uno, y figura en la antiafinidad del pod, junto a la preferencia por
+  evitar la primaria del almacén de eventos en los tres servicios que la tienen. Un servicio con
+  `eventPathSpread: false` conserva en su lugar el reparto predeterminado del clúster, que también
+  prefiere zonas distintas, y no recibe esta preferencia.
+
+###### Tus propios valores del chart {#v0190-chart-values}
+
+Si instalas el chart tú mismo:
+
+- Un `resources.requests.cpu` de nivel superior ya no llega a `device-management`,
+  `event-management`, `device-state`, `event-sources` ni `event-processing`: su solicitud medida
+  prevalece. Define las suyas en `functionalAreas.<servicio>.resources.requests`, o establece
+  `useMeasuredRequests: false` para que las solicitudes de nivel superior vuelvan a aplicarse a
+  todos los servicios. Con `useMeasuredRequests: false`, una solicitud de nivel superior por encima
+  de 1 núcleo hace fallar ahora la generación para `event-processing`, porque supera el límite
+  propio de ese servicio.
+- Un `resources.limits.cpu` de nivel superior por encima de 2 núcleos baja ahora `event-sources` y
+  `device-state` a 2, y ya no llega a `event-processing`, que tiene siempre 1 núcleo salvo que se
+  defina en `functionalAreas.event-processing.resources.limits`.
+- Un límite de CPU propio de un servicio por debajo de su solicitud medida se rechaza ahora,
+  nombrando `measuredRequests`.
+- Los valores de nivel superior del chart y el bloque de cada servicio en `functionalAreas`
+  rechazan ahora una clave que el chart no lee, así que una clave mal escrita hace fallar la
+  generación.
+- `eventPathSpread` está activado en los cinco servicios; activarlo en otro servicio lo reparte
+  junto con ellos.
+- Un servicio que ejecutes con `replicas` por encima de uno prefiere nodos que no ejecuten otro de
+  sus propios pods ([Pods propios separados](#v0190-own-pods-apart)).
+
+###### Las primarias de las bases de datos prefieren nodos distintos {#v0190-primary-spread}
+
+Cada base de datos prefiere un nodo que no ejecute la primaria de otra base de datos de
+DeviceChain. En las pruebas, con tres nodos de 8 vCPU, el nodo que ejecutaba las dos primarias
+estaba al 94-98% de CPU mientras los otros dos estaban al 45-51%. Es una preferencia: un clúster
+más pequeño sigue planificando todas las instancias de base de datos. Actúa cuando se planifica un
+pod de base de datos, así que una conmutación por error o un traspaso todavía pueden dejar las dos
+primarias en un mismo nodo; consulta
+[Dónde se ejecutan las primarias de las bases de datos](./bootstrap.md#ha-database-primaries). Una
+cuota que limita la ubicación entre espacios de nombres puede rechazar estos pods: consulta
+[el paso 5](#v0190-quota).
+
+###### Las bases de datos pueden ejecutarse en los nodos que elijas {#v0190-database-placement}
+
+`dcctl install` admite `--database-node-selector` y `--database-toleration`. Colocan el almacén
+relacional compartido y el almacén de eventos de cada instancia en nodos con una etiqueta, incluidos
+nodos con un taint que mantiene fuera otras cargas. `dcctl bootstrap` no tiene esos flags: cada
+instancia sigue a la instalación. Antes de instalar nada, install rechaza una ubicación con menos
+nodos utilizables que instancias tiene una base de datos, y cada bootstrap vuelve a comprobarlo.
+NATS, los servicios y el almacén de objetos de respaldo no se colocan. Añadir una ubicación a un
+clúster que ya ejecuta instancias se rechaza; sin ninguna en marcha, mueve el almacén relacional,
+cuyos volúmenes quizá no puedan seguirlo. Consulta
+[Ubicación de las bases de datos](./bootstrap.md#database-placement).
+
+##### Respaldos {#v0190-backups}
+
+###### `dcctl destroy` elimina los respaldos internos de una instancia {#v0190-destroy-backups}
+
+Cuando el espacio de nombres de la instancia ya no existe, destroy borra todo lo que hay bajo la
+ruta a la que archivaba su almacén de eventos en el almacén de objetos propio del clúster, y
+comprueba que la ruta ha quedado vacía. Lee y muestra esa ruta antes de cambiar nada. Los respaldos
+en un almacén de objetos que tú proporcionaste no se borran nunca: destroy indica dónde están. Pasa
+`--keep-backups` para conservar también los respaldos internos, y pásalo sin falta antes de
+reconstruir una instancia a partir de sus propios respaldos con `--restore-tsdb-from`, porque un
+destroy sin esa opción borra el archivo que lee esa restauración. Si no se puede acceder al almacén,
+destroy termina igualmente e indica qué dejó. Un archivo que destroy no escribió en esta ejecución
+(uno que dejó una versión anterior, o uno conservado con `--keep-backups` y del que después se
+restauró) se lista, no se elimina;
+[Qué pasa con los respaldos de la instancia](./bootstrap.md#destroy-backups) explica cómo
+eliminarlo. Destroy ya no muestra la lista **Changes to Outputs** de OpenTofu, cuyos valores eran
+los predeterminados de la configuración y no los de la instancia.
+
+###### Los respaldos que dejan de enviarse avisan antes {#v0190-backup-alerts}
+
+`PostgresWALArchiveBacklog` se dispara cuando una base de datos retiene registro de escritura
+anticipada sin enviar, también cuando el archivador es lento o está bloqueado.
+`BackupDestinationFillingFast` y `DatabaseVolumeFillingFast` se disparan según lo rápido que se
+llena el almacén de respaldos o un volumen del almacén de eventos. Consulta
+[Respaldos que dejan de enviarse](./observability.md#backup-archiving).
+
+###### El almacén de respaldos se dimensiona para que el almacén de eventos se llene primero {#v0190-backup-store-size}
+
+El almacén de respaldos interno de un clúster nuevo tiene **160 GiB** en lugar de 20 GiB, y
+**20 GiB** en lugar de 8 GiB con `--compact` cuando se mantiene TLS. Con 20 GiB, una ingesta
+sostenida llenaba el almacén tras entre 12 y 16 millones de eventos, mucho antes que un almacén de
+eventos de 32 GiB; entonces el archivado se detenía y el primario del almacén de eventos llenaba su
+propio volumen. El dimensionamiento supone hasta unos 1,9 KB de archivo por evento para las dos
+bases de datos, medidos antes de que esta versión comprimiera el registro de escritura anticipada,
+cambiara las claves del almacén de eventos y archivara con zstd, así que peca por exceso: en la
+prueba de rendimiento de la versión, el archivo del almacén de eventos ocupó por sí solo unos
+0,47 KB por evento almacenado. **Un clúster existente conserva el tamaño de su almacén**: el volumen
+se dimensiona solo al crearlo, y `backup_object_store_storage` en un almacén existente no hace nada.
+Para dar el nuevo tamaño a un clúster existente, amplía el volumen en una StorageClass que lo
+permita; consulta [Tamaño del almacén de objetos de respaldo](./bootstrap.md#backup-store-size).
+
+###### Cada base de datos conserva su propia ventana de recuperación: 30 días para los datos de núcleo, 7 para los de eventos {#v0190-backup-retention}
+
+`backup_retention` se sustituye por `backup_retention_rdb` en la configuración del clúster (por
+defecto `30d`) y `backup_retention_tsdb` en la de la instancia (por defecto `7d`). La base de datos
+relacional, que guarda inquilinos, usuarios, dispositivos, reglas, secretos y el último estado
+conocido, se puede recuperar ahora a cualquier punto de los últimos 30 días en lugar de 7, y los
+datos de núcleo de un inquilino eliminado siguen siendo restaurables durante 30 días
+([Qué se conserva deliberadamente](./tenant-deletion.md#retained)). Una ventana es un número entero
+y `d`, `w` o `m`; cualquier otra forma se rechaza antes de la aplicación. Cuando una ventana de
+retención limita el almacén de eventos, el ritmo de ingesta sostenido que llena un almacén de 20 GiB
+baja de unos 19 a unos 13 eventos por segundo, y el del almacén de 160 GiB de unos 150 a unos 100.
+Esos ritmos salen del coste por evento medido antes de la compresión del registro, las claves nuevas
+y zstd de esta versión, así que en ese aspecto pecan por defecto. También usan la parte del registro
+de la base de datos relacional medida una sola vez, aproximadamente un 14 % para una flota pequeña
+que informa con frecuencia; para flotas más grandes o más lentas probablemente es mayor, y si el
+registro relacional fuera todo, la cifra de 160 GiB sería de unos 35. Para conservar 7 días,
+establece `backup_retention_rdb = "7d"` si aplicas tú mismo la configuración de OpenTofu;
+`dcctl install` no tiene ninguna opción para ello. Consulta
+[Ventanas de recuperación](./bootstrap.md#backup-retention).
+
+###### Los respaldos base de las bases de datos pueden ser instantáneas de volumen {#v0190-snapshot-backups}
+
+En un clúster cuyo controlador de almacenamiento toma instantáneas de volumen CSI, `dcctl install
+--backup-snapshot-class <class>` toma el respaldo base diario de cada base de datos como una
+instantánea de volumen en lugar de una copia completa en el almacén de respaldos. No cambia nada si
+no pasas la opción. Consulta
+[Respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups).
+
+- El archivado del registro no cambia, y un respaldo base completo sigue yendo al almacén de
+  respaldos cada domingo a las 04:00. Toda restauración lee el almacén, no las instantáneas, así que
+  puede reproducir hasta una semana de registro.
+- Las instantáneas se guardan en tu proveedor de nube y sobreviven al clúster.
+  [Respaldos base como instantáneas de volumen](./bootstrap.md#snapshot-base-backups) explica qué
+  comprobar antes y después de borrar una.
+- La clase tiene que existir, tener `deletionPolicy: Delete` y pertenecer al controlador que
+  aprovisiona los volúmenes de las bases de datos; install y cada bootstrap comprueban las tres
+  cosas primero. GKE y AKS incluyen un controlador de instantáneas; en EKS, instala antes el
+  complemento del controlador de instantáneas.
+- El operador de DeviceChain poda las instantáneas antiguas cada diez minutos, y conserva todas las
+  que están dentro de la ventana de recuperación y la más reciente anterior a ella. Su ClusterRole
+  gana, en todos los espacios de nombres: `get` sobre namespaces; `get`, `list` y `delete` sobre los
+  Backups de CloudNativePG; `get`, `list` y `patch` sobre los ScheduledBackups de CloudNativePG; y
+  `create` y `patch` sobre los Events de `events.k8s.io`. Solo actúa en espacios de nombres que creó
+  DeviceChain, sobre las programaciones que genera su propia configuración, y registra cada pasada
+  en la anotación `devicechain.io/snapshot-retention-checked-at`.
+- El almacén de respaldos guarda hasta una semana más de registro de cada base de datos, así que se
+  llena antes: con las ventanas y el almacén predeterminados, a unos 60 eventos por segundo de
+  ingesta sostenida en lugar de unos 100 (de la misma medición, anterior a la compresión, así que
+  conservadora).
+- `PostgresNoRecentSnapshotBackup`, `DatabaseSnapshotPruningStalled` y
+  `DatabaseSnapshotBackupsUnobserved` son nuevas, y en un clúster así `PostgresNoRecentBaseBackup`
+  espera 8,5 días en lugar de 36 horas.
+- El ajuste pertenece al clúster; cambiarlo se rechaza mientras haya instancias en él.
+
+###### El registro de escritura anticipada se comprime, y se archiva con zstd {#v0190-wal}
+
+Los almacenes de eventos nuevos y los actualizados comprimen las imágenes de página de su registro
+de escritura anticipada (`wal_compression = lz4`), algo que se recarga sin reinicio. Las dos bases de
+datos archivan ahora su registro con zstd en lugar de gzip; los respaldos base siguen en gzip. Las
+restauraciones y la caducidad de los respaldos leen ambos formatos, según el nombre de cada segmento
+(`.gz` o `.zst`), así que un archivo que cambia de compresión a mitad se restaura como antes; la
+prueba de actualización de la versión restauró un archivo así y recuperó todos los eventos. En la
+prueba de rendimiento de la versión a 3000 eventos por segundo, el cambio de claves de esta versión
+y el archivado con zstd redujeron juntos un 22% el registro por evento almacenado del almacén de
+eventos y un 53% la CPU de su archivador, frente a la compilación de desarrollo anterior a ellos.
+Consulta [Volumen del almacén de eventos](./bootstrap.md#event-store-volume).
+
+##### Operaciones {#v0190-operations}
+
+###### `dcctl upgrade` aplica los ajustes del bróker de mensajería y del almacén de eventos de una instancia {#v0190-upgrade-infrastructure}
+
+`dcctl upgrade` aplica ahora los servidores NATS y el almacén de eventos de la instancia desde la
+configuración de OpenTofu que trae esta versión, antes de mover los servicios. Hasta ahora solo los
+aplicaba `dcctl bootstrap`, así que una instancia actualizada conservaba sus ajustes antiguos del
+bróker y del almacén de eventos sin decirlo. Esta actualización da a una instancia creada con
+`v0.18.0` las solicitudes y el límite de NATS, el registro de escritura anticipada comprimido, el
+archivado con zstd y la preferencia de ubicación de las primarias; en una instancia así, las
+instancias del almacén de eventos pueden reiniciarse una vez por la preferencia de ubicación. Los
+tamaños de los volúmenes se conservan. Consulta
+[Qué aplica una actualización a la infraestructura](#upgrade-infrastructure). La configuración de
+OpenTofu de la instancia declara ahora que necesita OpenTofu o Terraform 1.9 o posterior.
+
+###### Volver a ejecutar `dcctl bootstrap` termina una instancia cuyo primer arranque inicial falló al final {#v0190-bootstrap-resume}
+
+Un arranque inicial que fallaba después de escribir el documento de configuración de la
+instancia (mientras instalaba el chart, o mientras esperaba a que los servicios estuvieran
+listos) dejaba una instancia sobre la que `dcctl bootstrap` se negaba a volver a ejecutarse,
+como si ya estuviera en marcha.
+
+Ahora, cuando `dcctl bootstrap` declara una instancia que está construyendo, deja anotado en la
+declaración que el primer arranque inicial no ha terminado (la anotación
+`core.devicechain.io/bootstrap-unfinished`). Un arranque inicial o una actualización que termina
+con éxito la retira, en la misma escritura que registra la instancia como `Ready`. Hasta
+entonces, volver a ejecutar el mismo `dcctl bootstrap` termina la instancia. Reutiliza la clave
+raíz, las credenciales del bróker y las contraseñas de las bases de datos que dejó en el clúster
+la ejecución anterior, y muestra la contraseña generada del superusuario, a la que la ejecución
+fallida nunca llegó. Una vez retirada la anotación, una nueva ejecución se rechaza como antes.
+
+- Si una ejecución termina con éxito pero no puede retirar la anotación (la escritura se rechaza,
+  o el bloqueo del clúster se reclamó antes), sale con un error que indica que vuelvas a ejecutar
+  el mismo comando, en lugar de informar de un éxito sobre una instancia sobre la que un arranque
+  inicial posterior se ejecutaría.
+- Una instancia cuyo primer arranque inicial empezó con una versión anterior no tiene esa
+  anotación, así que se trata como en marcha, igual que antes; la negativa nombra `dcctl upgrade` y
+  `dcctl destroy`. Consulta
+  [Terminar un bootstrap que falló a mitad de camino](./disaster-recovery.md#resuming-a-bootstrap).
+- Actualiza todas las copias de `dcctl` que uses antes de ejecutarlas sobre una instancia
+  construida con esta versión. Un `dcctl` anterior no retira la anotación, así que una
+  actualización posterior con él que falle puede dejarla en vigor sobre una instancia en marcha,
+  y un `dcctl bootstrap` sin más se ejecutaría entonces sobre esa instancia.
+
+###### La detección reintenta liberar su partición cuando el bróker no responde {#v0190-detect-lease-release}
+
+Cuando el pod del motor de detección se detiene, libera su partición para que el siguiente pod
+empiece a detectar enseguida. Hasta ahora, si el bróker no respondía a esa liberación, por ejemplo
+porque un servidor del bróker se estaba reiniciando en ese momento, el pod se rendía tras un
+intento. El siguiente pod esperaba entonces a que la partición expirara, hasta 30 segundos, y un
+periodo de traspaso adicional de 20 segundos antes de detectar nada. Ahora el pod reintenta la
+liberación hasta que el bróker responde, mientras se lo permita su tiempo de apagado, y reserva lo
+suficiente para un tiempo de espera más del bróker y para terminar de detenerse. Una renovación o
+una liberación cuya respuesta se perdió mientras un servidor del bróker se reiniciaba tampoco le
+cuesta ya la partición al motor. El reintento lo hace el pod que se detiene, así que tiene efecto a
+partir de la actualización siguiente a la que instala esta versión: durante esa actualización, el
+pod que se sustituye todavía ejecuta la versión anterior y hace un solo intento.
+
+Lo que todavía pausa la detección:
+
+- **Sin `--ha`, una actualización que reinicia el bróker detiene la detección durante todo el
+  reinicio**, normalmente alrededor de un minuto (consulta [la entrada del bróker y del almacén de
+  eventos](#v0190-upgrade-infrastructure)). El motor no puede conservar su partición durante una
+  interrupción del bróker de más de 30 segundos, y nada registra que se detuvo limpiamente, así
+  que, cuando el bróker vuelve, espera el periodo de traspaso de 20 segundos, más hasta 5 segundos
+  antes de reintentar, y después reproduce el flujo desde su último punto de control, como tras
+  cualquier reinicio. El despliegue gradual de los servicios que sigue mueve luego la partición al
+  pod nuevo, que reproduce el flujo una vez más pero no espera.
+- **Un pod que se detiene mientras el bróker sigue inaccesible más allá de su apagado** todavía deja
+  que su partición expire, y el siguiente pod espera hasta 30 segundos más el periodo de traspaso.
+
+Con `--ha` el bróker sigue disponible mientras sus servidores se reinician de uno en uno. El motor
+solo pierde su partición si sus renovaciones fallan durante 30 segundos.
+
+###### Alertas {#v0190-alerts}
+
+- **Nuevas:** `JetStreamUnreadBacklogNearFull` (warning) y `JetStreamIngestBackpressureEngaged`
+  (critical) para la [contrapresión](#v0190-backpressure), que también se dispara por
+  [el rechazo por historial](#v0190-ingest-history-runway); `JetStreamDurableUnreadNearFull`
+  (warning), cuando un consumidor lleva 5 minutos sin haber leído más del 80% de lo que cabe en su
+  stream; las tres [alertas de respaldo](#v0190-backup-alerts); las tres
+  [alertas de instantáneas](#v0190-snapshot-backups); y `ExternalMqttSourceNotReadByOnePod`
+  (warning) para [una fuente MQTT sobre tu propio bróker](#v0190-external-mqtt-client-id).
+- **Cambia:** `JetStreamStreamNearFull` pasa a `info`, solo se dispara para streams que guardan
+  registros para un operador (`failed-decode`, `failed-events`, `connector-dispatch.dead`,
+  `max-deliveries`, y `dead-letters` mientras `user-management` no informe de que lo lee), y tiene en
+  cuenta el límite de mensajes de un stream además del de bytes. La configuración predeterminada de
+  Alertmanager de kube-prometheus-stack no entrega las alertas `info`. Consulta
+  [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
+- **Series nuevas:** `devicechain_<area>_jetstream_consumer_unread_ratio{stream, durable}` y
+  `devicechain_<area>_jetstream_stream_sink{stream}`, más las que nombran los apartados de arriba,
+  entre ellas, con sus nombres completos:
+  - `devicechain_<area>_jetstream_backpressure_history_runway_seconds{stream, durable}`
+    ([el rechazo por historial](#v0190-ingest-history-runway));
+  - `devicechain_eventsources_total_msg_reading_limited` y
+    `devicechain_eventsources_total_readings_rate_limited`
+    ([Lecturas, no mensajes](#v0190-ingest-readings));
+  - `devicechain_sparkplugingest_samples_too_old_dropped_total`,
+    `devicechain_lwm2mingest_telemetry_too_old_dropped_total` y
+    `devicechain_devicemanagement_resolve_event_time_too_old_total`
+    ([Lecturas antiguas](#v0190-event-age-limit));
+  - `devicechain_eventsources_external_mqtt_owner{source}` y
+    `devicechain_eventsources_total_msg_not_owner{source}`
+    ([Identificador de cliente MQTT](#v0190-external-mqtt-client-id)).
+
+  **Se elimina:** `devicechain_lwm2mingest_notify_samples_truncated_total`.
+
+###### Cualquier servicio puede servir perfiles del runtime de Go, desactivado por defecto {#v0190-profiling}
+
+`functionalAreas.<service>.profiler.enabled: true` sirve perfiles de CPU, memoria, asignaciones,
+goroutines y traza de ejecución de ese servicio, en un listener propio en la dirección de loopback
+del pod, al que se accede con `kubectl port-forward`. Nunca es un puerto del contenedor, un puerto
+del Service ni una ruta del ingress. Solo se reinician los pods de ese servicio. Consulta
+[Perfilar un servicio](./observability.md#profiling).
+
+###### Una configuración de Google Kubernetes Engine (nueva) {#v0190-gke}
+
+`deploy/gke` es nuevo: una configuración de OpenTofu que crea un clúster de GKE para DeviceChain,
+con un grupo `database` con taint de tres nodos de 4 vCPU y 16 GB y un grupo `services` de tres
+nodos de 4 vCPU y 8 GB, todos arrancando desde un disco persistente estándar. Instala con
+`--database-node-selector` y `--database-toleration` para colocar las bases de datos en el grupo
+`database`. Una instalación `--ha` predeterminada con una instancia cabe en la cuota de SSD de un
+proyecto nuevo de Google Cloud; para más instancias, o para un clúster creado de otra forma en
+cualquier nube, comprueba antes la cuota de disco: [Prerrequisitos](./bootstrap.md#prerequisites)
+indica los tamaños de los volúmenes y la guía de `deploy/gke`, la cuota que hay que solicitar.
+
+###### Los informes de las pruebas de carga cuentan los eventos rechazados {#v0190-loadtest-refusals}
 
 El simulador y el arnés de las pruebas de carga cuentan ahora por separado las dos formas en que la
 ingesta rechaza un evento:
@@ -5204,6 +4995,20 @@ Qué cambia:
   en la que el suelo no rechazó nada.
 
 No hay nada que hacer al actualizar.
+
+#### Rendimiento {#v0190-performance}
+
+En Google Kubernetes Engine, en tres nodos de base de datos de 4 vCPU y 16 GB y tres nodos de
+servicios de 4 vCPU y 8 GB, una instalación HA predeterminada aceptó 6000 eventos por segundo
+durante 10 minutos, dos veces, y almacenó exactamente una vez cada evento aceptado. Se midió con la
+versión candidata y con `event-management` en un solo pod, antes de que `--ha` empezara a
+ejecutarlo en dos.
+
+La resolución, el almacenamiento y el estado en vivo de los dispositivos siguieron cada uno el ritmo
+durante esos 10 minutos, y la cola se había vaciado en los 5 segundos siguientes al fin de la
+carga. La detección, que esa comprobación no cubre, siguió el ritmo a 6000 (cola máxima por debajo
+de 1000) y se quedó atrás a partir de 7600 ofrecidos. No se afirma ningún ritmo sostenido por encima
+de 6000. Consulta [Rendimiento medido](./bootstrap.md#measured-throughput).
 
 ### La transición única a la ingesta duradera
 

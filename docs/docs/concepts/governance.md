@@ -91,7 +91,7 @@ Within `event-sources`, a tenant can therefore be admitted at up to three times 
 
 The platform default is 1000 readings per second per tenant, with a burst of 2000. A reading is one stored value: one key of a measurement entry, one location or one alert. A message carrying 256 readings costs 256.
 
-A default high-availability installation on a cluster of three dedicated 4-vCPU/16 GB database nodes and three 4-vCPU/8 GB service nodes, with one `event-sources` replica, was measured storing 6,000 readings per second for 10 minutes. At the default, a single tenant's own devices are admitted at most five times 1000, or 5,000 readings per second, even with a backlog draining and both edge services running, which is below that measurement. Without a drain or the edge services it is 2,000.
+A default high-availability installation on a cluster of three dedicated 4-vCPU/16 GB database nodes and three 4-vCPU/8 GB service nodes, with one `event-sources` replica, was measured storing 6,000 readings per second for 10 minutes, with `event-management` at one pod, before `--ha` began running it as two. At the default, a single tenant's own devices are admitted at most five times 1000, or 5,000 readings per second, even with a backlog draining and both edge services running, which is below that measurement. Without a drain or the edge services it is 2,000.
 
 That is not a guarantee in every setup:
 
