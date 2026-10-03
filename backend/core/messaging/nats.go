@@ -244,12 +244,25 @@ type NatsManager struct {
 	// which is exactly the field an operator needs to know WHICH server was lost.
 	connectedServer atomic.Value
 
-	// writeStalled is set by the connection's stall closer (BrokerLivenessOptions) just
-	// before it closes a connection whose write made no progress, and taken by the
+	// writeStalled is set by the connection's stall closer (BrokerLivenessOptions) when it
+	// closes a connection whose write made no progress, and taken by the
 	// DisconnectErrHandler that nats.go calls after it. The handler is the ONE place a dead
 	// connection is counted: when a stalled write and a stale ping race to give up the same
 	// connection, nats.go reports whichever reached the lock first, and counting at both
 	// sites would count one death twice.
+	//
+	// It is ALSO dropped by the connect and reconnect handlers. A stall can close a
+	// connection that never became the live one (its CONNECT, or the reconnect's flush of
+	// buffered publishes), and nats.go calls no DisconnectErrHandler for that one, so the
+	// flag would otherwise survive to the next, unrelated disconnect (a broker rolling
+	// restart, say) and label it a write death, counting it and firing
+	// BrokerConnectionDiedSilently. nats.go queues every one of these callbacks on ONE
+	// ordered queue, so by the time a (re)connect handler runs, the disconnect handler of
+	// the connection before has already taken any flag that was its own. What is left is
+	// the residual race the ordering does not cover: a NEW connection whose write stalls
+	// for a whole write timeout before its own reconnect handler has been dispatched loses
+	// its label (it is then reported by the ping, or as an ordinary disconnect), which
+	// under-reports a death rather than inventing one.
 	writeStalled atomic.Bool
 
 	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
@@ -2431,12 +2444,14 @@ func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.
 		// to end, in the one case (a cold start of the whole instance, where NATS and
 		// the services race) that A0's own rollout makes routine.
 		nats.ConnectHandler(func(nc *nats.Conn) {
+			nmgr.writeStalled.Store(false) // see writeStalled
 			nmgr.connectedServer.Store(nc.ConnectedUrl())
 			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
 				Str("cluster", nc.ConnectedClusterName()).
 				Msg("Connected to NATS")
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
+			nmgr.writeStalled.Store(false) // see writeStalled
 			nmgr.connectedServer.Store(nc.ConnectedUrl())
 			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
 				Str("cluster", nc.ConnectedClusterName()).

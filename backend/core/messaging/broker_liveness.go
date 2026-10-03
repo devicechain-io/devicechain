@@ -50,11 +50,19 @@ import (
 // tolerate; and one PING/PONG per connection every 10 s is negligible for the broker at the
 // few dozen connections an instance holds.
 //
-// Long-lived connections NOT covered here, and why: the paho MQTT clients (event-sources'
-// external source, sparkplug-ingest's host, the edge agent's uplink) keep paho's own 30 s
-// keep-alive with a 10 s ping timeout, already inside this bound; outbound-connectors' MQTT
-// client sets its own; event-sources' presence canary is per probe and short-lived; and a
-// Postgres connection is not on the ingest path (event-sources opens no database).
+// Long-lived connections NOT covered here, and why:
+//
+//   - the paho MQTT clients (event-sources' external source, sparkplug-ingest's host, the
+//     edge agent's uplink) keep paho's defaults: a 30 s keep-alive, a 10 s ping timeout and
+//     NO write timeout. That bounds an IDLE or receive-mostly connection to a dead peer at
+//     roughly 40 s, but NOT a loaded publisher: paho writes its PINGREQ straight to the
+//     socket with no deadline, so once a publisher has filled the socket against a dead
+//     peer that write blocks for good and the ping timeout is never checked. The edge
+//     agent's uplink, which publishes upstream, is the one exposed. Bounding it needs
+//     SetWriteTimeout on those clients, which is not done here and is an open follow-up;
+//   - outbound-connectors' MQTT client sets its own keep-alive and write timeout;
+//   - event-sources' presence canary is per probe and short-lived;
+//   - a Postgres connection is not on the ingest path (event-sources opens no database).
 const (
 	// BrokerPingInterval is how often the client pings its server.
 	BrokerPingInterval = 10 * time.Second
@@ -73,7 +81,12 @@ const (
 	BrokerDeadConnectionBound = (BrokerMaxPingsOutstanding+1)*BrokerPingInterval + BrokerWriteTimeout
 
 	// brokerDialTimeout bounds one dial. It is nats.go's own default: a CustomDialer replaces
-	// the library's dialer and so has to carry the timeout itself.
+	// the library's dialer and so has to carry the timeout itself. It is FIXED, and two
+	// things the library's dialer does are therefore not done: honouring a caller-set
+	// nats.Timeout (no DeviceChain connection sets one; a connection that starts to must
+	// change this too), and dividing the timeout among the addresses a hostname resolves
+	// to (each gets the whole timeout here, so a name resolving to N dead addresses costs
+	// up to N dial timeouts per attempt rather than one).
 	brokerDialTimeout = nats.DefaultTimeout
 )
 
@@ -84,8 +97,17 @@ const (
 //
 // connection names the connection in the log line a stalled write produces (a service holds
 // more than one). onWriteStall, when non-nil, is called once for each connection a stalled
-// write closed, BEFORE the close, so the connection's DisconnectErrHandler, which nats.go
-// calls after it, can tell that disconnect from the others.
+// write closed, so the connection's DisconnectErrHandler, which nats.go calls after it, can
+// tell that disconnect from the others. What guarantees "after" is NOT the closer calling
+// onWriteStall before it closes: every write nats.go makes on a connection in use runs under
+// the connection's lock, which the read loop's processOpErr also takes before it queues the
+// handler, so the handler is queued only once the stalled write has returned, whichever order
+// the closer used. Do not reason from the closer's order.
+//
+// A stall can also close a connection that never became the live one (a CONNECT or the
+// reconnect's flush of buffered publishes, both of which nats.go writes under the same write
+// timeout), and no DisconnectErrHandler follows for that one; the caller must therefore also
+// drop whatever onWriteStall recorded when a connection is (re)established.
 //
 // TLS is unaffected: nats.go wraps the dialed connection in tls.Client, a TLS write that
 // reaches the deadline surfaces this connection's timeout, and the dialer does not implement
@@ -125,12 +147,18 @@ func (d *stallClosingDialer) Dial(network, address string) (net.Conn, error) {
 //
 // 🔴 ONLY THAT DEADLINE COUNTS, and the deadline is told apart by how far ahead it was armed.
 // Two shorter ones reach this connection too, and neither means a connection in use died:
-// nats.go's whole-connect deadline (Opts.Timeout, 2 s), under which a CONNECT or handshake that
+// nats.go's whole-connect deadline (Opts.Timeout, 2 s), under which a TLS handshake that
 // times out already fails the connect, and crypto/tls's close_notify on Close (5 s), which
 // runs while nats.go is ALREADY giving the connection up for another reason (a stale ping, a
 // requested shutdown) and would otherwise be counted as a second death. Those are passed
 // through untouched. The threshold is half the write timeout: well above both, well below the
 // write timeout itself, which is armed a few nanoseconds before it is read.
+//
+// The CONNECT itself is NOT under the 2 s deadline: nats.go writes it through the same
+// writer as all later traffic, which re-arms the full write timeout around it, so a CONNECT
+// that stalls is closed here like any other write. That is harmless (the connect fails
+// either way, and a CONNECT is a few hundred bytes), but it is one of the closes that no
+// DisconnectErrHandler follows; see BrokerLivenessOptions.
 type stallClosingConn struct {
 	net.Conn
 	connection string

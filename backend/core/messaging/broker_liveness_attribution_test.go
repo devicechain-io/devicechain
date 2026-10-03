@@ -5,13 +5,16 @@ package messaging
 
 import (
 	"errors"
+	"io"
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	dctest "github.com/devicechain-io/dc-microservice/test"
+	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -20,6 +23,33 @@ import (
 // the scenarios in broker_liveness_test.go, at each of their phases.
 func init() {
 	livenessAttribution = checkLivenessAttribution
+	livenessAfterOrdinaryDisconnect = checkOrdinaryDisconnectAfterDeath
+}
+
+// checkOrdinaryDisconnectAfterDeath: the ordinary disconnect that follows a dead connection
+// is logged as ordinary, and neither counter moves from the one death already counted.
+func checkOrdinaryDisconnectAfterDeath(t *testing.T, logs *dctest.LogSink, nmgr *NatsManager, detectedBy string) {
+	t.Helper()
+	waitFor(t, "the ordinary disconnect record", func() bool {
+		return ownLog(logs, nmgr, "Disconnected from NATS; retrying indefinitely") != nil
+	})
+	want := map[string]float64{deadByPing: 0, deadByWrite: 0}
+	want[detectedBy] = 1
+	for by, n := range want {
+		if got := testutil.ToFloat64(nmgr.metrics.connectionDead.WithLabelValues(by)); got != n {
+			t.Errorf("after an ordinary disconnect, nats_connection_dead_total{detected_by=%q} = %v, "+
+				"want %v: the ordinary disconnect was counted as a dead connection", by, got, n)
+		}
+	}
+	deaths := 0
+	for _, rec := range ownLogs(logs, nmgr) {
+		if msg, _ := rec["message"].(string); strings.Contains(msg, "had died without being closed") {
+			deaths++
+		}
+	}
+	if deaths != 1 {
+		t.Errorf("%d disconnect records report a dead connection, want 1 (the ordinary one is not)", deaths)
+	}
 }
 
 func checkLivenessAttribution(t *testing.T, logs *dctest.LogSink, nmgr *NatsManager, detectedBy string) {
@@ -50,8 +80,9 @@ func checkLivenessAttribution(t *testing.T, logs *dctest.LogSink, nmgr *NatsMana
 	if got := counted(want); got != 1 {
 		t.Errorf("nats_connection_dead_total{detected_by=%q} = %v, want 1", want, got)
 	}
-	// One death is one count: a stale ping racing the closer for the same connection
-	// must not count it again under the other label.
+	// One death is one count, under one label. (Which label wins when a stale ping races
+	// the closer for the same connection is pinned by TestTheDisconnectHandlerAttributesOnce;
+	// these scenarios do not produce that race.)
 	if got := counted(other); got != 0 {
 		t.Errorf("nats_connection_dead_total{detected_by=%q} = %v, want 0", other, got)
 	}
@@ -181,4 +212,91 @@ func TestTheDeadConnectionHelpQuotesTheConstants(t *testing.T) {
 		return
 	}
 	t.Fatal("nats_connection_dead_total is not registered")
+}
+
+// The disconnect handler's attribution, driven directly, since the scenarios cannot
+// produce its races on demand.
+//
+//   - a stalled write's flag wins over a stale ping reported for the same connection: the
+//     closer gave it up, and the ping only reached nats.go's lock first;
+//   - the flag is TAKEN: the next disconnect is not that write's;
+//   - a flag no disconnect took (a stall on a connection that never became the live one)
+//     is dropped by the reconnect and connect handlers, so it cannot label the next,
+//     unrelated disconnect.
+func TestTheDisconnectHandlerAttributesOnce(t *testing.T) {
+	type step struct {
+		event string // "stall", "disconnect:<err>", "reconnect", "connect"
+		want  string // for a disconnect: "write", "ping" or "" (ordinary)
+	}
+	eof := io.EOF
+	cases := []struct {
+		name  string
+		steps []step
+	}{
+		{"a stale ping does not take a stalled write's death", []step{
+			{"stall", ""}, {"disconnect:stale", deadByWrite},
+		}},
+		{"the flag is taken by the disconnect it labels", []step{
+			{"stall", ""}, {"disconnect:eof", deadByWrite}, {"disconnect:eof", ""},
+		}},
+		{"a stale ping with no stall is the ping's", []step{
+			{"disconnect:stale", deadByPing}, {"disconnect:eof", ""},
+		}},
+		{"a reconnect drops a flag no disconnect took", []step{
+			{"stall", ""}, {"reconnect", ""}, {"disconnect:eof", ""},
+		}},
+		{"a connect drops a flag no disconnect took", []step{
+			{"stall", ""}, {"connect", ""}, {"disconnect:eof", ""},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			nmgr := managerAt(t, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 4222}, "")
+			var o nats.Options
+			for _, opt := range nmgr.connectionEventHandlers(new(atomic.Bool)) {
+				if err := opt(&o); err != nil {
+					t.Fatal(err)
+				}
+			}
+			counts := map[string]float64{deadByPing: 0, deadByWrite: 0}
+			for i, s := range tc.steps {
+				switch s.event {
+				case "stall":
+					nmgr.writeStalled.Store(true)
+					continue
+				case "reconnect":
+					o.ReconnectedCB(nil)
+					continue
+				case "connect":
+					o.ConnectedCB(nil)
+					continue
+				case "disconnect:stale":
+					o.DisconnectedErrCB(nil, nats.ErrStaleConnection)
+				case "disconnect:eof":
+					o.DisconnectedErrCB(nil, eof)
+				default:
+					t.Fatalf("unknown step %q", s.event)
+				}
+				if s.want != "" {
+					counts[s.want]++
+				}
+				for by, n := range counts {
+					if got := testutil.ToFloat64(nmgr.metrics.connectionDead.WithLabelValues(by)); got != n {
+						t.Errorf("step %d (%s): detected_by=%q = %v, want %v", i, s.event, by, got, n)
+					}
+				}
+				recs := ownLogs(logs, nmgr)
+				msg, _ := recs[len(recs)-1]["message"].(string)
+				prefix := map[string]string{
+					deadByWrite: "Disconnected from NATS: a write to the server made no progress",
+					deadByPing:  "Disconnected from NATS: the server left 2 pings",
+					"":          "Disconnected from NATS; retrying indefinitely",
+				}[s.want]
+				if !strings.HasPrefix(msg, prefix) {
+					t.Errorf("step %d (%s): logged %q, want a record starting %q", i, s.event, msg, prefix)
+				}
+			}
+		})
+	}
 }

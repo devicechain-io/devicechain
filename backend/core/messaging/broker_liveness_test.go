@@ -46,6 +46,10 @@ import (
 // detectedBy is "" while the connection is healthy, then "ping" or "write".
 var livenessAttribution func(t *testing.T, logs *dctest.LogSink, nmgr *NatsManager, detectedBy string)
 
+// livenessAfterOrdinaryDisconnect, when set, checks that an ordinary disconnect following
+// a dead connection given up by detectedBy is reported as ordinary, and not counted again.
+var livenessAfterOrdinaryDisconnect func(t *testing.T, logs *dctest.LogSink, nmgr *NatsManager, detectedBy string)
+
 func attribute(t *testing.T, logs *dctest.LogSink, nmgr *NatsManager, detectedBy string) {
 	t.Helper()
 	if livenessAttribution != nil {
@@ -117,7 +121,8 @@ func TestADeadLoadedConnectionIsGivenUpByTheWriteTimeout(t *testing.T) {
 // runDeadConnection connects a manager through a proxy, proves the connection is NOT given
 // up while its server answers (for longer than a ping interval and a write timeout), then
 // freezes the proxy and requires the client to leave CONNECTED within bound and to
-// reconnect through a fresh, relayed connection.
+// reconnect through a fresh, relayed connection; then closes that connection the ordinary
+// way and requires the client to reconnect again.
 func runDeadConnection(t *testing.T, secure, loaded bool, bound time.Duration, detectedBy string) {
 	t.Helper()
 	logs := captureLogs(t)
@@ -208,6 +213,29 @@ func runDeadConnection(t *testing.T, secure, loaded bool, bound time.Duration, d
 		t.Fatalf("a round trip on the reconnected connection failed: %v", err)
 	}
 	attribute(t, logs, nmgr, detectedBy)
+
+	// An ORDINARY disconnect afterwards (a broker rolling restart closes its connections)
+	// is neither of the above, and must not be reported as one: a label left behind by the
+	// dead connection would make every later disconnect look like a lost node.
+	proxy.Sever()
+	select {
+	case s := <-statuses:
+		if s != nats.RECONNECTING {
+			t.Fatalf("the client went to %s after a closed connection, want RECONNECTING", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("still CONNECTED 5s after its connection was closed")
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for !nc.IsConnected() {
+		if time.Now().After(deadline) {
+			t.Fatalf("not reconnected 10s after an ordinary disconnect (status %s)", nc.Status())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if livenessAfterOrdinaryDisconnect != nil {
+		livenessAfterOrdinaryDisconnect(t, logs, nmgr, detectedBy)
+	}
 }
 
 // managerAt builds a manager through the real constructor, pointed at addr, dialling

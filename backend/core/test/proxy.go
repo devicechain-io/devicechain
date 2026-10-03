@@ -164,6 +164,20 @@ func (p *TCPProxy) Freeze() {
 	}
 }
 
+// Sever closes, in both directions, every connection open now that is not frozen: an
+// ordinary disconnect, which the client sees at once as the end of its stream. Frozen
+// connections are left as they are. Connections accepted afterwards relay normally.
+func (p *TCPProxy) Sever() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pr := range p.pairs {
+		if !pr.frozen.Load() {
+			_ = pr.client.Close()
+			_ = pr.server.Close()
+		}
+	}
+}
+
 // Release restores straight-through relaying in both directions.
 func (p *TCPProxy) Release() {
 	p.drop.Store(false)
