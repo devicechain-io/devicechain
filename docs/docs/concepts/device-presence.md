@@ -195,9 +195,10 @@ This applies to the platform broker's MQTT tap. Sparkplug charges its DATA readi
 **Backpressure is different.** While the platform is refusing new events (see
 [Backpressure on the ingest path](../deployment/observability.md#ingest-backpressure)), connect and
 disconnect transitions from every transport are still admitted, because a refused one would leave
-the device in the wrong state until a reconciliation pass repaired it. Nothing limits how many are
-admitted, so a fleet that reconnects in a loop can still fill the stream to its ceiling, and the
-stream then discards its oldest events.
+the device in the wrong state until a reconciliation pass repaired it. The backpressure gate does
+not limit how many it admits (the tenant ceiling above still applies to the broker tap), so a fleet
+that reconnects in a loop can still fill the stream to its ceiling, and the stream then discards its
+oldest events.
 
 ### Resizing the broker cluster requires restarting `event-sources` {#resizing-the-broker-cluster}
 

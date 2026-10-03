@@ -1018,7 +1018,11 @@ real.
 - **El broker elige nuevos líderes en segundos.** Los streams cuyo líder estaba en el nodo
   perdido eligen uno nuevo, y en las pruebas las escrituras confirmadas se reanudaron en unos
   diez segundos. Las publicaciones en curso en ese momento fallan, y un dispositivo que publica
-  por HTTP puede recibir algunas respuestas `503` y debe reintentar. Las conexiones nuevas a
+  por HTTP puede recibir algunas respuestas `503` y debe reintentar. Un `503` sin cabecera
+  `Retry-After` significa que la publicación falló y puede que el evento se haya almacenado
+  igualmente, así que un reintento lo almacena dos veces salvo que lleve `altId` y
+  `occurredTime` (consulta [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)).
+  Las conexiones nuevas a
   través del servicio del broker pueden seguir fallando de forma intermitente durante unos 45
   segundos, hasta que Kubernetes da el nodo por perdido y deja de dirigir tráfico al servidor que
   había en él.

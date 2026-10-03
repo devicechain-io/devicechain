@@ -196,7 +196,8 @@ Esto se aplica a la toma MQTT del broker de la plataforma. Sparkplug cobra sus l
 [Contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)), las
 transiciones de conexión y desconexión de todos los transportes se siguen admitiendo, porque una
 transición rechazada dejaría el dispositivo en un estado incorrecto hasta que una pasada de
-reconciliación lo reparase. Nada limita cuántas se admiten, así que una flota que se reconecta en
+reconciliación lo reparase. La compuerta de contrapresión no limita cuántas admite (el techo del
+inquilino sigue aplicándose a la toma del broker), así que una flota que se reconecta en
 bucle todavía puede llenar el stream hasta su techo, y el stream descarta entonces sus eventos más
 antiguos.
 
