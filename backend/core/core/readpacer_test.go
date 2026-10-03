@@ -6,6 +6,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -355,5 +356,122 @@ func TestAMicroserviceBackedPacerReportsThroughIt(t *testing.T) {
 	if p := NewReadPacer(nil, "test stream"); p.fail != nil {
 		t.Fatal("a pacer built without a microservice invented a sink; the documented nil " +
 			"case is what lets processors be assembled by literal in their own tests")
+	}
+}
+
+// answeredErr is a read error that says whether the broker answered the reader since its
+// previous error, as messaging's NATS reader's errors do. It is declared HERE, with only the
+// method, rather than built from the production type, so it states the contract the pacer
+// reads and nothing more.
+type answeredErr struct{ answered bool }
+
+func (e answeredErr) Error() string                    { return "a read error" }
+func (e answeredErr) AnsweredSincePreviousError() bool { return e.answered }
+
+// stepClock is a clock the test moves by hand. Its sleeps never wait and never advance it,
+// so the only time that passes is the time the test says passed.
+type stepClock struct{ t time.Time }
+
+func (c *stepClock) now() time.Time { return c.t }
+func (c *stepClock) sleep(ctx context.Context, _ time.Duration) bool {
+	return ctx.Err() == nil
+}
+
+// 🔴 THE DEFECT THIS PINS. A read loop on a quiet stream goes minutes or hours without a
+// message, and Succeeded is driven by messages. So a failure that healed at once and an
+// unrelated one minutes later were timed as ONE run from the first, and the second ended
+// the process — several services restarted together after a broker quorum loss that lasted
+// seconds. An error that carries proof the broker answered in between is a new run.
+func TestTwoFailuresWithABrokerAnswerBetweenThemAreTwoRuns(t *testing.T) {
+	clk := &stepClock{t: time.Unix(0, 0)}
+	sink := newRecordingSink()
+	p := NewReadPacer(nil, "quiet stream").UseClock(clk.now, clk.sleep).reportTo(sink.report)
+	ctx := context.Background()
+
+	if p.PauseAfterError(ctx, errRead) {
+		t.Fatal("the pacer stopped the loop on the first error of a run")
+	}
+	clk.t = clk.t.Add(3 * time.Minute) // idle, and the broker answered the reader meanwhile
+	stop := p.PauseAfterError(ctx, answeredErr{answered: true})
+
+	if got := sink.reported(); stop || len(got) != 0 {
+		t.Fatalf("stop=%v, reports=%v; want the loop kept and nothing reported: the broker answered "+
+			"between the two errors, so they are two separate failures, not one three-minute run", stop, got)
+	}
+}
+
+// The evidence is a property of the READ, so it has to be found however a caller wrapped
+// the error before pacing it.
+func TestTheAnswerIsFoundThroughWrapping(t *testing.T) {
+	clk := &stepClock{t: time.Unix(0, 0)}
+	sink := newRecordingSink()
+	p := NewReadPacer(nil, "quiet stream").UseClock(clk.now, clk.sleep).reportTo(sink.report)
+	ctx := context.Background()
+
+	p.PauseAfterError(ctx, errRead)
+	clk.t = clk.t.Add(3 * time.Minute)
+	stop := p.PauseAfterError(ctx, fmt.Errorf("fetch: %w", answeredErr{answered: true}))
+
+	if got := sink.reported(); stop || len(got) != 0 {
+		t.Fatalf("stop=%v, reports=%v; want the loop kept: the wrapped error still carries the "+
+			"broker's answer", stop, got)
+	}
+}
+
+// 🔑 THE COUNTERWEIGHT. The fail-fast exit exists so a pod does not report ready while
+// consuming nothing, and the restart is the remedy for several of these errors. An error
+// that carries the method but reports NO answer must keep the old timing exactly.
+func TestFailuresWithNoAnswerBetweenThemStillEndTheProcess(t *testing.T) {
+	sink := newRecordingSink()
+	p := NewReadPacer(nil, "dead stream").UseClock(VirtualClock()).reportTo(sink.report)
+	ctx := context.Background()
+
+	const bound = 40 // the same arithmetic bound as the plain-error test above
+	stopped := false
+	for n := 1; n <= bound && !stopped; n++ {
+		stopped = p.PauseAfterError(ctx, answeredErr{answered: false})
+	}
+	if !stopped {
+		t.Fatalf("the pacer never stopped within %d errors that carried no broker answer: a continuous "+
+			"outage must still end the process", bound)
+	}
+	if got := sink.reported(); len(got) != 1 {
+		t.Fatalf("the give-up was reported %d times, want 1: %v", len(got), got)
+	}
+}
+
+// An answer starts a new run AT the error that carries it, and that run is then timed and
+// counted like any other. It is not sticky: the errors after it, carrying none, extend the
+// new run until it too runs out.
+func TestAnAnswerStartsTheRunAtTheErrorThatCarriesIt(t *testing.T) {
+	sink := newRecordingSink()
+	now, sleep := VirtualClock()
+	p := NewReadPacer(nil, "flapping stream").UseClock(now, sleep).reportTo(sink.report)
+	ctx := context.Background()
+
+	for i := 0; i < 10; i++ { // a run well short of the budget
+		if p.PauseAfterError(ctx, answeredErr{answered: false}) {
+			t.Fatalf("the pacer stopped at error %d, inside the budget", i+1)
+		}
+	}
+	restartedAt := now()
+	n := 1
+	stop := p.PauseAfterError(ctx, answeredErr{answered: true})
+	for !stop && n < 1000 {
+		n++
+		stop = p.PauseAfterError(ctx, answeredErr{answered: false})
+	}
+	if !stop {
+		t.Fatal("the run that started at the answer never ran out: the answer was treated as sticky")
+	}
+	got := sink.reported()
+	if len(got) != 1 {
+		t.Fatalf("the give-up was reported %d times, want 1: %v", len(got), got)
+	}
+	want := fmt.Sprintf("failed continuously for %s over %d consecutive reads",
+		now().Sub(restartedAt).Round(time.Second), n)
+	if !strings.Contains(got[0].Error(), want) {
+		t.Fatalf("the report reads %q, want it to time and count the run from the error that carried the "+
+			"answer (%q): the ten errors before it belong to a run that ended", got[0], want)
 	}
 }

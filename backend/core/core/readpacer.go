@@ -5,6 +5,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,7 +24,10 @@ var (
 	readErrorBackoffMax = 5 * time.Second
 
 	// readErrorBudget is how long an UNBROKEN run of failures may last before the loop
-	// stops retrying and the process declares itself unfit.
+	// stops retrying and the process declares itself unfit. A run is unbroken while the
+	// broker has not answered the reader between its failures: a successful read ends it
+	// (Succeeded), and so does a read error that carries proof of an answer since the
+	// previous one (BrokerContact).
 	//
 	// It has to outlast the failures a consumer genuinely recovers from on its own — a
 	// broker failover, a broker restart, a burst of max_ack_pending refusals — which is
@@ -61,17 +65,34 @@ var (
 //
 // What does reach a pacer is everything natsReader hands back rather than healing: the
 // JetStream API errors, the 409 family (a stream at its MaxAckPending or MaxWaiting
-// ceiling), a consumer whose leadership keeps moving, a subscription it cannot rebuild.
-// Those are worth bounding — a run of them that outlasts the budget is a real outage — but
-// do not write the wider claim back in. If a pacer should cover a deleted consumer too,
-// that is a change to natsReader's rebind, not to this comment.
+// ceiling), a consumer whose leadership moved (`nats: Leadership Changed`), a fetch the
+// connection dropped out from under (`nats: disconnected during fetch`), a subscription it
+// cannot rebuild. Those are worth bounding — a run of them with no answer from the broker
+// in between is a real outage — but do not write the wider claim back in. If a pacer
+// should cover a deleted consumer too, that is a change to natsReader's rebind, not to
+// this comment.
+//
+// 🔴 "A RUN" MEANS ERRORS WITH NO BROKER ANSWER BETWEEN THEM, NOT ERRORS SINCE THE LAST
+// MESSAGE. A loop on a quiet stream can go hours without one, and when the run was timed
+// from its first error and ended only by a message, a disturbance that healed at once and
+// an unrelated one a quarter of an hour later read as one fifteen-minute failure: the
+// second ended the process. Several services restarted together that way after a broker
+// quorum loss that lasted seconds. A reader that has proof the broker answered it since
+// its previous error says so on the error (BrokerContact), and that error starts a new
+// run. The consequence is deliberate and is the boundary of what this bounds: a fault
+// that recurs while the broker keeps answering between occurrences — a consumer
+// leadership that moves every minute, say — is paced and logged each time but never ends
+// the process, because the restart would re-dial a broker that is already answering.
+// Only errors that arrive with no answer between them, faster than the reader's evidence
+// (natsReader probes an idle consumer every few seconds), run out the budget.
 //
 // So a pacer does both: it spaces the retries out, and it puts a ceiling on how long a
 // single unbroken run of them may last. Past that ceiling the loop stops and the process
-// says so through FailNow, which exits non-zero — so the failure is REPORTED (a restart
-// count, a container-exit alert) rather than being a healthy pod doing nothing. The restart
-// is also the only remedy available to several of these errors: it re-dials the broker,
-// re-creates the durable consumer, and re-reads the mounted credential.
+// says so through FailNow, which exits non-zero — so the failure is REPORTED, by the
+// container's restart count and the chart's InstanceContainerRestarted alert, rather than
+// being a healthy pod doing nothing. The restart is also the only remedy available to
+// several of these errors: it re-dials the broker, re-creates the durable consumer, and
+// re-reads the mounted credential.
 //
 // A ReadPacer is used from ONE goroutine — the loop's own — which is the same constraint
 // messaging.MessageReader.ReadMessage already places on its caller. It holds no lock.
@@ -101,6 +122,26 @@ type ReadPacer struct {
 	delay    time.Duration
 	failures int
 	runStart time.Time
+}
+
+// BrokerContact is implemented by a read error that can say whether the broker answered
+// the reader at least once AFTER the reader's previous error.
+//
+// It exists because Succeeded is driven by MESSAGES, and a stream that is quiet delivers
+// none. A loop on such a stream parks inside its read for minutes or hours, and nothing
+// resets the pacer while it waits. A reader that has proof the broker answered in between
+// (a delivery, a successful consumer lookup, a bind, a reconnect) says so on the next
+// error it returns, and PauseAfterError starts a new run with that error.
+//
+// Absent — a plain error, or any error from a reader that does not implement it — means
+// "no proof", which keeps the timing from the first error. That is the fail-closed side:
+// missing evidence can only end a run late, never early.
+//
+// It travels ON THE ERROR rather than through a method on the reader because the error is
+// the one value both read loops (messaging.RunConsumer and event-processing's readPump)
+// already hand to PauseAfterError, so neither loop has to know about it.
+type BrokerContact interface {
+	AnsweredSincePreviousError() bool
 }
 
 // NewReadPacer builds a pacer for a read loop, naming the stream it drains for the log.
@@ -148,7 +189,8 @@ func (p *ReadPacer) UseClock(now func() time.Time, sleep func(context.Context, t
 	return p
 }
 
-// Succeeded records a successful read, ending the current run of failures.
+// Succeeded records a successful read, ending the current run of failures. It is one of
+// two ways a run ends; the other is a read error that carries BrokerContact.
 //
 // 🔴 A LOOP THAT PAUSES BUT NEVER CALLS THIS EVENTUALLY KILLS ITS OWN PROCESS. The budget
 // bounds an UNBROKEN run; without the reset, one error an hour accumulates across a day
@@ -167,9 +209,18 @@ func (p *ReadPacer) Succeeded() {
 //   - the run of failures has outlasted the budget, in which case the process has already
 //     been told to end.
 //
+// An error that carries BrokerContact reporting an answer since the reader's previous
+// error starts a NEW run, of which it is the first failure: the broker answered between
+// the two, so they are two failures, not one long one. It is found through wrapping,
+// because the run is a property of the READ, not of whatever a caller wrapped around it.
+//
 // It does not swallow the error. Callers hand the error to the reader's own HandleResponse
 // (which logs it) before calling this; the point here is the rate, not the silence.
 func (p *ReadPacer) PauseAfterError(ctx context.Context, err error) (stop bool) {
+	var contact BrokerContact
+	if errors.As(err, &contact) && contact.AnsweredSincePreviousError() {
+		p.Succeeded()
+	}
 	p.failures++
 	if p.failures == 1 {
 		p.runStart = p.now()

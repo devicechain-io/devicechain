@@ -26,9 +26,13 @@ serves the two standard Kubernetes probes:
 - **`/healthz`** — liveness: can the process still do its job, or does it need a
   restart? It fails once the service's message-broker connection has closed for
   good, so Kubernetes restarts the pod. A loop that reads messages from a stream
-  and cannot read for two minutes without a break also ends the process, which
-  Kubernetes then restarts; before that it retries with a growing pause of up to
-  five seconds.
+  also ends the process when its reads keep failing for two minutes with no answer
+  from the message broker in between, and Kubernetes then restarts it. Until then it
+  retries with a growing pause of up to five seconds. A loop on a quiet stream checks
+  every few seconds that the broker still answers, and a reconnect to the broker counts
+  as an answer too, so two failures minutes apart count as two rather than one long
+  one, and a long broker outage does not restart the service when the broker comes
+  back. See [A container that restarted](#container-restarts).
 - **`/readyz`** — readiness: is it ready to take traffic? A service that isn't
   ready is held out of rotation by its Kubernetes Service (see
   [Deployment & Operator](./kubernetes-operator.md)).
@@ -496,6 +500,27 @@ that read `resolved-events` have no such checkpoint, and their notices are dead-
 | --- | --- | --- |
 | `MaxDeliveryRecordsWaiting` | Notices of messages that ran out of delivery attempts have waited 15 minutes without being recorded. | Check that every service is running: one that is down records late. If a notice stays once everything is healthy, it names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream. |
 | `ReplayCoveredDeliveriesExhausted` | A consumer that reads its stream from its own checkpoint ran out of delivery attempts in the last 15 minutes, because the checkpoint has not been saved for longer than the broker keeps redelivering. Nothing has been lost yet. | Fix whatever stops the service named by the `job` label from saving its checkpoint, usually its database connection. While the service runs, it saves what it has read once the checkpoint succeeds. If it restarts first, it reads the stream again from the last saved checkpoint, and events the stream has already discarded cannot be read again, so also watch `JetStreamDurableUnreadNearFull`. |
+
+## A container that restarted {#container-restarts}
+
+A DeviceChain service ends itself, with a non-zero exit status, when it can no longer do its
+job: when one of its loops' reads from the message broker have kept failing for two minutes
+with no answer in between, or when one of its parts reports that the process cannot continue.
+Its liveness probe also fails, so Kubernetes restarts it, when its broker connection has
+closed for good. The pod is usually ready again within seconds. Messages the container had
+read from the broker but not acknowledged are delivered again, so a restart does not drop
+them. Requests a device or client had in flight to the restarted container fail and must be
+retried, and each restart lengthens whatever outage caused it.
+
+| Alert | What it means | What to do |
+| --- | --- | --- |
+| `InstanceContainerRestarted` (warning) | Kubernetes restarted the container named by the `pod` and `container` labels in the last 15 minutes. It fires once per container and clears 15 minutes after that container's last restart. | Read the log of the container that exited: `kubectl logs --previous -n <namespace> <pod>`. The last error line says why, usually after "A component has declared this process unfit to continue". A read loop that gave up names its stream and its last broker error. If several services restarted together, look at the broker first: check that its servers are running and run `dcctl ha verify`. If the restarted container is a broker server (`dc-nats-*`), read its previous log too; its streams take a few minutes to be current again. If the container's last state is `OOMKilled`, raise its memory limit. Restarts in the first minutes of an install or an upgrade are expected. |
+
+The alert reads `kube_pod_container_status_restarts_total` from kube-state-metrics, which the
+monitoring stack installs. If you run your own Prometheus without kube-state-metrics, it never
+fires. A pod that is replaced rather than restarted, for example during an upgrade or after
+`kubectl delete pod`, starts a new count and does not fire it. A pod that keeps restarting is
+also reported by the monitoring stack's own `KubePodCrashLooping`, after 15 minutes.
 
 ## Tenants metered at the platform default {#tenant-ceilings}
 

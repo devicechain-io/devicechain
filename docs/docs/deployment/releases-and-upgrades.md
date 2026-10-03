@@ -4670,6 +4670,36 @@ had drained within 5 seconds of the load stopping. Detection, which that check d
 up at 6,000 (peak backlog under 1,000), and fell behind from 7,600 offered. No sustained rate above
 6,000 is claimed. See [Measured throughput](./bootstrap.md#measured-throughput).
 
+#### A broker disturbance minutes after another no longer restarts services, and a restart raises an alert {#next-read-loop-restarts}
+
+A service ends itself, so that Kubernetes restarts it, when one of its message-read loops keeps
+failing (see [Read loops that keep failing now restart their service](#v0180-read-loops)). A loop
+on a quiet stream, one that can go a long time without a message, timed those two minutes from
+its first failure and started again only when a message arrived. Two broker disturbances minutes
+or hours apart, such as a broker server restart and a later change of a consumer's leader, were
+therefore counted as one failure longer than two minutes, and the service exited on the second.
+Stopping two of the three broker servers at once restarted several services together this way,
+`event-sources` among them, which lengthened the gap in ingest.
+
+- A loop now starts counting again whenever the broker has answered it since its last failure:
+  a delivery, the check a quiet loop makes every few seconds that its consumer still exists, a
+  re-attach to its consumer, or a reconnect. A loop whose reads keep failing for two minutes with
+  no answer from the broker in between still ends the process, as before.
+- A broker outage longer than two minutes no longer restarts every service the moment the broker
+  comes back. The reconnect counts as the broker answering.
+- An empty read does not count as an answer, because the client reports one even while it is
+  disconnected. A second failure within a few seconds of the broker coming back can therefore
+  still be counted with the first.
+- A fault that keeps recurring while the broker answers in between, such as a consumer leader
+  that moves every minute, is retried and logged each time but no longer restarts the service.
+- New alert: `InstanceContainerRestarted` (warning), for each container in the instance's
+  namespace that Kubernetes restarted in the last 15 minutes. Before this, nothing reported a
+  single restart: the monitoring stack's `KubePodCrashLooping` fires only for a pod that is still
+  restarting after 15 minutes. The alert reads kube-state-metrics, which the bundled monitoring
+  stack installs. See [A container that restarted](./observability.md#container-restarts).
+
+Nothing needs doing.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

@@ -44,6 +44,12 @@ type ConsumerHandler func(msg Message) bool
 // different fix. Every loop in the tree pairs them correctly today. This is what stops the
 // twentieth from being the one that does not, by leaving no copy in which to get it wrong.
 //
+// A reader can also end a run without a message: an error that proves the broker answered
+// since the previous one (core.BrokerContact) starts a new run. That is what keeps a loop
+// on a quiet stream, which may go hours between messages, from joining two unrelated
+// failures into one. It rides on the error this loop already hands the pacer, so nothing
+// here handles it.
+//
 // THE THREE WAYS IT RETURNS, all of them ordinary:
 //
 //   - the context is cancelled, which is shutdown;

@@ -1297,6 +1297,38 @@ type natsReader struct {
 	// periodic consumer-liveness probe. Only the single read-loop goroutine touches
 	// it, so it needs no synchronization.
 	consecutiveTimeouts int
+	// answered records that the broker completed a round trip with this reader since the
+	// last non-EOF error ReadMessage returned: a fetch that delivered, a liveness probe that
+	// found the consumer, a (re)bind, a reconnect seen by the fetch it interrupted, or a
+	// fresh backpressure measurement taken while the reader was parked behind it. The next
+	// such error carries it (readError) and clears it. That is how the read loop's pacer
+	// tells two separate failures from one long one on a stream that delivers nothing in
+	// between (core.BrokerContact).
+	//
+	// An EMPTY fetch is deliberately not evidence. nats.go reports one as ErrTimeout from
+	// its own client-side deadline even while disconnected — the pull request is buffered
+	// for the reconnect and never reaches a server — and swallows the server's own 408, so
+	// an empty fetch reads the same whether the broker is there or not. The liveness probe
+	// that follows every few of them is a real round trip, and that is what counts.
+	//
+	// 🔴 THE BIT BELONGS TO THE READER, NOT TO A LOOP. It goes with the next non-EOF error
+	// returned to ANY caller: event-processing's fact catch-up reads these readers before
+	// its loops do, and an error there takes the bit without pacing it. That and every gap
+	// below can only make a run end LATE (the fail-closed side), never early.
+	//
+	// 🔴 A PARKED READER GATHERS NO EVIDENCE OF ITS OWN. While it waits on the readiness
+	// gate, on a term gate that is closed, between terms, or on a capacity slot, it neither
+	// fetches nor probes, so an error just before such a park and one just after it still
+	// join one run unless something else (a bind, a backpressure sample) answered in
+	// between. The readiness-gate park is left that way on purpose: what is not ready
+	// there is the service's own data plane, which is not something the broker can vouch for.
+	//
+	// Atomic because bindLocked also runs on the term-build goroutine (BindTerm); every
+	// other writer is the read goroutine.
+	answered atomic.Bool
+	// lastErrorAt is when ReadMessage last handed out a non-EOF error, so a backpressure
+	// measurement can be told to be newer than it. Read goroutine only.
+	lastErrorAt time.Time
 	// deliverNew, when set, creates the durable at the stream tail (DeliverNewPolicy)
 	// instead of the default DeliverAll — see ReaderWithDeliverNew.
 	deliverNew bool
@@ -1632,6 +1664,10 @@ func (r *natsReader) bindLocked() error {
 		return err
 	}
 	r.sub.Store(sub)
+	// AddConsumer and the bind both reached the broker and were answered: every path that
+	// (re)attaches — the first bind, the self-heal re-bind, a new term's BindTerm — is
+	// evidence for the pacer (see answered).
+	r.answered.Store(true)
 	return nil
 }
 
@@ -1991,6 +2027,10 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 	// can hand the same message out twice or drop a whole fetched batch. See the
 	// reading field for why this refuses instead of serializing.
 	if !r.reading.CompareAndSwap(false, true) {
+		// NOT through readError, deliberately. This call does not own the reader, so the
+		// evidence in answered belongs to the read in flight; and a concurrent read is a
+		// programming error that never clears on its own, so it must still run out the
+		// pacer's budget rather than be excused by another read's broker answer.
 		return Message{}, fmt.Errorf("%w: durable %q", ErrConcurrentRead, r.durable)
 	}
 	defer r.reading.Store(false)
@@ -2060,13 +2100,16 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			// to fail its onward publish would leave it unacked to spend another, and one
 			// that spends them all is given up on as poison. Parked here, the backlog waits
 			// in this stream, undelivered, and a parked reader holds no slot.
-			if r.downstream != "" && r.nmgr.Backpressure(r.downstream) != nil {
-				select {
-				case <-ctx.Done():
-					return Message{}, io.EOF
-				case <-time.After(termGatePoll):
+			if r.downstream != "" {
+				if bp := r.nmgr.Backpressure(r.downstream); bp != nil {
+					r.noteBackpressureAnswer(bp)
+					select {
+					case <-ctx.Done():
+						return Message{}, io.EOF
+					case <-time.After(termGatePoll):
+					}
+					continue
 				}
-				continue
 			}
 			batch := fetchBatch
 			var fetchedAt time.Time
@@ -2098,7 +2141,14 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 					r.consecutiveTimeouts++
 					if r.consecutiveTimeouts >= livenessProbeAfterTimeouts {
 						r.consecutiveTimeouts = 0
-						if _, cerr := r.nmgr.js.ConsumerInfo(r.stream, r.durable); errors.Is(cerr, nats.ErrConsumerNotFound) {
+						_, cerr := r.nmgr.js.ConsumerInfo(r.stream, r.durable)
+						switch {
+						case cerr == nil:
+							// Only the consumer's leader answers this with success, so it is
+							// proof the broker is serving this consumer, not just that a
+							// socket is open (see answered).
+							r.answered.Store(true)
+						case errors.Is(cerr, nats.ErrConsumerNotFound):
 							log.Warn().Str("durable", r.durable).Msg("Durable consumer missing on liveness probe; re-binding")
 							if rebindErr := r.rebindWithBackoff(ctx); rebindErr != nil {
 								return Message{}, io.EOF
@@ -2133,11 +2183,21 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 					}
 					continue
 				}
-				return Message{}, err
+				// A fetch is interrupted by EVERY change of connection status, the reconnect
+				// included. Seen connected, this is the fetch the reconnect interrupted, and the
+				// reconnect is the broker answering: without counting it, an outage longer than
+				// the pacer's budget would end the process at the moment the broker came back,
+				// when the restart has nothing left to re-dial. The disconnect side of the same
+				// outage sees the connection down and carries no answer.
+				if errors.Is(err, nats.ErrFetchDisconnected) && r.nmgr.nc != nil && r.nmgr.nc.IsConnected() {
+					r.answered.Store(true)
+				}
+				return Message{}, r.readError(err)
 			}
 			if len(msgs) == 0 {
 				continue
 			}
+			r.answered.Store(true)
 			r.consecutiveTimeouts = 0
 			r.pending = msgs
 			// A Fetch can wait out its whole long-poll, so the term may have ended while it
@@ -2164,6 +2224,43 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		msg.slot = sl
 		msg.origin = Origin{Suffix: r.suffix, Stream: r.stream, Consumer: r.durable, Seq: seq}
 		return msg, nil
+	}
+}
+
+// brokerReadError is a non-EOF read error together with whether the broker had answered
+// this reader since its previous one (core.BrokerContact). It changes nothing a caller
+// sees: Error is the wrapped error's text and Unwrap returns it, so errors.Is and errors.As
+// find what they found before.
+type brokerReadError struct {
+	err      error
+	answered bool
+}
+
+func (e *brokerReadError) Error() string                    { return e.err.Error() }
+func (e *brokerReadError) Unwrap() error                    { return e.err }
+func (e *brokerReadError) AnsweredSincePreviousError() bool { return e.answered }
+
+var _ core.BrokerContact = (*brokerReadError)(nil)
+
+// readError hands out a non-EOF read error with the evidence gathered since the last one,
+// and starts the next interval. Swap, not Load: the bit describes the interval BETWEEN two
+// errors, so reading it must end that interval.
+func (r *natsReader) readError(err error) error {
+	r.lastErrorAt = time.Now()
+	return &brokerReadError{err: err, answered: r.answered.Swap(false)}
+}
+
+// noteBackpressureAnswer counts a backpressure park as a broker answer when the gate's
+// verdict rests on a measurement taken AFTER this reader's last error. A gate that is
+// refusing on a fresh sample proves the broker answered the sampler's ConsumerInfo and
+// StreamInfo, and a reader can sit parked behind it for as long as the backlog takes to
+// drain — minutes — without fetching or probing anything itself. A stale gate proves
+// nothing (it is stale BECAUSE the sampler is not being answered), and neither does a
+// sample older than the last error.
+func (r *natsReader) noteBackpressureAnswer(bp error) {
+	var be *BackpressureError
+	if errors.As(bp, &be) && !be.Stale && be.sampledAt.After(r.lastErrorAt) {
+		r.answered.Store(true)
 	}
 }
 
