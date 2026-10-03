@@ -4561,9 +4561,11 @@ its partition only if its renewals fail for 30 seconds.
   when a consumer has not read more than 80% of what its stream can hold, for 5 minutes; the three
   [backup alerts](#v0190-backup-alerts); the three [snapshot alerts](#v0190-snapshot-backups);
   `ExternalMqttSourceNotReadByOnePod` (warning) for
-  [an MQTT source on your own broker](#v0190-external-mqtt-client-id); and
+  [an MQTT source on your own broker](#v0190-external-mqtt-client-id);
   `BrokerConnectionDiedSilently` (warning) for
-  [a broker connection that died without closing](#v0190-broker-liveness).
+  [a broker connection that died without closing](#v0190-broker-liveness); and
+  `InstanceContainerRestarted` (warning) for
+  [a container that Kubernetes restarted](#v0190-read-loop-restarts).
 - **Changed:** `JetStreamStreamNearFull` is now `info`, fires only for streams that hold records for
   an operator (`failed-decode`, `failed-events`, `connector-dispatch.dead`, `max-deliveries`, and
   `dead-letters` while `user-management` does not report reading it), and counts a stream's message
@@ -4655,6 +4657,36 @@ holding `event-sources`' broker connection stopped ingest for about five and a h
 - The `JetStreamIngestBackpressureEngaged` runbook now covers a writing service that cannot reach
   the broker, and the [node-loss](./bootstrap.md#ha-node-loss) description states how long a
   service connected to the lost server takes to reconnect.
+
+Nothing to do at upgrade.
+
+###### A broker disturbance minutes after another no longer restarts services, and a restart raises an alert {#v0190-read-loop-restarts}
+
+A service ends itself, so that Kubernetes restarts it, when one of its message-read loops keeps
+failing (see [Read loops that keep failing now restart their service](#v0180-read-loops)). A loop
+on a quiet stream, one that can go a long time without a message, timed those two minutes from
+its first failure and started again only when a message arrived. Two broker disturbances minutes
+or hours apart, such as a broker server restart and a later change of a consumer's leader, were
+therefore counted as one failure longer than two minutes, and the service exited on the second.
+Stopping two of the three broker servers at once restarted several services together this way,
+`event-sources` among them, which lengthened the gap in ingest.
+
+- A loop now starts counting again whenever the broker has answered it since its last failure:
+  a delivery, the check a quiet loop makes every few seconds that its consumer still exists, a
+  re-attach to its consumer, or a reconnect. A loop whose reads keep failing for two minutes with
+  no answer from the broker in between still ends the process, as before.
+- A broker outage longer than two minutes no longer restarts every service the moment the broker
+  comes back. The reconnect counts as the broker answering.
+- An empty read does not count as an answer, because the client reports one even while it is
+  disconnected. A second failure within a few seconds of the broker coming back can therefore
+  still be counted with the first.
+- A fault that keeps recurring while the broker answers in between, such as a consumer leader
+  that moves every minute, is retried and logged each time but no longer restarts the service.
+- New alert: `InstanceContainerRestarted` (warning), for each container in the instance's
+  namespace that Kubernetes restarted in the last 15 minutes. Before this, nothing reported a
+  single restart: the monitoring stack's `KubePodCrashLooping` fires only for a pod that is still
+  restarting after 15 minutes. The alert reads kube-state-metrics, which the bundled monitoring
+  stack installs. See [A container that restarted](./observability.md#container-restarts).
 
 Nothing to do at upgrade.
 

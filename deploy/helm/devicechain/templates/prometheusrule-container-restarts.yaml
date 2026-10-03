@@ -1,0 +1,54 @@
+{{/*
+Alerting rule for CONTAINER RESTARTS in this instance's namespace.
+
+WHY IT EXISTS. A DeviceChain service ends itself on purpose when it cannot do its job: a
+message-read loop whose reads keep failing for two minutes with no answer from the broker
+(core.ReadPacer), a component that declares the process unfit (Microservice.FailNow).
+Kubernetes restarts the container, and the pod is Ready again within seconds. Without this
+rule nothing reported that it happened: kube-prometheus-stack's KubePodCrashLooping fires
+only for a pod still in a crash loop after 15 minutes, and a single restart, or several
+services restarting together after a broker disturbance, never reaches it. The same goes
+for the broker's own servers, which run in this namespace too.
+
+`kube_pod_container_status_restarts_total` comes from kube-state-metrics, which the
+monitoring stack installs. Without kube-state-metrics the series does not exist and the
+rule never fires.
+
+increase() is taken PER SERIES and only then summed by pod and container. A pod REPLACED
+under the same name (a StatefulSet pod that was deleted) is not a restart: kube-state-metrics
+labels the series with the pod's uid, so the replacement is a new series starting at 0, and
+even where the two shared a series the drop to 0 reads to increase() as a counter reset that
+adds nothing. Only a container Kubernetes restarted in place counts.
+
+No `for:`. A restart is an event, and the 15-minute window is what keeps the alert visible
+long enough to be seen. No `or vector(0)`, for the reason prometheusrule-dead-letter.yaml
+gives in its header.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{/* The alert label below names the INSTANCE, not its namespace: those are the
+     same string today and are about to stop being, so they are spelled apart. */}}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: container-restarts
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.container-restarts
+      rules:
+        - alert: InstanceContainerRestarted
+          expr: |
+            sum by (pod, container) (
+              increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}[15m])
+            ) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "a container in this instance was restarted"
+            description: "Kubernetes restarted the container named by the pod and container labels in the last 15 minutes. A DeviceChain service exits on purpose when it cannot do its job, and the reason is in the log of the container that exited: run kubectl logs --previous on the pod and read the last error line, usually after 'A component has declared this process unfit to continue'. A read loop that failed for two minutes with no answer from the message broker names its stream and its last error there. Several services restarting together point at the broker: check that its servers are running and run dcctl ha verify. If the restarted container is a broker server (dc-nats-*), read its previous log too; its streams take a few minutes to be current again. A container whose last state is OOMKilled needs a higher memory limit. Restarts in the first minutes of an install or upgrade are expected. Messages the container had read from the broker but not acknowledged are delivered again, but requests a device or client had in flight to it fail and must be retried, and every restart lengthens the outage it happened in."
+{{- end }}

@@ -62,6 +62,11 @@ type BackpressureError struct {
 	Runway  bool
 	History uint64
 	Rate    float64
+
+	// sampledAt is when the measurement behind a non-Stale refusal was taken, on the
+	// gate's clock (the wall clock in production). A parked reader reads it to tell a
+	// broker answer newer than its last error from an older one (noteBackpressureAnswer).
+	sampledAt time.Time
 }
 
 func (e *BackpressureError) Error() string {
@@ -574,10 +579,10 @@ func (nmgr *NatsManager) Backpressure(suffix string) error {
 	case gs.sampledAt.IsZero() || g.now().Sub(gs.sampledAt) > backpressureStaleAfter:
 		return &BackpressureError{Stream: gs.stream, Stale: true}
 	case gs.closed:
-		return &BackpressureError{Stream: gs.stream, Durable: gs.worst, Ratio: gs.ratio}
+		return &BackpressureError{Stream: gs.stream, Durable: gs.worst, Ratio: gs.ratio, sampledAt: gs.sampledAt}
 	case gs.runwayClosed:
 		return &BackpressureError{Stream: gs.stream, Durable: gs.runwayDurable, Ratio: gs.ratio,
-			Runway: true, History: gs.runwayHistory, Rate: gs.runwayRate}
+			Runway: true, History: gs.runwayHistory, Rate: gs.runwayRate, sampledAt: gs.sampledAt}
 	}
 	return nil
 }

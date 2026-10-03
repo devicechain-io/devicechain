@@ -4922,9 +4922,11 @@ solo pierde su partición si sus renovaciones fallan durante 30 segundos.
   (warning), cuando un consumidor lleva 5 minutos sin haber leído más del 80% de lo que cabe en su
   stream; las tres [alertas de respaldo](#v0190-backup-alerts); las tres
   [alertas de instantáneas](#v0190-snapshot-backups); `ExternalMqttSourceNotReadByOnePod`
-  (warning) para [una fuente MQTT sobre tu propio bróker](#v0190-external-mqtt-client-id); y
+  (warning) para [una fuente MQTT sobre tu propio bróker](#v0190-external-mqtt-client-id);
   `BrokerConnectionDiedSilently` (warning) para
-  [una conexión con el bróker que murió sin cerrarse](#v0190-broker-liveness).
+  [una conexión con el bróker que murió sin cerrarse](#v0190-broker-liveness); y
+  `InstanceContainerRestarted` (warning) para
+  [un contenedor que Kubernetes reinició](#v0190-read-loop-restarts).
 - **Cambia:** `JetStreamStreamNearFull` pasa a `info`, solo se dispara para streams que guardan
   registros para un operador (`failed-decode`, `failed-events`, `connector-dispatch.dead`,
   `max-deliveries`, y `dead-letters` mientras `user-management` no informe de que lo lee), y tiene en
@@ -5022,6 +5024,39 @@ la ingesta durante unos cinco minutos y medio.
 - El procedimiento de `JetStreamIngestBackpressureEngaged` cubre ahora un servicio que escribe y no
   llega al bróker, y la descripción de la [pérdida de un nodo](./bootstrap.md#ha-node-loss) indica
   cuánto tarda en reconectarse un servicio conectado al servidor perdido.
+
+No hay nada que hacer al actualizar.
+
+###### Una perturbación del bróker minutos después de otra ya no reinicia servicios, y un reinicio dispara una alerta {#v0190-read-loop-restarts}
+
+Un servicio termina por sí mismo, para que Kubernetes lo reinicie, cuando uno de sus bucles de
+lectura de mensajes sigue fallando (consulta
+[Los bucles de lectura que siguen fallando ahora reinician su servicio](#v0180-read-loops)). Un
+bucle sobre un flujo tranquilo, que puede pasar mucho tiempo sin recibir un mensaje, contaba esos
+dos minutos desde su primer fallo y solo volvía a empezar cuando llegaba un mensaje. Dos
+perturbaciones del bróker separadas por minutos u horas, como el reinicio de un servidor del bróker
+y un cambio posterior del líder de un consumidor, contaban por tanto como un único fallo de más de
+dos minutos, y el servicio terminaba en la segunda. Detener a la vez dos de los tres servidores del
+bróker reiniciaba así varios servicios juntos, entre ellos `event-sources`, lo que alargaba el
+corte de la ingesta.
+
+- Ahora un bucle vuelve a empezar la cuenta siempre que el bróker le haya respondido desde su
+  último fallo: una entrega, la comprobación que hace un bucle tranquilo cada pocos segundos de que
+  su consumidor sigue existiendo, una nueva vinculación a su consumidor o una reconexión. Un bucle
+  cuyas lecturas siguen fallando durante dos minutos sin ninguna respuesta del bróker entre medias
+  sigue terminando el proceso, como antes.
+- Una caída del bróker de más de dos minutos ya no reinicia todos los servicios en el momento en
+  que el bróker vuelve. La reconexión cuenta como respuesta del bróker.
+- Una lectura vacía no cuenta como respuesta, porque el cliente informa de una incluso mientras
+  está desconectado. Un segundo fallo pocos segundos después de que vuelva el bróker todavía puede
+  contarse junto con el primero.
+- Un fallo que se repite mientras el bróker responde entre medias, como un líder de consumidor que
+  cambia cada minuto, se reintenta y se registra cada vez, pero ya no reinicia el servicio.
+- Nueva alerta: `InstanceContainerRestarted` (aviso), por cada contenedor del namespace de la
+  instancia que Kubernetes haya reiniciado en los últimos 15 minutos. Hasta ahora nada informaba de
+  un reinicio aislado: `KubePodCrashLooping`, de la pila de monitoreo, solo se dispara para un pod
+  que sigue reiniciándose a los 15 minutos. La alerta lee kube-state-metrics, que instala la pila
+  de monitoreo incluida. Consulta [Un contenedor que se reinició](./observability.md#container-restarts).
 
 No hay nada que hacer al actualizar.
 

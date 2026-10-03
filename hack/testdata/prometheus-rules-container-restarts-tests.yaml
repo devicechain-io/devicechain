@@ -1,0 +1,179 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the container-restart alerting rule.
+#
+# WHAT THESE ARE FOR. InstanceContainerRestarted watches kube-state-metrics' restart
+# counter, which sits flat on a healthy instance for its whole life and steps by one each
+# time Kubernetes restarts a container in place. The firing cases pin that ONE restart is
+# enough (a service that ends itself is the event this rule exists to report), that each
+# restarted container is reported on its own, and that the alert clears once the restart
+# has left the window. The quiet cases pin the three ways it could fire wrongly: on a flat
+# counter, on another instance's namespace, and on a pod that was REPLACED under the same
+# name rather than restarted (a StatefulSet pod deleted and recreated), which kube-state-
+# metrics reports as a new series under a new uid, starting at 0.
+#
+# THE SERIES: kube_pod_container_status_restarts_total, one per (namespace, pod, uid,
+# container), a counter that exists from the moment the pod is scheduled.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml. Naming it below is not
+# optional: promtool with no rule_files loads no rules, and every expected alert then
+# reads as "the rule does not fire" rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # One in-place restart fires, names the pod and container, and clears once it has
+  # left the 15m window.
+  # ------------------------------------------------------------------
+  - name: one in-place restart fires and then clears
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="device-management-8495cb8b6f-vdvm5", uid="u1", container="device-management", job="kube-state-metrics"}'
+        values: '0 0 0 1x30'
+      # A neighbour that never restarted: it must not be reported alongside.
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="event-sources-6d4f9c7b8-x2k4p", uid="u2", container="event-sources", job="kube-state-metrics"}'
+        values: '0x33'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: device-management-8495cb8b6f-vdvm5
+              container: device-management
+            exp_annotations: &annotations
+              summary: "a container in this instance was restarted"
+              description: "Kubernetes restarted the container named by the pod and container labels in the last 15 minutes. A DeviceChain service exits on purpose when it cannot do its job, and the reason is in the log of the container that exited: run kubectl logs --previous on the pod and read the last error line, usually after 'A component has declared this process unfit to continue'. A read loop that failed for two minutes with no answer from the message broker names its stream and its last error there. Several services restarting together point at the broker: check that its servers are running and run dcctl ha verify. If the restarted container is a broker server (dc-nats-*), read its previous log too; its streams take a few minutes to be current again. A container whose last state is OOMKilled needs a higher memory limit. Restarts in the first minutes of an install or upgrade are expected. Messages the container had read from the broker but not acknowledged are delivered again, but requests a device or client had in flight to it fail and must be retried, and every restart lengthens the outage it happened in."
+      # The restart (between the 2m and 3m samples) is still inside the 15m window at 16m...
+      - eval_time: 16m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: device-management-8495cb8b6f-vdvm5
+              container: device-management
+            exp_annotations: *annotations
+      # ...and has left it a minute later, so the alert clears.
+      - eval_time: 17m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Two restarts of the same container are still one alert for it.
+  # ------------------------------------------------------------------
+  - name: repeated restarts of one container are one alert
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="command-delivery-5c8d7f6b9-q7w2n", uid="u3", container="command-delivery", job="kube-state-metrics"}'
+        values: '0 0 1 2 2x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: command-delivery-5c8d7f6b9-q7w2n
+              container: command-delivery
+            exp_annotations: *annotations
+
+  # ------------------------------------------------------------------
+  # A cascade: several services restarted together after a broker disturbance. One
+  # alert per container, so the set of them shows the cascade.
+  # ------------------------------------------------------------------
+  - name: a cascade fires once per restarted container
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="event-sources-6d4f9c7b8-x2k4p", uid="u4", container="event-sources", job="kube-state-metrics"}'
+        values: '0 0 1x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="user-management-7f9b8c6d5-m3n8p", uid="u5", container="user-management", job="kube-state-metrics"}'
+        values: '0 0 1x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="event-processing-0", uid="u6", container="event-processing", job="kube-state-metrics"}'
+        values: '0 0 1x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: event-sources-6d4f9c7b8-x2k4p
+              container: event-sources
+            exp_annotations: *annotations
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: user-management-7f9b8c6d5-m3n8p
+              container: user-management
+            exp_annotations: *annotations
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: event-processing-0
+              container: event-processing
+            exp_annotations: *annotations
+
+  # ------------------------------------------------------------------
+  # Quiet: an idle instance, where every counter is flat.
+  # ------------------------------------------------------------------
+  - name: flat restart counters stay quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="device-management-8495cb8b6f-vdvm5", uid="u1", container="device-management", job="kube-state-metrics"}'
+        values: '0x30'
+      # A container that restarted long ago and has been stable since.
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-0", uid="u7", container="nats", job="kube-state-metrics"}'
+        values: '4x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Quiet: a restart in ANOTHER instance's namespace is that instance's alert.
+  # ------------------------------------------------------------------
+  - name: a restart in another namespace stays quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-other", pod="device-management-8495cb8b6f-vdvm5", uid="u8", container="device-management", job="kube-state-metrics"}'
+        values: '0 0 0 1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Quiet: a StatefulSet pod REPLACED under the same name. The old pod had restarted
+  # once, long before; it is deleted, and its replacement is a new series (new uid)
+  # starting at 0. Nothing restarted in place.
+  # ------------------------------------------------------------------
+  - name: a pod replaced under the same name is not a restart
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-1", uid="old", container="nats", job="kube-state-metrics"}'
+        values: '1 1 1 _x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-1", uid="new", container="nats", job="kube-state-metrics"}'
+        values: '_ _ _ 0x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []

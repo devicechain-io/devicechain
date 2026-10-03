@@ -25,9 +25,16 @@ sirve las dos sondas estándar de Kubernetes:
 
 - **`/healthz`** — vitalidad (liveness): ¿puede el proceso seguir haciendo su trabajo, o necesita un
   reinicio? Falla una vez que la conexión del servicio con el broker de mensajería se ha cerrado de
-  forma definitiva, de modo que Kubernetes reinicia el pod. Un bucle que lee mensajes de un flujo y
-  no puede leer durante dos minutos seguidos también termina el proceso, que Kubernetes reinicia
-  después; antes de eso reintenta con una pausa creciente de hasta cinco segundos.
+  forma definitiva, de modo que Kubernetes reinicia el pod. Un bucle que lee mensajes de un flujo
+  también termina el proceso cuando sus lecturas siguen fallando durante dos minutos sin ninguna
+  respuesta del broker de mensajería entre medias, y Kubernetes lo reinicia después. Hasta entonces
+  reintenta con una pausa creciente de hasta cinco segundos. Un bucle sobre un flujo tranquilo
+  comprueba cada pocos segundos que el broker sigue respondiendo, y una reconexión al broker también
+  cuenta como respuesta, así que dos fallos separados por minutos cuentan como dos y no como uno
+  largo, y una caída larga del broker no reinicia el servicio cuando el broker vuelve. Un broker
+  que simplemente no es alcanzable no cuenta como lecturas fallidas: las lecturas lo esperan, el
+  servicio sigue reconectando y continúa cuando el broker vuelve. Consulte
+  [Un contenedor que se reinició](#container-restarts).
 - **`/readyz`** — disponibilidad (readiness): ¿está listo para recibir tráfico? Un servicio que no está
   listo se mantiene fuera de rotación por su Service de Kubernetes (consulte
   [Despliegue y operador](./kubernetes-operator.md)).
@@ -513,6 +520,28 @@ sus avisos se registran como mensajes no entregados como siempre.
 | --- | --- | --- |
 | `MaxDeliveryRecordsWaiting` | Hay avisos de mensajes que agotaron sus intentos esperando desde hace 15 minutos sin convertirse en registros. | Compruebe que todos los servicios están en marcha: uno caído registra tarde. Si el aviso persiste con todo sano, nombra un consumidor que ya ningún servicio lee (un lector retirado en una actualización); no se registrará y puede borrarse del stream. |
 | `ReplayCoveredDeliveriesExhausted` | Un consumidor que lee su stream desde su propio punto de control agotó intentos de entrega en los últimos 15 minutos, porque el punto de control lleva sin guardarse más tiempo del que el broker sigue reentregando. Todavía no se ha perdido nada. | Corrija lo que impide al servicio que indica la etiqueta `job` guardar su punto de control, normalmente su conexión a la base de datos. Mientras el servicio sigue en marcha, guarda lo que ha leído en cuanto el punto de control se guarda. Si se reinicia antes, vuelve a leer el stream desde el último punto de control guardado, y los eventos que el stream ya haya descartado no se pueden volver a leer, así que vigile también `JetStreamDurableUnreadNearFull`. |
+
+## Un contenedor que se reinició {#container-restarts}
+
+Un servicio de DeviceChain termina por sí mismo, con un estado de salida distinto de cero, cuando
+ya no puede hacer su trabajo: cuando las lecturas de uno de sus bucles en el broker de mensajería
+llevan dos minutos fallando sin ninguna respuesta entre medias, o cuando una de sus partes informa
+de que el proceso no puede continuar. Su sonda de vitalidad también falla, y Kubernetes lo
+reinicia, cuando su conexión con el broker se ha cerrado de forma definitiva. El pod suele volver a
+estar listo en segundos. Los mensajes que el contenedor había leído del broker sin confirmar se
+entregan de nuevo, así que un reinicio no los pierde. Las peticiones que un dispositivo o un cliente
+tenía en curso con el contenedor reiniciado fallan y hay que reintentarlas, y cada reinicio alarga
+la interrupción que lo provocó.
+
+| Alerta | Qué significa | Qué hacer |
+| --- | --- | --- |
+| `InstanceContainerRestarted` (warning) | Kubernetes reinició en los últimos 15 minutos el contenedor que indican las etiquetas `pod` y `container`. Se dispara una vez por contenedor y se despeja 15 minutos después del último reinicio de ese contenedor. | Lea el registro del contenedor que terminó: `kubectl logs --previous -n <namespace> <pod>`. La última línea de error dice por qué, normalmente tras "A component has declared this process unfit to continue". Un bucle de lectura que se rindió nombra su flujo y su último error del broker. Si varios servicios se reiniciaron a la vez, mire primero el broker: compruebe que sus servidores están en marcha y ejecute `dcctl ha verify`. Si el contenedor reiniciado es un servidor del broker (`dc-nats-*`), lea también su registro anterior; sus streams tardan unos minutos en volver a estar al día. Si el último estado del contenedor es `OOMKilled`, aumente su límite de memoria. Los reinicios en los primeros minutos de una instalación o una actualización son de esperar. |
+
+La alerta lee `kube_pod_container_status_restarts_total` de kube-state-metrics, que instala la pila
+de monitoreo. Si usa su propio Prometheus sin kube-state-metrics, nunca se dispara. Un pod que se
+sustituye en lugar de reiniciarse, por ejemplo durante una actualización o tras
+`kubectl delete pod`, empieza una cuenta nueva y no la dispara. Un pod que se reinicia una y otra
+vez lo notifica también la propia `KubePodCrashLooping` de la pila de monitoreo, a los 15 minutos.
 
 ## Inquilinos medidos con el valor por defecto de la plataforma {#tenant-ceilings}
 

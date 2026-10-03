@@ -225,3 +225,60 @@ func TestTheLoopEndsWhenThePacerSaysStop(t *testing.T) {
 			"already declared its own process unfit and is still consuming", r.reads)
 	}
 }
+
+// answeredReadErr is a read error that says whether the broker answered the reader since
+// its previous one — the shape core.BrokerContact names, declared here with only the method.
+type answeredReadErr struct{ answered bool }
+
+func (e answeredReadErr) Error() string                    { return "nats: Leadership Changed" }
+func (e answeredReadErr) AnsweredSincePreviousError() bool { return e.answered }
+
+// quietLoopScript is a loop on a quiet stream: one error, three minutes with no message
+// (the clock moves inside the read that follows), a second error carrying whether the broker
+// answered meanwhile, then a message and EOF.
+func quietLoopScript(clock *time.Time, second error) *scriptedReader {
+	return &scriptedReader{
+		steps: []step{
+			{err: errors.New("nats: disconnected during fetch")},
+			{err: second},
+			{msg: Message{Subject: "after"}},
+		},
+		onRead: func(n int) {
+			if n == 1 {
+				*clock = clock.Add(3 * time.Minute)
+			}
+		},
+	}
+}
+
+// 🔴 THE DEFECT, THROUGH THE REAL LOOP. RunConsumer resets its pacer only after a message,
+// and a quiet stream delivers none, so two failures three minutes apart were one run and
+// the second ended the loop (and, in production, the process). The reader's error is what
+// carries the proof that they were two, and the loop must hand it to the pacer unchanged.
+func TestAQuietLoopSurvivesTwoFailuresFarApartWhenTheBrokerAnsweredBetween(t *testing.T) {
+	clock, slept := time.Now(), 0
+	r := quietLoopScript(&clock, answeredReadErr{answered: true})
+	handled := 0
+
+	RunConsumer(context.Background(), r, testPacer(&clock, &slept), countingHandler(&handled))
+
+	if handled != 1 {
+		t.Fatalf("the loop handled %d messages after %d reads, want 1: it gave up on the second of two "+
+			"failures three minutes apart although the broker answered between them", handled, r.reads)
+	}
+}
+
+// 🔑 THE COUNTERWEIGHT: with no answer between them, the same two failures ARE one run past
+// the budget, and the loop must still give up rather than read again.
+func TestAQuietLoopStillGivesUpWhenTheBrokerNeverAnsweredBetween(t *testing.T) {
+	clock, slept := time.Now(), 0
+	r := quietLoopScript(&clock, answeredReadErr{answered: false})
+	handled := 0
+
+	RunConsumer(context.Background(), r, testPacer(&clock, &slept), countingHandler(&handled))
+
+	if handled != 0 || r.reads != 2 {
+		t.Fatalf("handled=%d reads=%d, want 0 and 2: three minutes of failure with no broker answer is "+
+			"past the budget, so the loop must stop at the second error and not read again", handled, r.reads)
+	}
+}
