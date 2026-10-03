@@ -393,7 +393,7 @@ de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
 | `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo rechaza eventos nuevos para todos los inquilinos: los dispositivos HTTP reciben `503` con `Retry-After`, los eventos de los dispositivos MQTT esperan en el flujo de captura, y las lecturas de Sparkplug y LwM2M, y los eventos de un broker MQTT externo, se descartan y se cuentan. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
-| `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos: la cola sin leer de un consumidor está cerca del límite, o el flujo lleno descarta el historial procesado por delante de ella tan deprisa que se agotaría en 30 segundos. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. Si `JetStreamUnreadBacklogNearFull` no se dispara, es el segundo caso: `jetstream_backpressure_history_runway_seconds` lo muestra, y el registro del servicio que escribe indica el consumidor y el ritmo. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80% y, si la causa era el historial, cuando ese historial duraría un minuto o el consumidor lo ha leído todo. |
+| `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos: la cola sin leer de un consumidor está cerca del límite, o el flujo lleno descarta el historial procesado por delante de ella tan deprisa que se agotaría en 30 segundos, o un servicio que escribe en él lleva 30 segundos sin poder medir esa cola. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. Si `JetStreamUnreadBacklogNearFull` no se dispara, es el segundo caso: `jetstream_backpressure_history_runway_seconds` lo muestra, y el registro del servicio que escribe indica el consumidor y el ritmo. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80% y, si la causa era el historial, cuando ese historial duraría un minuto o el consumidor lo ha leído todo. Si ninguno de los dos indica un consumidor, puede que el servicio que escribe no esté llegando al broker: consulta [Una conexión con el broker que murió en silencio](#broker-connection-dead). |
 
 Los servicios que escriben en los dos flujos exportan estas series:
 
@@ -412,6 +412,39 @@ Los servicios que escriben en los dos flujos exportan estas series:
   puede mostrar 0 cuando el servicio de hecho está rechazando.
 - **`devicechain_<area>_jetstream_publish_refused_total{stream}`**: mensajes que el servicio no
   publicó porque el flujo estaba rechazando.
+
+## Una conexión con el broker que murió en silencio {#broker-connection-dead}
+
+Un servidor del broker cuya máquina se detiene o se reinicia de golpe, o que una partición de red
+deja aislado, no cierra nada: las conexiones de sus clientes siguen abiertas y simplemente dejan de
+recibir respuesta. Cada servicio envía un ping a su servidor del broker cada 10 segundos y da una
+conexión por perdida tras tres intervalos sin respuesta (30 segundos), o en cuanto una escritura
+lleva 10 segundos sin avanzar, así que una conexión muerta se detecta en 40 segundos como mucho. Un
+servidor que deja de leer durante 10 segundos mientras el servicio le escribe se abandona de la
+misma forma. Después el servicio se reconecta, normalmente en pocos segundos. Mientras está aislado
+no puede publicar ni recibir: en `event-sources`, la ingesta HTTP se rechaza (`503`) o agota su
+tiempo, y la [compuerta de contrapresión](#ingest-backpressure) se declara activada porque no
+puede medir la cola.
+
+| Alerta | Gravedad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `BrokerConnectionDiedSilently` | warning | Un servicio abandonó una conexión con el broker que había dejado de responder, en los últimos 15 minutos, y se reconectó. | Comprueba si se perdió o se reinició un nodo: `kubectl get nodes`, y los eventos de máquinas virtuales de tu proveedor de nube, porque Kubernetes no registra nada de una máquina que se reinicia dentro del periodo de gracia del nodo (entre 40 y 50 segundos, aproximadamente). Ejecuta `dcctl ha verify`. Si se repite para un mismo servicio sin ningún evento de nodo, el problema está en la red entre ese servicio y el broker. |
+
+- **`devicechain_<area>_nats_connection_dead_total{detected_by}`**: conexiones que este servicio
+  abandonó. `detected_by="ping"` significa que el servidor dejó sus pings sin respuesta;
+  `detected_by="write"`, que una escritura llevaba 10 segundos sin avanzar. Combina los pods con
+  `sum`.
+- **`devicechain_<area>_nats_connection_dead_last_timestamp_seconds`**: cuándo abandonó el servicio
+  la última, en segundos Unix, o 0 si no lo ha hecho desde que arrancó. La alerta lee esta, así que
+  se dispara aunque Prometheus estuviera en el nodo perdido y no viera el momento en que cambió el
+  contador.
+
+El registro del servicio dice lo mismo e indica el servidor: `Disconnected from NATS: the server
+left 2 pings sent 10s apart unanswered…` o `Disconnected from NATS: a write to the server made no
+progress for 10s…`, y después `Reconnected to NATS`. La segunda conexión con el broker que mantiene
+`event-sources`, la que observa las conexiones de los dispositivos al broker, tiene el mismo límite
+pero no se cuenta: su registro dice `A write to the NATS server made no progress` o `Lost the NATS
+system-account connection`.
 
 ## Una fuente MQTT externa que nadie lee {#external-mqtt-owner}
 

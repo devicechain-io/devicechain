@@ -1022,15 +1022,33 @@ real.
 
 - **El broker elige nuevos líderes en segundos.** Los streams cuyo líder estaba en el nodo
   perdido eligen uno nuevo, y en las pruebas las escrituras confirmadas se reanudaron en unos
-  diez segundos. Las publicaciones en curso en ese momento fallan, y un dispositivo que publica
+  diez segundos para los servicios cuya propia conexión con el broker iba a un servidor
+  superviviente. Las publicaciones en curso en ese momento fallan, y un dispositivo que publica
   por HTTP puede recibir algunas respuestas `503` y debe reintentar. Un `503` sin cabecera
   `Retry-After` significa que la publicación falló y puede que el evento se haya almacenado
   igualmente, así que un reintento lo almacena dos veces salvo que lleve `altId` y
   `occurredTime` (consulta [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)).
   Las conexiones nuevas a
   través del servicio del broker pueden seguir fallando de forma intermitente durante unos 45
-  segundos, hasta que Kubernetes da el nodo por perdido y deja de dirigir tráfico al servidor que
-  había en él.
+  segundos, hasta que el servidor de ese nodo vuelve o Kubernetes da el nodo por perdido y deja de
+  dirigir tráfico a él.
+- **Un servicio conectado al servidor perdido se reconecta en un minuto, aproximadamente.** Una
+  máquina que se detiene de golpe no cierra nada, así que un servicio cuya propia conexión con el
+  broker iba al servidor de ese nodo solo se entera cuando ese servidor deja de responder. Cada
+  servicio envía un ping a su servidor cada 10 segundos y da la conexión por perdida tras tres
+  intervalos sin respuesta (30 segundos), o en cuanto una escritura lleva 10 segundos sin avanzar;
+  entre las dos cosas detectan una conexión muerta en 40 segundos como mucho. Después el servicio
+  se reconecta, lo que lleva unos segundos, o más mientras el servicio del broker siga dirigiendo
+  algunas conexiones nuevas al servidor perdido (consulta el punto anterior). Hasta entonces no
+  puede publicar ni recibir. Si es `event-sources`, la ingesta HTTP se rechaza o agota su tiempo
+  mientras tanto, así que los dispositivos que publican por HTTP deben reintentar ante respuestas
+  `503` y tiempos agotados. Una petición que agotó su tiempo también puede haberse almacenado, así
+  que la misma regla de `altId` y `occurredTime` se aplica a su reintento.
+- **Puede que Kubernetes no informe de nada.** Una máquina que se reinicia dentro del periodo de
+  gracia del nodo (entre 40 y 50 segundos, aproximadamente) nunca se marca como `NotReady`, así
+  que ningún evento de nodo ni alerta de Kubernetes registra la pérdida. Si las alertas del chart
+  están instaladas, `BrokerConnectionDiedSilently` sí lo hace; consulta
+  [Una conexión con el broker que murió en silencio](./observability.md#broker-connection-dead).
 - **El procesamiento de eventos puede detenerse durante un minuto, aproximadamente.** Si el
   servidor del broker del nodo perdido era el líder del stream de eventos entrantes, los eventos
   de los dispositivos se siguen aceptando, pero su resolución puede detenerse durante un minuto,

@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -115,6 +116,19 @@ type streamMetrics struct {
 	// handled, by the ORIGINAL message's stream and the outcome (recorder.go). Every replica
 	// of an area shares one recorder durable, so each advisory is counted by exactly one pod.
 	maxDeliveryRecords *prometheus.CounterVec
+
+	// connectionDead counts the broker connections this service gave up because they had
+	// died WITHOUT being closed (broker_liveness.go), by what detected it: ping, the server
+	// left too many pings unanswered; write, a write made no progress for BrokerWriteTimeout.
+	// Each pod counts its own connection. Both series are created at 0 with the metrics.
+	//
+	// connectionDeadLast is when the last one was counted, in Unix seconds (0: never), and it
+	// is the one the alert reads. A counter's increase() misses an event whose first sample
+	// Prometheus never scraped, and the incident this exists for is a lost NODE, which is
+	// where Prometheus itself may have been running; a timestamp says "within the last 15
+	// minutes" from any one sample taken in that window.
+	connectionDead     *prometheus.CounterVec
+	connectionDeadLast prometheus.Gauge
 
 	// warned tracks whether a stream is currently above the near-full threshold, so
 	// the near-full line fires once on the way up (and an info once on the way back down)
@@ -285,7 +299,7 @@ type durableSample struct {
 }
 
 func newStreamMetrics(ms *core.Microservice) *streamMetrics {
-	return &streamMetrics{
+	m := &streamMetrics{
 		usedBytes:  ms.NewGaugeVec("jetstream_stream_used_bytes", "Current on-disk bytes stored in a JetStream stream.", []string{"stream"}),
 		limitBytes: ms.NewGaugeVec("jetstream_stream_limit_bytes", "Configured MaxBytes ceiling for a JetStream stream.", []string{"stream"}),
 		usedMsgs:   ms.NewGaugeVec("jetstream_stream_used_messages", "Current message count in a JetStream stream.", []string{"stream"}),
@@ -344,6 +358,16 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"replay-covered (not lettered: this service re-reads the stream from its own checkpoint, "+
 				"so the message is not lost, but that checkpoint has been failing).",
 			[]string{"stream", "outcome"}),
+		connectionDead: ms.NewCounterVec("nats_connection_dead_total",
+			fmt.Sprintf("Times this service gave up a connection to the message broker that had died without "+
+				"being closed, and reconnected: detected_by=ping, the server left %d pings sent %s apart "+
+				"unanswered; detected_by=write, a write made no progress for %s. A lost or restarted node, a "+
+				"network partition, or a server that stopped reading.",
+				BrokerMaxPingsOutstanding, BrokerPingInterval, BrokerWriteTimeout),
+			[]string{"detected_by"}),
+		connectionDeadLast: ms.NewGauge("nats_connection_dead_last_timestamp_seconds",
+			"When this service last gave up a broker connection that had died without being closed "+
+				"(see nats_connection_dead_total), in Unix seconds; 0 if it has not since it started."),
 		publishLatency: ms.NewHistogramVec("jetstream_publish_duration_seconds",
 			"Time from sending a JetStream publish to acting on its acknowledgement or failure, by stream "+
 				"suffix and mode. mode=sync is one request's round trip; mode=pipelined includes any wait "+
@@ -411,6 +435,26 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		warned:   map[string]bool{},
 		durables: map[durableRef]durableSample{},
 	}
+	// Created at 0 with the metrics, before any connection, for the reason initDurable gives.
+	m.connectionDead.WithLabelValues(deadByPing).Add(0)
+	m.connectionDead.WithLabelValues(deadByWrite).Add(0)
+	return m
+}
+
+// The detected_by values of nats_connection_dead_total.
+const (
+	deadByPing  = "ping"
+	deadByWrite = "write"
+)
+
+// countDeadConnection records one broker connection given up for having died without being
+// closed. A no-op on a manager with no metrics (one assembled by hand in a unit test).
+func (m *streamMetrics) countDeadConnection(by string) {
+	if m == nil || m.connectionDead == nil {
+		return
+	}
+	m.connectionDead.WithLabelValues(by).Inc()
+	m.connectionDeadLast.SetToCurrentTime()
 }
 
 // evictionBroadcastInit creates one EvictionBroadcast series at 0.

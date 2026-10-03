@@ -4921,8 +4921,10 @@ solo pierde su partición si sus renovaciones fallan durante 30 segundos.
   [el rechazo por historial](#v0190-ingest-history-runway); `JetStreamDurableUnreadNearFull`
   (warning), cuando un consumidor lleva 5 minutos sin haber leído más del 80% de lo que cabe en su
   stream; las tres [alertas de respaldo](#v0190-backup-alerts); las tres
-  [alertas de instantáneas](#v0190-snapshot-backups); y `ExternalMqttSourceNotReadByOnePod`
-  (warning) para [una fuente MQTT sobre tu propio bróker](#v0190-external-mqtt-client-id).
+  [alertas de instantáneas](#v0190-snapshot-backups); `ExternalMqttSourceNotReadByOnePod`
+  (warning) para [una fuente MQTT sobre tu propio bróker](#v0190-external-mqtt-client-id); y
+  `BrokerConnectionDiedSilently` (warning) para
+  [una conexión con el bróker que murió sin cerrarse](#v0190-broker-liveness).
 - **Cambia:** `JetStreamStreamNearFull` pasa a `info`, solo se dispara para streams que guardan
   registros para un operador (`failed-decode`, `failed-events`, `connector-dispatch.dead`,
   `max-deliveries`, y `dead-letters` mientras `user-management` no informe de que lo lee), y tiene en
@@ -4943,7 +4945,10 @@ solo pierde su partición si sus renovaciones fallan durante 30 segundos.
     ([Lecturas antiguas](#v0190-event-age-limit));
   - `devicechain_eventsources_external_mqtt_owner{source}` y
     `devicechain_eventsources_total_msg_not_owner{source}`
-    ([Identificador de cliente MQTT](#v0190-external-mqtt-client-id)).
+    ([Identificador de cliente MQTT](#v0190-external-mqtt-client-id));
+  - `devicechain_<area>_nats_connection_dead_total{detected_by}` y
+    `devicechain_<area>_nats_connection_dead_last_timestamp_seconds`
+    ([Un servidor del bróker que dejó de responder](#v0190-broker-liveness)).
 
   **Se elimina:** `devicechain_lwm2mingest_notify_samples_truncated_total`.
 
@@ -4993,6 +4998,30 @@ Qué cambia:
   Esa ejecución no dice nada sobre la prioridad de descarte. Antes, la prueba la informaba como un
   descarte del inquilino que nunca se descarta. Con un suelo, también podía aprobar una ejecución
   en la que el suelo no rechazó nada.
+
+No hay nada que hacer al actualizar.
+
+###### Los servicios detectan en 40 segundos un servidor del bróker que dejó de responder {#v0190-broker-liveness}
+
+Cuando la máquina de un servidor del bróker se detenía de golpe (un nodo reiniciado o que perdió la
+alimentación), los servicios conectados a ese servidor podían tardar hasta seis minutos en darse
+cuenta, porque nada cerraba sus conexiones. Si uno de ellos era `event-sources`, la ingesta HTTP se
+detenía durante ese tiempo, y si la máquina volvía pronto Kubernetes no registraba nada. En las
+pruebas, un reinicio forzado del nodo que tenía la conexión de `event-sources` con el bróker detuvo
+la ingesta durante unos cinco minutos y medio.
+
+- Ahora cada servicio envía un ping a su servidor del bróker cada 10 segundos y da la conexión por
+  perdida tras tres intervalos sin respuesta, o cuando una escritura lleva 10 segundos sin avanzar,
+  así que una conexión muerta se detecta en 40 segundos como mucho; después el servicio se reconecta
+  a un servidor que responde. La segunda conexión con el bróker que mantiene `event-sources`, para
+  la presencia de los dispositivos, tiene el mismo límite.
+- Nuevo contador `devicechain_<area>_nats_connection_dead_total{detected_by}` y nuevo indicador
+  `devicechain_<area>_nats_connection_dead_last_timestamp_seconds`, y una nueva alerta,
+  `BrokerConnectionDiedSilently` (warning). Consulta
+  [Una conexión con el broker que murió en silencio](./observability.md#broker-connection-dead).
+- El procedimiento de `JetStreamIngestBackpressureEngaged` cubre ahora un servicio que escribe y no
+  llega al bróker, y la descripción de la [pérdida de un nodo](./bootstrap.md#ha-node-loss) indica
+  cuánto tarda en reconectarse un servicio conectado al servidor perdido.
 
 No hay nada que hacer al actualizar.
 
