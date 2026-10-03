@@ -342,3 +342,24 @@ func TestEmitAllSkipsADeviceWithNoMetrics(t *testing.T) {
 		t.Errorf("counted %d emits, want 2 — a silent device must not be counted as emitted", got)
 	}
 }
+
+// The stamp is the event's identity in the load test's reconciliation, together with the
+// device token, so it must be exactly representable in the store, which keeps
+// microseconds. A nanosecond part would be dropped on the way in, and the identity sent
+// would not be the identity stored.
+//
+// This fails without the truncation only where time.Now has sub-microsecond resolution
+// (Linux, which CI runs). On a wall clock that ticks in microseconds every stamp is
+// aligned anyway and the test passes whatever eventTimestamp does.
+func TestEventTimestampIsMicrosecondExact(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		s := eventTimestamp()
+		at, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatalf("eventTimestamp() = %q does not parse as RFC 3339: %v", s, err)
+		}
+		if ns := at.Nanosecond() % 1000; ns != 0 {
+			t.Fatalf("eventTimestamp() = %q carries %d ns below the microsecond; the store keeps microseconds", s, ns)
+		}
+	}
+}

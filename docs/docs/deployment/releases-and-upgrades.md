@@ -4690,6 +4690,48 @@ Stopping two of the three broker servers at once restarted several services toge
 
 Nothing to do at upgrade.
 
+###### The load-test reports check each event, not only the totals {#v0190-loadtest-identity}
+
+The L1 and contention load tests now check every event they sent, not only that the number stored
+equals the number accepted. Equal totals can hide a lost event offset by a duplicate or by an event
+that should not be there.
+
+Each event is identified by its device and the `occurredTime` the simulator sent with it, which
+the simulator now writes to the microsecond, the precision the event store keeps. After the run's
+settle interval, the harness reads each device's stored events back through the tenant `events`
+query and checks that:
+
+- every accepted event is stored exactly once;
+- no refused event is stored: a `429`, a `503` with a `Retry-After`, or another `4xx`;
+- an event whose outcome is unknown is stored at most once: a timeout or dropped connection, a
+  `503` without a `Retry-After`, or another `5xx`;
+- nothing else is stored in the run's window.
+
+Where it appears:
+
+- The L1 report has an `identity` section with `missing`, `duplicateKeys`, `unexpected`,
+  `refusedStored`, `ambiguousStored` and `ambiguousAbsent`, up to ten example events for each,
+  how long after the run the check last looked (`observedUntilAfterDriveSeconds`), and a
+  `reconciled` verdict. A new `ingest-identity` check fails the run when any of the first three is
+  not zero, or when the evidence cannot decide, for example because events were still arriving
+  while they were read. A report without this section no longer passes.
+- The contention report has the same section for each probe tenant, checked as `gold-identity` and
+  `shed-identity`.
+- The self-test now also removes one stored event and inserts a duplicate of another, so the totals
+  match again, and passes only if the count check still passes and the identity check names both
+  events.
+- The `ingest-completeness` check still compares the totals, and its message now says that this is
+  all it compares.
+
+A redelivered copy of an event can be stored up to a minute after the first one, so a run whose
+result is to be published should settle for at least that long (`--quiesce-settle 60s`).
+
+The simulator does not send an `altId`. An `altId` would make the event store skip a second copy
+before storing it, which would hide the duplicates this check looks for and change the work being
+measured.
+
+Nothing to do at upgrade.
+
 #### Performance {#v0190-performance}
 
 On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service

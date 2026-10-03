@@ -9,12 +9,15 @@
 # dc-loadtest* binary whose non-zero exit IS the gate:
 #   - the INSTRUMENT CHECK, first: dc-loadtest-selftest drives a known volume, deletes
 #            one persisted row beneath the API, and requires the L1 oracle's verdict to
-#            flip. It runs BEFORE L1 because certifying a green pass whose instrument
+#            flip; then duplicates another so the totals agree again, and requires the
+#            count to pass while the identity reconciliation names both rows. It runs
+#            BEFORE L1 because certifying a green pass whose instrument
 #            has not been validated certifies nothing -- and for its whole existence
 #            this binary was built by no workflow and run by no script, so the L1
 #            oracle's ability to fail had never once been asserted by a gate.
 #   - L1  -- aggregate reconciliation: drive the seeded devicepulse scenario over
-#            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED, and
+#            the device-plane HTTP ingress, reconcile PERSISTED == ACCEPTED and every
+#            accepted event's identity (device, occurredTime), stored exactly once, and
 #            require every device's live state to reach its last accepted event
 #            (a lag guard at this load, not a throughput measurement).
 #   - L2d-1 detection -> durable alarm: safety/edge/background populations through
@@ -625,7 +628,8 @@ jobs:
           # writes ~/.devicechain/sims/l1probe.json (the handshake dc-loadtest reads).
           "$RUNNER_TEMP/dcctl" sim create l1probe -s localhost
           # dc-loadtest drives the seeded scenario over the ingress, then reconciles
-          # persisted==accepted (plus clean-drive and load-floor) and waits for every
+          # persisted==accepted (plus clean-drive and load-floor), then every stored
+          # event against the emit ledger by identity (ingest-identity), and waits for every
           # device's live state to reach its last accepted event (state-caught-up, on by
           # default); non-zero exit on any failed invariant IS the gate. Inputs are empty on a push event -> defaulted.
           "$RUNNER_TEMP/bin/dc-loadtest" \
@@ -652,6 +656,25 @@ jobs:
           else
             printf '_no report produced -- see the drive step log_\n' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # The release cites the L1 REPORT, so the report itself is checked: a driver that
+      # stopped emitting the identity section, or one that emitted it failed, cannot
+      # certify a release even if its exit code said otherwise. It repeats the driver's
+      # own verdict on purpose -- it watches the artifact, not the process.
+      - name: L1 -- identity reconciled (the gate)
+        run: |
+          report="$RUNNER_TEMP/l1-report.json"
+          jq -e '
+            (.identity | type) == "object"
+            and .identity.reconciled == true
+            and .identity.missing == 0 and .identity.duplicateKeys == 0 and .identity.unexpected == 0
+            and .identity.accepted == .drive.accepted
+            and .identity.accepted > 0
+          ' "$report" >/dev/null || {
+            echo "::error::the L1 report carries no passing identity reconciliation (an accepted event missing or duplicated, an unexpected one stored, or a driver that did not check identity). See the identity section of the L1 report."
+            exit 1
+          }
+          jq -r '.identity | "identity: \(.accepted) accepted, \(.missing) missing, \(.duplicateKeys) duplicated, \(.unexpected) unexpected, \(.ambiguous) ambiguous; observed until \(.observedUntilAfterDriveSeconds)s after the drive"' "$report"
 
       - name: Upload L1 report
         if: always()
@@ -1183,6 +1206,8 @@ jobs:
 
           # `passed` per probe mirrors Report.Passed(): an EMPTY invariant set is a
           # fail, not a vacuous pass, so a truncated report can't read as green here.
+          # For L1 and L3 it also requires the identity invariants (hasInv), as their
+          # Passed() does: a report that compared totals only certifies nothing.
           baseline="$RUNNER_TEMP/loadtest-baseline.json"
           jq -n \
             --argjson l1 "$l1" \
@@ -1192,6 +1217,7 @@ jobs:
             --argjson bat "$bat" \
             --argjson pos "$pos" '
             def verdict: ((.invariants | length) > 0) and all(.invariants[]; .passed);
+            def hasInv($n): any(.invariants[]?; .name == $n);
             {
               runId:       env.GITHUB_RUN_ID,
               runAttempt:  env.GITHUB_RUN_ATTEMPT,
@@ -1206,7 +1232,13 @@ jobs:
                 failed:    .drive.failed,
                 stateCaughtUp:   .stateCaughtUp,
                 stateLagSeconds: .stateLagSeconds,
-                passed:    verdict
+                identityReconciled: .identity.reconciled,
+                missing:     .identity.missing,
+                duplicated:  .identity.duplicateKeys,
+                unexpected:  .identity.unexpected,
+                ambiguous:   .identity.ambiguous,
+                identityObservedUntilAfterDriveSeconds: .identity.observedUntilAfterDriveSeconds,
+                passed:    (verdict and (.identity | type) == "object" and hasInv("ingest-identity"))
               } end),
               detection: ($det | if . == null then null else {
                 achievedRatePerSec: .drive.achievedRatePerSec,
@@ -1265,7 +1297,16 @@ jobs:
                 shedShed:      .shed.Shed,
                 shedBackpressured: .shed.Backpressured,
                 shedPersisted: .shed.Persisted,
-                passed:        verdict
+                goldIdentityReconciled: .gold.identity.reconciled,
+                goldMissing:    .gold.identity.missing,
+                goldDuplicated: .gold.identity.duplicateKeys,
+                goldUnexpected: .gold.identity.unexpected,
+                shedIdentityReconciled: .shed.identity.reconciled,
+                shedMissing:    .shed.identity.missing,
+                shedDuplicated: .shed.identity.duplicateKeys,
+                shedUnexpected: .shed.identity.unexpected,
+                shedRefusedStored: .shed.identity.refusedStored,
+                passed:        (verdict and hasInv("gold-identity") and hasInv("shed-identity"))
               } end)
             }' > "$baseline"
 
@@ -1273,37 +1314,43 @@ jobs:
             echo ""
             echo "## ADR-064 load-test baseline (run ${GITHUB_RUN_ID})"
             echo ""
-            echo "| probe | achieved ev/s | accepted | persisted | shed | backpressured | verdict |"
-            echo "| --- | ---: | ---: | ---: | ---: | ---: | :---: |"
+            echo "| probe | achieved ev/s | accepted | persisted | identity missing/dup/unexpected | shed | backpressured | verdict |"
+            echo "| --- | ---: | ---: | ---: | :---: | ---: | ---: | :---: |"
             # 🔴 The verdict column takes a STRING, not a boolean, because two probes
             # here have three states. Folding INCONCLUSIVE into FAIL in the one artifact
             # a human reads at a glance would undo the whole reason those probes carry a
             # third disposition -- "we could not measure this" would record identically
             # to "this is broken", months later, to someone who was not here.
             jq -r '
-              def row($name; $rate; $acc; $per; $shed; $bp; $ok):
-                "| \($name) | \($rate // "-") | \($acc // "-") | \($per // "-") | \($shed // "-") | \($bp // "-") | \($ok // "-") |";
+              def row($name; $rate; $acc; $per; $id; $shed; $bp; $ok):
+                "| \($name) | \($rate // "-") | \($acc // "-") | \($per // "-") | \($id // "-") | \($shed // "-") | \($bp // "-") | \($ok // "-") |";
+              # identity as missing/duplicated/unexpected, or null (rendered "-") for a
+              # probe that does not reconcile identity or a report that lacks it.
+              def idcell($m; $d; $u): if $m == null then null else "\($m)/\($d)/\($u)" end;
               def verdictOf($b): if $b == true then "PASS" elif $b == false then "FAIL" else null end;
               [ row("L1 aggregate";
                     (.l1.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .l1.accepted; .l1.persisted; .l1.shed; .l1.backpressured; verdictOf(.l1.passed)),
+                    .l1.accepted; .l1.persisted; idcell(.l1.missing; .l1.duplicated; .l1.unexpected);
+                    .l1.shed; .l1.backpressured; verdictOf(.l1.passed)),
                 row("detection";
                     (.detection.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .detection.accepted; null; .detection.shed; .detection.backpressured; verdictOf(.detection.passed)),
+                    .detection.accepted; null; null; .detection.shed; .detection.backpressured; verdictOf(.detection.passed)),
                 row("command round-trip";
                     (.command.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .command.accepted; null; .command.shed; .command.backpressured; verdictOf(.command.passed)),
+                    .command.accepted; null; null; .command.shed; .command.backpressured; verdictOf(.command.passed)),
                 row("L4 presence";
                     (.presence.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .presence.accepted; null; .presence.shed; .presence.backpressured; .presence.disposition),
+                    .presence.accepted; null; null; .presence.shed; .presence.backpressured; .presence.disposition),
                 row("L2d-4 fleet write";
                     (.batch.achievedRatePerSec | if . then (.*10|round/10) else null end);
-                    .batch.accepted; null; .batch.shed; .batch.backpressured; .batch.disposition),
+                    .batch.accepted; null; null; .batch.shed; .batch.backpressured; .batch.disposition),
                 row("L3 floor1 gold";
                     null; .contentionFloor1.goldAccepted; .contentionFloor1.goldPersisted;
+                    idcell(.contentionFloor1.goldMissing; .contentionFloor1.goldDuplicated; .contentionFloor1.goldUnexpected);
                     .contentionFloor1.goldShed; .contentionFloor1.goldBackpressured; verdictOf(.contentionFloor1.passed)),
                 row("L3 floor1 best-effort";
                     null; .contentionFloor1.shedAccepted; .contentionFloor1.shedPersisted;
+                    idcell(.contentionFloor1.shedMissing; .contentionFloor1.shedDuplicated; .contentionFloor1.shedUnexpected);
                     .contentionFloor1.shedShed; .contentionFloor1.shedBackpressured; verdictOf(.contentionFloor1.passed))
               ] | .[]' "$baseline"
             echo ""

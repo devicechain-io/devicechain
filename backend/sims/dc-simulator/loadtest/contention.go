@@ -31,10 +31,12 @@ import (
 // shed priority, and a run where it refused gold — or, at floor 0, the shed probe —
 // fails as unattributable rather than being read as a shed. The gate therefore
 // reconciles, per tenant:
-//   - GOLD rides through — zero sheds AND persisted == accepted (zero loss);
-//   - the SHED probe loses ONLY what it was told it lost — persisted == accepted with
-//     the 429s correctly absent (shedding may drop, it must never corrupt), and it
-//     actually shed (the mechanism engaged — else "gold rode through" is vacuous).
+//   - GOLD rides through — zero sheds AND persisted == accepted (zero loss), and every
+//     accepted event stored exactly once by identity (gold-identity);
+//   - the SHED probe loses ONLY what it was told it lost — persisted == accepted, every
+//     accepted event stored once and every 429 absent by identity (shed-identity:
+//     shedding may drop, it must never corrupt), and it actually shed (the mechanism
+//     engaged — else "gold rode through" is vacuous).
 //
 // The floor is NOT read by the harness (it is event-sources instance config); the
 // operator states it via ExpectFloor so the classifier knows the regime: ExpectFloor
@@ -53,6 +55,10 @@ const (
 	// InvContentionUnbackpressured: the platform's shared backpressure gate did not
 	// refuse a tenant whose refusals the verdict attributes to shed priority.
 	InvContentionUnbackpressured = "contention-not-backpressured"
+	// InvGoldIdentity and InvShedIdentity: each tenant's identity reconciliation held —
+	// every accepted event stored once, every refused event absent.
+	InvGoldIdentity = "gold-identity"
+	InvShedIdentity = "shed-identity"
 )
 
 // ContentionConfig is one contention-profile run's configuration. The Profile sizes
@@ -110,6 +116,9 @@ type tenantOutcome struct {
 	Persisted     int64 // oracle-observed persisted count over the window
 	Reached       bool  // whether persisted reached the accepted target within the quiesce timeout
 	Rate          float64
+	// Identity is the tenant's identity reconciliation: every accepted event stored
+	// once, every refused (shed or backpressured) event absent.
+	Identity IdentityReport `json:"identity"`
 }
 
 // runOneTenant drives one probe tenant through the full L1 path — clean-tenant
@@ -132,6 +141,7 @@ func runOneTenant(ctx context.Context, role string, hs *sim.Handshake, p Profile
 		return nil, err
 	}
 	counter := &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint}
+	rt.Identity = sim.NewIdentityLedger()
 	if err := requireCleanTenant(ctx, counter); err != nil {
 		return nil, fmt.Errorf("%s tenant %q: %w", role, hs.Tenant, err)
 	}
@@ -144,22 +154,29 @@ func runOneTenant(ctx context.Context, role string, hs *sim.Handshake, p Profile
 		return nil, fmt.Errorf("%s drive aborted: %w", role, err)
 	}
 	snap := rt.Stats.Snapshot(end)
+	w := deriveWindow(start, end)
 
 	oracle := &Oracle{Counter: counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout, Settle: p.QuiesceSettle}
-	qr, err := oracle.Await(ctx, deriveWindow(start, end), snap.Emitted)
+	qr, err := oracle.Await(ctx, w, snap.Emitted)
 	if err != nil {
 		return nil, fmt.Errorf("%s oracle read-back: %w", role, err)
 	}
-	return outcomeOf(role, hs.Tenant, len(rt.Devices), snap, qr), nil
+	reader := &graphqlIdentityReader{session: rt.Session, endpoint: eventEndpoint}
+	id, _, err := checkIdentity(ctx, counter, reader, rt.Identity, deviceTokens(rt.Devices), snap, w, end, p.QuiesceSettle)
+	if err != nil {
+		return nil, fmt.Errorf("%s %w", role, err)
+	}
+	return outcomeOf(role, hs.Tenant, len(rt.Devices), snap, qr, id), nil
 }
 
-// outcomeOf maps one tenant's driver snapshot and oracle read-back into the
-// classifier's input. It is pure, and separate from runOneTenant (which needs a live
-// cluster), because this mapping is where a 503 would be re-filed as a 429 — the one
-// line that decides whether backpressure reads as "gold was shed".
-func outcomeOf(role, tenant string, devices int, snap sim.Snapshot, qr QuiesceResult) *tenantOutcome {
+// outcomeOf maps one tenant's driver snapshot, oracle read-back and identity
+// reconciliation into the classifier's input. It is pure, and separate from runOneTenant
+// (which needs a live cluster), because this mapping is where a 503 would be re-filed as
+// a 429 — the one line that decides whether backpressure reads as "gold was shed".
+func outcomeOf(role, tenant string, devices int, snap sim.Snapshot, qr QuiesceResult, id IdentityReport) *tenantOutcome {
 	l := ledgerOf(snap)
 	return &tenantOutcome{
+		Identity:      id,
 		Role:          role,
 		Tenant:        tenant,
 		Devices:       devices,
@@ -232,9 +249,13 @@ type ContentionReport struct {
 }
 
 // Passed reports whether every invariant held. An empty set is NOT a pass — a report
-// that asserted nothing has proven nothing (same rule as the L1 Report).
+// that asserted nothing has proven nothing (same rule as the L1 Report) — and neither is
+// one without both tenants' identity invariants: equal totals alone do not show that
+// shedding dropped only what it refused.
 func (r *ContentionReport) Passed() bool {
-	if len(r.Invariants) == 0 {
+	if len(r.Invariants) == 0 ||
+		invariantByName(r.Invariants, InvGoldIdentity) == nil ||
+		invariantByName(r.Invariants, InvShedIdentity) == nil {
 		return false
 	}
 	for _, inv := range r.Invariants {
@@ -263,6 +284,9 @@ func (r *ContentionReport) Human() string {
 	line := func(o tenantOutcome) {
 		fmt.Fprintf(&b, "  %-4s %q: accepted %d, shed %d, backpressured %d, failed %d, persisted %d (%.0f ev/s)\n",
 			o.Role, o.Tenant, o.Accepted, o.Shed, o.Backpressured, o.Failed, o.Persisted, o.Rate)
+		id := o.Identity
+		fmt.Fprintf(&b, "       identity: missing %d, duplicated %d, unexpected %d (refused stored %d); ambiguous %d; observed until %.0fs after the drive\n",
+			id.Missing, id.DuplicateKeys, id.Unexpected, id.RefusedStored, id.Ambiguous, id.ObservedUntilAfterDriveSecs)
 	}
 	line(r.Gold)
 	line(r.Shed)
@@ -351,11 +375,23 @@ func classifyContention(cfg ContentionConfig, gold, shed *tenantOutcome) []Invar
 	add(InvContentionLoadFloor, gold.Accepted >= cfg.MinAccepted && shedAttempted >= cfg.MinAccepted,
 		fmt.Sprintf("gold accepted %d, shed attempted %d (floor %d each — a gate must apply real load)", gold.Accepted, shedAttempted, cfg.MinAccepted))
 
-	// Tenant isolation is covered by the exact per-tenant completeness checks above:
-	// each persisted count is read on its OWN tenant-scoped session, and a cross-tenant
-	// bleed would make persisted != accepted (an extra event from the other tenant) and
-	// fail gold-zero-loss / shed-no-corruption. A separate weak "both reached" invariant
-	// would only duplicate that, so it is deliberately omitted rather than shipped soft.
+	// Identity, per tenant. The two count invariants above compare totals, and equal
+	// totals can hide a lost event offset by a duplicate or by a row that should not be
+	// there. These compare every event: for gold, each accepted event stored exactly
+	// once; for the shed probe, the same AND each refused (429) event absent, which is
+	// the real proof behind "shedding drops, it must not corrupt".
+	add(InvGoldIdentity, gold.Identity.Reconciled,
+		fmt.Sprintf("gold %q: %s", gold.Tenant, identityDetail(gold.Identity)))
+	add(InvShedIdentity, shed.Identity.Reconciled,
+		fmt.Sprintf("shed %q: %s", shed.Tenant, identityDetail(shed.Identity)))
+
+	// Tenant isolation is covered by the exact per-tenant checks above: each tenant is
+	// read on its OWN tenant-scoped session, and a cross-tenant bleed would make
+	// persisted != accepted (an extra event from the other tenant) and fail
+	// gold-zero-loss / shed-no-corruption, and, because the two tenants drive the same
+	// device tokens, would show as an unexpected or duplicated identity. A separate weak
+	// "both reached" invariant would only duplicate that, so it is deliberately omitted
+	// rather than shipped soft.
 
 	return inv
 }

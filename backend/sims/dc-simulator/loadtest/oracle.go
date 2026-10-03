@@ -123,7 +123,8 @@ func deriveWindow(start, end time.Time) Window {
 
 // Oracle owns the aggregate-reconciliation strategy: poll the windowed persisted
 // count until it converges on the target (the accepted ledger) or the timeout
-// elapses, then hand the observed count to Reconcile.
+// elapses, then hand the observed count to Reconcile. That is the fast pre-check;
+// the identity reconciliation (checkIdentity) follows it.
 type Oracle struct {
 	Counter eventCounter
 	Poll    time.Duration
@@ -287,7 +288,10 @@ const (
 //     at-most-once dropped-event class (ADR-030) — the failure this layer exists
 //     to catch — OR lag that never drained within the timeout; either fails.
 //     persisted > accepted is duplication or window contamination — also a fail,
-//     never quietly tolerated.
+//     never quietly tolerated. persisted == accepted is a PASS of the totals only:
+//     a lost event offset by a duplicate, or by a row that should not be there,
+//     leaves them equal (accepting A,B,C,D and storing A,A,C,D passes). That is why
+//     ingest-identity exists, and why this detail says what it compared.
 func Reconcile(accepted, failed, persisted, minAccepted int64) []Invariant {
 	loadApplied := accepted >= minAccepted
 	cleanDrive := failed == 0
@@ -314,7 +318,7 @@ func Reconcile(accepted, failed, persisted, minAccepted int64) []Invariant {
 		comp.Detail = fmt.Sprintf("inconclusive: %d failed emits make the accepted ledger ambiguous", failed)
 	case persisted == accepted:
 		comp.Passed = true
-		comp.Detail = fmt.Sprintf("persisted == accepted == %d (no events dropped)", accepted)
+		comp.Detail = fmt.Sprintf("persisted == accepted == %d (count agreement only; identity is checked by ingest-identity)", accepted)
 	case persisted < accepted:
 		comp.Passed = false
 		comp.Detail = fmt.Sprintf("DROPPED: persisted %d < accepted %d (%d events lost or never drained within the timeout — at-most-once hole, ADR-030)", persisted, accepted, accepted-persisted)

@@ -5060,6 +5060,50 @@ corte de la ingesta.
 
 No hay nada que hacer al actualizar.
 
+###### Los informes de las pruebas de carga comprueban cada evento, no solo los totales {#v0190-loadtest-identity}
+
+Las pruebas de carga L1 y de contención comprueban ahora cada evento que enviaron, no solo que el
+número de eventos almacenados sea igual al de aceptados. Unos totales iguales pueden ocultar un
+evento perdido compensado por un duplicado o por un evento que no debería estar.
+
+Cada evento se identifica por su dispositivo y por el `occurredTime` con el que lo envió el
+simulador, que ahora lo escribe al microsegundo, la precisión que guarda el almacén de eventos. Tras
+el intervalo de asentamiento de la ejecución, el arnés vuelve a leer los eventos almacenados de cada
+dispositivo con la consulta `events` del inquilino y comprueba que:
+
+- cada evento aceptado está almacenado exactamente una vez;
+- ningún evento rechazado está almacenado: un `429`, un `503` con `Retry-After` u otro `4xx`;
+- un evento de resultado desconocido está almacenado como mucho una vez: un tiempo de espera
+  agotado o una conexión cortada, un `503` sin `Retry-After` u otro `5xx`;
+- no hay nada más almacenado en la ventana de la ejecución.
+
+Dónde aparece:
+
+- El informe L1 tiene una sección `identity` con `missing`, `duplicateKeys`, `unexpected`,
+  `refusedStored`, `ambiguousStored` y `ambiguousAbsent`, hasta diez eventos de ejemplo de cada
+  uno, cuánto tiempo después de la ejecución miró la comprobación por última vez
+  (`observedUntilAfterDriveSeconds`) y un veredicto `reconciled`. Una nueva comprobación,
+  `ingest-identity`, falla la ejecución cuando alguno de los tres primeros no es cero, o cuando las
+  pruebas no permiten decidir, por ejemplo porque seguían llegando eventos mientras se leían. Un
+  informe sin esta sección ya no se aprueba.
+- El informe de contención tiene la misma sección para cada inquilino de prueba, comprobada como
+  `gold-identity` y `shed-identity`.
+- La autocomprobación ahora también elimina un evento almacenado e inserta un duplicado de otro, de
+  modo que los totales vuelven a coincidir, y solo se aprueba si la comprobación de los totales
+  sigue aprobándose y la comprobación de identidad nombra los dos eventos.
+- La comprobación `ingest-completeness` sigue comparando los totales, y su mensaje dice ahora que es
+  lo único que compara.
+
+Una copia reentregada de un evento puede almacenarse hasta un minuto después de la primera, así que
+una ejecución cuyo resultado se vaya a publicar debe asentarse al menos ese tiempo
+(`--quiesce-settle 60s`).
+
+El simulador no envía `altId`. Un `altId` haría que el almacén de eventos descartara una segunda
+copia antes de almacenarla, lo que ocultaría los duplicados que busca esta comprobación y cambiaría
+el trabajo que se mide.
+
+No hay nada que hacer al actualizar.
+
 #### Rendimiento {#v0190-performance}
 
 En Google Kubernetes Engine, en tres nodos de base de datos de 4 vCPU y 16 GB y tres nodos de

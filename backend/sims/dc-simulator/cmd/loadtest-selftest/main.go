@@ -3,10 +3,12 @@
 
 // dc-loadtest-selftest validates the ADR-064 load-test ORACLE itself — it closes
 // the "check that cannot fail" on the harness. It drives a small known volume,
-// confirms the oracle counts it exactly over the real tenant GraphQL, then deletes
-// exactly one persisted row DIRECTLY in Postgres (out-of-band, beneath the API) and
-// confirms the oracle's completeness verdict flips to a detected drop. It exits 0
-// only when the oracle is SOUND (passed intact, failed perturbed).
+// confirms the oracle counts and identifies it exactly over the real tenant GraphQL,
+// then deletes exactly one persisted row DIRECTLY in Postgres (out-of-band, beneath
+// the API) and confirms both the completeness and the identity verdict flip to a
+// detected drop naming that row, then duplicates a second row so the totals agree
+// again and confirms the count passes while the identity verdict names both rows. It
+// exits 0 only when the oracle is SOUND (passed intact, failed both perturbations).
 //
 // Unlike dc-loadtest, this binary is privileged: it holds a DB connection so it can
 // perturb ground truth. That privilege is exactly why it is a separate tool — the

@@ -265,8 +265,9 @@ func TestShippedCPULimitsCarryTheMeasuredSustainedRate(t *testing.T) {
 // requestSizingRate is the ingest rate, in events/s, the CPU REQUESTS are sized
 // for: the rate a default --ha install sustained on gkeSplitPoolCores' cluster for 10
 // minutes, twice, with resolution, storage and live state each keeping at least 99.7%
-// of it and every accepted event stored exactly once. Detection (event-processing)
-// did not keep up there; see its row below. A request only places a pod: sized at
+// of it and as many events stored as were accepted (the totals were compared, not
+// each event). Detection (event-processing) did not keep up there; see its row
+// below. A request only places a pod: sized at
 // the default tenant ceiling (1,000/s) these services requested between 15% and 66%
 // of what they used at this rate, and the scheduler stacked the busiest together.
 const requestSizingRate = 6000

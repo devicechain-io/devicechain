@@ -5,7 +5,8 @@
 // same handshake file `dcctl sim create` writes (the scoped identity + resolved
 // endpoints), drives a scenario at a target load over the real device wire,
 // waits for the pipeline to quiesce, reconciles persisted vs. accepted events
-// against tenant-scoped platform truth, and exits non-zero if any correctness
+// against tenant-scoped platform truth, first by count and then one by one by
+// identity (device, occurredTime), and exits non-zero if any correctness
 // invariant failed — the hard pre-release-tag gate.
 //
 // Like dc-simulator, it is an untrusted external client: no service framework,

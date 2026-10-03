@@ -14,7 +14,8 @@ import (
 
 // Run executes one load-test profile end to end against the platform the
 // handshake points at: provision the scenario, drive it at load for the hold,
-// wait for the pipeline to quiesce, reconcile persisted vs. accepted, wait for
+// wait for the pipeline to quiesce, reconcile persisted vs. accepted (the count
+// pre-check) and then every event by identity (reconcileDrive), wait for
 // the live device state to reach every device's last accepted event (unless
 // StateTimeout is 0), and return the report. It is the L1 orchestration; the caller (cmd/loadtest) turns the
 // report's verdict into a process exit code (the CI gate).
@@ -48,9 +49,10 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 		return nil, err
 	}
 	counter := &graphqlEventCounter{session: rt.Session, endpoint: eventEndpoint}
-	if checkState {
-		rt.Accepted = sim.NewAcceptedLedger()
-	}
+	// Always on: the identity reconciliation is the check behind "every accepted event
+	// stored exactly once", and a gate that can be switched off is the defect it closes.
+	// The state check reads the same ledger.
+	rt.Identity = sim.NewIdentityLedger()
 
 	// Fresh-tenant precondition. The window reconciliation assumes this tenant is
 	// ours exclusively for the run; a persistent sim on the same tenant (dcctl sim
@@ -78,14 +80,15 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	snap := rt.Stats.Snapshot(end)
 
 	// Reconcile against settled platform truth: poll until the persisted count
-	// reaches the accepted target or the timeout backstops.
-	oracle := &Oracle{Counter: counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout, Settle: p.QuiesceSettle}
-	qr, err := oracle.Await(ctx, deriveWindow(start, end), snap.Emitted)
+	// reaches the accepted target or the timeout backstops, then reconcile every event
+	// by identity.
+	reader := &graphqlIdentityReader{session: rt.Session, endpoint: eventEndpoint}
+	v, err := reconcileDrive(ctx, counter, reader, rt.Identity, deviceTokens(rt.Devices), snap, deriveWindow(start, end), end, p)
 	if err != nil {
-		return nil, fmt.Errorf("oracle read-back: %w", err)
+		return nil, err
 	}
-
-	invariants := Reconcile(snap.Emitted, snap.Failed, qr.Persisted, p.MinAccepted)
+	qr := v.Quiesce
+	invariants := v.Invariants
 	var stateCaughtUp *bool
 	var stateLag float64
 	if checkState {
@@ -109,6 +112,7 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 		QuiesceSecs:   qr.Elapsed.Seconds(),
 		StateCaughtUp: stateCaughtUp,
 		StateLagSecs:  stateLag,
+		Identity:      &v.Identity,
 		Invariants:    invariants,
 	}
 	return report, nil
@@ -118,7 +122,7 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 // device's last accepted event, and returns the verdict, whether it caught up, and how long
 // after the drive ended the wait finished.
 func awaitLiveState(ctx context.Context, rt *sim.Runtime, endpoint string, end time.Time, p Profile) (Invariant, bool, time.Duration, error) {
-	want, unparsed := rt.Accepted.Snapshot()
+	want, unparsed := rt.Identity.LatestAccepted()
 	if unparsed > 0 {
 		// The simulator formats every occurredTime itself, so this is a harness defect, and
 		// the ledger cannot say what was accepted.

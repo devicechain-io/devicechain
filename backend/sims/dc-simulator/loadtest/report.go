@@ -114,16 +114,22 @@ type Report struct {
 	// StateCaughtUp is whether the live device state reached every device's last accepted
 	// event, and StateLagSecs how long after the drive ended the check finished; both
 	// absent when the check was not run (--state-timeout 0).
-	StateCaughtUp *bool       `json:"stateCaughtUp,omitempty"`
-	StateLagSecs  float64     `json:"stateLagSeconds,omitempty"`
-	Invariants    []Invariant `json:"invariants"`
+	StateCaughtUp *bool   `json:"stateCaughtUp,omitempty"`
+	StateLagSecs  float64 `json:"stateLagSeconds,omitempty"`
+	// Identity is the identity reconciliation's evidence. Run always sets it; it is a
+	// pointer only so a report without it is visibly one, and Passed refuses it.
+	Identity   *IdentityReport `json:"identity,omitempty"`
+	Invariants []Invariant     `json:"invariants"`
 }
 
 // Passed reports whether every invariant held. An empty invariant set is NOT a
 // pass — a report with nothing asserted has proven nothing, so the gate treats
-// it as a failure rather than a vacuous green.
+// it as a failure rather than a vacuous green. Nor is a report that carries no
+// identity reconciliation: equal totals alone do not show that every accepted event
+// was stored once, so a report missing the identity section or its invariant cannot
+// certify a run, whichever caller built it.
 func (r *Report) Passed() bool {
-	if len(r.Invariants) == 0 {
+	if len(r.Invariants) == 0 || r.Identity == nil || invariantByName(r.Invariants, InvIdentity) == nil {
 		return false
 	}
 	for _, inv := range r.Invariants {
@@ -152,6 +158,13 @@ func (r *Report) Human() string {
 		r.Drive.Devices, r.Drive.TargetRatePS, r.Drive.AchievedRatePS, r.Drive.HoldSeconds,
 		r.Drive.outcome(), r.Drive.Ticks)
 	fmt.Fprintf(&b, "  oracle: persisted %d, reached-target %v in %.0fs\n", r.PersistedSeen, r.Reached, r.QuiesceSecs)
+	if id := r.Identity; id != nil {
+		fmt.Fprintf(&b, "  identity: accepted %d, stored %d; missing %d, duplicated %d, unexpected %d (refused stored %d); ambiguous %d (stored %d, absent %d); read %d devices in %.0fs, observed until %.0fs after the drive\n",
+			id.Accepted, id.Persisted, id.Missing, id.DuplicateKeys, id.Unexpected, id.RefusedStored,
+			id.Ambiguous, id.AmbiguousStored, id.AmbiguousAbsent, id.DevicesRead, id.ReadSeconds, id.ObservedUntilAfterDriveSecs)
+	} else {
+		fmt.Fprintf(&b, "  identity: NOT checked\n")
+	}
 	switch {
 	case r.StateCaughtUp == nil:
 		fmt.Fprintf(&b, "  state: not checked\n")
