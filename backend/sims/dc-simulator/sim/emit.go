@@ -23,19 +23,21 @@ import (
 // maxIngressResponseBytes bounds how much of an unexpected error body is read.
 const maxIngressResponseBytes = 4096
 
-// ErrShed marks an emit the ingress REJECTED cleanly: at the per-tenant rate limit (HTTP
-// 429, ADR-023/063), or under backpressure (HTTP 503 with a Retry-After, ErrBackpressured).
+// ErrShed is the CLASS of clean ingress refusals: at the per-tenant rate limit (HTTP 429,
+// ADR-023/063), or under backpressure (HTTP 503 with a Retry-After, ErrBackpressured).
 // Both are definitive non-accepts — the ingress refuses before anything is published, so
 // the event provably never entered the pipeline — which is what lets a governed run
-// distinguish an EXPECTED shed from a real failure and reconcile persisted == emitted with
-// the shed events correctly absent. EmitMeasurements wraps it so callers test with
-// errors.Is(err, ErrShed); EmitAll routes it to Stats.Shed.
+// distinguish an EXPECTED refusal from a real failure and reconcile persisted == emitted
+// with the refused events correctly absent. EmitMeasurements wraps it so callers test with
+// errors.Is(err, ErrShed). EmitAll counts the two members APART: the 429 in Stats.Shed, the
+// backpressure 503 in Stats.Backpressured.
 var ErrShed = errors.New("emit shed at ingress (HTTP 429, or 503 under backpressure)")
 
 // ErrBackpressured marks the backpressure kind of shed: the platform refused the event
 // because a reader of its ingest stream is far behind, and said so with a 503 carrying a
-// Retry-After. It always travels with ErrShed, so the accounting is the shed accounting;
-// it exists so a caller can tell the platform's refusal from the tenant's ceiling.
+// Retry-After. It always travels with ErrShed (it is a clean refusal like a 429), but it is
+// counted in Stats.Backpressured, not Stats.Shed: the platform's shared gate refuses every
+// tenant alike, so it says nothing about the tenant's ceiling or shed priority.
 //
 // 🔴 A 503 WITHOUT a Retry-After is NOT this. The ingress answers a bare 503 when its
 // publish failed, and a publish that timed out may have been stored, so counting it as a
@@ -84,10 +86,11 @@ func EmitAll(ctx context.Context, rt *Runtime, workers int, metrics MetricsFunc)
 // is a shed or a failure. Collapsing them into "err == nil" would file every silent
 // device as an accepted emit and inflate the achieved rate a measurement rests on.
 //
-// 🔴 Shared rather than copied, and the accounting is the reason. The 429/ErrShed
-// split is what keeps a governed run reconcilable, and a second pool with its own
-// copy of the switch is one edit away from filing a shed as a failure in one
-// scenario and not the other — a divergence that shows up as a load report nobody
+// 🔴 Shared rather than copied, and the accounting is the reason. The switch splits
+// a 429 (shed) from a backpressure 503 (backpressured) from a failure, which is what
+// keeps a governed run reconcilable, and a second pool with its own copy of the
+// switch is one edit away from filing a refusal as a failure, or a 503 as a shed, in
+// one scenario and not the other — a divergence that shows up as a load report nobody
 // can reconcile rather than as anything that looks like a bug here.
 func emitEach(ctx context.Context, rt *Runtime, workers int,
 	emit func(i int, d DeviceInstance) (offered bool, err error)) error {
@@ -119,11 +122,16 @@ func emitEach(ctx context.Context, rt *Runtime, workers int,
 				switch {
 				case err == nil:
 					rt.Stats.Emitted.Add(1)
+				case errors.Is(err, ErrBackpressured):
+					// 🔴 Before the ErrShed case, and the order is load-bearing: a
+					// backpressure 503 wraps BOTH sentinels, so the ErrShed case would
+					// otherwise file it as a shed at the tenant's ceiling.
+					rt.Stats.Backpressured.Add(1)
 				case errors.Is(err, ErrShed):
 					// A governed shed (429) is a clean non-accept, NOT a failure: it is
 					// counted separately so a run under a contention floor stays
-					// reconcilable (persisted == emitted, shed events absent). It does not
-					// set firstErr — EmitAll only "fails" on real errors.
+					// reconcilable (persisted == emitted, shed events absent). Neither
+					// refusal sets firstErr — EmitAll only "fails" on real errors.
 					rt.Stats.Shed.Add(1)
 				default:
 					rt.Stats.Failed.Add(1)
@@ -352,15 +360,16 @@ func eventTimestamp() string {
 // JsonEvent envelope for device d, POSTs it to the real device-plane HTTP ingress
 // route a physical device uses (no sim-only backdoor), authenticated by the
 // credential bootstrap.go provisioned, and classifies the response — 202 accepted,
-// 429 and a backpressure 503 (one carrying a Retry-After) wrapped as ErrShed, anything
-// else a failure.
+// 429 wrapped as ErrShed, a backpressure 503 (one carrying a Retry-After) wrapped as
+// ErrBackpressured and ErrShed, anything else a failure.
 //
 // 🔴 It is a shared helper rather than a shape each emitter repeats, and the reason
-// is the 429 branch specifically. ErrShed is what keeps a governed run reconcilable
-// (EmitAll routes it to Stats.Shed rather than Stats.Failed); a second copy of this
-// classification is a second thing to remember when the accounting changes, and the
-// copy that was forgotten reports a shed as a failure — turning an EXPECTED outcome
-// under a contention floor into a run that says it broke.
+// is the refusal branches specifically. They are what keep a governed run reconcilable
+// (EmitAll routes them to Stats.Shed and Stats.Backpressured rather than
+// Stats.Failed); a second copy of this classification is a second thing to remember
+// when the accounting changes, and the copy that was forgotten reports a shed as a
+// failure — turning an EXPECTED outcome under a contention floor into a run that
+// says it broke.
 //
 // occurredTime is passed IN rather than stamped here because the entry inside the
 // payload carries the same stamp: computing it twice would put two different times

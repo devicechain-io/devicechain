@@ -59,8 +59,8 @@ func (r *MonitorReport) Human() string {
 		verdict = "PASS"
 	}
 	fmt.Fprintf(&b, "safety-monitor %s — %s (seed %d, tenant %s)\n", verdict, r.Manifest, r.Seed, r.Tenant)
-	fmt.Fprintf(&b, "  drive: %d devices, target %.1f ev/s, achieved %.1f ev/s over %.0fs — accepted %d, failed %d\n",
-		r.Drive.Devices, r.Drive.TargetRatePS, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.Accepted, r.Drive.Failed)
+	fmt.Fprintf(&b, "  drive: %d devices, target %.1f ev/s, achieved %.1f ev/s over %.0fs — %s\n",
+		r.Drive.Devices, r.Drive.TargetRatePS, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.outcome())
 	fmt.Fprintf(&b, "  monitor: cohort %d devices, observed %d events, %d violation(s)\n",
 		r.Safety.Cohort, r.Safety.Observed, len(r.Safety.Violations))
 	for _, v := range r.Safety.Violations {
@@ -171,16 +171,8 @@ func RunMonitored(ctx context.Context, hs *sim.Handshake, p Profile, cohortSize 
 		Tenant:         hs.Tenant,
 		MinAccepted:    p.MinAccepted,
 		DrainTruncated: drainTruncated,
-		Drive: DriveStats{
-			Devices:        len(rt.Devices),
-			TargetRatePS:   rt.Load.TargetRate(len(rt.Devices)),
-			AchievedRatePS: snap.Rate,
-			Accepted:       snap.Emitted,
-			Failed:         snap.Failed,
-			Ticks:          snap.Ticks,
-			HoldSeconds:    end.Sub(start).Seconds(),
-		},
-		Safety: mon.Report(),
+		Drive:          newDriveStats(len(rt.Devices), rt.Load.TargetRate(len(rt.Devices)), snap, start, end),
+		Safety:         mon.Report(),
 	}, nil
 }
 

@@ -210,6 +210,9 @@ func TestEmitAllRoutesShedApartFromFailure(t *testing.T) {
 	if emitted != 0 {
 		t.Errorf("emitted = %d, want 0 (nothing was accepted)", emitted)
 	}
+	if bp := rt.Stats.Backpressured.Load(); bp != 0 {
+		t.Errorf("backpressured = %d, want 0 (a 429 is the tenant's ceiling, not the platform's backpressure)", bp)
+	}
 }
 
 // Per-device metric values must reach the device they were computed for.

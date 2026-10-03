@@ -993,8 +993,8 @@ func (r *BatchReport) Human() string {
 	fmt.Fprintf(&b, "batch-fanout %s (seed %d, tenant %s) — exit %d [0=pass 1=fleet-write defect 2=could not measure]\n",
 		r.Disposition, r.Seed, r.Tenant, r.ExitCode())
 	fmt.Fprintf(&b, "  %s\n", r.Reason)
-	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — accepted %d, shed %d, failed %d\n",
-		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.Accepted, r.Drive.Shed, r.Drive.Failed)
+	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — %s\n",
+		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.outcome())
 	fmt.Fprintf(&b, "  batch %s: resolved %d, accepted %d, statuses %s (settle confirmed: %v); %d target, %d bystander, %d poison, %d concurrent replay(s)\n",
 		r.BatchToken, r.BatchResolved, r.BatchAccepted, sortedTally(r.Statuses), r.SettleReached,
 		r.TargetDevices, r.BystanderDevices, r.PoisonDevices, r.Replays)
@@ -1396,14 +1396,15 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 	obs.Deaf = obsDeaf
 
 	// The same two driver signals the presence harness reads, and for the same reason:
-	// a shed run is at the tenant's ingest ceiling, which presence transitions share —
-	// and a target the platform believes absent has its command HELD, which fails the
-	// round trip for a governance reason rather than a delivery one. A large FAILED
-	// share is the shared port-forward dropping, which is a tunnel fault.
-	if snap.Shed > 0 {
-		report.cannotMeasure.cannot("the background fleet was shed %d time(s) at the ingress (the per-tenant ingest ceiling, or backpressure). Presence transitions "+
-			"share that ceiling, and a target the platform believes absent has its command HELD rather than dispatched — so a failed "+
-			"round trip here cannot be told apart from a governed one", snap.Shed)
+	// a refused run (shed at the tenant's ingest ceiling, or backpressured) is refused
+	// at an ingress presence transitions share — and a target the platform believes
+	// absent has its command HELD, which fails the round trip for a governance reason
+	// rather than a delivery one. A large FAILED share is the shared port-forward
+	// dropping, which is a tunnel fault.
+	if refused, ok := backgroundRefusals(snap); ok {
+		report.cannotMeasure.cannot("the background fleet was %s. Presence transitions "+
+			"share that ingress, and a target the platform believes absent has its command HELD rather than dispatched — so a failed "+
+			"round trip here cannot be told apart from a governed one", refused)
 	}
 	if snap.Failed > 0 && snap.Failed*10 >= snap.Emitted {
 		report.cannotMeasure.cannot("%d of %d background emit(s) failed outright (not shed — real transport errors), so the contention "+
@@ -1411,16 +1412,7 @@ func RunBatch(ctx context.Context, hs *sim.Handshake, cfg BatchConfig) (*BatchRe
 	}
 
 	report.FinishedAt = end.UTC()
-	report.Drive = DriveStats{
-		Devices:        len(background),
-		TargetRatePS:   rt.Load.TargetRate(len(background)),
-		AchievedRatePS: snap.Rate,
-		Accepted:       snap.Emitted,
-		Shed:           snap.Shed,
-		Failed:         snap.Failed,
-		Ticks:          snap.Ticks,
-		HoldSeconds:    end.Sub(start).Seconds(),
-	}
+	report.Drive = newDriveStats(len(background), rt.Load.TargetRate(len(background)), snap, start, end)
 	report.BatchToken = rec.Token
 	report.BatchAccepted, report.BatchResolved = rec.Accepted, rec.Resolved
 	report.Statuses, report.SettleReached = obs.Statuses, obs.SettleReached

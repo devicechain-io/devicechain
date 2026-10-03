@@ -198,7 +198,7 @@ func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
 		case <-ticker.C:
 			started := time.Now()
 			l.rt.Stats.Ticks.Add(1)
-			shedBefore := l.rt.Stats.Shed.Load()
+			shedBefore := l.rt.Stats.refused()
 			if err := l.sim.Tick(ctx, l.rt); err != nil {
 				log.Error().Err(err).Msg("sim tick failed")
 				l.mu.Lock()
@@ -206,10 +206,12 @@ func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
 				l.mu.Unlock()
 			}
 
-			// Attribute this tick's sheds, and SAY SO when the answer changes.
+			// Attribute this tick's refusals, and SAY SO when the answer changes.
 			//
-			// 🔴 A shed is not an emit failure — the ingress refuses it cleanly at the
-			// per-tenant ceiling (ADR-023/063) and a governed load run expects them, so
+			// 🔴 A refusal is not an emit failure — the ingress refuses cleanly, at the
+			// per-tenant ceiling (a shed, ADR-023/063) or under the platform's
+			// backpressure (a 503 with a Retry-After), and a governed load run expects
+			// them, so
 			// EmitAll deliberately does not treat one as an error. But on a scenario
 			// being watched rather than measured, that silence is the problem: a device
 			// whose events are being refused looks exactly like a device that has
@@ -219,10 +221,10 @@ func (l *Lifecycle) runTickLoop(ctx context.Context, done chan struct{}) {
 			// will see it, rather than only in a counter they would have to think to
 			// read. Only the LIFECYCLE does this: the load harness drives EmitAll
 			// directly and is unaffected.
-			shedNow := l.rt.Stats.Shed.Load() - shedBefore
+			shedNow := l.rt.Stats.refused() - shedBefore
 			if was := l.rt.Stats.LastTickShed.Swap(shedNow); (was == 0) != (shedNow == 0) {
 				if shedNow > 0 {
-					log.Warn().Int64("shed", shedNow).
+					log.Warn().Int64("refused", shedNow).
 						Msg("ingress is SHEDDING this tenant's events (its rate ceiling, or backpressure); " +
 							"devices whose widgets look silent are being refused, not quiet")
 				} else {

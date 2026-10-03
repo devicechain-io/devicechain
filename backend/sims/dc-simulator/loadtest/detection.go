@@ -710,8 +710,8 @@ func (r *DetectionReport) Human() string {
 		verdict = "PASS"
 	}
 	fmt.Fprintf(&b, "detection-alarm-probes %s (seed %d, tenant %s)\n", verdict, r.Seed, r.Tenant)
-	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — accepted %d, failed %d\n",
-		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.Accepted, r.Drive.Failed)
+	fmt.Fprintf(&b, "  drive: %d bg devices, achieved %.1f ev/s over %.0fs — %s\n",
+		r.Drive.Devices, r.Drive.AchievedRatePS, r.Drive.HoldSeconds, r.Drive.outcome())
 	fmt.Fprintf(&b, "  probes: %d safety, %d edge × K=%d cycles, %d emit failure(s); alarms reached-target %v in %.0fs\n",
 		r.SafetyProbes, r.EdgeProbes, r.Cycles, r.ProbeFailures, r.AlarmsReached, r.AlarmSecs)
 	if r.LiveSignal {
@@ -965,15 +965,7 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 		LiveAbsent:    absentReason,
 		Detection:     liveSignal,
 		Invariants:    invs,
-		Drive: DriveStats{
-			Devices:        len(background),
-			TargetRatePS:   rt.Load.TargetRate(len(background)),
-			AchievedRatePS: snap.Rate,
-			Accepted:       snap.Emitted,
-			Failed:         snap.Failed,
-			Ticks:          snap.Ticks,
-			HoldSeconds:    end.Sub(start).Seconds(),
-		},
+		Drive:         newDriveStats(len(background), rt.Load.TargetRate(len(background)), snap, start, end),
 	}
 	return report, nil
 }
