@@ -289,7 +289,10 @@ type Stream struct {
 	// message it has not read yet. While any of them is so far behind that its UNREAD backlog
 	// fills 90% of the stream's ceiling, the stream applies backpressure: core/messaging
 	// refuses its writers (messaging.ErrStreamBackpressure), and a reader that forwards into
-	// it (Forwards) stops fetching, until that backlog is below 80%. Empty means the stream
+	// it (Forwards) stops fetching, until that backlog is below 80%. On a full stream it also
+	// applies backpressure while the messages that reader has already read, which DiscardOld
+	// removes first, would all be discarded within 30 s at the rate the stream is discarding
+	// them (the runway rule, core/messaging/backpressure.go). Empty means the stream
 	// never refuses: when it is full it discards its oldest message, read or not, and the
 	// readers' unread-loss counters are what record a message nobody had read.
 	//

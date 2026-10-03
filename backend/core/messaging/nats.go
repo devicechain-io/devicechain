@@ -1006,6 +1006,10 @@ func (nmgr *NatsManager) sampleNow(ctx context.Context) {
 type natsWriter struct {
 	nmgr   *NatsManager
 	suffix string
+	// gate is the stream's backpressure gate, nil for a stream that applies none. The writer
+	// counts what it publishes against it, so the gate is measured on volume as well as on
+	// its timer (gateState.notePublished).
+	gate *gateState
 }
 
 // NewWriter creates a producer for the given subject suffix. The stream backing
@@ -1023,7 +1027,7 @@ func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
 	// not born refusing. Its refused counter exists at 0 from here, for the reason
 	// initDurable gives.
 	if streams.AppliesBackpressure(suffix) {
-		nmgr.registerBackpressure(suffix)
+		w.gate = nmgr.registerBackpressure(suffix)
 		nmgr.metrics.initRefused(StreamName(nmgr.Microservice.InstanceId, suffix))
 	}
 	nmgr.writers = append(nmgr.writers, w)
@@ -1175,6 +1179,11 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			start := time.Now()
 			_, err = w.nmgr.js.PublishMsg(nm, nats.Context(pctx))
 			w.nmgr.metrics.observePublish(w.suffix, publishModeSync, time.Since(start))
+			if err == nil {
+				// The subject and data only: the count paces measurement, it is not the
+				// broker's accounting.
+				w.gate.notePublished(len(nm.Subject) + len(nm.Data))
+			}
 		}
 		cancel()
 		if err != nil && !callerBound && errors.Is(err, context.DeadlineExceeded) {

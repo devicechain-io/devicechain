@@ -218,12 +218,14 @@ type streamMetrics struct {
 	// consumerPending: that series is exported by the service that READS the durable, and
 	// only for its own readers; this one is exported by every service that WRITES the stream,
 	// for the durables that gate it, which is what the refusal is decided on. Absent while
-	// not measured, like consumerPending.
+	// not measured, like consumerPending. historyRunway is the runway rule's quantity for the
+	// same durables, measured by the same writers and withdrawn with unreadRatio.
 	//
 	// publishRefused counts messages a writer refused under backpressure, by stream, created
 	// at 0 when a writer on a gated stream is built. engaged is the scrape-time gauge of each
 	// gate (engagedCollector); nil on a microservice with no registry.
 	unreadRatio    *prometheus.GaugeVec
+	historyRunway  *prometheus.GaugeVec
 	publishRefused *prometheus.CounterVec
 	engaged        *engagedCollector
 
@@ -367,6 +369,13 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"as this service measures it before writing to the stream. At 0.9 the stream refuses new "+
 				"messages until it is below 0.8. Absent while not measured.",
 			[]string{"stream", "durable"}),
+		historyRunway: ms.NewGaugeVec("jetstream_backpressure_history_runway_seconds",
+			"How long the messages a gating consumer has already read, still held ahead of its unread ones, "+
+				"would last at the rate the full stream has recently been discarding them, as this service "+
+				"measures it before writing to the stream. +Inf while the stream is not at its ceiling, is "+
+				"discarding none of them, or the consumer has read everything. Below 30 the stream refuses new "+
+				"messages until it is 60 or more, or the consumer has read everything. Absent while not measured.",
+			[]string{"stream", "durable"}),
 		publishRefused: ms.NewCounterVec("jetstream_publish_refused_total",
 			"Messages this service did not publish because the stream was applying backpressure.",
 			[]string{"stream"}),
@@ -444,12 +453,27 @@ func (m *streamMetrics) setUnreadRatio(stream, durable string, r float64) {
 	m.unreadRatio.WithLabelValues(stream, durable).Set(r)
 }
 
-// forgetUnreadRatio withdraws a durable's ratio series: it was not measured.
-func (m *streamMetrics) forgetUnreadRatio(stream, durable string) {
-	if m == nil || m.unreadRatio == nil {
+// setHistoryRunway records how long one gating durable's read history would last (see
+// runwaySeconds).
+func (m *streamMetrics) setHistoryRunway(stream, durable string, seconds float64) {
+	if m == nil || m.historyRunway == nil {
 		return
 	}
-	m.unreadRatio.DeleteLabelValues(stream, durable)
+	m.historyRunway.WithLabelValues(stream, durable).Set(seconds)
+}
+
+// forgetBackpressure withdraws a durable's gate series, the ratio and the runway: it was not
+// measured.
+func (m *streamMetrics) forgetBackpressure(stream, durable string) {
+	if m == nil {
+		return
+	}
+	if m.unreadRatio != nil {
+		m.unreadRatio.DeleteLabelValues(stream, durable)
+	}
+	if m.historyRunway != nil {
+		m.historyRunway.DeleteLabelValues(stream, durable)
+	}
 }
 
 // initRefused creates a gated stream's refused counter at 0, for the reason initDurable gives.

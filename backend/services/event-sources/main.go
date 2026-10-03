@@ -268,7 +268,8 @@ func initializeMetrics() {
 	BackpressureCounter = Microservice.NewCounterVec(
 		"total_msg_backpressured",
 		"Count of inbound messages refused because the ingest pipeline is applying backpressure "+
-			"(a consumer's unread backlog is near its stream's ceiling)",
+			"(a consumer's unread backlog is near its stream's ceiling, or the full stream is close to "+
+			"discarding the messages it has not read)",
 		[]string{"source"})
 	TenantGoneCounter = Microservice.NewCounterVec(
 		"total_msg_tenant_deleted",
