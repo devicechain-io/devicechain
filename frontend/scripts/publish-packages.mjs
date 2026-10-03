@@ -27,9 +27,9 @@
 // actually happen are detected and named here instead — see assertOidcReady() and the
 // FIRST-PUBLISH message below.
 
-import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { npmCommand, runSync } from './launch.mjs';
 import { PackageError, resolvePackages } from './packages.mjs';
 import { normalizeVersion, verifyManifest } from './set-package-versions.mjs';
 
@@ -37,6 +37,10 @@ import { normalizeVersion, verifyManifest } from './set-package-versions.mjs';
 // rather than assumed: the runner's bundled npm is whatever setup-node's Node ships,
 // and an older one does not fail with "OIDC unsupported" — it falls through to looking
 // for a token it will not find, and reports a permissions error instead.
+//
+// The floor is asserted on the npm this script LAUNCHES — every npm call below goes
+// through the same resolver in scripts/launch.mjs — so the version check and the
+// publish cannot read two different npms.
 const MIN_NPM = [11, 5, 1];
 
 const DIST_TAG = /^[a-z][a-z0-9-]*$/;
@@ -45,8 +49,13 @@ function fail(message) {
   throw new PackageError(message);
 }
 
-function run(command, args, options = {}) {
-  return spawnSync(command, args, { encoding: 'utf8', ...options });
+// npm, launched through Node (scripts/launch.mjs). An npm that did not run to
+// completion — failed to launch, or was killed by a signal — THROWS here (a
+// LaunchError, which is a PackageError) rather than coming back as a null status,
+// which publishedVersions() below would otherwise read as "this package is not on
+// the registry".
+function run(args, options = {}) {
+  return runSync(npmCommand(args), { encoding: 'utf8', ...options });
 }
 
 function parseArgs(argv) {
@@ -77,8 +86,8 @@ export function compareTriple(raw, want) {
 }
 
 function assertNpmVersion() {
-  const result = run('npm', ['--version']);
-  if (result.status !== 0) fail('`npm --version` failed — there is no npm on PATH');
+  const result = run(['--version']);
+  if (result.status !== 0) fail(`\`npm --version\` exited ${result.status}`);
   const raw = result.stdout.trim();
   if (compareTriple(raw, MIN_NPM) < 0) {
     fail(`npm ${raw} is older than ${MIN_NPM.join('.')}, which is the floor for trusted publishing (OIDC)`);
@@ -132,7 +141,7 @@ function assertOidcReady() {
     );
   }
 
-  const dump = run('npm', ['config', 'ls', '-l']).stdout ?? '';
+  const dump = run(['config', 'ls', '-l']).stdout ?? '';
   const registry = configuredRegistry(dump);
   if (registry !== 'https://registry.npmjs.org/') {
     fail(`the configured registry is '${registry}', but trusted publishing only works against https://registry.npmjs.org/`);
@@ -166,13 +175,13 @@ export function parseVersions(stdout) {
 }
 
 function publishedVersions(name) {
-  const result = run('npm', ['view', name, 'versions', '--json']);
+  const result = run(['view', name, 'versions', '--json']);
   if (result.status !== 0) return null; // package does not exist at all
   return parseVersions(result.stdout);
 }
 
 function distTags(name) {
-  const result = run('npm', ['view', name, 'dist-tags', '--json']);
+  const result = run(['view', name, 'dist-tags', '--json']);
   if (result.status !== 0) return null;
   return JSON.parse(result.stdout);
 }
@@ -259,11 +268,7 @@ function main(argv) {
       console.log('    (--dry-run: not published)');
       continue;
     }
-    const result = spawnSync('npm', ['publish', '--tag', tag], {
-      stdio: ['inherit', 'inherit', 'pipe'],
-      cwd: dir,
-      encoding: 'utf8',
-    });
+    const result = run(['publish', '--tag', tag], { stdio: ['inherit', 'inherit', 'pipe'], cwd: dir });
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.status !== 0 && isAlreadyPublishedRefusal(result.stderr, version)) {
       console.log(`  ${name}@${version} was already published (the registry's read side had not caught up) — continuing`);

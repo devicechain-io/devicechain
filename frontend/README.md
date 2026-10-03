@@ -54,6 +54,26 @@ npm run codegen              # generate the console's typed GraphQL operations
 npm run dev                  # per-app dev server (e.g. apps/console)
 ```
 
+Native Windows (PowerShell or cmd) is supported for install, the package build
+and typecheck; the `frontend-windows` workflow checks that on every frontend
+change. A checkout made before `frontend/.gitattributes` pinned the brand
+package's generated files to LF may still hold CRLF copies, which its build
+reports as stale. Restore them once from `frontend/`. In PowerShell:
+
+```powershell
+Remove-Item packages/brand/css/*.css, packages/brand/tokens.generated.json
+git checkout -- packages/brand
+```
+
+In Git Bash (or any POSIX shell):
+
+```bash
+rm packages/brand/css/*.css packages/brand/tokens.generated.json
+git checkout -- packages/brand
+```
+
+From cmd, run either one in PowerShell or Git Bash instead.
+
 To exercise the full stack, deploy onto the local kind cluster (see
 `deploy/local/`) and use `deploy/local/bounce.sh frontend` to rebuild + roll the
 frontend image, then browse the ingress at `http://localhost/`.

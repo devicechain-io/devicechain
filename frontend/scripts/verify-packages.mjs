@@ -52,11 +52,11 @@
 // is not a merge gate because it needs Chrome. The two are complementary: this one
 // runs on every pull request and every release.
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { npmCommand, runSync, systemCommand } from './launch.mjs';
 import { DEPENDENCY_FIELDS, PackageError, SCOPE, resolvePackages } from './packages.mjs';
 
 const PLACEHOLDER = '0.0.0-dev';
@@ -232,25 +232,35 @@ function packAndExtract(name, dir, work, extractedByName) {
 
   // `--json` for the file list, so the inventory comes from npm's own packer rather
   // than from a second reading of `files` — the point is to see what npm decided.
+  // npm is launched through Node (scripts/launch.mjs); one that could not run throws a
+  // LaunchError, which is a PackageError and names the command.
+  const packed = runSync(npmCommand(['pack', '--json', '--pack-destination', tarballs]), {
+    cwd: dir,
+    encoding: 'utf8',
+    // npm writes its notices to stderr; anything it puts on stdout that is not the
+    // JSON would break the parse, so slice from the array rather than trusting it.
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  // npm's own error is already on stderr, inherited above. These say which package it
+  // was about, which a bare exit status or a raw JSON stack does not.
+  if (packed.status !== 0) {
+    throw new PackageError(`${name}: \`npm pack\` failed (exit ${packed.status})`);
+  }
   let report;
   try {
-    const stdout = execFileSync('npm', ['pack', '--json', '--pack-destination', tarballs], {
-      cwd: dir,
-      encoding: 'utf8',
-      // npm writes its notices to stderr; anything it puts on stdout that is not the
-      // JSON would break the parse, so slice from the array rather than trusting it.
-      stdio: ['ignore', 'pipe', 'inherit'],
-    });
-    report = JSON.parse(stdout.slice(stdout.indexOf('[')))[0];
+    report = JSON.parse(packed.stdout.slice(packed.stdout.indexOf('[')))[0];
   } catch (err) {
-    // npm's own error is already on stderr, inherited above. This says which package it
-    // was about, which the raw stack over an execFileSync internal does not.
-    throw new PackageError(`${name}: \`npm pack\` failed (${err.message.split('\n')[0]})`);
+    throw new PackageError(`${name}: \`npm pack --json\` printed no usable report (${err.message.split('\n')[0]})`);
   }
 
   const root = path.join(work, 'extract', name);
   mkdirSync(root, { recursive: true });
-  execFileSync('tar', ['-xzf', path.join(tarballs, report.filename), '-C', root]);
+  const untar = runSync(systemCommand('tar', ['-xzf', path.join(tarballs, report.filename), '-C', root]), {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
+  if (untar.status !== 0) {
+    throw new PackageError(`${name}: extracting ${report.filename} failed (exit ${untar.status})`);
+  }
   const pkgDir = path.join(root, 'package');
   if (!existsSync(path.join(pkgDir, 'package.json'))) {
     throw new PackageError(`${name}: the tarball did not extract to package/package.json`);

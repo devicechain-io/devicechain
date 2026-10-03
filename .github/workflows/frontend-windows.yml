@@ -1,0 +1,85 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The frontend installs, builds its packages and typechecks on native Windows.
+#
+# The package build scripts once started npm and the TypeScript compiler by name,
+# with no shell. On Windows both are .cmd shims that such a spawn cannot start, so
+# a fresh Windows checkout could not build the frontend at all, and nothing on the
+# Linux runners could see it. This workflow is what keeps that fixed.
+#
+# WHY A SEPARATE WORKFLOW AND NOT A JOB IN ci.yml. ci.yml's `ci-complete` gate
+# requires every job in that file, and it counts a SKIPPED job as a failure
+# (hack/check-ci-gate-complete.sh enforces the first half). This job is
+# path-filtered, so as a ci.yml job it would either break that guard or, once
+# listed, block every pull request that does not touch frontend/. A workflow-level
+# `paths:` filter in its own file has neither problem; codeql-frontend.yml is the
+# same arrangement.
+#
+# 🔴 NOT in the required-checks set. It covers developer tooling on one platform,
+# it costs a few minutes of a slower runner, and a Windows runner hiccup must not
+# block merges of changes that have nothing to do with it.
+#
+# SCOPE, so it is not overclaimed. It runs `npm ci`, `build:packages`, the
+# launcher's own tests (scripts/launch.test.mjs, on native Windows paths) and
+# `typecheck`. It does NOT run lint (the apps' lint scripts single-quote their
+# glob, which cmd.exe passes through literally), the unit tests, codegen, the production build or `verify:packages` (which links
+# with directory symlinks, a privilege Windows does not grant by default). None
+# of those is claimed to work on Windows by this check.
+name: frontend-windows
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-windows.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-windows.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: frontend builds on Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
+        # A contributor's shell: npm here is npm.cmd / npm.ps1, as it is for them.
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # Same as the Linux frontend job in ci.yml.
+          node-version: 26
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The step the defect broke, first, so a regression is reported here as the
+      # build failure it is rather than as some later step's confusing symptom.
+      - name: Build publishable packages
+        run: npm run build:packages
+
+      # Only the launcher's tests, not all of `test:scripts`: the rest cover release
+      # plumbing that runs on Linux only. Run by node directly, so npm_execpath is
+      # unset and the npm bundled beside node.exe is the one these tests find and
+      # launch: the Windows branch of the resolver, exercised natively.
+      - name: Launcher tests
+        run: node --test scripts/launch.test.mjs
+
+      - name: Typecheck
+        run: npm run typecheck
