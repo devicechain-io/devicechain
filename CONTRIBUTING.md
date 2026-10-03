@@ -91,6 +91,21 @@ go vet ./...
 go test ./...
 ```
 
+`backend/cli` and `backend/k8s` also need a local Kubernetes API server for their
+tests: some of them start a real `kube-apiserver` and `etcd` as local processes (no
+cluster involved), and they fail, rather than skip, when the binaries are missing.
+Install them once and export the variable in the shell you run the tests or the sweep
+from. From the repository root:
+
+```bash
+cd backend/k8s && make envtest
+export KUBEBUILDER_ASSETS="$(bin/setup-envtest use "$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile)" -p path)"
+cd -
+```
+
+The version is the one `backend/k8s/Makefile` pins, which CI uses for both modules.
+`setup-envtest` prints an absolute path, so the variable holds in every module.
+
 To sweep every module before pushing, **save this to a file and run it** — it ends in
 `exit`, so pasting it into your shell will close it. The workspace enumerates its own
 modules, so the script never falls out of step with `go.work`:

@@ -142,6 +142,20 @@ go vet ./...
 go test ./...
 ```
 
+🔴 **`backend/cli` and `backend/k8s` need `KUBEBUILDER_ASSETS` set, or their tests FAIL.** The
+chart is installed into a real API server for every profile dcctl renders
+(`backend/cli/bootstrap/apiserver_render_test.go`), and the operator's CEL rules are checked by one
+(`backend/k8s/controllers/instance_cel_test.go`), so those tests start a local `kube-apiserver` +
+`etcd` and fail — deliberately never skip — without the binaries. CI sets the variable for exactly
+these two modules (`envtest binaries` step). From the repository root, before the per-module
+commands or the sweep:
+
+```bash
+cd backend/k8s && make envtest
+export KUBEBUILDER_ASSETS="$(bin/setup-envtest use "$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile)" -p path)"
+cd -
+```
+
 Full sweep before committing — the workspace enumerates its own modules, so this needs no list to
 keep in step with `go.work`. **Save it to a file and run it; do not paste it into your shell** (it
 ends in `exit`). The details below are load-bearing, and they are the same trap in different
@@ -174,6 +188,7 @@ clothes:
   both drift and a module it could not resolve, so its status alone is not a verdict.
 
 ```bash
+# needs KUBEBUILDER_ASSETS exported (see above), or backend/cli and backend/k8s fail
 rc=0
 root="$(git rev-parse --show-toplevel)"
 for m in $(go list -m -f '{{.Dir}}'); do

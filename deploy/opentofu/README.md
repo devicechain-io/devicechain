@@ -207,8 +207,12 @@ accidental destroys (methodology §11). Three guards back this up:
   bootstraps through `bootstrap.initdb` — it never adopts a pre-existing PGDATA (the
   cutover guard in main.tf says the same thing about StatefulSet data). A `Retain`
   class buys a volume you can still get data OFF; it does not buy a redeploy that
-  comes back up on it. The supported recovery path is `bootstrap.recovery` from a
-  backup, which no `Cluster` here declares yet (A2.5).
+  comes back up on it. The supported recovery path is `bootstrap.recovery` from the
+  backup store, and it is wired: `dcctl install --restore-rdb-from` recovers the
+  relational store and `dcctl bootstrap --restore-tsdb-from` an instance's event
+  store, each only when that store is created (the `recovery:` block in
+  `modules/cnpg-cluster/chart/templates/cluster.yaml`). See
+  [disaster recovery](https://docs.devicechain.io/deployment/disaster-recovery#recover).
 - 🔴 **The Cluster OWNS its PVCs, and this is SHARPER than the topology it replaced.**
   The old StatefulSets set `persistent_volume_claim_retention_policy { when_deleted =
   "Retain" }`, so deleting one left the data volumes behind. CloudNativePG has no

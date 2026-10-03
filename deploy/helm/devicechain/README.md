@@ -209,6 +209,20 @@ Per-tenant rate ceilings are enforced by each replica separately: at `replicas: 
 event-sources, outbound-connectors and ai-inference can admit up to twice a tenant's
 ceiling.
 
+The five services on the event path request CPU sized from measurement, from
+`functionalAreas.<area>.measuredRequests`: `device-management` 800m,
+`event-management` 900m, `device-state` 950m and `event-sources` 1 core, what each
+used at 6,000 events a second in an earlier GKE run, and `event-processing` 400m, a floor taken from a
+heavier run rather than a measure of what keeping up needs. While
+`useMeasuredRequests` is `true`, the default, a top-level `resources.requests.cpu`
+does not reach these five; set the area's own
+`functionalAreas.<area>.resources.requests`, which wins over both.
+`dcctl install --compact` turns `useMeasuredRequests` off. These five also prefer
+nodes running fewer of each other (`eventPathSpread`), and `device-management`,
+`event-sources` and `event-management` prefer a node without the instance's
+event-store primary (`avoidEventStorePrimary`). Both are preferences: a pod still
+schedules when they cannot be met.
+
 Areas can also expose extra ports beyond the shared 8080 graphql port via
 `functionalAreas.<area>.extraPorts` (name ≤15 chars). event-sources ships with
 its HTTP device-ingest port by default:
