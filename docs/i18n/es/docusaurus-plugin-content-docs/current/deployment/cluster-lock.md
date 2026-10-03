@@ -234,7 +234,9 @@ operator: it is now held by bob@laptop/9912/3a7f…
 
 Una ejecución cercada (reclamada) no escribe nada más en el clúster. Eso incluye la anotación
 de fase en su propia declaración de instancia, porque esa declaración pertenece ya a quien
-la reclamó.
+la reclamó. Si esa ejecución, por lo demás, había conseguido terminar el primer arranque
+inicial de una instancia, sale con un error: no pudo registrar que el arranque terminó, así que
+vuelve a ejecutar el mismo comando cuando el bloqueo esté libre.
 
 :::warning Una reclamación no puede interrumpir un paso que ya está en marcha
 La comprobación ocurre *entre* pasos. Una reclamación que llega un segundo después de

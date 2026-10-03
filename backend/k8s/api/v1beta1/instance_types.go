@@ -36,7 +36,24 @@ const (
 	// point leaves a CR that says Destroying rather than one that still says
 	// Ready over an instance that is half gone.
 	AnnotationPhase = "core.devicechain.io/phase"
+
+	// AnnotationBootstrapUnfinished marks a declaration whose first bootstrap has not
+	// yet ended successfully. dcctl bootstrap writes it when its run is BUILDING the
+	// instance (no configuration document yet, or the record already there), and the
+	// write that records PhaseReady — by either verb — removes it in the same patch.
+	//
+	// 🔴 ABSENCE MEANS LIVE. `dcctl bootstrap` lets a re-run through over an instance
+	// whose configuration document exists only while this reads exactly
+	// BootstrapUnfinished AND the phase is not PhaseReady, so a declaration written by
+	// an earlier release, a hand-edited value, a missing declaration, or the record
+	// beside Ready (which only a dcctl from before the record leaves) all keep the
+	// instance protected. A phase write that moves a declaration AWAY from Ready drops
+	// an inert record, so moving the phase can never revive one.
+	AnnotationBootstrapUnfinished = "core.devicechain.io/bootstrap-unfinished"
 )
+
+// BootstrapUnfinished is the only value AnnotationBootstrapUnfinished takes.
+const BootstrapUnfinished = "true"
 
 // The values AnnotationPhase takes.
 //

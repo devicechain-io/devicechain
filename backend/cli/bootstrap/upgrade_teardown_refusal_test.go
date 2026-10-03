@@ -171,26 +171,27 @@ func TestFinishUpgradePhaseWillNotStampOverATeardown(t *testing.T) {
 
 // 🔴 THE READ/WRITE DISTINCTION, WHICH THE MENTION COUNT CANNOT MAKE.
 // TestEachVerbNamesItsOwnPhase lists the Phase constants each verb NAMES, and adding a
-// guard put PhaseDestroying on finishUpgradePhase's list — so from that test's point of
-// view this function may now say the word for any reason at all, including stamping it.
-// Here every occurrence of it inside finishUpgradePhase has to be an operand of a
-// comparison, which is what "reads it as a guard" means in source.
-func TestFinishUpgradePhaseNeverWritesADestroyingPhase(t *testing.T) {
+// guard put PhaseDestroying on the terminal stamp's list — so from that test's point of
+// view the stamp may now say the word for any reason at all, including stamping it.
+// Here every occurrence of it inside recordRunEnded (the stamp upgrade and bootstrap
+// share) has to be an operand of a comparison, which is what "reads it as a guard"
+// means in source.
+func TestTheTerminalStampNeverWritesADestroyingPhase(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "upgrade.go", nil, parser.SkipObjectResolution)
+	file, err := parser.ParseFile(fset, "runend.go", nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var body *ast.FuncDecl
 	ast.Inspect(file, func(n ast.Node) bool {
-		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "finishUpgradePhase" {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "recordRunEnded" {
 			body = fn
 		}
 		return true
 	})
 	if body == nil {
-		t.Fatal("there is no finishUpgradePhase in upgrade.go, so this check examined nothing")
+		t.Fatal("there is no recordRunEnded in runend.go, so this check examined nothing")
 	}
 
 	// Every position at which PhaseDestroying is an operand of a comparison.
@@ -216,7 +217,7 @@ func TestFinishUpgradePhaseNeverWritesADestroyingPhase(t *testing.T) {
 		}
 		mentions++
 		if !compared[sel.Sel.Pos()] {
-			t.Errorf("finishUpgradePhase uses PhaseDestroying at %s somewhere other than a "+
+			t.Errorf("recordRunEnded uses PhaseDestroying at %s somewhere other than a "+
 				"comparison. An upgrade may READ it — that is the guard — but a verb that "+
 				"WRITES another verb's word declares the wrong command over a live instance",
 				fset.Position(sel.Sel.Pos()))
@@ -224,8 +225,8 @@ func TestFinishUpgradePhaseNeverWritesADestroyingPhase(t *testing.T) {
 		return true
 	})
 	if mentions == 0 {
-		t.Fatal("finishUpgradePhase no longer mentions PhaseDestroying at all, so the guard " +
-			"that stops an upgrade erasing a half-finished teardown is gone")
+		t.Fatal("recordRunEnded no longer mentions PhaseDestroying at all, so the guard " +
+			"that stops a run erasing a half-finished teardown is gone")
 	}
 }
 

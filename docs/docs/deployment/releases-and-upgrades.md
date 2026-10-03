@@ -4735,6 +4735,33 @@ discarded events nobody had processed. Measuring after every publish would not h
 
 Nothing to do at upgrade. No stream is reconfigured and no setting is added.
 
+#### Running `dcctl bootstrap` again finishes an instance whose first bootstrap failed late {#next-bootstrap-resume}
+
+A bootstrap that failed after it had written the instance's configuration document (while
+installing the chart, or while waiting for the services to become ready) left an instance that
+`dcctl bootstrap` refused to run on again, as if it were already running.
+
+Now, when `dcctl bootstrap` declares an instance it is building, it records on the declaration
+that the first bootstrap has not finished (the annotation
+`core.devicechain.io/bootstrap-unfinished`). A bootstrap or upgrade that ends successfully
+removes it, in the same write that records the instance as `Ready`. Until then, running the same
+`dcctl bootstrap` command again finishes the instance. It reuses the root key, broker credentials
+and database passwords the earlier run left in the cluster, and shows the superuser's generated
+password, which the failed run never reached. Once the record is gone, a re-run is refused as
+before.
+
+- If a run ends successfully but cannot remove the record (the write is refused, or the cluster
+  lock was taken over first), it exits with an error that says to run the same command again,
+  rather than reporting success over an instance a later bootstrap would run over.
+- Nothing to do at upgrade. An instance whose first bootstrap was started by an earlier release
+  has no record, so it is treated as running, exactly as before; the refusal names
+  `dcctl upgrade` and `dcctl destroy`. See
+  [Finishing a bootstrap that failed partway](./disaster-recovery.md#resuming-a-bootstrap).
+- Upgrade every copy of `dcctl` you use before running it against an instance this release
+  built. An earlier `dcctl` does not remove the record, so a later upgrade with it that fails can
+  leave the record in force over a running instance, and a plain `dcctl bootstrap` would then
+  run over that instance.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

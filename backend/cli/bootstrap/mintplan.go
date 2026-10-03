@@ -372,9 +372,9 @@ func instanceArchiveCredential(st *State, cluster ownedSecret) ownedSecret {
 //   - THE SUPERUSER'S SEED PASSWORD IS REUSED WHEN PRESENT, AND MINTED WHEN ABSENT.
 //     user-management reads it once, to seed an empty identity table, so a re-run
 //     that minted over it would leave the Secret naming a password the superuser was
-//     never given. A bootstrap re-run happens only before the instance's configuration
-//     document exists (stepRefuseRebuild), but the Secret is written earlier than that,
-//     and a value the report has not shown yet is still one to keep. The exception is
+//     never given. A bootstrap re-run happens only before a bootstrap of the instance
+//     has ended successfully (stepRefuseRebuild), but the Secret is written earlier than
+//     that, and a value the report has not shown yet is still one to keep. The exception is
 //     a carve-out re-run over a LIVE instance that has no such Secret: nothing is
 //     minted for it at all (see the settlement below the loops).
 //   - THE DASHBOARD PASSWORD IS REUSED WHEN PRESENT, AND MINTED WHEN ABSENT. A fresh

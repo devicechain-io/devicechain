@@ -48,7 +48,12 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	}
 
 	doing(fmt.Sprintf("declaring instance %q", st.Instance))
-	if err := writeInstanceDeclaration(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion); err != nil {
+	// 🔴 !OverLiveInstance, NOT true. A run is BUILDING the instance when step 3 found
+	// no configuration document or found the first-bootstrap record still there, and
+	// only such a run marks the declaration unfinished. A carve-out re-run (a restore,
+	// --allow-legacy-db-removal) over a LIVE instance clears the mark instead: had it
+	// written one, its failure would hand the next plain bootstrap a running instance.
+	if err := writeInstanceDeclaration(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion, !st.OverLiveInstance); err != nil {
 		return err
 	}
 	done()
@@ -85,6 +90,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 			"from this one's", st.Instance)
 	}
 	applyDeclaration(st, inst.Spec)
+	// From the read-back, like the UID: what the cluster holds is what the terminal
+	// stamp has to clear (recordRunEnded), not what this step meant to write.
+	st.UnfinishedBootstrap = bootstrapUnfinished(inst)
 	return nil
 }
 

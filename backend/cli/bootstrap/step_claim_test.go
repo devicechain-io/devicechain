@@ -61,7 +61,7 @@ func TestTheDeclarationsUIDReachesTheRun(t *testing.T) {
 	prevWrite := writeInstanceDeclaration
 	t.Cleanup(func() { readInstanceDeclaration = prev; writeInstanceDeclaration = prevWrite })
 
-	writeInstanceDeclaration = func(context.Context, string, string, dcv1beta1.InstanceSpec, string) error {
+	writeInstanceDeclaration = func(context.Context, string, string, dcv1beta1.InstanceSpec, string, bool) error {
 		return nil
 	}
 	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
@@ -89,7 +89,7 @@ func TestADeclarationWithNoUIDStopsTheRun(t *testing.T) {
 	prevWrite := writeInstanceDeclaration
 	t.Cleanup(func() { readInstanceDeclaration = prev; writeInstanceDeclaration = prevWrite })
 
-	writeInstanceDeclaration = func(context.Context, string, string, dcv1beta1.InstanceSpec, string) error {
+	writeInstanceDeclaration = func(context.Context, string, string, dcv1beta1.InstanceSpec, string, bool) error {
 		return nil
 	}
 	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {

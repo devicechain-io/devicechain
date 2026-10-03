@@ -226,9 +226,18 @@ that does move a live instance: `dcctl upgrade`, covered in
 [Releases & Upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 A run that *failed* partway through is a different case, and re-running it is still how you
-repair it. Step 3 refuses only a **live** instance, which it recognises by the configuration
-document written in step 8. Everything short of that is a half-built instance, and running
-the bootstrap again is the supported way to finish it.
+repair it. Step 3 refuses only a **live** instance: one whose configuration document (written
+in step 8) exists **and** whose first bootstrap has finished. When step 5 declares the
+instance, it records on the declaration that its first bootstrap has not finished, and only a
+run that ends successfully removes that record. Until then, a failure at any step, including
+inside the Helm install or while waiting for readiness, leaves a half-built instance. Run the
+same `dcctl bootstrap` command again, from the same machine, to finish it.
+
+An instance whose first bootstrap was started by an earlier `dcctl` release carries no such
+record. If that bootstrap failed after step 8 began, step 3 cannot tell the instance from a
+running one and refuses. The refusal names the two ways on: `dcctl upgrade`, which runs the
+same Helm install and readiness wait over the instance, or `dcctl destroy` followed by a fresh
+bootstrap.
 
 :::warning One-time exception: instances created before the database moved to CloudNativePG
 The relational database changed from a StatefulSet to a CloudNativePG cluster, and there is
@@ -334,6 +343,10 @@ failure names a step you can find here:
    acting on it. It comes *before* anything of the instance is applied, because every step
    below this one writes to a cluster that may already be running the instance it would be
    writing over. A dry run says what a real run would refuse rather than hiding it.
+   It recognises a live instance by its configuration document, unless the instance's
+   declaration records that its first bootstrap never finished. In that case it lets the run
+   through to finish the instance. If it cannot read the declaration, it stops rather than
+   guessing.
 4. **Check what other instances hold** — ask the cluster which ingress host and local MQTT
    port other instances already hold, and stop if this instance's host is one of them. Also
    look at the namespace this instance is about to be built in, `dci-<id>`, and stop if it
@@ -348,13 +361,19 @@ failure names a step you can find here:
    works from what came back rather than from the flags that produced it. The cluster, not
    your laptop, is the record of what this instance is. See
    [the instance declaration](./kubernetes-operator.md#instance-declaration).
+   When the run is building the instance (step 3 found no configuration document, or found
+   that the first bootstrap never finished), the declaration also carries the annotation
+   `core.devicechain.io/bootstrap-unfinished: "true"`. A run that ends successfully removes
+   it, in the same write that records the instance as `Ready`.
 6. **Render configuration** — resolve the instance id, namespace, profile, and every generated
    credential: the broker-auth material (the shared service password and the callout issuer
    key), the certificate authority that signs the broker's own TLS certificate, the
    cross-service auth secret, and the **secret-store root key**. All of them are minted here,
    because step 3 has established there is no live instance to take them from. Finishing a
    half-built instance is the exception: there the step reads back what an earlier run already
-   put in the cluster rather than generating a second set.
+   put in the cluster rather than generating a second set. That includes an instance whose
+   earlier run got as far as writing its configuration document. The broker's certificate
+   authority is the one thing every run issues afresh.
    The step also records the broker's credentials on the machine you run it from, before the
    broker is configured with them. The broker is configured before the instance is, and its
    credentials cannot be recovered from the cluster once they are in it, so this is what lets
@@ -369,8 +388,8 @@ failure names a step you can find here:
    incremental.
 8. **Install instance (Helm)** — write the instance's **configuration document**, the one
    every service reads its credentials and endpoints from. Then deploy the Helm chart via the
-   Helm Go SDK, blocking until the workloads are ready. That document is what makes the
-   instance live, and what step 3 looks for on any later run.
+   Helm Go SDK, blocking until the workloads are ready. Step 3 looks for that document on any
+   later run. The instance counts as live once a run has also ended successfully.
 9. **Wait for readiness** — poll each enabled area's Deployment until it has finished rolling
    onto the configuration this run produced. This is an explicit confirmation gate rather
    than trusting the Helm step's own wait. Having replicas available is not enough: where pods
@@ -378,17 +397,19 @@ failure names a step you can find here:
    waits for the new template to be observed, for every replica to be recreated on it, and for
    no old replica to still be running. `dcctl upgrade` uses the same gate for the same reason.
 10. **Report access info** — print the namespace, the superuser's email and where its password
-    is kept (plus the password itself, once, on the run that generated it), and how to reach
-    the instance.
+    is kept (plus the password itself, once: on the run that generated it, or on the run that
+    finishes a bootstrap that failed before showing it), and how to reach the instance.
 
 :::tip `Ctrl+C` stops a run cleanly
 An interrupted run stops the infrastructure tool gracefully — it finishes what it is doing and
 writes its state — and hands the cluster lock back, so re-running is all you need. A second
 `Ctrl+C` exits immediately and gives up both. See [Interrupting a run](./cluster-lock.md#interrupt).
 
-If the run had already reached step 8, the instance exists and the bootstrap will refuse the
-next time you run it. That is not a dead end: the instance is built, and `dcctl upgrade` is how
-you move it from there.
+If the run had already reached step 8, running it again still finishes it: step 3 lets a
+re-run through until a bootstrap of the instance has ended successfully. A **second** `Ctrl+C`
+during step 8 can leave the instance's Helm release marked as still in progress. The re-run
+then stops at step 8 with `another operation (install/upgrade/rollback) is in progress`, and
+dcctl does not clear that for you. Recover with `dcctl destroy`, then bootstrap again.
 :::
 
 Because the embedded artifacts are the *same* ones the platform ships, a bootstrapped instance
@@ -1318,7 +1339,8 @@ The command prints the namespace, the **superuser** credential, and how to reach
 through the cluster ingress. The superuser is `superuser@devicechain.local`, and there is no
 default password. The bootstrap generates one for the instance, keeps it in the Secret
 `dci-<instance>-superuser` in the instance's namespace, and prints it once, at the end of the
-run that generated it. To read it again:
+run that generated it (or of the run that finishes a bootstrap that failed before printing it).
+To read it again:
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d

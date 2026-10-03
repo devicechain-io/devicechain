@@ -193,8 +193,16 @@ Before acting on `Bootstrapping` or `Upgrading`, check whether the run is still 
 run rewrites the phase to `Ready` or `Failed` when it ends, including when it is interrupted
 with Ctrl+C. Only a run that never got to write its ending leaves one of these behind — a
 machine that lost power, a terminal that was killed. Neither value blocks anything: `dcctl
-bootstrap` and `dcctl upgrade` run over them without complaint. The one phase the commands
-act on is `Destroying` (see [below](#finalizer)).
+bootstrap` and `dcctl upgrade` run over them without complaint. The one phase value the
+commands act on is `Destroying` (see [below](#finalizer)).
+
+Beside the phase, one other annotation is acted on.
+`core.devicechain.io/bootstrap-unfinished: "true"` marks an instance whose first bootstrap has
+not yet ended successfully. While it is there, and the phase
+is not `Ready`, `dcctl bootstrap` runs over the instance to finish it even though its
+configuration document exists. The bootstrap or upgrade that ends successfully removes it in
+the same write that records `Ready`. Do not add it by hand: on a running instance whose phase is
+not `Ready`, it lets a bootstrap re-run through over that instance.
 
 A row that reads `declared, unknown phase "…"` was written by a newer `dcctl` than the one
 listing it.

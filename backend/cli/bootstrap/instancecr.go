@@ -239,17 +239,60 @@ func instanceToUnstructured(inst *dcv1beta1.Instance) (*unstructured.Unstructure
 // them. What is here is the declaration itself.
 //
 // It is the BOOTSTRAP path's entry point, which is why it names the phase its
-// caller is in rather than taking one: its single caller is the claim step, and a
+// caller is in (through writeBootstrapDecl) rather than taking one: its single caller is the claim step, and a
 // step that could declare an instance under any phase it liked is a step that can
 // lie about which verb is running. The verb that needed a different word grew its
 // own caller of the inner function instead — see recordUpgradedVersion.
-func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string) error {
+//
+// building says whether this run is BUILDING the instance — step 3 found no
+// configuration document, or found the record that its first bootstrap never
+// finished — and so whether the declaration is marked unfinished
+// (AnnotationBootstrapUnfinished) or cleared of the mark. See firstBootstrapMark.
+func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string, building bool) error {
 	dyn, _, _, err := kubeClients(kubeContext)
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster to record the instance declaration: %w", err)
 	}
-	return writeInstanceCR(ctx, dyn, id, spec, dcctlVersion, dcv1beta1.PhaseBootstrapping)
+	return writeBootstrapDecl(ctx, dyn, id, spec, dcctlVersion, building)
 }
+
+// writeBootstrapDecl is WriteInstanceCR with the client supplied, and it is where the
+// building→mark decision lives.
+//
+// 🔴 THE DECISION IS ON THIS SIDE OF THE SEAM ON PURPOSE. Mapped inside WriteInstanceCR,
+// it sat between a stubbed step (stepDeclareInstance's writeInstanceDeclaration) and a
+// function the tests called with the mark already chosen (writeInstanceDecl), so no test
+// ran it — and a building run mapped to markLive is a bootstrap that never writes the
+// record, which is every failed bootstrap refused again on its re-run.
+func writeBootstrapDecl(ctx context.Context, dyn dynamic.Interface, id string, spec dcv1beta1.InstanceSpec, dcctlVersion string, building bool) error {
+	mark := markLive
+	if building {
+		mark = markUnfinished
+	}
+	return writeInstanceDecl(ctx, dyn, id, spec, dcctlVersion, dcv1beta1.PhaseBootstrapping, mark)
+}
+
+// firstBootstrapMark is what a declaration write does with AnnotationBootstrapUnfinished.
+type firstBootstrapMark int
+
+const (
+	// markCarried leaves the record as it is — except that setPhase drops one sitting
+	// beside Ready, which is inert and must not be revived by a phase move. The upgrade's
+	// write: an upgrade neither starts nor declares a first bootstrap.
+	markCarried firstBootstrapMark = iota
+	// markUnfinished writes the record. A bootstrap that is BUILDING the instance.
+	//
+	// 🔴 ON AN EXISTING DECLARATION TOO, and that is safe for the reason the run was let
+	// through at all: step 3 found no configuration document (so nothing here has ever
+	// served) or found the record already there. A declaration left by an earlier release
+	// with no document behind it is thereby brought inside the fix, rather than left to
+	// fail late with no record and be refused as live.
+	markUnfinished
+	// markLive removes it. A bootstrap let through over a LIVE instance by a carve-out
+	// (a restore, --allow-legacy-db-removal): such a run must never leave a record behind
+	// it, or its failure would hand the next plain bootstrap a running instance.
+	markLive
+)
 
 // writeInstanceCR is WriteInstanceCR with the client supplied.
 //
@@ -267,6 +310,14 @@ func WriteInstanceCR(ctx context.Context, kubeContext, id string, spec dcv1beta1
 // reported a bootstrap in progress over a healthy instance. A field that names
 // which verb is running cannot be filled in by the function every verb shares.
 func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec dcv1beta1.InstanceSpec, dcctlVersion, phase string) error {
+	return writeInstanceDecl(ctx, dyn, id, spec, dcctlVersion, phase, markCarried)
+}
+
+// writeInstanceDecl is writeInstanceCR with one more decision: what the write does with
+// the first-bootstrap record. Only the bootstrap's write (writeBootstrapDecl) decides
+// it; every other writer carries it.
+func writeInstanceDecl(ctx context.Context, dyn dynamic.Interface, id string, spec dcv1beta1.InstanceSpec,
+	dcctlVersion, phase string, mark firstBootstrapMark) error {
 	if err := ValidateInstanceSpec(spec); err != nil {
 		return err
 	}
@@ -324,6 +375,12 @@ func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec
 	inst.Spec = spec
 	applyProvenance(inst, dcctlVersion)
 	setPhase(inst, phase)
+	switch mark {
+	case markUnfinished:
+		inst.Annotations[dcv1beta1.AnnotationBootstrapUnfinished] = dcv1beta1.BootstrapUnfinished
+	case markLive:
+		delete(inst.Annotations, dcv1beta1.AnnotationBootstrapUnfinished)
+	}
 	addFinalizer(inst)
 
 	obj, err := instanceToUnstructured(inst)
@@ -359,11 +416,31 @@ func writeInstanceCR(ctx context.Context, dyn dynamic.Interface, id string, spec
 
 // setPhase records what this run is TRYING to do. See AnnotationPhase: it is
 // intent, and it is deliberately not in status, which belongs to the operator.
+//
+// It also applies the one rule the first-bootstrap record follows on EVERY phase
+// write (see firstBootstrapRecordSurvives), so no writer of the phase can forget it.
 func setPhase(inst *dcv1beta1.Instance, phase string) {
 	if inst.Annotations == nil {
 		inst.Annotations = map[string]string{}
 	}
+	if !firstBootstrapRecordSurvives(inst.Annotations[dcv1beta1.AnnotationPhase], phase) {
+		delete(inst.Annotations, dcv1beta1.AnnotationBootstrapUnfinished)
+	}
 	inst.Annotations[dcv1beta1.AnnotationPhase] = phase
+}
+
+// firstBootstrapRecordSurvives says whether AnnotationBootstrapUnfinished may stay on a
+// declaration whose phase moves from current to next.
+//
+// 🔴 THE RECORD NEVER OUTLIVES A READY, IN EITHER DIRECTION.
+//   - INTO Ready: a run that ended well has made the instance live, whichever verb it
+//     was, and a record left beside it is a later bootstrap let through over a running
+//     instance. Removed in the same write, so no reader sees one without the other.
+//   - OUT OF Ready: a record already beside Ready is inert (bootstrapUnfinished ignores
+//     it) — only a dcctl from before the record leaves one there. Moving the phase away
+//     would REVIVE it over a live instance, so the move drops it.
+func firstBootstrapRecordSurvives(current, next string) bool {
+	return current != dcv1beta1.PhaseReady && next != dcv1beta1.PhaseReady
 }
 
 // addFinalizer keeps a hand-deleted declaration readable until destroy has run.
@@ -430,8 +507,8 @@ func SetInstancePhase(ctx context.Context, kubeContext, id, phase string) error 
 // setInstancePhase is SetInstancePhase with the client supplied, split for the
 // reason writeInstanceCR is split from WriteInstanceCR: a caller that already
 // holds a client should not build a second one from a kubeconfig, and a write
-// only reachable through a kubeconfig is a write no test can watch. Upgrade's
-// terminal stamp (finishUpgradePhase) is that caller.
+// only reachable through a kubeconfig is a write no test can watch. The terminal
+// stamp both verbs share (recordRunEnded) is that caller.
 func setInstancePhase(ctx context.Context, dyn dynamic.Interface, id, phase string) error {
 	existing, err := readInstanceCR(ctx, dyn, id)
 	if err != nil {
@@ -453,7 +530,17 @@ func setInstancePhase(ctx context.Context, dyn dynamic.Interface, id, phase stri
 	// Nothing contends for this annotation. dcctl is its only writer, so there is
 	// no lost update to protect against, and a patch that touches one key leaves
 	// every other field — including whatever the operator just wrote — alone.
+	//
+	// 🔴 ONE KEY, OR TWO IN ONE PATCH. The first-bootstrap record follows the phase
+	// (firstBootstrapRecordSurvives), and it is removed in the SAME merge patch, so
+	// there is no moment at which the declaration reads Ready beside a record, or the
+	// record gone beside a phase that is not Ready.
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, dcv1beta1.AnnotationPhase, phase)
+	if _, has := existing.Annotations[dcv1beta1.AnnotationBootstrapUnfinished]; has &&
+		!firstBootstrapRecordSurvives(existing.Annotations[dcv1beta1.AnnotationPhase], phase) {
+		patch = fmt.Sprintf(`{"metadata":{"annotations":{%q:%q,%q:null}}}`,
+			dcv1beta1.AnnotationPhase, phase, dcv1beta1.AnnotationBootstrapUnfinished)
+	}
 	if _, err := dyn.Resource(instanceGVR).Patch(ctx, id, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("recording phase %q on instance %q: %w", phase, id, err)
 	}

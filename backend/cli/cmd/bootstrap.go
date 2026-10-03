@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -429,7 +428,7 @@ var bootstrapCmd = &cobra.Command{
 		}
 
 		runErr := bootstrap.NewDefaultPipeline().Run(ctx, st)
-		finishClaim(ctx, st, runErr)
+		runErr = finishClaim(ctx, st, runErr)
 		unwindLocalRecordWhenNothingWasWritten(opts, prior, runErr)
 		return runErr
 	},
@@ -567,7 +566,16 @@ func init() {
 	rootCmd.AddCommand(bootstrapCmd)
 }
 
-// finishClaim records how the run ended and gives the cluster lock back.
+// finishBootstrapPhase is the seam finishClaim records the outcome through.
+var finishBootstrapPhase = bootstrap.FinishBootstrapPhase
+
+// finishClaim records how the run ended, gives the cluster lock back, and returns
+// what the command reports: the run's own error when it failed, and otherwise the
+// one error recording the outcome can produce — a run that ended well over an
+// instance whose first bootstrap had not finished, and could not record that it now
+// has (bootstrap.FinishBootstrapPhase). That instance is live, and until the record
+// is gone a later bootstrap would be let through over it, so the command must not
+// report success; the error names the remedy.
 //
 // 🔴 IT RUNS ON A CONTEXT THAT CANNOT BE CANCELLED, deliberately. The run's own
 // context is what Ctrl+C cancels, and Ctrl+C is precisely the case where giving
@@ -578,29 +586,21 @@ func init() {
 //
 // 🔴 A FENCED RUN WRITES NOTHING. Once the claim is lost, the declaration belongs
 // to whoever reclaimed it, and stamping Failed on it would overwrite the phase of
-// a bootstrap that is running right now and doing fine. Release is still called,
-// and it is a no-op by its own precondition check.
-func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) {
+// a bootstrap that is running right now and doing fine. The check is asked of the
+// API server, not remembered — "Wait for readiness" runs without a fence — and it
+// lives in the shared stamp (recordRunEnded), with upgrade's. Release is still
+// called, and it is a no-op by its own precondition check.
+func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) error {
 	if st.Claim == nil {
-		return
+		return runErr
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
-	// 🔴 Asked, not remembered. The cached flag is refreshed by a 10s ticker and the
-	// last fenced step boundary is several minutes back — "Wait for readiness" runs
-	// without one — so a reclaim landing in that gap would leave this run stamping
-	// Ready or Failed on a declaration the reclaimer now owns.
-	if st.Claim.CheckHeld(cleanup) == nil {
-		phase := dcv1beta1.PhaseReady
-		if runErr != nil {
-			phase = dcv1beta1.PhaseFailed
-		}
-		if err := bootstrap.SetInstancePhase(cleanup, st.KubeContext, st.Instance, phase); err != nil {
-			// Reporting, not correctness. A bootstrap that worked must not be
-			// reported as failed because a courtesy annotation did not land.
-			fmt.Println(color.YellowString("warning: could not record the instance phase (%v)", err))
-		}
-	}
+	finishErr := finishBootstrapPhase(cleanup, st, runErr)
 	st.Claim.Release(cleanup)
+	if runErr != nil {
+		return runErr
+	}
+	return finishErr
 }
