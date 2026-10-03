@@ -86,6 +86,28 @@ func TestSourceIdsThatReduceAlikeKeepDistinctClientIDs(t *testing.T) {
 	assert.NotEqual(t, plain, reduced)
 }
 
+// The suffix is only a guarantee if nothing else can produce it. A source id that is
+// already in the token grammar used to be returned unchanged, so an id written in the
+// shape of a reduced one ("a-b-" and the first 8 hex digits of sha256("a:b")) met the id
+// "a:b" reduces to, and the two sources' sessions would take each other over.
+func TestARawSourceIdShapedLikeAReducedOneKeepsItsOwnClientID(t *testing.T) {
+	sum := sha256.Sum256([]byte("a:b"))
+	lookalike := "a-b-" + hex.EncodeToString(sum[:])[:8]
+	reduced, err := ExternalMqttClientID("inst-1", "a:b", "pod-a")
+	require.NoError(t, err)
+	raw, err := ExternalMqttClientID("inst-1", lookalike, "pod-a")
+	require.NoError(t, err)
+	assert.NotEqual(t, reduced, raw)
+
+	// It is suffixed in turn, by its own hash, and only an id of that shape is: an id that
+	// merely ends in a dash and some hex digits of another length stays readable.
+	own := sha256.Sum256([]byte(lookalike))
+	assert.Equal(t, "devicechain:inst-1:"+lookalike+"-"+hex.EncodeToString(own[:])[:8]+":pod-a", raw)
+	plain, err := ExternalMqttClientID("inst-1", "sensor-0a1b", "pod-a")
+	require.NoError(t, err)
+	assert.Equal(t, "devicechain:inst-1:sensor-0a1b:pod-a", plain)
+}
+
 // The id the source reports is the id paho connects with.
 func TestMqttEventSourceConnectsWithItsClientID(t *testing.T) {
 	es, err := NewMqttEventSource("ext", "cid-under-test", map[string]string{"host": "h", "port": "1883", "topic": "t"},
@@ -134,10 +156,14 @@ func TestAMessageDeliveredAfterTheSourceWasLostIsDropped(t *testing.T) {
 	msg := &fakeMqttMessage{topic: "inst-1/acme/devices/d1/events", payload: []byte(`{"device":"d1"}`)}
 	es.onMessage(nil, msg)
 	require.Len(t, es.messages, 1, "an owned source queues the message")
+	// Owns is the answer OwnedMqttSource checks a factory's wiring by, so it must be the
+	// gate's own answer, the one the message path just acted on.
+	assert.True(t, es.Owns())
 
 	owned = false
 	es.onMessage(nil, msg)
 	assert.Len(t, es.messages, 1, "a source that has lost ownership queued a message")
 	assert.Equal(t, 1, metered, "a dropped message was metered against its tenant")
 	assert.Equal(t, 1, received, "a dropped message was counted as received")
+	assert.False(t, es.Owns())
 }

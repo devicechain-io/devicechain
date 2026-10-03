@@ -87,6 +87,8 @@ type TermSource interface {
 	Stop(ctx context.Context) error
 	Terminate(ctx context.Context) error
 	ClientID() string
+	// Owns asks the source's ownership gate, the one it asks for every message.
+	Owns() bool
 }
 
 // NewTermSource builds the source for one term. owns is the term's ownership gate, which
@@ -170,7 +172,8 @@ type OwnedMqttSource struct {
 
 // NewOwnedMqttSource builds an owned external source. newSource is called once here, to
 // surface a configuration error (a bad port) at build time as an unowned source always
-// did, and then once per term. newLeases is called at start, when the platform broker is up.
+// did, and to refuse a source that does not connect under its own client id or does not
+// gate on the ownership gate it is handed; and then once per term. newLeases is called at start, when the platform broker is up.
 func NewOwnedMqttSource(id, instanceId, replica string, newSource NewTermSource,
 	newLeases func() (SourceLeases, error), hooks OwnerHooks) (*OwnedMqttSource, error) {
 	if hooks.Fail == nil {
@@ -186,13 +189,22 @@ func NewOwnedMqttSource(id, instanceId, replica string, newSource NewTermSource,
 	if err != nil {
 		return nil, err
 	}
-	probe, err := newSource(want, func() bool { return false })
+	// The probe's gate answers "not owned" and records that it was asked, so asking the
+	// probe shows whether the source gates on the gate it is handed. main's factory is a
+	// closure no test can call; a factory that wired any other gate (an always-true one)
+	// would have a pod that lost the source go on storing what its broker still delivers.
+	asked := false
+	probe, err := newSource(want, func() bool { asked = true; return false })
 	if err != nil {
 		return nil, err
 	}
 	if probe.ClientID() != want {
 		return nil, fmt.Errorf("external MQTT source %q was built with client id %q, not its own %q: "+
 			"a broker keeps one session per id, so a shared one is taken over", id, probe.ClientID(), want)
+	}
+	if probe.Owns() || !asked {
+		return nil, fmt.Errorf("external MQTT source %q was built with an ownership gate other than the one "+
+			"it was handed: a pod that lost the source would go on storing what its broker delivers", id)
 	}
 	o := &OwnedMqttSource{id: id, want: want, clientID: probe.ClientID(), newSource: newSource,
 		newLeases: newLeases, hooks: hooks}
