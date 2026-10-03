@@ -560,8 +560,13 @@ tolerations:
 {{- end -}}
 
 {{/*
-devicechain.eventStorePrimaryAntiAffinity: a PREFERRED pod anti-affinity against this
-instance's event-store primary, for an area whose values set avoidEventStorePrimary.
+devicechain.podAntiAffinity: the pod's PREFERRED anti-affinity, composed from every rule
+that wants one, because a pod spec has one affinity block and two helpers each rendering
+`affinity:` would collide. Two terms, each rendered only when its rule applies, in this
+order:
+
+1. Against this instance's event-store primary, for an area whose values set
+avoidEventStorePrimary.
 
 The selector is the label CloudNativePG puts on a primary pod and moves on promotion
 (cnpg.io/instanceRole: primary, the label dcctl's own database checks read). No
@@ -579,19 +584,54 @@ a standby on this pod's node does not move the pod; the next reschedule of eithe
 Measured on GKE (values.yaml, device-management): with every area requesting the same
 CPU, the scheduler put the event-store primary, event-management and replicas of
 device-management and event-sources on one node.
-Parameters: areaCfg.
+
+2. Against the area's OWN pods, for an area with eventPathSpread above one replica. A
+pod that sets a topology spread of its own loses the scheduler's DEFAULT spread (one
+Deployment's replicas across nodes and zones), and the event-path spread alone lets one
+area's replicas share a node: both event-management pods on one node and two other
+event-path pods on each of the others has skew 0 and satisfies it. Two pods that share
+a node share its CPU and are lost together, which is what running two was for. The
+selector is the area's labels (the Deployment's selector, rendered by the same helper),
+so a rollout's old pods count too, which is right while they still occupy their nodes.
+
+This is NOT a second topology spread constraint, and must not become one. The API
+server allows one constraint per (topologyKey, whenUnsatisfiable) pair whatever the
+selectors, so a second hostname/ScheduleAnyway entry makes the Deployment invalid on
+create; and a strategic-merge patch keys that list on topologyKey ALONE, so a Helm
+upgrade merges two hostname entries into one constraint counting only this area's pods,
+which silently drops the event-path spread. A second entry with DoNotSchedule is legal
+on create but required, which would leave a rollout's surge pod Pending on a small
+cluster, and it shares the merge key all the same. The zone half of the default spread
+is not restored.
+
+Both weight 100: neither preference was measured against the other. The list has no
+patch strategy, so an upgrade replaces it whole: a change of replica count or of either
+switch takes effect in one upgrade.
+Parameters: areaCfg, replicas (the area's resolved count), areaLabels (its labels).
 */}}
-{{- define "devicechain.eventStorePrimaryAntiAffinity" -}}
-{{- if get .areaCfg "avoidEventStorePrimary" -}}
+{{- define "devicechain.podAntiAffinity" -}}
+{{- $primary := get .areaCfg "avoidEventStorePrimary" -}}
+{{- $own := and (include "devicechain.eventPathLabel" (dict "areaCfg" .areaCfg)) (gt (int .replicas) 1) -}}
+{{- if or $primary $own -}}
 affinity:
   podAntiAffinity:
     preferredDuringSchedulingIgnoredDuringExecution:
+{{- if $primary }}
       - weight: 100
         podAffinityTerm:
           topologyKey: kubernetes.io/hostname
           labelSelector:
             matchLabels:
               cnpg.io/instanceRole: primary
+{{- end }}
+{{- if $own }}
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              {{- .areaLabels | nindent 14 }}
+{{- end }}
 {{- end }}
 {{- end -}}
 
@@ -601,7 +641,9 @@ whose values set eventPathSpread. Rendered into the pod TEMPLATE's labels only, 
 into the Deployment selector: a selector is immutable, so adding a key to it would make
 every upgrade of an existing instance fail.
 devicechain.eventPathSpread builds its selector by calling this helper, so the label a
-pod carries and the label the constraint counts cannot be spelled two ways.
+pod carries and the label the constraint counts cannot be spelled two ways; and
+devicechain.podAntiAffinity calls it as the gate for the term over the area's own pods,
+which exists only where this spread does.
 Parameters: areaCfg.
 */}}
 {{- define "devicechain.eventPathLabel" -}}
@@ -617,7 +659,7 @@ instance's event-path pods (every area whose values set eventPathSpread).
 The pods belong to different Deployments, so the selector is a label they share rather
 than any one Deployment's own labels. No instance label: a topology spread counts only
 pods in the pod's own namespace, which is the instance namespace, so the namespace makes
-the distinction (as for devicechain.eventStorePrimaryAntiAffinity above). No
+the distinction (as for devicechain.podAntiAffinity above). No
 matchLabelKeys: pod-template-hash there would narrow the count to the pod's own
 Deployment revision, and the spread would separate nothing.
 
@@ -634,18 +676,11 @@ the measured requests in values.yaml are what address it.
 Which NATS server leads a stream is NATS's choice, so no rule here can keep a service
 off the busiest broker's node. What this does is cap how many of these pods share one.
 
-A pod that sets a spread of its own loses the scheduler's DEFAULT spread (one
-Deployment's replicas across nodes and zones). At replicas: 1 that costs nothing. Above
-it, the shared constraint alone would let one area's replicas share a node: a layout
-with both event-management pods on one node and two other event-path pods on each of
-the others has skew 0 and satisfies it. So above one replica a second constraint
-restores the node half of the default, a PREFERRED hostname spread over the area's own
-pods (its areaLabels, the Deployment's selector). Two pods that share a node share its
-CPU and are lost together, which is what running two was for. No matchLabelKeys: the
-old revision's pods count too during a rollout, which is right, since they still occupy
-their nodes (the scheduler skips pods already terminating). The zone half is not
-restored; values.yaml (device-management) says so where the switch is.
-Parameters: areaCfg, replicas (the area's resolved count), areaLabels (its labels).
+A pod that sets a spread of its own loses the scheduler's DEFAULT spread. Above one
+replica the area's own pods get their node preference back from
+devicechain.podAntiAffinity, not from a second constraint here: see that helper for why
+a second hostname/ScheduleAnyway constraint is refused on create and merged on upgrade.
+Parameters: areaCfg.
 */}}
 {{- define "devicechain.eventPathSpread" -}}
 {{- with include "devicechain.eventPathLabel" (dict "areaCfg" .areaCfg) -}}
@@ -656,14 +691,6 @@ topologySpreadConstraints:
     labelSelector:
       matchLabels:
         {{- . | nindent 8 }}
-{{- if gt (int $.replicas) 1 }}
-  - maxSkew: 1
-    topologyKey: kubernetes.io/hostname
-    whenUnsatisfiable: ScheduleAnyway
-    labelSelector:
-      matchLabels:
-        {{- $.areaLabels | nindent 8 }}
-{{- end }}
 {{- end }}
 {{- end -}}
 

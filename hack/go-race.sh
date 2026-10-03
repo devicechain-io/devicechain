@@ -18,7 +18,7 @@
 # indistinguishable at exactly the moment somebody wants to know. So the step is
 # UNCONDITIONAL and the verdict is a line in the log naming the module and the flag:
 #
-#   race: COVERED backend/core -- go test -race -count=1 ./...
+#   race: COVERED backend/core -- go test -race -count=1 -timeout 20m ./...
 #   race: NOT COVERED <module> -- exempt (hack/go-race.sh): <reason>
 #
 # The workflow greps its own output for that line, so a future edit that leaves
@@ -59,7 +59,17 @@ ROOT="$(cd "$HACK/.." && pwd)"
 # -count=1 for the same reason every other test gate in this repo passes it: `go
 # test` does not track files outside the module, so a cached pass can survive a
 # change that must fail.
-RACE_TEST=(go test -race -count=1)
+#
+# -timeout 20m because go test's default of 10 minutes is a PER-PACKAGE budget, and
+# the detector slows a package several times over. backend/cli/bootstrap took 544 s
+# of its 600 under -race on main's CI (and 57 s without it), so the next test added
+# there would have failed this step by timing out with no race in sight: the
+# API-server suites it gained (every chart profile installed into envtest) cost about
+# 150 s more under the detector. With them, an independent local run of the
+# package took 605 s under -race: already past the old default, and about half of
+# the 20 minutes. Measure it again before adding slow tests there. A real hang still
+# fails, after 20 minutes.
+RACE_TEST=(go test -race -count=1 -timeout 20m)
 race_test() { "${RACE_TEST[@]}" "$@"; }
 
 # ---------------------------------------------------------------------------

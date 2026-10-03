@@ -121,7 +121,7 @@ repositorio:
 hack/go-race.sh backend/services/event-processing   # o el módulo que hayas tocado
 ```
 
-Imprime `race: COVERED <module>` y después ejecuta `go test -race -count=1 ./...` en ese módulo. El
+Imprime `race: COVERED <module>` y después ejecuta `go test -race -count=1 -timeout 20m ./...` en ese módulo. El
 detector ralentiza las pruebas varias veces, así que una prueba que afirma un presupuesto de tiempo
 de reloj puede fallar con él sin que haya ninguna condición de carrera. Corrige esa prueba para que
 su presupuesto no dependa de lo rápido que se ejecute el binario.
@@ -137,6 +137,18 @@ prueba puede actuar sobre el clúster al que estás conectado. Una prueba que ne
 establece su propio `KUBECONFIG`. Un paquete nuevo en `backend/cli` cuyas pruebas puedan llegar a un
 clúster necesita el mismo `TestMain`. Una prueba en `backend/cli/internal/kubeisolation` encuentra
 esos paquetes a partir del grafo de importaciones y falla hasta que cada uno lo tenga.
+
+**`backend/k8s` y `backend/cli` necesitan un servidor de API local para sus pruebas.** Algunas de
+sus pruebas inician un `kube-apiserver` y un `etcd` reales como procesos locales (sin ningún
+clúster): las reglas de validación del operador solo las aplica un servidor de API, y `backend/cli`
+instala el chart en uno para cada perfil que renderiza `dcctl`, porque algunas reglas de la
+especificación de pods son invisibles para un renderizado. Sin los binarios, esas pruebas fallan en
+lugar de omitirse. Instálalos una vez y apunta las pruebas a ellos:
+
+```bash
+cd backend/k8s && make envtest
+export KUBEBUILDER_ASSETS="$(bin/setup-envtest use "$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile)" -p path)"
+```
 
 ### Fuzzing
 

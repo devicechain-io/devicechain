@@ -23,14 +23,17 @@ type podAffinityTerm struct {
 	NamespaceSelector interface{} `json:"namespaceSelector"`
 }
 
+// preferredTerm is one rendered preferred anti-affinity term.
+type preferredTerm struct {
+	Weight          int             `json:"weight"`
+	PodAffinityTerm podAffinityTerm `json:"podAffinityTerm"`
+}
+
 // renderedAffinity is one Deployment's pod affinity, as rendered.
 type renderedAffinity struct {
 	present   bool // the pod spec carries an affinity block at all
-	preferred []struct {
-		Weight          int             `json:"weight"`
-		PodAffinityTerm podAffinityTerm `json:"podAffinityTerm"`
-	}
-	required []podAffinityTerm
+	preferred []preferredTerm
+	required  []podAffinityTerm
 	// podAffinity is anything under affinity other than podAntiAffinity, which
 	// this chart does not set.
 	other bool
@@ -56,11 +59,8 @@ func renderedAntiAffinity(t *testing.T, manifest string) map[string]renderedAffi
 					Spec struct {
 						Affinity *struct {
 							PodAntiAffinity *struct {
-								Preferred []struct {
-									Weight          int             `json:"weight"`
-									PodAffinityTerm podAffinityTerm `json:"podAffinityTerm"`
-								} `json:"preferredDuringSchedulingIgnoredDuringExecution"`
-								Required []podAffinityTerm `json:"requiredDuringSchedulingIgnoredDuringExecution"`
+								Preferred []preferredTerm   `json:"preferredDuringSchedulingIgnoredDuringExecution"`
+								Required  []podAffinityTerm `json:"requiredDuringSchedulingIgnoredDuringExecution"`
 							} `json:"podAntiAffinity"`
 							PodAffinity  interface{} `json:"podAffinity"`
 							NodeAffinity interface{} `json:"nodeAffinity"`
@@ -96,36 +96,103 @@ func renderedAntiAffinity(t *testing.T, manifest string) map[string]renderedAffi
 	return out
 }
 
-// avoidsTheEventStorePrimary reports what is wrong with one area's affinity, or ""
-// when it is exactly one PREFERRED term against this namespace's event-store
-// primary. The values are asserted, not just the presence: a required term, a
-// zone-wide topology or a different selector each change what the rule does.
-func avoidsTheEventStorePrimary(ra renderedAffinity) string {
-	switch {
-	case !ra.present:
-		return "no pod anti-affinity rendered, want a preferred term against cnpg.io/instanceRole=primary"
-	case ra.other:
-		return "renders a pod or node affinity as well as the anti-affinity"
-	case len(ra.required) != 0:
-		return "renders a REQUIRED anti-affinity term: on a cluster with fewer nodes than busy services the pod would stay Pending"
-	case len(ra.preferred) != 1:
-		return "renders a number of preferred terms other than one"
+// termsSelecting returns the preferred terms whose selector has the label key.
+func termsSelecting(ra renderedAffinity, key string) []preferredTerm {
+	var out []preferredTerm
+	for _, p := range ra.preferred {
+		if sel := p.PodAffinityTerm.LabelSelector; sel != nil {
+			if _, ok := sel.MatchLabels[key]; ok {
+				out = append(out, p)
+			}
+		}
 	}
-	p := ra.preferred[0]
+	return out
+}
+
+// preferredHostnameTerm reports what is wrong with one preferred term, or "" when it
+// is weight 100 over kubernetes.io/hostname, selecting exactly want, in the pod's own
+// namespace. The values are asserted, not just the presence: a zone-wide topology, a
+// different weight or a different selector each change what the rule does.
+func preferredHostnameTerm(p preferredTerm, want map[string]string) string {
 	term := p.PodAffinityTerm
 	switch {
 	case p.Weight != 100:
-		return "the preferred term's weight is not 100"
+		return fmt.Sprintf("the preferred term's weight is %d, not 100", p.Weight)
 	case term.TopologyKey != "kubernetes.io/hostname":
 		return "the preferred term's topologyKey is not kubernetes.io/hostname: " + term.TopologyKey
 	case term.LabelSelector == nil ||
 		len(term.LabelSelector.MatchExpressions) != 0 ||
-		!maps.Equal(term.LabelSelector.MatchLabels, map[string]string{"cnpg.io/instanceRole": "primary"}):
-		return "the preferred term does not select exactly cnpg.io/instanceRole=primary"
+		!maps.Equal(term.LabelSelector.MatchLabels, want):
+		return fmt.Sprintf("the preferred term does not select exactly %v", want)
 	case len(term.Namespaces) != 0 || term.NamespaceSelector != nil:
 		return "the preferred term names namespaces: it must match only the pod's own, the instance namespace"
 	}
 	return ""
+}
+
+// affinityShape reports what is wrong with the affinity block as a whole, whatever
+// terms it holds: only a PREFERRED pod anti-affinity is allowed.
+func affinityShape(ra renderedAffinity) string {
+	switch {
+	case !ra.present:
+		return "no pod anti-affinity rendered"
+	case ra.other:
+		return "renders a pod or node affinity as well as the anti-affinity"
+	case len(ra.required) != 0:
+		return "renders a REQUIRED anti-affinity term: on a cluster with fewer nodes than busy services the pod would stay Pending"
+	}
+	return ""
+}
+
+// primaryLabels is what the term against the event-store primary selects.
+var primaryLabels = map[string]string{"cnpg.io/instanceRole": "primary"}
+
+// avoidsTheEventStorePrimary reports what is wrong with one area's affinity, or ""
+// when it holds exactly one PREFERRED term against this namespace's event-store
+// primary, and nothing required.
+func avoidsTheEventStorePrimary(ra renderedAffinity) string {
+	if why := affinityShape(ra); why != "" {
+		return why + ", want a preferred term against cnpg.io/instanceRole=primary"
+	}
+	terms := termsSelecting(ra, "cnpg.io/instanceRole")
+	if len(terms) != 1 {
+		return fmt.Sprintf("renders %d preferred terms against the event-store primary, want exactly one", len(terms))
+	}
+	return preferredHostnameTerm(terms[0], primaryLabels)
+}
+
+// ownLabels is the area's own labels, which its Deployment selects on.
+func ownLabels(area, instance string) map[string]string {
+	return map[string]string{"devicechain.io/instance": instance, "devicechain.io/functional-area": area}
+}
+
+// prefersNodesWithoutItsOwnPods reports what is wrong with one area's affinity, or ""
+// when it holds exactly one PREFERRED term against the area's own pods (exactly its
+// own labels), and nothing required. It is what keeps the replicas of an area that
+// set the event-path spread, and so lost the scheduler's default spread, on
+// different nodes.
+func prefersNodesWithoutItsOwnPods(ra renderedAffinity, area, instance string) string {
+	if why := affinityShape(ra); why != "" {
+		return why + ", want a preferred term against the area's own pods"
+	}
+	terms := termsSelecting(ra, "devicechain.io/functional-area")
+	if len(terms) != 1 {
+		return fmt.Sprintf("renders %d preferred terms against the area's own pods, want exactly one", len(terms))
+	}
+	return preferredHostnameTerm(terms[0], ownLabels(area, instance))
+}
+
+// strayTerms returns every preferred term that is neither the term against the
+// event-store primary nor the one against the area's own pods.
+func strayTerms(ra renderedAffinity, area, instance string) []string {
+	var out []string
+	for _, p := range ra.preferred {
+		if preferredHostnameTerm(p, primaryLabels) == "" || preferredHostnameTerm(p, ownLabels(area, instance)) == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%+v", p))
+	}
+	return out
 }
 
 // device-management, event-management and event-sources prefer a node that is not
@@ -145,6 +212,7 @@ func TestEventPathAreasPreferNodesWithoutTheEventStorePrimary(t *testing.T) {
 		{"chart defaults", func() map[string]interface{} { return nil }},
 		{"dcctl default", func() map[string]interface{} { return helmValues(compactState(false)) }},
 		{"dcctl --compact", func() map[string]interface{} { return helmValues(compactState(true)) }},
+		{"dcctl --ha", func() map[string]interface{} { return helmValues(persistenceState(true, false, "default")) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manifest, err := renderChart(t, tc.vals())
@@ -152,6 +220,9 @@ func TestEventPathAreasPreferNodesWithoutTheEventStorePrimary(t *testing.T) {
 				t.Fatalf("rendering chart: %v", err)
 			}
 			got := renderedAntiAffinity(t, manifest)
+			// Only --ha runs a pod twice here (event-management), and only a pod that
+			// runs twice gets the term against its own pods.
+			twice := map[string]bool{"event-management": tc.name == "dcctl --ha"}
 			for _, area := range avoiders {
 				ra, ok := got[area]
 				if !ok {
@@ -160,6 +231,15 @@ func TestEventPathAreasPreferNodesWithoutTheEventStorePrimary(t *testing.T) {
 				}
 				if why := avoidsTheEventStorePrimary(ra); why != "" {
 					t.Errorf("%s: %s", area, why)
+				}
+				own := prefersNodesWithoutItsOwnPods(ra, area, "dctest")
+				if twice[area] && own != "" {
+					t.Errorf("%s at two pods: %s", area, own)
+				} else if !twice[area] && own == "" {
+					t.Errorf("%s at one pod renders a preferred term against its own pods", area)
+				}
+				if stray := strayTerms(ra, area, "dctest"); len(stray) != 0 {
+					t.Errorf("%s renders preferred terms that are neither rule's: %v", area, stray)
 				}
 			}
 			for _, area := range untouched {
@@ -334,6 +414,16 @@ func TestEventPathPodsSpreadAcrossNodes(t *testing.T) {
 		{"chart defaults", func() map[string]interface{} { return nil }},
 		{"dcctl default", func() map[string]interface{} { return helmValues(compactState(false)) }},
 		{"dcctl --compact", func() map[string]interface{} { return helmValues(compactState(true)) }},
+		// Above one replica: event-management under --ha, and every area that takes
+		// the top-level count. The event-path spread stays ONE constraint; the area's
+		// own pods are kept apart by a preferred anti-affinity instead (see
+		// TestEventPathAreasPreferNodesWithoutTheEventStorePrimary).
+		{"dcctl --ha", func() map[string]interface{} { return helmValues(persistenceState(true, false, "default")) }},
+		{"dcctl --ha, every area at replicas 2", func() map[string]interface{} {
+			vals := helmValues(persistenceState(true, false, "default"))
+			vals["replicas"] = 2
+			return vals
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manifest, err := renderChart(t, tc.vals())
@@ -393,6 +483,34 @@ func TestEventPathPodsSpreadAcrossNodes(t *testing.T) {
 		}
 		if why := spreadsWithTheEventPath(got["device-management"], "device-management", "dctest"); why != "" {
 			t.Errorf("device-management, which did not switch it off: %s", why)
+		}
+	})
+
+	// Without the shared spread, the pod keeps the scheduler's default spread, which
+	// already separates one Deployment's replicas (and its zones), so the area gets no
+	// term against its own pods either; the event-store primary term is untouched.
+	t.Run("above one replica, eventPathSpread off keeps the default spread", func(t *testing.T) {
+		vals := helmValues(persistenceState(true, false, "default"))
+		fa := vals["functionalAreas"].(map[string]interface{})
+		fa["event-management"].(map[string]interface{})["eventPathSpread"] = false
+		manifest, err := renderChart(t, vals)
+		if err != nil {
+			t.Fatalf("rendering chart: %v", err)
+		}
+		em, ok := renderedSpread(t, manifest)["event-management"]
+		if !ok {
+			t.Fatal("event-management did not render")
+		}
+		if len(em.constraints) != 0 {
+			t.Errorf("event-management renders %d spread constraints with eventPathSpread: false", len(em.constraints))
+		}
+		ra := renderedAntiAffinity(t, manifest)["event-management"]
+		if why := prefersNodesWithoutItsOwnPods(ra, "event-management", "dctest"); why == "" {
+			t.Error("event-management with eventPathSpread: false renders a term against its own pods; " +
+				"it keeps the default spread instead")
+		}
+		if why := avoidsTheEventStorePrimary(ra); why != "" {
+			t.Errorf("event-management with eventPathSpread: false: %s", why)
 		}
 	})
 }

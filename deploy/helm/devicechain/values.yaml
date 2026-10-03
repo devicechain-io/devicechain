@@ -1086,7 +1086,7 @@ functionalAreas:
     measuredRequests:
       cpu: 800m
     # Prefer a node that is not running this instance's event-store primary
-    # (templates/_helpers.tpl devicechain.eventStorePrimaryAntiAffinity). Preferred,
+    # (templates/_helpers.tpl devicechain.podAntiAffinity). Preferred,
     # never required: on a cluster with fewer nodes than busy services the pod still
     # schedules. Measured on the same GKE cluster with TUNED settings (not these
     # defaults), moving event-management off that node raised the sustained rate from
@@ -1109,8 +1109,10 @@ functionalAreas:
     # One trade: a pod that sets a spread of its own no longer gets the cluster's
     # DEFAULT spread, which keeps one Deployment's replicas on different nodes and
     # zones. At replicas: 1 there is nothing to spread. Above 1, the chart adds a
-    # second preferred constraint over this area's own pods, so its replicas still
-    # prefer different nodes; they no longer prefer different zones.
+    # preferred pod anti-affinity between this area's own pods
+    # (devicechain.podAntiAffinity), so its replicas still prefer different nodes;
+    # they no longer prefer different zones. With eventPathSpread: false the area
+    # keeps the cluster's default spread and gets no such term.
     eventPathSpread: true
     # Profiling listener: Go runtime profiles (CPU, heap, goroutines, execution
     # trace) served by this service on a port of its own. OFF, here and in every

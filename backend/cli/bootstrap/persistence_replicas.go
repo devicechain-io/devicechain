@@ -15,7 +15,8 @@ import (
 // the same reason: neither tool can see the other's half):
 //
 //   - Helm: functionalAreas.event-management.replicas, which the chart's Deployment,
-//     PodDisruptionBudget and the area's own pod spread all read;
+//     PodDisruptionBudget and the preference that keeps the area's own pods on
+//     different nodes all read;
 //   - OpenTofu: event_management_replicas, by which the instance root multiplies the
 //     event store's per-pod connection reserve (instance/main.tf).
 //

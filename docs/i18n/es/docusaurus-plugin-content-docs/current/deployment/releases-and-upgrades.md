@@ -4936,6 +4936,24 @@ Lo que todavía pausa la detección:
 Con `--ha` el bróker sigue disponible mientras sus servidores se reinician de uno en uno. El motor
 solo pierde su partición si sus renovaciones fallan durante 30 segundos. No hace falta hacer nada.
 
+#### Un servicio que ejecuta más de un pod mantiene sus pods en nodos distintos {#next-own-pods-apart}
+
+Con más de una réplica, cada uno de los cinco servicios de la ruta de eventos (`device-management`,
+`event-management`, `device-state`, `event-sources` y `event-processing`) prefiere un nodo que no
+ejecute ya otro de sus propios pods. Un servicio con [el reparto de la ruta de
+eventos](#next-event-path-requests) deja de recibir el reparto predeterminado del clúster, y esto le
+devuelve la mitad que mantiene las réplicas de un servicio en nodos distintos; la otra mitad, zonas
+distintas, no se devuelve. Es una preferencia que el planificador pondera junto con las demás del
+servicio (menos servicios de la ruta de eventos por nodo y, para `device-management`,
+`event-sources` y `event-management`, sin la primaria del almacén de eventos), no una garantía.
+
+- Con `--ha`, se aplica a los dos pods de `event-management`.
+- **Si instalas el chart por tu cuenta**, se aplica a cualquiera de los cinco que ejecutes con
+  `replicas` por encima de uno, y figura en la antiafinidad del pod, junto a la preferencia por
+  evitar la primaria del almacén de eventos en los tres servicios que la tienen. Un servicio con `eventPathSpread: false` conserva en su
+  lugar el reparto predeterminado del clúster, que también prefiere zonas distintas, y no recibe
+  esta preferencia.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

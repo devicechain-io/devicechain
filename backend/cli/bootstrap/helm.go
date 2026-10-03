@@ -159,26 +159,9 @@ func helmInstall(ctx context.Context, st *State) error {
 		carryForwardFromRelease(st, previous)
 	}
 
-	// 🔴 TWO VALUE MAPS, AND THE DIFFERENCE BETWEEN THEM IS THE SLICE. The authoring
-	// values carry the instance's credentials inside instance.config; the install
-	// values carry the NAME of a Secret dcctl wrote instead. Helm records the values
-	// of every revision it keeps, so anything that stays in this map stays readable
-	// for as long as that revision does — which is what makes rotating a credential
-	// something other than retracting it.
-	authoring := helmValues(st)
-	doc, err := composeInstanceConfig(ctx, ch, authoring)
+	vals, doc, err := releaseValues(ctx, ch, st, previous)
 	if err != nil {
 		return err
-	}
-	vals, err := installValuesFor(authoring, st.Instance, doc)
-	if err != nil {
-		return err
-	}
-	// Before the check below rather than after it, so what is validated is what is
-	// installed. A carried block that the chart refuses should fail here, named, and
-	// not ten minutes later as a rollout that never became ready.
-	if st.Evolving {
-		carryReleaseValues(vals, previous)
 	}
 
 	// Check the instance config the chart is about to be handed BEFORE handing it to
@@ -263,6 +246,41 @@ func helmInstall(ctx context.Context, st *State) error {
 
 	_, err = newHelmUpgrade(actionConfig, releaseNamespace).RunWithContext(ctx, releaseName, ch, vals)
 	return err
+}
+
+// releaseValues is the value map helmInstall hands Helm, and the instance configuration
+// document it writes beside the release: helmValues, composed into a document, then the
+// install values that name the document instead of carrying it, then (on a run that is
+// moving an instance) what the existing release carries forward. One function, so the
+// API-server check in this package's tests (apiserver_render_test.go) installs exactly
+// what a bootstrap installs rather than a restatement of it.
+//
+// 🔴 TWO VALUE MAPS, AND THE DIFFERENCE BETWEEN THEM IS THE SLICE. The authoring
+// values carry the instance's credentials inside instance.config; the install
+// values carry the NAME of a Secret dcctl wrote instead. Helm records the values
+// of every revision it keeps, so anything that stays in this map stays readable
+// for as long as that revision does — which is what makes rotating a credential
+// something other than retracting it.
+//
+// st must already carry what carryForwardFromRelease reads out of previous: some of it
+// is an input to helmValues.
+func releaseValues(ctx context.Context, ch *chart.Chart, st *State, previous map[string]interface{}) (map[string]interface{}, []byte, error) {
+	authoring := helmValues(st)
+	doc, err := composeInstanceConfig(ctx, ch, authoring)
+	if err != nil {
+		return nil, nil, err
+	}
+	vals, err := installValuesFor(authoring, st.Instance, doc)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Before helmInstall's config check rather than after it, so what is validated is
+	// what is installed. A carried block that the chart refuses should fail there,
+	// named, and not ten minutes later as a rollout that never became ready.
+	if st.Evolving {
+		carryReleaseValues(vals, previous)
+	}
+	return vals, doc, nil
 }
 
 // previousReleaseValues returns the values the release is currently installed with,
