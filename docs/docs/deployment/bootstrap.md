@@ -946,7 +946,10 @@ happens:
 - **The broker elects new leaders within seconds.** Streams led from the lost node pick a new
   leader, and in testing acknowledged writes resumed within about ten seconds. Publishes in flight
   at that moment fail, and a device posting over HTTP can see some `503` responses and should
-  retry. New connections through the broker's service can keep failing intermittently for about
+  retry. A `503` without a `Retry-After` header means the publish failed and the event may have
+  been stored anyway, so a retry stores it twice unless it carries an `altId` and an
+  `occurredTime` (see [quality of service](../guides/connecting-a-device.md#quality-of-service)).
+  New connections through the broker's service can keep failing intermittently for about
   45 seconds, until Kubernetes marks the node as lost and stops routing to the server on it.
 - **Event processing can pause for about a minute.** If the lost node's broker server led the
   stream of incoming events, devices' events keep being accepted, but resolving them can stall

@@ -381,8 +381,9 @@ Qué hace cada transporte mientras el flujo rechaza:
 
 Las transiciones de conexión y desconexión (del broker, los nacimientos y muertes de Sparkplug, los
 registros de LwM2M) se siguen aceptando mientras el flujo rechaza, porque nada volvería a enviar una
-transición rechazada. Ocupan el 10% del flujo que queda por encima del umbral de rechazo. Nada
-limita cuántas se admiten: los dispositivos deciden con qué frecuencia se conectan y desconectan,
+transición rechazada. Ocupan el 10% del flujo que queda por encima del umbral de rechazo. La
+compuerta de contrapresión no limita cuántas admite (el techo del inquilino sigue aplicándose a la
+toma del broker): los dispositivos deciden con qué frecuencia se conectan y desconectan,
 así que una flota que se reconecta en bucle puede llenar ese margen, y entonces el broker descarta
 los eventos más antiguos, incluidos los no leídos, como hacía antes de esta versión. Solo estos dos consumidores frenan
 la ingesta. Un `device-state` o un `event-processing` lentos no lo hacen. Sus pérdidas sin leer las

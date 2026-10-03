@@ -370,8 +370,9 @@ What each transport does while the stream is refusing:
 Connect and disconnect transitions (from the broker, Sparkplug births and deaths, LwM2M
 registrations) are still accepted while the stream is refusing, because nothing would send a
 refused transition again. They land in the 10% of the stream kept above the refusal threshold.
-Nothing limits how many are admitted: devices decide how often they connect and disconnect, so a
-fleet that reconnects in a loop can fill that margin, and then the broker discards the oldest
+The backpressure gate does not limit how many it admits (the tenant ceiling still applies to the
+broker tap): devices decide how often they connect and disconnect, so a fleet that reconnects in a
+loop can fill that margin, and then the broker discards the oldest
 events, unread ones included, as it did before this release. Only these two consumers
 hold ingest back. A slow `device-state` or `event-processing` does not. Their unread losses are
 still reported by the alerts above. `event-processing`'s real position is its own checkpoint,
