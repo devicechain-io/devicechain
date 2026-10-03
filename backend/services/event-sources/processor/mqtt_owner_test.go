@@ -62,7 +62,10 @@ type fakeBucket struct {
 	holder map[string]*fakeLease
 	// grantAlways makes every Acquire succeed: the negative control for "one owner".
 	grantAlways bool
-	log         *eventLog
+	// renewerLinger is how long KeepAlive takes to return once its context ends, so a
+	// release that does not wait for the renewer is seen to overtake it.
+	renewerLinger time.Duration
+	log           *eventLog
 }
 
 func newFakeBucket(log *eventLog) *fakeBucket {
@@ -110,6 +113,9 @@ type fakeLease struct {
 	lost     chan struct{}
 	lostOnce sync.Once
 	held     atomic.Bool
+	// renewerEnded is whether KeepAlive has returned. A term runs exactly one renewer, so
+	// at release it must be true: false is a renewer still running, or not yet started.
+	renewerEnded atomic.Bool
 }
 
 func (l *fakeLease) expire() {
@@ -123,8 +129,10 @@ func (l *fakeLease) takenOver() {
 }
 
 func (l *fakeLease) KeepAlive(ctx context.Context, _ time.Duration) error {
+	defer l.renewerEnded.Store(true)
 	select {
 	case <-ctx.Done():
+		time.Sleep(l.b.renewerLinger)
 		return nil
 	case <-l.lose:
 		return messaging.ErrNotHolder
@@ -139,6 +147,9 @@ func (l *fakeLease) Release() error {
 		delete(l.b.holder, l.partition)
 	}
 	l.b.mu.Unlock()
+	if !l.renewerEnded.Load() {
+		l.b.log.add("release-while-renewing:" + l.pod)
+	}
 	l.b.log.add("release:" + l.pod)
 	return nil
 }
@@ -159,6 +170,7 @@ type fakeSource struct {
 }
 
 func (s *fakeSource) ClientID() string                        { return s.clientID }
+func (s *fakeSource) Owns() bool                              { return s.owns() }
 func (s *fakeSource) Initialize(ctx context.Context) error    { return s.ExecuteInitialize(ctx) }
 func (s *fakeSource) ExecuteInitialize(context.Context) error { return nil }
 func (s *fakeSource) Start(ctx context.Context) error         { return s.ExecuteStart(ctx) }
@@ -227,8 +239,14 @@ func (p *pod) lastOwns() func() bool {
 
 func newPod(t *testing.T, name string, b *fakeBucket) *pod {
 	t.Helper()
+	return newPodFor(t, name, "ext", b)
+}
+
+// newPodFor is newPod for a source other than "ext".
+func newPodFor(t *testing.T, name, source string, b *fakeBucket) *pod {
+	t.Helper()
 	p := &pod{name: name}
-	owned, err := NewOwnedMqttSource("ext", "inst-1", name,
+	owned, err := NewOwnedMqttSource(source, "inst-1", name,
 		func(clientID string, owns func() bool) (TermSource, error) {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -561,7 +579,7 @@ func TestAnOwnedSourceWithNoLeaseBucketFailsItsStart(t *testing.T) {
 
 func TestOwnedSourceRefusesMissingHooks(t *testing.T) {
 	src := func(clientID string, owns func() bool) (TermSource, error) {
-		return &fakeSource{clientID: clientID, log: &eventLog{}}, nil
+		return &fakeSource{clientID: clientID, log: &eventLog{}, owns: owns}, nil
 	}
 	leases := func() (SourceLeases, error) { return nil, nil }
 	hooks := OwnerHooks{Fail: func(error) {}, SetOwner: func(string, bool) {}, NotOwner: func(string) {}}
@@ -596,12 +614,77 @@ func TestABadPortFailsAtBuildNotAtStart(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// 🔴 THE PER-MESSAGE GATE IS ONLY AS GOOD AS THE FACTORY THAT WIRES IT. main's factory is a
+// closure no test can call, so if it handed the source any gate but the term's own (an
+// always-true one, say), every message a pod is still delivered after losing the source
+// would be stored beside the copy the new owner stores. The constructor builds a probe
+// with a gate that answers "not owned" and records that it was asked, and refuses a
+// source whose Owns does not give that answer by asking it. main's wiring tests build
+// through the constructor, so they fail on such a factory too.
+func TestAFactoryWhoseGateIgnoresTheTermsIsRefused(t *testing.T) {
+	hooks := OwnerHooks{Fail: func(error) {}, SetOwner: func(string, bool) {}, NotOwner: func(string) {}}
+	leases := func() (SourceLeases, error) { return nil, nil }
+	for name, gate := range map[string]func(owns func() bool) func() bool{
+		"always owns":     func(func() bool) func() bool { return func() bool { return true } },
+		"never asks owns": func(func() bool) func() bool { return func() bool { return false } },
+		"asks, then owns": func(owns func() bool) func() bool { return func() bool { _ = owns(); return true } },
+	} {
+		_, err := NewOwnedMqttSource("ext", "inst-1", "pod-a",
+			func(clientID string, owns func() bool) (TermSource, error) {
+				return &fakeSource{clientID: clientID, log: &eventLog{}, owns: gate(owns)}, nil
+			}, leases, hooks)
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "ownership gate", name)
+	}
+	_, err := NewOwnedMqttSource("ext", "inst-1", "pod-a",
+		func(clientID string, owns func() bool) (TermSource, error) {
+			return &fakeSource{clientID: clientID, log: &eventLog{}, owns: owns}, nil
+		}, leases, hooks)
+	assert.NoError(t, err, "the counterweight: a source that asks the term's gate is accepted")
+}
+
+// 🔴 THE LEASE IS PER SOURCE. Two external sources on one instance are two leases, and a
+// pod may hold both. One key for every source would have the second source's owner find
+// the first's lease held, on every pod, so the second source would never be read anywhere.
+func TestTwoSourcesOnOnePodAreEachRead(t *testing.T) {
+	assert.Equal(t, "event-sources:mqtt:ext-a", OwnershipPartition("ext-a"))
+	assert.Equal(t, "event-sources:mqtt:ext-b", OwnershipPartition("ext-b"))
+
+	fastOwnerRetries(t)
+	b := newFakeBucket(&eventLog{})
+	srcA, srcB := newPodFor(t, "pod-a", "ext-a", b), newPodFor(t, "pod-a", "ext-b", b)
+	require.NoError(t, srcA.start(t))
+	require.NoError(t, srcB.start(t))
+	t.Cleanup(func() { srcA.stop(t); srcB.stop(t) })
+	for name, p := range map[string]*pod{"ext-a": srcA, "ext-b": srcB} {
+		owner, reported := p.isOwner()
+		assert.True(t, reported && owner, "source %s is not read by the only pod there is", name)
+	}
+	assert.True(t, b.held(OwnershipPartition("ext-a")) && b.held(OwnershipPartition("ext-b")))
+}
+
+// A term's renewer is joined before its lease is released: nothing of the term may outlive
+// it, or a renewal could land on a lease another pod has since taken. The fake renewer
+// takes a while to return once its context ends, so a release that did not wait for it
+// would be recorded while it still ran (or before it had even started).
+func TestATermsRenewerHasEndedBeforeItsLeaseIsReleased(t *testing.T) {
+	log := &eventLog{}
+	b := newFakeBucket(log)
+	b.renewerLinger = 100 * time.Millisecond
+	a := newPod(t, "pod-a", b)
+	require.NoError(t, a.start(t))
+	a.stop(t)
+	assert.Contains(t, log.snapshot(), "release:pod-a")
+	assert.NotContains(t, log.snapshot(), "release-while-renewing:pod-a",
+		"the lease was released while the term's renewer still ran")
+}
+
 // A factory that ignores the id it is handed would put every pod on one session again; the
 // constructor refuses it.
 func TestAFactoryThatIgnoresTheClientIDIsRefused(t *testing.T) {
 	_, err := NewOwnedMqttSource("ext", "inst-1", "pod-a",
 		func(_ string, owns func() bool) (TermSource, error) {
-			return &fakeSource{clientID: "devicechain", log: &eventLog{}}, nil
+			return &fakeSource{clientID: "devicechain", log: &eventLog{}, owns: owns}, nil
 		},
 		func() (SourceLeases, error) { return nil, nil },
 		OwnerHooks{Fail: func(error) {}, SetOwner: func(string, bool) {}, NotOwner: func(string) {}})

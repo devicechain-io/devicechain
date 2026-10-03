@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,10 @@ const externalClientIDPrefix = "devicechain"
 // unambiguous (messaging's deviceClientIDSeparator is ":" for the same two reasons).
 const externalClientIDSeparator = ":"
 
+// reducedClientIDPart is the shape of a source id clientIDPart suffixed: '-' and 8
+// lowercase hex digits at the end.
+var reducedClientIDPart = regexp.MustCompile(`-[0-9a-f]{8}$`)
+
 // errEmptyClientIDPart is what ExternalMqttClientID returns when a part is empty.
 var errEmptyClientIDPart = errors.New("an external MQTT source's client id needs every part")
 
@@ -91,7 +96,10 @@ var errEmptyClientIDPart = errors.New("an external MQTT source's client id needs
 //
 // The separator cannot occur inside a part: instanceId and replica must already be in the
 // token grammar (letters, digits, '-', '_'), and the source id is reduced to it by
-// clientIDPart. That makes the mapping injective, so distinct inputs cannot meet on one id.
+// clientIDPart. Two distinct inputs therefore meet on one id only if two source ids that
+// clientIDPart had to suffix reduce alike AND share the first 8 hex digits of their
+// sha256: a 32-bit hash collision between two ids of one instance's configuration, not
+// anything an id can be written to do.
 //
 // It refuses an empty part rather than producing an id that collides with a sibling's.
 func ExternalMqttClientID(instanceId, sourceId, replica string) (string, error) {
@@ -114,9 +122,13 @@ func ExternalMqttClientID(instanceId, sourceId, replica string) (string, error) 
 // clientIDPart reduces a source id to the token grammar. When that changes the id, it
 // appends '-' and the first 8 hex digits of sha256(original), so "a:b" and "a-b" (both
 // "a-b" after reduction) stay distinct. An id already in the grammar is returned unchanged,
-// so the common case ("mqtt1") stays readable in the broker's logs.
+// so the common case ("mqtt1") stays readable in the broker's logs, UNLESS it already ends
+// in that suffix's shape: such an id is suffixed in turn, by its own hash. Without that, an
+// id written as "a-b-" plus the first 8 hex digits of sha256("a:b") would come out exactly
+// as "a:b" does, and the two sources would take one session from each other. So every
+// output in the suffixed shape carries the hash of the id it came from.
 func clientIDPart(s string) string {
-	if core.ValidateToken(s) == nil {
+	if core.ValidateToken(s) == nil && !reducedClientIDPart.MatchString(s) {
 		return s
 	}
 	out := make([]rune, 0, len(s))
@@ -335,6 +347,11 @@ func (es *MqttEventSource) clientOptions(clientID string) *mqtt.ClientOptions {
 // ClientID is the MQTT client id this source connects with, read from the options paho
 // is given.
 func (es *MqttEventSource) ClientID() string { return es.opts.ClientID }
+
+// Owns asks the ownership gate the source was built with, the one every message is gated
+// on, whether this pod still owns the source. OwnedMqttSource asks it of the source its
+// factory builds, to refuse a factory that wired any gate but the term's.
+func (es *MqttEventSource) Owns() bool { return es.owns() }
 
 // tenantFromTopic derives the tenant from an inbound MQTT topic of the form
 // "{instanceId}/{tenant}/..." (ADR-006/ADR-048): the tenant is the second of at
