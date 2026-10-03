@@ -990,8 +990,9 @@ instancia puede apagar PostgreSQL correctamente y después no terminar: su regis
 `failed waiting for all runnables to end within grace period of 30s`, y su pod se queda en
 `Terminating` aunque la base de datos ya se ha detenido. Los datos no tienen ningún problema, y
 el pod se elimina al cumplirse los dos minutos. Un pod que aún no tiene este límite (uno creado
-antes de que se introdujera, o cualquier instancia de un almacén de eventos creado antes que no
-haya recibido ni una actualización ni el parche que describen las notas de la versión) sigue
+antes de que se introdujera, o cualquier instancia de un almacén de eventos creado antes de que
+existiera ese límite y que aún no haya recibido ni una actualización ni el parche que describen
+las notas de la versión) sigue
 teniendo treinta minutos; las
 [notas de la versión](./releases-and-upgrades.md#database-primary-failover-in-seconds) explican
 cómo reconocer ese caso y resolverlo.

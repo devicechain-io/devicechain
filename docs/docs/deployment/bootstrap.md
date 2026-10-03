@@ -917,8 +917,9 @@ PostgreSQL down cleanly and then fail to exit: its log ends with
 `failed waiting for all runnables to end within grace period of 30s`, and its pod stays
 `Terminating` although the database has stopped. Nothing is wrong with the data, and the pod is
 removed when the two minutes are up. A pod that does not yet carry this limit (one created before
-it was introduced, or any instance of an event store created before it that neither an upgrade
-nor the patch the release notes describe has reached yet) still carries thirty minutes; the
+it was introduced, or any instance of an event store that predates the limit and has not yet
+been reached by an upgrade or by the patch the release notes describe) still carries thirty
+minutes; the
 [release notes](./releases-and-upgrades.md#database-primary-failover-in-seconds) say how to
 recognise that case and clear it.
 
