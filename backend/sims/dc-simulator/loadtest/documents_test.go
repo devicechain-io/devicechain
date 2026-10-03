@@ -156,6 +156,14 @@ func harnessDocuments() []harnessDocument {
 				"startTime":  "2026-08-19T00:00:00Z", "endTime": "2026-08-19T00:01:00Z",
 			},
 		}},
+		{"identityEventsQuery", "event-management", identityEventsQuery, map[string]any{
+			"c": map[string]any{
+				"pageNumber": 2, "pageSize": identityPageSize,
+				"deviceToken": "harness-probe-001",
+				"eventTypes":  []any{MeasurementEventType},
+				"startTime":   "2026-08-19T00:00:00Z", "endTime": "2026-08-19T00:01:00Z",
+			},
+		}},
 
 		// device-management — provisioning and the durable alarm oracle.
 		{"queryDetectionRulesByToken", "device-management", queryDetectionRulesByToken, map[string]any{
@@ -193,8 +201,8 @@ func harnessDocuments() []harnessDocument {
 func TestEveryHarnessDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 	docs := harnessDocuments()
 	// A table that lost its entries would validate nothing and report green.
-	if len(docs) < 14 {
-		t.Fatalf("harnessDocuments() lists only %d document(s); it has previously listed at least 14, so this test is asserting almost nothing", len(docs))
+	if len(docs) < 15 {
+		t.Fatalf("harnessDocuments() lists only %d document(s); it has previously listed at least 15, so this test is asserting almost nothing", len(docs))
 	}
 	byArea := map[string]*graphql.Schema{}
 	for _, d := range docs {

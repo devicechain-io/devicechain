@@ -94,3 +94,36 @@ func TestBackgroundRefusalsCountsBothKinds(t *testing.T) {
 		t.Errorf("backgroundRefusals = %q, want %q", desc, want)
 	}
 }
+
+// The L1 report carries the identity evidence under the JSON keys the release gate's jq
+// reads, and its log line names the counts; a report without it says so rather than
+// printing nothing.
+func TestL1ReportCarriesIdentity(t *testing.T) {
+	id := &IdentityReport{Accepted: 7, Persisted: 8, Missing: 1, DuplicateKeys: 2, Unexpected: 3, RefusedStored: 1,
+		Ambiguous: 4, AmbiguousStored: 1, AmbiguousAbsent: 3, DevicesRead: 5, ReadSeconds: 6,
+		ObservedUntilAfterDriveSecs: 9, Reconciled: false}
+	r := &Report{Identity: id}
+	raw, err := r.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Identity map[string]any `json:"identity"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]any{"reconciled": false, "missing": 1.0, "duplicateKeys": 2.0, "unexpected": 3.0,
+		"accepted": 7.0, "ambiguous": 4.0, "observedUntilAfterDriveSeconds": 9.0} {
+		if doc.Identity[k] != v {
+			t.Errorf("identity[%q] = %v, want %v (serialized %s)", k, doc.Identity[k], v, raw)
+		}
+	}
+	const want = "identity: accepted 7, stored 8; missing 1, duplicated 2, unexpected 3 (refused stored 1); ambiguous 4 (stored 1, absent 3); read 5 devices in 6s, observed until 9s after the drive"
+	if got := r.Human(); !strings.Contains(got, want) {
+		t.Errorf("Human() does not carry %q:\n%s", want, got)
+	}
+	if got := (&Report{}).Human(); !strings.Contains(got, "identity: NOT checked") {
+		t.Errorf("a report with no identity section does not say so:\n%s", got)
+	}
+}

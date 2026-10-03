@@ -4,6 +4,7 @@
 package loadtest
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -18,11 +19,14 @@ func cfgFloor(floor int) ContentionConfig {
 // A clean CONTENDED outcome pair (floor >= 1): gold rode through zero-loss, the shed
 // probe shed some and everything it kept persisted.
 func contendedGold() *tenantOutcome {
-	return &tenantOutcome{Role: "gold", Tenant: "t-gold", Accepted: 15000, Shed: 0, Failed: 0, Persisted: 15000, Reached: true}
+	return &tenantOutcome{Role: "gold", Tenant: "t-gold", Accepted: 15000, Shed: 0, Failed: 0, Persisted: 15000, Reached: true, Identity: reconciled()}
 }
+
+// reconciled is an identity report that held.
+func reconciled() IdentityReport { return IdentityReport{Reconciled: true} }
 func contendedShed() *tenantOutcome {
 	// Attempted 15000, ~2/3 shed, the accepted third all persisted.
-	return &tenantOutcome{Role: "shed", Tenant: "t-shed", Accepted: 5000, Shed: 10000, Failed: 0, Persisted: 5000, Reached: true}
+	return &tenantOutcome{Role: "shed", Tenant: "t-shed", Accepted: 5000, Shed: 10000, Failed: 0, Persisted: 5000, Reached: true, Identity: reconciled()}
 }
 
 func allPass(invs []Invariant) bool {
@@ -56,7 +60,7 @@ func TestClassifyContentionContendedPasses(t *testing.T) {
 // caused by the floor).
 func TestClassifyContentionNegativeControlPasses(t *testing.T) {
 	gold := contendedGold()
-	shed := &tenantOutcome{Role: "shed", Tenant: "t-shed", Accepted: 15000, Shed: 0, Failed: 0, Persisted: 15000, Reached: true}
+	shed := &tenantOutcome{Role: "shed", Tenant: "t-shed", Accepted: 15000, Shed: 0, Failed: 0, Persisted: 15000, Reached: true, Identity: reconciled()}
 	invs := classifyContention(cfgFloor(0), gold, shed)
 	if !invByName(t, invs, InvContentionUnbackpressured).Passed {
 		t.Error("no tenant was backpressured, but contention-not-backpressured failed")
@@ -260,10 +264,11 @@ func TestShedProbeBackpressureAtAFloorDoesNotVoidTheRun(t *testing.T) {
 // classifier sees them; every counter must land in its own field.
 func TestOutcomeOfKeepsRefusalsApart(t *testing.T) {
 	snap := sim.Snapshot{Emitted: 2, Shed: 3, Backpressured: 4, Failed: 1, Rate: 12.5}
-	o := outcomeOf("gold", "t-gold", 10, snap, QuiesceResult{Persisted: 2, Reached: true})
+	id := IdentityReport{Accepted: 2, Missing: 1, Samples: IdentitySamples{Missing: []string{"d@x"}}}
+	o := outcomeOf("gold", "t-gold", 10, snap, QuiesceResult{Persisted: 2, Reached: true}, id)
 	want := tenantOutcome{Role: "gold", Tenant: "t-gold", Devices: 10, Accepted: 2, Shed: 3,
-		Backpressured: 4, Failed: 1, Persisted: 2, Reached: true, Rate: 12.5}
-	if *o != want {
+		Backpressured: 4, Failed: 1, Persisted: 2, Reached: true, Rate: 12.5, Identity: id}
+	if !reflect.DeepEqual(*o, want) {
 		t.Errorf("outcomeOf = %+v, want %+v", *o, want)
 	}
 }
@@ -273,13 +278,63 @@ func TestContentionReportPassedRequiresInvariants(t *testing.T) {
 	if empty.Passed() {
 		t.Error("a report with no invariants must not pass — it asserted nothing")
 	}
-	pass := &ContentionReport{Invariants: []Invariant{{Name: "x", Passed: true}}}
+	idInvs := []Invariant{{Name: InvGoldIdentity, Passed: true}, {Name: InvShedIdentity, Passed: true}}
+	pass := &ContentionReport{Invariants: append([]Invariant{{Name: "x", Passed: true}}, idInvs...)}
 	if !pass.Passed() {
 		t.Error("a report with all-passing invariants should pass")
 	}
-	fail := &ContentionReport{Invariants: []Invariant{{Name: "x", Passed: true}, {Name: "y", Passed: false}}}
+	fail := &ContentionReport{Invariants: append([]Invariant{{Name: "x", Passed: true}, {Name: "y", Passed: false}}, idInvs...)}
 	if fail.Passed() {
 		t.Error("a report with any failing invariant must fail")
+	}
+	// A report whose invariants all passed but that never checked identity proves only
+	// that the totals agreed: it must not certify the run.
+	for _, missing := range []string{InvGoldIdentity, InvShedIdentity} {
+		var invs []Invariant
+		for _, inv := range pass.Invariants {
+			if inv.Name != missing {
+				invs = append(invs, inv)
+			}
+		}
+		if (&ContentionReport{Invariants: invs}).Passed() {
+			t.Errorf("a report without %s passed", missing)
+		}
+	}
+}
+
+// Each tenant's identity verdict fails the gate on its own, and only its own invariant:
+// equal totals (persisted == accepted, which every count invariant here reads) must not
+// carry a tenant whose events did not reconcile one by one.
+func TestClassifyContentionIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		breakGold bool
+		inv       string
+	}{
+		{"gold", true, InvGoldIdentity},
+		{"shed", false, InvShedIdentity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gold, shed := contendedGold(), contendedShed()
+			bad := IdentityReport{Accepted: 5000, Persisted: 5000, Missing: 1, DuplicateKeys: 1, ExtraCopies: 1,
+				Samples: IdentitySamples{Missing: []string{"dev-1@B"}, Duplicate: []string{"dev-1@A x2"}}}
+			if tc.breakGold {
+				gold.Identity = bad
+			} else {
+				shed.Identity = bad
+			}
+			invs := classifyContention(cfgFloor(2), gold, shed)
+			for _, inv := range invs {
+				want := inv.Name != tc.inv
+				if inv.Passed != want {
+					t.Errorf("%s passed=%v, want %v (%s)", inv.Name, inv.Passed, want, inv.Detail)
+				}
+			}
+			got := invByName(t, invs, tc.inv)
+			if !strings.Contains(got.Detail, "dev-1@B") || !strings.Contains(got.Detail, "dev-1@A x2") {
+				t.Errorf("%s detail %q does not name the missing and duplicated events", tc.inv, got.Detail)
+			}
+		})
 	}
 }
 

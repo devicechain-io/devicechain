@@ -352,8 +352,15 @@ func formatFixValue(v float64) string {
 // platform-side defect survived — a fix to the measuring instrument that reads
 // like a fix to the thing measured. The platform fix is the per-message event
 // identity that gives a base event a key of its own.
+//
+// The stamp is truncated to the MICROSECOND, the precision the event store keeps. The
+// load test identifies an event by (device token, occurredTime), so the stamp sent must
+// be the stamp stored: a nanosecond part would be dropped on the way in by a rounding
+// rule the harness would then have to copy. Truncated here, no layer can round it
+// differently, and the identity ledger refuses a stamp with a sub-microsecond part, so
+// losing this truncation fails the reconciliation rather than passing it quietly.
 func eventTimestamp() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+	return time.Now().UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 // postEvent is the wire tail every emitter shares: it wraps payload in the
@@ -361,7 +368,10 @@ func eventTimestamp() string {
 // route a physical device uses (no sim-only backdoor), authenticated by the
 // credential bootstrap.go provisioned, and classifies the response — 202 accepted,
 // 429 wrapped as ErrShed, a backpressure 503 (one carrying a Retry-After) wrapped as
-// ErrBackpressured and ErrShed, anything else a failure.
+// ErrBackpressured and ErrShed, anything else a failure. Every emit that reached the
+// wire is also filed in rt.Identity by what the response says about the event store
+// (classifyResponse): accepted, refused, or ambiguous, the last including a transport
+// error, where the request may have been processed.
 //
 // 🔴 It is a shared helper rather than a shape each emitter repeats, and the reason
 // is the refusal branches specifically. They are what keep a governed run reconcilable
@@ -401,28 +411,28 @@ func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 
 	resp, err := rt.HTTPClient.Do(req)
 	if err != nil {
+		// The request may have been processed before the connection failed, so the store
+		// may hold this event: ambiguous, never refused.
+		rt.Identity.Record(OutcomeAmbiguous, d.Token, eventType, occurredTime)
 		return fmt.Errorf("post to ingress %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		// A governed shed. Drain a bounded prefix so the connection can be reused, but
-		// wrap ErrShed so EmitAll routes it to Stats.Shed rather than Stats.Failed.
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
-		return fmt.Errorf("ingress %s returned 429 (%s): %w", url, strings.TrimSpace(string(raw)), ErrShed)
+	outcome, refusal := classifyResponse(resp.StatusCode, resp.Header.Get("Retry-After"))
+	// This is the one tail every emitter shares, so recording here covers every event
+	// shape the simulator sends.
+	rt.Identity.Record(outcome, d.Token, eventType, occurredTime)
+	if outcome == OutcomeAccepted {
+		return nil
 	}
-	if resp.StatusCode == http.StatusServiceUnavailable && resp.Header.Get("Retry-After") != "" {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
-		return fmt.Errorf("ingress %s returned 503 (%s): %w: %w", url, strings.TrimSpace(string(raw)), ErrBackpressured, ErrShed)
+	// Drain a bounded prefix so the connection can be reused and the error can say why.
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
+	if refusal != nil {
+		// A governed shed (429) or a backpressure 503: wrapped so EmitAll routes it to
+		// Stats.Shed or Stats.Backpressured rather than Stats.Failed.
+		return fmt.Errorf("ingress %s returned %d (%s): %w", url, resp.StatusCode, strings.TrimSpace(string(raw)), refusal)
 	}
-	if resp.StatusCode != http.StatusAccepted {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxIngressResponseBytes))
-		return fmt.Errorf("ingress %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
-	}
-	// Accepted: this is the one tail every emitter shares, so recording here covers every
-	// event shape the simulator sends.
-	rt.Accepted.Record(d.Token, occurredTime)
-	return nil
+	return fmt.Errorf("ingress %s returned %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
 }
 
 // jsonRoundTrip marshals v and unmarshals it back into a map[string]interface{}

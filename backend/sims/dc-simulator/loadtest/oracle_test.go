@@ -90,8 +90,7 @@ func TestReconcile(t *testing.T) {
 			if got := findInvariant(t, invs, InvCompleteness).Passed; got != tc.wantComplete {
 				t.Errorf("completeness = %v, want %v", got, tc.wantComplete)
 			}
-			r := &Report{Invariants: invs}
-			if got := r.Passed(); got != tc.wantOverall {
+			if got := allPass(invs); got != tc.wantOverall {
 				t.Errorf("overall = %v, want %v", got, tc.wantOverall)
 			}
 		})
@@ -325,13 +324,23 @@ func TestReportPassed(t *testing.T) {
 	if (&Report{}).Passed() {
 		t.Error("empty report must not pass")
 	}
-	pass := &Report{Invariants: []Invariant{{Name: "a", Passed: true}, {Name: "b", Passed: true}}}
+	id := &IdentityReport{Reconciled: true}
+	idInv := Invariant{Name: InvIdentity, Passed: true}
+	pass := &Report{Identity: id, Invariants: []Invariant{{Name: "a", Passed: true}, {Name: "b", Passed: true}, idInv}}
 	if !pass.Passed() {
 		t.Error("all-passing report should pass")
 	}
-	fail := &Report{Invariants: []Invariant{{Name: "a", Passed: true}, {Name: "b", Passed: false}}}
+	fail := &Report{Identity: id, Invariants: []Invariant{{Name: "a", Passed: true}, {Name: "b", Passed: false}, idInv}}
 	if fail.Passed() {
 		t.Error("one failed invariant must fail the report")
+	}
+	// Equal totals alone do not show every accepted event was stored once: a report that
+	// never reconciled identity must not certify the run, whichever half is missing.
+	if (&Report{Invariants: pass.Invariants}).Passed() {
+		t.Error("a report with no identity section passed")
+	}
+	if (&Report{Identity: id, Invariants: pass.Invariants[:2]}).Passed() {
+		t.Error("a report with no ingest-identity invariant passed")
 	}
 }
 
@@ -386,4 +395,22 @@ func TestGraphqlEventCounter(t *testing.T) {
 			t.Fatal("a null totalRecords must be an error, not a silent zero")
 		}
 	})
+}
+
+// TestCountAgreementDoesNotClaimNoLoss pins what ingest-completeness may say when the
+// totals agree. Equal totals cannot tell "nothing was lost" from "one event was lost and
+// another stored twice": accepting A,B,C,D and storing A,A,C,D reaches exactly this
+// call, Reconcile(4, 0, 4, 4). The detail used to read "(no events dropped)", which is a
+// claim the inputs cannot support.
+func TestCountAgreementDoesNotClaimNoLoss(t *testing.T) {
+	comp := findInvariant(t, Reconcile(4, 0, 4, 4), InvCompleteness)
+	if !comp.Passed {
+		t.Fatalf("equal totals must still pass the count pre-check: %s", comp.Detail)
+	}
+	if strings.Contains(comp.Detail, "no events dropped") {
+		t.Errorf("ingest-completeness detail = %q; equal totals do not show that no event was dropped", comp.Detail)
+	}
+	if !strings.Contains(comp.Detail, "count agreement only") {
+		t.Errorf("ingest-completeness detail = %q; want it to say it compares counts only", comp.Detail)
+	}
 }

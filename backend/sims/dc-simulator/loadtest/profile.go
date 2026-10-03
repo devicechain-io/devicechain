@@ -12,8 +12,10 @@
 // This is L1 — the aggregate-reconciliation base layer of the execution spec
 // (research/load-test-harness.md §4.1): drive a known, counted volume of events
 // and assert `persisted == accepted` after quiesce, the whole-fleet completeness
-// check that catches the at-most-once dropped-event class (ADR-030) at O(devices)
-// cost. Planted probes (alarm/command/detection/isolation), the safety-continuous
+// pre-check, then reconcile every stored event against the emit ledger by identity
+// (identity.go) — equal totals alone can hide a lost event offset by a duplicate —
+// which catches the at-most-once dropped-event class (ADR-030) and the duplicate
+// class at O(events) read cost. Planted probes (alarm/command/detection/isolation), the safety-continuous
 // live monitor, and the tiered ADR-063 contention profile layer on top of it in
 // later slices.
 package loadtest
