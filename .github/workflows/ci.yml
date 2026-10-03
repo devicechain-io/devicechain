@@ -411,6 +411,24 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go vet -tags "integration interop" ./...
 
+      # dcctl ships for Windows, and its tests must at least COMPILE there: a test-only
+      # dependency that does not build on Windows takes every test in its package down
+      # with it, platform-neutral ones included, and no Linux step can see that
+      # (controller-runtime's envtest did exactly this to backend/cli/bootstrap). vet
+      # type-checks every package and its tests for GOOS=windows, compiling their
+      # dependencies, and links and runs nothing, so it needs no Windows runner. It
+      # carries the same tags as the step above so a tagged suite is covered too, and
+      # it also catches a non-test Windows break on a PR rather than at the release build.
+      # backend/k8s is not here: the operator is built only for Linux. Its controllers
+      # test package imports envtest and so does not build on Windows either, two
+      # platform-neutral tests in it included.
+      - name: go vet (windows)
+        if: matrix.module == 'backend/cli'
+        working-directory: ${{ matrix.module }}
+        env:
+          GOOS: windows
+        run: go vet -tags "integration interop" ./...
+
       # graph-gophers/graphql-go silently discards input-object entries the schema
       # does not define when the value arrives through a VARIABLE (the literal path
       # rejects them correctly). The spec requires a request error, so a misnamed
