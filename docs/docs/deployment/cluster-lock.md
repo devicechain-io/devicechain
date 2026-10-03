@@ -227,7 +227,9 @@ operator: it is now held by bob@laptop/9912/3a7f…
 
 A fenced (reclaimed) run writes nothing further to the cluster. That includes the phase
 annotation on its own instance declaration, because that declaration now belongs to
-whoever reclaimed it.
+whoever reclaimed it. If such a run had otherwise succeeded in finishing an instance's
+first bootstrap, it exits with an error: it could not record that the bootstrap finished,
+so run the same command again once the lock is free.
 
 :::warning A reclaim cannot interrupt a step already running
 The check happens *between* steps. A reclaim that lands one second into "Apply

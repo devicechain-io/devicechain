@@ -14,6 +14,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/devicechain-io/dc-microservice/config"
+
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
 // 🔴 THE CHART AND dcctl SPELL THE SECRET INDEPENDENTLY, and this is what holds them
@@ -296,6 +298,7 @@ func TestABootstrapRerunOverALiveInstanceWithNoSecretMintsNoSeed(t *testing.T) {
 	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
 		return aLiveInstance(), nil
 	}
+	stubDeclaration(t, aDeclaration(dcv1beta1.PhaseReady, ""))
 
 	for _, tc := range []struct {
 		name   string
@@ -352,6 +355,7 @@ func TestABootstrapRerunOverALiveInstanceKeepsItsSeedAndDoesNotShowIt(t *testing
 	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
 		return aLiveInstance(), nil
 	}
+	stubDeclaration(t, aDeclaration(dcv1beta1.PhaseReady, ""))
 	rec := aCompleteInstall()
 	st := &State{Instance: testInstance, InstanceUID: testUID, ClusterUID: testClusterUID, Values: map[string]string{},
 		AllowLegacyDbRemoval: true}
@@ -382,12 +386,25 @@ func TestARunOverNoLiveInstanceIsNotRecordedAsOne(t *testing.T) {
 	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
 		return nil, nil
 	}
+	// With no document there is nothing to protect, so the declaration is not asked:
+	// a read here would put a cluster round-trip, and its failure modes, in front of
+	// every first bootstrap.
+	asked := false
+	prevDecl := readInstanceDeclaration
+	t.Cleanup(func() { readInstanceDeclaration = prevDecl })
+	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
+		asked = true
+		return nil, nil
+	}
 	st := aBootstrapOf(testInstance)
 	if err := stepRefuseRebuild(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}
 	if st.OverLiveInstance {
 		t.Error("a bootstrap with no configuration document in the cluster was recorded as running over a live instance")
+	}
+	if asked {
+		t.Error("the declaration was read although there was no configuration document to protect")
 	}
 }
 

@@ -210,7 +210,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// signal does terminate the process, by design) — has to replace it with a
 	// terminal one. A deferred call is what makes that true of exits nobody has
 	// written yet.
-	defer func() { finishUpgradePhase(ctx, dyn, opts.Instance, st, upgradeClaim, err) }()
+	//
+	// The run's own error goes in and the command's comes out: finishUpgradePhase does
+	// the merge, so the one line here that is not reachable by a test is an assignment.
+	defer func() {
+		err = finishUpgradePhase(ctx, dyn, opts.Instance, st, upgradeClaim, err)
+	}()
 
 	if opts.DryRun {
 		sayUpgradeDryRun(st)
@@ -536,70 +541,38 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 // only ever entered describes a run that never ended, over an instance that is
 // running fine.
 //
-// 🔴 A FENCED RUN WRITES NOTHING, for the reason finishClaim gives at the same
-// point in bootstrap: once the claim is lost the declaration belongs to whoever
-// reclaimed it, and stamping Failed would overwrite the phase of a run that is
-// live and doing well. CheckHeld is what establishes that — asked of the API
-// server here, not read from the renewal loop's cached flag, which can be a full
-// interval out of date at exactly this moment.
+// The rules the stamp follows — a fenced run writes nothing, a run that never held the
+// lock does stamp, a teardown is never stamped over, and a run that ended well over an
+// instance whose first bootstrap had not finished fails if its Ready cannot be recorded
+// — are recordRunEnded's, shared with bootstrap so neither verb can keep one and drop
+// another.
 //
-// 🔑 A run that never HELD the lock is the other case, and it DOES stamp.
-// beginUpgradeClaim warns and continues when it cannot take the lock, so such a
-// run has already rewritten this declaration's spec unfenced; refusing it the
-// terminal phase would buy no safety and would leave the instance reading
-// Upgrading for good — the exact defect this function exists to close.
-//
-// Reporting, not correctness: an upgrade that worked must not be reported as
-// failed because a courtesy annotation did not land.
-func finishUpgradePhase(ctx context.Context, dyn dynamic.Interface, instance string, st *State, claim *Claim, runErr error) {
-	// Detached from the caller's cancellation, like finishClaim's and Release's own:
-	// Ctrl+C is when the terminal phase matters most, and it is also when the run's
-	// context is already dead — so a cleanup that inherited it would fail its first
-	// call and leave the declaration mid-verb.
+// 🔴 IT RETURNS WHAT THE COMMAND EXITS WITH, not just what the stamp did: the run's own
+// error when it has one, and otherwise that last case — a Ready that could not be
+// recorded over an unfinished instance. The merge lives here rather than in Upgrade's
+// deferred call because Upgrade builds its clients from a kubeconfig and no test drives
+// it; a merge that dropped this error there would let a successful upgrade exit 0 with
+// the record still standing over the instance it made live, and nothing would notice.
+func finishUpgradePhase(ctx context.Context, dyn dynamic.Interface, instance string, st *State, claim *Claim, runErr error) error {
+	// Detached from the caller's cancellation, like recordRunEnded's own: Ctrl+C is
+	// when giving the lock back matters most, and it is also when the run's context is
+	// already dead.
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
+	var err error
 	// A rehearsal recorded no Upgrading (recordUpgradedVersion returns early under
 	// --dry-run), so it has nothing to close out and must write nothing.
-	if !st.DryRun && (claim == nil || claim.CheckHeld(cleanup) == nil) {
-		phase := dcv1beta1.PhaseReady
-		if runErr != nil {
-			phase = dcv1beta1.PhaseFailed
-		}
-		// 🔴 AND NOT OVER A TEARDOWN. Destroying is the one phase value another command
-		// ACTS on — writeInstanceCR refuses a rebuild over it and hydrateUpgradeState
-		// refuses an upgrade over it — so stamping it out does not merely mislabel the
-		// instance, it removes the only cluster-side evidence that the cluster holds half
-		// of one, and hands the next bootstrap a green light onto it.
-		//
-		// 🔑 THE REFUSAL UPSTREAM SHOULD MEAN THIS NEVER FIRES, AND THAT IS EXACTLY WHY IT
-		// IS HERE. hydrateUpgradeState refuses a teardown before this defer is registered,
-		// but nothing in THIS function depends on that: it is an ordering two files apart
-		// that a reordering, or a future caller reaching finishUpgradePhase by another
-		// path, would break in silence. The guarantee is made local to the function that
-		// would do the damage.
-		//
-		// 🔑 A READ THAT FAILS NEEDS NO ARM OF ITS OWN, and giving it one would be a
-		// branch nothing could tell from the other. setInstancePhase reads the same
-		// declaration through the same client before it patches, so a read this could not
-		// make is a write that cannot happen either — and that already warns. What must
-		// not happen is the read failing and the phase being written anyway, which is not
-		// reachable from here.
-		current, readErr := readInstanceCR(cleanup, dyn, instance)
-		if readErr == nil && current != nil &&
-			current.Annotations[dcv1beta1.AnnotationPhase] == dcv1beta1.PhaseDestroying {
-			fmt.Println(color.YellowString(
-				"warning: instance %q is part-way through being DESTROYED, so this upgrade left the "+
-					"declaration saying so rather than recording itself as %s.\n"+
-					"  Finish the teardown with `dcctl destroy %s`, which is resumable, and build it "+
-					"again with `dcctl bootstrap` afterwards.", instance, phase, instance))
-		} else if err := setInstancePhase(cleanup, dyn, instance, phase); err != nil {
-			fmt.Println(color.YellowString("warning: could not record the instance phase (%v)", err))
-		}
+	if !st.DryRun {
+		err = recordRunEnded(cleanup, dyn, "upgrade", instance, st, claim, runErr)
 	}
 	if claim != nil {
 		claim.Release(cleanup)
 	}
+	if runErr != nil {
+		return runErr
+	}
+	return err
 }
 
 // deploymentRef names one Deployment in the rendered stream.

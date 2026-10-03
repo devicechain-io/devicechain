@@ -174,11 +174,23 @@ type State struct {
 	// what decides what the report may claim about it. See superuserSeedState.
 	SuperuserSeed superuserSeedState
 	// OverLiveInstance says stepRefuseRebuild found this instance already running —
-	// its configuration document exists — and let the run through on one of its
+	// its configuration document exists and its declaration does not record a first
+	// bootstrap that never finished — and let the run through on one of its
 	// carve-outs (a restore, or --allow-legacy-db-removal). Such a run is not building
 	// the instance's identities, so it must not generate the superuser's seed password
 	// either: see resolveCredentials.
 	OverLiveInstance bool
+	// UnfinishedBootstrap says the declaration this run read back records that the
+	// instance's first bootstrap has not ended successfully (bootstrapUnfinished).
+	// Settled by the declare step for a bootstrap and by hydrateUpgradeState for an
+	// upgrade, from the declaration itself.
+	//
+	// 🔴 IT IS WHAT MAKES THE TERMINAL STAMP CORRECTNESS-BEARING. A run that ends well
+	// over such an instance has made it live, and only its Ready write removes the
+	// record; if that write cannot happen, the record stands over a running instance
+	// and a later bootstrap is let through over it — so recordRunEnded reports that as
+	// a failure rather than the courtesy warning every other phase write gets.
+	UnfinishedBootstrap bool
 	// Evolving says this State describes an instance that already exists and is
 	// being moved, rather than one being built.
 	//

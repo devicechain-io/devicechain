@@ -89,8 +89,9 @@ const (
 	superuserSeedMinted
 	// superuserSeedRecovered: a Secret this instance already had was read back. On an
 	// instance that is not yet running, that is an earlier run of this same bootstrap
-	// which died before its report — a re-run is refused once the configuration
-	// document exists, and the report runs after it — so the value was never shown.
+	// which died before its report — a re-run is refused once a bootstrap of the
+	// instance has ended successfully, and the report runs after that — so the value
+	// was never shown.
 	// Over a LIVE instance (a carve-out re-run) it may have been shown and changed
 	// since, and is not shown again.
 	superuserSeedRecovered

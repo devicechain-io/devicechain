@@ -225,22 +225,31 @@ func TestUpgradeCannotEndWithoutRecordingHowItEnded(t *testing.T) {
 
 // 🔴 THE PHASE BECAME A PARAMETER, SO SOMETHING HAS TO WATCH WHAT EACH CALLER
 // PASSES. The value used to be a constant inside writeInstanceCR, where it could
-// not be got wrong; now it is an argument, and the bootstrap entry point
-// WriteInstanceCR builds its own client from a kubeconfig — so no unit test
-// reaches the one call that must still say Bootstrapping. Handing an upgrade's
-// word to bootstrap would be invisible everywhere else: the write succeeds, the
-// spec is right, and only the phase is wrong.
+// not be got wrong; now it is an argument. The bootstrap's call is reached by
+// TestTheBootstrapsDeclarationWriteMarksExactlyWhenItIsBuilding through
+// writeBootstrapDecl, but upgrade's recordUpgradedVersion and the shared terminal
+// stamp are each tested for their own outcome, not for which verb's word they
+// reach for. Handing one verb's word to another would be invisible everywhere
+// else: the write succeeds, the spec is right, and only the phase is wrong.
 func TestEachVerbNamesItsOwnPhase(t *testing.T) {
 	for fn, want := range map[string][]string{
-		"WriteInstanceCR":       {"PhaseBootstrapping"},
+		// The bootstrap's word lives in the client-taking half, where the building→mark
+		// decision is tested; its kubeconfig wrapper names none, so a phase chosen there
+		// would be a second, untested choice beside it.
+		"writeBootstrapDecl":    {"PhaseBootstrapping"},
+		"WriteInstanceCR":       {},
 		"recordUpgradedVersion": {"PhaseUpgrading"},
 		// 🔴 PhaseDestroying IS IN THIS LIST AS A READ, NOT AS A WORD THIS VERB CLAIMS.
-		// finishUpgradePhase compares the declaration's current phase against it and
-		// DECLINES to stamp when they match, because Destroying is the one value another
-		// command acts on. This check counts MENTIONS, so it cannot tell a comparison from
-		// a write — TestFinishUpgradePhaseNeverWritesADestroyingPhase is what keeps the
-		// distinction, and without it this entry is a hole an actual mis-stamp fits through.
-		"finishUpgradePhase": {"PhaseDestroying", "PhaseFailed", "PhaseReady"},
+		// recordRunEnded — the terminal stamp upgrade and bootstrap share — compares the
+		// declaration's current phase against it and DECLINES to stamp when they match,
+		// because Destroying is the one value another command acts on. This check counts
+		// MENTIONS, so it cannot tell a comparison from a write —
+		// TestTheTerminalStampNeverWritesADestroyingPhase is what keeps the distinction,
+		// and without it this entry is a hole an actual mis-stamp fits through.
+		"recordRunEnded": {"PhaseDestroying", "PhaseFailed", "PhaseReady"},
+		// The upgrade's own wrapper names none: a phase chosen there would be a second
+		// terminal stamp beside the shared one.
+		"finishUpgradePhase": {},
 	} {
 		got := phaseConstantsNamedBy(t, fn)
 		if !slices.Equal(got, want) {

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/config"
+
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
 // An instance that is up: the configuration document exists and parses, which is the
@@ -30,7 +32,7 @@ func aBootstrapOf(instance string) *State {
 // safe, and for as long as there was nowhere else for the job to go, the pipeline
 // went to some lengths to reuse instead. `dcctl upgrade` is that place now.
 func TestABootstrapOverALiveInstanceIsRefused(t *testing.T) {
-	err := rebuildRefusalReason(aBootstrapOf(testInstance), aLiveInstance())
+	err := rebuildRefusalReason(aBootstrapOf(testInstance), aLiveInstance(), nil)
 	if err == nil {
 		t.Fatal("a bootstrap aimed at a running instance was allowed to proceed and mint over it")
 	}
@@ -49,7 +51,7 @@ func TestABootstrapOverALiveInstanceIsRefused(t *testing.T) {
 // owner passwords exist only in their Secrets. Re-running is the only thing that
 // repairs it.
 func TestAHalfBuiltInstanceCanStillBeRepairedByRunningAgain(t *testing.T) {
-	if err := rebuildRefusalReason(aBootstrapOf(testInstance), nil); err != nil {
+	if err := rebuildRefusalReason(aBootstrapOf(testInstance), nil, nil); err != nil {
 		t.Fatalf("a bootstrap that died before writing its configuration document could not be "+
 			"run again, which makes a half-built instance permanently unrepairable: %v", err)
 	}
@@ -75,7 +77,7 @@ func TestARestoreOverALiveInstanceIsStillAllowed(t *testing.T) {
 		}()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := rebuildRefusalReason(tc.st, aLiveInstance()); err != nil {
+			if err := rebuildRefusalReason(tc.st, aLiveInstance(), nil); err != nil {
 				t.Errorf("a recovery could not be re-run against the instance it recovered, "+
 					"which takes the retry away exactly when it matters: %v", err)
 			}
@@ -91,7 +93,7 @@ func TestTheLegacyDatabaseRemovalRerunIsStillAllowed(t *testing.T) {
 	st := aBootstrapOf(testInstance)
 	st.AllowLegacyDbRemoval = true
 
-	if err := rebuildRefusalReason(st, aLiveInstance()); err != nil {
+	if err := rebuildRefusalReason(st, aLiveInstance(), nil); err != nil {
 		t.Errorf("the documented legacy-removal re-run was refused: %v", err)
 	}
 }
@@ -133,9 +135,15 @@ func TestADryRunIsNotRefusedButSaysTheRealOneWouldBe(t *testing.T) {
 	lookupDeployedInstance = func(context.Context, string, string) (*config.InstanceConfiguration, error) {
 		return aLiveInstance(), nil
 	}
+	stubDeclaration(t, aDeclaration(dcv1beta1.PhaseReady, ""))
 
-	if err := stepRefuseRebuild(context.Background(), st); err != nil {
-		t.Fatalf("a rehearsal that applies nothing was refused: %v", err)
+	out := captureStdout(t, func() {
+		if err := stepRefuseRebuild(context.Background(), st); err != nil {
+			t.Errorf("a rehearsal that applies nothing was refused: %v", err)
+		}
+	})
+	if !strings.Contains(out, "REFUSE") {
+		t.Errorf("the rehearsal does not say a real run would be refused:\n%s", out)
 	}
 }
 
@@ -171,7 +179,7 @@ func TestEveryWayOfNamingARestoreReachesTheCarveOut(t *testing.T) {
 		plan := reflect.ValueOf(&st.Restore).Elem()
 		plan.FieldByName(name).SetString("an-archive")
 
-		if err := rebuildRefusalReason(st, aLiveInstance()); err != nil {
+		if err := rebuildRefusalReason(st, aLiveInstance(), nil); err != nil {
 			t.Errorf("a restore declared through RestorePlan.%s was refused as a rebuild: %v",
 				name, err)
 		}

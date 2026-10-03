@@ -461,9 +461,15 @@ Un cambio de versión no puede convertirse en un cambio de credenciales.
 
 ### Terminar un bootstrap que falló a mitad de camino {#resuming-a-bootstrap}
 
-La negativa se basa en el **documento de configuración** de la instancia, que se escribe cerca del
-final de la ejecución. Todo lo que se quede antes de eso es una instancia a medio construir y no
-una instancia viva, y volver a ejecutar el bootstrap es la manera admitida de terminarla.
+La negativa se basa en dos cosas: el **documento de configuración** de la instancia, que se
+escribe cerca del final de la ejecución, y una anotación en la declaración de la instancia que
+indica que su primer arranque inicial no ha terminado, y que solo retira una ejecución que acaba
+con éxito. Una instancia sin documento, o con esa anotación, está a medio construir y no viva, y
+volver a ejecutar el mismo bootstrap es la manera admitida de terminarla. Reutiliza la clave
+raíz, las credenciales del broker y las contraseñas de las bases de datos que dejó en el clúster
+la ejecución anterior, y el informe muestra la contraseña generada del superusuario, a la que la
+ejecución fallida nunca llegó. Las instancias cuyo primer arranque inicial empezó con una versión
+anterior no llevan esa anotación. Consulta [Qué hace bootstrap](./bootstrap.md#what-it-does).
 
 El broker es la razón por la que esa ventana tiene que quedar abierta. Se configura varios pasos
 antes que la instancia en sí. Un bootstrap que falle en ese intervalo deja un broker en

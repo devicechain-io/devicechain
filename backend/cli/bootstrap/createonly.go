@@ -7,7 +7,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/fatih/color"
+
 	"github.com/devicechain-io/dc-microservice/config"
+
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 )
 
 // stepRefuseRebuild stops a bootstrap aimed at an instance that already exists.
@@ -29,19 +33,37 @@ import (
 //     before the configuration document is written. A run killed anywhere between
 //     leaves a namespace with no document, and a refusal keyed on the namespace makes
 //     that instance permanently unrepairable.
-//   - NOT the Instance declaration. It lands at step 5, before a single credential has
-//     been minted — so every failure in steps 6 through 8 would become unrepairable.
+//   - NOT the Instance declaration's existence. It lands at step 5, before a single
+//     credential has been minted — so every failure in steps 6 through 8 would become
+//     unrepairable. (What it RECORDS is part of the answer: see below.)
 //   - NOT "any of our namespaces". The operator's namespace is created by the claim
 //     step (and by `dcctl install` before that), before anything
 //     instance-shaped exists, and dc-system is the cluster's — `dcctl install` created
 //     it before this bootstrap was allowed to start.
 //
-// The configuration document is the boundary: it is written at step 8 and it is the
-// first DURABLE copy of the broker credentials and the root key. Before it exists,
-// those values live only in this machine's bootstrap record, and a re-run is how a
-// half-built instance is repaired. After it exists, a re-run is how a working one is
-// destroyed. That is the same line the whole reuse machinery was already drawn
-// around, and DeployedInstanceConfig already fails closed on "could not tell".
+// The configuration document is where the boundary starts: it is written at step 8
+// and it is the first DURABLE copy of the broker credentials and the root key. Before
+// it exists, those values live only in this machine's bootstrap record, and a re-run
+// is how a half-built instance is repaired. That is the same line the whole reuse
+// machinery was already drawn around, and DeployedInstanceConfig already fails closed
+// on "could not tell".
+//
+// 🔴 BUT THE DOCUMENT ALONE DOES NOT MAKE AN INSTANCE LIVE. dcctl writes it at the
+// START of the Helm step, before Helm runs (helmInstall), so a chart the API server
+// rejects, a rollout that never becomes ready, or a Ctrl+C anywhere after that leaves
+// the document over an instance that never served — and keyed on the document alone,
+// this step refused every re-run of it and left destroy as the only way out. So the
+// declaration also records whether the instance's first bootstrap has ever ended
+// successfully (AnnotationBootstrapUnfinished, see bootstrapUnfinished), and a run is
+// let through over the document while that record says it has not. The render step
+// reads back every credential the earlier run put in the cluster — the same reuse the
+// carve-outs below rely on — so finishing such an instance mints over nothing but the
+// broker's TLS authority, which every run issues afresh.
+//
+// 🔴 ABSENCE OF THE RECORD MEANS LIVE, and that is the fail-closed direction: every
+// instance built before the record existed carries none and stays exactly as
+// protected as it was, and a declaration that cannot be READ stops the run rather
+// than being taken for one that says "unfinished".
 //
 // 🔴 THE WINDOW BETWEEN STEPS 7 AND 8 IS THE ONE THIS MUST LEAVE OPEN. A live broker
 // configured with credentials whose only copy is a file on this machine, live database
@@ -54,12 +76,22 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 	// a rehearsal that hides the refusal is a rehearsal of a different run.
 	if st.DryRun {
 		deployed, err := lookupDeployedInstance(ctx, st.KubeContext, st.Instance)
-		if err == nil && deployed != nil && rebuildRefusalReason(st, deployed) != nil {
+		if err != nil || deployed == nil {
+			return nil
+		}
+		// Best-effort, like the document read above: an unreadable declaration reads
+		// as nil, which predicts the refusal — a real run would stop on it, and the
+		// rehearsal still says it would not go ahead.
+		decl, _ := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
+		finishing := bootstrapUnfinished(decl)
+		if rebuildRefusalReason(st, deployed, decl) != nil {
 			wouldDo(fmt.Sprintf(
 				"REFUSE: instance %q is already running here, so a real run would stop at this "+
 					"step and point at `dcctl upgrade`", st.Instance))
+		} else if finishing {
+			wouldDo(fmt.Sprintf("finish instance %q, whose first bootstrap did not complete", st.Instance))
 		}
-		st.OverLiveInstance = err == nil && deployed != nil
+		st.OverLiveInstance = !finishing
 		return nil
 	}
 
@@ -68,15 +100,46 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 	if err != nil {
 		return fail("checking for an existing instance", err)
 	}
-	if err := rebuildRefusalReason(st, deployed); err != nil {
+	var decl *dcv1beta1.Instance
+	if deployed != nil {
+		// 🔴 ASKED ONLY WHEN THE DOCUMENT IS THERE, AND AN ERROR STOPS THE RUN. "Could
+		// not tell whether its first bootstrap finished" must not resolve to "it did
+		// not", which is the direction that lets a run through over a live instance.
+		if decl, err = readInstanceDeclaration(ctx, st.KubeContext, st.Instance); err != nil {
+			return fail("checking whether this instance's first bootstrap finished", err)
+		}
+	}
+	if err := rebuildRefusalReason(st, deployed, decl); err != nil {
 		return err
 	}
-	// Past the refusal with a document in hand means a carve-out let this run through
-	// over a live instance, whose superuser was seeded long ago. Recorded so the
-	// credential step does not generate a seed password for it (resolveCredentials).
-	st.OverLiveInstance = deployed != nil
+	finishing := deployed != nil && bootstrapUnfinished(decl)
+	// Past the refusal with a document in hand and no unfinished record means a
+	// carve-out let this run through over a live instance, whose superuser was seeded
+	// long ago. Recorded so the credential step does not generate a seed password for
+	// it (resolveCredentials), and so the declare step does not mark it unfinished.
+	st.OverLiveInstance = deployed != nil && !finishing
 	done()
+	if finishing {
+		fmt.Println(color.YellowString("  instance %q exists but its first bootstrap did not finish; "+
+			"this run finishes it, reusing what the earlier run put in the cluster", st.Instance))
+	}
 	return nil
+}
+
+// bootstrapUnfinished reports whether a declaration records that its instance's first
+// bootstrap never ended successfully.
+//
+// 🔴 EXACTLY THE ONE VALUE, AND NEVER BESIDE READY. Anything else — no declaration, no
+// record, another value — reads as finished, the direction that keeps a live instance
+// protected. The phase conjunct is for the one writer this release cannot reach: a dcctl
+// from before the record stamps Ready without removing it, and an instance that reached
+// Ready is live whoever wrote it. This release never leaves the two together — its Ready
+// write removes the record in the same patch (setInstancePhase) — so the conjunct costs
+// nothing here.
+func bootstrapUnfinished(decl *dcv1beta1.Instance) bool {
+	return decl != nil &&
+		decl.Annotations[dcv1beta1.AnnotationBootstrapUnfinished] == dcv1beta1.BootstrapUnfinished &&
+		decl.Annotations[dcv1beta1.AnnotationPhase] != dcv1beta1.PhaseReady
 }
 
 // rebuildRefusalReason returns the refusal, or nil when this run may proceed.
@@ -84,8 +147,14 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 // Separated from the step so the policy can be exercised without a cluster — the
 // carve-outs below are each a documented path, and a guard whose exceptions were
 // never constructed is a guard that removes them on its next edit.
-func rebuildRefusalReason(st *State, deployed *config.InstanceConfiguration) error {
+func rebuildRefusalReason(st *State, deployed *config.InstanceConfiguration, decl *dcv1beta1.Instance) error {
 	if deployed == nil {
+		return nil
+	}
+
+	// 🔴 A FIRST BOOTSTRAP THAT NEVER FINISHED IS NOT A LIVE INSTANCE, whatever the
+	// document says: see stepRefuseRebuild for why the document can exist over one.
+	if bootstrapUnfinished(decl) {
 		return nil
 	}
 

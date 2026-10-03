@@ -5100,6 +5100,35 @@ publicación no lo habría evitado.
 
 No hay nada que hacer al actualizar. Ningún stream se reconfigura y no se añade ningún ajuste.
 
+#### Volver a ejecutar `dcctl bootstrap` termina una instancia cuyo primer arranque inicial falló al final {#next-bootstrap-resume}
+
+Un arranque inicial que fallaba después de escribir el documento de configuración de la
+instancia (mientras instalaba el chart, o mientras esperaba a que los servicios estuvieran
+listos) dejaba una instancia sobre la que `dcctl bootstrap` se negaba a volver a ejecutarse,
+como si ya estuviera en marcha.
+
+Ahora, cuando `dcctl bootstrap` declara una instancia que está construyendo, deja anotado en la
+declaración que el primer arranque inicial no ha terminado (la anotación
+`core.devicechain.io/bootstrap-unfinished`). Un arranque inicial o una actualización que termina
+con éxito la retira, en la misma escritura que registra la instancia como `Ready`. Hasta
+entonces, volver a ejecutar el mismo `dcctl bootstrap` termina la instancia. Reutiliza la clave
+raíz, las credenciales del broker y las contraseñas de las bases de datos que dejó en el clúster
+la ejecución anterior, y muestra la contraseña generada del superusuario, a la que la ejecución
+fallida nunca llegó. Una vez retirada la anotación, una nueva ejecución se rechaza como antes.
+
+- Si una ejecución termina con éxito pero no puede retirar la anotación (la escritura se rechaza,
+  o el bloqueo del clúster se reclamó antes), sale con un error que indica que vuelvas a ejecutar
+  el mismo comando, en lugar de informar de un éxito sobre una instancia sobre la que un arranque
+  inicial posterior se ejecutaría.
+- No hay nada que hacer al actualizar. Una instancia cuyo primer arranque inicial empezó con una
+  versión anterior no tiene esa anotación, así que se trata como en marcha, igual que antes; la
+  negativa nombra `dcctl upgrade` y `dcctl destroy`. Consulta
+  [Terminar un bootstrap que falló a mitad de camino](./disaster-recovery.md#resuming-a-bootstrap).
+- Actualiza todas las copias de `dcctl` que uses antes de ejecutarlas sobre una instancia
+  construida con esta versión. Un `dcctl` anterior no retira la anotación, así que una
+  actualización posterior con él que falle puede dejarla en vigor sobre una instancia en marcha,
+  y un `dcctl bootstrap` sin más se ejecutaría entonces sobre esa instancia.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

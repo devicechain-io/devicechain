@@ -241,10 +241,19 @@ infraestructura o el chart. Nombra el comando que sí mueve una instancia viva:
 [Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
 
 Una ejecución que *falló* a mitad de camino es un caso distinto, y volver a ejecutarla sigue
-siendo la forma de repararla. El paso 3 solo rechaza una instancia **viva**, que reconoce por
-el documento de configuración que se escribe en el paso 8. Todo lo que se quede antes de eso
-es una instancia a medio construir, y volver a ejecutar el arranque inicial es la manera
-admitida de terminarla.
+siendo la forma de repararla. El paso 3 solo rechaza una instancia **viva**: una cuyo
+documento de configuración (escrito en el paso 8) existe **y** cuyo primer arranque inicial
+ha terminado. Cuando el paso 5 declara la instancia, deja anotado en la declaración que su
+primer arranque inicial no ha terminado, y solo una ejecución que acaba con éxito retira esa
+anotación. Hasta entonces, un fallo en cualquier paso, incluso dentro de la instalación de
+Helm o mientras se espera a que todo esté listo, deja una instancia a medio construir. Vuelve
+a ejecutar el mismo `dcctl bootstrap`, desde la misma máquina, para terminarla.
+
+Una instancia cuyo primer arranque inicial empezó con una versión anterior de `dcctl` no
+lleva esa anotación. Si ese arranque falló después de empezar el paso 8, el paso 3 no puede
+distinguirla de una instancia en marcha y la rechaza. La negativa nombra las dos salidas:
+`dcctl upgrade`, que ejecuta sobre la instancia la misma instalación de Helm y la misma espera
+a que todo esté listo, o `dcctl destroy` seguido de un arranque inicial nuevo.
 
 :::warning Excepción única: instancias creadas antes de que la base de datos pasara a CloudNativePG
 La base de datos relacional pasó de ser un StatefulSet a un clúster de CloudNativePG, y no
@@ -355,6 +364,10 @@ que un fallo nombra un paso que puedes encontrar aquí:
    la instancia, porque todos los pasos que vienen debajo escriben en un clúster que puede
    estar ejecutando ya la instancia sobre la que escribirían. Una ejecución en seco dice qué
    rechazaría una ejecución real, en lugar de ocultarlo.
+   Reconoce una instancia viva por su documento de configuración, salvo que la declaración de
+   la instancia indique que su primer arranque inicial nunca terminó. En ese caso deja pasar
+   la ejecución para terminar la instancia. Si no puede leer la declaración, se detiene en
+   lugar de suponer.
 4. **Check what other instances hold** (comprobar lo que tienen otras instancias) — pregunta
    al clúster qué host de ingress y qué puerto MQTT local tienen ya otras instancias, y se
    detiene si el host de esta instancia es uno de ellos. También mira el namespace en el que
@@ -371,6 +384,10 @@ que un fallo nombra un paso que puedes encontrar aquí:
    que lo produjeron. El registro de lo que es esta instancia está en el clúster, no en tu
    portátil. Consulta
    [la declaración de la instancia](./kubernetes-operator.md#instance-declaration).
+   Cuando la ejecución está construyendo la instancia (el paso 3 no encontró documento de
+   configuración, o encontró que el primer arranque inicial nunca terminó), la declaración
+   lleva además la anotación `core.devicechain.io/bootstrap-unfinished: "true"`. Una ejecución
+   que acaba con éxito la retira, en la misma escritura que registra la instancia como `Ready`.
 6. **Render configuration** (renderizar la configuración) — resuelve el id de la instancia, el
    namespace, el perfil y todas las credenciales generadas: el material de autenticación del
    broker (la contraseña de servicio compartida y la clave del emisor del callout), la
@@ -378,7 +395,9 @@ que un fallo nombra un paso que puedes encontrar aquí:
    autenticación entre servicios y la **clave raíz del almacén de secretos**. Todas se acuñan
    aquí, porque el paso 3 ha establecido que no hay ninguna instancia viva de la que tomarlas.
    Terminar una instancia a medio construir es la excepción: ahí el paso vuelve a leer lo que
-   una ejecución anterior ya dejó en el clúster en lugar de generar un segundo juego.
+   una ejecución anterior ya dejó en el clúster en lugar de generar un segundo juego, también
+   cuando esa ejecución llegó a escribir el documento de configuración. La autoridad
+   certificadora del broker es lo único que cada ejecución emite de nuevo.
    El paso también registra las credenciales del broker en la máquina desde la que lo
    ejecutas, antes de configurar el broker con ellas. El broker se configura antes que la
    instancia, y sus credenciales ya no se pueden recuperar del clúster una vez están en él, así
@@ -396,8 +415,9 @@ que un fallo nombra un paso que puedes encontrar aquí:
 8. **Install instance (Helm)** (instalar la instancia) — escribe el **documento de
    configuración** de la instancia, del que cada servicio lee sus credenciales y sus
    endpoints. Después despliega el chart de Helm vía el SDK de Helm para Go, bloqueando hasta
-   que las cargas de trabajo estén listas. Ese documento es lo que hace que la instancia esté
-   viva, y lo que el paso 3 busca en cualquier ejecución posterior.
+   que las cargas de trabajo estén listas. El paso 3 busca ese documento en cualquier
+   ejecución posterior. La instancia cuenta como viva cuando, además, una ejecución ha
+   terminado con éxito.
 9. **Wait for readiness** (esperar a que todo esté listo) — sondea el Deployment de cada área
    habilitada hasta que haya terminado de desplegarse sobre la configuración que ha producido
    esta ejecución. Es una puerta de confirmación explícita, en lugar de confiar en la espera
@@ -407,8 +427,9 @@ que un fallo nombra un paso que puedes encontrar aquí:
    ella y a que no quede ninguna réplica antigua en ejecución. `dcctl upgrade` usa la misma
    puerta por la misma razón.
 10. **Report access info** (informar de los datos de acceso) — imprime el namespace, el correo
-    del superusuario y dónde se guarda su contraseña (y la propia contraseña, una sola vez, en
-    la ejecución que la generó), y cómo llegar a la instancia.
+    del superusuario y dónde se guarda su contraseña (y la propia contraseña, una sola vez: en
+    la ejecución que la generó, o en la que termina un arranque inicial que falló antes de
+    mostrarla), y cómo llegar a la instancia.
 
 :::tip `Ctrl+C` detiene una ejecución de forma limpia
 Una ejecución interrumpida detiene la herramienta de infraestructura con elegancia —termina lo
@@ -416,9 +437,12 @@ que está haciendo y escribe su estado— y devuelve el bloqueo del clúster, as
 volver a ejecutarla. Un segundo `Ctrl+C` sale de inmediato y renuncia a ambas cosas. Consulta
 [Interrumpir una ejecución](./cluster-lock.md#interrupt).
 
-Si la ejecución ya había llegado al paso 8, la instancia existe y el arranque inicial se negará
-la próxima vez que lo ejecutes. Eso no es un callejón sin salida: la instancia está construida,
-y `dcctl upgrade` es como la mueves a partir de ahí.
+Si la ejecución ya había llegado al paso 8, volver a ejecutarla también la termina: el paso 3
+deja pasar una nueva ejecución hasta que un arranque inicial de la instancia haya terminado con
+éxito. Un **segundo** `Ctrl+C` durante el paso 8 puede dejar la release de Helm de la instancia
+marcada como todavía en curso. Entonces la nueva ejecución se detiene en el paso 8 con
+`another operation (install/upgrade/rollback) is in progress`, y dcctl no lo resuelve por ti.
+Para recuperarte, usa `dcctl destroy` y vuelve a hacer el arranque inicial.
 :::
 
 Dado que los artefactos incrustados son los *mismos* que distribuye la plataforma, una
@@ -1429,7 +1453,8 @@ El comando imprime el namespace, la credencial de **superusuario** y cómo llega
 instancia a través del ingress del clúster. El superusuario es `superuser@devicechain.local`,
 y no hay contraseña por defecto. El arranque genera una para la instancia, la guarda en el
 Secret `dci-<instance>-superuser` del namespace de la instancia y la imprime una sola vez, al
-final de la ejecución que la generó. Para volver a leerla:
+final de la ejecución que la generó (o de la que termina un arranque inicial que falló antes de
+imprimirla). Para volver a leerla:
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d

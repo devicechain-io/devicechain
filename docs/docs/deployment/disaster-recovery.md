@@ -434,9 +434,14 @@ A version change cannot become a credential change.
 
 ### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}
 
-The refusal is keyed on the instance's **configuration document**, which is written near the end of
-the run. Anything short of that is a half-built instance rather than a live one, and running the
-bootstrap again is the supported way to finish it.
+The refusal is keyed on two things: the instance's **configuration document**, which is written
+near the end of the run, and a record on the instance's declaration that its first bootstrap has
+not finished, which only a run that ends successfully removes. An instance with no document, or
+with the record, is half-built rather than live, and running the same bootstrap again is the
+supported way to finish it. It reuses the root key, the broker credentials and the database
+passwords the earlier run left in the cluster, and the report shows the superuser's generated
+password, which the failed run never reached. Instances whose first bootstrap was started by an
+earlier release carry no record. See [What bootstrap does](./bootstrap.md#what-it-does).
 
 The broker is why that window has to stay open. It is configured several steps before the instance
 itself is. A bootstrap that fails in between leaves a running broker that no later run could

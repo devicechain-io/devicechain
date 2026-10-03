@@ -200,8 +200,18 @@ Antes de actuar sobre `Bootstrapping` o `Upgrading`, comprueba si la ejecución 
 Una ejecución viva reescribe la fase a `Ready` o `Failed` al terminar, incluso cuando se
 interrumpe con Ctrl+C. Solo una ejecución que nunca llegó a escribir su final deja uno de estos
 valores atrás: una máquina que perdió la corriente, una terminal que fue matada. Ninguno de los
-dos bloquea nada: `dcctl bootstrap` y `dcctl upgrade` se ejecutan sobre ellos sin objeción. La
-única fase sobre la que actúan los comandos es `Destroying` (consulta [más abajo](#finalizer)).
+dos bloquea nada: `dcctl bootstrap` y `dcctl upgrade` se ejecutan sobre ellos sin objeción. El
+único valor de fase sobre el que actúan los comandos es `Destroying` (consulta
+[más abajo](#finalizer)).
+
+Además de la fase, hay otra anotación sobre la que actúan.
+`core.devicechain.io/bootstrap-unfinished: "true"` marca una instancia cuyo primer arranque
+inicial todavía no ha terminado con éxito. Mientras está ahí, y la fase no es `Ready`,
+`dcctl bootstrap` se ejecuta sobre la instancia para terminarla aunque su documento de
+configuración exista. El arranque inicial o la actualización
+que termina con éxito la retira en la misma escritura que registra `Ready`. No la añadas a mano:
+en una instancia en marcha cuya fase no sea `Ready`, deja pasar una nueva ejecución del arranque
+inicial sobre ella.
 
 Una fila que dice `declared, unknown phase "…"` la escribió un `dcctl` más nuevo que el que la
 está listando.
