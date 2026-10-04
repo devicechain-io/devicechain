@@ -16,6 +16,7 @@ import (
 	assets "github.com/devicechain-io/dc-deploy"
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -168,13 +169,21 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		// deliberate: the real run prints it earlier, before the apply, because an
 		// operator mid-incident has to be told which way it will go while they can
 		// still stop. It is a warning, not a step.)
+		//
+		// The re-install refusals come first, as they do in the real run (identify,
+		// refuse, then build): a plan printed above a refusal is a plan the run
+		// will not carry out.
+		rehearsed, err := rehearseInstallRefusals(ctx, st, settings, localClusterStateExists)
+		if err != nil {
+			return err
+		}
 		if err := buildOperatorImageForInstall(ctx, st); err != nil {
 			return err
 		}
-		if class := backupSnapshotClass(st); class != "" {
+		if class := backupSnapshotClass(st); class != "" && !rehearsed {
 			wouldDo("refuse, before any write, a VolumeSnapshotClass " + class + " that does not exist, " +
 				"does not use deletionPolicy Delete, or belongs to another driver than the database volumes' " +
-				"-- NOT rehearsed, because the cluster may not exist yet")
+				"-- NOT rehearsed, because the cluster could not be identified")
 		}
 		if p := databasePlacement(st); !p.IsZero() {
 			wouldDo("place the relational store, and every instance's event store, on " + p.describe())
@@ -200,11 +209,9 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return nil
 	}
 
-	uid, err := IdentifyCluster(ctx, binding.KubeContext)
+	uid, err := identifyCluster(ctx, binding.KubeContext)
 	if err != nil {
-		return fmt.Errorf("reading the identity of cluster %s: %w\n"+
-			"  dcctl files this cluster's prerequisite state under that identity, so it cannot "+
-			"install them without it", binding.Describe(), err)
+		return identityReadError(binding.Describe(), err)
 	}
 	st.ClusterUID, st.Binding.ClusterUID = uid, uid
 	if err := WriteClusterRecord(ClusterRecord{
@@ -446,6 +453,67 @@ var installClients = func(kubeContext string) (dynamic.Interface, kubernetes.Int
 		return nil, nil, err
 	}
 	return dyn, typed, nil
+}
+
+// identityReadError is the one message for an identity read that fails, on the real run
+// and on its rehearsal alike.
+func identityReadError(described string, err error) error {
+	return fmt.Errorf("reading the identity of cluster %s: %w\n"+
+		"  dcctl files this cluster's prerequisite state under that identity, so it cannot "+
+		"install them without it", described, err)
+}
+
+// identifyCluster is the seam Install and its rehearsal read the cluster's identity
+// through. One variable for both, so the dry run identifies the cluster exactly as the
+// run does; indirected so a test can reach the refusals behind it without a cluster.
+var identifyCluster = IdentifyCluster
+
+// rehearseInstallRefusals makes, for a dry run, the re-install refusals Install makes
+// on what the cluster already holds: the same identity read and the same
+// connectAndRefuse, so a rehearsal fails with the real run's own message. Those are
+// an install from a machine that holds no state for the cluster, changed settings
+// under running instances, and an unusable VolumeSnapshotClass.
+//
+// NOT rehearsed, and still refused by the real run: the relational-store owner check
+// (checkRelationalStoreOwner) and the refusal of a record written by a newer dcctl
+// (markInstallApplying).
+//
+// Failing to REACH the cluster is softened, as every dry-run read is: a dry run is
+// often aimed at a cluster that does not exist yet. It is SAID, and the caller keeps
+// the "NOT rehearsed" plan lines. What the cluster ANSWERS is fatal, as on the real
+// run: an API status error (Forbidden, Unauthorized...), a cancelled context (Ctrl+C), and
+// every refusal connectAndRefuse makes.
+//
+// 🔴 A FUNCTION OF ITS OWN, NOT A SECOND connectAndRefuse CALL INSIDE Install.
+// TestInstallAppliesThePrerequisitesInOrder pins Install's call order by the FIRST
+// occurrence of each name; a dry-run call above the real one would become that first
+// occurrence and blind the guard to the real call moving.
+//
+// Nothing is written: no ClusterRecord, no claim. The refusal is returned unwrapped,
+// byte-identical to the real run's.
+func rehearseInstallRefusals(ctx context.Context, st *State, settings InstallSettings,
+	stateExists func(uid string) (bool, error)) (rehearsed bool, err error) {
+	uid, err := identifyCluster(ctx, st.KubeContext)
+	if err != nil {
+		var status apierrors.APIStatus
+		if errors.Is(ctx.Err(), context.Canceled) || errors.As(err, &status) {
+			return false, identityReadError(st.Binding.Describe(), err)
+		}
+		notRehearsed := "an install from another machine, changed settings under running instances"
+		if backupSnapshotClass(st) != "" {
+			notRehearsed += ", an unusable VolumeSnapshotClass"
+		}
+		fmt.Println(color.YellowString(
+			"  could not identify cluster %s (%v); the refusals a re-install makes — %s — were NOT "+
+				"rehearsed; the real run identifies the cluster first and stops if it cannot",
+			st.Binding.Describe(), err, notRehearsed))
+		return false, nil
+	}
+	st.ClusterUID, st.Binding.ClusterUID = uid, uid
+	if _, _, err := connectAndRefuse(ctx, st, settings, stateExists); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // connectAndRefuse connects to the cluster and runs every refusal Install makes on

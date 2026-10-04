@@ -5139,6 +5139,18 @@ evento que pueda enviar un dispositivo llega hoy hasta ahí; es una ruta de defe
 la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta causa, indicada en
 [la tabla de alertas](./detection-engine.md#what-to-watch).
 
+#### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación
+
+En un clúster que responde, una ejecución en seco ahora lee el registro de instalación, pregunta
+qué instancias se ejecutan en el clúster cuando cambian los ajustes, y falla con el mismo mensaje que la instalación cuando
+esta se rechazaría por lo que el clúster ya contiene: una reinstalación desde una máquina sin
+estado del clúster, ajustes cambiados mientras hay instancias en ejecución, o un
+`--backup-snapshot-class` que no puede funcionar. Antes imprimía un plan y salía con 0. Una
+ejecución en seco contra un clúster que aún no existe, o al que no llega, sigue imprimiendo su plan
+e indica que esas comprobaciones no se hicieron. Una ejecución en seco no comprueba todo lo que la
+instalación rechaza; por ejemplo, un clúster cuyo almacén relacional fue creado por una versión
+anterior se sigue rechazando solo cuando la instalación se ejecuta.
+
 No hay nada que hacer.
 
 ### La transición única a la ingesta duradera
