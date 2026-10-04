@@ -64,6 +64,19 @@ PALETTE = {
     "lamp":       ("M_Light_White",      (1.00, 0.92, 0.75),     0.20, 0.0, 2.0),
     "tail":       ("M_Light_Red",        (0.80, 0.02, 0.01),     0.30, 0.0, 2.0),
     "track":      ("M_Track",            (0.05, 0.05, 0.05),     0.85, 0.1, None),   # + tread texture
+    # site props and vegetation (ArtSource/props)
+    "bark":       ("M_Bark",             (0.060, 0.040, 0.028),  0.90, 0.0, None),
+    "pine":       ("M_Foliage_Pine",     (0.018, 0.048, 0.022),  0.85, 0.0, None),
+    "leaf":       ("M_Foliage_Broadleaf", (0.045, 0.090, 0.022), 0.80, 0.0, None),
+    "shrub":      ("M_Foliage_Shrub",    (0.060, 0.080, 0.028),  0.85, 0.0, None),
+    "rock":       ("M_Rock",             (0.185, 0.175, 0.160),  0.88, 0.0, None),
+    "cabin":      ("M_Cabin_White",      (0.60, 0.61, 0.60),     0.60, 0.0, None),
+    "box_blue":   ("M_Container_Blue",   (0.022, 0.070, 0.180),  0.60, 0.2, None),
+    "box_red":    ("M_Container_Red",    (0.200, 0.035, 0.018),  0.65, 0.2, None),
+    "concrete":   ("M_Concrete",         (0.40, 0.39, 0.36),     0.92, 0.0, None),
+    "cone":       ("M_Cone_Orange",      (0.90, 0.15, 0.01),     0.50, 0.0, None),
+    "reflect":    ("M_Reflective_White", (0.80, 0.80, 0.80),     0.35, 0.0, None),
+    "sign":       ("M_Sign_Green",       (0.010, 0.120, 0.050),  0.50, 0.0, None),
 }
 
 S = dict(coll=None, nodes={}, mats={}, out=None, name=None)

@@ -17,6 +17,10 @@ with the code change, so the models in `Assets/Sitepulse/Art/Models/` always mat
 | `machines/loader.py` | Articulated wheel loader |
 | `machines/hauler.py` | Rigid-frame haul truck |
 | `machines/kit_selftest.py` | Exercises the kit builders the dozer does not use |
+| `props/build_props.py` | Site props and vegetation (site office, workshop, containers, fuel tank, light tower, cones, barriers, sign, trees, shrubs, boulders) |
+| `terrain/quarry_heightmap.py` | The quarry terrain: heightmap, terrain-layer masks, roads, zones, vegetation and prop placement |
+| `terrain/quarry_fleet.py` | The 18-machine preview choreography played on the terrain |
+| `textures/prepare_textures.py` | Fetches the CC0 terrain materials and prepares them for Unity terrain layers |
 
 Each machine module documents its rig in its header: every pivot node, its axis, its range and
 sign, and the rules that couple parts (for example the dozer blade's counter-rotation or the
@@ -69,3 +73,45 @@ files with the same node tree, because glTF has no LOD groups; Unity pairs them 
 glTF carries no constraints, so the hydraulic cylinders and rods are aimed in Unity at runtime:
 `<P>Cylinder<S>` points its local +Y at `<P>RodMount<S>`, and `<P>Rod<S>` at
 `<P>CylinderMount<S>`.
+
+## Props and vegetation
+
+```
+blender --background --python props/build_props.py -- [name ...] --out out/props
+```
+
+Builds every prop (or the ones named) with the same kit, writing `<name>.glb`, `<name>_LOD1.glb`
+and `props_check.json`; copy the `.glb` files into `../Assets/Sitepulse/Art/Models/Props/`. In
+Unity, **Sitepulse > Quarry > Build Prop Prefabs** pairs the two levels of each prop into a
+prefab with a `LODGroup` under `Assets/Sitepulse/Art/Prefabs/`.
+
+## The quarry terrain
+
+These two scripts need only Python 3.8+ with numpy and Pillow (no Blender), and both are
+deterministic:
+
+```
+python3 terrain/quarry_heightmap.py [--seed N] [--raw out/terrain] [--preview out/terrain]
+python3 terrain/quarry_fleet.py [--preview out/terrain/fleet.png]
+```
+
+`quarry_heightmap.py` writes straight into `../Assets/Sitepulse/Art/Terrain/`: the packed 16-bit
+heightmap, one mask per terrain layer and `quarry_features.json` (terrain size and elevation
+mapping, zones, roads with per-segment grade, named spots, vegetation and prop placements).
+Its header documents the layout and every parameter; `--raw` also writes the plain RAW
+heightmap that Unity's terrain **Import Raw** reads. `quarry_fleet.py` then writes
+`../Assets/Sitepulse/Data/quarry_fleet.json` and fails if any two machines' footprints touch at
+any point in the loop. Re-run it whenever the terrain changes.
+
+Unity builds the terrain from these files when the scene opens (`QuarryTerrain`); there is no
+TerrainData asset to keep in step. After changing props or placements, run
+**Sitepulse > Quarry > Build Scene** to regenerate `Scenes/Quarry.unity`.
+
+## Terrain textures
+
+```
+python3 textures/prepare_textures.py
+```
+
+Downloads the four CC0 materials listed in `../THIRD_PARTY.md` and writes their albedo, normal
+and terrain mask maps into `../Assets/Sitepulse/Art/Textures/Terrain/`.
