@@ -178,9 +178,9 @@ su `cluster.json` haya confirmado a qué clúster pertenecía.
 
 En un clúster que conservas, como un clúster gestionado o cualquier clúster que no haya creado
 `dcctl install`, los requisitos previos permanecen después de eliminar la última instancia. Quitarlos
-a mano no está admitido: incluyen la base de datos relacional compartida y el almacén de objetos de
-copias de seguridad, y los respaldos de las instancias eliminadas están entre lo que permanece
-(consulta [Qué pasa con los respaldos de la instancia](#destroy-backups)). Conserva el directorio del
+a mano no está admitido: incluyen la base de datos relacional compartida y sus copias de seguridad, y el almacén de
+objetos de copias del propio clúster si lo usas, junto con las copias de instancias que una
+eliminación conservó o no pudo borrar (consulta [Qué pasa con los respaldos de la instancia](#destroy-backups)). Conserva el directorio del
 clúster en `~/.devicechain/clusters/<cluster-uid>/` mientras sigan ahí, porque todo `dcctl install`
 posterior en el clúster trabaja a partir de él (consulta
 [Dónde guarda install su estado](#install-state)).
@@ -1123,7 +1123,7 @@ desacordonar el mismo nodo, como en un parche del sistema operativo o un reinici
   datos queda en `Pending` hasta que el nodo se desacordona. Todas las bases de datos funcionan con
   dos de sus tres instancias mientras el nodo esté fuera. Es lo esperado, y no hay nada que
   corregir.
-- **Ninguna de las bases de datos puede perder otra instancia mientras tanto.** Si el almacén
+- **No dejes que ninguna base de datos pierda otra instancia mientras tanto.** Si el almacén
   relacional pierde su réplica en espera restante, todas las escrituras en él esperan (consulta
   [Bases de datos con `--ha`](#ha-databases)). Si el almacén de eventos de una instancia pierde su
   réplica en espera, sigue funcionando sin replicación, y su punto de recuperación queda entonces

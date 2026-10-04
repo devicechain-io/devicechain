@@ -169,8 +169,9 @@ which cluster it belonged to.
 
 On a cluster you keep, such as a managed cluster or any cluster that `dcctl install` did not
 create, the prerequisites stay after the last instance is destroyed. Removing them by hand is not
-supported: they include the shared relational database and the backup object store, and the
-backups of destroyed instances are among what stays (see
+supported: they include the shared relational database and its backups, and the in-cluster
+backup object store if you use it, along with any instance backups a destroy kept or could not
+remove (see
 [What happens to the instance's backups](#destroy-backups)). Keep the cluster's directory under
 `~/.devicechain/clusters/<cluster-uid>/` for as long as they are there, because every later
 `dcctl install` on the cluster works from it (see
@@ -1036,7 +1037,7 @@ the same node, as for an operating-system patch or a reboot:
   instance of the same database, so the evicted instance of every database stays `Pending` until
   the node is uncordoned. Every database runs on two of its three instances for as long as the node
   is out. That is expected, and there is nothing to fix.
-- **Neither database can lose another instance meanwhile.** If the relational store loses its
+- **Do not let any database lose another instance meanwhile.** If the relational store loses its
   remaining standby, every write to it waits (see [Databases under `--ha`](#ha-databases)). If
   an instance's event store loses its standby, it carries on without replication, and its recovery
   point is then bounded by replication lag. Keep the maintenance short, and take nothing else down

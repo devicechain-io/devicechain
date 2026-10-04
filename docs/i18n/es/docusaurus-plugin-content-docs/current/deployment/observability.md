@@ -776,7 +776,7 @@ Con tasas de eventos altas y sostenidas, `JetStreamReplicaPeersDegraded` puede p
 volver a despejarse sin que nada vaya mal. Una copia de uno de los flujos con más tráfico se queda
 un momento por detrás de su líder, cuenta como no actualizada hasta que lo alcanza, y después lo
 alcanza. En dos pruebas de 10 minutos a 6000 eventos por segundo con un bróker de tres servidores,
-el flujo con más tráfico tuvo una copia no actualizada en aproximadamente una de cada cuatro
+el flujo con más tráfico tuvo una copia no actualizada en aproximadamente una de cada cinco
 comprobaciones, y nunca durante más de unos segundos seguidos, y el aviso pasó a pendiente y se
 despejó repetidas veces. Solo se activa cuando un flujo lleva 20 minutos sin todas sus copias
 actualizadas en cada comprobación, así que un retraso de este tipo lo despeja en lugar de activarlo.

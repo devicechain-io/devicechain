@@ -739,7 +739,7 @@ At sustained high event rates, `JetStreamReplicaPeersDegraded` can go pending an
 without anything being wrong. A copy of one of the busiest streams falls a moment behind its
 leader, counts as not current until it catches up, and then does. In two 10-minute tests at 6,000
 events a second on a three-server broker, the busiest stream had a copy that was not current in
-about one check in four, and never for more than a few seconds at a time, and the alert went
+about one check in five, and never for more than a few seconds at a time, and the alert went
 pending and cleared again repeatedly. It fires only when a stream has been short of current copies
 at every check for 20 minutes, so lag of this kind clears it rather than firing it. To check
 replication, run `dcctl ha verify`: it keeps re-checking for up to 90 seconds (`--settle`) before
