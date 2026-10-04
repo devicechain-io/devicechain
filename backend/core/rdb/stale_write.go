@@ -101,7 +101,7 @@ const versionColumn = "updated_at"
 // clock, a frozen test clock), and a second replica's clock can be behind the first's; either
 // way the write would store the version it read, and a writer holding that version would
 // still be told the row had not moved. The microsecond is the precision PostgreSQL keeps:
-// a value less than a microsecond past readAt is stored AS readAt, so the floor is a whole
+// a value less than a microsecond past readAt may be stored as readAt (truncated), so the floor is a whole
 // microsecond strictly past it, which no truncation or rounding can bring back down.
 func nextVersion(db *gorm.DB, readAt time.Time) time.Time {
 	floor := readAt.Truncate(time.Microsecond).Add(time.Microsecond)

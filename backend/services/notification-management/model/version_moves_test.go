@@ -58,8 +58,8 @@ func TestEveryPolicyWriteMovesTheVersion(t *testing.T) {
 			}
 
 			stored := readStalePolicy(t, api, ctx)
-			if stored.UpdatedAt.Equal(read.UpdatedAt) {
-				t.Fatalf("the write left the version where it was read: %v", stored.UpdatedAt)
+			if !stored.UpdatedAt.After(read.UpdatedAt) {
+				t.Fatalf("the write did not move the version forward: read %v stored %v", read.UpdatedAt, stored.UpdatedAt)
 			}
 			if stored.Name.String != "Writer" {
 				t.Fatalf("stored name is %q, want %q", stored.Name.String, "Writer")

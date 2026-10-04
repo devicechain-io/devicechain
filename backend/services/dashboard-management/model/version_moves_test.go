@@ -88,7 +88,7 @@ func TestEveryDashboardWriteMovesTheVersion(t *testing.T) {
 			row.write(t, api, ctx, v0)
 
 			_, stored := versionStringOf(t, api, ctx)
-			assert.False(t, stored.UpdatedAt.Equal(read.UpdatedAt), "the write left the version where it was read: %v", stored.UpdatedAt)
+			assert.True(t, stored.UpdatedAt.After(read.UpdatedAt), "the write did not move the version forward: read %v stored %v", read.UpdatedAt, stored.UpdatedAt)
 			assert.JSONEq(t, row.content, string(stored.Definition))
 
 			// The editor who read the version before the write is refused and changes nothing.

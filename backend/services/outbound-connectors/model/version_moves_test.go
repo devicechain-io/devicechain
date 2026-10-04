@@ -92,7 +92,7 @@ func TestEveryConnectorWriteMovesTheVersion(t *testing.T) {
 			token := row.write(t, api, ctx, v0)
 
 			_, stored := connectorOf(t, api, ctx, token)
-			assert.False(t, stored.UpdatedAt.Equal(read.UpdatedAt), "the write left the version where it was read: %v", stored.UpdatedAt)
+			assert.True(t, stored.UpdatedAt.After(read.UpdatedAt), "the write did not move the version forward: read %v stored %v", read.UpdatedAt, stored.UpdatedAt)
 			row.check(t, stored)
 
 			// The editor who read the version before the write is refused and changes nothing.
