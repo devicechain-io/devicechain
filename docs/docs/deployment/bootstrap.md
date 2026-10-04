@@ -167,6 +167,15 @@ the cluster gone and removes the directory along with the instance's own local s
 [Removing an instance](#destroy). Or remove it by hand, once its `cluster.json` has confirmed
 which cluster it belonged to.
 
+On a cluster you keep, such as a managed cluster or any cluster that `dcctl install` did not
+create, the prerequisites stay after the last instance is destroyed. Removing them by hand is not
+supported: they include the shared relational database and the backup object store, and the
+backups of destroyed instances are among what stays (see
+[What happens to the instance's backups](#destroy-backups)). Keep the cluster's directory under
+`~/.devicechain/clusters/<cluster-uid>/` for as long as they are there, because every later
+`dcctl install` on the cluster works from it (see
+[Where install keeps its state](#install-state)).
+
 ### The connection budget {#connection-budget}
 
 The relational database has a fixed number of connections, set by `--max-connections`
@@ -1010,6 +1019,57 @@ happens:
 Plan a node's return the way you plan its loss, and do not take a second node down until
 `dcctl ha verify` passes again.
 
+#### Maintaining a database node {#ha-database-node-maintenance}
+
+Under `--ha` each database runs three instances and never two on one node. On a cluster with
+exactly three nodes the databases can use (three database nodes, if you
+[set nodes aside for them](#database-placement)), every one of those nodes therefore runs one
+instance of every database. This describes cordoning one of them, doing the work and uncordoning
+the same node, as for an operating-system patch or a reboot:
+
+- **A primary on the node is switched to a standby.** As soon as the node is cordoned, the
+  database operator starts switching the primary to a standby on another node, and the drain can
+  evict the old primary while that is under way. Writes to that database pause for the switchover
+  (see [When a database primary stops](#ha-database-failover)), and the services retry them. In
+  testing a new primary was in place about ten seconds after the cordon.
+- **The evicted instances wait for the node to come back.** Each of the other nodes already runs an
+  instance of the same database, so the evicted instance of every database stays `Pending` until
+  the node is uncordoned. Every database runs on two of its three instances for as long as the node
+  is out. That is expected, and there is nothing to fix.
+- **Neither database can lose another instance meanwhile.** If the relational store loses its
+  remaining standby, every write to it waits (see [Databases under `--ha`](#ha-databases)). If
+  an instance's event store loses its standby, it carries on without replication, and its recovery
+  point is then bounded by replication lag. Keep the maintenance short, and take nothing else down
+  until the node is back.
+- **Uncordon the node when the work is done.** The instances that waited start on it again and
+  rejoin as standbys. In testing, after a node that had been out for under a minute, every
+  database was back to three ready instances within 45 seconds of the uncordon. A node that is
+  replaced rather than returned, as a managed node-pool upgrade does, was not tested: a waiting
+  instance can only start where its volume can follow it.
+
+If the databases share nodes with the rest of the instance (you did not set up
+[database placement](#database-placement)), draining a node also takes out a broker server and the
+service pods on it, and the broker server too stays `Pending` until the uncordon. Treat it as
+[losing a node](#ha-node-loss), planned: one node at a time.
+
+Before you drain the next node, check that every database is back to full strength:
+
+```bash
+kubectl get clusters.postgresql.cnpg.io -A
+```
+
+`READY` should show 3 for every database. If a broker server was on the node, also run
+`dcctl ha verify` for the instance, as after [losing a node](#ha-node-loss).
+
+While a node that the instance needs is cordoned, a re-run of `dcctl install` and a new
+`dcctl bootstrap` are refused, because a cordoned node does not count toward the nodes they check
+for (see [Database placement](#database-placement)); finish the maintenance first.
+
+Without `--ha`, each database has one instance and no standby to switch to. Draining its node is
+not held back: the instance is stopped, and the database is unavailable until the instance can
+start again. If its volume is tied to that node, as on a local kind cluster, that is not until the
+node is uncordoned.
+
 #### Where the database primaries run {#ha-database-primaries}
 
 Each database prefers a node that is not running another DeviceChain database's primary. In
@@ -1106,7 +1166,8 @@ store's primary, the busiest database pod.
   refuses before it creates or changes that database.
 - A node that is cordoned for maintenance, or not ready, does not count. While a node upgrade has
   one of the database nodes out, a re-run of `install` or a new `bootstrap` is refused; finish the
-  upgrade, then re-run.
+  upgrade, then re-run. What the databases do while the node is out is under
+  [Maintaining a database node](#ha-database-node-maintenance).
 - The two databases' primaries still [prefer different nodes](#ha-database-primaries), among the
   nodes you chose. If the selection is a single node, they share it.
 
@@ -1540,4 +1601,5 @@ removing the gone cluster's local state (~/.devicechain/clusters/<cluster-uid>)
 ```
 
 There is no uninstall command yet. To delete a local cluster that `dcctl install` created, use
-kind directly, as shown under [Install the cluster](#install).
+kind directly, as shown under [Install the cluster](#install). On a cluster you keep, see
+[Removing a cluster](#removing-a-cluster).

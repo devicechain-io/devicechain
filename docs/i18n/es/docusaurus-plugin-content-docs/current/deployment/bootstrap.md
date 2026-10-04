@@ -176,6 +176,15 @@ descubre que el clúster ya no existe y elimina el directorio junto con el estad
 de la instancia —consulta [Eliminar una instancia](#destroy). O elimínalo a mano, una vez que
 su `cluster.json` haya confirmado a qué clúster pertenecía.
 
+En un clúster que conservas, como un clúster gestionado o cualquier clúster que no haya creado
+`dcctl install`, los requisitos previos permanecen después de eliminar la última instancia. Quitarlos
+a mano no está admitido: incluyen la base de datos relacional compartida y el almacén de objetos de
+copias de seguridad, y los respaldos de las instancias eliminadas están entre lo que permanece
+(consulta [Qué pasa con los respaldos de la instancia](#destroy-backups)). Conserva el directorio del
+clúster en `~/.devicechain/clusters/<cluster-uid>/` mientras sigan ahí, porque todo `dcctl install`
+posterior en el clúster trabaja a partir de él (consulta
+[Dónde guarda install su estado](#install-state)).
+
 ### El presupuesto de conexiones {#connection-budget}
 
 La base de datos relacional tiene un número fijo de conexiones, fijado por `--max-connections`
@@ -1094,6 +1103,64 @@ real.
 Planifica la vuelta de un nodo como planificas su pérdida, y no retires un segundo nodo hasta
 que `dcctl ha verify` vuelva a pasar.
 
+#### Mantenimiento de un nodo de base de datos {#ha-database-node-maintenance}
+
+Con `--ha`, cada base de datos ejecuta tres instancias y nunca dos en el mismo nodo. En un clúster
+con exactamente tres nodos que las bases de datos pueden usar (tres nodos de base de datos, si los
+[reservaste para ellas](#database-placement)), cada uno de esos nodos ejecuta por tanto una
+instancia de cada base de datos. Lo que sigue describe acordonar uno de ellos, hacer el trabajo y
+desacordonar el mismo nodo, como en un parche del sistema operativo o un reinicio:
+
+- **La primaria que esté en el nodo se conmuta a una réplica en espera.** En cuanto el nodo se
+  acordona, el operador de bases de datos empieza a conmutar la primaria a una réplica en espera de
+  otro nodo, y el drenado puede desalojar la primaria antigua mientras eso ocurre. Las escrituras en
+  esa base de datos se detienen durante la conmutación (consulta
+  [Cuando se detiene la primaria de una base de datos](#ha-database-failover)), y los servicios las
+  reintentan. En las pruebas, una primaria nueva estuvo en funcionamiento unos diez segundos
+  después del acordonamiento.
+- **Las instancias desalojadas esperan a que vuelva el nodo.** Cada uno de los demás nodos ya
+  ejecuta una instancia de la misma base de datos, así que la instancia desalojada de cada base de
+  datos queda en `Pending` hasta que el nodo se desacordona. Todas las bases de datos funcionan con
+  dos de sus tres instancias mientras el nodo esté fuera. Es lo esperado, y no hay nada que
+  corregir.
+- **Ninguna de las bases de datos puede perder otra instancia mientras tanto.** Si el almacén
+  relacional pierde su réplica en espera restante, todas las escrituras en él esperan (consulta
+  [Bases de datos con `--ha`](#ha-databases)). Si el almacén de eventos de una instancia pierde su
+  réplica en espera, sigue funcionando sin replicación, y su punto de recuperación queda entonces
+  acotado por el retraso de replicación. Mantén el mantenimiento corto y no retires nada más hasta
+  que el nodo vuelva.
+- **Desacordona el nodo cuando termine el trabajo.** Las instancias que esperaban vuelven a
+  arrancar en él y se reincorporan como réplicas en espera. En las pruebas, tras un nodo que había
+  estado fuera menos de un minuto, todas las bases de datos volvieron a tener tres instancias
+  listas en menos de 45 segundos tras el desacordonamiento. Un nodo que se sustituye en lugar de
+  devolverse, como hace la actualización de un grupo de nodos gestionado, no se probó: una
+  instancia en espera solo puede arrancar donde su volumen pueda seguirla.
+
+Si las bases de datos comparten nodos con el resto de la instancia (no configuraste la
+[ubicación de las bases de datos](#database-placement)), drenar un nodo también retira un servidor
+del bróker y los pods de servicio que hay en él, y el servidor del bróker también queda en
+`Pending` hasta que se desacordona. Trátalo como [perder un nodo](#ha-node-loss), pero planificado:
+un nodo cada vez.
+
+Antes de drenar el siguiente nodo, comprueba que cada base de datos ha vuelto a su plena capacidad:
+
+```bash
+kubectl get clusters.postgresql.cnpg.io -A
+```
+
+`READY` debe mostrar 3 en todas las bases de datos. Si había un servidor del bróker en el nodo,
+ejecuta también `dcctl ha verify` para la instancia, como tras [perder un nodo](#ha-node-loss).
+
+Mientras un nodo que la instancia necesita está acordonado, se rechazan tanto volver a ejecutar
+`dcctl install` como un nuevo `dcctl bootstrap`, porque un nodo acordonado no cuenta entre los
+nodos que comprueban (consulta [Ubicación de las bases de datos](#database-placement)); termina
+antes el mantenimiento.
+
+Sin `--ha`, cada base de datos tiene una sola instancia y ninguna réplica en espera a la que
+conmutar. Nada impide drenar su nodo: la instancia se detiene, y la base de datos no está
+disponible hasta que la instancia pueda arrancar de nuevo. Si su volumen está ligado a ese nodo,
+como en un clúster kind local, eso no ocurre hasta que el nodo se desacordona.
+
 #### Dónde se ejecutan las primarias de las bases de datos {#ha-database-primaries}
 
 Cada base de datos prefiere un nodo que no ejecute la primaria de otra base de datos de
@@ -1198,7 +1265,9 @@ de datos más cargado.
   de datos, y lo rechaza antes de crear o cambiar esa base de datos.
 - Un nodo acordonado por mantenimiento, o que no está listo, no cuenta. Mientras una actualización de
   nodos tiene fuera uno de los nodos de bases de datos, se rechaza volver a ejecutar `install` o un
-  `bootstrap` nuevo; termina la actualización y vuelve a ejecutarlo.
+  `bootstrap` nuevo; termina la actualización y vuelve a ejecutarlo. Lo que hacen las bases de
+  datos mientras el nodo está fuera se explica en
+  [Mantenimiento de un nodo de base de datos](#ha-database-node-maintenance).
 - Las primarias de las dos bases de datos siguen
   [prefiriendo nodos distintos](#ha-database-primaries), entre los nodos que elegiste. Si la
   selección es un solo nodo, lo comparten.
@@ -1675,4 +1744,5 @@ removing the gone cluster's local state (~/.devicechain/clusters/<cluster-uid>)
 ```
 
 Todavía no hay ningún comando de desinstalación. Para eliminar un clúster local que creó
-`dcctl install`, usa kind directamente, como se muestra en [Instalar el clúster](#install).
+`dcctl install`, usa kind directamente, como se muestra en [Instalar el clúster](#install). En un clúster que
+conservas, consulta [Eliminar un clúster](#removing-a-cluster).
