@@ -514,12 +514,8 @@ func TestN2Shape(t *testing.T) {
 // rate above 6,000 is not one this sentence may claim.
 const measuredThroughput = "On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and " +
 	"three 4-vCPU, 8 GB service nodes, a default HA install accepted 6,000 events a second for 10 " +
-	"minutes, twice, and stored every accepted event exactly once. " + measuredOnePod
-
-// measuredOnePod is the qualifier the measurement carries: it ran before `--ha`
-// began running event-management as two pods.
-const measuredOnePod = "That was measured on the release candidate with event-management at one pod, " +
-	"before `--ha` began running it as two."
+	"minutes, twice, and stored every accepted event exactly once, checked event by event: none " +
+	"missing, none stored twice, none unexpected."
 
 // The GKE guide describes the cluster its configuration creates: each pool's
 // machine type, size and node count, the vCPUs that adds up to against the quota,
@@ -633,10 +629,6 @@ func TestGKEGuideShapeIsTheDefaults(t *testing.T) {
 			t.Errorf("%s no longer carries the published throughput measurement word for word:\n\n%s\n\n"+
 				"It is history, quoted as measured; edit it only when a new measurement replaces it, and then "+
 				"in this test and every surface that quotes it", filepath.Join(rel...), measuredThroughput)
-		}
-		if !strings.Contains(text, collapse(measuredOnePod)) {
-			t.Errorf("%s dropped the qualifier that the measurement ran event-management at one pod (%q); "+
-				"it stays until 6,000 events a second is re-measured with two", filepath.Join(rel...), measuredOnePod)
 		}
 	}
 	if strings.Contains(collapse(readme), "Those nodes are this configuration's defaults") {
