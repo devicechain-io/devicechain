@@ -4,12 +4,16 @@
 package core
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,6 +280,18 @@ func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
 
 	for i := 0; i < 300; i++ {
 		srv := ms.NewHttpServer(0)
+		var boundInode string
+		realListen := srv.listen
+		srv.listen = func(network, address string) (net.Listener, error) {
+			ln, err := realListen(network, address)
+			if err == nil {
+				boundInode, err = socketInode(ln)
+				if err != nil {
+					ln.Close()
+				}
+			}
+			return ln, err
+		}
 		if err := srv.Start(); err != nil {
 			t.Fatalf("round %d: Start: %v", i, err)
 		}
@@ -286,18 +302,14 @@ func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
 		if err := srv.Shutdown(context.Background()); err != nil {
 			t.Fatalf("round %d: Shutdown: %v", i, err)
 		}
-		// The listener Start bound has been CLOSED by the time Shutdown returns. This
-		// sees the close having begun, not the socket having been released (a close
-		// another goroutine started but has not finished already reads as closed here),
-		// so the release itself is checked by the rebind below and, deterministically, by
-		// TestHttpServerStopWaitsForAListenerCloseServeHasBegun.
 		if err := listenerControl(bound); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("round %d: the listener Start bound on %s was not closed when Shutdown "+
 				"returned: control = %v, want %v", i, addr, err, net.ErrClosed)
 		}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			t.Fatalf("round %d: rebinding %s after Shutdown returned: %v", i, addr, err)
+			verdict, report := probePortHolders(bound.Addr().(*net.TCPAddr).Port, boundInode)
+			t.Fatalf("round %d: rebinding %s after Shutdown returned: %v\n%s: %s", i, addr, err, verdict, report)
 		}
 		ln.Close()
 	}
@@ -846,4 +858,176 @@ func TestHttpServerIsNotALifecycleComponent(t *testing.T) {
 		t.Fatal("HttpServer satisfies LifecycleComponent; it must not, because the HTTP stop's " +
 			"position relative to the NATS stop differs by service and both orders in the tree are correct")
 	}
+}
+
+// socketInode returns N from the "socket:[N]" link of the listener's descriptor.
+func socketInode(ln net.Listener) (string, error) {
+	sc, ok := ln.(syscall.Conn)
+	if !ok {
+		return "", errors.New("listener does not expose its socket")
+	}
+	rc, err := sc.SyscallConn()
+	if err != nil {
+		return "", err
+	}
+	var inode string
+	var linkErr error
+	if err := rc.Control(func(fd uintptr) {
+		inode, linkErr = socketLinkInode("/proc/self/fd/" + strconv.FormatUint(uint64(fd), 10))
+	}); err != nil {
+		return "", err
+	}
+	return inode, linkErr
+}
+
+// socketLinkInode reads one /proc/self/fd link and returns the inode of a socket link.
+func socketLinkInode(path string) (string, error) {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", err
+	}
+	inner, ok := strings.CutPrefix(target, "socket:[")
+	if !ok || !strings.HasSuffix(inner, "]") {
+		return "", fmt.Errorf("%s is %q, not a socket", path, target)
+	}
+	return strings.TrimSuffix(inner, "]"), nil
+}
+
+// ownSocketInodes returns the inode of every socket descriptor this process holds.
+func ownSocketInodes() (map[string]bool, error) {
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		return nil, err
+	}
+	own := map[string]bool{}
+	for _, e := range entries {
+		// A descriptor can close between the listing and the read, and a non-socket
+		// descriptor has no inode to report; neither is an error for this purpose.
+		if inode, err := socketLinkInode("/proc/self/fd/" + e.Name()); err == nil {
+			own[inode] = true
+		}
+	}
+	return own, nil
+}
+
+// portHolder is one row of /proc/net/tcp{,6} whose local port is the one asked about.
+type portHolder struct {
+	table  string // "tcp" or "tcp6"
+	local  string // the kernel's hex form, e.g. "0100007F:B2F3"
+	remote string
+	state  string // LISTEN, ESTABLISHED, TIME_WAIT, ...; an unknown code is kept as "st=XX"
+	inode  string // "0" when no process owns the socket
+}
+
+var tcpStateNames = map[string]string{
+	"01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV", "04": "FIN_WAIT1",
+	"05": "FIN_WAIT2", "06": "TIME_WAIT", "07": "CLOSE", "08": "CLOSE_WAIT",
+	"09": "LAST_ACK", "0A": "LISTEN", "0B": "CLOSING",
+}
+
+// parseProcNetTCP returns the rows of one /proc/net/tcp{,6} table whose LOCAL port is port.
+func parseProcNetTCP(table string, r io.Reader, port int) ([]portHolder, error) {
+	var rows []portHolder
+	sc := bufio.NewScanner(r)
+	sc.Scan() // header
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) < 10 {
+			continue
+		}
+		colon := strings.LastIndex(f[1], ":")
+		if colon < 0 {
+			return nil, fmt.Errorf("%s: malformed local address %q", table, f[1])
+		}
+		p, err := strconv.ParseInt(f[1][colon+1:], 16, 32)
+		if err != nil {
+			return nil, fmt.Errorf("%s: malformed local port in %q: %w", table, f[1], err)
+		}
+		if int(p) != port {
+			continue
+		}
+		state, ok := tcpStateNames[strings.ToUpper(f[3])]
+		if !ok {
+			state = "st=" + f[3]
+		}
+		rows = append(rows, portHolder{table: table, local: f[1], remote: f[2], state: state, inode: f[9]})
+	}
+	return rows, sc.Err()
+}
+
+type holderVerdict int
+
+const (
+	holderLateRelease  holderVerdict = iota // this round's listener holds the port, or nothing does by now
+	holderTakenByOther                      // a socket that is not this round's listener holds it
+	holderUnexplained                       // the probe could not decide
+)
+
+func (v holderVerdict) String() string {
+	switch v {
+	case holderLateRelease:
+		return "late release"
+	case holderTakenByOther:
+		return "taken by another socket"
+	default:
+		return "unexplained"
+	}
+}
+
+// classifyRebindFailure says who holds a port whose rebind just failed. It is a diagnostic:
+// the test fails on every verdict, and the verdict only decides what the failure says.
+//
+// A row carrying boundInode is this round's own listener still holding the port, which is
+// a late release even if other rows exist. No row at all is also a late release, because
+// a failed REUSEADDR rebind with nothing on the port can only mean it was freed after the
+// failure. Any other row is another socket; a row no process owns (inode 0) is one that
+// has closed and lingers, and it blocks the rebind because Go sets SO_REUSEADDR on
+// listeners and not on dialers. An unknown boundInode decides nothing.
+func classifyRebindFailure(holders []portHolder, boundInode string, own map[string]bool) (holderVerdict, string) {
+	if boundInode == "" {
+		return holderUnexplained, "this round's listener inode is unknown, so no holder can be called foreign"
+	}
+	var other []string
+	for _, h := range holders {
+		if h.inode == boundInode {
+			return holderLateRelease, fmt.Sprintf("this round's own listener (inode %s) still holds the port: %s %s %s", boundInode, h.table, h.local, h.state)
+		}
+		whose := "a socket of another process"
+		switch {
+		case h.inode == "0":
+			whose = "a closed socket no process owns"
+		case own[h.inode]:
+			whose = "a socket of this test process"
+		}
+		other = append(other, fmt.Sprintf("%s (inode %s) %s %s -> %s %s", whose, h.inode, h.table, h.local, h.remote, h.state))
+	}
+	if len(other) == 0 {
+		return holderLateRelease, "nothing holds the port now: it was freed after the rebind failed"
+	}
+	return holderTakenByOther, strings.Join(other, "; ")
+}
+
+// probePortHolders reads the kernel's socket tables for port and classifies the holders.
+func probePortHolders(port int, boundInode string) (holderVerdict, string) {
+	var holders []portHolder
+	for _, table := range []string{"tcp", "tcp6"} {
+		f, err := os.Open("/proc/net/" + table)
+		if err != nil {
+			if table == "tcp6" && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return holderUnexplained, fmt.Sprintf("reading /proc/net/%s: %v", table, err)
+		}
+		rows, err := parseProcNetTCP(table, f, port)
+		f.Close()
+		if err != nil {
+			return holderUnexplained, err.Error()
+		}
+		holders = append(holders, rows...)
+	}
+	own, err := ownSocketInodes()
+	if err != nil {
+		return holderUnexplained, fmt.Sprintf("reading /proc/self/fd: %v", err)
+	}
+	return classifyRebindFailure(holders, boundInode, own)
 }
