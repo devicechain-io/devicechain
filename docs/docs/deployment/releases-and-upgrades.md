@@ -4826,6 +4826,22 @@ release is still refused only when the install runs.
 
 Nothing to do.
 
+#### `dcctl install` and `dcctl bootstrap` wait until every database instance has joined {#next-upgrade-wait-database-instances}
+
+Before, `dcctl install` returned once the relational database's primary accepted a connection, and
+`dcctl bootstrap` waited only for the services, so either could report success, and bootstrap could
+print that both databases were replicated, while a replica was still being created. Install now
+records itself, releases the cluster lock, and then waits up to 15 minutes until every instance of
+the relational database has joined. Bootstrap waits for the services and then, for up to 15 minutes,
+for every instance of the instance's event store. If one has not joined in time, the command exits
+with an error that names the database and how many of its instances are ready. Run the same command
+again to keep waiting (for install, that re-applies the prerequisites and refuses bootstraps while
+it runs, so watch the database with `kubectl` if you only want to follow it); a bootstrap that
+ended this way is not undone, and the install is already recorded, so instances can be
+bootstrapped meanwhile. A healthy install adds a few seconds.
+
+Nothing else needs doing.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

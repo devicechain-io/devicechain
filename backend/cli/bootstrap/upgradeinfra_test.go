@@ -691,8 +691,8 @@ func TestStatefulSetRolledOutRejectsStatesTheNaiveCheckAccepts(t *testing.T) {
 	}
 }
 
-func TestEventStoreReadyPredicate(t *testing.T) {
-	if ok, why := eventStoreReady(anEventStore(3, "32Gi", "tsdb:1"), imagesOf(3, "tsdb:1")); !ok {
+func TestCNPGClusterReadyPredicate(t *testing.T) {
+	if ok, why := cnpgClusterReady(anEventStore(3, "32Gi", "tsdb:1"), imagesOf(3, "tsdb:1")); !ok {
 		t.Fatalf("a healthy store reads unhealthy: %s", why)
 	}
 	for name, c := range map[string]struct {
@@ -716,7 +716,7 @@ func TestEventStoreReadyPredicate(t *testing.T) {
 	} {
 		u := anEventStore(3, "32Gi", "tsdb:1")
 		c.mutate(u)
-		ok, why := eventStoreReady(u, c.images)
+		ok, why := cnpgClusterReady(u, c.images)
 		if ok || !strings.Contains(why, c.reason) {
 			t.Errorf("%s: ready=%v reason=%q, want unready naming %q", name, ok, why, c.reason)
 		}
@@ -724,7 +724,7 @@ func TestEventStoreReadyPredicate(t *testing.T) {
 	// A Ready condition that never says which spec it judged is not held against it.
 	u := anEventStore(3, "32Gi", "tsdb:1")
 	setReadyCondition(u, "True", 0)
-	if ok, why := eventStoreReady(u, imagesOf(3, "tsdb:1")); !ok {
+	if ok, why := cnpgClusterReady(u, imagesOf(3, "tsdb:1")); !ok {
 		t.Errorf("a Ready condition with no observedGeneration failed the store: %s", why)
 	}
 }

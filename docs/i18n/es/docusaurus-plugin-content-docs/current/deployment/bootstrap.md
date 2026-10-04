@@ -99,6 +99,14 @@ causa sigue ahí, la nueva ejecución falla del mismo modo. Antes de dar el clú
 así que un almacén que quedó sin estar listo tras un cambio fallido anterior se notifica en
 lugar de pasarse por alto.
 
+`install` también espera, hasta 15 minutos, a que se hayan unido todas las instancias de la base de
+datos relacional, y termina con un error que nombra la base de datos y cuántas de sus instancias
+están listas si alguna no lo ha hecho. Para entonces la instalación ya está registrada y el bloqueo
+del clúster liberado, así que se pueden hacer bootstrap de instancias mientras sigue esperando. Para
+seguir la base de datos, obsérvela con `kubectl`; ejecutar de nuevo el mismo `dcctl install` también
+sigue esperando, pero vuelve a aplicar los requisitos previos y rechaza los bootstraps mientras se
+ejecuta.
+
 ### Dónde guarda install su estado {#install-state}
 
 Los requisitos previos se aplican con OpenTofu, y su estado vive en la máquina que ejecutó
@@ -434,7 +442,11 @@ que un fallo nombra un paso que puedes encontrar aquí:
    sustituyendo pods, eso ya es cierto de los que están de salida. Así que el paso espera
    además a que se observe la nueva plantilla, a que todas las réplicas se hayan recreado sobre
    ella y a que no quede ninguna réplica antigua en ejecución. `dcctl upgrade` usa la misma
-   puerta por la misma razón.
+   puerta por la misma razón. Después espera, hasta 15 minutos, a que se hayan unido todas las
+   instancias del almacén de eventos de la instancia, porque los servicios están listos solo en el
+   primario. Si alguna no lo ha hecho, el paso falla con un error que nombra la base de datos y
+   cuántas de sus instancias están listas; nada se deshace, y ejecutar de nuevo el mismo
+   `dcctl bootstrap` termina la instancia.
 10. **Report access info** (informar de los datos de acceso) — imprime el namespace, el correo
     del superusuario y dónde se guarda su contraseña (y la propia contraseña, una sola vez: en
     la ejecución que la generó, o en la que termina un arranque inicial que falló antes de

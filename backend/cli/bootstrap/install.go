@@ -87,7 +87,9 @@ type InstallOptions struct {
 // Install prepares a cluster for instances: it creates or names the cluster, applies
 // the cluster prerequisites, makes the base database identity, and records the install.
 //
-// 🔴 THE RECORD IS WRITTEN LAST, AND ONLY ON SUCCESS. `dcctl bootstrap` refuses a
+// 🔴 THE RECORD IS WRITTEN LAST OF THE WRITES, AND ONLY ON SUCCESS OF THEM. The command can
+// still fail after it, waiting for the relational store's replicas
+// (finishInstall). `dcctl bootstrap` refuses a
 // cluster without an `installed` record and builds every instance from what it says,
 // so a record that claimed an install which did not finish would put instances on
 // prerequisites that are not there. markInstallApplying brackets the apply for exactly
@@ -195,6 +197,8 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 			"store, the backup object store)")
 		wouldDo("create the base database identity instances' logins are made with")
 		wouldDo(fmt.Sprintf("record the install in ConfigMap %s/%s", infraNamespace, installRecordName))
+		wouldDo(fmt.Sprintf("wait until every instance of the relational store %s/%s has joined",
+			infraNamespace, RdbClusterName))
 		// 🔴 A RESTORE IS THE ONE THING A REHEARSAL MOST NEEDS TO BE TOLD ABOUT, and
 		// the reason it is rendered from the PLAN plus a READ rather than from the
 		// apply's outputs is that a dry run has no outputs: this project has already
@@ -330,21 +334,73 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	}
 	done()
 
-	// 🔴 THE LAST ONE MATTERS MOST. This record is what every later bootstrap reads
-	// to decide the shape of the instances it builds; writing it over a reclaimer's
-	// would hand them a cluster described by a run they stopped.
-	if err := stillHoldsTheCluster(ctx, st, "recording the install"); err != nil {
-		return err
-	}
-	if err := writeInstalled(ctx, typed, InstallRecord{
+	return finishInstall(ctx, st, provider.Name(), typed, dyn, InstallRecord{
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,
 		Settings:     settings,
 		Outputs:      outputs,
-	}, time.Now); err != nil {
+	}, cnpgClusterReadyTimeout, rolloutPollInterval)
+}
+
+// finishInstall is Install's tail: record the install, wait for the relational store, and
+// only then say it is installed.
+//
+// 🔴 ONE FUNCTION, SO THE ERROR CANNOT BE DROPPED AT ITS CALL SITE. The report is the
+// success message, and a call site that printed the wait's error instead of returning it
+// would report "prerequisites installed" over a store with one of three instances ready
+// — the defect the wait exists to close. Held by value in TestFinishInstall*.
+func finishInstall(ctx context.Context, st *State, provider string, typed kubernetes.Interface,
+	dyn dynamic.Interface, rec InstallRecord, timeout, poll time.Duration) error {
+	if err := recordInstallAndWaitForStore(ctx, st, typed, dyn, rec, timeout, poll); err != nil {
 		return err
 	}
-	reportInstall(st, provider.Name())
+	reportInstall(st, provider)
+	return nil
+}
+
+// recordInstallAndWaitForStore records the completed install, hands the cluster lock back,
+// and then waits until every instance of the relational store has joined.
+//
+// 🔴 THE LAST ONE MATTERS MOST. This record is what every later bootstrap reads
+// to decide the shape of the instances it builds; writing it over a reclaimer's
+// would hand them a cluster described by a run they stopped.
+//
+// 🔴 THE WAIT COMES AFTER THE RECORD, NOT BEFORE. The record says what was applied and
+// where the store is, and both are true once the apply has returned. Held at `applying`
+// (installrecord.go) every bootstrap and upgrade on the cluster would be refused over a
+// store that is serving on its primary, and over a condition an install cannot fix when
+// it is a lost node. The wait decides the exit status and the summary, not the record.
+//
+// 🔴 AND THE LOCK GOES BACK BEFORE THE WAIT, for the same reason: the wait reads and
+// writes nothing, and a Lease held for up to fifteen minutes of watching would refuse
+// every bootstrap and upgrade the record has just let through. st.Claim is cleared so
+// Install's deferred release does not repeat it.
+func recordInstallAndWaitForStore(ctx context.Context, st *State, typed kubernetes.Interface,
+	dyn dynamic.Interface, rec InstallRecord, timeout, poll time.Duration) error {
+	if err := stillHoldsTheCluster(ctx, st, "recording the install"); err != nil {
+		return err
+	}
+	if err := writeInstalled(ctx, typed, rec, time.Now); err != nil {
+		return err
+	}
+	if st.Claim != nil {
+		st.Claim.Release(ctx)
+		st.Claim = nil
+	}
+	const msg = "waiting for every instance of the relational store to join"
+	doing(msg)
+	store := rec.Outputs.Rdb
+	if err := waitForCNPGClusterReady(ctx, dyn, typed, store.Namespace, store.ClusterName, timeout, poll); err != nil {
+		hint := ""
+		if st.Restore.RestoresRelationalStore() {
+			hint = " A restore's replicas clone the recovered store after its primary is up, which can take longer than this on a large archive."
+		}
+		return fail(msg, fmt.Errorf("%w. The install is recorded and the cluster lock is released, so instances can "+
+			"be bootstrapped now.%s To follow the store, watch `kubectl -n %s get clusters.postgresql.cnpg.io %s`. "+
+			"To have dcctl keep waiting, run the same `dcctl install` command again; it re-applies the "+
+			"prerequisites and refuses bootstraps while it runs", err, hint, store.Namespace, store.ClusterName))
+	}
+	done()
 	return nil
 }
 
@@ -761,9 +817,8 @@ func reportInstall(st *State, provider string) {
 	// how a restore that recovered nothing gets believed.
 	if st.Restore.RestoresRelationalStore() {
 		fmt.Printf("  %s %s\n", color.WhiteString("Relational recovery:"),
-			color.GreenString("requested from %q — check `kubectl -n %s get clusters.postgresql.cnpg.io %s` "+
-				"reads `Cluster in healthy state` before believing it", st.Restore.RdbFrom,
-				infraNamespace, RdbClusterName))
+			color.GreenString("requested from %q — the store was waited for until healthy, which does "+
+				"not say the rows came back: check the data before believing it", st.Restore.RdbFrom))
 	}
 	fmt.Println(color.HiGreenString("\nNext: build an instance on it:\n\n    dcctl bootstrap %s <instance>%s\n",
 		provider, clusterTargetFlag(st.Binding)))

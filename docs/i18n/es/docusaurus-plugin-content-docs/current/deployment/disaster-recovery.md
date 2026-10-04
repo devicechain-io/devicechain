@@ -354,11 +354,12 @@ clúster *antiguo*.
 
 ### Comprueba que cada base de datos terminó de recuperarse {#check-recovery-finished}
 
-Que el bootstrap termine no significa que la base de datos esté lista. `dcctl` informa de éxito en
-cuanto las cargas de trabajo están arriba, lo que puede ocurrir antes de que la base de datos en
-recuperación haya terminado de reproducir su archivo histórico. Una recuperación que no puede
-alcanzar su archivo se queda esperando en lugar de fallar. Así que comprueba la propia base de
-datos antes de dar por buena una restauración:
+`dcctl install` y `dcctl bootstrap` esperan a que cada base de datos esté sana con todas sus
+instancias unidas, y terminan con un error si alguna no lo está en 15 minutos. Un archivo grande
+puede tardar más en reproducirse, así que una restauración puede necesitar más de una ejecución. Una
+recuperación que no puede alcanzar su archivo se queda esperando en lugar de fallar. Una base de
+datos sana no dice que las filas hayan vuelto, así que comprueba la propia base de datos antes de
+dar por buena una restauración:
 
 ```bash
 kubectl get clusters.postgresql.cnpg.io --all-namespaces

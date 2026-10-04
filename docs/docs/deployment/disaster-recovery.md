@@ -331,10 +331,11 @@ values.
 
 ### Check that each database finished recovering {#check-recovery-finished}
 
-The bootstrap finishing is not the database being ready. `dcctl` reports success once the workloads
-are up, which can be before the recovering database has finished replaying its archive. A
-recovery that cannot reach its archive sits waiting rather than failing. So check the database
-itself before you believe a restore:
+`dcctl install` and `dcctl bootstrap` wait for each database to be healthy with every instance
+joined, and end with an error if one is not within 15 minutes. A large archive can take longer than
+that to replay, so a restore may need more than one run. A recovery that cannot reach its archive
+sits waiting rather than failing. A healthy database does not say the rows came back, so check the
+database itself before you believe a restore:
 
 ```bash
 kubectl get clusters.postgresql.cnpg.io --all-namespaces

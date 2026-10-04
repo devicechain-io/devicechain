@@ -154,7 +154,7 @@ func (h haTopology) summary() string {
 	}
 	return fmt.Sprintf(
 		"%d NATS servers (one per node), streams and KV buckets at %d replicas; both databases "+
-			"replicated too — relational synchronously, event store preferred — with volumes sized "+
+			"configured replicated too — relational synchronously, event store preferred — with volumes sized "+
 			"per instance, so their disk scales with the count",
 		h.ServerReplicas, h.StreamReplicas)
 }
