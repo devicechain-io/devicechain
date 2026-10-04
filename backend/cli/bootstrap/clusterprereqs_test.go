@@ -241,14 +241,14 @@ func TestInstanceRootVarsAreRoutedAndSharedByBothVerbs(t *testing.T) {
 // is held by its source the same way.
 func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 	fset, positions := callPositions(t, "install.go", "Install",
-		"connectAndRefuse", "resolveCredentials", "splitVars", "checkRelationalStoreOwner",
+		"connectAndRefuse", "resolveCredentials", "installClusterVars", "checkRelationalStoreOwner",
 		"ensureInfraNamespace", "writeClusterSecrets", "markInstallApplying", "applyClusterPrereqs",
 		"withProvisionerSession", "finishInstall")
 
 	for _, want := range []struct{ name, why string }{
 		{"connectAndRefuse", "a re-install from another machine, one that changes the cluster under running instances, or one naming a VolumeSnapshotClass that cannot work, would go ahead"},
 		{"resolveCredentials", "a re-install would mint fresh passwords over the ones the live store runs on"},
-		{"splitVars", "every -var would go to the cluster root, and it would refuse the instance root's"},
+		{"installClusterVars", "every -var would go to the cluster root, and it would refuse the instance root's; and the control-plane scrapes of a managed cluster would stay on and alert forever"},
 		{"checkRelationalStoreOwner", "a store built before per-instance logins would have its owner Secret rewritten under it"},
 		{"ensureInfraNamespace", "the credentials below cannot be written into a namespace that is not there"},
 		{"writeClusterSecrets", "CloudNativePG would mint its own password for the shared store and nothing would hold it"},
@@ -286,6 +286,22 @@ func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 			"a cluster recorded as installed without its base identity refuses the first bootstrap"},
 		{"applyClusterPrereqs", "finishInstall",
 			"the record may say installed only after the apply that installs has succeeded"},
+	})
+}
+
+// The cluster root's variables are produced in ONE place, and the control-plane detection is
+// inside it: a detection called beside it would be one line nothing notices missing.
+func TestInstallClusterVarsDecidesTheScrapesBeforeRouting(t *testing.T) {
+	fset, positions := callPositions(t, "controlplane.go", "installClusterVars",
+		"settleControlPlaneScrapes", "splitVars", "infraVars")
+	for _, name := range []string{"settleControlPlaneScrapes", "splitVars", "infraVars"} {
+		if _, ok := positions[name]; !ok {
+			t.Fatalf("installClusterVars no longer calls %s", name)
+		}
+	}
+	assertCallOrder(t, "installClusterVars", fset, positions, []callOrder{
+		{"settleControlPlaneScrapes", "infraVars",
+			"the variables would be assembled from a State the detection has not yet filled in"},
 	})
 }
 
