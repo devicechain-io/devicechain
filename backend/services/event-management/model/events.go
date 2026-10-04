@@ -58,8 +58,11 @@ type Event struct {
 //
 // The per-device read is served in time order by idx_events_tenant_device_time
 // (tenant_id, device_token, occurred_time DESC): the fail-closed tenant predicate and the
-// device token are both index conditions, so the page and the COUNT that ListOf issues before
-// it visit only this tenant's rows of this device, never another tenant's reuse of the token.
+// device token are both index conditions, so the COUNT that ListOf issues before the page, and
+// the type-filtered read, visit only this tenant's rows of this device, never another tenant's
+// reuse of the token. The unfiltered page may instead be planned on events_pkey (a statistics
+// choice), checking the device per row: that visits other devices of this tenant, still never
+// another tenant's rows, because that key leads with tenant_id too.
 // An event_type filter is still checked per row, against this device's rows only; the event_id
 // tiebreak sorts within one timestamp. Compressed chunks are segmented by (tenant_id,
 // device_token) and read per device and tenant either way. Neither column is nullable, so no

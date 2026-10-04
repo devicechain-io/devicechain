@@ -134,7 +134,7 @@ var afterDeviceIndexLock func()
 // The properties below are load-bearing:
 //
 //  1. **It reads the catalog first and replaces only what it recognises.** An index of the new
-//     name that is not exactly the one this migration builds ends it before any DDL. Done
+//     name that is not the one this migration builds, as far as the shape check sees ends it before any DDL. Done
 //     (new valid, old gone) takes no lock at all, which is what makes a re-run free.
 //  2. **Gates before any lock**, as for the key rebuild and with the same bounds: chunks (from
 //     the catalog), then the heap rows of events not yet compressed. Past either it stops,
@@ -171,6 +171,13 @@ var afterDeviceIndexLock func()
 //
 // The bounds are the key rebuild's own value, not a copy: the upgrade notes publish one row
 // bound and one chunk bound for both.
+//
+// The budget is this migration's own fresh one (60 s), taken when it starts. An upgrade
+// straight from v0.18.0 runs the index trim, the key rebuild and this migration in one start,
+// each with its own budget, so the worst case is about three budgets plus the rest of startup,
+// against the startup probe. That is a restart, not a stall: a killed build rolls back
+// server-side, the earlier migrations are already recorded, and no marker is written, so the
+// next start resumes here.
 func NewTenantDeviceIndexSchema() *gormigrate.Migration {
 	return newTenantDeviceIndexSchema(timeLeadingKeysDefaultTiming)
 }
@@ -187,6 +194,10 @@ func newTenantDeviceIndexSchema(timing timeLeadingKeysTiming) *gormigrate.Migrat
 type deviceIndexState int
 
 const (
+	// Done and DropOld are told apart for the log and the tests only: the caller runs the same
+	// bounded DROP INDEX IF EXISTS of the old index in both. "Done takes no lock" therefore
+	// rests on DROP INDEX IF EXISTS of a missing name resolving no relation and so locking
+	// nothing, which the re-run test under an ACCESS EXCLUSIVE holder pins.
 	deviceIndexDone    deviceIndexState = iota // new valid, old absent
 	deviceIndexDropOld                         // new valid, old present
 	deviceIndexBuild                           // new absent
@@ -261,8 +272,9 @@ func gateDeviceIndex(db *gorm.DB, timing timeLeadingKeysTiming) error {
 	return nil
 }
 
-// classifyDeviceIndex reads the catalog only. A new index that is not exactly the one this
-// migration builds is refused; a still-needed build is refused when the old index carries the
+// classifyDeviceIndex reads the catalog only. A new index that is not the one this
+// migration builds (columns, DESC bits, method, uniqueness, plainness; null ordering, operator
+// class and collation are not compared, the columns being NOT NULL) is refused; a still-needed build is refused when the old index carries the
 // too-slow marker, unless a valid new index exists, which makes the marker moot.
 func classifyDeviceIndex(db *gorm.DB) (deviceIndexState, error) {
 	// The shape is read from pg_index and pg_attribute, never through pg_get_indexdef: that

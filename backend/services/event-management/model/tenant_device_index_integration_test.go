@@ -231,7 +231,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 	seedStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 
 	// 500 devices of 200 events a tenant, so no one token is a large share of the table: the
-	// planner then prefers the device index for the page too, as in production. (With a token
+	// planner here prefers the device index for the page too. (With a token
 	// that is a quarter of the table it expects to meet five of its rows within the first
 	// twenty of the key and walks the tenant's rows instead; that is the planner's estimate,
 	// not this index.)
@@ -296,8 +296,8 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 	}
 	// The device PAGE (no type filter) is deliberately not asserted here: it has an ORDER BY
 	// the events key already gives, and the planner walks that key with the device as a
-	// filter, on this index shape and on the old one alike (measured; it is a statistics
-	// estimate, not an index choice). What this change fixes is the COUNT and the type-filtered
+	// filter, in this test's seed, as on the old index shape (a statistics estimate, not an
+	// index choice; the reads test's seed plans it on the new index). What this change fixes is the COUNT and the type-filtered
 	// read, which the tenant-less index could only answer by visiting other tenants' rows.
 	seek("device COUNT", count, 0)
 	seek("device + type page", typedData, 4)
@@ -421,7 +421,7 @@ func TestIntegrationDeviceIndexBuildLetsReadsThrough(t *testing.T) {
 
 	var shareGranted bool
 	observer := connectInstance(t, inst)
-	require.NoError(t, observer.QueryRow(context.Background(), `SELECT bool_or(granted) FROM pg_locks
+	require.NoError(t, observer.QueryRow(context.Background(), `SELECT COALESCE(bool_or(granted), false) FROM pg_locks
 		WHERE mode = 'ShareLock' AND relation = '"event-management".events'::regclass`).Scan(&shareGranted))
 	assert.True(t, shareGranted, "the build holds a ShareLock on events")
 
@@ -568,7 +568,7 @@ func TestIntegrationDeviceIndexTooSlowIsRolledBackAndSticks(t *testing.T) {
 	assert.False(t, hasIndex(t, sys, tenantDeviceIndex.name), "rolled back whole")
 	assert.True(t, hasIndex(t, sys, tenantDeviceIndex.replaces))
 	var note string
-	require.NoError(t, sys.Raw(`SELECT obj_description('"event-management".events_device_token_occurred_time_idx'::regclass, 'pg_class')`).Scan(&note).Error)
+	require.NoError(t, sys.Raw(`SELECT COALESCE(obj_description('"event-management".events_device_token_occurred_time_idx'::regclass, 'pg_class'), '')`).Scan(&note).Error)
 	assert.True(t, strings.HasPrefix(note, tenantDeviceIndexTooSlowMarker), "the verdict is recorded: %q", note)
 
 	// The next start refuses at once while another session holds events ACCESS EXCLUSIVE.
