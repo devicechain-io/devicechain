@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -272,42 +274,56 @@ func TestHttpServerLifecycleOverARealListener(t *testing.T) {
 // deterministically by TestHttpServerStopWaitsForAListenerCloseServeHasBegun. This one
 // stays because it goes through Start and Serve as a service does.
 //
+// The port is chosen outside the kernel's auto-assign range (ip_local_port_range), which
+// the kernel never hands out on its own. Binding port 0 took each port from inside that
+// range, and in the moment between the stop and the rebind any other socket on the host
+// (a parallel test's dial, a listener on port 0) could be handed the port just released,
+// so the rebind failed with "address already in use" over a release that was on time.
+// Loopback rather than every interface is deliberate and does not change what is tested:
+// the window is the scheduling of the serve goroutine, not the address. The inode of the
+// bound socket is captured inside the listen hook, before Start launches the serve
+// goroutine, so reading it does not widen the gap between Start and Shutdown.
+//
 // The rebind is strict and is never retried. Every way this test has to fail is the port
-// being released LATE, and a retry is exactly what passes a late release.
+// being released LATE, and a retry is exactly what passes a late release. A rebind that
+// fails still fails the test; the kernel's socket table is then read so the failure says
+// whether this round's own listener still holds the port or nothing does ("late release")
+// or some other socket does ("taken by another socket"). Only the Start bind before a
+// round is retried, and only for "address already in use", because it is not the thing
+// under test.
 func TestHttpServerShutdownReleasesThePortEvenBeforeServing(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("picks its port outside the kernel's auto-assign range, which only Linux " +
+			"publishes in /proc; the release is pinned on every OS by " +
+			"TestHttpServerStopWaitsForAListenerCloseServeHasBegun")
+	}
+	lo, hi, err := ephemeralPortRange()
+	if err != nil {
+		t.Fatalf("reading the auto-assign port range: %v", err)
+	}
 	ms := &Microservice{FunctionalArea: "immediate-stop"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 
 	for i := 0; i < 300; i++ {
-		srv := ms.NewHttpServer(0)
-		var boundInode string
-		realListen := srv.listen
-		srv.listen = func(network, address string) (net.Listener, error) {
-			ln, err := realListen(network, address)
-			if err == nil {
-				boundInode, err = socketInode(ln)
-				if err != nil {
-					ln.Close()
-				}
-			}
-			return ln, err
-		}
-		if err := srv.Start(); err != nil {
-			t.Fatalf("round %d: Start: %v", i, err)
-		}
-		srv.mu.Lock()
-		bound := srv.ln
-		srv.mu.Unlock()
+		srv, bound, boundInode := startOnUnassignablePort(t, ms, lo, hi, i)
 		addr := srv.Addr()
 		if err := srv.Shutdown(context.Background()); err != nil {
 			t.Fatalf("round %d: Shutdown: %v", i, err)
 		}
+		// The listener Start bound has been CLOSED by the time Shutdown returns. This
+		// sees the close having begun, not the socket having been released (a close
+		// another goroutine started but has not finished already reads as closed here),
+		// so the release itself is checked by the rebind below and, deterministically, by
+		// TestHttpServerStopWaitsForAListenerCloseServeHasBegun.
 		if err := listenerControl(bound); !errors.Is(err, net.ErrClosed) {
 			t.Fatalf("round %d: the listener Start bound on %s was not closed when Shutdown "+
 				"returned: control = %v, want %v", i, addr, err, net.ErrClosed)
 		}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
+			if !errors.Is(err, syscall.EADDRINUSE) {
+				t.Fatalf("round %d: rebinding %s after Shutdown returned: %v", i, addr, err)
+			}
 			verdict, report := probePortHolders(bound.Addr().(*net.TCPAddr).Port, boundInode)
 			t.Fatalf("round %d: rebinding %s after Shutdown returned: %v\n%s: %s", i, addr, err, verdict, report)
 		}
@@ -1030,4 +1046,226 @@ func probePortHolders(port int, boundInode string) (holderVerdict, string) {
 		return holderUnexplained, fmt.Sprintf("reading /proc/self/fd: %v", err)
 	}
 	return classifyRebindFailure(holders, boundInode, own)
+}
+
+// ephemeralPortRange reads the range the kernel auto-assigns local ports from.
+func ephemeralPortRange() (lo, hi int, err error) {
+	raw, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err != nil {
+		return 0, 0, err
+	}
+	f := strings.Fields(string(raw))
+	if len(f) != 2 {
+		return 0, 0, fmt.Errorf("ip_local_port_range is %q, want two numbers", raw)
+	}
+	if lo, err = strconv.Atoi(f[0]); err != nil {
+		return 0, 0, err
+	}
+	if hi, err = strconv.Atoi(f[1]); err != nil {
+		return 0, 0, err
+	}
+	return lo, hi, nil
+}
+
+// unassignablePortFloor keeps clear of the low fixed ports other suites bind.
+const unassignablePortFloor = 10000
+
+// startBindAttempts bounds the pre-round Start retries on "address already in use".
+const startBindAttempts = 20
+
+// pickPortOutside returns a port in [floor, 65535] that is not in [lo, hi], where rnd(n)
+// returns a number in [0, n). The candidates are [floor, lo-1] and then [hi+1, 65535].
+func pickPortOutside(lo, hi, floor int, rnd func(n int) int) (int, error) {
+	const top = 65535
+	belowFirst, belowLast := floor, min(lo-1, top)
+	aboveFirst, aboveLast := max(hi+1, floor), top
+	below := max(0, belowLast-belowFirst+1)
+	above := max(0, aboveLast-aboveFirst+1)
+	if below+above == 0 {
+		return 0, fmt.Errorf("no port in [%d, %d] lies outside the auto-assign range [%d, %d] "+
+			"(net.ipv4.ip_local_port_range); this test needs room outside that range", floor, top, lo, hi)
+	}
+	n := rnd(below + above)
+	if n < below {
+		return belowFirst + n, nil
+	}
+	return aboveFirst + n - below, nil
+}
+
+// startOnUnassignablePort starts a loopback server on a port the kernel will not auto-assign
+// and returns it with the listener it bound and that listener's socket inode. The inode is
+// read inside the listen hook, which Start calls before it launches the serve goroutine.
+func startOnUnassignablePort(t *testing.T, ms *Microservice, lo, hi, round int) (*HttpServer, net.Listener, string) {
+	t.Helper()
+	for attempt := 0; attempt < startBindAttempts; attempt++ {
+		port, err := pickPortOutside(lo, hi, unassignablePortFloor, rand.IntN)
+		if err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		srv := NewHttpServerAt(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), ms.Mux(), HttpServerOptions{})
+		var bound net.Listener
+		var inode string
+		var inodeErr error
+		srv.listen = func(network, address string) (net.Listener, error) {
+			ln, err := net.Listen(network, address)
+			if err == nil {
+				bound = ln
+				inode, inodeErr = socketInode(ln)
+			}
+			return ln, err
+		}
+		if err := srv.Start(); err != nil {
+			if errors.Is(err, syscall.EADDRINUSE) {
+				continue
+			}
+			t.Fatalf("round %d: Start on port %d: %v", round, port, err)
+		}
+		if inodeErr != nil || inode == "" {
+			t.Fatalf("round %d: reading the bound socket's inode: %v", round, inodeErr)
+		}
+		a, ok := bound.Addr().(*net.TCPAddr)
+		if !ok || !a.IP.Equal(net.IPv4(127, 0, 0, 1)) || (a.Port >= lo && a.Port <= hi) {
+			t.Fatalf("round %d: bound %v, want 127.0.0.1 on a port outside the auto-assign range [%d, %d]",
+				round, bound.Addr(), lo, hi)
+		}
+		return srv, bound, inode
+	}
+	t.Fatalf("round %d: %d picks in a row were already in use", round, startBindAttempts)
+	return nil, nil, ""
+}
+
+func TestPickPortOutsideTheAutoAssignRange(t *testing.T) {
+	at := func(n int) func(int) int { return func(int) int { return n } }
+	last := func(n int) int { return n - 1 }
+	cases := []struct {
+		name          string
+		lo, hi, floor int
+		rnd           func(int) int
+		want          int
+		wantErr       bool
+	}{
+		{"first below", 32768, 60999, 10000, at(0), 10000, false},
+		{"last below", 32768, 60999, 10000, at(22767), 32767, false},
+		{"first above", 32768, 60999, 10000, at(22768), 61000, false},
+		{"last above", 32768, 60999, 10000, last, 65535, false},
+		{"range reaches below the floor", 5000, 60999, 10000, at(0), 61000, false},
+		{"range reaches the top", 32768, 65535, 10000, last, 32767, false},
+		{"range covers everything", 1024, 65535, 10000, at(0), 0, true},
+		{"nothing left above the floor", 10000, 65535, 10000, at(0), 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := pickPortOutside(c.lo, c.hi, c.floor, c.rnd)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("got port %d, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("port = %d, want %d", got, c.want)
+			}
+			if got >= c.lo && got <= c.hi {
+				t.Errorf("port %d lies inside the auto-assign range [%d, %d]", got, c.lo, c.hi)
+			}
+		})
+	}
+}
+
+func TestParseProcNetTCPReadsOnlyTheRowsOnThePort(t *testing.T) {
+	const header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+	tcp := header +
+		"   0: 0100007F:B2F3 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 123456 1 0000000000000000 100 0 0 10 0\n" +
+		"   1: 0100007F:B2F3 0100007F:9C40 01 00000000:00000000 00:00000000 00000000  1000        0 0 1 0000000000000000 100 0 0 10 0\n" +
+		"   2: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777 1 0000000000000000 100 0 0 10 0\n"
+	tcp6 := header +
+		"   0: 00000000000000000000000000000000:B2F3 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 654321 1 0000000000000000 100 0 0 10 0\n"
+
+	got, err := parseProcNetTCP("tcp", strings.NewReader(tcp), 0xB2F3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got6, err := parseProcNetTCP("tcp6", strings.NewReader(tcp6), 0xB2F3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []portHolder{
+		{"tcp", "0100007F:B2F3", "00000000:0000", "LISTEN", "123456"},
+		{"tcp", "0100007F:B2F3", "0100007F:9C40", "ESTABLISHED", "0"},
+		{"tcp6", "00000000000000000000000000000000:B2F3", "00000000000000000000000000000000:0000", "LISTEN", "654321"},
+	}
+	all := append(got, got6...)
+	if len(all) != len(want) {
+		t.Fatalf("rows = %+v, want %+v", all, want)
+	}
+	for i := range want {
+		if all[i] != want[i] {
+			t.Errorf("row %d = %+v, want %+v", i, all[i], want[i])
+		}
+	}
+}
+
+func TestClassifyRebindFailure(t *testing.T) {
+	ours := portHolder{"tcp", "0100007F:B2F3", "00000000:0000", "LISTEN", "100"}
+	foreign := portHolder{"tcp", "0100007F:B2F3", "0100007F:9C40", "ESTABLISHED", "200"}
+	lingering := portHolder{"tcp", "0100007F:B2F3", "0100007F:9C40", "TIME_WAIT", "0"}
+	cases := []struct {
+		name    string
+		holders []portHolder
+		bound   string
+		own     map[string]bool
+		want    holderVerdict
+		report  string
+	}{
+		{"own listener still holds it", []portHolder{ours}, "100", nil, holderLateRelease, "own listener"},
+		{"own listener and a foreign row", []portHolder{foreign, ours}, "100", map[string]bool{"200": true}, holderLateRelease, "own listener"},
+		{"nothing holds it now", nil, "100", nil, holderLateRelease, "nothing holds the port"},
+		{"foreign socket of this process", []portHolder{foreign}, "100", map[string]bool{"200": true}, holderTakenByOther, "this test process"},
+		{"foreign socket of another process", []portHolder{foreign}, "100", nil, holderTakenByOther, "another process"},
+		{"closed socket nobody owns", []portHolder{lingering}, "100", nil, holderTakenByOther, "no process owns"},
+		{"our inode unknown", []portHolder{foreign}, "", nil, holderUnexplained, "unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, report := classifyRebindFailure(c.holders, c.bound, c.own)
+			if got != c.want {
+				t.Errorf("verdict = %v, want %v (%s)", got, c.want, report)
+			}
+			if !strings.Contains(report, c.report) {
+				t.Errorf("report = %q, want it to contain %q", report, c.report)
+			}
+		})
+	}
+}
+
+// The probe's failure mode is reporting nothing, which would read as a quiet test. This
+// points it at a port it must see held, against the real kernel.
+func TestPortHolderProbeNamesTheHolderOfALivePort(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc/net/tcp")
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	port := l.Addr().(*net.TCPAddr).Port
+	inode, err := socketInode(l)
+	if err != nil || inode == "" {
+		t.Fatalf("socketInode = %q, %v", inode, err)
+	}
+
+	if v, report := probePortHolders(port, inode); v != holderLateRelease || !strings.Contains(report, "LISTEN") {
+		t.Errorf("held by the listener itself: verdict %v, report %q; want late release naming LISTEN", v, report)
+	}
+	if v, report := probePortHolders(port, "1"); v != holderTakenByOther || !strings.Contains(report, "this test process") {
+		t.Errorf("held by a socket that is not ours: verdict %v, report %q; want taken by another socket of this process", v, report)
+	}
+	l.Close()
+	if v, report := probePortHolders(port, inode); v != holderLateRelease || !strings.Contains(report, "nothing holds") {
+		t.Errorf("after the close: verdict %v, report %q; want late release with no holder", v, report)
+	}
 }
