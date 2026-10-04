@@ -299,6 +299,16 @@ cannot be told apart after the fact.
 Each device receives commands on a topic scoped to that device alone, and is authorized for that
 topic only. A device cannot observe commands addressed to any other device in its tenant.
 
+### Delivery order is not execution order {#delivery-order}
+
+The platform delivers one device's commands in the order you enqueued them. Whether the device
+*executes* them in that order is up to the device. A device that handles commands one at a time
+does. A device that runs several handlers at once does not, except for commands it has grouped
+together: the .NET SDK's `MaxConcurrentCommands` setting, for example, gives up execution order
+between commands unless they share a lane. A sequence whose order is its meaning, such as writing a
+firmware image and then executing it, has to be grouped on the device, because the platform cannot
+make a device that runs two commands at once run them one after the other.
+
 ## One command, many devices {#command-batches}
 
 A **command batch** fans one command out to many devices as a single, recorded operation. You
