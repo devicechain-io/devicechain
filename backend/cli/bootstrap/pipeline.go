@@ -96,6 +96,16 @@ type State struct {
 	// use it only to shape what the instance renders — no ServiceMonitors or rules
 	// against CRDs that are not there.
 	NoMonitoring bool
+	// UnscrapedControlPlane is the control-plane components (kube-prometheus-stack values keys)
+	// the monitoring stack does not scrape, because install found no pod for them in kube-system.
+	// Set only by install (settleControlPlaneScrapes), read by infraVars for the cluster root.
+	// An observation of the cluster, re-read on every install and not a setting a re-install must
+	// agree with: a component that appears later is scraped only after the next install.
+	//
+	// 🔴 nil MEANS SCRAPE EVERYTHING, and that is why the field lists what is OFF rather than what
+	// is on: every path that never runs the detection (bootstrap, upgrade, a State built by hand, a
+	// detection error) lands on the noisy side, never the silent one.
+	UnscrapedControlPlane []string
 	// NoCNPG records that the cluster was installed WITHOUT the CloudNativePG
 	// operator and its backup plugin (ADR-020 A2). Set and read back the same way
 	// as NoMonitoring; on the instance side it goes into the declaration and decides

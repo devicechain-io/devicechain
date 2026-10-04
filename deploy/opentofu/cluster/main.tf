@@ -713,6 +713,8 @@ module "monitoring" {
   chart_version = var.monitoring_chart_version
   slim          = var.monitoring_slim
 
+  unscraped_control_plane = var.monitoring_unscraped_control_plane
+
   # Export the CloudNativePG Clusters' own status conditions through
   # kube-state-metrics (ADR-020 A1.5). Read from enable_cnpg rather than offered as
   # a preference: with no CNPG CRDs there is nothing to watch, and the alerts that

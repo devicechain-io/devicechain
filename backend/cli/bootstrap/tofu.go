@@ -481,7 +481,7 @@ func infraVars(st *State) []string {
 	// hostPort; a LoadBalancer stays <pending> and times out the apply. The
 	// monitoring stack likewise runs in its slim profile (emptyDir TSDB, smaller
 	// requests) so it fits a local single-node cluster.
-	if looksLocal(st.KubeContext) {
+	if monitoringSlim(st) {
 		vars = append(vars,
 			"ingress_use_host_port=true",
 			"monitoring_slim=true",
@@ -510,6 +510,16 @@ func infraVars(st *State) []string {
 	if st.NoMonitoring {
 		vars = append(vars, "enable_monitoring=false")
 	}
+	// The control-plane scrapes the monitoring stack switches off. Emitted on EVERY run, empty
+	// included, as a JSON list (valid HCL), so the cluster root never falls back to a default this
+	// function did not state. 🔴 NEVER `null`: json.Marshal of a nil slice is "null", which the
+	// non-nullable variable refuses.
+	unscraped := st.UnscrapedControlPlane
+	if unscraped == nil {
+		unscraped = []string{}
+	}
+	sel, _ := json.Marshal(unscraped)
+	vars = append(vars, "monitoring_unscraped_control_plane="+string(sel))
 	// The CloudNativePG operator is likewise default-on (ADR-020 A2, decision D4:
 	// one storage shape, HA or not). --no-cnpg is the escape hatch for a cluster that
 	// already runs it — Helm refuses to adopt objects another installer created, so

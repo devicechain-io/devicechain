@@ -773,6 +773,13 @@ variable "monitoring_slim" {
   default     = false
 }
 
+variable "monitoring_unscraped_control_plane" {
+  description = "Control-plane components the monitoring stack does not scrape (kube-prometheus-stack keys: kubeControllerManager, kubeScheduler, kubeEtcd, kubeProxy). dcctl install lists those whose chart selector finds no pod in kube-system, as on a managed control plane, and its value wins over this file; empty scrapes all four. Ignored when monitoring_slim is true, which switches all four off."
+  type        = list(string)
+  default     = []
+  nullable    = false
+}
+
 variable "monitoring_prometheus_retention" {
   description = "How long Prometheus retains samples (e.g. 15d). Lower it for a slim/local cluster on emptyDir."
   type        = string

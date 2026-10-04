@@ -13,6 +13,16 @@
 # service, plus per-area metrics + JetStream stream metrics); this module is the
 # collection + visualization half.
 
+# Named so hack/check-tofu-module-tests.sh pins it to the version the roots run (it
+# pins only the providers a module declares); the roots pin the version.
+terraform {
+  required_providers {
+    helm = {
+      source = "hashicorp/helm"
+    }
+  }
+}
+
 variable "namespace" {
   type    = string
   default = "monitoring"
@@ -120,6 +130,26 @@ variable "slim" {
   EOT
   type        = bool
   default     = false
+}
+
+variable "unscraped_control_plane" {
+  description = <<-EOT
+    Control-plane components to NOT scrape, by kube-prometheus-stack values key: any of
+    kubeControllerManager, kubeScheduler, kubeEtcd, kubeProxy. Each one listed has its Service,
+    ServiceMonitor and bundled *Down alerting rules switched off. dcctl fills it at install with the
+    components whose chart selector finds no pod in kube-system -- a managed control plane runs them
+    outside the cluster, where this chart cannot reach them and their *Down alerts would fire forever.
+    Empty (the default) scrapes all four. slim switches all four off regardless.
+  EOT
+  type        = list(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition = alltrue([for c in var.unscraped_control_plane :
+    contains(["kubeControllerManager", "kubeScheduler", "kubeEtcd", "kubeProxy"], c)])
+    error_message = "unscraped_control_plane accepts only kubeControllerManager, kubeScheduler, kubeEtcd and kubeProxy; another name would switch off nothing while reading as if it had."
+  }
 }
 
 variable "grafana_admin_secret" {
@@ -245,16 +275,16 @@ locals {
     retention = var.prometheus_retention
   }
 
-  # kind's control-plane components (controller-manager, scheduler, etcd, kube-proxy)
-  # bind to 127.0.0.1, so kube-prometheus-stack's default scrape targets for them are
-  # permanently Down and their bundled *Down rules alert forever — drowning the
-  # DeviceChain alerts. Turn those component scrapes off on a slim/kind cluster.
-  kind_component_overrides = var.slim ? {
-    kubeControllerManager = { enabled = false }
-    kubeScheduler         = { enabled = false }
-    kubeEtcd              = { enabled = false }
-    kubeProxy             = { enabled = false }
-  } : {}
+  # A control-plane component whose scrape cannot work gets it switched off -- and with it the
+  # chart's *Down rule for it, which would otherwise alert forever and drown the DeviceChain alerts.
+  #   - slim (kind): all four run as pods but bind 127.0.0.1, so every scrape is permanently Down.
+  #   - var.unscraped_control_plane: the components dcctl found no pod for in kube-system (a managed
+  #     control plane). Only what is listed is switched off; an empty list keeps the values document
+  #     as it was before this existed, so an install that could not tell keeps every scrape (noisy,
+  #     not silent). distinct(): a repeated name is harmless intent, and a map built with a duplicate
+  #     key is an error.
+  control_plane_unscraped = var.slim ? ["kubeControllerManager", "kubeScheduler", "kubeEtcd", "kubeProxy"] : distinct(var.unscraped_control_plane)
+  control_plane_overrides = { for c in local.control_plane_unscraped : c => { enabled = false } }
 
   # Grafana SSO (ADR-047): when enabled, serve Grafana under a subpath and gate login
   # to the operator/superuser tier via the `sudo` userinfo claim. role_attribute_strict
@@ -392,7 +422,7 @@ locals {
     }
 
     grafana = local.grafana_values
-  }, local.kind_component_overrides, local.cnpg_cluster_metrics_values)
+  }, local.control_plane_overrides, local.cnpg_cluster_metrics_values)
 }
 
 locals {

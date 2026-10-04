@@ -192,6 +192,11 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		}
 		wouldDo("install the operator — CRDs, RBAC and the controller Deployment at " +
 			operatorImageRef(st) + " — in namespace " + st.OperatorNamespace)
+		if !st.NoMonitoring && !monitoringSlim(st) {
+			wouldDo("look in " + controlPlaneNamespace + " for each control-plane component the monitoring chart " +
+				"scrapes, and switch off the scrape of any with no pod behind the chart's selector " +
+				"(decided when the run reads the cluster)")
+		}
 		wouldDo("tofu init+apply deploy/opentofu/cluster — once per cluster, shared by every instance " +
 			"(CloudNativePG operator + backup plugin, ingress, cert-manager, monitoring, the relational " +
 			"store, the backup object store)")
@@ -250,7 +255,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	// happen while they can still stop.
 	printRelationalRestore(st.Restore, live, backupSnapshotClass(st))
 
-	clusterVars, _, err := splitVars(infraVars(st))
+	clusterVars, err := installClusterVars(ctx, st, typed)
 	if err != nil {
 		return err
 	}
