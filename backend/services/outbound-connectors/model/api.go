@@ -206,10 +206,18 @@ func (api *Api) UpdateConnector(ctx context.Context, token string, request *Conn
 		current.Description = description
 		current.Type = connectorType
 		current.Config = cfg
-		if err := api.RDB.DB(ctx).Save(current).Error; err != nil {
+		if err := rdb.AdvancingFrom(api.RDB.DB(ctx), current.UpdatedAt).Save(current).Error; err != nil {
 			return nil, err
 		}
-		return api.applyUpdatedSecret(ctx, current, secret)
+		// Reload for the stored updated_at, as the guarded path below does.
+		reloaded, err := api.ConnectorsByToken(ctx, []string{token})
+		if err != nil {
+			return nil, err
+		}
+		if len(reloaded) == 0 {
+			return nil, gorm.ErrRecordNotFound
+		}
+		return api.applyUpdatedSecret(ctx, reloaded[0], secret)
 	}
 
 	// Optimistic concurrency: a clean early-out against the caller's stated version,
@@ -313,7 +321,7 @@ func (api *Api) RenameConnector(ctx context.Context, token string, newToken stri
 		// narrow write is what bounds it. It still passes through the token-grammar
 		// callback (a map destination is checked the same way a struct is) and the
 		// tenant-scope callback.
-		if err := tx.Model(current).Update("token", newToken).Error; err != nil {
+		if err := rdb.AdvancingFrom(tx, current.UpdatedAt).Model(current).Update("token", newToken).Error; err != nil {
 			// THE LOSING RACER ARRIVES HERE rather than through the Count above, and it
 			// must read exactly as the uncontended refusal does. Any uniqueness conflict
 			// on this write is the token's: it changes that one column and no other.
@@ -327,7 +335,15 @@ func (api *Api) RenameConnector(ctx context.Context, token string, newToken stri
 	}); err != nil {
 		return nil, err
 	}
-	return current, nil
+	// Reload for the stored updated_at: the copy in memory carries digits the database drops.
+	reloaded, err := api.ConnectorsByToken(ctx, []string{newToken})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // ErrConnectorTokenTaken is the ONE sentence a caller gets when the token they asked for
@@ -464,10 +480,19 @@ func (api *Api) RollbackConnector(ctx context.Context, token string, version int
 
 	conn.Type = snapshot.Type
 	conn.Config = snapshot.Config
-	if err := api.RDB.DB(ctx).Save(conn).Error; err != nil {
+	if err := rdb.AdvancingFrom(api.RDB.DB(ctx), conn.UpdatedAt).Save(conn).Error; err != nil {
 		return nil, err
 	}
-	return conn, nil
+	// Reload for the stored updated_at: the console takes the version from this response as
+	// its next precondition, and the copy in memory carries digits the database drops.
+	reloaded, err := api.ConnectorsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // ErrNotPublished is returned by LatestPublishedConnector when the connector exists but

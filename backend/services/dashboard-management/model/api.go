@@ -196,7 +196,8 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 			return nil, err
 		}
 	} else {
-		res := api.RDB.DB(ctx).Model(current).Where("id = ?", current.ID).Updates(assignments)
+		// The version is moved past the one just read, as the guarded write does.
+		res := rdb.AdvancingFrom(api.RDB.DB(ctx), current.UpdatedAt).Model(current).Where("id = ?", current.ID).Updates(assignments)
 		if res.Error != nil {
 			return nil, res.Error
 		}
@@ -287,10 +288,19 @@ func (api *Api) RollbackDashboard(ctx context.Context, token string, version int
 	}
 
 	dash.Definition = snapshot.Definition
-	if err := api.RDB.DB(ctx).Save(dash).Error; err != nil {
+	if err := rdb.AdvancingFrom(api.RDB.DB(ctx), dash.UpdatedAt).Save(dash).Error; err != nil {
 		return nil, err
 	}
-	return dash, nil
+	// Reload for the stored updated_at: the console takes the version from this response as
+	// its next precondition, and the copy in memory carries digits the database drops.
+	reloaded, err := api.DashboardsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // DashboardVersions lists a dashboard's published versions, newest first. Returns
