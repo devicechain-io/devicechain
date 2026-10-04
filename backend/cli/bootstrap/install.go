@@ -211,9 +211,7 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 
 	uid, err := identifyCluster(ctx, binding.KubeContext)
 	if err != nil {
-		return fmt.Errorf("reading the identity of cluster %s: %w\n"+
-			"  dcctl files this cluster's prerequisite state under that identity, so it cannot "+
-			"install them without it", binding.Describe(), err)
+		return identityReadError(binding.Describe(), err)
 	}
 	st.ClusterUID, st.Binding.ClusterUID = uid, uid
 	if err := WriteClusterRecord(ClusterRecord{
@@ -457,6 +455,14 @@ var installClients = func(kubeContext string) (dynamic.Interface, kubernetes.Int
 	return dyn, typed, nil
 }
 
+// identityReadError is the one message for an identity read that fails, on the real run
+// and on its rehearsal alike.
+func identityReadError(described string, err error) error {
+	return fmt.Errorf("reading the identity of cluster %s: %w\n"+
+		"  dcctl files this cluster's prerequisite state under that identity, so it cannot "+
+		"install them without it", described, err)
+}
+
 // identifyCluster is the seam Install and its rehearsal read the cluster's identity
 // through. One variable for both, so the dry run identifies the cluster exactly as the
 // run does; indirected so a test can reach the refusals behind it without a cluster.
@@ -491,14 +497,16 @@ func rehearseInstallRefusals(ctx context.Context, st *State, settings InstallSet
 	if err != nil {
 		var status apierrors.APIStatus
 		if errors.Is(ctx.Err(), context.Canceled) || errors.As(err, &status) {
-			return false, fmt.Errorf("reading the identity of cluster %s: %w", st.Binding.Describe(), err)
+			return false, identityReadError(st.Binding.Describe(), err)
+		}
+		notRehearsed := "an install from another machine, changed settings under running instances"
+		if backupSnapshotClass(st) != "" {
+			notRehearsed += ", an unusable VolumeSnapshotClass"
 		}
 		fmt.Println(color.YellowString(
-			"  could not identify cluster %s (%v); the refusals a re-install makes — an install from "+
-				"another machine, changed settings under running instances, an unusable "+
-				"VolumeSnapshotClass — were NOT rehearsed; the real run identifies the cluster "+
-				"first and stops if it cannot",
-			st.Binding.Describe(), err))
+			"  could not identify cluster %s (%v); the refusals a re-install makes — %s — were NOT "+
+				"rehearsed; the real run identifies the cluster first and stops if it cannot",
+			st.Binding.Describe(), err, notRehearsed))
 		return false, nil
 	}
 	st.ClusterUID, st.Binding.ClusterUID = uid, uid

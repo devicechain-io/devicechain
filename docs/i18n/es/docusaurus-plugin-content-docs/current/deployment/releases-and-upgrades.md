@@ -5141,8 +5141,8 @@ la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta cau
 
 #### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación
 
-En un clúster que responde, una ejecución en seco ahora lee el registro de instalación y pregunta
-qué instancias se ejecutan en el clúster, y falla con el mismo mensaje que la instalación cuando
+En un clúster que responde, una ejecución en seco ahora lee el registro de instalación, pregunta
+qué instancias se ejecutan en el clúster cuando cambian los ajustes, y falla con el mismo mensaje que la instalación cuando
 esta se rechazaría por lo que el clúster ya contiene: una reinstalación desde una máquina sin
 estado del clúster, ajustes cambiados mientras hay instancias en ejecución, o un
 `--backup-snapshot-class` que no puede funcionar. Antes imprimía un plan y salía con 0. Una

@@ -4770,8 +4770,8 @@ Nothing needs doing.
 
 #### `dcctl install --dry-run` makes the re-install refusals the install makes
 
-On a cluster that answers, a dry run now reads the install record and asks which instances run on
-the cluster, and fails with the install's own message when the install would be refused for what
+On a cluster that answers, a dry run now reads the install record, asks which instances run on
+the cluster when the settings change, and fails with the install's own message when the install would be refused for what
 the cluster already holds: a re-install from a machine that holds no state for the cluster, changed
 settings while instances run on it, or a `--backup-snapshot-class` that cannot work. Before, it
 printed a plan and exited 0. A dry run aimed at a cluster that does not exist yet, or that it cannot

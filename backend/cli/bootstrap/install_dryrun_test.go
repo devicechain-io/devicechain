@@ -60,11 +60,17 @@ func withLocalClusterState(t *testing.T, uid string) {
 // the seams the caller stubbed.
 func dryRunInstall(t *testing.T, opts InstallOptions) (string, error) {
 	t.Helper()
-	deadKubeconfig(t)
 	// Bounded, and per call: the claim report asks the dead endpoint first and spends
 	// whatever deadline it is given.
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
+	return dryRunInstallWith(t, ctx, opts)
+}
+
+// dryRunInstallWith is dryRunInstall under a context the caller built.
+func dryRunInstallWith(t *testing.T, ctx context.Context, opts InstallOptions) (string, error) {
+	t.Helper()
+	deadKubeconfig(t)
 	opts.Options.DryRun = true
 	opts.Options.KubeContext = "dead"
 	opts.Options.ImageRegistry = "example.invalid/dc"
@@ -365,5 +371,26 @@ func TestACancelledRehearsalIsAnErrorNotAPlan(t *testing.T) {
 	rehearsed, err := rehearseInstallRefusals(ctx, st, InstallSettings{}, stateHere())
 	if err == nil || rehearsed {
 		t.Fatalf("a cancelled rehearsal returned (%v, %v), want an error", rehearsed, err)
+	}
+}
+
+// Install must hand ITS OWN context to the rehearsal: a Ctrl+C during a dry run's
+// identity read is fatal, not the soft "NOT rehearsed" warning. Driven through Install,
+// because the function-level test above cannot see which context Install passes.
+func TestADryRunThroughInstallStopsOnACancelledContext(t *testing.T) {
+	fakeHome(t)
+	stubIdentifyCluster(t, "", errors.New("context canceled"))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	out, err := dryRunInstallWith(t, ctx, InstallOptions{})
+	if err == nil {
+		t.Fatalf("a cancelled dry run succeeded:\n%s", out)
+	}
+	if strings.Contains(out, "were NOT rehearsed") {
+		t.Errorf("a cancellation was softened into a warning:\n%s", out)
+	}
+	if strings.Contains(out, wouldInstallOperator) {
+		t.Errorf("a plan was printed above a cancellation:\n%s", out)
 	}
 }
