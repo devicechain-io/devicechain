@@ -3512,6 +3512,51 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### Next release {#next-upgrade}
+
+What the release after `v0.19.0` changes, collected as it lands.
+
+#### A device's event list reads only its own tenant's rows {#tenant-device-index}
+
+The index that serves a device's event list now starts with the tenant. In `v0.19.0` the list's
+total, and a device's list filtered by event type, visited every row with that device's token that
+was not yet compressed, including the rows of a device with the same token in another tenant, so a
+busy `gateway-1` in one tenant slowed the list of `gateway-1` in another. They now visit only the
+device's own rows, and a SQL or BI query on a device's events gains the same. Each stored base event
+still updates the same number of indexes: the new index replaces the old one, and is a little wider
+because it carries the tenant.
+
+- **At the upgrade.** The first start of the new `event-management` builds the index over the base
+  events that are not yet compressed (by default, about the last week), then removes the index it
+  replaces. While it builds, writes of base events wait and reads do not; the build is bounded to
+  40 seconds once the table is locked. It refuses, changing nothing, when there are more than
+  4,000,000 rows to index or the table has more than 500 chunks, and it stops for good (until the
+  index exists) if the build runs out of its time. None of these needs a recreate: the error carries
+  the statements that build the index by hand. The previous `event-management` keeps storing events
+  meanwhile.
+- **To build it by hand, at a quiet time.** Run these on the event store's primary, then restart
+  `event-management`, which finds the index and only removes the one it replaces. The first
+  statement removes an unfinished index of the same name that an interrupted build leaves behind,
+  and does nothing when there is none:
+
+  ```sql
+  DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_time;
+  CREATE INDEX idx_events_tenant_device_time
+    ON "event-management".events (tenant_id, device_token, occurred_time DESC)
+    WITH (timescaledb.transaction_per_chunk);
+  ```
+
+  The build goes one chunk at a time, so a write waits only while the chunk it targets is being
+  indexed: about 3 microseconds for each of that chunk's base events that is not yet compressed.
+  While a chunk is indexed, the previous `event-management` and the new one both wait to store
+  events into it, and an event held longer than the broker's 60 second acknowledgement wait is
+  delivered again, which is safe. On a busy instance, choose a quiet time.
+- **To avoid the refusal, build the index before you upgrade.** On a `v0.19.0` instance with
+  more than `4000000` uncompressed base events, run the two statements above first; `v0.19.0`
+  works with them, and the upgrade then only removes the old index. To count the base events, use
+  the query under [Check the row count](#v0190-row-count) with `hypertable_name IN ('events')`.
+- Going back to `v0.19.0` keeps the new index, and `v0.19.0` works with it.
+
 ### v0.19.0 — sized from measurement at 6,000 events a second; a full stream refuses {#v0190-upgrade}
 
 `v0.19.0` is an in-place upgrade from `v0.18.0`: `dcctl install` for the cluster, then `dcctl

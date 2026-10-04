@@ -17,9 +17,9 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
  THEN substring(session_user::text from 11)
  END
  $$;
-CREATE INDEX events_device_token_occurred_time_idx ON "event-management".events USING btree (device_token, occurred_time DESC);
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
+CREATE INDEX idx_events_tenant_device_time ON "event-management".events USING btree (tenant_id, device_token, occurred_time DESC);
 CREATE INDEX idx_measurement_tenant_device_name_time ON "event-management".measurement_events USING btree (tenant_id, device_token, name, occurred_time DESC);
 CREATE INDEX measurement_events_occurred_time_idx ON "event-management".measurement_events USING btree (occurred_time DESC);
 CREATE SCHEMA "event-management";

@@ -22,8 +22,8 @@ import (
 // some of this area's DDL is non-transactional (Timescale refuses create_hypertable and the
 // policy calls inside a transaction block), so a half-applied migration is never rolled back
 // and replays from the top on the next boot. Index and key changes on a hypertable DO run in a
-// transaction, and the two migrations that make them (NewIndexTrimSchema,
-// NewTimeLeadingKeysSchema) depend on that; their doc comments say how.
+// transaction, and the three migrations that make them (NewIndexTrimSchema,
+// NewTimeLeadingKeysSchema, NewTenantDeviceIndexSchema) depend on that; their doc comments say how.
 //
 // 🔴 THE BASELINE WAS RE-CUT ONCE AFTER THE SQUASH, and this is the record of it: the base event
 // gained event_id and its primary key moved from the natural key to (tenant_id, event_id,
@@ -71,5 +71,9 @@ var (
 		// it gates on how much uncompressed history a build must cover and refuses, changing
 		// nothing, past what fits the startup window.
 		NewTimeLeadingKeysSchema(),
+		// Leads the per-device event index with the tenant and drops the tenant-less one it
+		// replaces (see its doc comment). It BUILDS, gated like the key rebuild, but every
+		// refusal hands the operator the build to run by hand: the schema is correct without it.
+		NewTenantDeviceIndexSchema(),
 	}
 )

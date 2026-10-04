@@ -119,8 +119,9 @@ type timeLeadingKeysTiming struct {
 //     slow (below).
 //   - budget = 60 s for everything in one start. On an upgrade from v0.18.0 the index trim
 //     runs in the same start first; its own budget is 60 s and it takes well under a second
-//     uncontended. Expected total: seconds. Worst case: the trim's budget, this budget and
-//     the rest of startup can exceed the probe, in which case the pod is restarted. That is
+//     uncontended. The tenant-led device index migration that follows takes its own fresh
+//     budget in the same start. Expected total: seconds. Worst case: the trim's budget, this
+//     budget, that one and the rest of startup can exceed the probe, in which case the pod is restarted. That is
 //     a restart, not a stall: neither migration leaves a table half-done (each table's
 //     swap is one transaction, rolled back on any error, and server-side the swap is
 //     bounded by its own statement_timeout even if the pod is gone), the trim is then

@@ -78,8 +78,10 @@ const identityMethod = "per driven device: the tenant events query filtered to t
 	"total holds; every row keyed (device token, occurredTime in microseconds) and compared with the " +
 	"simulator's accepted/refused/ambiguous ledger with multiplicity; then the window's tenant total " +
 	"re-counted to catch rows no device read saw. Cost: one COUNT and one page per 1000 rows per " +
-	"device over the (device_token, occurred_time) index, which carries no tenant_id, so in " +
-	"uncompressed chunks each COUNT also visits other tenants' rows under the same token."
+	"device over the per-device index: (tenant_id, device_token, occurred_time) from the release " +
+	"after v0.19.0, so each COUNT visits only this tenant's rows of the device; on v0.19.0 and " +
+	"earlier (device_token, occurred_time), which carries no tenant_id, so in uncompressed " +
+	"chunks each COUNT also visits other tenants' rows under the same token."
 
 // IdentityKey is one event's identity in the reconciliation.
 type IdentityKey struct {
