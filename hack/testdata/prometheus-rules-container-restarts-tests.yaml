@@ -14,7 +14,8 @@
 # metrics reports as a new series under a new uid, starting at 0.
 #
 # THE SERIES: kube_pod_container_status_restarts_total, one per (namespace, pod, uid,
-# container), a counter that exists from the moment the pod is scheduled.
+# container) per kube-state-metrics scrape identity (instance, replica), a counter that
+# exists from the moment the pod is scheduled.
 #
 # Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
 # rendered group in beside this file as rendered-rules.yaml. Naming it below is not
@@ -177,3 +178,182 @@ tests:
       - eval_time: 10m
         alertname: InstanceContainerRestarted
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # NEW. kube-state-metrics itself moved (its node was reset) while the pod restarted.
+  # Its series come back under a new `instance` label, so the restarted pod's counter
+  # is a NEW series whose first sample is already 1. Same pod, same uid: a restart.
+  # Measured live: 5 of 6 restarted pods were missed this way.
+  # ------------------------------------------------------------------
+  - name: a restart while kube-state-metrics was moving still fires
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="device-management-85ddd7888f-qpms4", uid="u1", container="device-management", job="kube-state-metrics", instance="10.16.4.12:8080"}'
+        values: '0 0 0 stale _x29'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="device-management-85ddd7888f-qpms4", uid="u1", container="device-management", job="kube-state-metrics", instance="10.16.4.57:8080"}'
+        values: '_ _ _ _ _ 1x30'
+      # A neighbour that did NOT restart moves too: its new series starts where the
+      # old one stopped, and must stay quiet.
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-0", uid="u7", container="nats", job="kube-state-metrics", instance="10.16.4.12:8080"}'
+        values: '4 4 4 stale _x29'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-0", uid="u7", container="nats", job="kube-state-metrics", instance="10.16.4.57:8080"}'
+        values: '_ _ _ _ _ 4x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: device-management-85ddd7888f-qpms4
+              container: device-management
+            exp_annotations: *annotations
+      # The last sample before the restart (2m) is still in the window at 16m...
+      - eval_time: 16m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: device-management-85ddd7888f-qpms4
+              container: device-management
+            exp_annotations: *annotations
+      # ...and has left it at 17m.
+      - eval_time: 17m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # NEW. The same move, but the pod restarts AFTER kube-state-metrics is back: the
+  # new series goes 0 -> 1 on its own. (dc-nats-2 in the same live run.)
+  # ------------------------------------------------------------------
+  - name: a restart inside the new series after a move fires
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-2", uid="u9", container="nats", job="kube-state-metrics", instance="10.16.4.12:8080"}'
+        values: '0 0 0 stale _x29'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-2", uid="u9", container="nats", job="kube-state-metrics", instance="10.16.4.57:8080"}'
+        values: '_ _ _ _ _ 0 0 1x30'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: dc-nats-2
+              container: nats
+            exp_annotations: *annotations
+
+  # ------------------------------------------------------------------
+  # NEW. A brand-new pod (a scale-up, a rollout) appears with its counter at 0.
+  # Nothing restarted.
+  # ------------------------------------------------------------------
+  - name: a new pod starting at 0 stays quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="event-sources-6d4f9c7b8-new01", uid="u10", container="event-sources", job="kube-state-metrics"}'
+        values: '_ _ _ _ _ 0x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # NEW. Two kube-state-metrics replicas report the same pod at once, one a scrape
+  # behind the other. One restart is ONE alert for the container, not two.
+  # ------------------------------------------------------------------
+  - name: two concurrent kube-state-metrics series give one alert
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="user-management-7f9b8c6d5-m3n8p", uid="u5", container="user-management", job="kube-state-metrics", instance="10.16.1.10:8080"}'
+        values: '0 0 0 1x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="user-management-7f9b8c6d5-m3n8p", uid="u5", container="user-management", job="kube-state-metrics", instance="10.16.2.20:8080"}'
+        values: '0 0 0 0 1x30'
+      # A flat neighbour reported by both replicas stays quiet.
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-0", uid="u7", container="nats", job="kube-state-metrics", instance="10.16.1.10:8080"}'
+        values: '2x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-0", uid="u7", container="nats", job="kube-state-metrics", instance="10.16.2.20:8080"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: user-management-7f9b8c6d5-m3n8p
+              container: user-management
+            exp_annotations: *annotations
+      - eval_time: 25m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # NEW. kube-state-metrics still reports a replaced pod for a moment after its
+  # replacement appears under the same name. The old pod had restarted once; the new
+  # one then restarts too. The new pod's restart is reported, the old pod's count is not.
+  # ------------------------------------------------------------------
+  - name: a replacement that overlaps its predecessor is counted on its own
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-1", uid="old", container="nats", job="kube-state-metrics"}'
+        values: '1 1 1 1 1 stale _x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-1", uid="new", container="nats", job="kube-state-metrics"}'
+        values: '_ _ _ 0 1x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: InstanceContainerRestarted
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: dc-nats-1
+              container: nats
+            exp_annotations: *annotations
+
+  # ------------------------------------------------------------------
+  # NEW. The move leaves NO staleness marker: the old series stays readable for its
+  # lookback at 0 while the new one already reads 1. The restart is still reported.
+  # ------------------------------------------------------------------
+  - name: a restart across a move with no staleness marker still fires
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="device-management-85ddd7888f-qpms4", uid="u1", container="device-management", job="kube-state-metrics", instance="10.16.4.12:8080"}'
+        values: '0 0 0 _x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="device-management-85ddd7888f-qpms4", uid="u1", container="device-management", job="kube-state-metrics", instance="10.16.4.57:8080"}'
+        values: '_ _ _ 1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: InstanceContainerRestarted
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: device-management-85ddd7888f-qpms4
+              container: device-management
+            exp_annotations: *annotations
+
+  # ------------------------------------------------------------------
+  # Two kube-state-metrics replicas report the same pod with a flat, nonzero count.
+  # One replica leaves and comes back (its node is lost). The pod did not restart, so
+  # nothing fires: the replicas collapse to one series. Summing them instead would read
+  # 6, then 3, then 6, and report a restart that never happened.
+  # ------------------------------------------------------------------
+  - name: one of two kube-state-metrics replicas leaving and returning stays quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-0", uid="u7", container="nats", job="kube-state-metrics", instance="10.16.1.10:8080"}'
+        values: '3x40'
+      - series: 'kube_pod_container_status_restarts_total{namespace="dci-devicechain", pod="dc-nats-0", uid="u7", container="nats", job="kube-state-metrics", instance="10.16.2.20:8080"}'
+        values: '3 3 3 3 3 stale _x10 3x24'
+    alert_rule_test:
+      - {eval_time: 8m,  alertname: InstanceContainerRestarted, exp_alerts: []}
+      - {eval_time: 20m, alertname: InstanceContainerRestarted, exp_alerts: []}
+      - {eval_time: 30m, alertname: InstanceContainerRestarted, exp_alerts: []}
