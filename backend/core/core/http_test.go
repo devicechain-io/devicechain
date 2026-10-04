@@ -1121,10 +1121,12 @@ func startOnUnassignablePort(t *testing.T, ms *Microservice, lo, hi, round int) 
 			t.Fatalf("round %d: Start on port %d: %v", round, port, err)
 		}
 		if inodeErr != nil || inode == "" {
-			t.Fatalf("round %d: reading the bound socket's inode: %v", round, inodeErr)
+			_ = srv.Shutdown(context.Background())
+			t.Fatalf("round %d: reading the bound socket's inode: inode %q (err %v)", round, inode, inodeErr)
 		}
 		a, ok := bound.Addr().(*net.TCPAddr)
 		if !ok || !a.IP.Equal(net.IPv4(127, 0, 0, 1)) || (a.Port >= lo && a.Port <= hi) {
+			_ = srv.Shutdown(context.Background())
 			t.Fatalf("round %d: bound %v, want 127.0.0.1 on a port outside the auto-assign range [%d, %d]",
 				round, bound.Addr(), lo, hi)
 		}
@@ -1267,5 +1269,23 @@ func TestPortHolderProbeNamesTheHolderOfALivePort(t *testing.T) {
 	l.Close()
 	if v, report := probePortHolders(port, inode); v != holderLateRelease || !strings.Contains(report, "nothing holds") {
 		t.Errorf("after the close: verdict %v, report %q; want late release with no holder", v, report)
+	}
+}
+
+// A dual-stack listener on [::]:P is the typical Go listener and shows up only in
+// /proc/net/tcp6; a probe that skipped that table would call it "freed late".
+func TestPortHolderProbeNamesADualStackHolderOfALivePort(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("reads /proc/net/tcp6")
+	}
+	l, err := net.Listen("tcp", "[::]:0")
+	if err != nil {
+		t.Skipf("IPv6 is unavailable: %v", err)
+	}
+	defer l.Close()
+	port := l.Addr().(*net.TCPAddr).Port
+	v, report := probePortHolders(port, "1")
+	if v != holderTakenByOther || !strings.Contains(report, "tcp6") {
+		t.Errorf("held by a dual-stack socket that is not ours: verdict %v, report %q; want taken by another socket naming tcp6", v, report)
 	}
 }
