@@ -149,7 +149,9 @@ public sealed class MqttSessionOptions
     /// How long disposing the session waits for RUNNING command handlers, after cancelling them.
     /// Applies only when <see cref="MaxConcurrentCommands"/> is above 1. Default 5 seconds.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The value is negative or longer than <see cref="MaxCommandShutdownTimeout"/>.
+    /// </exception>
     public TimeSpan CommandShutdownTimeout
     {
         get => _commandShutdownTimeout;
@@ -161,7 +163,19 @@ public sealed class MqttSessionOptions
                     nameof(value), value, "CommandShutdownTimeout must not be negative");
             }
 
+            if (value > MaxCommandShutdownTimeout)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), value, "CommandShutdownTimeout must not exceed " + MaxCommandShutdownTimeout);
+            }
+
             _commandShutdownTimeout = value;
         }
     }
+
+    /// <summary>
+    /// The longest <see cref="CommandShutdownTimeout"/> accepted: 24 days, inside what the timer
+    /// accepts on every supported target (int.MaxValue milliseconds is about 24.8 days).
+    /// </summary>
+    public static readonly TimeSpan MaxCommandShutdownTimeout = TimeSpan.FromDays(24);
 }

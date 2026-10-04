@@ -964,12 +964,82 @@ public class MqttDeviceSessionTests
     }
 
     [Fact]
+    public async Task ALargestAllowedShutdownTimeoutStillTearsTheConnectionDown()
+    {
+        var connection = new FakeMqttConnection();
+        var options = ConcurrentOptions(2);
+        options.CommandShutdownTimeout = MqttSessionOptions.MaxCommandShutdownTimeout;
+        var session = new MqttDeviceSession(options, new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (c, ct) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await session.DisposeAsync().AsTask().WaitAsync(Timeout);
+
+        Assert.False(connection.IsConnected);
+        Assert.Equal(MqttSessionState.Stopped, session.State);
+    }
+
+    [Fact]
+    public async Task ARedeliveryAfterCompletionIsNotRunAgainWhenConcurrent()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.Release("cmd-1");
+        await using var session = new MqttDeviceSession(ConcurrentOptions(2), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+
+        await connection.DeliverInOrder("cmd-1", "work", "n1");
+        Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(1)));
+        await connection.DeliverInOrder("cmd-1", "work", "n2");
+        Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(2)));
+
+        Assert.Equal(1, probe.Invocations("cmd-1"));
+        Assert.Equal(new[] { "n1", "n2" }, connection.Responses().Select(r => r.DispatchNonce).OrderBy(n => n));
+    }
+
+    [Fact]
+    public async Task ALaneSelectorFailureIsAnsweredUnderTheDeliverysOwnNonce()
+    {
+        var connection = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(
+            ConcurrentOptions(2, c => throw new InvalidOperationException("lane")), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (c, ct) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await connection.DeliverInOrder("bad", "bad", "nz");
+        Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(1)));
+
+        Assert.Equal("nz", connection.Responses().Single().DispatchNonce);
+    }
+
+    [Fact]
+    public async Task ADuplicateOfAQueuedCommandDoesNotHoldDisposeOpen()
+    {
+        var connection = new FakeMqttConnection();
+        var options = ConcurrentOptions(2, _ => "L");
+        options.CommandShutdownTimeout = TimeSpan.FromSeconds(3);
+        var session = new MqttDeviceSession(options, new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, async (c, ct) =>
+        {
+            try { await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, ct); } catch (OperationCanceledException) { }
+            return CommandOutcome.Succeeded();
+        });
+        _ = connection.DeliverInOrder("a", "work");
+        _ = connection.DeliverInOrder("b", "work", "n1");
+        await connection.DeliverInOrder("b", "work", "n2");
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await session.DisposeAsync();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), $"dispose took {sw.Elapsed}");
+    }
+
+    [Fact]
     public void ConcurrencySettingsOutOfRangeAreRefused()
     {
         var options = Options();
         Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxConcurrentCommands = 0);
         Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxConcurrentCommands = -1);
         Assert.Throws<ArgumentOutOfRangeException>(() => options.CommandShutdownTimeout = TimeSpan.FromSeconds(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.CommandShutdownTimeout = TimeSpan.FromDays(60));
         Assert.Equal(1, options.MaxConcurrentCommands);
     }
 

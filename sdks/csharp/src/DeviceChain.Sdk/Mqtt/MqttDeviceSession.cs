@@ -142,18 +142,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         _eventsTopic = DevicePlane.EventsTopic(options.InstanceId, options.Tenant, options.DeviceToken);
         _history = new CommandHistory(options.CommandHistorySize);
 
-        // The setters already refuse these; checking again here is what covers an options object
-        // built any other way, since the session trusts what it captures below.
-        if (options.MaxConcurrentCommands < 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), "MaxConcurrentCommands must be at least 1");
-        }
-
-        if (options.CommandShutdownTimeout < TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), "CommandShutdownTimeout must not be negative");
-        }
-
+        // The options setters already refuse out-of-range values, and the options class is sealed.
         _maxConcurrent = options.MaxConcurrentCommands;
         _laneSelector = options.CommandLane;
         _shutdownTimeout = options.CommandShutdownTimeout;
@@ -926,8 +915,11 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
         // 🔴 CLOSE THE EXECUTOR BEFORE CANCELLING ANYTHING. If the token were cancelled first, a
         // running handler that saw it and returned would let the pump start a queued command with
-        // an already-cancelled token. Closing under the lock first means nothing starts after
-        // this point and the queued commands are cancelled, not run.
+        // an already-cancelled token. Closing under the lock first means no queued command is
+        // started after this point and the queued commands are cancelled, not run. One narrow
+        // window remains: the pump selects a job under the lock and starts it outside it, so a job
+        // selected just before the close can still enter its handler with a token that is already
+        // cancelled. That is harmless: the handler sees the cancellation at once.
         if (_maxConcurrent > 1)
         {
             CloseExecutor();
@@ -938,7 +930,15 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
         if (_maxConcurrent > 1)
         {
-            await DrainExecutorAsync().ConfigureAwait(false);
+            try
+            {
+                await DrainExecutorAsync().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Teardown below must run whatever the drain did: skipping it leaves a live socket
+                // on a session that reports Stopped, and a second dispose is a no-op.
+            }
         }
 
         // 🔴 TAKE THE GATE. Without it, disposal races an in-flight reconnect: the loop nulls

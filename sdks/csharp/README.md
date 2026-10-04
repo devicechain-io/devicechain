@@ -204,7 +204,7 @@ widens that window.
 **Dispose.** Disposing the session at a value above 1 first stops the executor: commands still
 waiting are never started and are not answered (they stay `SENT` until they time out), then it
 cancels the token running handlers were given and waits for them for up to
-`CommandShutdownTimeout` (5 seconds by default). A handler that ignores cancellation past that
+`CommandShutdownTimeout` (5 seconds by default, at most 24 days). A handler that ignores cancellation past that
 bound is abandoned and disposal still returns. Responses from handlers that finish during or after
 disposal are not published, so those commands time out rather than being answered. A handler that
 disposes its own session waits out the whole bound. At 1, disposal is unchanged and does not wait
