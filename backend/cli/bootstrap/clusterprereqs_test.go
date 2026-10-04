@@ -309,6 +309,74 @@ func TestInstallRefusesInsideTheConnectionItWritesThrough(t *testing.T) {
 	})
 }
 
+// callCounts counts every call to each of names inside fn. callPositions records only the
+// FIRST, which is exactly what hides a second call.
+func callCounts(t *testing.T, file, fn string, names ...string) map[string]int {
+	t.Helper()
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("reading %s: %v", file, err)
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), file, src, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", file, err)
+	}
+	counts := map[string]int{}
+	found := false
+	for _, d := range parsed.Decls {
+		decl, ok := d.(*ast.FuncDecl)
+		if !ok || decl.Recv != nil || decl.Name.Name != fn {
+			continue
+		}
+		found = true
+		ast.Inspect(decl, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if id, ok := call.Fun.(*ast.Ident); ok {
+					for _, name := range names {
+						if id.Name == name {
+							counts[name]++
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	if !found {
+		t.Fatalf("%s no longer declares %s", file, fn)
+	}
+	return counts
+}
+
+// 🔴 A DRY RUN'S REFUSALS ARE A FUNCTION OF THEIR OWN, and Install calls the refusal
+// once. callPositions keeps the first occurrence of each name, so a second
+// connectAndRefuse above the real one would become the position the order test pins
+// and blind it to the real call moving; and a second identity reader would be two
+// readers of one input.
+func TestInstallCallsItsRefusalsOnceAndTheDryRunMakesTheSameOnes(t *testing.T) {
+	c := callCounts(t, "install.go", "Install",
+		"connectAndRefuse", "IdentifyCluster", "identifyCluster", "rehearseInstallRefusals")
+	if c["connectAndRefuse"] != 1 {
+		t.Errorf("Install calls connectAndRefuse %d time(s), want 1 (the dry run goes through rehearseInstallRefusals)", c["connectAndRefuse"])
+	}
+	if c["IdentifyCluster"] != 0 || c["identifyCluster"] != 1 {
+		t.Errorf("Install reads the cluster's identity through IdentifyCluster %d and identifyCluster %d time(s), want 0 and 1", c["IdentifyCluster"], c["identifyCluster"])
+	}
+	if c["rehearseInstallRefusals"] != 1 {
+		t.Errorf("Install calls rehearseInstallRefusals %d time(s), want 1", c["rehearseInstallRefusals"])
+	}
+
+	fset, positions := callPositions(t, "install.go", "rehearseInstallRefusals", "identifyCluster", "connectAndRefuse")
+	for _, name := range []string{"identifyCluster", "connectAndRefuse"} {
+		if _, ok := positions[name]; !ok {
+			t.Fatalf("rehearseInstallRefusals no longer calls %s", name)
+		}
+	}
+	assertCallOrder(t, "rehearseInstallRefusals", fset, positions, []callOrder{
+		{"identifyCluster", "connectAndRefuse", "the refusals judge the cluster this rehearsal identified"},
+	})
+}
+
 // 🔴 A MISSING OUTPUT MUST STOP THE RUN, and the mutation round is why this test
 // exists: reading an absent output as an empty string SURVIVED, because every branch
 // inside applyClusterPrereqs needs a tofu binary and a live cluster to reach. The

@@ -4768,6 +4768,19 @@ therefore has a fourth cause, listed in [the alert table](./detection-engine.md#
 
 Nothing needs doing.
 
+#### `dcctl install --dry-run` makes the re-install refusals the install makes
+
+On a cluster that answers, a dry run now reads the install record and asks which instances run on
+the cluster, and fails with the install's own message when the install would be refused for what
+the cluster already holds: a re-install from a machine that holds no state for the cluster, changed
+settings while instances run on it, or a `--backup-snapshot-class` that cannot work. Before, it
+printed a plan and exited 0. A dry run aimed at a cluster that does not exist yet, or that it cannot
+reach, still prints its plan, and says those checks were not made. A dry run does not check
+everything the install refuses; for example, a cluster whose relational store was built by an older
+release is still refused only when the install runs.
+
+Nothing to do.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
