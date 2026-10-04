@@ -1,0 +1,47 @@
+# Unity-generated and machine-local state. Everything here is rebuilt by the
+# Editor on open, or belongs to one person's machine.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Bb]uilds/
+/[Mm]emory[Cc]aptures/
+/[Rr]ecordings/
+
+# IDE and generated project files
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.slnx
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# Crash reports and dumps
+sysinfo.txt
+crashlytics-build.properties
+*.dmp
+mono_crash.*
+
+# Scratch editor scripts used while driving the Editor from the command line
+/AgentScripts/
+/AgentScripts.meta
+
+# Art source build output: the committed models live under Assets/Sitepulse/Art/Models
+/ArtSource/out/
+/ArtSource/renders/
+*.blend
+*.blend1
+*.blend2
+__pycache__/
+*.pyc
