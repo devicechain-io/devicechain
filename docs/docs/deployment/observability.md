@@ -713,7 +713,7 @@ each stream and KV bucket it uses every 30 seconds, and five alerts watch the re
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `JetStreamNotReplicatedAsConfigured` | warning | For 15 minutes, a stream has had fewer replicas than the instance is configured for, as seen by the service named by the `job` label. The instance is not highly available for that stream. | Make sure the NATS cluster has enough servers for `instance.config.infrastructure.nats.streamReplicas`. A replica increase runs only when a service starts, so once the cluster is large enough, restart the affected Deployments. |
-| `JetStreamReplicaPeersDegraded` | warning | For 20 minutes, a stream has had fewer current, online copies than it has replicas. Losing its leader may lose data or availability. The wait is long because newly added replicas copy the stream's data before they count as current. | Check the health and placement of the NATS pods. Three replicas on pods that share one node do not survive the loss of that node. |
+| `JetStreamReplicaPeersDegraded` | warning | For 20 minutes, a stream has had fewer current, online copies than it has replicas. Losing its leader may lose data or availability. The wait is long because newly added replicas copy the stream's data before they count as current, and because under sustained high event rates a copy can fall briefly behind; see below. | Check the health and placement of the NATS pods. Three replicas on pods that share one node do not survive the loss of that node. |
 | `JetStreamLeaseBucketNotReplicated` | critical | On an instance configured for more than one replica, the bucket that decides which pod may write has fewer than three replicas. Losing its server blocks every standby from taking over. | As for `JetStreamNotReplicatedAsConfigured`. Do not rely on failover while it fires. |
 | `JetStreamClusterUnused` | warning | The broker is clustered, but every stream is configured for one replica, so the instance runs several NATS servers and survives no server loss. | Set `streamReplicas` to match the cluster (`dcctl install --ha` sets both), or scale the NATS cluster down if one server is what you intended. |
 | `JetStreamReplicationUnobserved` | warning | For 15 minutes, a running pod has been unable to read the replication state of a stream it could read earlier. The alerts above cannot judge that stream for that pod while this fires, so its replication is unknown, not healthy. | If it fires for every stream at once, the broker or JetStream is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its leader: inspect it with `nats stream info`. |
@@ -734,6 +734,17 @@ each stream and KV bucket it uses every 30 seconds, and five alerts watch the re
 - It resolves six hours after the pod last read the stream, even if the stream is still
   unreadable. A resolved notification is not proof of recovery.
 - A pod that is not running exports nothing, so it cannot fire. Pod health alerts cover that case.
+
+At sustained high event rates, `JetStreamReplicaPeersDegraded` can go pending and clear again
+without anything being wrong. A copy of one of the busiest streams falls a moment behind its
+leader, counts as not current until it catches up, and then does. In two 10-minute tests at 6,000
+events a second on a three-server broker, the busiest stream had a copy that was not current in
+about one check in five, and never for more than a few seconds at a time, and the alert went
+pending and cleared again repeatedly. It fires only when a stream has been short of current copies
+at every check for 20 minutes, so lag of this kind clears it rather than firing it. To check
+replication, run `dcctl ha verify`: it keeps re-checking for up to 90 seconds (`--settle`) before
+it reports a failure, so a copy that is briefly behind does not fail it, and it passed when run
+after each of those tests.
 
 The alerts read these series, which every service that uses JetStream exports:
 
