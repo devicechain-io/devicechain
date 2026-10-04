@@ -55,6 +55,12 @@ public delegate Task<CommandOutcome> CommandHandler(DeviceCommand command, Cance
 /// silent hang, which this SDK has been bitten by before. A Unity caller marshals to the main
 /// thread in its own pump.
 /// </para>
+/// <para>
+/// By default commands run strictly one at a time, in arrival order. Set
+/// <see cref="MqttSessionOptions.MaxConcurrentCommands"/> above 1 to run handlers in parallel;
+/// the platform's per-device delivery order then holds as EXECUTION order only within a lane
+/// (<see cref="MqttSessionOptions.CommandLane"/>).
+/// </para>
 /// </remarks>
 public sealed class MqttDeviceSession : IAsyncDisposable
 {
@@ -84,6 +90,33 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
     private readonly object _inFlightLock = new();
 
+    // The concurrent-command executor's state (MaxConcurrentCommands > 1), all guarded by
+    // _inFlightLock so that de-dupe and admission are ONE atomic decision.
+    //
+    // 🔑 THE OPTIONS ARE READ ONCE, HERE. MqttSessionOptions is a mutable class and the session
+    // keeps a reference to it; reading the cap on every message would let a caller who changed it
+    // mid-session run handlers inline while executor jobs were still running, breaking both the
+    // cap and lane order.
+    private readonly int _maxConcurrent;
+    private readonly Func<DeviceCommand, string?>? _laneSelector;
+    private readonly TimeSpan _shutdownTimeout;
+
+    // Admitted, not yet started, in arrival order.
+    private readonly LinkedList<Job> _waiting = new();
+
+    // Lanes that have a handler running right now.
+    private readonly HashSet<string> _busyLanes = new(StringComparer.Ordinal);
+
+    // Everything the executor has in flight that disposal must wait for: handler workers and the
+    // tasks that answer duplicates or lane failures. A counter and a completion source rather
+    // than a set of tasks, because a worker has no handle to the task that Task.Run returned.
+    private readonly TaskCompletionSource<bool> _drained =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private int _running;
+    private int _outstanding;
+    private bool _closed;
+
     private IMqttConnection? _connection;
     private CommandHandler? _handler;
     private MqttSessionState _state = MqttSessionState.Starting;
@@ -108,6 +141,41 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         _responsesTopic = DevicePlane.CommandResponsesTopic(options.InstanceId, options.Tenant, options.DeviceToken);
         _eventsTopic = DevicePlane.EventsTopic(options.InstanceId, options.Tenant, options.DeviceToken);
         _history = new CommandHistory(options.CommandHistorySize);
+
+        // The options setters already refuse out-of-range values, and the options class is sealed.
+        _maxConcurrent = options.MaxConcurrentCommands;
+        _laneSelector = options.CommandLane;
+        _shutdownTimeout = options.CommandShutdownTimeout;
+    }
+
+    /// <summary>
+    /// How many command handlers are running right now. Always 0 unless
+    /// <see cref="MqttSessionOptions.MaxConcurrentCommands"/> is above 1.
+    /// </summary>
+    public int RunningCommands
+    {
+        get
+        {
+            lock (_inFlightLock)
+            {
+                return _running;
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many admitted commands are waiting for a handler slot or for their lane. Always 0
+    /// unless <see cref="MqttSessionOptions.MaxConcurrentCommands"/> is above 1.
+    /// </summary>
+    public int QueuedCommands
+    {
+        get
+        {
+            lock (_inFlightLock)
+            {
+                return _waiting.Count;
+            }
+        }
     }
 
     /// <summary>The session's current state.</summary>
@@ -428,22 +496,26 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         // while the handler is still working coalesces onto that execution instead of starting a
         // second one.
         //
-        // 🔴 BUT BE HONEST ABOUT WHEN IT IS REACHABLE — AN EARLIER VERSION OF THIS COMMENT WAS
-        // NOT. Over the shipped MQTTnet transport that window CANNOT OCCUR: MQTTnet dispatches
-        // inbound PUBLISHes strictly SEQUENTIALLY, measured — with a handler blocked, a second
-        // command published at t=85ms was not dispatched until the first handler returned at
-        // t=1587ms. So a real redelivery always arrives AFTER the handler finished and is
-        // answered from the completed-command cache above; only the fake reaches this branch.
+        // 🔴 WHETHER THAT WINDOW IS REACHABLE DEPENDS ON MaxConcurrentCommands. At 1, over the
+        // shipped MQTTnet transport it is closed by sequential dispatch, measured: with a handler
+        // blocked, a second command published at t=85ms was not dispatched until the first
+        // handler returned at t=1587ms, so a real redelivery always arrives AFTER the handler
+        // finished and is answered from the completed-command cache above. Above 1 it is LIVE:
+        // the callback returns at admission, so a re-dispatched command can arrive while its
+        // first delivery is running or still queued, and this map is the only thing standing
+        // between it and a second actuation (see AdmitConcurrent, which registers a command here
+        // at admission rather than at start).
         //
-        // It stays because the seam admits other transports — the hand-rolled MQTT 3.1.1 client
-        // that is the stated fallback would be free to dispatch concurrently — and because the
-        // cost is a dictionary lookup. It is defence in depth, not a live guard, and saying so is
-        // better than leaving a comment that implies coverage the shipped path does not exercise.
-        //
-        // 🔑 THE SEQUENTIAL DISPATCH HAS A CONSEQUENCE WORTH KNOWING: a slow command handler
-        // HEAD-OF-LINE BLOCKS every later command for that device. A machine part-way through a
-        // multi-second command cannot be redirected until it finishes. That is a property to
-        // design scenes around, not a defect to fix here.
+        // 🔑 AT 1, A SLOW HANDLER HEAD-OF-LINE BLOCKS every later command for that device: a
+        // machine part-way through a multi-second command cannot be redirected until it
+        // finishes. MaxConcurrentCommands is the opt-out, and it trades away execution order
+        // outside a lane.
+        if (_maxConcurrent > 1)
+        {
+            AdmitConcurrent(envelope, handler);
+            return;
+        }
+
         Task<CommandOutcome>? existing = null;
         TaskCompletionSource<CommandOutcome>? owned = null;
 
@@ -508,6 +580,10 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         var connection = Volatile.Read(ref _connection);
         if (connection == null || !connection.IsConnected)
         {
+            // 🔴 THIS ANSWER IS DROPPED, NOT HELD FOR THE RECONNECT. A handler that finishes while
+            // the session is reconnecting has its response lost, and nothing re-dispatches a SENT
+            // MQTT command, so it stays SENT until it times out. That is true at any concurrency;
+            // a longer-running handler just makes the window wider.
             return;
         }
 
@@ -535,9 +611,263 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         }
         catch (Exception)
         {
-            // The broker will redeliver the command if this never landed, and the cached outcome
-            // above answers the redelivery without re-running the handler.
+            // 🔴 NOTHING WILL REDELIVER THE COMMAND IF THIS NEVER LANDED. A platform command
+            // reaches the device at QoS 0, which the broker does not store or redeliver, so the
+            // command stays SENT until it times out. The outcome IS recorded in the history, so
+            // if the platform does re-dispatch the command (a publish that reported an error but
+            // landed is released and sent again under a new nonce), that delivery is answered
+            // from the history without re-running the handler.
         }
+    }
+
+    // One admitted command in the concurrent executor.
+    private sealed class Job
+    {
+        public Job(CommandDeliveryEnvelope envelope, DeviceCommand command, string? lane, CommandHandler handler)
+        {
+            Envelope = envelope;
+            Command = command;
+            Lane = lane;
+            Handler = handler;
+            Owned = new TaskCompletionSource<CommandOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public CommandDeliveryEnvelope Envelope { get; }
+
+        public DeviceCommand Command { get; }
+
+        public string? Lane { get; }
+
+        public CommandHandler Handler { get; }
+
+        public TaskCompletionSource<CommandOutcome> Owned { get; }
+    }
+
+    // What the locked part of admission decided; the work it implies happens OUTSIDE the lock,
+    // because publishing runs transport code and a fake or real connection may complete
+    // synchronously.
+    private enum Admission
+    {
+        Dropped,
+        AnswerFrom,
+        Queued,
+        LaneFailed,
+    }
+
+    // The N > 1 receive path. It never awaits a handler: it decides, under the lock, what this
+    // delivery is, and returns.
+    private void AdmitConcurrent(CommandDeliveryEnvelope envelope, CommandHandler handler)
+    {
+        var token = envelope.Token!;
+        var command = new DeviceCommand(token, envelope.Name ?? string.Empty, envelope.Payload);
+
+        // User code, so outside the lock. A throw is captured, not propagated.
+        string? lane = null;
+        string? laneError = null;
+        if (_laneSelector != null)
+        {
+            try
+            {
+                lane = _laneSelector(command);
+            }
+            catch (Exception ex)
+            {
+                laneError = ex.Message;
+            }
+        }
+
+        var admission = Admission.Dropped;
+        Task<CommandOutcome>? answerFrom = null;
+        CommandOutcome? laneFailure = null;
+        List<Job>? toStart = null;
+
+        lock (_inFlightLock)
+        {
+            if (_closed)
+            {
+                // Disposing: no answer. The command stays SENT until it times out, exactly like
+                // an unanswered command today; answering Failed would claim the device tried.
+            }
+            else if (_history.TryGet(token, out var cached))
+            {
+                admission = Admission.AnswerFrom;
+                answerFrom = Task.FromResult(cached!);
+                _outstanding++;
+            }
+            else if (_inFlight.TryGetValue(token, out var running))
+            {
+                // Running OR queued: a duplicate coalesces onto it, and does not wait inline, or
+                // one duplicate of a slow command would head-of-line block the device again.
+                admission = Admission.AnswerFrom;
+                answerFrom = running;
+                _outstanding++;
+            }
+            else if (laneError != null)
+            {
+                // The command never runs, so it has no reason to wait for a slot. Duplicates were
+                // coalesced above; this records the outcome so later ones are answered from it.
+                laneFailure = CommandOutcome.Failed($"the command lane selector threw: {laneError}");
+                _history.Add(token, laneFailure);
+                admission = Admission.LaneFailed;
+                _outstanding++;
+            }
+            else
+            {
+                var job = new Job(envelope, command, lane, handler);
+
+                // Registered at ADMISSION, not at start, so a duplicate of a QUEUED command
+                // coalesces too.
+                _inFlight[token] = job.Owned.Task;
+                _waiting.AddLast(job);
+                admission = Admission.Queued;
+                toStart = Pump();
+            }
+        }
+
+        switch (admission)
+        {
+            case Admission.AnswerFrom:
+                RunReserved(() => AnswerAsync(answerFrom!, envelope));
+                break;
+            case Admission.LaneFailed:
+                RunReserved(() => PublishResponseAsync(token, laneFailure!, envelope.DispatchNonce));
+                break;
+            case Admission.Queued:
+                StartJobs(toStart!);
+                break;
+        }
+    }
+
+    // Takes the startable jobs off the queue. Lock held. Start order is arrival order among the
+    // jobs that CAN start: one whose lane is busy is passed over, so a later job in a free lane
+    // may start first, while within a lane it is strict FIFO because a lane is released only when
+    // its handler has returned.
+    private List<Job> Pump()
+    {
+        var started = new List<Job>();
+        while (!_closed && _running < _maxConcurrent)
+        {
+            Job? next = null;
+            for (var node = _waiting.First; node != null; node = node.Next)
+            {
+                var lane = node.Value.Lane;
+                if (lane == null || !_busyLanes.Contains(lane))
+                {
+                    next = node.Value;
+                    _waiting.Remove(node);
+                    break;
+                }
+            }
+
+            if (next == null)
+            {
+                break;
+            }
+
+            if (next.Lane != null)
+            {
+                _busyLanes.Add(next.Lane);
+            }
+
+            _running++;
+            _outstanding++;
+            started.Add(next);
+        }
+
+        return started;
+    }
+
+    // The Task.Run is load-bearing: calling the handler inline would run a synchronously blocking
+    // handler on the receive thread. _outstanding was already incremented under the lock.
+    private void StartJobs(List<Job> jobs)
+    {
+        foreach (var job in jobs)
+        {
+            var captured = job;
+            RunReserved(() => RunJobAsync(captured));
+        }
+    }
+
+    // Every worker body is wrapped in one catch-all, so a faulted task is never left unobserved.
+    // The caller has already counted this work in _outstanding, under the lock that decided it.
+    private void RunReserved(Func<Task> body)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await body().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Handler failures are already turned into outcomes; this is the backstop.
+            }
+            finally
+            {
+                lock (_inFlightLock)
+                {
+                    _outstanding--;
+                    if (_closed && _outstanding == 0)
+                    {
+                        _drained.TrySetResult(true);
+                    }
+                }
+            }
+        });
+    }
+
+    private async Task RunJobAsync(Job job)
+    {
+        CommandOutcome outcome;
+        try
+        {
+            outcome = await job.Handler(job.Command, _stopped.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Same as the one-at-a-time path: a handler that threw did not carry the command out.
+            outcome = CommandOutcome.Failed($"the device's command handler threw: {ex.Message}");
+        }
+
+        List<Job> next;
+        lock (_inFlightLock)
+        {
+            _history.Add(job.Envelope.Token!, outcome);
+            _inFlight.Remove(job.Envelope.Token!);
+            _running--;
+            if (job.Lane != null)
+            {
+                _busyLanes.Remove(job.Lane);
+            }
+
+            next = Pump();
+        }
+
+        job.Owned.TrySetResult(outcome);
+
+        // The next job starts before this one's response is published: the slot is held from
+        // handler invocation to handler return, not through the publish.
+        StartJobs(next);
+
+        await PublishResponseAsync(job.Envelope.Token!, outcome, job.Envelope.DispatchNonce)
+            .ConfigureAwait(false);
+    }
+
+    private async Task AnswerAsync(Task<CommandOutcome> existing, CommandDeliveryEnvelope envelope)
+    {
+        CommandOutcome previous;
+        try
+        {
+            previous = await existing.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The command was queued when the session was disposed and never ran. Nothing to say.
+            return;
+        }
+
+        await PublishResponseAsync(envelope.Token!, previous, envelope.DispatchNonce)
+            .ConfigureAwait(false);
     }
 
     private async Task DetachAndDisposeAsync(IMqttConnection connection)
@@ -583,8 +913,33 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             return;
         }
 
+        // 🔴 CLOSE THE EXECUTOR BEFORE CANCELLING ANYTHING. If the token were cancelled first, a
+        // running handler that saw it and returned would let the pump start a queued command with
+        // an already-cancelled token. Closing under the lock first means no queued command is
+        // started after this point and the queued commands are cancelled, not run. One narrow
+        // window remains: the pump selects a job under the lock and starts it outside it, so a job
+        // selected just before the close can still enter its handler with a token that is already
+        // cancelled. That is harmless: the handler sees the cancellation at once.
+        if (_maxConcurrent > 1)
+        {
+            CloseExecutor();
+        }
+
         _stopped.Cancel();
         SetState(MqttSessionState.Stopped);
+
+        if (_maxConcurrent > 1)
+        {
+            try
+            {
+                await DrainExecutorAsync().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Teardown below must run whatever the drain did: skipping it leaves a live socket
+                // on a session that reports Stopped, and a second dispose is a no-op.
+            }
+        }
 
         // 🔴 TAKE THE GATE. Without it, disposal races an in-flight reconnect: the loop nulls
         // _connection before dialing, so a dispose landing in that window sees nothing to close,
@@ -621,6 +976,55 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         // thrown into an unobserved background task — while every later read of _stopped.Token
         // (message handling, response publishing) throws too. Neither holds an unmanaged resource
         // or a timer here, so letting the GC take them is strictly safer than a tidy Dispose.
+    }
+
+    private void CloseExecutor()
+    {
+        lock (_inFlightLock)
+        {
+            _closed = true;
+            foreach (var job in _waiting)
+            {
+                _inFlight.Remove(job.Envelope.Token!);
+
+                // Canceled, not faulted: a canceled task nobody observes raises no
+                // UnobservedTaskException. Queued commands are neither run nor answered.
+                job.Owned.TrySetCanceled();
+            }
+
+            _waiting.Clear();
+            if (_outstanding == 0)
+            {
+                _drained.TrySetResult(true);
+            }
+        }
+    }
+
+    // Waits, bounded, for running handlers (which now see a cancelled token) and the tasks that
+    // answer duplicates. A handler that ignores cancellation past the bound is abandoned and
+    // disposal still returns. Task.WaitAsync is net6+, and this compiles for netstandard2.1.
+    private async Task DrainExecutorAsync()
+    {
+        using var bound = new CancellationTokenSource();
+        var timer = Task.Delay(_shutdownTimeout, bound.Token);
+        try
+        {
+            await Task.WhenAny(_drained.Task, timer).ConfigureAwait(false);
+        }
+        finally
+        {
+            bound.Cancel();
+        }
+
+        // The timer is cancelled on every path; observe it so a cancelled delay is never unobserved.
+        try
+        {
+            await timer.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected: the drain won.
+        }
     }
 
     /// <summary>

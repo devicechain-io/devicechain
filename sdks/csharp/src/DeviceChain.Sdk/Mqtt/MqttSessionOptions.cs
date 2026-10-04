@@ -81,4 +81,101 @@ public sealed class MqttSessionOptions
 
     /// <summary>The ceiling on reconnect backoff.</summary>
     public TimeSpan ReconnectMaxDelay { get; set; } = TimeSpan.FromSeconds(30);
+
+    private int _maxConcurrentCommands = 1;
+    private TimeSpan _commandShutdownTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How many command handlers may run at once for this device. The default, 1, runs commands
+    /// strictly one at a time in the order they arrive.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Above 1, the receive callback hands each command to a bounded executor and returns, so
+    /// later commands are received while earlier handlers run. At most this many handlers run at
+    /// once; further commands wait and start in arrival order.
+    /// </para>
+    /// <para>
+    /// 🔴 THE PLATFORM DELIVERS A DEVICE'S COMMANDS IN ORDER; ABOVE 1 THE SDK EXECUTES THEM IN THAT
+    /// ORDER ONLY WITHIN A LANE (see <see cref="CommandLane"/>). A sequence whose order is its
+    /// meaning, such as writing a firmware image and then executing it, must share a lane, or the
+    /// two can run at the same time.
+    /// </para>
+    /// <para>
+    /// Read once, when the session is constructed; changing it afterwards has no effect. A value
+    /// below 1 throws, because 0 must not read as "unbounded".
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value is below 1.</exception>
+    public int MaxConcurrentCommands
+    {
+        get => _maxConcurrentCommands;
+        set
+        {
+            if (value < 1)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), value, "MaxConcurrentCommands must be at least 1");
+            }
+
+            _maxConcurrentCommands = value;
+        }
+    }
+
+    /// <summary>
+    /// Optionally maps a command to an ordered lane. Commands in the same lane run strictly in
+    /// arrival order, each starting only after the previous one's handler has returned; different
+    /// lanes run in parallel, subject to <see cref="MaxConcurrentCommands"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A null lane (no selector, or a selector that returns null) means NO ordering constraint.
+    /// Someone who raises <see cref="MaxConcurrentCommands"/> is asking for parallelism, so
+    /// defaulting null to one shared lane would make the setting a no-op until a selector was
+    /// also written. To order everything except some commands, return one constant lane for
+    /// everything else.
+    /// </para>
+    /// <para>
+    /// Lanes are compared ordinally. A selector that throws does not run the command in no lane,
+    /// which would silently drop the ordering asked for: the command is not run and is answered
+    /// as failed. The selector is called on the receive path, so keep it cheap and do not call
+    /// back into the session. Ignored when <see cref="MaxConcurrentCommands"/> is 1, where
+    /// one-at-a-time already satisfies every lane. Read once, when the session is constructed.
+    /// </para>
+    /// </remarks>
+    public Func<DeviceCommand, string?>? CommandLane { get; set; }
+
+    /// <summary>
+    /// How long disposing the session waits for RUNNING command handlers, after cancelling them.
+    /// Applies only when <see cref="MaxConcurrentCommands"/> is above 1. Default 5 seconds.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The value is negative or longer than <see cref="MaxCommandShutdownTimeout"/>.
+    /// </exception>
+    public TimeSpan CommandShutdownTimeout
+    {
+        get => _commandShutdownTimeout;
+        set
+        {
+            if (value < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), value, "CommandShutdownTimeout must not be negative");
+            }
+
+            if (value > MaxCommandShutdownTimeout)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), value, "CommandShutdownTimeout must not exceed " + MaxCommandShutdownTimeout);
+            }
+
+            _commandShutdownTimeout = value;
+        }
+    }
+
+    /// <summary>
+    /// The longest <see cref="CommandShutdownTimeout"/> accepted: 24 days, inside what the timer
+    /// accepts on every supported target (int.MaxValue milliseconds is about 24.8 days).
+    /// </summary>
+    public static readonly TimeSpan MaxCommandShutdownTimeout = TimeSpan.FromDays(24);
 }

@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -599,6 +600,449 @@ public class MqttDeviceSessionTests
             DevicePlane.CommandResponsesTopic("inst", "acme", "sensor-002"));
     }
 
+    // ── concurrent command handlers ──────────────────────────────────────────
+    //
+    // Deliveries here go through DeliverInOrder, which models the shipped transport: ONE pump
+    // that calls the receive callback for message k+1 only after the callback for message k has
+    // returned. The Task it returns completes when the callback returns, which is the point at
+    // which the transport acknowledges the message.
+
+    private static async Task<bool> CompletesAsync(Task task)
+    {
+        return await Task.WhenAny(task, Task.Delay(Timeout)) == task;
+    }
+
+    private static MqttSessionOptions ConcurrentOptions(int max, Func<DeviceCommand, string?>? lane = null)
+    {
+        var options = Options();
+        options.MaxConcurrentCommands = max;
+        options.CommandLane = lane;
+        return options;
+    }
+
+    // Handler A blocks a thread synchronously, which is what catches an executor that runs the
+    // handler inline on the receive thread. It is one blocked thread-pool thread, which is fine;
+    // do not scale this pattern up into thread-pool starvation.
+    [Fact]
+    public async Task TwoSlowHandlersOverlapWhenTwoMayRunAtOnce()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.BlockSynchronously("a");
+        await using var session = new MqttDeviceSession(ConcurrentOptions(2), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            var a = connection.DeliverInOrder("a", "work");
+            var b = connection.DeliverInOrder("b", "work");
+
+            Assert.True(await CompletesAsync(Task.WhenAll(probe.Entered("a"), probe.Entered("b"))),
+                "both handlers should be running at once");
+            // The callback returned for A while A is still held: the receive path is free.
+            Assert.True(await CompletesAsync(a));
+            Assert.True(await CompletesAsync(b));
+            Assert.Equal(2, probe.MaxRunning);
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    // The counterweight to the test above: with the default, behaviour is exactly as before. It
+    // passes on the old code by design.
+    [Fact]
+    public async Task WithTheDefaultHandlersRunOneAtATimeExactlyAsBefore()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        var options = Options();
+        Assert.Equal(1, options.MaxConcurrentCommands);
+        await using var session = new MqttDeviceSession(options, new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            var a = connection.DeliverInOrder("a", "work");
+            var b = connection.DeliverInOrder("b", "work");
+
+            Assert.True(await CompletesAsync(probe.Entered("a")));
+            Assert.False(a.IsCompleted);
+            Assert.False(probe.Entered("b").IsCompleted);
+
+            probe.Release("a");
+            // The acknowledgement point is after the response is published.
+            Assert.True(await CompletesAsync(a));
+            Assert.Contains(connection.Responses(), r => r.CommandToken == "a");
+
+            probe.Release("b");
+            Assert.True(await CompletesAsync(b));
+            Assert.Equal(new[] { "a", "b" }, probe.EntryOrder());
+            Assert.Equal(1, probe.MaxRunning);
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task SameLaneCommandsRunInArrivalOrderWhileAnotherLaneRuns()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.Release("x2");
+        probe.Release("y1");
+        probe.Release("y2");
+        await using var session = new MqttDeviceSession(
+            ConcurrentOptions(3, c => c.Name), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            // Lane is the command name: x1 and x2 share lane "X", y1 and y2 share lane "Y".
+            _ = connection.DeliverInOrder("x1", "X");
+            _ = connection.DeliverInOrder("x2", "X");
+            _ = connection.DeliverInOrder("y1", "Y");
+            _ = connection.DeliverInOrder("y2", "Y");
+
+            // The other lane completes while x1 is held, which gives the executor every chance to
+            // start x2 early.
+            Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(2)));
+            Assert.Equal(new[] { "y1", "y2" }, connection.Responses().Select(r => r.CommandToken).OrderBy(t => t));
+            Assert.False(probe.Entered("x2").IsCompleted);
+            Assert.Equal(1, session.QueuedCommands);
+
+            probe.Release("x1");
+            Assert.True(await CompletesAsync(probe.Entered("x2")));
+            var order = probe.EntryOrder();
+            // The three that may start together can reach the handler in any order; x2 is last.
+            Assert.Equal(new[] { "x1", "y1", "y2" }, order.Take(3).OrderBy(t => t));
+            Assert.Equal("x2", order[3]);
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task NoMoreThanTheCapRunAndTheRestStartInArrivalOrder()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        await using var session = new MqttDeviceSession(ConcurrentOptions(2), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            var deliveries = new[]
+            {
+                _ = connection.DeliverInOrder("c1", "work"),
+                _ = connection.DeliverInOrder("c2", "work"),
+                _ = connection.DeliverInOrder("c3", "work"),
+                _ = connection.DeliverInOrder("c4", "work"),
+            };
+            Assert.True(await CompletesAsync(Task.WhenAll(deliveries)));
+            Assert.True(await CompletesAsync(Task.WhenAll(probe.Entered("c1"), probe.Entered("c2"))));
+            Assert.Equal(2, session.RunningCommands);
+            Assert.Equal(2, session.QueuedCommands);
+            Assert.False(probe.Entered("c3").IsCompleted);
+
+            probe.Release("c1");
+            // c3, not c4: waiting commands start in arrival order.
+            Assert.True(await CompletesAsync(probe.Entered("c3")));
+            Assert.False(probe.Entered("c4").IsCompleted);
+            Assert.Equal(1, session.QueuedCommands);
+
+            probe.Release("c2");
+            probe.Release("c3");
+            probe.Release("c4");
+            Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(4)));
+            Assert.Equal(2, probe.MaxRunning);
+            Assert.Equal(new[] { "c1", "c2" }, probe.EntryOrder().Take(2).OrderBy(t => t));
+            Assert.Equal(new[] { "c3", "c4" }, probe.EntryOrder().Skip(2));
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task ADuplicateOfARunningCommandIsAnsweredWithoutASecondExecutionAndBlocksNothing()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.Release("cmd-2");
+        await using var session = new MqttDeviceSession(ConcurrentOptions(2), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            _ = connection.DeliverInOrder("cmd-1", "work", "nonce-a");
+            Assert.True(await CompletesAsync(probe.Entered("cmd-1")));
+            var duplicate = connection.DeliverInOrder("cmd-1", "work", "nonce-b");
+            _ = connection.DeliverInOrder("cmd-2", "work", "nonce-c");
+
+            // Neither the duplicate nor the command behind it waits for the slow handler.
+            Assert.True(await CompletesAsync(duplicate));
+            Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(1)));
+            Assert.Equal("cmd-2", connection.Responses()[0].CommandToken);
+
+            probe.Release("cmd-1");
+            Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(3)));
+            Assert.Equal(1, probe.Invocations("cmd-1"));
+            var answers = connection.Responses().Where(r => r.CommandToken == "cmd-1").ToList();
+            Assert.Equal(new[] { "nonce-a", "nonce-b" }, answers.Select(r => r.DispatchNonce).OrderBy(n => n));
+            Assert.All(answers, r => Assert.True(r.Success));
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task ADuplicateOfAQueuedCommandCoalescesOntoIt()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.Release("c2");
+        await using var session = new MqttDeviceSession(
+            ConcurrentOptions(2, _ => "L"), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            _ = connection.DeliverInOrder("c1", "work", "n1");
+            Assert.True(await CompletesAsync(probe.Entered("c1")));
+            _ = connection.DeliverInOrder("c2", "work", "n2a");
+            var duplicate = connection.DeliverInOrder("c2", "work", "n2b");
+
+            // c2 is queued behind c1 in the same lane; its duplicate must not wait for c1.
+            Assert.True(await CompletesAsync(duplicate));
+            Assert.Equal(1, session.QueuedCommands);
+
+            probe.Release("c1");
+            Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(3)));
+            Assert.Equal(1, probe.Invocations("c2"));
+            var answers = connection.Responses().Where(r => r.CommandToken == "c2").ToList();
+            Assert.Equal(new[] { "n2a", "n2b" }, answers.Select(r => r.DispatchNonce).OrderBy(n => n));
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task AThrowingHandlerIsAnsweredFailedWhileAnotherStillRuns()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.ThrowFor("b");
+        await using var session = new MqttDeviceSession(ConcurrentOptions(2), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            _ = connection.DeliverInOrder("a", "work");
+            Assert.True(await CompletesAsync(probe.Entered("a")));
+            _ = connection.DeliverInOrder("b", "work");
+
+            Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(1)));
+            var response = connection.Responses()[0];
+            Assert.Equal("b", response.CommandToken);
+            Assert.False(response.Success);
+            Assert.StartsWith("the device's command handler threw", response.Error);
+            Assert.False(probe.Exited("a").IsCompleted);
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task ALaneSelectorThatThrowsFailsTheCommandWithoutRunningIt()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.Release("bad-1");
+        await using var session = new MqttDeviceSession(
+            ConcurrentOptions(2, c => c.Name == "bad" ? throw new InvalidOperationException("no lane") : null),
+            new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+        try
+        {
+            await connection.DeliverInOrder("bad-1", "bad");
+
+            Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(1)));
+            Assert.Equal(0, probe.Invocations("bad-1"));
+            var response = connection.Responses().Single();
+            Assert.Equal("bad-1", response.CommandToken);
+            Assert.False(response.Success);
+            Assert.Contains("lane selector", response.Error);
+        }
+        finally
+        {
+            probe.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task DisposeCancelsRunningHandlersWaitsForThemAndNeverStartsQueuedOnes()
+    {
+        const string marker = "dc-concurrent-dispose-marker";
+        var unobserved = 0;
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            // The event is process-wide and test classes run in parallel, so count only ours.
+            if (e.Exception.Flatten().InnerExceptions.Any(x => x.Message.Contains(marker)))
+            {
+                Interlocked.Increment(ref unobserved);
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.OnCancel("a", () => new OperationCanceledException());
+        probe.OnCancel("b", () => new InvalidOperationException(marker));
+        var session = new MqttDeviceSession(ConcurrentOptions(2), new FakeMqttClientFactory(connection));
+        try
+        {
+            await StartAsync(session, connection, probe.Handler);
+            _ = connection.DeliverInOrder("a", "work");
+            _ = connection.DeliverInOrder("b", "work");
+            var c = connection.DeliverInOrder("c", "work");
+            Assert.True(await CompletesAsync(c));
+            Assert.True(await CompletesAsync(Task.WhenAll(probe.Entered("a"), probe.Entered("b"))));
+            Assert.Equal(1, session.QueuedCommands);
+
+            await session.DisposeAsync().AsTask().WaitAsync(Timeout);
+
+            // Disposal waited for both: they have already exited, not merely been told to.
+            Assert.True(probe.Exited("a").IsCompleted);
+            Assert.True(probe.Exited("b").IsCompleted);
+            Assert.False(probe.Entered("c").IsCompleted);
+            Assert.Equal(2, probe.Started);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Assert.Equal(0, Volatile.Read(ref unobserved));
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+            probe.ReleaseAll();
+            await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task DisposeIsBoundedByTheShutdownTimeout()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        var options = ConcurrentOptions(2);
+        options.CommandShutdownTimeout = TimeSpan.FromMilliseconds(200);
+        var session = new MqttDeviceSession(options, new FakeMqttClientFactory(connection));
+        try
+        {
+            // This handler ignores cancellation and stays running.
+            await StartAsync(session, connection, probe.Handler);
+            _ = connection.DeliverInOrder("stuck", "work");
+            Assert.True(await CompletesAsync(probe.Entered("stuck")));
+
+            await session.DisposeAsync().AsTask().WaitAsync(Timeout);
+
+            Assert.Equal(1, session.RunningCommands);
+        }
+        finally
+        {
+            // Do not leak a running handler into later tests.
+            probe.ReleaseAll();
+            await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ALargestAllowedShutdownTimeoutStillTearsTheConnectionDown()
+    {
+        var connection = new FakeMqttConnection();
+        var options = ConcurrentOptions(2);
+        options.CommandShutdownTimeout = MqttSessionOptions.MaxCommandShutdownTimeout;
+        var session = new MqttDeviceSession(options, new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (c, ct) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await session.DisposeAsync().AsTask().WaitAsync(Timeout);
+
+        Assert.False(connection.IsConnected);
+        Assert.Equal(MqttSessionState.Stopped, session.State);
+    }
+
+    [Fact]
+    public async Task ARedeliveryAfterCompletionIsNotRunAgainWhenConcurrent()
+    {
+        var connection = new FakeMqttConnection();
+        var probe = new HandlerProbe();
+        probe.Release("cmd-1");
+        await using var session = new MqttDeviceSession(ConcurrentOptions(2), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, probe.Handler);
+
+        await connection.DeliverInOrder("cmd-1", "work", "n1");
+        Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(1)));
+        await connection.DeliverInOrder("cmd-1", "work", "n2");
+        Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(2)));
+
+        Assert.Equal(1, probe.Invocations("cmd-1"));
+        Assert.Equal(new[] { "n1", "n2" }, connection.Responses().Select(r => r.DispatchNonce).OrderBy(n => n));
+    }
+
+    [Fact]
+    public async Task ALaneSelectorFailureIsAnsweredUnderTheDeliverysOwnNonce()
+    {
+        var connection = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(
+            ConcurrentOptions(2, c => throw new InvalidOperationException("lane")), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (c, ct) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await connection.DeliverInOrder("bad", "bad", "nz");
+        Assert.True(await CompletesAsync(connection.WaitForPublishedAsync(1)));
+
+        Assert.Equal("nz", connection.Responses().Single().DispatchNonce);
+    }
+
+    [Fact]
+    public async Task ADuplicateOfAQueuedCommandDoesNotHoldDisposeOpen()
+    {
+        var connection = new FakeMqttConnection();
+        var options = ConcurrentOptions(2, _ => "L");
+        options.CommandShutdownTimeout = TimeSpan.FromSeconds(3);
+        var session = new MqttDeviceSession(options, new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, async (c, ct) =>
+        {
+            try { await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, ct); } catch (OperationCanceledException) { }
+            return CommandOutcome.Succeeded();
+        });
+        _ = connection.DeliverInOrder("a", "work");
+        _ = connection.DeliverInOrder("b", "work", "n1");
+        await connection.DeliverInOrder("b", "work", "n2");
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await session.DisposeAsync();
+
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), $"dispose took {sw.Elapsed}");
+    }
+
+    [Fact]
+    public void ConcurrencySettingsOutOfRangeAreRefused()
+    {
+        var options = Options();
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxConcurrentCommands = 0);
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.MaxConcurrentCommands = -1);
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.CommandShutdownTimeout = TimeSpan.FromSeconds(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.CommandShutdownTimeout = TimeSpan.FromDays(60));
+        Assert.Equal(1, options.MaxConcurrentCommands);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static async Task WaitForStateAsync(MqttDeviceSession session, MqttSessionState expected)
@@ -716,6 +1160,124 @@ public class MqttDeviceSessionTests
         }
     }
 
+    // Per-command gates for the concurrency tests: records entry order and peak concurrency, and
+    // holds each handler until the test releases it.
+    private sealed class HandlerProbe
+    {
+        private readonly object _lock = new();
+        private readonly Dictionary<string, TaskCompletionSource<bool>> _entered = new();
+        private readonly Dictionary<string, TaskCompletionSource<bool>> _exited = new();
+        private readonly Dictionary<string, TaskCompletionSource<bool>> _release = new();
+        private readonly Dictionary<string, int> _invocations = new();
+        private readonly HashSet<string> _sync = new();
+        private readonly HashSet<string> _throws = new();
+        private readonly Dictionary<string, Func<Exception>> _onCancel = new();
+        private readonly List<string> _order = new();
+        private int _running;
+        private int _max;
+
+        public int MaxRunning { get { lock (_lock) { return _max; } } }
+
+        public int Started { get { lock (_lock) { return _order.Count; } } }
+
+        private static TaskCompletionSource<bool> Gate(Dictionary<string, TaskCompletionSource<bool>> map, string key)
+        {
+            if (!map.TryGetValue(key, out var gate))
+            {
+                gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                map[key] = gate;
+            }
+
+            return gate;
+        }
+
+        public Task Entered(string token) { lock (_lock) { return Gate(_entered, token).Task; } }
+
+        public Task Exited(string token) { lock (_lock) { return Gate(_exited, token).Task; } }
+
+        public void Release(string token) { lock (_lock) { Gate(_release, token).TrySetResult(true); } }
+
+        public void BlockSynchronously(string token) { lock (_lock) { _sync.Add(token); } }
+
+        public void ThrowFor(string token) { lock (_lock) { _throws.Add(token); } }
+
+        // The handler waits for cancellation, then fails the way the factory says.
+        public void OnCancel(string token, Func<Exception> exception) { lock (_lock) { _onCancel[token] = exception; } }
+
+        public int Invocations(string token) { lock (_lock) { return _invocations.GetValueOrDefault(token); } }
+
+        public string[] EntryOrder() { lock (_lock) { return _order.ToArray(); } }
+
+        public void ReleaseAll()
+        {
+            lock (_lock)
+            {
+                foreach (var token in _entered.Keys.Concat(_order).ToList())
+                {
+                    Gate(_release, token).TrySetResult(true);
+                }
+            }
+        }
+
+        public async Task<CommandOutcome> Handler(DeviceCommand command, CancellationToken cancellationToken)
+        {
+            Task releaseTask;
+            bool sync, throws;
+            Func<Exception>? onCancel;
+            lock (_lock)
+            {
+                _invocations[command.Token] = _invocations.GetValueOrDefault(command.Token) + 1;
+                _order.Add(command.Token);
+                _running++;
+                _max = Math.Max(_max, _running);
+                releaseTask = Gate(_release, command.Token).Task;
+                sync = _sync.Contains(command.Token);
+                throws = _throws.Contains(command.Token);
+                onCancel = _onCancel.GetValueOrDefault(command.Token);
+                Gate(_entered, command.Token).TrySetResult(true);
+            }
+
+            try
+            {
+                if (throws)
+                {
+                    throw new InvalidOperationException("handler failed on purpose");
+                }
+
+                if (onCancel != null)
+                {
+                    try
+                    {
+                        await Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw onCancel();
+                    }
+                }
+
+                if (sync)
+                {
+                    releaseTask.Wait();
+                }
+                else
+                {
+                    await releaseTask;
+                }
+
+                return CommandOutcome.Succeeded();
+            }
+            finally
+            {
+                lock (_lock)
+                {
+                    _running--;
+                    Gate(_exited, command.Token).TrySetResult(true);
+                }
+            }
+        }
+    }
+
     private sealed class FakeMqttConnection : IMqttConnection
     {
         private readonly TaskCompletionSource<bool> _subackGate =
@@ -734,7 +1296,63 @@ public class MqttDeviceSessionTests
         // mutable to 0 with every gate green.
         public MqttQos? SubscribedQos { get; private set; }
 
-        public List<(string Topic, byte[] Payload, MqttQos Qos)> Published { get; } = new();
+        private readonly object _publishedLock = new();
+        private readonly List<(string Topic, byte[] Payload, MqttQos Qos)> _published = new();
+        private readonly List<(int Count, TaskCompletionSource<bool> Signal)> _publishWaiters = new();
+        private readonly object _orderLock = new();
+        private Task _orderTail = Task.CompletedTask;
+
+        // A snapshot: handlers publish from worker threads in the concurrency tests.
+        public List<(string Topic, byte[] Payload, MqttQos Qos)> Published
+        {
+            get { lock (_publishedLock) { return _published.ToList(); } }
+        }
+
+        public List<CommandResponseEnvelope> Responses() =>
+            Published.Select(p => JsonSerializer.Deserialize<CommandResponseEnvelope>(p.Payload)!).ToList();
+
+        // Completes once at least `count` messages have been published. Signalled by the publish
+        // itself, never polled.
+        public Task WaitForPublishedAsync(int count)
+        {
+            lock (_publishedLock)
+            {
+                if (_published.Count >= count)
+                {
+                    return Task.CompletedTask;
+                }
+
+                var signal = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _publishWaiters.Add((count, signal));
+                return signal.Task;
+            }
+        }
+
+        // Models the shipped transport: ONE pump that calls the receive callback for message k+1
+        // only after the callback for message k has returned. The returned Task completes when
+        // the callback returns, which is the point at which the transport acknowledges the message.
+        public Task DeliverInOrder(string token, string name, string dispatchNonce = "nonce-1")
+        {
+            lock (_orderLock)
+            {
+                var previous = _orderTail;
+                var delivery = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await previous;
+                    }
+                    catch (Exception)
+                    {
+                        // An earlier delivery's failure is its own caller's to see.
+                    }
+
+                    await DeliverCommandAsync(token, name, null, dispatchNonce);
+                });
+                _orderTail = delivery;
+                return delivery;
+            }
+        }
 
         public bool IsConnected { get; private set; }
 
@@ -767,7 +1385,25 @@ public class MqttDeviceSessionTests
 
         public Task PublishAsync(string topic, byte[] payload, MqttQos qos, CancellationToken cancellationToken)
         {
-            Published.Add((topic, payload, qos));
+            List<TaskCompletionSource<bool>> ready = new();
+            lock (_publishedLock)
+            {
+                _published.Add((topic, payload, qos));
+                for (var i = _publishWaiters.Count - 1; i >= 0; i--)
+                {
+                    if (_published.Count >= _publishWaiters[i].Count)
+                    {
+                        ready.Add(_publishWaiters[i].Signal);
+                        _publishWaiters.RemoveAt(i);
+                    }
+                }
+            }
+
+            foreach (var signal in ready)
+            {
+                signal.TrySetResult(true);
+            }
+
             return Task.CompletedTask;
         }
 

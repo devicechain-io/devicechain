@@ -312,6 +312,17 @@ Cada dispositivo recibe comandos en un topic acotado exclusivamente a ese dispos
 autorizado solo para ese topic. Un dispositivo no puede observar comandos dirigidos a ningún otro
 dispositivo de su inquilino.
 
+### El orden de entrega no es el orden de ejecución {#delivery-order}
+
+La plataforma entrega los comandos de un dispositivo en el orden en que los pusiste en cola. Que el
+dispositivo los *ejecute* en ese orden depende del propio dispositivo. Un dispositivo que atiende
+los comandos de uno en uno lo hace. Uno que ejecuta varios manejadores a la vez no, salvo para los
+comandos que haya agrupado: el ajuste `MaxConcurrentCommands` del SDK de .NET, por ejemplo, renuncia
+al orden de ejecución entre comandos a menos que compartan un carril. Una secuencia cuyo orden es su
+significado, como escribir una imagen de firmware y luego ejecutarla, tiene que agruparse en el
+dispositivo, porque la plataforma no puede hacer que un dispositivo que ejecuta dos comandos a la
+vez los ejecute uno tras otro.
+
 ## Un comando, muchos dispositivos {#command-batches}
 
 Un **lote de comandos** difunde un solo comando a muchos dispositivos como una única operación

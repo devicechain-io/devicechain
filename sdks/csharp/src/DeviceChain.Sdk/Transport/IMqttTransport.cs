@@ -108,6 +108,10 @@ public interface IMqttConnection : IAsyncDisposable
     /// only when the broker has PUBACKed — which is the durability point that matters: an
     /// unacked QoS-1 publish is not a delivered message.
     /// </summary>
+    /// <remarks>
+    /// Implementations must accept concurrent calls: a session running command handlers in
+    /// parallel publishes their responses from several threads at once.
+    /// </remarks>
     Task PublishAsync(string topic, byte[] payload, MqttQos qos, CancellationToken cancellationToken);
 
     /// <summary>
