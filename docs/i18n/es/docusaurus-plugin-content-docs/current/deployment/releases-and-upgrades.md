@@ -4146,7 +4146,9 @@ de mover los servicios ([detalles](#v0190-upgrade-infrastructure)):
 
 - Los servidores NATS se reinician por sus nuevas solicitudes y su límite, de uno en uno con
   `--ha`. Sin `--ha` el bróker no está disponible mientras se reinicia su único servidor,
-  normalmente alrededor de un minuto.
+  normalmente alrededor de un minuto. Con `--ha`, la ingesta HTTP puede responder `503` brevemente
+  mientras se sustituye un servidor; reinténtalo como con cualquier `503`
+  ([calidad de servicio](../guides/connecting-a-device.md#quality-of-service)).
 - Sin `--ha`, la detección se detiene mientras se reinicia el bróker, durante ese minuto más hasta
   25 segundos, y después reproduce el flujo desde su último punto de control
   ([La partición de la detección](#v0190-detect-lease-release)).
@@ -4171,9 +4173,11 @@ claves del almacén de eventos, tabla a tabla
 lecturas y escrituras de esa tabla esperan: unos segundos en el caso habitual, y como máximo 45
 segundos por tabla para la reconstrucción de la clave. El `event-management` anterior sigue
 recibiendo y almacenando eventos; un lote retenido el tiempo suficiente se entrega de nuevo y se
-almacena una sola vez. Con `--ha`, los dos pods nuevos arrancan a la vez: uno hace el trabajo
-mientras el otro espera, y el que espera puede ser reiniciado una vez por su comprobación de
-arranque. Es lo esperado. Si el trabajo se detiene (una tabla ocupada, el minuto agotado, demasiadas
+almacena una sola vez. Con `--ha`, los pods se
+renuevan de uno en uno, y el primer pod nuevo en arrancar hace el trabajo antes de estar listo. Un
+segundo pod nuevo que arranque mientras ese trabajo sigue en curso lo espera y puede ser reiniciado
+una vez por su comprobación de arranque; el que arranca después no tiene nada que esperar. Ambos
+casos son lo esperado. Si el trabajo se detiene (una tabla ocupada, el minuto agotado, demasiadas
 filas, más de 500 fragmentos, una tabla que tarda más de 40 segundos), `event-management` se detiene
 con un error que nombra la tabla y qué hacer, todos los demás servicios ejecutan la nueva versión, y
 el `event-management` anterior sigue almacenando eventos. Consulta

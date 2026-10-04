@@ -3866,7 +3866,9 @@ unavailable until it has restarted; writes made meanwhile are retried.
 services ([details](#v0190-upgrade-infrastructure)):
 
 - The NATS servers restart for their new requests and limit, one at a time under `--ha`. Without
-  `--ha` the broker is unavailable while its one server restarts, usually about a minute.
+  `--ha` the broker is unavailable while its one server restarts, usually about a minute. Under
+  `--ha`, HTTP ingest can briefly answer `503` while a server is replaced; retry it as for any
+  `503` ([quality of service](../guides/connecting-a-device.md#quality-of-service)).
 - Without `--ha`, detection stops while the broker restarts, for about that minute plus up to 25
   seconds, and then replays from its last checkpoint
   ([Detection's partition](#v0190-detect-lease-release)).
@@ -3888,8 +3890,10 @@ event store's keys, one table at a time ([The event store's keys](#v0190-event-s
 While it works on a table, reads and writes of that table wait: a few seconds in the expected
 case, and at most 45 seconds a table for the key rebuild. The previous `event-management` keeps
 receiving and storing events; a batch held long enough is delivered again and stored once. Under
-`--ha`, both new pods start together: one does the work while the other waits, and the waiting pod
-may be restarted once by its startup check. That is expected. If the work stops (a table kept busy,
+`--ha`, the pods roll one at a time, and whichever new pod starts first does the work before it is
+ready. A second new pod that starts while that work is still running waits for it and may be
+restarted once by its startup check; one that starts after it has nothing to wait for. Both are
+expected. If the work stops (a table kept busy,
 a minute run out, too many rows, more than 500 chunks, a table that takes more than 40 seconds),
 `event-management` stops with an error that names the table and what to do, every other service
 runs the new release, and the previous `event-management` keeps storing events. See
