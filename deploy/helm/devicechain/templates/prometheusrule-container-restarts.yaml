@@ -14,11 +14,27 @@ for the broker's own servers, which run in this namespace too.
 monitoring stack installs. Without kube-state-metrics the series does not exist and the
 rule never fires.
 
-increase() is taken PER SERIES and only then summed by pod and container. A pod REPLACED
-under the same name (a StatefulSet pod that was deleted) is not a restart: kube-state-metrics
-labels the series with the pod's uid, so the replacement is a new series starting at 0, and
-even where the two shared a series the drop to 0 reads to increase() as a counter reset that
-adds nothing. Only a container Kubernetes restarted in place counts.
+The counter is first collapsed to ONE logical series per container incarnation (namespace,
+pod, uid, container) with max, and only then is increase() taken over it. The scrape identity
+(instance, endpoint, service, and the kube-state-metrics replica) is not part of that
+identity: when kube-state-metrics itself moves, for instance because its node was lost, it
+comes back under a new `instance` label, and a pod that restarted meanwhile appears as a NEW
+series whose first sample is already 1. increase() per raw series would read 0 for both the
+old series and the new one and miss the restart; over the collapsed series it reads 0, gap, 1.
+Two kube-state-metrics replicas reporting the same pod collapse to the same one series, so a
+restart is one alert, not two.
+
+The uid stays in the grouping. A pod REPLACED under the same name (a StatefulSet pod that was
+deleted) is not a restart: its series is new, with a new uid, starting at 0. Without the uid
+a replacement that overlaps its predecessor in kube-state-metrics would hide behind the
+predecessor's higher count. Only a container Kubernetes restarted in place counts.
+
+LIMITS. A restart that happens while kube-state-metrics is away for MORE than 15 minutes is
+not reported: no sample from before the restart is left in the window. After an outage the
+alert clears 15 minutes after kube-state-metrics last reported before the outage, which is
+sooner than 15 minutes after the restart. A pod restarted before kube-state-metrics first saw
+it is not reported, and neither is one restarted across a kube-state-metrics upgrade that
+adds or removes the uid label.
 
 No `for:`. A restart is an event, and the 15-minute window is what keeps the alert visible
 long enough to be seen. No `or vector(0)`, for the reason prometheusrule-dead-letter.yaml
@@ -43,7 +59,11 @@ spec:
         - alert: InstanceContainerRestarted
           expr: |
             sum by (pod, container) (
-              increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}[15m])
+              increase(
+                (max by (namespace, pod, uid, container) (
+                  kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}
+                ))[15m:1m]
+              )
             ) > 0
           labels:
             severity: warning

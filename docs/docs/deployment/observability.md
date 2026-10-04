@@ -524,6 +524,11 @@ fires. A pod that is replaced rather than restarted, for example during an upgra
 `kubectl delete pod`, starts a new count and does not fire it. A pod that keeps restarting is
 also reported by the monitoring stack's own `KubePodCrashLooping`, after 15 minutes.
 
+The alert also reports a restart that happened while kube-state-metrics itself was being moved,
+for example after its node was lost, as long as kube-state-metrics is back within 15 minutes.
+After such an outage it clears 15 minutes after kube-state-metrics last reported before the
+outage. A restart during a longer kube-state-metrics outage is not reported.
+
 ## Tenants metered at the platform default {#tenant-ceilings}
 
 Every service that enforces a per-tenant ceiling reads each tenant's ceiling from

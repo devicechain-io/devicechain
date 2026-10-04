@@ -543,6 +543,11 @@ sustituye en lugar de reiniciarse, por ejemplo durante una actualización o tras
 `kubectl delete pod`, empieza una cuenta nueva y no la dispara. Un pod que se reinicia una y otra
 vez lo notifica también la propia `KubePodCrashLooping` de la pila de monitoreo, a los 15 minutos.
 
+La alerta también notifica un reinicio ocurrido mientras kube-state-metrics se estaba moviendo, por
+ejemplo tras perder su nodo, siempre que kube-state-metrics vuelva antes de 15 minutos. Tras una
+caída así se despeja 15 minutos después de la última vez que kube-state-metrics informó antes de la
+caída. Un reinicio durante una caída más larga de kube-state-metrics no se notifica.
+
 ## Inquilinos medidos con el valor por defecto de la plataforma {#tenant-ceilings}
 
 Cada servicio que aplica un techo por inquilino lee el techo de cada inquilino desde
