@@ -141,7 +141,7 @@ var compressSegmentBy = map[string]string{
 	// ~20 minutes). They are read through commonEventFilters, whose only non-time
 	// predicate is device_token (event_type is a coarse IN-list, too low-cardinality
 	// to be worth a segment of its own). events additionally carries a
-	// (device_token, occurred_time DESC) index for the per-device read.
+	// (tenant_id, device_token, occurred_time DESC) index for the per-device read.
 	"events":          "tenant_id, device_token",
 	"location_events": "tenant_id, device_token",
 	// measurement_events is read both directly and, for bucketed aggregation, on the

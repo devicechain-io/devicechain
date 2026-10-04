@@ -56,17 +56,14 @@ type Event struct {
 // own content-derived identity and is unique within (tenant, occurred_time) by
 // construction, so it closes the order.
 //
-// The per-device read is served in time order by events_device_token_occurred_time_idx
-// (device_token, occurred_time DESC), with tenant_id and any event_type filter checked
-// per row. Tokens are unique within a tenant, so the tenant check only discards another
-// tenant's reuse of a token; the event_id tiebreak sorts within one timestamp. What that
-// index does NOT give is an index-only answer: it carries no tenant_id, so the COUNT that
-// ListOf issues before the page, and a device read filtered to a rare event type, visit
-// every row with that token in the uncompressed (recent) chunks — every tenant's device
-// of that token, not only this one, so a busy "gateway-1" in one tenant slows another
-// tenant's "gateway-1" total. Compressed chunks are segmented by (tenant_id,
-// device_token) and read per device and tenant either way. Neither column
-// is nullable, so no NULLS placement is needed.
+// The per-device read is served in time order by idx_events_tenant_device_time
+// (tenant_id, device_token, occurred_time DESC): the fail-closed tenant predicate and the
+// device token are both index conditions, so the page and the COUNT that ListOf issues before
+// it visit only this tenant's rows of this device, never another tenant's reuse of the token.
+// An event_type filter is still checked per row, against this device's rows only; the event_id
+// tiebreak sorts within one timestamp. Compressed chunks are segmented by (tenant_id,
+// device_token) and read per device and tenant either way. Neither column is nullable, so no
+// NULLS placement is needed.
 func (Event) DefaultOrder() string {
 	return "events.occurred_time DESC, events.event_id DESC"
 }

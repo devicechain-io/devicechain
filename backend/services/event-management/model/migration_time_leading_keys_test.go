@@ -53,7 +53,14 @@ func TestTimeLeadingKeysSnapshot(t *testing.T) {
 	assert.Nil(t, m.Rollback, "a rollback would be the same build over live chunks")
 	assert.Equal(t, "20261001000000", m.ID)
 	assert.Greater(t, m.ID, NewIndexTrimSchema().ID)
-	assert.Equal(t, m.ID, Migrations[len(Migrations)-1].ID, "appended last")
+	rekeyAt := -1
+	for i, mig := range Migrations {
+		if mig.ID == m.ID {
+			rekeyAt = i
+		}
+	}
+	require.Positive(t, rekeyAt, "the rekey is in the chain")
+	assert.Equal(t, NewIndexTrimSchema().ID, Migrations[rekeyAt-1].ID, "appended right after the trim")
 
 	// The defaults, by value: the arithmetic on timeLeadingKeysDefaultTiming depends on them.
 	assert.Equal(t, timeLeadingKeysTiming{

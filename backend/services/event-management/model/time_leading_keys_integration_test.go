@@ -24,11 +24,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// eventStoreIndexes is every index the six event hypertables carry at the end of the chain,
+// afterRekeyIndexes is every index the six event hypertables carry after the key rebuild,
 // by table, as pg_indexes renders its definition: the trim's set with the five identity keys
 // rebuilt to lead with time and the four tenant-time indexes gone. Transcribed from the
 // golden schema, so a changed column order fails as surely as an extra or missing name.
-var eventStoreIndexes = map[string]map[string]string{
+var afterRekeyIndexes = map[string]map[string]string{
 	"events": {
 		"events_pkey":                           `CREATE UNIQUE INDEX events_pkey ON "event-management".events USING btree (tenant_id, occurred_time, event_id)`,
 		"events_device_token_occurred_time_idx": `CREATE INDEX events_device_token_occurred_time_idx ON "event-management".events USING btree (device_token, occurred_time DESC)`,
@@ -63,14 +63,14 @@ var testRekeyTiming = timeLeadingKeysTiming{
 	countTimeout: 10 * time.Second, maxRows: 1_000_000, maxChunks: eventStoreMaxChunks, buildMemory: "64MB",
 }
 
-// assertFinalIndexes asserts every event hypertable, and every chunk of it, carries exactly
+// assertAfterRekeyIndexes asserts every event hypertable, and every chunk of it, carries exactly
 // the final set.
-func assertFinalIndexes(t *testing.T, db *gorm.DB, minChunks int) {
+func assertAfterRekeyIndexes(t *testing.T, db *gorm.DB, minChunks int) {
 	t.Helper()
 	for _, table := range LifecycleHypertables {
-		assert.Equalf(t, eventStoreIndexes[table], hypertableIndexes(t, db, table), "indexes on %s", table)
+		assert.Equalf(t, afterRekeyIndexes[table], hypertableIndexes(t, db, table), "indexes on %s", table)
 	}
-	assertChunkSets(t, db, minChunks, func(table string) []string { return sortedNames(eventStoreIndexes[table]) })
+	assertChunkSets(t, db, minChunks, func(table string) []string { return sortedNames(afterRekeyIndexes[table]) })
 }
 
 // assertAfterTrimIndexes asserts the hypertables still carry the trim's set: every key on
@@ -96,16 +96,16 @@ func pkeyDef(t *testing.T, db *gorm.DB) string {
 // and events_pkey is a PRIMARY KEY on (tenant_id, occurred_time, event_id). On main this
 // fails listing five column orders and four extra names on every table and chunk.
 func TestIntegrationIdentityKeysLeadWithTime(t *testing.T) {
-	mgr := newPostgresManager(t, freshInstance(t, "itrekey"))
+	mgr := newPostgresManagerWith(t, freshInstance(t, "itrekey"), migrationsThrough(t, rekeyID()))
 	sys := systemDB(mgr)
 	twoChunkSeed(t, sys)
 
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 	assert.Equal(t, "PRIMARY KEY (tenant_id, occurred_time, event_id)", pkeyDef(t, sys))
 
 	// Negative control: the reader reads.
 	require.NoError(t, sys.Exec(`CREATE INDEX t3_probe ON "event-management".alert_events (source)`).Error)
-	assert.NotEqual(t, eventStoreIndexes["alert_events"], hypertableIndexes(t, sys, "alert_events"),
+	assert.NotEqual(t, afterRekeyIndexes["alert_events"], hypertableIndexes(t, sys, "alert_events"),
 		"the index reader must see an index outside the final set")
 	require.NoError(t, sys.Exec(`DROP INDEX "event-management".t3_probe`).Error)
 }
@@ -150,9 +150,9 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 	// The test starts from the OLD shape, on every chunk, compressed ones included.
 	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(afterTrimIndexes[table]) })
 
-	after := newPostgresManagerWith(t, inst, Migrations)
+	after := newPostgresManagerWith(t, inst, migrationsThrough(t, rekeyID()))
 	sys = systemDB(after)
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 	assert.Equal(t, "PRIMARY KEY (tenant_id, occurred_time, event_id)", pkeyDef(t, sys))
 
 	api := NewApi(after)
@@ -231,7 +231,7 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 	for _, table := range LifecycleHypertables {
 		require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, oldChunk[table]).Error)
 	}
-	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(eventStoreIndexes[table]) })
+	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(afterRekeyIndexes[table]) })
 	e0 = count("events")
 	write()
 	assert.Equal(t, e0, count("events"), "a redelivery after decompression stores nothing")
@@ -259,7 +259,7 @@ func TestIntegrationTimeLeadingKeysRefuseTooMuchHistory(t *testing.T) {
 
 	timing.maxRows = 20
 	require.NoError(t, newTimeLeadingKeysSchema(timing).Migrate(sys))
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 
 	// Control: with every chunk compressed, nothing is left for the build to index, and a
 	// gate of 0 rows lets it apply. A gate that counted the compressed rows would refuse.
@@ -274,7 +274,7 @@ func TestIntegrationTimeLeadingKeysRefuseTooMuchHistory(t *testing.T) {
 	}
 	timing.maxRows = 0
 	require.NoError(t, newTimeLeadingKeysSchema(timing).Migrate(sys))
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 }
 
 // TestIntegrationTimeLeadingKeysWaitBoundedlyForALockAndResume holds one table across the
@@ -328,7 +328,7 @@ func TestIntegrationTimeLeadingKeysWaitBoundedlyForALockAndResume(t *testing.T) 
 	assert.Less(t, elapsed, timing.budget+time.Second, "the run must end within its budget")
 
 	// By value: events re-keyed, everything from the busy table on untouched.
-	assert.Equal(t, eventStoreIndexes["events"], hypertableIndexes(t, sys, "events"))
+	assert.Equal(t, afterRekeyIndexes["events"], hypertableIndexes(t, sys, "events"))
 	for _, table := range []string{"measurement_events", "location_events", "alert_events", "event_anchors"} {
 		assert.Equalf(t, afterTrimIndexes[table], hypertableIndexes(t, sys, table), "%s after the failed run", table)
 	}
@@ -336,7 +336,7 @@ func TestIntegrationTimeLeadingKeysWaitBoundedlyForALockAndResume(t *testing.T) 
 	_, err = holder.Exec(context.Background(), `ROLLBACK`)
 	require.NoError(t, err)
 	require.NoError(t, newTimeLeadingKeysSchema(timing).Migrate(sys), "the next run must resume and finish")
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 
 	for setting, want := range map[string]string{"lock_timeout": "0", "statement_timeout": "0"} {
 		var v string
@@ -401,7 +401,7 @@ func TestIntegrationTimeLeadingKeysStartNoAttemptTheBudgetCannotHold(t *testing.
 	assert.Less(t, elapsed-holdFirst, timing.lockAttempt/2,
 		"after events, nothing may wait on measurement_events' lock")
 
-	assert.Equal(t, eventStoreIndexes["events"], hypertableIndexes(t, sys, "events"))
+	assert.Equal(t, afterRekeyIndexes["events"], hypertableIndexes(t, sys, "events"))
 	for _, table := range []string{"measurement_events", "location_events", "alert_events", "event_anchors"} {
 		assert.Equalf(t, afterTrimIndexes[table], hypertableIndexes(t, sys, table), "%s after the spent run", table)
 	}
@@ -452,7 +452,7 @@ func TestIntegrationTimeLeadingKeysACancelledSwapIsNotTooSlow(t *testing.T) {
 	assert.Nil(t, note, "no too-slow marker for a cancelled swap")
 
 	require.NoError(t, newTimeLeadingKeysSchema(testRekeyTiming).Migrate(sys), "the next start re-keys")
-	assertFinalIndexes(t, sys, 1)
+	assertAfterRekeyIndexes(t, sys, 1)
 }
 
 // TestIntegrationTimeLeadingKeysLockChunksAndCompressedRelationsFirst holds, from another
@@ -566,7 +566,7 @@ func TestIntegrationTimeLeadingKeysTooSlowIsRolledBackAndSticks(t *testing.T) {
 
 	require.NoError(t, sys.Exec(`COMMENT ON INDEX "event-management".events_pkey IS NULL`).Error)
 	require.NoError(t, newTimeLeadingKeysSchema(testRekeyTiming).Migrate(sys), "cleared, the re-key runs again")
-	assertFinalIndexes(t, sys, 1)
+	assertAfterRekeyIndexes(t, sys, 1)
 }
 
 // TestIntegrationTimeLeadingKeysRefuseAShapeTheyDidNotWrite: a key in neither its old nor
@@ -606,7 +606,7 @@ func TestIntegrationTimeLeadingKeysRefuseAShapeTheyDidNotWrite(t *testing.T) {
 // index is back gets that index dropped and nothing else.
 func TestIntegrationTimeLeadingKeysRerunDoesNothing(t *testing.T) {
 	inst := freshInstance(t, "itrekeyrerun")
-	mgr := newPostgresManager(t, inst)
+	mgr := newPostgresManagerWith(t, inst, migrationsThrough(t, rekeyID()))
 	sys := systemDB(mgr)
 	twoChunkSeed(t, sys)
 
@@ -630,14 +630,14 @@ func TestIntegrationTimeLeadingKeysRerunDoesNothing(t *testing.T) {
 	_, err = holder.Exec(context.Background(), `ROLLBACK`)
 	require.NoError(t, err)
 	assert.Equal(t, before, oids(), "a re-run rebuilds nothing")
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 
 	// Drop-only: the key is new, the redundant index is back.
 	require.NoError(t, sys.Exec(`CREATE INDEX events_tenant_id_occurred_time_idx
 		ON "event-management".events (tenant_id, occurred_time DESC)`).Error)
 	require.NoError(t, NewTimeLeadingKeysSchema().Migrate(sys))
 	assert.Equal(t, before, oids(), "the drop-only path rebuilds nothing")
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 }
 
 // TestIntegrationReadsAreServedByTheTimeLeadingKeys EXPLAINs, on the final schema, every
@@ -699,8 +699,16 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	}
 	tenantData := capture(t, counter, "ORDER BY")
 	requireServedBy(t, sys, explainScans(t, sys, nil, tenantData), "events", "events_pkey", "events tenant read")
-	requireServedBy(t, sys, explainScans(t, sys, nil, capture(t, counter, "count(*)")), "events", "events_pkey",
-		"events tenant COUNT")
+	// The tenant COUNT reads no column, so either tenant-led index answers it: the key, or the
+	// narrower per-device index (an index-only scan), whichever the planner finds cheaper. What
+	// is pinned is that it SEEKS on the tenant, which only a tenant-led index can.
+	countScans := scansOf(t, sys, explainScans(t, sys, nil, capture(t, counter, "count(*)")), "events")
+	require.NotEmpty(t, countScans, "the tenant COUNT scans no chunk of events")
+	for _, s := range countScans {
+		assert.Truef(t, chunkIndexIs(s.index, "events_pkey") || chunkIndexIs(s.index, "idx_events_tenant_device_time"),
+			"events tenant COUNT: %s on %s uses %q", s.node, s.relation, s.index)
+		assert.Contains(t, s.indexCond, "tenant_id", "events tenant COUNT must seek on the tenant")
+	}
 
 	// (3) the load-test oracle's shape: a type and a time range, COUNT only.
 	counter.Reset()
@@ -759,7 +767,7 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 		assert.False(t, chunkIndexIs(s.index, "events_pkey"), s.index)
 	}
 
-	// Unchanged: the device read, its COUNT and the device + rare-type read.
+	// The device read, its COUNT and the device + rare-type read: led by the tenant.
 	counter.Reset()
 	res, err := api.Events(ctx, EventSearchCriteria{Pagination: page, DeviceToken: &device})
 	require.NoError(t, err)
@@ -768,16 +776,16 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	deviceData := capture(t, counter, "ORDER BY")
 	deviceCount := capture(t, counter, "count(*)")
 	requireServedBy(t, sys, explainScans(t, sys, nil, deviceData), "events",
-		"events_device_token_occurred_time_idx", "device read")
+		"idx_events_tenant_device_time", "device read")
 	requireServedBy(t, sys, explainScans(t, sys, nil, deviceCount), "events",
-		"events_device_token_occurred_time_idx", "device read COUNT")
+		"idx_events_tenant_device_time", "device read COUNT")
 	counter.Reset()
 	res, err = api.Events(ctx, EventSearchCriteria{Pagination: page, DeviceToken: &device,
 		EventTypes: []esmodel.EventType{esmodel.Alert}})
 	require.NoError(t, err)
 	require.Len(t, res.Results, 1)
 	requireServedBy(t, sys, explainScans(t, sys, nil, capture(t, counter, "ORDER BY")), "events",
-		"events_device_token_occurred_time_idx", "device + type read")
+		"idx_events_tenant_device_time", "device + type read")
 
 	generic := connectInstance(t, inst)
 	for _, s := range []string{`SET enable_seqscan = off`, `SET enable_bitmapscan = off`} {
@@ -794,7 +802,7 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 		require.Len(t, results[0].Rows, 1)
 		scans, err := planIndexScans(results[0].Rows[0][0])
 		require.NoError(t, err)
-		requireServedBy(t, sys, scans, "events", "events_device_token_occurred_time_idx", what)
+		requireServedBy(t, sys, scans, "events", "idx_events_tenant_device_time", what)
 	}
 
 	// Unchanged: the measurement_rollups refresh's cross-tenant range.

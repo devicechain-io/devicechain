@@ -3771,6 +3771,55 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### Próxima versión {#next-upgrade}
+
+Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
+
+#### La lista de eventos de un dispositivo lee solo las filas de su inquilino {#tenant-device-index}
+
+El índice que sirve la lista de eventos de un dispositivo empieza ahora por el inquilino. En
+`v0.19.0`, el total de la lista, y la lista de un dispositivo filtrada por tipo de evento, recorrían
+todas las filas aún sin comprimir con el token de ese dispositivo, incluidas las de un dispositivo con
+el mismo token en otro inquilino, así que un `gateway-1` con mucho tráfico en un inquilino ralentizaba
+la lista de `gateway-1` en otro. Ahora recorren solo las filas del propio dispositivo, y una consulta
+SQL o de BI sobre los eventos de un dispositivo gana lo mismo. Cada evento base almacenado sigue
+actualizando el mismo número de índices: el nuevo sustituye al anterior, y es algo más ancho porque
+incluye el inquilino.
+
+- **Durante la actualización.** El primer arranque del nuevo `event-management` construye el índice
+  sobre los eventos base aún sin comprimir (por defecto, aproximadamente la última semana) y después
+  elimina el índice al que sustituye. Mientras construye, las escrituras de eventos base esperan y las
+  lecturas no; la construcción está acotada a 40 segundos una vez bloqueada la tabla. Se niega, sin
+  cambiar nada, cuando hay más de 4 000 000 de filas que indexar o la tabla tiene más de 500
+  fragmentos, y se detiene de forma definitiva (hasta que el índice exista) si la construcción agota su
+  tiempo. Ninguno de estos casos obliga a recrear la instancia: el error incluye las sentencias que
+  construyen el índice a mano. Mientras tanto, el `event-management` anterior sigue almacenando
+  eventos.
+- **Para construirlo a mano, en un momento tranquilo.** Ejecuta esto en el primario del almacén de
+  eventos y reinicia `event-management`, que encuentra el índice y solo elimina el que sustituye. La
+  primera sentencia elimina un índice inacabado del mismo nombre que deja una construcción
+  interrumpida, y no hace nada si no lo hay:
+
+  ```sql
+  DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_time;
+  CREATE INDEX idx_events_tenant_device_time
+    ON "event-management".events (tenant_id, device_token, occurred_time DESC)
+    WITH (timescaledb.transaction_per_chunk);
+  ```
+
+  La construcción avanza fragmento a fragmento, así que una escritura espera solo mientras se indexa
+  el fragmento al que va dirigida: unos 3 microsegundos por cada evento base de ese fragmento aún sin
+  comprimir. Mientras se indexa un fragmento, el `event-management` anterior y el nuevo esperan para
+  almacenar eventos en él, y un evento retenido más allá de la espera de confirmación del broker, de
+  60 segundos, se entrega de nuevo, lo cual es seguro. En una instancia con mucho tráfico, elige un
+  momento tranquilo.
+- **Para evitar el rechazo, construye el índice antes de actualizar.** En una instancia `v0.19.0` con
+  más de `4000000` eventos base sin comprimir, ejecuta primero las dos sentencias anteriores;
+  `v0.19.0` funciona con ellas, y la actualización entonces solo elimina el índice anterior. Para
+  contar los eventos base, usa la consulta de [Comprueba el número de filas](#v0190-row-count) con
+  `hypertable_name IN ('events')`.
+- Volver a `v0.19.0` conserva el nuevo índice, y `v0.19.0` funciona con él.
+
 ### v0.19.0 — dimensionada a partir de lo medido a 6000 eventos por segundo; un stream lleno rechaza {#v0190-upgrade}
 
 `v0.19.0` es una actualización en su sitio desde `v0.18.0`: `dcctl install` para el clúster y

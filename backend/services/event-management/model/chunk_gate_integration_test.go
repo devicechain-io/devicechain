@@ -198,7 +198,7 @@ func TestIntegrationTimeLeadingKeysRefuseTooManyChunksBeforeLocking(t *testing.T
 	t.Logf("identity-key rebuild over %d chunks of events: %s", eventStoreMaxChunks, rekey)
 	assert.Less(t, rekey, timeLeadingKeysDefaultTiming.tableBuild,
 		"the rebuild at the ceiling fits one table's allowance")
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 	assert.Nil(t, pkeyNote(t, sys))
 }
 
@@ -270,9 +270,9 @@ func TestIntegrationIndexTrimRefusesTooManyChunksBeforeLocking(t *testing.T) {
 	}
 	assert.Less(t, chunkCount(t, sys, "events"), eventStoreMaxChunks)
 
-	// The next start applies the whole chain, the trim and the rebuild, at the default timing.
-	after := newPostgresManagerWith(t, inst, Migrations)
-	assertFinalIndexes(t, systemDB(after), 2)
+	// The next start applies the trim and the rebuild, at the default timing.
+	after := newPostgresManagerWith(t, inst, migrationsThrough(t, rekeyID()))
+	assertAfterRekeyIndexes(t, systemDB(after), 2)
 }
 
 // documentedDropChunks returns the batched drop_chunks procedure the upgrade notes publish,
@@ -326,7 +326,7 @@ func TestIntegrationChunkCeilingIsPerTableAndInclusive(t *testing.T) {
 
 	timing.maxChunks = 6
 	require.NoError(t, newTimeLeadingKeysSchema(timing).Migrate(sys))
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 }
 
 // TestIntegrationChunkCeilingGatesADropOnlyTable: a table whose key is already rebuilt but
@@ -337,7 +337,7 @@ func TestIntegrationChunkCeilingIsPerTableAndInclusive(t *testing.T) {
 // place, and applies at 6.
 func TestIntegrationChunkCeilingGatesADropOnlyTable(t *testing.T) {
 	inst := freshInstance(t, "itceilingdroponly")
-	mgr := newPostgresManager(t, inst)
+	mgr := newPostgresManagerWith(t, inst, migrationsThrough(t, rekeyID()))
 	sys := systemDB(mgr)
 	twoChunkSeed(t, sys)
 	backdateEvents(t, sys, "measurement_events", 1, 4, 8*24*time.Hour)
@@ -369,5 +369,5 @@ func TestIntegrationChunkCeilingGatesADropOnlyTable(t *testing.T) {
 	timing.maxChunks = 6
 	require.NoError(t, newTimeLeadingKeysSchema(timing).Migrate(sys))
 	assert.False(t, redundantPresent(), "within the ceiling the drop-only table has its index dropped")
-	assertFinalIndexes(t, sys, 2)
+	assertAfterRekeyIndexes(t, sys, 2)
 }
