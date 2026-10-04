@@ -3789,8 +3789,7 @@ solicitan ahora la CPU que se midió que usan, se reparten entre los nodos, alma
 eventos en menos sentencias y responden desde memoria las búsquedas repetidas; con `--ha` sin
 `--compact`, `event-management` se ejecuta en dos pods. En Google Kubernetes Engine, una instalación HA
 predeterminada aceptó 6000 eventos por segundo durante 10 minutos, dos veces, y almacenó
-exactamente una vez cada evento aceptado; se midió con la versión candidata y con
-`event-management` en un solo pod ([Rendimiento](#v0190-performance)). Dos caminos de fallo dejan
+exactamente una vez cada evento aceptado, comprobado evento por evento ([Rendimiento](#v0190-performance)). Dos caminos de fallo dejan
 de ser silenciosos: un stream de ingesta lleno rechaza ahora los eventos nuevos en lugar de
 descartar los no leídos, y las alertas de respaldo avisan antes de que el archivado pueda detener
 una base de datos. Y `dcctl upgrade` aplica ahora los ajustes del bróker de mensajería y del almacén
@@ -4357,7 +4356,7 @@ acababa rechazando los eventos de todos los inquilinos.
 Con el valor por defecto, los dispositivos de un inquilino se admiten como máximo a 5000 lecturas
 por segundo, incluso con un atraso vaciándose y ambos servicios de borde en marcha, lo que queda por
 debajo de las 6000 por segundo que se midió que almacena una instalación de alta disponibilidad por
-defecto, con `event-management` en un solo pod, en el clúster descrito en
+defecto, con `event-management` en dos pods, en el clúster descrito en
 [qué permite el valor por defecto](../concepts/governance.md#ingest-default). En un clúster más
 pequeño, o con más de una réplica de `event-sources`, baja el valor por defecto.
 
@@ -5112,12 +5111,11 @@ No hay nada que hacer al actualizar.
 
 En Google Kubernetes Engine, en tres nodos de base de datos de 4 vCPU y 16 GB y tres nodos de
 servicios de 4 vCPU y 8 GB, una instalación HA predeterminada aceptó 6000 eventos por segundo
-durante 10 minutos, dos veces, y almacenó exactamente una vez cada evento aceptado. Se midió con la
-versión candidata y con `event-management` en un solo pod, antes de que `--ha` empezara a
-ejecutarlo en dos.
+durante 10 minutos, dos veces, y almacenó exactamente una vez cada evento aceptado. Se comprobó evento por evento: ninguno faltante, ninguno
+almacenado dos veces, ninguno inesperado.
 
 La resolución, el almacenamiento y el estado en vivo de los dispositivos siguieron cada uno el ritmo
-durante esos 10 minutos, y la cola se había vaciado en los 5 segundos siguientes al fin de la
+durante esos 10 minutos, y la cola se había vaciado en los 3 segundos siguientes al fin de la
 carga. La detección, que esa comprobación no cubre, siguió el ritmo a 6000 (cola máxima por debajo
 de 1000) y se quedó atrás a partir de 7600 ofrecidos. No se afirma ningún ritmo sostenido por encima
 de 6000. Consulta [Rendimiento medido](./bootstrap.md#measured-throughput).

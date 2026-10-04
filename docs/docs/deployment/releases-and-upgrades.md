@@ -3529,8 +3529,7 @@ they were measured to use, spread across nodes, store and merge events in fewer 
 answer repeated lookups from memory; under `--ha` without `--compact`, `event-management` runs as
 two pods. On Google
 Kubernetes Engine, a default HA install accepted 6,000 events a second for 10 minutes, twice, and
-stored every accepted event exactly once; that was measured on the release candidate with
-`event-management` at one pod ([Performance](#v0190-performance)). Two failure paths change from
+stored every accepted event exactly once, checked event by event ([Performance](#v0190-performance)). Two failure paths change from
 silent to visible: a full ingest stream now refuses new events instead of discarding unread ones,
 and the backup alerts warn before archiving can stop a database. And `dcctl upgrade` now applies an
 instance's message broker and event store settings, which it never did before, so an upgraded
@@ -4055,7 +4054,7 @@ store, and the backpressure gate then refused every tenant's events.
 
 At the default, a tenant's own devices are admitted at most 5,000 readings per second, even with a
 backlog draining and both edge services running, which is below the 6,000 per second a default
-high-availability installation was measured to store, with `event-management` at one pod, on the
+high-availability installation was measured to store, with `event-management` at two pods, on the
 cluster described in [what the default allows](../concepts/governance.md#ingest-default). On a
 smaller cluster, or with more than one `event-sources` replica, lower the default.
 
@@ -4741,11 +4740,11 @@ Nothing to do at upgrade.
 
 On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service
 nodes, a default HA install accepted 6,000 events a second for 10 minutes, twice, and stored every
-accepted event exactly once. That was measured on the release candidate with `event-management` at
-one pod, before `--ha` began running it as two.
+accepted event exactly once. That was checked event by event: none missing, none stored twice, none
+unexpected.
 
 Resolution, storage and live device state each kept pace over those 10 minutes, and the backlog
-had drained within 5 seconds of the load stopping. Detection, which that check does not cover, kept
+had drained within 3 seconds of the load stopping. Detection, which that check does not cover, kept
 up at 6,000 (peak backlog under 1,000), and fell behind from 7,600 offered. No sustained rate above
 6,000 is claimed. See [Measured throughput](./bootstrap.md#measured-throughput).
 
