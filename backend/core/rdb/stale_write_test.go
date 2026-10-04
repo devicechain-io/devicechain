@@ -34,7 +34,13 @@ type staleWidgetPart struct {
 
 func newStaleWidgetDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard})
+	return newStaleWidgetDBAt(t, nil)
+}
+
+// newStaleWidgetDBAt is newStaleWidgetDB with gorm's clock replaced; nil keeps gorm's own.
+func newStaleWidgetDBAt(t *testing.T, clock func() time.Time) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Discard, NowFunc: clock})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
@@ -218,4 +224,144 @@ func TestUpdateIfUnmovedNeverSavesTheRecordsAssociations(t *testing.T) {
 			assert.Equal(t, int64(0), parts, "the guarded write re-inserted an association it was handed")
 		})
 	}
+}
+
+// frozen is an instant with sub-microsecond digits on purpose. It is in the past, so the real
+// clock is always beyond the floor derived from it (do not move it into the future).
+var frozen = time.Date(2026, 10, 3, 12, 0, 0, 123456789, time.UTC)
+
+func floorOf(readAt time.Time) time.Time {
+	return readAt.Truncate(time.Microsecond).Add(time.Microsecond)
+}
+
+// Two saves that read the same instant from the clock must not leave the row at the version
+// the first one read: a second editor holding that version would still be accepted and would
+// overwrite the first.
+func TestUpdateIfUnmovedMovesTheVersionWhenTheClockDoesNot(t *testing.T) {
+	db := newStaleWidgetDBAt(t, func() time.Time { return frozen })
+	row := &staleWidget{Name: "original"}
+	require.NoError(t, db.Create(row).Error)
+	first := readWidget(t, db, row.ID)
+	second := readWidget(t, db, row.ID)
+	readAt := first.UpdatedAt
+
+	require.NoError(t, rdb.UpdateIfUnmoved(db, &first, readAt, map[string]any{"name": "first writer"}, staleWidgets))
+
+	after := readWidget(t, db, row.ID)
+	assert.True(t, after.UpdatedAt.Equal(floorOf(readAt)), "stored version %v, want %v", after.UpdatedAt, floorOf(readAt))
+	assert.Same(t, staleWidgets, rdb.RefuseIfMoved(after.UpdatedAt, gqlcore.FormatTime(readAt), staleWidgets))
+	assert.Same(t, staleWidgets, rdb.UpdateIfUnmoved(db, &second, readAt, map[string]any{"name": "second writer"}, staleWidgets))
+	assert.Equal(t, "first writer", readWidget(t, db, row.ID).Name)
+}
+
+// A replica whose clock is behind must not move the version backwards.
+func TestUpdateIfUnmovedMovesTheVersionWhenTheClockIsBehind(t *testing.T) {
+	db := newStaleWidgetDBAt(t, func() time.Time { return frozen.Add(-time.Hour) })
+	row := &staleWidget{Name: "original"}
+	require.NoError(t, db.Create(row).Error)
+	require.NoError(t, db.Model(&staleWidget{}).Where("id = ?", row.ID).
+		UpdateColumn("updated_at", frozen).Error)
+	loaded := readWidget(t, db, row.ID)
+	readAt := loaded.UpdatedAt
+	require.True(t, readAt.Equal(frozen))
+
+	require.NoError(t, rdb.UpdateIfUnmoved(db, &loaded, readAt, map[string]any{"name": "mine"}, staleWidgets))
+
+	after := readWidget(t, db, row.ID)
+	assert.True(t, after.UpdatedAt.Equal(floorOf(frozen)), "stored version %v, want %v", after.UpdatedAt, floorOf(frozen))
+}
+
+// The counterweight: a clock that has moved on is what is stored; the floor invents nothing.
+func TestUpdateIfUnmovedStoresTheClockWhenItHasMoved(t *testing.T) {
+	now := frozen
+	db := newStaleWidgetDBAt(t, func() time.Time { return now })
+	row := &staleWidget{Name: "original"}
+	require.NoError(t, db.Create(row).Error)
+	loaded := readWidget(t, db, row.ID)
+
+	later := time.Date(2100, 1, 1, 0, 0, 0, 987654321, time.UTC)
+	now = later
+	require.NoError(t, rdb.UpdateIfUnmoved(db, &loaded, loaded.UpdatedAt, map[string]any{"name": "mine"}, staleWidgets))
+
+	after := readWidget(t, db, row.ID)
+	assert.Equal(t, "mine", after.Name)
+	assert.True(t, after.UpdatedAt.Equal(later), "stored version %v, want %v", after.UpdatedAt, later)
+}
+
+func TestUpdateIfUnmovedLeavesTheCallersMapAlone(t *testing.T) {
+	db := newStaleWidgetDB(t)
+	row := &staleWidget{Name: "original"}
+	require.NoError(t, db.Create(row).Error)
+	loaded := readWidget(t, db, row.ID)
+
+	m := map[string]any{"name": "mine"}
+	require.NoError(t, rdb.UpdateIfUnmoved(db, &loaded, loaded.UpdatedAt, m, staleWidgets))
+	assert.Equal(t, map[string]any{"name": "mine"}, m)
+}
+
+// The version is the write's to set; a caller naming it is a defect, not a stale write.
+func TestUpdateIfUnmovedRefusesACallerSuppliedVersion(t *testing.T) {
+	for _, key := range []string{"updated_at", "UpdatedAt"} {
+		t.Run(key, func(t *testing.T) {
+			db := newStaleWidgetDB(t)
+			row := &staleWidget{Name: "original"}
+			require.NoError(t, db.Create(row).Error)
+			loaded := readWidget(t, db, row.ID)
+
+			err := rdb.UpdateIfUnmoved(db, &loaded, loaded.UpdatedAt,
+				map[string]any{"name": "mine", key: frozen}, staleWidgets)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "is the version this write sets")
+			assert.False(t, errors.Is(err, staleWidgets))
+
+			after := readWidget(t, db, row.ID)
+			assert.Equal(t, "original", after.Name)
+			assert.True(t, after.UpdatedAt.Equal(loaded.UpdatedAt))
+		})
+	}
+}
+
+// The writes that carry no precondition must move the version too, or a writer who read it
+// before them is not refused.
+func TestAdvancingFromMovesAnUnguardedWrite(t *testing.T) {
+	cases := map[string]func(db *gorm.DB, w *staleWidget, readAt time.Time) error{
+		"Save": func(db *gorm.DB, w *staleWidget, readAt time.Time) error {
+			w.Name = "unguarded"
+			return rdb.AdvancingFrom(db, readAt).Omit("Parts").Save(w).Error
+		},
+		"Update": func(db *gorm.DB, w *staleWidget, readAt time.Time) error {
+			return rdb.AdvancingFrom(db, readAt).Model(w).Update("name", "unguarded").Error
+		},
+	}
+	for name, write := range cases {
+		t.Run(name, func(t *testing.T) {
+			db := newStaleWidgetDBAt(t, func() time.Time { return frozen })
+			row := &staleWidget{Name: "original"}
+			require.NoError(t, db.Create(row).Error)
+			loaded := readWidget(t, db, row.ID)
+			stale := readWidget(t, db, row.ID)
+			readAt := loaded.UpdatedAt
+
+			require.NoError(t, write(db, &loaded, readAt))
+
+			after := readWidget(t, db, row.ID)
+			assert.Equal(t, "unguarded", after.Name)
+			assert.True(t, after.UpdatedAt.Equal(floorOf(readAt)), "stored version %v, want %v", after.UpdatedAt, floorOf(readAt))
+			assert.Same(t, staleWidgets, rdb.UpdateIfUnmoved(db, &stale, readAt, map[string]any{"name": "late"}, staleWidgets))
+			assert.Equal(t, "unguarded", readWidget(t, db, row.ID).Name)
+		})
+	}
+}
+
+func TestAdvancingFromStoresTheClockWhenItHasMoved(t *testing.T) {
+	later := time.Date(2100, 1, 1, 0, 0, 0, 987654321, time.UTC)
+	now := frozen
+	db := newStaleWidgetDBAt(t, func() time.Time { return now })
+	row := &staleWidget{Name: "original"}
+	require.NoError(t, db.Create(row).Error)
+	loaded := readWidget(t, db, row.ID)
+
+	now = later
+	require.NoError(t, rdb.AdvancingFrom(db, loaded.UpdatedAt).Model(&loaded).Update("name", "x").Error)
+	assert.True(t, readWidget(t, db, row.ID).UpdatedAt.Equal(later))
 }

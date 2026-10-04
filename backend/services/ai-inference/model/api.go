@@ -280,7 +280,7 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 		current.ModelID = modelID
 		current.Params = params
 		current.Enabled = enabled
-		if err := api.sys(ctx).Save(current).Error; err != nil {
+		if err := rdb.AdvancingFrom(api.sys(ctx), current.UpdatedAt).Save(current).Error; err != nil {
 			return nil, err
 		}
 		return api.reloadWithSecret(ctx, token, current.ID, secret)
@@ -379,7 +379,7 @@ func (api *Api) RenameAIProvider(ctx context.Context, token string, newToken str
 		// together. On the one mutation whose whole content is that the identifier
 		// changed, the PK is the only link between its two labels. Passing the loaded row
 		// writes the same single column and keeps it.
-		if err := tx.Model(current).Update("token", newToken).Error; err != nil {
+		if err := rdb.AdvancingFrom(tx, current.UpdatedAt).Model(current).Update("token", newToken).Error; err != nil {
 			// THE LOSING RACER ARRIVES HERE rather than through the Count above, and it
 			// must read exactly as the uncontended refusal does. Any uniqueness conflict
 			// on this write is the token's: it changes that one column and no other.
@@ -393,7 +393,15 @@ func (api *Api) RenameAIProvider(ctx context.Context, token string, newToken str
 	}); err != nil {
 		return nil, err
 	}
-	return current, nil
+	// Reload for the stored updated_at: the copy in memory carries digits the database drops.
+	reloaded, err := api.AIProvidersByToken(ctx, []string{newToken})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // ErrAIProviderTokenTaken is the ONE sentence a caller gets when the token they asked for

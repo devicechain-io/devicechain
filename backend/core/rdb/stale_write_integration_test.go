@@ -144,7 +144,8 @@ func TestStaleWriteVersionMustBeReadBackNotTakenFromMemory(t *testing.T) {
 	require.NoError(t, db.First(&loaded, row.ID).Error)
 
 	// A clock with sub-microsecond digits, so the lost digits are certain rather than likely.
-	sent := time.Date(2026, 9, 27, 10, 0, 0, 123456789, time.UTC)
+	// It is past the version just read, so the write stores it rather than the floor.
+	sent := loaded.UpdatedAt.Truncate(time.Second).Add(time.Hour + 123456789*time.Nanosecond)
 	session := db.Session(&gorm.Session{NowFunc: func() time.Time { return sent }})
 	require.NoError(t, UpdateIfUnmoved(session, &loaded, loaded.UpdatedAt, map[string]any{"name": "mine"}, staleItWidgets))
 	require.True(t, loaded.UpdatedAt.Equal(sent), "gorm left %v on the record, want the %v it sent", loaded.UpdatedAt, sent)
@@ -159,4 +160,26 @@ func TestStaleWriteVersionMustBeReadBackNotTakenFromMemory(t *testing.T) {
 	assert.Same(t, staleItWidgets, RefuseIfMoved(stored.UpdatedAt, gqlcore.FormatTime(loaded.UpdatedAt), staleItWidgets),
 		"the in-memory version was accepted; the reload this test argues for would be unnecessary")
 	assert.NoError(t, RefuseIfMoved(stored.UpdatedAt, gqlcore.FormatTime(stored.UpdatedAt), staleItWidgets))
+}
+
+// A clock less than a microsecond past the version just read would be stored AS that version
+// by PostgreSQL, which keeps whole microseconds. The write must store a version strictly past
+// it at that precision, or a writer holding the old one is still accepted.
+func TestStaleWriteMovesTheStoredVersionAtMicrosecondPrecision(t *testing.T) {
+	db := staleItDB(t)
+	row := &staleItWidget{Name: "original"}
+	require.NoError(t, db.Create(row).Error)
+	var loaded staleItWidget
+	require.NoError(t, db.First(&loaded, row.ID).Error)
+	readAt := loaded.UpdatedAt
+	require.Zero(t, readAt.Nanosecond()%1000)
+
+	nudged := readAt.Add(400 * time.Nanosecond)
+	session := db.Session(&gorm.Session{NowFunc: func() time.Time { return nudged }})
+	require.NoError(t, UpdateIfUnmoved(session, &loaded, readAt, map[string]any{"name": "mine"}, staleItWidgets))
+
+	var stored staleItWidget
+	require.NoError(t, db.First(&stored, row.ID).Error)
+	assert.True(t, stored.UpdatedAt.Equal(readAt.Add(time.Microsecond)), "stored %v, want %v", stored.UpdatedAt, readAt.Add(time.Microsecond))
+	assert.Same(t, staleItWidgets, RefuseIfMoved(stored.UpdatedAt, gqlcore.FormatTime(readAt), staleItWidgets))
 }

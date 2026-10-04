@@ -171,7 +171,7 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.Enabled = enabled
 		if expectedUpdatedAt == nil {
 			// No precondition: the unconditional write, last write wins.
-			if err := tx.Omit("Rules").Save(policy).Error; err != nil {
+			if err := rdb.AdvancingFrom(tx, readAt).Omit("Rules").Save(policy).Error; err != nil {
 				return err
 			}
 		} else {
