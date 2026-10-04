@@ -36,6 +36,10 @@ sooner than 15 minutes after the restart. A pod restarted before kube-state-metr
 it is not reported, and neither is one restarted across a kube-state-metrics upgrade that
 adds or removes the uid label.
 
+These 15-minute figures assume Prometheus writes a staleness marker when a scrape fails or a
+target is removed. Without one the last value stays readable for up to 5 more minutes, so the
+outage limit and the clear time can each stretch by that much.
+
 No `for:`. A restart is an event, and the 15-minute window is what keeps the alert visible
 long enough to be seen. No `or vector(0)`, for the reason prometheusrule-dead-letter.yaml
 gives in its header.
