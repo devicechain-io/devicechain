@@ -10,7 +10,8 @@ namespace DeviceChain.Sitepulse.Tests
 {
     /// <summary>
     /// The imported models keep the conventions every rig rule depends on: no root rotation,
-    /// +Z forward, identity pivots at rest, and the named nodes the rigs drive.
+    /// +Z forward, identity pivots at rest (aimed parts excepted: they rest pointing at their
+    /// target), and the named nodes the rigs drive.
     /// </summary>
     public class FleetModelTests
     {
@@ -44,6 +45,8 @@ namespace DeviceChain.Sitepulse.Tests
                 {
                     var t = FleetRig.Find(root, p);
                     Assert.IsNotNull(t, $"{file}: no pivot named {p}");
+                    // an aimed part rests pointing at its target, so its rest rotation is not identity
+                    if (FleetRig.AimTarget(p) != null) continue;
                     Assert.That(Quaternion.Angle(t.localRotation, Quaternion.identity), Is.LessThan(0.01f), $"{file}: pivot {p} is not at rest");
                 }
 

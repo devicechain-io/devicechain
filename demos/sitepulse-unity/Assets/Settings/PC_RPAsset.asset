@@ -12,8 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bf2edee5c58d82540a51f03df9d42094, type: 3}
   m_Name: PC_RPAsset
   m_EditorClassIdentifier: 
-  k_AssetVersion: 12
-  k_AssetPreviousVersion: 12
+  k_AssetVersion: 13
+  k_AssetPreviousVersion: 13
   m_RendererType: 1
   m_RendererData: {fileID: 0}
   m_RendererDataList:
@@ -25,7 +25,7 @@ MonoBehaviour:
   m_SupportsTerrainHoles: 1
   m_SupportsHDR: 1
   m_HDRColorBufferPrecision: 0
-  m_MSAA: 1
+  m_MSAA: 4
   m_RenderScale: 1
   m_UpscalingFilter: 0
   m_FsrOverrideSharpness: 0
@@ -53,11 +53,12 @@ MonoBehaviour:
   m_AdditionalLightsShadowResolutionTierHigh: 1024
   m_ReflectionProbeBlending: 1
   m_ReflectionProbeBoxProjection: 1
-  m_ShadowDistance: 50
+  m_ReflectionProbeAtlas: 1
+  m_ShadowDistance: 220
   m_ShadowCascadeCount: 4
   m_Cascade2Split: 0.25
   m_Cascade3Split: {x: 0.1, y: 0.3}
-  m_Cascade4Split: {x: 0.12299999, y: 0.2926, z: 0.53599995}
+  m_Cascade4Split: {x: 0.04, y: 0.12, z: 0.36}
   m_CascadeBorder: 0.107758604
   m_ShadowDepthBias: 0.1
   m_ShadowNormalBias: 0.5
@@ -73,16 +74,15 @@ MonoBehaviour:
   m_MixedLightingSupported: 1
   m_SupportsLightCookies: 1
   m_SupportsLightLayers: 1
-  m_DebugLevel: 0
   m_StoreActionsOptimization: 0
   m_UseAdaptivePerformance: 1
   m_ColorGradingMode: 0
   m_ColorGradingLutSize: 32
+  m_AllowPostProcessAlphaOutput: 0
   m_UseFastSRGBLinearConversion: 0
   m_SupportDataDrivenLensFlare: 1
   m_SupportScreenSpaceLensFlare: 1
   m_GPUResidentDrawerMode: 0
-  m_UseLegacyLightmaps: 0
   m_SmallMeshScreenPercentage: 0
   m_GPUResidentDrawerEnableOcclusionCullingInCameras: 0
   m_ShadowType: 1
@@ -109,6 +109,7 @@ MonoBehaviour:
   m_PrefilterDebugKeywords: 1
   m_PrefilterWriteRenderingLayers: 0
   m_PrefilterHDROutput: 1
+  m_PrefilterAlphaOutput: 0
   m_PrefilterSSAODepthNormals: 0
   m_PrefilterSSAOSourceDepthLow: 1
   m_PrefilterSSAOSourceDepthMedium: 1
@@ -126,8 +127,15 @@ MonoBehaviour:
   m_PrefilterSoftShadowsQualityHigh: 0
   m_PrefilterSoftShadows: 0
   m_PrefilterScreenCoord: 1
+  m_PrefilterScreenSpaceIrradiance: 0
   m_PrefilterNativeRenderPass: 1
   m_PrefilterUseLegacyLightmaps: 0
+  m_PrefilterBicubicLightmapSampling: 0
+  m_PrefilterReflectionProbeRotation: 0
+  m_PrefilterReflectionProbeBlending: 0
+  m_PrefilterReflectionProbeBoxProjection: 0
+  m_PrefilterReflectionProbeAtlas: 0
+  m_PrefilterPointSamplingUpsampling: 0
   m_ShaderVariantLogLevel: 0
   m_ShadowCascades: 0
   m_Textures:
