@@ -257,6 +257,8 @@ func TestTheOperatorIsToldWhatIsNotScrapedAndWhatCouldNotBeRead(t *testing.T) {
 // fails SILENT (it finds no pod, so a working scrape is switched off on a self-managed
 // cluster), which is the direction this file exists to forbid. This pins the shipped default;
 // an operator's own monitoring_chart_version is not overridden by dcctl and is not guarded.
+// What it checks is the chart VERSION string, not the selectors: a bump fails here so someone
+// re-reads the four exporter Service templates; the selectors themselves are not compared.
 func TestControlPlaneSelectorsWereReadFromTheShippedChart(t *testing.T) {
 	src, err := fs.ReadFile(assets.OpenTofuCluster(), "variables.tf")
 	if err != nil {
@@ -274,5 +276,46 @@ func TestControlPlaneSelectorsWereReadFromTheShippedChart(t *testing.T) {
 		t.Fatalf("monitoring_chart_version defaults to %q: the control-plane selectors in controlplane.go "+
 			"were read from chart 65.1.1's templates/exporters/*/service.yaml; re-read them for the new "+
 			"version, then update this pin", got)
+	}
+}
+
+// The cluster root has to hand the variable on to the monitoring module. Delete that one line
+// and every other test still passes: dcctl sends the variable, the root accepts and drops it,
+// the module falls back to [] and a managed cluster scrapes everything again. The wiring is HCL,
+// so this reads the module block out of the shipped source.
+func TestTheClusterRootPassesTheListToTheMonitoringModule(t *testing.T) {
+	src, err := fs.ReadFile(assets.OpenTofuCluster(), "main.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?s)\nmodule\s+"monitoring"\s*\{(.*?)\n\}`).FindSubmatch(src)
+	if block == nil {
+		t.Fatal(`module "monitoring" is not declared in the cluster root`)
+	}
+	if !regexp.MustCompile(`(?m)^\s*unscraped_control_plane\s*=\s*var\.monitoring_unscraped_control_plane\s*$`).Match(block[1]) {
+		t.Fatalf("module \"monitoring\" does not set unscraped_control_plane = var.monitoring_unscraped_control_plane:\n%s", block[1])
+	}
+}
+
+// A failed lookup for one component leaves THAT component scraped and still decides the rest:
+// the answer must reach the State, and so the variables, not only the operator's terminal.
+func TestAFailedLookupKeepsTheOtherAnswers(t *testing.T) {
+	typed := fake.NewSimpleClientset()
+	typed.PrependReactor("list", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if listRestriction(a) == "component=etcd" {
+			return true, nil, errors.New("timeout")
+		}
+		return false, nil, nil
+	})
+	st := &State{KubeContext: managedKubeContext}
+
+	var vars []string
+	var err error
+	captureOutput(t, func() { vars, err = installClusterVars(t.Context(), st, typed) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unscrapedVar(t, vars); got != `["kubeControllerManager","kubeScheduler","kubeProxy"]` {
+		t.Fatalf("value = %s, want etcd left scraped and the other three off", got)
 	}
 }

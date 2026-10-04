@@ -163,10 +163,10 @@ ServiceMonitors / PrometheusRule / dashboard ConfigMaps depend on, so it applies
 It is default-on (`enable_monitoring`); set `monitoring_slim=true` on a local/kind
 cluster (emptyDir TSDB, smaller requests). Grafana auth is native admin for now
 (`monitoring_grafana_admin_password`); OIDC via user-management (ADR-047), gated to
-the operator/superuser tier, is a follow-up. On a managed control plane `dcctl install` also passes
-`monitoring_unscraped_control_plane` -- the control-plane components with no pod in
-`kube-system` -- so their scrape and `*Down` alert are switched off (its value wins over a
-tfvars entry). Reach Grafana with
+the operator/superuser tier, is a follow-up. `dcctl install` always passes
+`monitoring_unscraped_control_plane` (empty when nothing is off) -- the control-plane
+components with no pod behind the chart's selector in `kube-system` -- so their scrape and
+`*Down` alert are switched off (its value wins over a tfvars entry). Reach Grafana with
 `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80`.
 
 These endpoints line up with the Helm chart's `values.yaml` defaults, so the chart
