@@ -9,6 +9,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/processor"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -17,11 +18,13 @@ import (
 // Nothing else runs this wiring: a processor test builds the processor itself, so a service
 // that stopped passing the setting would run the default while every other test stayed green.
 //
-// It builds the resolve metrics directly rather than through buildMetrics, which reads the
-// core/service-built dead-letter producer this test has no service to build.
+// It builds the resolve metrics and a dead-letter producer directly rather than through
+// buildMetrics, which reads the producer core/service builds and this test has no service to run.
 func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
-	savedMs, savedCfg, savedMetrics := Microservice, Configuration, ResolveMetrics
-	t.Cleanup(func() { Microservice, Configuration, ResolveMetrics = savedMs, savedCfg, savedMetrics })
+	savedMs, savedCfg, savedMetrics, savedDead := Microservice, Configuration, ResolveMetrics, DeadLetters
+	t.Cleanup(func() {
+		Microservice, Configuration, ResolveMetrics, DeadLetters = savedMs, savedCfg, savedMetrics, savedDead
+	})
 
 	for _, tc := range []struct {
 		doc  string
@@ -38,6 +41,7 @@ func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
 			Microservice.MicroserviceConfigurationRaw = []byte(tc.doc)
 			require.NoError(t, parseConfiguration())
 			ResolveMetrics = processor.NewResolveMetrics(Microservice)
+			DeadLetters = deadletter.NewProducer(Microservice)
 
 			require.Equal(t, tc.want, newInboundEventsProcessor(nil).Resolvers())
 		})
@@ -50,17 +54,40 @@ func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
 // to reading its caches one after another, with every processor test still green, because
 // they build their own resolvers.
 func TestTheProcessorReadsItsCachesAtTheSameTime(t *testing.T) {
-	savedMs, savedCfg, savedMetrics, savedCached := Microservice, Configuration, ResolveMetrics, CachedApi
+	savedMs, savedCfg, savedMetrics, savedCached, savedDead :=
+		Microservice, Configuration, ResolveMetrics, CachedApi, DeadLetters
 	t.Cleanup(func() {
-		Microservice, Configuration, ResolveMetrics, CachedApi = savedMs, savedCfg, savedMetrics, savedCached
+		Microservice, Configuration, ResolveMetrics, CachedApi, DeadLetters =
+			savedMs, savedCfg, savedMetrics, savedCached, savedDead
 	})
 	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
 	CachedApi = model.NewCachedApi(&model.Api{}, &model.Caches{})
 
 	require.True(t, model.ReadsAheadConcurrently(newInboundEventsProcessor(nil).Api),
 		"the inbound processor's api is not the CachedApi itself, so no event reads its caches at the same time")
+}
+
+// The inbound processor counts a lost failure record on THIS service's producer: the one
+// core/service built, which the max-delivery recorder and the alarm publisher share. A processor
+// test builds its own producer, so a main.go that stopped passing this one would leave every
+// processor test green while the loss went uncounted in production.
+func TestTheInboundProcessorCountsLostRecordsOnTheServiceProducer(t *testing.T) {
+	savedMs, savedCfg, savedMetrics, savedDead := Microservice, Configuration, ResolveMetrics, DeadLetters
+	t.Cleanup(func() {
+		Microservice, Configuration, ResolveMetrics, DeadLetters = savedMs, savedCfg, savedMetrics, savedDead
+	})
+	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
+	require.NoError(t, parseConfiguration())
+	ResolveMetrics = processor.NewResolveMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
+
+	require.NotNil(t, DeadLetters)
+	require.Same(t, DeadLetters, newInboundEventsProcessor(nil).DeadLetters())
 }

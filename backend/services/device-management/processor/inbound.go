@@ -17,6 +17,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -119,6 +120,13 @@ type InboundEventsProcessor struct {
 	// instruments the readers already tolerate, where a nil pointer would be dereferenced.
 	metrics ResolveMetrics
 
+	// deadLetters is the service's dead-letter producer. This processor writes no dead letters
+	// itself; it counts on the producer's dead_letter_lost_total the one loss it can cause: a
+	// record of a failed event that cannot be encoded, so the failure is recorded nowhere (see
+	// loseRecord). Set by WithDeadLetters, whose absence is caught where the loss is counted
+	// (Producer.Lost refuses a nil producer) and, in production, by the service's wiring test.
+	deadLetters *deadletter.Producer
+
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
 	// let ExecuteStop drain senders before closing the channels they feed, so a
 	// resolver or the reader can never send on a closed channel at SIGTERM.
@@ -205,6 +213,21 @@ func (iproc *InboundEventsProcessor) Resolvers() int {
 	return iproc.resolverCount
 }
 
+// WithDeadLetters hands the processor the service's dead-letter producer, on whose
+// dead_letter_lost_total a failure record that cannot be encoded is counted. It panics on nil:
+// passing no producer is a wiring mistake, and a nil here would make that loss silent.
+func WithDeadLetters(p *deadletter.Producer) InboundOption {
+	if p == nil {
+		panic("processor: WithDeadLetters needs the service's dead-letter producer; it is where " +
+			"a failure record that cannot be encoded is counted")
+	}
+	return func(iproc *InboundEventsProcessor) { iproc.deadLetters = p }
+}
+
+// DeadLetters is the producer WithDeadLetters set, or nil. It exists so the service's wiring
+// test can check main.go hands on the producer core/service built.
+func (iproc *InboundEventsProcessor) DeadLetters() *deadletter.Producer { return iproc.deadLetters }
+
 // Create a new inbound events processor. authMode is the device authentication
 // policy applied while resolving inbound events (transport security, ADR-014);
 // maxFutureSkew bounds a device-reported event time against the server's own clock.
@@ -243,6 +266,9 @@ func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageR
 // max-delivery recorder from the source stream. Either way the failure is recorded
 // somewhere. Acking at hand-off, as this loop once did, lost it whenever the publish failed.
 //
+// The one exception is a record that cannot be encoded: it is not published, its source is
+// acked, and the loss is counted on dead_letter_lost_total (see loseRecord).
+//
 // A record that was stored but whose PubAck was lost is published again when its source is
 // redelivered; the dedup id (sourceDedupID) keeps that second copy out of the stream.
 func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) bool {
@@ -252,10 +278,27 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 	}
 	log.Debug().Str("message", item.event.Message).Msg("received failed event")
 
-	// Marshal event message to protobuf.
+	// 🔴 A RECORD THAT WILL NOT ENCODE IS NOT PUBLISHED. Falling through published a message with
+	// a nil Value, which proto3 decodes WITHOUT ERROR as an empty failure with reason 0 — a record
+	// that reads as plausible and says nothing, stored in place of the real one, with the source
+	// acked behind it.
+	//
+	// The encoder can refuse: PFailedEvent is proto3, and a proto3 string field holding invalid
+	// UTF-8 does not marshal. Nothing a device sends reaches it today; this is the defect path.
+	//
+	// It settles through the writer's Fail, like every other outcome on it, so it is acked in
+	// order behind the publishes already in flight and on the writer's settle goroutine. (Acking
+	// out of order would not be a correctness fault, the consumers are AckExplicit; the order is
+	// kept so one writer has one story, and TestAnUnencodableRecordIsAckedBehindEarlierOutcomes
+	// pins it.) Fail does not back the writer off, and the settle loop does not log it as a
+	// broker failure: nothing is wrong with the broker.
 	bytes, err := proto.MarshalFailedEvent(&item.event)
 	if err != nil {
-		log.Error().Err(err).Msg("unable to marshal event to protobuf")
+		iproc.FailedEventsWriter.Fail(err, func(error) {
+			iproc.loseRecord("a failed event's record", item.tenant, item.event.Reason, item.src,
+				item.correlation, err)
+		})
+		return false
 	}
 
 	// Create and deliver message on the failed event's tenant subject.
@@ -272,6 +315,27 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 		}
 	})
 	return false
+}
+
+// loseRecord settles an inbound message whose record of failure cannot be encoded, so there is
+// nothing to publish. The source is acked, because this is terminal: a redelivery resolves to
+// the same failure and the same record, which will not encode either. The failure is then
+// recorded nowhere, which is a loss, so it is counted on the service's dead_letter_lost_total —
+// the series DeadLetterWriteLost selects — and logged as LOST.
+//
+// Both arms that can reach it (the failed-event record and the archived unresolved event) go
+// through here, so the policy is written once. A failed Ack leaves the message to be
+// redelivered and so counts the loss again on the next delivery: the count may overstate.
+//
+// The log carries server-derived fields only; the record's own text is what failed to encode.
+func (iproc *InboundEventsProcessor) loseRecord(what string, tenant string, reason uint,
+	src messaging.Message, correlation string, err error) {
+	iproc.deadLetters.Lost()
+	log.Error().Err(err).Str("tenant", tenant).Uint("reason", reason).
+		Str("subject", src.Subject).Uint64("streamSeq", src.StreamSeq).Str("correlation", correlation).
+		Msgf("LOST: %s could not be encoded, a defect in device-management; nothing was published and "+
+			"the source is acknowledged, so the failure is recorded nowhere else", what)
+	_ = src.Ack()
 }
 
 // invalidEventErrorCap bounds the decode error recorded on an undecodable message.
@@ -379,8 +443,7 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(src messaging.Message, te
 	bytes, err := esproto.MarshalUnresolvedEvent(&archived)
 	if err != nil {
 		// Terminal either way: the same event will not marshal on a redelivery.
-		log.Error().Err(err).Msg("unable to marshal unresolved event to protobuf")
-		_ = src.Ack()
+		iproc.loseRecord("an unresolved event's archive", tenant, reason, src, correlation, err)
 	} else {
 		// Log the resolution failure REASON before dead-lettering. Without this the
 		// cause travels only inside the dead-lettered FailedEvent payload — an

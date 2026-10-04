@@ -5124,6 +5124,23 @@ carga. La detección, que esa comprobación no cubre, siguió el ritmo a 6000 (c
 de 1000) y se quedó atrás a partir de 7600 ofrecidos. No se afirma ningún ritmo sostenido por encima
 de 6000. Consulta [Rendimiento medido](./bootstrap.md#measured-throughput).
 
+### Próxima versión {#next-upgrade}
+
+Lo que cambia la versión posterior a `v0.19.0`, reunido a medida que llega.
+
+#### Un evento entrante cuyo registro de fallo no se puede codificar ya no se guarda como un registro vacío {#next-upgrade-failed-record-encode}
+
+Cuando device-management no podía codificar el registro de un evento entrante que había fallado,
+guardaba de todos modos un registro vacío y confirmaba el evento. El registro se leía como un fallo
+sin motivo ni texto, y el fallo real no quedaba registrado en ningún sitio. Ahora no publica nada
+para ese evento, lo confirma y cuenta la pérdida en `dead_letter_lost_total`, por lo que se dispara
+`DeadLetterWriteLost` y la línea `LOST` del registro del pod indica de qué evento se trata. Ningún
+evento que pueda enviar un dispositivo llega hoy hasta ahí; es una ruta de defecto, y la alerta es
+la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta causa, indicada en
+[la tabla de alertas](./detection-engine.md#what-to-watch).
+
+No hay nada que hacer.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

@@ -185,12 +185,14 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 // resolver pool sized by the loaded configuration. It is a function of its own so
 // resolution_wiring_test.go can check the configuration reaches the processor: a processor
 // test builds the processor itself, so a service that stopped passing resolution.workers
-// would run the default while every other test stayed green.
+// would run the default while every other test stayed green. Its loss counter is the service's
+// dead-letter producer, for the same reason.
 func newInboundEventsProcessor(reader messaging.MessageReader) *processor.InboundEventsProcessor {
 	return processor.NewInboundEventsProcessor(Microservice, reader, ResolvedEventsWriter, FailedEventsWriter,
 		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
-		processor.WithResolvers(Configuration.Resolution.Workers))
+		processor.WithResolvers(Configuration.Resolution.Workers),
+		processor.WithDeadLetters(DeadLetters))
 }
 
 // buildApis builds the service's two Apis over the relational store and the broker: the
