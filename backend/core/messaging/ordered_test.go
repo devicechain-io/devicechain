@@ -814,3 +814,28 @@ func TestOrderedWriterHonoursTheDedupID(t *testing.T) {
 		t.Errorf("stored: got %d, want 2", info.State.Msgs)
 	}
 }
+
+// An outcome the submitter decided (Fail) is not logged as a broker failure: the caller names
+// what it was, and "nats write operation failed" would point an operator at the broker. The
+// counterweight is the same line for an error the writer itself produced, which still logs.
+func TestFailIsNotLoggedAsABrokerFailure(t *testing.T) {
+	_, nmgr := orderedManager(t)
+	w := newOrdered(t, nmgr, 8)
+	buf := captureLogs(t)
+
+	out := newOutcomes()
+	w.Fail(errors.New("could not encode"), out.done(0))
+	w.Publish(context.Background(), Message{Value: []byte("x")}, out.done(1)) // no tenant: refused by the writer
+	w.Close()
+
+	if out.errs[0] == nil || out.errs[1] == nil {
+		t.Fatalf("outcomes: got %v, want both errors", out.errs)
+	}
+	logged := buf.String()
+	if got := strings.Count(logged, "nats write operation failed"); got != 1 {
+		t.Fatalf("settle loop logged %d broker-failure lines, want 1 (the writer's own refusal only):\n%s", got, logged)
+	}
+	if strings.Contains(logged, "could not encode") {
+		t.Fatalf("Fail's caller-owned error was logged by the settle loop:\n%s", logged)
+	}
+}

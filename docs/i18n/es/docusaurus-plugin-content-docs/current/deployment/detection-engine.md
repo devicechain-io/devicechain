@@ -559,7 +559,7 @@ temporizadores se reporta como un total de toda la instancia, porque atribuirlo 
 exigiría recorrerlo entero en cada punto de control.
 :::
 
-## Qué vigilar
+## Qué vigilar {#what-to-watch}
 
 | Señal | Significa |
 |---|---|

@@ -5137,7 +5137,7 @@ para ese evento, lo confirma y cuenta la pérdida en `dead_letter_lost_total`, p
 `DeadLetterWriteLost` y la línea `LOST` del registro del pod indica de qué evento se trata. Ningún
 evento que pueda enviar un dispositivo llega hoy hasta ahí; es una ruta de defecto, y la alerta es
 la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta causa, indicada en
-[la tabla de alertas](./detection-engine.md).
+[la tabla de alertas](./detection-engine.md#what-to-watch).
 
 No hay nada que hacer.
 

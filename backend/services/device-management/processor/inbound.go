@@ -286,9 +286,12 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 	// The encoder can refuse: PFailedEvent is proto3, and a proto3 string field holding invalid
 	// UTF-8 does not marshal. Nothing a device sends reaches it today; this is the defect path.
 	//
-	// It settles through the writer, like every other outcome on it, so it is acked in order and
-	// on the writer's settle goroutine. Fail does not back the writer off: nothing is wrong with
-	// the broker.
+	// It settles through the writer's Fail, like every other outcome on it, so it is acked in
+	// order behind the publishes already in flight and on the writer's settle goroutine. (Acking
+	// out of order would not be a correctness fault, the consumers are AckExplicit; the order is
+	// kept so one writer has one story, and TestAnUnencodableRecordIsAckedBehindEarlierOutcomes
+	// pins it.) Fail does not back the writer off, and the settle loop does not log it as a
+	// broker failure: nothing is wrong with the broker.
 	bytes, err := proto.MarshalFailedEvent(&item.event)
 	if err != nil {
 		iproc.FailedEventsWriter.Fail(err, func(error) {

@@ -92,6 +92,9 @@ type orderedPending struct {
 	// brokerFailed marks an err the broker side produced (the send itself failed), as
 	// opposed to a refusal decided locally; only the former is backed off.
 	brokerFailed bool
+	// reported marks an err the submitter decided and owns (Fail): the settle loop does not
+	// log it as a broker failure, because the caller that supplied it says what it was.
+	reported bool
 	// sent is when the publish was attempted; zero for an outcome decided locally.
 	sent time.Time
 	// deadline is min(caller deadline, sent+publishWait); callerBound says which.
@@ -212,7 +215,8 @@ func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(erro
 	o.pending <- orderedPending{fut: fut, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
 }
 
-// Fail reports err to done, in order, without publishing anything.
+// Fail reports err to done, in order, without publishing anything. The settle loop does not
+// log err: the caller supplied it, and names what it was.
 func (o *orderedWriter) Fail(err error, done func(error)) {
 	if err == nil {
 		panic("messaging: OrderedWriter.Fail needs a non-nil error: a success without a PubAck is not reportable")
@@ -223,7 +227,7 @@ func (o *orderedWriter) Fail(err error, done func(error)) {
 	o.enter("Fail")
 	defer o.busy.Store(false)
 	o.slots <- struct{}{}
-	o.pending <- orderedPending{err: err, done: done}
+	o.pending <- orderedPending{err: err, reported: true, done: done}
 }
 
 // Draining ends failure backoff for the rest of this writer's life; see the interface.
@@ -257,7 +261,7 @@ func (o *orderedWriter) settleLoop() {
 			o.nmgr.metrics.observePublish(o.suffix, publishModePipelined, time.Since(p.sent))
 			brokerFailed = err != nil
 		}
-		if err != nil {
+		if err != nil && !p.reported {
 			log.Error().Err(err).Str("suffix", o.suffix).Msg("nats write operation failed")
 		}
 		p.done(err)

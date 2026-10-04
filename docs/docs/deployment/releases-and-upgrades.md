@@ -4764,7 +4764,7 @@ reason and no text, and the real failure was recorded nowhere. It now publishes 
 event, acknowledges it, and counts the loss on `dead_letter_lost_total`, so `DeadLetterWriteLost`
 fires and the `LOST` line in the pod's log says which event. No event a device can send reaches
 this today; it is a defect path, and the alert is how you would learn of one. `DeadLetterWriteLost`
-therefore has a fourth cause, listed in [the alert table](./detection-engine.md).
+therefore has a fourth cause, listed in [the alert table](./detection-engine.md#what-to-watch).
 
 Nothing needs doing.
 

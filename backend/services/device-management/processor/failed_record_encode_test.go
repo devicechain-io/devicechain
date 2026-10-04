@@ -161,3 +161,66 @@ func TestAnUnresolvedEventThatCannotBeEncodedIsCountedAsLost(t *testing.T) {
 	require.Equal(t, 1, ack.n)
 	require.Equal(t, 1.0, gatheredCounter(t, reg, deviceManagementLost))
 }
+
+// holdingWriter is an OrderedWriter that, like the real one, reports outcomes in submission
+// order and not before they settle: every outcome is held until release, then reported in the
+// order submitted. msgtest.InlineOrderedWriter settles at once and so cannot tell an outcome
+// settled through the writer from one settled beside it.
+type holdingWriter struct {
+	held []func()
+}
+
+func (w *holdingWriter) Publish(_ context.Context, _ messaging.Message, done func(error)) {
+	w.held = append(w.held, func() { done(nil) })
+}
+
+func (w *holdingWriter) Fail(err error, done func(error)) {
+	w.held = append(w.held, func() { done(err) })
+}
+
+func (w *holdingWriter) Draining() {}
+func (w *holdingWriter) Close()    {}
+
+func (w *holdingWriter) release() {
+	for _, f := range w.held {
+		f()
+	}
+	w.held = nil
+}
+
+// An unencodable record is acked in order, behind the publishes already in flight, and not
+// before: it settles through the writer like every other outcome.
+func TestAnUnencodableRecordIsAckedBehindEarlierOutcomes(t *testing.T) {
+	hw := &holdingWriter{}
+	iproc, reg := failedRecordProcessor(t, &capturingWriter{})
+	iproc.FailedEventsWriter = hw
+
+	var order []string
+	first, second := &orderAck{name: "first", log: &order}, &orderAck{name: "second", log: &order}
+	queueFailedWith(iproc, "boom", first)
+	require.False(t, iproc.ProcessFailedEvent(context.Background()))
+	queueFailedWith(iproc, "\xff", second)
+	require.False(t, iproc.ProcessFailedEvent(context.Background()))
+
+	require.Empty(t, order, "nothing may be acked before the writer settles it")
+	require.Equal(t, 0.0, gatheredCounter(t, reg, deviceManagementLost), "nor counted lost")
+
+	hw.release()
+	require.Equal(t, []string{"first", "second"}, order)
+	require.Equal(t, 1.0, gatheredCounter(t, reg, deviceManagementLost))
+}
+
+// orderAck appends its name to a shared log when acked.
+type orderAck struct {
+	name string
+	log  *[]string
+}
+
+func (a *orderAck) Ack() error { *a.log = append(*a.log, a.name); return nil }
+
+func queueFailedWith(iproc *InboundEventsProcessor, errText string, ack messaging.Acknowledger) {
+	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), "device-management",
+		"event could not be resolved", errors.New(errText), []byte("payload"))
+	src := messaging.NewConsumedMessage(testTenantSubject, []byte("x"), 1, nil, ack)
+	iproc.failed <- failedItem{tenant: "tenant1", event: *failed, src: src, correlation: "corr"}
+}
