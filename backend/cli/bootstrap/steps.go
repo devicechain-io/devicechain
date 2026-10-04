@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -868,20 +869,69 @@ func runStreamed(heading, label string, work func() error) error {
 // restated. The list is re-read each pass so a Deployment that appears late is still
 // waited for, and `total > 0` keeps an empty namespace from reporting success — an
 // absence answering a question about health.
+//
+// It then waits for every instance of the event store to have joined
+// (waitForInstanceReady): the areas are ready on the primary alone.
 func stepWaitReady(ctx context.Context, st *State) error {
 	if st.DryRun {
 		doing(waitReadyMessage)
 		fmt.Println()
 		wouldDo("poll each area's deployment until it has rolled over")
+		wouldDo("wait until every instance of the event store " + st.Values["namespace"] + "/" +
+			TsdbClusterName + " has joined")
 		return nil
 	}
-	_, _, typed, err := kubeClients(st.KubeContext)
+	dyn, typed, err := stepWaitReadyClients(st.KubeContext)
 	if err != nil {
 		doing(waitReadyMessage)
 		return fail("building kube clients", err)
 	}
-	return waitForAreasStep(ctx, typed, st.Values["namespace"], waitReadyMessage,
-		areaReadyTimeout, areaReadyPollInterval)
+	return waitForInstanceReady(ctx, typed, dyn, st.Values["namespace"], stepWaitReadyBounds)
+}
+
+// stepWaitReadyBounds are step 9's real bounds; a variable for the same reason as
+// stepWaitReadyClients.
+var stepWaitReadyBounds = instanceReadyWaits{
+	areas: areaReadyTimeout, store: cnpgClusterReadyTimeout, poll: areaReadyPollInterval}
+
+// stepWaitReadyClients builds the clients step 9 waits with. A variable so a test can hand
+// the step a cluster it can reach: the step is where the event store wait is made, and a
+// call site nothing can drive is a call site whose removal nothing notices.
+var stepWaitReadyClients = func(kubeContext string) (dynamic.Interface, kubernetes.Interface, error) {
+	dyn, _, typed, err := kubeClients(kubeContext)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dyn, typed, nil
+}
+
+// instanceReadyWaits are step 9's bounds, as a value so a test can shorten them.
+type instanceReadyWaits struct{ areas, store, poll time.Duration }
+
+const eventStoreJoinMessage = "waiting for every instance of the event store to join"
+
+// waitForInstanceReady is step 9 against given clients: the areas' rollout, then the
+// instance's event store.
+//
+// 🔴 THE DEPLOYMENTS BECOME READY ON THE PRIMARY ALONE. The event store's Cluster release
+// holds only the Cluster resource (modules/cnpg-cluster/main.tf), so neither Helm nor the
+// areas' rollout says whether its replicas have joined — and the report that follows says
+// both databases are replicated. Areas first: replicas clone while the areas roll, so the
+// store is usually ready by the time it is asked, and the areas' bound is not spent
+// waiting behind a replica. The check is the one `dcctl upgrade` applies to the same
+// Cluster.
+func waitForInstanceReady(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface,
+	ns string, w instanceReadyWaits) error {
+	if err := waitForAreasStep(ctx, typed, ns, waitReadyMessage, w.areas, w.poll); err != nil {
+		return err
+	}
+	doing(eventStoreJoinMessage)
+	if err := waitForCNPGClusterReady(ctx, dyn, typed, ns, TsdbClusterName, w.store, w.poll); err != nil {
+		return fail(eventStoreJoinMessage, fmt.Errorf("%w. Nothing has been undone; run the same `dcctl bootstrap` "+
+			"command again to finish the instance", err))
+	}
+	done()
+	return nil
 }
 
 const (

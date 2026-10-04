@@ -66,12 +66,6 @@ const (
 	// brokerRolloutTimeout matches the nats release's own timeout
 	// (modules/nats/main.tf), which is sized for a rolling restart of every server.
 	brokerRolloutTimeout = 15 * time.Minute
-	// eventStoreReadyTimeout matches the event store release's own timeout
-	// (modules/cnpg-cluster/main.tf).
-	eventStoreReadyTimeout = 15 * time.Minute
-
-	// healthyClusterPhase is CloudNativePG's phase for a Cluster with nothing to do.
-	healthyClusterPhase = "Cluster in healthy state"
 )
 
 // liveVolumes are the sizes an existing instance's volumes have.
@@ -150,35 +144,10 @@ func readInfraFrom(ctx context.Context, typed kubernetes.Interface, dyn dynamic.
 		return liveInfra{}, fmt.Errorf("reading the event store (Cluster %s/%s): %w", ns, TsdbClusterName, err)
 	}
 	out.EventStore = cl
-	if out.StoreImages, err = eventStorePodImages(ctx, typed, ns); err != nil {
+	if out.StoreImages, err = cnpgInstancePodImages(ctx, typed, ns, TsdbClusterName); err != nil {
 		return liveInfra{}, err
 	}
 	return out, nil
-}
-
-// eventStorePodImages lists the postgres image of every live instance pod of the event
-// store. A pod on its way out, a finished one, and a CloudNativePG job pod (initdb, a
-// join) are not instances, and counting them would make a healthy store read as having
-// more pods than instances.
-func eventStorePodImages(ctx context.Context, typed kubernetes.Interface, ns string) ([]string, error) {
-	pods, err := typed.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "cnpg.io/cluster=" + TsdbClusterName})
-	if err != nil {
-		return nil, fmt.Errorf("listing the event store's pods in %s: %w", ns, err)
-	}
-	var images []string
-	for _, p := range pods.Items {
-		if p.DeletionTimestamp != nil || p.Status.Phase == corev1.PodSucceeded ||
-			p.Status.Phase == corev1.PodFailed || p.Labels["cnpg.io/jobRole"] != "" {
-			continue
-		}
-		for _, c := range p.Spec.Containers {
-			if c.Name == "postgres" {
-				images = append(images, c.Image)
-			}
-		}
-	}
-	return images, nil
 }
 
 // liveVolumesFrom reads the two volume sizes off the running objects. A missing
@@ -277,54 +246,6 @@ func brokerNotReady(sts *appsv1.StatefulSet, pods []corev1.Pod) string {
 	return out
 }
 
-// eventStoreReady is the event store's health, with no cluster in it. The reason names
-// the first condition that failed.
-func eventStoreReady(cluster *unstructured.Unstructured, podImages []string) (bool, string) {
-	if cluster == nil {
-		return false, "the Cluster was not read"
-	}
-	phase, _, _ := unstructured.NestedString(cluster.Object, "status", "phase")
-	if phase != healthyClusterPhase {
-		return false, fmt.Sprintf("its phase is %q, not %q", phase, healthyClusterPhase)
-	}
-	instances, _, _ := unstructured.NestedInt64(cluster.Object, "spec", "instances")
-	ready, _, _ := unstructured.NestedInt64(cluster.Object, "status", "readyInstances")
-	if instances == 0 || ready != instances {
-		return false, fmt.Sprintf("%d of %d instances are ready", ready, instances)
-	}
-	current, _, _ := unstructured.NestedString(cluster.Object, "status", "currentPrimary")
-	target, _, _ := unstructured.NestedString(cluster.Object, "status", "targetPrimary")
-	if current == "" || current != target {
-		return false, fmt.Sprintf("its primary is moving (current %q, target %q)", current, target)
-	}
-	image, _, _ := unstructured.NestedString(cluster.Object, "spec", "imageName")
-	if int64(len(podImages)) != instances {
-		return false, fmt.Sprintf("%d instance pods are running for %d instances", len(podImages), instances)
-	}
-	for _, img := range podImages {
-		if image != "" && img != image {
-			return false, fmt.Sprintf("an instance still runs %s, not %s", img, image)
-		}
-	}
-	conds, _, _ := unstructured.NestedSlice(cluster.Object, "status", "conditions")
-	for _, c := range conds {
-		m, ok := c.(map[string]interface{})
-		if !ok || m["type"] != "Ready" {
-			continue
-		}
-		if m["status"] != "True" {
-			return false, fmt.Sprintf("its Ready condition is %v", m["status"])
-		}
-		// A condition with no observedGeneration cannot say which spec it judged, so it
-		// is not held against the Cluster; one that has it must have seen this spec.
-		if og, ok := asInt64(m["observedGeneration"]); ok && og != 0 && og < cluster.GetGeneration() {
-			return false, fmt.Sprintf("it has not yet judged its latest spec (generation %d, observed %d)",
-				cluster.GetGeneration(), og)
-		}
-	}
-	return true, ""
-}
-
 func asInt64(v interface{}) (int64, bool) {
 	switch n := v.(type) {
 	case int64:
@@ -398,32 +319,6 @@ func waitForBrokerRollout(ctx context.Context, typed kubernetes.Interface, ns st
 	})
 	if err != nil {
 		return fmt.Errorf("waiting for the broker's servers to restart: %w", err)
-	}
-	return nil
-}
-
-// waitForEventStoreReady blocks until the event store is healthy on its current spec.
-//
-// 🔴 HELM'S WAIT DOES NOT COVER THE DATABASE: the release holds only the Cluster
-// resource, which Helm reports ready the moment it is accepted. And a Cluster read in
-// the instant after its spec changed, before CloudNativePG has acted on it, still reads
-// healthy — so readiness must HOLD for three polls spanning two intervals, not be seen
-// once.
-func waitForEventStoreReady(ctx context.Context, dyn dynamic.Interface, typed kubernetes.Interface, ns string, timeout, interval time.Duration) error {
-	_, err := pollUntil(ctx, timeout, interval, 3, func() (bool, string, error) {
-		cl, err := dyn.Resource(clusterGVR).Namespace(ns).Get(ctx, TsdbClusterName, metav1.GetOptions{})
-		if err != nil {
-			return false, "", err
-		}
-		images, err := eventStorePodImages(ctx, typed, ns)
-		if err != nil {
-			return false, "", err
-		}
-		ok, why := eventStoreReady(cl, images)
-		return ok, why, nil
-	})
-	if err != nil {
-		return fmt.Errorf("waiting for the event store to be healthy: %w", err)
 	}
 	return nil
 }
@@ -517,7 +412,7 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 			"This apply replaces the template it is rolling to, and the upgrade waits for that one "+
 			"to roll out", brokerNotReady(infra.Broker, infra.BrokerPods)))
 	}
-	if ok, why := eventStoreReady(infra.EventStore, infra.StoreImages); !ok {
+	if ok, why := cnpgClusterReady(infra.EventStore, infra.StoreImages); !ok {
 		return fmt.Errorf("instance %q's event store is not healthy (%s), so this upgrade would "+
 			"restart instances of a database that is already degraded. Nothing has been changed. "+
 			"Bring it back first, then run the upgrade again", st.Instance, why)
@@ -1389,7 +1284,10 @@ func clusterInfraWaits(st *State, typed kubernetes.Interface, dyn dynamic.Interf
 			return waitForBrokerRollout(ctx, typed, ns, brokerRolloutTimeout, rolloutPollInterval)
 		},
 		store: func(ctx context.Context) error {
-			return waitForEventStoreReady(ctx, dyn, typed, ns, eventStoreReadyTimeout, rolloutPollInterval)
+			if err := waitForCNPGClusterReady(ctx, dyn, typed, ns, TsdbClusterName, cnpgClusterReadyTimeout, rolloutPollInterval); err != nil {
+				return fmt.Errorf("waiting for the event store to be healthy: %w", err)
+			}
+			return nil
 		},
 	}
 }
@@ -1402,7 +1300,7 @@ var errRehearsalApplies = errors.New("a rehearsal (--dry-run) applies nothing; r
 // 🔴 BOTH WAITS RUN WHETHER OR NOT THIS PLAN TOUCHED THEM. A run that failed part-way
 // leaves the releases already carrying the new values, so the re-run an operator is
 // told to make plans no change at all — and a wait keyed on the plan would then move the
-// services onto a broker still short a server. Each costs one poll when healthy.
+// services onto a broker still short a server. The broker wait costs one poll when healthy; the event store wait holds for three.
 //
 // The CloudNativePG admission race is retried once, as bootstrap's apply does — but by
 // planning AGAIN through the gate, not by re-applying: a saved plan is stale after a

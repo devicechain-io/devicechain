@@ -5202,6 +5202,21 @@ anterior se sigue rechazando solo cuando la instalación se ejecuta.
 
 No hay nada que hacer.
 
+#### `dcctl install` y `dcctl bootstrap` esperan a que se hayan unido todas las instancias de la base de datos {#next-upgrade-wait-database-instances}
+
+Antes, `dcctl install` volvía en cuanto el primario de la base de datos relacional aceptaba una
+conexión, y `dcctl bootstrap` solo esperaba a los servicios, de modo que cualquiera de los dos
+podía informar de éxito, y bootstrap imprimir que ambas bases de datos estaban replicadas, mientras
+una réplica aún se estaba creando. Ahora install se registra, libera el bloqueo del clúster y espera
+hasta 15 minutos a que se hayan unido todas las instancias de la base de datos relacional. Bootstrap
+espera a los servicios y después, hasta 15 minutos, a todas las instancias del almacén de eventos de
+la instancia. Si alguna no se ha unido a tiempo, el comando termina con un error que nombra la base
+de datos y cuántas de sus instancias están listas. Ejecute de nuevo el mismo comando para seguir
+esperando; un bootstrap que terminó así no se deshace, y la instalación ya está registrada, así que
+mientras tanto se pueden hacer bootstrap de instancias. Una instalación sana añade unos segundos.
+
+No hace falta nada más.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

@@ -803,10 +803,10 @@ resource "helm_release" "cluster" {
   # ready the moment the CR is accepted. The timeout below therefore bounds the
   # apply, not the database.
   #
-  # What actually covers the gap today is the Helm step that follows, which waits
-  # on the eleven service Deployments with its own 10-minute timeout — and those
-  # cannot become ready until the database accepts connections. That is real, but
-  # it is downstream and incidental, so it is written here rather than assumed.
+  # What covers the gap is dcctl itself: install waits until every instance of
+  # the relational store has joined, bootstrap's readiness step does the same for
+  # the instance's event store, and upgrade for the event store. A caller that
+  # applies this module without dcctl gets no such wait.
   timeout = 900
 
   # 🔴 atomic IS LOAD-BEARING, and it is here because of prevent_destroy below —

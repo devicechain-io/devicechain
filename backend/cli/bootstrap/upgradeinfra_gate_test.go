@@ -206,7 +206,7 @@ func TestSettleLetsAnUnfinishedBrokerRollThrough(t *testing.T) {
 // cluster label; counted, they make a healthy store read as having more pods than
 // instances, and the precheck refuses — or the wait times out on — a store with nothing
 // wrong with it. Through a real clientset, so the label selector is exercised too.
-func TestEventStorePodImagesCountsOnlyLiveInstancePods(t *testing.T) {
+func TestCNPGInstancePodImagesCountsOnlyLiveInstancePods(t *testing.T) {
 	ns := InstanceNamespace("prod")
 	pod := func(name, image string, labels map[string]string, mutate func(*corev1.Pod)) *corev1.Pod {
 		l := map[string]string{"cnpg.io/cluster": TsdbClusterName}
@@ -237,14 +237,14 @@ func TestEventStorePodImagesCountsOnlyLiveInstancePods(t *testing.T) {
 			Labels: map[string]string{"cnpg.io/cluster": "other"}},
 			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres", Image: "tsdb:1"}}}},
 	)
-	got, err := eventStorePodImages(context.Background(), c, ns)
+	got, err := cnpgInstancePodImages(context.Background(), c, ns, TsdbClusterName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(got, ",") != "tsdb:2,tsdb:2" {
 		t.Errorf("event store instance images = %q, want the two live instances' only", got)
 	}
-	if ok, why := eventStoreReady(anEventStore(2, "8Gi", "tsdb:2"), got); !ok {
+	if ok, why := cnpgClusterReady(anEventStore(2, "8Gi", "tsdb:2"), got); !ok {
 		t.Errorf("a healthy two-instance store with job and finished pods beside it reads unhealthy: %s", why)
 	}
 }

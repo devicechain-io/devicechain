@@ -243,7 +243,7 @@ func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 	fset, positions := callPositions(t, "install.go", "Install",
 		"connectAndRefuse", "resolveCredentials", "splitVars", "checkRelationalStoreOwner",
 		"ensureInfraNamespace", "writeClusterSecrets", "markInstallApplying", "applyClusterPrereqs",
-		"withProvisionerSession", "writeInstalled")
+		"withProvisionerSession", "recordInstallAndWaitForStore")
 
 	for _, want := range []struct{ name, why string }{
 		{"connectAndRefuse", "a re-install from another machine, one that changes the cluster under running instances, or one naming a VolumeSnapshotClass that cannot work, would go ahead"},
@@ -255,7 +255,7 @@ func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 		{"markInstallApplying", "a failed re-install would leave the previous record reading as installed"},
 		{"applyClusterPrereqs", "the cluster would have no operator, no ingress and no shared database"},
 		{"withProvisionerSession", "the base identity every instance's login is created as would not exist"},
-		{"writeInstalled", "nothing would record that the cluster prerequisites are installed, and every bootstrap would refuse"},
+		{"recordInstallAndWaitForStore", "nothing would record that the cluster prerequisites are installed, and every bootstrap would refuse"},
 	} {
 		if _, ok := positions[want.name]; !ok {
 			t.Fatalf("Install no longer calls %s — %s", want.name, want.why)
@@ -282,9 +282,9 @@ func TestInstallAppliesThePrerequisitesInOrder(t *testing.T) {
 				"leaves the previous record reading as a finished install"},
 		{"applyClusterPrereqs", "withProvisionerSession",
 			"the base identity is created on the store the cluster apply builds"},
-		{"withProvisionerSession", "writeInstalled",
+		{"withProvisionerSession", "recordInstallAndWaitForStore",
 			"a cluster recorded as installed without its base identity refuses the first bootstrap"},
-		{"applyClusterPrereqs", "writeInstalled",
+		{"applyClusterPrereqs", "recordInstallAndWaitForStore",
 			"the record may say installed only after the apply that installs has succeeded"},
 	})
 }
