@@ -93,6 +93,13 @@ the re-run fails the same way. Before it reports the cluster installed, `install
 that the backup object store has finished rolling out, so a store left unready by an earlier
 failed change is reported instead of being passed over.
 
+`install` also waits, for up to 15 minutes, until every instance of the relational database has
+joined, and exits with an error naming the database and how many of its instances are ready if one
+has not. The install is already recorded by then and the cluster lock is released, so instances can
+be bootstrapped while it is still waiting. To follow the database, watch it with `kubectl`; running
+the same `dcctl install` again also keeps waiting, but it re-applies the prerequisites and refuses
+bootstraps while it runs.
+
 ### Where install keeps its state {#install-state}
 
 The prerequisites are applied with OpenTofu, and their state lives on the machine that ran
@@ -405,7 +412,11 @@ failure names a step you can find here:
    than trusting the Helm step's own wait. Having replicas available is not enough: where pods
    are being replaced, that is already true of the ones on their way out. So the step also
    waits for the new template to be observed, for every replica to be recreated on it, and for
-   no old replica to still be running. `dcctl upgrade` uses the same gate for the same reason.
+   no old replica to still be running. `dcctl upgrade` uses the same gate for the same reason. It then waits, for up to 15 minutes,
+   until every instance of the instance's event store has joined, because the services are ready
+   on the primary alone. If one has not, the step fails with an error naming the database and how
+   many of its instances are ready; nothing is undone, and running the same `dcctl bootstrap`
+   again finishes the instance.
 10. **Report access info** — print the namespace, the superuser's email and where its password
     is kept (plus the password itself, once: on the run that generated it, or on the run that
     finishes a bootstrap that failed before showing it), and how to reach the instance.

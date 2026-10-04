@@ -5212,8 +5212,10 @@ hasta 15 minutos a que se hayan unido todas las instancias de la base de datos r
 espera a los servicios y después, hasta 15 minutos, a todas las instancias del almacén de eventos de
 la instancia. Si alguna no se ha unido a tiempo, el comando termina con un error que nombra la base
 de datos y cuántas de sus instancias están listas. Ejecute de nuevo el mismo comando para seguir
-esperando; un bootstrap que terminó así no se deshace, y la instalación ya está registrada, así que
-mientras tanto se pueden hacer bootstrap de instancias. Una instalación sana añade unos segundos.
+esperando (en install, eso vuelve a aplicar los requisitos previos y rechaza los bootstraps mientras
+se ejecuta, así que si solo quiere seguir la base de datos obsérvela con `kubectl`); un bootstrap
+que terminó así no se deshace, y la instalación ya está registrada, así que mientras tanto se
+pueden hacer bootstrap de instancias. Una instalación sana añade unos segundos.
 
 No hace falta nada más.
 

@@ -89,7 +89,7 @@ type InstallOptions struct {
 //
 // 🔴 THE RECORD IS WRITTEN LAST OF THE WRITES, AND ONLY ON SUCCESS OF THEM. The command can
 // still fail after it, waiting for the relational store's replicas
-// (recordInstallAndWaitForStore). `dcctl bootstrap` refuses a
+// (finishInstall). `dcctl bootstrap` refuses a
 // cluster without an `installed` record and builds every instance from what it says,
 // so a record that claimed an install which did not finish would put instances on
 // prerequisites that are not there. markInstallApplying brackets the apply for exactly
@@ -334,15 +334,27 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	}
 	done()
 
-	if err := recordInstallAndWaitForStore(ctx, st, typed, dyn, InstallRecord{
+	return finishInstall(ctx, st, provider.Name(), typed, dyn, InstallRecord{
 		ClusterUID:   st.ClusterUID,
 		DcctlVersion: st.DcctlVersion,
 		Settings:     settings,
 		Outputs:      outputs,
-	}, cnpgClusterReadyTimeout, rolloutPollInterval); err != nil {
+	}, cnpgClusterReadyTimeout, rolloutPollInterval)
+}
+
+// finishInstall is Install's tail: record the install, wait for the relational store, and
+// only then say it is installed.
+//
+// 🔴 ONE FUNCTION, SO THE ERROR CANNOT BE DROPPED AT ITS CALL SITE. The report is the
+// success message, and a call site that printed the wait's error instead of returning it
+// would report "prerequisites installed" over a store with one of three instances ready
+// — the defect the wait exists to close. Held by value in TestFinishInstall*.
+func finishInstall(ctx context.Context, st *State, provider string, typed kubernetes.Interface,
+	dyn dynamic.Interface, rec InstallRecord, timeout, poll time.Duration) error {
+	if err := recordInstallAndWaitForStore(ctx, st, typed, dyn, rec, timeout, poll); err != nil {
 		return err
 	}
-	reportInstall(st, provider.Name())
+	reportInstall(st, provider)
 	return nil
 }
 
@@ -384,8 +396,9 @@ func recordInstallAndWaitForStore(ctx context.Context, st *State, typed kubernet
 			hint = " A restore's replicas clone the recovered store after its primary is up, which can take longer than this on a large archive."
 		}
 		return fail(msg, fmt.Errorf("%w. The install is recorded and the cluster lock is released, so instances can "+
-			"be bootstrapped now.%s To keep waiting, run the same `dcctl install` command again, or watch "+
-			"`kubectl -n %s get clusters.postgresql.cnpg.io %s`", err, hint, store.Namespace, store.ClusterName))
+			"be bootstrapped now.%s To follow the store, watch `kubectl -n %s get clusters.postgresql.cnpg.io %s`. "+
+			"To have dcctl keep waiting, run the same `dcctl install` command again; it re-applies the "+
+			"prerequisites and refuses bootstraps while it runs", err, hint, store.Namespace, store.ClusterName))
 	}
 	done()
 	return nil

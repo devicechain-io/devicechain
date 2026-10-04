@@ -239,3 +239,141 @@ func TestRecordInstallAndWaitForStoreRecordsNothingWithoutTheClaim(t *testing.T)
 		t.Error("an install record exists though the lock was lost")
 	}
 }
+
+// --- the hold, the read flag, the zero guard, and the callers ------------------------
+
+// 🔴 READINESS MUST HOLD, NOT BE SEEN ONCE. A Cluster read in the instant after its spec
+// changed still reads healthy; the wait is the gate for install, bootstrap and upgrade,
+// so a healthy first read followed by a short one must not pass.
+func TestWaitForCNPGClusterReadyDoesNotTrustASingleHealthyRead(t *testing.T) {
+	healthy := aCluster("dc-x", "dc-tsdb", 3, 3, healthyClusterPhase)
+	short := aCluster("dc-x", "dc-tsdb", 3, 1, "Creating a new replica")
+	dyn := fakeDyn(healthy)
+	gets := 0
+	dyn.PrependReactor("get", "clusters", func(k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 1 {
+			return true, healthy, nil
+		}
+		return true, short, nil
+	})
+	typed := fake.NewSimpleClientset(cnpgPods("dc-x", "dc-tsdb", 3)...)
+	err := within(t, testWaitBound, func() error {
+		return waitForCNPGClusterReady(context.Background(), dyn, typed, "dc-x", "dc-tsdb", testWaitBound, testWaitPoll)
+	})
+	if err == nil {
+		t.Fatal("one healthy read, then a short Cluster, was reported ready")
+	}
+	if !strings.Contains(err.Error(), "1 of 3 instances ready") {
+		t.Errorf("error = %q", err)
+	}
+}
+
+// The read flag describes the LAST poll: a Cluster read once and unreadable since is
+// reported as unreadable, not as the stale count from the first poll.
+func TestWaitForCNPGClusterReadyReportsTheLastPollsFailureNotAnEarlierCount(t *testing.T) {
+	short := aCluster("dc-x", "dc-tsdb", 3, 1, "Creating a new replica")
+	dyn := fakeDyn(short)
+	gets := 0
+	dyn.PrependReactor("get", "clusters", func(k8stesting.Action) (bool, runtime.Object, error) {
+		gets++
+		if gets == 1 {
+			return true, short, nil
+		}
+		return true, nil, errors.New("the API server is unreachable")
+	})
+	err := within(t, testWaitBound, func() error {
+		return waitForCNPGClusterReady(context.Background(), dyn, fake.NewSimpleClientset(cnpgPods("dc-x", "dc-tsdb", 1)...),
+			"dc-x", "dc-tsdb", testWaitBound, testWaitPoll)
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "could not be read") || strings.Contains(err.Error(), "1 of 3 instances ready") {
+		t.Errorf("error = %q", err)
+	}
+}
+
+// A Cluster declaring no instances is not ready: with none ready either, the counts agree.
+func TestCNPGClusterReadyRefusesAClusterWithNoInstances(t *testing.T) {
+	ok, why := cnpgClusterReady(aCluster("dc-x", "dc-tsdb", 0, 0, healthyClusterPhase), nil)
+	if ok || !strings.Contains(why, "0 of 0 instances are ready") {
+		t.Errorf("ready = %v, reason = %q", ok, why)
+	}
+}
+
+// 🔴 UPGRADE'S EVENT STORE WAIT IS DRIVEN: the closure applyUpgradeInfra calls must fail
+// over a short store, or dropping the call would leave upgrade reporting success over it.
+func TestUpgradeStoreWaitRefusesAShortEventStore(t *testing.T) {
+	st := &State{Instance: "x"}
+	ns := InstanceNamespace("x")
+	dyn := fakeDyn(aCluster(ns, TsdbClusterName, 3, 1, "Creating a new replica"))
+	typed := fake.NewSimpleClientset(cnpgPods(ns, TsdbClusterName, 1)...)
+	ctx, cancel := context.WithTimeout(context.Background(), testWaitBound)
+	defer cancel()
+	err := clusterInfraWaits(st, typed, dyn).store(ctx)
+	if err == nil {
+		t.Fatal("the upgrade's event store wait passed over a store with 1 of 3 instances ready")
+	}
+	if !strings.Contains(err.Error(), "waiting for the event store to be healthy") {
+		t.Errorf("error = %q", err)
+	}
+}
+
+// 🔴 INSTALL'S TAIL RETURNS THE WAIT'S ERROR AND SAYS NOTHING OF SUCCESS: a short store
+// must not be followed by the "prerequisites installed ... Next: build an instance" report.
+func TestFinishInstallOverAShortStoreReturnsTheErrorAndReportsNoSuccess(t *testing.T) {
+	rec := aCompleteInstall()
+	typed := fake.NewSimpleClientset(cnpgPods("dc-system", "dc-rdb", 1)...)
+	dyn := fakeDyn(aCluster("dc-system", "dc-rdb", 3, 1, "Creating a new replica"))
+	var err error
+	out := captureOutput(t, func() {
+		err = finishInstall(context.Background(), &State{}, "kind", typed, dyn, rec, testWaitBound, testWaitPoll)
+	})
+	if err == nil {
+		t.Fatal("install finished over a relational store with 1 of 3 instances ready")
+	}
+	if strings.Contains(out, "Next: build an instance") || strings.Contains(out, "prerequisites installed") {
+		t.Errorf("a success report was printed over a short store:\n%s", out)
+	}
+}
+
+func TestFinishInstallOverAJoinedStoreReportsSuccess(t *testing.T) {
+	rec := aCompleteInstall()
+	typed := fake.NewSimpleClientset(cnpgPods("dc-system", "dc-rdb", 3)...)
+	dyn := fakeDyn(aCluster("dc-system", "dc-rdb", 3, 3, healthyClusterPhase))
+	var err error
+	out := captureOutput(t, func() {
+		err = finishInstall(context.Background(), &State{}, "kind", typed, dyn, rec, time.Second, testWaitPoll)
+	})
+	if err != nil || !strings.Contains(out, "Next: build an instance") {
+		t.Errorf("err = %v, output:\n%s", err, out)
+	}
+}
+
+// A restore's replicas clone after the primary is up, so its timeout says so, and the
+// same text is absent for an ordinary install.
+func TestInstallWaitErrorExplainsARestoresSlowReplicas(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		restore RestorePlan
+		want    bool
+	}{
+		{"restore", RestorePlan{RdbFrom: "s3://archive"}, true},
+		{"ordinary", RestorePlan{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := aCompleteInstall()
+			typed := fake.NewSimpleClientset(cnpgPods("dc-system", "dc-rdb", 1)...)
+			dyn := fakeDyn(aCluster("dc-system", "dc-rdb", 3, 1, "Creating a new replica"))
+			err := recordInstallAndWaitForStore(context.Background(), &State{Restore: tc.restore}, typed, dyn, rec,
+				testWaitBound, testWaitPoll)
+			if err == nil {
+				t.Fatal("expected the wait to fail")
+			}
+			if got := strings.Contains(err.Error(), "replicas clone the recovered store"); got != tc.want {
+				t.Errorf("restore hint present = %v, want %v: %q", got, tc.want, err)
+			}
+		})
+	}
+}

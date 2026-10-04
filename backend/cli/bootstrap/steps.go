@@ -920,6 +920,11 @@ const eventStoreJoinMessage = "waiting for every instance of the event store to 
 // store is usually ready by the time it is asked, and the areas' bound is not spent
 // waiting behind a replica. The check is the one `dcctl upgrade` applies to the same
 // Cluster.
+//
+// The cluster Lease is still held through this wait, unlike install's: step 9 belongs to a
+// run that has yet to write its terminal phase, so handing the lock back here would let
+// another bootstrap or upgrade in under a run that is not finished. The cost is that the
+// store wait can add up to its bound to the time the Lease is held.
 func waitForInstanceReady(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface,
 	ns string, w instanceReadyWaits) error {
 	if err := waitForAreasStep(ctx, typed, ns, waitReadyMessage, w.areas, w.poll); err != nil {
