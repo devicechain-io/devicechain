@@ -10,9 +10,11 @@ wheel loaders and haul trucks report telemetry to a DeviceChain instance and car
 sent from it. The scene shows what the platform observed and what the machine did, side by side,
 so a viewer can follow a command from the console to the machine and back.
 
-**Status: early.** This project currently holds the machine models, their rigs and a preview
-of the fleet. The quarry terrain comes next, then the connection to a DeviceChain instance
-through the [Unity SDK](../../sdks/unity). Nothing here talks to a platform yet.
+**Status: early.** This project holds the machine models and their rigs, the quarry terrain with
+its roads, site props and vegetation, and a looping preview of an 18-machine fleet working the
+site (`Scenes/Quarry.unity`). The connection to a DeviceChain instance through the
+[Unity SDK](../../sdks/unity) comes next. Nothing here talks to a platform yet, and the scene's
+look is still being worked on (see [Known limitations](#known-limitations)).
 
 ## Prerequisites
 
@@ -27,14 +29,17 @@ through a WSL share (`\\wsl$\...`) is slow and unreliable.
 
 ## Opening the project
 
-Open `demos/sitepulse-unity` from Unity Hub (**Add project from disk**), or from the Unity
-command line:
+Open `demos/sitepulse-unity` from Unity Hub (**Add project from disk**), or with the `unity`
+command-line tool that ships with Unity Hub:
 
 ```
 unity open <path-to-clone>\demos\sitepulse-unity
 ```
 
-The first open imports every package and model, which takes a few minutes.
+The first open imports every package, model and texture, which takes a few minutes. Then run
+**Sitepulse > Quarry > Build Prop Prefabs** followed by **Sitepulse > Quarry > Build Scene** to
+generate the prefabs and `Scenes/Quarry.unity` (the scene file itself is not committed). Press
+Play to watch the fleet preview.
 
 ## Layout
 
@@ -44,14 +49,18 @@ Assets/Sitepulse/
   Scripts/Domain/      machine and task state, free of Unity and transport types
   Scripts/Platform/    the DeviceChain connection
   Scripts/Simulation/  movement, tasks and the simulation clock
-  Scripts/Visuals/     machine rigs (FleetRig, MachineRig) and the fleet preview
+  Scripts/Visuals/     machine rigs (FleetRig, MachineRig), the quarry terrain and the fleet preview
+  Scripts/Editor/      the scene and prefab builder (Sitepulse > Quarry menu)
   Scripts/UI/          heads-up display and presenter controls
-  Data/                site, route and preset data
+  Data/                site, route and preset data, and the fleet preview choreography
   Art/Models/          the machine models (.glb), generated from ArtSource/
+  Art/Models/Props/    site props and vegetation (.glb), generated from ArtSource/
+  Art/Terrain/         the quarry heightmap, layer masks and feature list, generated from ArtSource/
+  Art/Prefabs/         prop prefabs with LODs, written by the builder
   Art/Materials/       shared materials
   Art/Textures/        textures
   Tests/EditMode/      Edit Mode tests
-ArtSource/             the code that builds the machine models (see ArtSource/README.md)
+ArtSource/             the code that builds the models, props and terrain (see ArtSource/README.md)
 ```
 
 ## The machine models
@@ -68,11 +77,34 @@ and builds a `LODGroup` from the two model files. `MachineRig` drives one machin
 of inputs: implement angles, steering, and the distance it has travelled, from which it spins
 wheels and scrolls track treads.
 
+## The quarry
+
+`QuarryTerrain` builds a Unity terrain at scene start from the generated heightmap, layer masks
+and feature list in `Art/Terrain/`, so there is no terrain asset to keep in step: change the
+generator, re-run it, and the scene follows. The features file also places the roads, the site
+buildings and the vegetation. `QuarryFleetPreview` plays the choreography in
+`Data/quarry_fleet.json` (loaders loading haul trucks, trucks running the ramp, dozers working
+the dump pad) through the same `MachineRig` the platform connection will drive.
+`FrameTimeBenchmark` is off unless a player build is started with `-sitepulse-benchmark`; it
+flies a camera over the site and writes the average FPS and the 99th-percentile and worst frame
+times to `sitepulse-benchmark.txt` beside the executable.
+
+## Known limitations
+
+- The scene has not had its final look pass: materials, lighting and post-processing are
+  first-cut, and the terrain's bench geometry is regular.
+- There is no processing plant (crusher, conveyors) yet.
+- The preview choreography is simple: some machines work in place and haul trucks share a
+  narrow two-way ramp.
+- Asset `.meta` files for the quarry assets are generated when the project is first opened.
+
 ## Tests
 
 `Tests/EditMode` checks that each imported model keeps the conventions the rigs rely on: no root
 rotation, the machine facing +Z, every driven pivot present and at rest, and that the rig rules
-(hydraulic aiming, the hauler's load rule) hold. Run them from **Window > General > Test Runner**,
+(hydraulic aiming, the hauler's load rule) hold. It also checks the quarry data: the heightmap
+decoder round-trips and rejects a truncated file, and the fleet choreography holds all 18
+machines with tracks of the right length. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
 or from the command line with the Editor closed:
 
 ```
@@ -81,6 +113,7 @@ unity test <path-to-clone>\demos\sitepulse-unity --mode EditMode
 
 ## Third-party content
 
-The machine models are original work, built by the code in `ArtSource/`. Any third-party asset
-added to the project is recorded, with its source and license, in
-[`THIRD_PARTY.md`](THIRD_PARTY.md).
+The machine models, props and terrain are original work, built by the code in `ArtSource/`. The
+only third-party content is four CC0 terrain materials from ambientCG; each is recorded, with its
+source and license, in [`THIRD_PARTY.md`](THIRD_PARTY.md). Anything added later must be CC0 or
+equally permissive and be recorded there.

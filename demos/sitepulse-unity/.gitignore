@@ -34,8 +34,8 @@ crashlytics-build.properties
 mono_crash.*
 
 # Scratch editor scripts used while driving the Editor from the command line
-/AgentScripts/
-/AgentScripts.meta
+/EditorScratch/
+/EditorScratch.meta
 
 # Art source build output: the committed models live under Assets/Sitepulse/Art/Models
 /ArtSource/out/
@@ -45,3 +45,11 @@ mono_crash.*
 *.blend2
 __pycache__/
 *.pyc
+
+# Terrain and texture tooling output: the Unity-ready files are written into Assets/
+/ArtSource/terrain/out/
+/ArtSource/textures/cache/
+
+# Player builds and the benchmark's result file
+/Build/
+sitepulse-benchmark.txt
