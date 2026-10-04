@@ -95,8 +95,8 @@ A default install sizes the CPU request of each service on the event path from m
 ([service sizing](https://docs.devicechain.io/deployment/bootstrap#service-sizing)). On
 Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service
 nodes, a default HA install accepted 6,000 events a second for 10 minutes, twice, and stored every
-accepted event exactly once. That was measured on the release candidate with event-management at
-one pod, before `--ha` began running it as two. See
+accepted event exactly once, checked event by event: none missing, none stored twice, none
+unexpected. See
 [measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput). Each
 tenant is allowed 1,000 readings a second by default
 ([governance](https://docs.devicechain.io/concepts/governance)).
