@@ -1019,18 +1019,25 @@ jobs:
           cache-dependency-path: "**/go.sum"
 
       - name: Check SPDX headers
-        # Go + hand-authored GraphQL/proto sources + the C# SDK. YAML and the
-        # operator Dockerfile are excluded: those manifests are controller-gen-
+        # Go + hand-authored GraphQL/proto sources + the C# SDK + the demos. YAML and
+        # the operator Dockerfile are excluded: those manifests are controller-gen-
         # generated, so a header would drift away on every `make manifests`
         # regeneration. .NET project/build files are excluded (addlicense has no
-        # header style for them); the .cs sources are checked.
+        # header style for them); the .cs sources are checked. In the Unity demo
+        # projects the C# and Python sources are checked, and everything the Editor
+        # writes (meta files, serialized assets, scenes, project settings, the
+        # package lock) is excluded: Unity rewrites those files whole, so a header
+        # would not survive the next save.
         run: >
           go run github.com/google/addlicense@latest -check
           -ignore '**/*.yaml' -ignore '**/Dockerfile'
           -ignore '**/*.csproj' -ignore '**/*.sln' -ignore '**/*.props'
           -ignore '**/bin/**' -ignore '**/obj/**'
           -ignore '**/migrationdiff/golden/*.sql'
-          -f hack/license-header.txt backend sdks
+          -ignore 'demos/**/*.meta' -ignore 'demos/**/*.asset' -ignore 'demos/**/*.unity'
+          -ignore 'demos/**/*.prefab' -ignore 'demos/**/*.mat' -ignore 'demos/**/*.inputactions'
+          -ignore 'demos/**/ProjectSettings/**' -ignore 'demos/**/Packages/packages-lock.json'
+          -f hack/license-header.txt backend sdks demos
 
       # The step above proves every SOURCE FILE says Apache-2.0. Nothing proved that
       # the ECOSYSTEM agrees — GitHub runs its own detector over LICENSE and publishes
