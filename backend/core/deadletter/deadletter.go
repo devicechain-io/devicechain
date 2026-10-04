@@ -447,7 +447,9 @@ func NewProducer(ms *core.Microservice) *Producer {
 			"Dead letters this service gave up on and could NOT record: the work is gone with "+
 				"no letter anywhere. Either the write failed on every attempt (the broker was "+
 				"unreachable or refusing, or out of storage), or the service refused its own "+
-				"letter as malformed, which is a defect in the service, or a dead-letter reader "+
+				"letter as malformed, which is a defect in the service, or device-management could not "+
+				"encode the record of an inbound event that failed (the event is acknowledged and "+
+				"nothing published says it failed, also a defect in the service), or a dead-letter reader "+
 				"(the store or the command writeback) ran out of deliveries on a letter, which then "+
 				"ages out of the stream possibly unstored. The pod's LOST error log line says which."),
 	}
@@ -494,10 +496,11 @@ func (p *Producer) NewIndexSink(w Writer, onLoss func(err error)) *Sink {
 	return &Sink{writer: w, source: p.source, onLoss: onLoss}
 }
 
-// Lost counts one letter lost on dead_letter_lost_total, for a producer whose give-up
-// write cannot go through a Sink — the connectors service's verbatim copy, which goes to
-// its own subject as raw bytes. Whatever writes it, a loss is counted on the same series,
-// or the alert that selects that series by name does not see it.
+// Lost counts one loss on dead_letter_lost_total, for a producer whose give-up write cannot
+// go through a Sink: the connectors service's verbatim copy, which goes to its own subject as
+// raw bytes, and device-management's record of a failed inbound event, which is not a letter
+// at all but is lost the same way when it cannot be encoded. Whatever writes it, a loss is
+// counted on the same series, or the alert that selects that series by name does not see it.
 func (p *Producer) Lost() {
 	p.mustBeBuilt("Lost")
 	p.lost.Inc()

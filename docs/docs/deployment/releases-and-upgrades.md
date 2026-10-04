@@ -4752,6 +4752,22 @@ had drained within 3 seconds of the load stopping. Detection, which that check d
 up at 6,000 (peak backlog under 1,000), and fell behind from 7,600 offered. No sustained rate above
 6,000 is claimed. See [Measured throughput](./bootstrap.md#measured-throughput).
 
+### Next release {#next-upgrade}
+
+What the release after `v0.19.0` changes, collected as it lands.
+
+#### An inbound event whose failure record cannot be encoded is no longer stored as an empty record {#next-upgrade-failed-record-encode}
+
+When device-management could not encode the record of an inbound event that failed, it used to
+store an empty record anyway and acknowledge the event. The record read back as a failure with no
+reason and no text, and the real failure was recorded nowhere. It now publishes nothing for that
+event, acknowledges it, and counts the loss on `dead_letter_lost_total`, so `DeadLetterWriteLost`
+fires and the `LOST` line in the pod's log says which event. No event a device can send reaches
+this today; it is a defect path, and the alert is how you would learn of one. `DeadLetterWriteLost`
+therefore has a fourth cause, listed in [the alert table](./detection-engine.md).
+
+Nothing needs doing.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives
