@@ -7,8 +7,8 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: IntroGlow
-  m_Shader: {fileID: 4800000, guid: 1fb309933d88b7c4aa14f8263f08602b, type: 3}
+  m_Name: IntroBloom
+  m_Shader: {fileID: 4800000, guid: 6cb615efed642ec4682efe493cdb5b7a, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -22,18 +22,13 @@ Material:
   m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
-    m_TexEnvs: []
+    m_TexEnvs:
+    - _MainTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     m_Ints: []
-    m_Floats:
-    - _DstBlend: 1
-    - _Head: 0
-    - _Intensity: 1
-    - _Mode: 0
-    - _Softness: 4
-    - _Trace: 1
-    - _ZTest: 4
-    m_Colors:
-    - _Base: {r: 0, g: 0, b: 0, a: 0}
-    - _Color: {r: 0.6, g: 0.81, b: 0.93, a: 1}
+    m_Floats: []
+    m_Colors: []
   m_BuildTextureStacks: []
   m_AllowLocking: 1

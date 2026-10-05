@@ -8,8 +8,8 @@ using UnityEngine;
 namespace DeviceChain.Demos.EditorTools
 {
     /// <summary>
-    /// Writes the package's materials and the intro prefab from the generated model and the two
-    /// shaders. Run it after regenerating the model (ArtSource~/build_mark.py); it overwrites what
+    /// Writes the package's materials and the intro prefab from the generated model and the
+    /// package's shaders. Run it after regenerating the model (ArtSource~/build_mark.py); it overwrites what
     /// it made before and keeps the assets' GUIDs.
     /// </summary>
     public static class DemoIntroBuilder
@@ -18,6 +18,9 @@ namespace DeviceChain.Demos.EditorTools
         public const string ModelPath = Root + "Models/devicechain_mark.glb";
         public const string MarkMaterialPath = Root + "Materials/IntroMark.mat";
         public const string GlowMaterialPath = Root + "Materials/IntroGlow.mat";
+        public const string HoleMaterialPath = Root + "Materials/IntroHole.mat";
+        public const string BloomMaterialPath = Root + "Materials/IntroBloom.mat";
+        public const string OverlayMaterialPath = Root + "Materials/IntroOverlay.mat";
         public const string PrefabPath = Root + "Resources/" + DemoIntro.ResourceName + ".prefab";
 
         [MenuItem("Tools/DeviceChain/Rebuild Demo Intro Assets")]
@@ -27,6 +30,9 @@ namespace DeviceChain.Demos.EditorTools
             if (mark == null) throw new FileNotFoundException(ModelPath);
             var markMat = Material(MarkMaterialPath, "DeviceChain/Intro/Mark");
             var glowMat = Material(GlowMaterialPath, "DeviceChain/Intro/Glow");
+            var holeMat = Material(HoleMaterialPath, "DeviceChain/Intro/Hole");
+            var bloomMat = Material(BloomMaterialPath, "Hidden/DeviceChain/Intro/Bloom");
+            var overlayMat = Material(OverlayMaterialPath, "Hidden/DeviceChain/Intro/Overlay");
 
             var go = new GameObject(DemoIntro.ResourceName);
             try
@@ -35,6 +41,9 @@ namespace DeviceChain.Demos.EditorTools
                 intro.mark = mark;
                 intro.markMaterial = markMat;
                 intro.glowMaterial = glowMat;
+                intro.holeMaterial = holeMat;
+                intro.bloomMaterial = bloomMat;
+                intro.overlayMaterial = overlayMat;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(PrefabPath)));
                 PrefabUtility.SaveAsPrefabAsset(go, PrefabPath);
             }
@@ -58,7 +67,12 @@ namespace DeviceChain.Demos.EditorTools
             }
             else
             {
+                // the shader's defaults are the tuning: a rebuild resets the material to them and
+                // keeps the asset (and its GUID)
                 m.shader = shader;
+                var defaults = new Material(shader);
+                m.CopyPropertiesFromMaterial(defaults);
+                Object.DestroyImmediate(defaults);
             }
             EditorUtility.SetDirty(m);
             return m;

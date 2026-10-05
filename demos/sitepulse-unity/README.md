@@ -156,7 +156,7 @@ times to `sitepulse-benchmark-<quality>.txt` beside the executable.
 The scene opens with the animated DeviceChain logo intro shared by the DeviceChain demos, from the
 local package [`../shared/io.devicechain.demo-intro`](../shared/io.devicechain.demo-intro)
 (listed in `Packages/manifest.json`). The scene builder places its prefab in the scene; it plays
-over the quarry's first shot for about 3.5 seconds and dissolves into it. Any key, click or tap
+over the quarry's first shot for about 3.6 seconds and opens onto it. Any key, click or tap
 skips it; start the player with `-reduced-motion` for the still lockup and a short fade, or with
 `-no-intro` to leave it out. The frame-time benchmark (`-sitepulse-benchmark`) always runs without
 it.

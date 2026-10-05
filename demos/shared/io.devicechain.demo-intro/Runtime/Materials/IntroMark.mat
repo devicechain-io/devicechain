@@ -26,17 +26,19 @@ Material:
     m_Ints: []
     m_Floats:
     - _Alpha: 1
+    - _Chamfer: 0
     - _Flat: 1
     - _Light: 1
-    - _Rim: 0.6
+    - _Rim: 0.35
     - _SweepPos: -10
     - _SweepWidth: 0.12
     m_Colors:
-    - _Ambient: {r: 0.29999998, g: 0.33999997, b: 0.39999998, a: 1}
-    - _KeyColor: {r: 1.15, g: 1.12, b: 1.08, a: 1}
-    - _KeyDir: {r: -0.45, g: 0.65, b: -0.6, a: 0}
+    - _Ambient: {r: 0.32999998, g: 0.34999996, b: 0.37999994, a: 1}
+    - _Dark: {r: 0, g: 0, b: 0, a: 1}
+    - _KeyColor: {r: 1.1, g: 1.1, b: 1.1, a: 1}
+    - _KeyDir: {r: -0.5, g: 0.5, b: -0.7071, a: 0}
     - _Origin: {r: 0, g: 0, b: 0, a: 0}
-    - _RimColor: {r: 0.31999996, g: 0.62, b: 0.8399999, a: 1}
+    - _RimColor: {r: 0.60389996, g: 0.8078, b: 0.9255, a: 1}
     - _SweepAxis: {r: 0.6, g: 0.8, b: 0, a: 0}
     - _SweepColor: {r: 0.75, g: 0.9, b: 1, a: 1}
   m_BuildTextureStacks: []
