@@ -40,10 +40,19 @@ import (
 // spelled as literals. Nothing in the scenario may read these — they exist to be
 // compared AGAINST the scenario.
 const (
-	wantSitepulseDozerCount = 1
+	// S1: six of each machine kind and one plant. Literals, never derived from the
+	// per-kind counts the manifest is built from: a comparison to the constant that
+	// sized a population cannot fail.
+	wantSitepulseMachinesPerKind = 6
+	wantSitepulsePlantCount      = 1
+	wantSitepulseDeviceCount     = 3*wantSitepulseMachinesPerKind + wantSitepulsePlantCount
 
 	wantSitepulseFirstToken      = "sp-dozer-01"
 	wantSitepulseFirstExternalId = "SP-DZ-0001"
+	// The first dozer's bearer at seed 1, captured from the S0 manifest. Growing the site
+	// must not move an existing machine's credential, or a scene authored at S0 stops
+	// authenticating.
+	wantSitepulseFirstCredentialId = "a85913521abfb00e24b1fa855ab1803c"
 
 	wantSitepulseAreaParam = "areaToken"
 
@@ -63,7 +72,11 @@ var wantSitepulseZoneTokens = []string{"sp-zone-cut", "sp-zone-fill", "sp-zone-y
 // read by no rule and no widget — so deleting either is invisible to every other check
 // in this file, while quietly removing a metric the player emits and the profile is
 // supposed to promise.
-var wantSitepulseMetricKeys = []string{"fuel_pct", "engine_temp_c", "engine_hours"}
+var wantSitepulseMetricKeys = []string{"fuel_pct", "engine_temp_c", "engine_hours", "payload_t", "tyre_pressure_kpa"}
+
+// wantSitepulseNewMetricUnits are the units of the two measurements S1 added to the
+// equipment profile.
+var wantSitepulseNewMetricUnits = map[string]string{"payload_t": "t", "tyre_pressure_kpa": "kPa"}
 
 func sitepulseManifest(t *testing.T) SimManifest {
 	t.Helper()
@@ -249,7 +262,7 @@ func TestSitepulseProfileDeclaresTheWholeMachineVocabulary(t *testing.T) {
 // would be the same green.
 func TestSitepulseRuleSendsACommandTheProfileActuallyDeclares(t *testing.T) {
 	profile := sitepulseProfile(t)
-	doc := decodeThresholdRule(t, soleDetectionRule(t, profile).Definition)
+	doc := decodeThresholdRule(t, ruleByToken(t, profile, "sp-rule-lowfuel").Definition)
 
 	if len(doc.Actions) != 2 {
 		t.Fatalf("the low-fuel rule renders %d actions, want 2 (raiseAlarm + sendCommand): %+v",
@@ -321,7 +334,7 @@ func TestSitepulseRefuelCommandTakesNoArguments(t *testing.T) {
 // sees; and compared to the literal "lt" as well as to OpLt, so swapping the two
 // constants' values would not leave this green.
 func TestSitepulseLowFuelRuleFiresBelowTheThresholdNotAboveIt(t *testing.T) {
-	doc := decodeThresholdRule(t, soleDetectionRule(t, sitepulseProfile(t)).Definition)
+	doc := decodeThresholdRule(t, ruleByToken(t, sitepulseProfile(t), "sp-rule-lowfuel").Definition)
 
 	if doc.When.Op != "lt" {
 		t.Errorf("the low-fuel rule renders op %q, want \"lt\" — fuel is a DEPLETING quantity, so "+
@@ -352,7 +365,7 @@ func TestSitepulseLowFuelRuleFiresBelowTheThresholdNotAboveIt(t *testing.T) {
 	}
 	// Disabled rules are published UNCHECKED — the publish gate only validates enabled
 	// ones — so a rule parked here would make a broken predicate look accepted.
-	if !soleDetectionRule(t, sitepulseProfile(t)).Enabled {
+	if !ruleByToken(t, sitepulseProfile(t), "sp-rule-lowfuel").Enabled {
 		t.Error("the low-fuel rule is disabled, so it is published unchecked and never fires")
 	}
 }
@@ -402,58 +415,284 @@ func TestSitepulseCommandFarEndIsExternal(t *testing.T) {
 // and then to the credential. A pattern edit here silently renames every machine the
 // scene knows, and the failure surfaces in another repo as a bind that finds nothing.
 //
-// Checked at S0's count AND at a resized one, because the padding is what makes the two
-// agree: the scene binds four-digit ids that count=1 does not need, and a pattern that
-// only happened to render correctly at one device would break on the first resize.
+// Every kind's first and last device is pinned against LITERALS, for the same reason the
+// counts are: a comparison to the constant that rendered the pattern cannot fail.
 func TestSitepulsePopulationRendersTheTokensTheSceneBindsTo(t *testing.T) {
-	// S0: exactly one dozer, and the ids the acceptance run names literally.
 	devices := sitepulseManifest(t).Expand(1)
-	// Against the LITERAL 1, not against sitepulseDozerCount. Comparing the expansion
-	// to the constant that sized it is a check that cannot fail: bump the constant to 2
-	// and both sides move, so S0's "the vertical at count=1" silently becomes something
-	// else with every test green.
-	if len(devices) != wantSitepulseDozerCount {
-		t.Fatalf("sitepulse expands to %d devices, want exactly %d — S0 is deliberately the "+
-			"vertical at one machine", len(devices), wantSitepulseDozerCount)
-	}
-	if devices[0].Token != wantSitepulseFirstToken {
-		t.Errorf("the sole dozer's token is %q, want %q", devices[0].Token, wantSitepulseFirstToken)
-	}
-	if devices[0].ExternalId != wantSitepulseFirstExternalId {
-		t.Errorf("the sole dozer's externalId is %q, want %q — this is the key the scene binds "+
-			"by, so a change here is a rename the Unity side cannot see",
-			devices[0].ExternalId, wantSitepulseFirstExternalId)
-	}
-	if devices[0].DeviceTypeToken != SitepulseDeviceTypeToken {
-		t.Errorf("the sole dozer is of type %q, want %q", devices[0].DeviceTypeToken, SitepulseDeviceTypeToken)
+	if len(devices) != wantSitepulseDeviceCount {
+		t.Fatalf("sitepulse expands to %d devices, want exactly %d (6 dozers, 6 loaders, "+
+			"6 haul trucks, 1 plant)", len(devices), wantSitepulseDeviceCount)
 	}
 
-	// Resized to S1's fleet, through NewSim — the only supported construction path, and
-	// the one that would refuse the count if the manifest had acquired a second
-	// population or gone FixedTopology.
-	s, err := NewSim("sitepulse", 1, Load{DeviceCount: 18})
+	kinds := []struct {
+		name                            string
+		from, to                        int
+		firstToken, lastToken           string
+		firstExternalId, lastExternalId string
+		deviceType                      string
+	}{
+		{"dozer", 0, 6, "sp-dozer-01", "sp-dozer-06", "SP-DZ-0001", "SP-DZ-0006", "sp-dozer"},
+		{"loader", 6, 12, "sp-loader-01", "sp-loader-06", "SP-LD-0001", "SP-LD-0006", "sp-loader"},
+		{"hauler", 12, 18, "sp-hauler-01", "sp-hauler-06", "SP-HL-0001", "SP-HL-0006", "sp-hauler"},
+		{"plant", 18, 19, "sp-plant-01", "sp-plant-01", "SP-PL-0001", "SP-PL-0001", "sp-crusher-plant"},
+	}
+	for _, k := range kinds {
+		first, last := devices[k.from], devices[k.to-1]
+		if first.Token != k.firstToken || last.Token != k.lastToken {
+			t.Errorf("%s tokens run %q..%q, want %q..%q", k.name, first.Token, last.Token, k.firstToken, k.lastToken)
+		}
+		if first.ExternalId != k.firstExternalId || last.ExternalId != k.lastExternalId {
+			t.Errorf("%s externalIds run %q..%q, want %q..%q — these are the keys the scene binds by",
+				k.name, first.ExternalId, last.ExternalId, k.firstExternalId, k.lastExternalId)
+		}
+		for _, d := range devices[k.from:k.to] {
+			if d.DeviceTypeToken != k.deviceType {
+				t.Errorf("%s %q is of device type %q, want %q", k.name, d.Token, d.DeviceTypeToken, k.deviceType)
+			}
+		}
+	}
+	// The dozer population stays FIRST: the anchor test and every consumer that reads
+	// "the first device" were written against it.
+	if devices[0].Token != wantSitepulseFirstToken || devices[0].ExternalId != wantSitepulseFirstExternalId {
+		t.Errorf("the first device is %q/%q, want %q/%q", devices[0].Token, devices[0].ExternalId,
+			wantSitepulseFirstToken, wantSitepulseFirstExternalId)
+	}
+}
+
+// Machines are placed round-robin PER POPULATION, so six of a kind lands two in each
+// zone in the zone order, and the plant — a population of one — lands in the first.
+func TestSitepulseSpreadsEveryMachineKindAcrossTheZones(t *testing.T) {
+	devices := sitepulseManifest(t).Expand(1)
+	if len(devices) != wantSitepulseDeviceCount {
+		t.Fatalf("sitepulse expands to %d devices, want %d", len(devices), wantSitepulseDeviceCount)
+	}
+	zoneOf := func(d DeviceInstance) string {
+		for _, a := range d.Assignments {
+			if a.TargetType == "area" {
+				return a.TargetToken
+			}
+		}
+		return ""
+	}
+	for kind := 0; kind < 3; kind++ {
+		perZone := map[string]int{}
+		for i := 0; i < wantSitepulseMachinesPerKind; i++ {
+			d := devices[kind*wantSitepulseMachinesPerKind+i]
+			if got, want := zoneOf(d), wantSitepulseZoneTokens[i%3]; got != want {
+				t.Errorf("%s is anchored to %q, want %q", d.Token, got, want)
+			}
+			perZone[zoneOf(d)]++
+		}
+		for _, z := range wantSitepulseZoneTokens {
+			if perZone[z] != 2 {
+				t.Errorf("kind %d has %d machines in %q, want 2", kind, perZone[z], z)
+			}
+		}
+	}
+	plant := devices[18]
+	if got := zoneOf(plant); got != "sp-zone-cut" {
+		t.Errorf("the plant is anchored to %q, want the cut face: with no area anchor its "+
+			"telemetry is unreachable by any area-scoped query", got)
+	}
+	for _, d := range devices {
+		customer := ""
+		for _, a := range d.Assignments {
+			if a.TargetType == "customer" {
+				customer = a.TargetToken
+			}
+		}
+		if customer != wantSitepulseCustomerToken {
+			t.Errorf("%s has customer anchor %q, want %q", d.Token, customer, wantSitepulseCustomerToken)
+		}
+	}
+}
+
+// Provisioning mints a credential per device from Expand, and the Unity player resolves
+// {deviceToken}-cred. Every one of the 19 devices needs one, they must not collide, and
+// growing the site must not move the S0 dozer's bearer.
+func TestSitepulseEveryDeviceGetsItsOwnCredentialAndExternalId(t *testing.T) {
+	devices := sitepulseManifest(t).Expand(1)
+	credIds := map[string]string{}
+	externalIds := map[string]string{}
+	for _, d := range devices {
+		if d.CredentialToken != d.Token+"-cred" {
+			t.Errorf("%s has credential token %q, want %q", d.Token, d.CredentialToken, d.Token+"-cred")
+		}
+		if d.CredentialId == "" || d.ExternalId == "" {
+			t.Errorf("%s has an empty credential id (%q) or externalId (%q)", d.Token, d.CredentialId, d.ExternalId)
+		}
+		if prev, dup := credIds[d.CredentialId]; dup {
+			t.Errorf("%s and %s share a bearer", prev, d.Token)
+		}
+		credIds[d.CredentialId] = d.Token
+		if prev, dup := externalIds[d.ExternalId]; dup {
+			t.Errorf("%s and %s share externalId %q", prev, d.Token, d.ExternalId)
+		}
+		externalIds[d.ExternalId] = d.Token
+	}
+	if devices[0].CredentialId != wantSitepulseFirstCredentialId {
+		t.Errorf("sp-dozer-01's bearer at seed 1 is %q, want %q: the S1 site moved an S0 machine's credential",
+			devices[0].CredentialId, wantSitepulseFirstCredentialId)
+	}
+}
+
+// --devices sizes every MACHINE population and leaves the plant alone: there is one
+// crusher on the site however many machines work it.
+func TestSitepulseResizeScalesTheMachinesAndKeepsTheSinglePlant(t *testing.T) {
+	s, err := NewSim("sitepulse", 1, Load{DeviceCount: 3})
 	if err != nil {
-		t.Fatalf("NewSim at 18 devices: %v", err)
+		t.Fatalf("NewSim at a device count of 3: %v", err)
 	}
-	resized := s.Manifest().Expand(1)
-	if len(resized) != 18 {
-		t.Fatalf("a resized sitepulse expands to %d devices, want 18", len(resized))
+	devices := s.Manifest().Expand(1)
+	if want := 3*3 + wantSitepulsePlantCount; len(devices) != want {
+		t.Fatalf("sitepulse at --devices 3 expands to %d devices, want %d (3 per machine kind + the plant)",
+			len(devices), want)
 	}
-	if resized[0].Token != wantSitepulseFirstToken || resized[0].ExternalId != wantSitepulseFirstExternalId {
-		t.Errorf("resizing moved the FIRST device to %q/%q; the scene's binding must survive a "+
-			"population change", resized[0].Token, resized[0].ExternalId)
+	if devices[0].Token != wantSitepulseFirstToken || devices[0].ExternalId != wantSitepulseFirstExternalId {
+		t.Errorf("resizing moved the first device to %q/%q", devices[0].Token, devices[0].ExternalId)
 	}
-	if got, want := resized[17].Token, "sp-dozer-18"; got != want {
-		t.Errorf("the eighteenth dozer's token is %q, want %q", got, want)
+	if last := devices[len(devices)-1]; last.Token != "sp-plant-01" {
+		t.Errorf("the last device is %q, want the single plant sp-plant-01", last.Token)
 	}
-	if got, want := resized[17].ExternalId, "SP-DZ-0018"; got != want {
-		t.Errorf("the eighteenth dozer's externalId is %q, want %q", got, want)
+	if err := s.Manifest().Validate(); err != nil {
+		t.Errorf("the resized manifest does not validate: %v", err)
 	}
-	// The zones are round-robin targets, so at 18 they must divide evenly — six machines
-	// per zone with no remainder is what makes the S1 site look composed rather than
-	// lopsided, and it is a property of the ZONE COUNT, not of the population.
-	if zones := len(sitepulseManifest(t).Areas); 18%zones != 0 {
-		t.Errorf("18 machines do not divide evenly across %d zones", zones)
+}
+
+// The three machine kinds are device types over ONE shared equipment profile; the plant is
+// a fixed type over its own profile, because it reports metrics no machine does.
+func TestSitepulseDeviceTypesShareTheEquipmentProfileAndThePlantHasItsOwn(t *testing.T) {
+	m := sitepulseManifest(t)
+	got := map[string]string{}
+	for _, dt := range m.DeviceTypes {
+		got[dt.Token] = dt.ProfileToken
+	}
+	want := map[string]string{
+		"sp-dozer":         "sp-equipment-profile",
+		"sp-loader":        "sp-equipment-profile",
+		"sp-hauler":        "sp-equipment-profile",
+		"sp-crusher-plant": "sp-plant-profile",
+	}
+	if len(got) != len(want) {
+		t.Errorf("the site declares device types %v, want %v", got, want)
+	}
+	for tok, profile := range want {
+		if got[tok] != profile {
+			t.Errorf("device type %q references profile %q, want %q", tok, got[tok], profile)
+		}
+	}
+}
+
+// The two measurements S1 added to the equipment profile.
+func TestSitepulseEquipmentProfileCarriesPayloadAndTyrePressure(t *testing.T) {
+	declared := map[string]MetricSpec{}
+	for _, mx := range sitepulseProfile(t).Metrics {
+		declared[mx.Key] = mx
+	}
+	for key, unit := range wantSitepulseNewMetricUnits {
+		mx, ok := declared[key]
+		if !ok {
+			t.Errorf("the equipment profile does not declare %q", key)
+			continue
+		}
+		if mx.DataType != "DOUBLE" || mx.Unit != unit {
+			t.Errorf("metric %q is %s in %q, want DOUBLE in %q", key, mx.DataType, mx.Unit, unit)
+		}
+	}
+}
+
+// The plant: throughput as a DOUBLE and its running state as a BOOLEAN. A BOOLEAN metric is
+// how the platform models a discrete on/off signal (stored 0/1); a StateChange event is the
+// presence channel and device ingest refuses it, and a STRING metric is not storable.
+// It declares no commands — it is not commanded — and is not a machine.
+func TestSitepulsePlantProfileModelsThroughputAndRunningState(t *testing.T) {
+	p := profileByToken(t, sitepulseManifest(t), "sp-plant-profile")
+	declared := map[string]MetricSpec{}
+	for _, mx := range p.Metrics {
+		declared[mx.Key] = mx
+	}
+	if len(declared) != 2 {
+		t.Fatalf("the plant profile declares %d metrics, want 2: %v", len(declared), declared)
+	}
+	if mx := declared["throughput_tph"]; mx.DataType != "DOUBLE" || mx.Unit != "t/h" {
+		t.Errorf("throughput_tph is %+v, want DOUBLE in t/h", mx)
+	}
+	if mx := declared["plant_running"]; mx.DataType != "BOOLEAN" {
+		t.Errorf("plant_running is %+v, want a BOOLEAN metric — never a STRING (not storable) "+
+			"and never a StateChange (the presence channel, refused at device ingest)", mx)
+	}
+	if len(p.Commands) != 0 {
+		t.Errorf("the plant profile declares commands %v; nothing commands the plant", p.Commands)
+	}
+	if len(p.DetectionRules) != 0 {
+		t.Errorf("the plant profile declares %d rules, want none", len(p.DetectionRules))
+	}
+}
+
+// ---- The S1 rules ---------------------------------------------------------------
+
+// The profile carries exactly three rules, low-fuel first and unchanged.
+func TestSitepulseProfileCarriesTheThreeRules(t *testing.T) {
+	var tokens []string
+	for _, r := range sitepulseProfile(t).DetectionRules {
+		tokens = append(tokens, r.Token)
+		if !r.Enabled {
+			t.Errorf("rule %q is disabled, so it is published unchecked and never fires", r.Token)
+		}
+	}
+	want := []string{"sp-rule-lowfuel", "sp-rule-overheat", "sp-rule-tyre-low"}
+	if len(tokens) != len(want) {
+		t.Fatalf("the equipment profile declares rules %v, want %v", tokens, want)
+	}
+	for i := range want {
+		if tokens[i] != want[i] {
+			t.Errorf("rule[%d] is %q, want %q", i, tokens[i], want[i])
+		}
+	}
+}
+
+// Overheat: engine_temp_c ABOVE 105, critical, raise an alarm and nothing else. All values
+// are contracts with the Unity player's thermal model, pinned as literals.
+func TestSitepulseOverheatRuleFiresAbove105AsCriticalWithNoCommand(t *testing.T) {
+	rule := ruleByToken(t, sitepulseProfile(t), "sp-rule-overheat")
+	doc := decodeThresholdRule(t, rule.Definition)
+	if rule.Metric != "engine_temp_c" || doc.When.Metric != "engine_temp_c" {
+		t.Errorf("the overheat rule declares metric %q and reads %q, want engine_temp_c", rule.Metric, doc.When.Metric)
+	}
+	if doc.When.Op != "gt" || doc.When.Threshold != 105 {
+		t.Errorf("the overheat rule fires on %s %v, want gt 105 — a hot engine is a metric running HIGH",
+			doc.When.Op, doc.When.Threshold)
+	}
+	if doc.Severity != "critical" {
+		t.Errorf("the overheat rule's authoring severity is %q, want critical", doc.Severity)
+	}
+	if len(doc.Actions) != 1 || doc.Actions[0].Type != actionTypeRaiseAlarm {
+		t.Fatalf("the overheat rule renders actions %+v, want exactly one raiseAlarm and no sendCommand", doc.Actions)
+	}
+	if doc.Actions[0].RaiseAlarm.AlarmKey != "engine-overheat" {
+		t.Errorf("the overheat rule raises %q, want engine-overheat", doc.Actions[0].RaiseAlarm.AlarmKey)
+	}
+}
+
+// Tyre pressure is a DEPLETING quantity, so this is the second rule to fire BELOW its
+// threshold: a gt here would alarm on healthy tyres and go quiet on a flat one.
+func TestSitepulseTyrePressureRuleFiresBelow600AsMajorWithNoCommand(t *testing.T) {
+	rule := ruleByToken(t, sitepulseProfile(t), "sp-rule-tyre-low")
+	doc := decodeThresholdRule(t, rule.Definition)
+	if rule.Metric != "tyre_pressure_kpa" || doc.When.Metric != "tyre_pressure_kpa" {
+		t.Errorf("the tyre rule declares metric %q and reads %q, want tyre_pressure_kpa", rule.Metric, doc.When.Metric)
+	}
+	if doc.When.Op != "lt" || doc.When.Threshold != 600 {
+		t.Errorf("the tyre rule fires on %s %v, want lt 600", doc.When.Op, doc.When.Threshold)
+	}
+	if doc.Severity != "major" {
+		t.Errorf("the tyre rule's authoring severity is %q, want major", doc.Severity)
+	}
+	if len(doc.Actions) != 1 || doc.Actions[0].Type != actionTypeRaiseAlarm {
+		t.Fatalf("the tyre rule renders actions %+v, want exactly one raiseAlarm and no sendCommand", doc.Actions)
+	}
+	if doc.Actions[0].RaiseAlarm.AlarmKey != "tyre-pressure-low" {
+		t.Errorf("the tyre rule raises %q, want tyre-pressure-low", doc.Actions[0].RaiseAlarm.AlarmKey)
 	}
 }
 

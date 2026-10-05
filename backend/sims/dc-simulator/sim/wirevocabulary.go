@@ -69,4 +69,12 @@ const (
 	// tombstone row that does not belong to any scenario.)
 	SeverityMajor          = "major"
 	AlarmSeverityMajorWire = "MAJOR"
+
+	// The critical tier is the same kind of pair: SeverityCritical is what
+	// event-processing's rule compiler accepts, AlarmSeverityCriticalWire is what the
+	// raise-alarm consumer writes on the durable row and what an alarm widget's
+	// severity filter is spelled in. Both gates read the authored-rules fixture, which
+	// records the wire tier per RULE, so a scenario may mix tiers.
+	SeverityCritical          = "critical"
+	AlarmSeverityCriticalWire = "CRITICAL"
 )

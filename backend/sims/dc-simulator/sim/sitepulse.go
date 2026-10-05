@@ -10,8 +10,9 @@ import (
 )
 
 // sitepulse is the slice-4 heavy-equipment construction-site scenario
-// (sim-slice4-sitepulse-spec.md), at its S0 size: ONE dozer, on a site of three
-// zones, whose closed loop is
+// (sim-slice4-sitepulse-spec.md), at its S1 size: eighteen machines (six dozers, six
+// wheel loaders, six haul trucks) and one crusher plant on a site of three zones. The
+// closed loop each machine can run is
 //
 //	fuel_pct drains -> sp-rule-lowfuel fires below 15% -> raiseAlarm("low-fuel")
 //	+ sendCommand("goto-refuel") -> the command reaches the machine over MQTT ->
@@ -47,12 +48,16 @@ type sitepulse struct {
 	load Load
 }
 
-// Sitepulse sizing. S0 is deliberately the vertical at ONE machine — the same move
-// devicepulse made — because every seam below it is net-new (emit from Unity, receive
-// a command in Unity, bind by externalId) and one machine is the smallest topology
-// that can be debugged when any of them misbehaves. S1 takes the population to 18
-// across three device types; see the deliberate omissions below.
-const sitepulseDozerCount = 1
+// Sitepulse sizing. S0 was the vertical at ONE machine — the same move devicepulse
+// made — because every seam below it is net-new (emit from Unity, receive a command in
+// Unity, bind by externalId). S1 is the site the scene renders: six of each of the three
+// machine kinds (18 machines, which divides evenly by the three zones) and one crusher
+// plant, so 19 broker sessions. The machine counts are what `--devices` resizes; the
+// plant is FixedCount, since there is one crusher however many machines work it.
+const (
+	sitepulseMachinesPerKind = 6
+	sitepulsePlantCount      = 1
+)
 
 // Sitepulse entity tokens — fixed, not derived from any handshake field, since this
 // manifest is a static built-in scenario (mirrors the Devicepulse*/Buildingpulse*/
@@ -65,7 +70,17 @@ const sitepulseDozerCount = 1
 // and provisions a half-connected topology no gate objects to.
 const (
 	SitepulseProfileToken    = "sp-equipment-profile"
-	SitepulseDeviceTypeToken = "sp-dozer"
+	SitepulseDozerTypeToken  = "sp-dozer"
+	SitepulseLoaderTypeToken = "sp-loader"
+	SitepulseHaulerTypeToken = "sp-hauler"
+
+	// The processing plant is a device with its own profile and type, because it reports
+	// metrics no machine does and answers no commands. Not to be confused with
+	// SitepulseAssetTypeToken ("sp-fixed-plant"), the ASSET classifier of the refuelling
+	// station: that is an entity a scene places things against, this is a device that
+	// emits telemetry.
+	SitepulsePlantProfileToken = "sp-plant-profile"
+	SitepulsePlantTypeToken    = "sp-crusher-plant"
 
 	SitepulseCustomerTypeToken = "sp-contractor"
 	SitepulseCustomerToken     = "acme-earthworks"
@@ -87,18 +102,28 @@ const (
 	SitepulseZoneYardToken = "sp-zone-yard"
 )
 
-// The machine's metric vocabulary — its capability contract, shared by every device
-// type the scenario will grow (ADR-045).
+// The machine's metric vocabulary — its capability contract, shared by the three machine
+// device types (ADR-045); the plant has its own below.
 //
-// engine_hours is declared and read by NOTHING: no rule tests it and no widget binds
-// it. That is intended rather than an oversight. A profile states what a machine can
-// report, not what some rule happens to consume, and an odometer is part of what a
-// piece of heavy plant reports; the player emits it from S0 so the metric exists on
-// the wire before anything needs it.
+// engine_hours and payload_t are declared and read by NOTHING in a rule: no rule tests
+// them. That is intended rather than an oversight. A profile states what a machine can
+// report, not what some rule happens to consume, and an odometer and a load cell are
+// part of what a piece of heavy plant reports; the player emits them so the scene's
+// cards show real platform data rather than numbers the platform never saw.
 const (
 	SitepulseFuelKey        = "fuel_pct"
 	SitepulseEngineTempKey  = "engine_temp_c"
 	SitepulseEngineHoursKey = "engine_hours"
+	SitepulsePayloadKey     = "payload_t"
+	SitepulseTyreKey        = "tyre_pressure_kpa"
+
+	// The plant's vocabulary. Its running state is a BOOLEAN metric — the platform's
+	// model of a discrete on/off signal, stored as 0/1. It is deliberately neither a
+	// StateChange event (that is the presence channel, and device ingest refuses it) nor
+	// a STRING metric (not storable). On the wire the value must parse as a boolean:
+	// "true"/"false" or "1"/"0", never "1.0".
+	SitepulseThroughputKey   = "throughput_tph"
+	SitepulsePlantRunningKey = "plant_running"
 )
 
 // The command vocabulary, and the rule that chains one of them.
@@ -122,12 +147,44 @@ const (
 	SitepulseAlarmKey  = "low-fuel"
 	sitepulseRuleName  = "Site Pulse low fuel"
 
-	// The alarm tier. Both spellings live in wirevocabulary.go, which carries the whole
-	// reasoning for why they are two constants and what each way of collapsing them
-	// breaks — the canonical copy, not a summary of one.
+	// The engine overheat rule: alarm only, no command (the scene's response to a hot
+	// engine is its own).
+	SitepulseOverheatRuleToken = "sp-rule-overheat"
+	SitepulseOverheatAlarmKey  = "engine-overheat"
+	sitepulseOverheatRuleName  = "Site Pulse engine overheat"
+
+	// The low tyre pressure rule: alarm only, no command.
+	SitepulseTyreRuleToken = "sp-rule-tyre-low"
+	SitepulseTyreAlarmKey  = "tyre-pressure-low"
+	sitepulseTyreRuleName  = "Site Pulse low tyre pressure"
+
+	// The alarm tiers. Both spellings of each live in wirevocabulary.go, which carries
+	// the whole reasoning for why they are two constants and what each way of collapsing
+	// them breaks — the canonical copy, not a summary of one. Low fuel and low tyre
+	// pressure are major; an overheating engine is critical.
 	SitepulseSeverity          = SeverityMajor
 	SitepulseAlarmSeverityWire = AlarmSeverityMajorWire
+
+	SitepulseOverheatSeverity          = SeverityCritical
+	SitepulseOverheatAlarmSeverityWire = AlarmSeverityCriticalWire
+
+	SitepulseTyreSeverity          = SeverityMajor
+	SitepulseTyreAlarmSeverityWire = AlarmSeverityMajorWire
 )
+
+// SitepulseOverheatThreshold is the engine temperature (degrees Celsius) the overheat
+// rule fires ABOVE. A metric running HIGH, so Op is OpGt. Like the low-fuel threshold
+// it is the SHARED half of a contract with the Unity player, whose thermal model
+// generates the temperature in another process: the scene's "heat up the engine" input
+// is judged against this value by the live run, not by a test in this module.
+const SitepulseOverheatThreshold = 105.0
+
+// SitepulseTyrePressureThreshold is the tyre pressure (kPa) the tyre rule fires BELOW.
+// Pressure is a DEPLETING quantity, so this is the second rule to set Op: OpLt — a
+// `gt` here would alarm on healthy tyres and go quiet on a flat one. It is the shared
+// half of a contract with the Unity player: a healthy machine reports a nominal
+// pressure comfortably above it, and a puncture drains below it.
+const SitepulseTyrePressureThreshold = 600.0
 
 // SitepulseLowFuelThreshold is the fuel percentage the DETECT rule fires BELOW.
 //
@@ -147,6 +204,46 @@ const (
 // this module. Nothing here can close that seam; saying so is better than a test that
 // pretends to.
 const SitepulseLowFuelThreshold = 15.0
+
+// sitepulseMachineRules is the equipment profile's detection rules: the original low-fuel
+// rule (alarm AND command), then the engine overheat and low tyre pressure rules, which
+// alarm and send nothing. Every rule is Enabled, because publish-time validation only
+// gates ENABLED rules.
+func sitepulseMachineRules() []DetectionRuleSpec {
+	return []DetectionRuleSpec{
+		ThresholdAlarmRule{
+			Token:      SitepulseRuleToken,
+			Name:       sitepulseRuleName,
+			Metric:     SitepulseFuelKey,
+			Op:         OpLt,
+			Threshold:  SitepulseLowFuelThreshold,
+			Severity:   SitepulseSeverity,
+			AlarmKey:   SitepulseAlarmKey,
+			CommandKey: SitepulseRefuelCommandKey,
+			Enabled:    true,
+		}.Spec(),
+		ThresholdAlarmRule{
+			Token:     SitepulseOverheatRuleToken,
+			Name:      sitepulseOverheatRuleName,
+			Metric:    SitepulseEngineTempKey,
+			Op:        OpGt,
+			Threshold: SitepulseOverheatThreshold,
+			Severity:  SitepulseOverheatSeverity,
+			AlarmKey:  SitepulseOverheatAlarmKey,
+			Enabled:   true,
+		}.Spec(),
+		ThresholdAlarmRule{
+			Token:     SitepulseTyreRuleToken,
+			Name:      sitepulseTyreRuleName,
+			Metric:    SitepulseTyreKey,
+			Op:        OpLt,
+			Threshold: SitepulseTyrePressureThreshold,
+			Severity:  SitepulseTyreSeverity,
+			AlarmKey:  SitepulseTyreAlarmKey,
+			Enabled:   true,
+		}.Spec(),
+	}
+}
 
 // sitepulseAreas is the site's three zones, freshly built per call.
 //
@@ -218,10 +315,10 @@ func (s *sitepulse) Manifest() SimManifest {
 	return resize(s.load, SimManifest{
 		Name: "sitepulse",
 		Seed: s.seed,
-		// A legitimate scale knob, unlike widgetlab: nothing here binds a named device
-		// (no dashboard at S0, and the scene resolves whatever externalIds exist), so
-		// `--devices` genuinely means "more machines" and S1 is this same manifest at a
-		// larger count.
+		// A legitimate scale knob, unlike widgetlab: nothing here binds a named device (no
+		// dashboard yet, and the scene resolves whatever externalIds exist), so `--devices`
+		// genuinely means "more machines of each kind". It sizes the three machine
+		// populations and leaves the single plant alone (PopulationSpec.FixedCount).
 		FixedTopology: false,
 		// The Unity player publishes this scenario's telemetry, so Sim.Tick emits
 		// nothing (see Tick). Declared, because "resizable" is not "load-drivable": a
@@ -262,6 +359,8 @@ func (s *sitepulse) Manifest() SimManifest {
 					{Key: SitepulseFuelKey, Name: "Fuel Level", DataType: "DOUBLE", Unit: "%"},
 					{Key: SitepulseEngineTempKey, Name: "Engine Temperature", DataType: "DOUBLE", Unit: "C"},
 					{Key: SitepulseEngineHoursKey, Name: "Engine Hours", DataType: "DOUBLE", Unit: "h"},
+					{Key: SitepulsePayloadKey, Name: "Payload", DataType: "DOUBLE", Unit: "t"},
+					{Key: SitepulseTyreKey, Name: "Tyre Pressure", DataType: "DOUBLE", Unit: "kPa"},
 				},
 				// Two commands, and only one of them is chained by a rule. goto-refuel is
 				// argument-free ON PURPOSE: REACT's sendCommand payload is STATIC — frozen at
@@ -288,73 +387,102 @@ func (s *sitepulse) Manifest() SimManifest {
 						Name:       "Go Refuel",
 					},
 				},
-				// The one rule, and the first in the tree to both ALARM and ACT.
+				// Three rules. The low-fuel rule is the first in the tree to both ALARM and ACT.
 				//
 				// CommandKey is SitepulseRefuelCommandKey — the command's KEY, never its Token
 				// and never its display Name. Manifest.Validate cross-checks it against this
 				// same profile's declared keys, so a slip is a loud bootstrap error naming both
 				// sides rather than a dead-letter on first firing.
 				//
-				// Enabled, because publish-time validation only gates ENABLED rules — a
-				// disabled one is published unchecked and would make a broken predicate look
-				// accepted.
+				// The overheat and tyre rules only ALARM: they render the single-action
+				// document, and the machine's response to either is the scene's own.
 				//
-				// 🔴 ONE RULE, DELIBERATELY. The full scenario also carries an engine_temp_c
-				// overheat rule at severity `critical`. It is not here because `critical` would
-				// mean adding a second severity pair to wirevocabulary.go — an authoring
-				// spelling and a wire spelling, each needing a consumer test in the module that
-				// owns its enum — and S0's acceptance exercises neither. It lands with S1,
-				// where a fleet makes a second tier worth showing.
-				DetectionRules: []DetectionRuleSpec{
-					ThresholdAlarmRule{
-						Token:      SitepulseRuleToken,
-						Name:       sitepulseRuleName,
-						Metric:     SitepulseFuelKey,
-						Op:         OpLt,
-						Threshold:  SitepulseLowFuelThreshold,
-						Severity:   SitepulseSeverity,
-						AlarmKey:   SitepulseAlarmKey,
-						CommandKey: SitepulseRefuelCommandKey,
-						Enabled:    true,
-					}.Spec(),
+				// All Enabled, because publish-time validation only gates ENABLED rules — a
+				// disabled one is published unchecked and would make a broken predicate look
+				// accepted. See sitepulseMachineRules.
+				DetectionRules: sitepulseMachineRules(),
+			},
+			{
+				// The crusher plant's profile. Its own profile rather than the equipment one
+				// because it reports metrics no machine does (and the equipment profile's
+				// fuel and tyre metrics mean nothing to it). No commands: nothing commands
+				// the plant, so the Unity player must not wait on a command subscription for
+				// it. No rules.
+				Token:    SitepulsePlantProfileToken,
+				Name:     "Site Pulse Plant Profile",
+				Category: "industrial",
+				Metrics: []MetricSpec{
+					{Key: SitepulseThroughputKey, Name: "Throughput", DataType: "DOUBLE", Unit: "t/h"},
+					{Key: SitepulsePlantRunningKey, Name: "Running", DataType: "BOOLEAN"},
 				},
 			},
 		},
-		// ONE device type at S0. The full site has three (dozer/loader/hauler) over this
-		// same profile — they differ in what a viewer sees and what the scene binds a
-		// prefab to, not in what they can report — but three of anything at count=1 is
-		// three ways for the same seam to fail rather than one. S1 adds the other two.
+		// Three machine device types over ONE shared equipment profile — they differ in what a
+		// viewer sees and what the scene binds a prefab to, not in what they can report —
+		// and a fixed plant type over its own profile.
 		DeviceTypes: []DeviceTypeSpec{
-			{Token: SitepulseDeviceTypeToken, Name: "Site Pulse Dozer", ProfileToken: SitepulseProfileToken},
+			{Token: SitepulseDozerTypeToken, Name: "Site Pulse Dozer", ProfileToken: SitepulseProfileToken},
+			{Token: SitepulseLoaderTypeToken, Name: "Site Pulse Wheel Loader", ProfileToken: SitepulseProfileToken},
+			{Token: SitepulseHaulerTypeToken, Name: "Site Pulse Haul Truck", ProfileToken: SitepulseProfileToken},
+			{Token: SitepulsePlantTypeToken, Name: "Site Pulse Crusher Plant", ProfileToken: SitepulsePlantProfileToken},
 		},
+		// The dozer population stays FIRST: tests and consumers that read "the first device"
+		// were written against it.
+		//
+		// The externalId is the SCENE'S binding key (ADR-049): the player resolves
+		// devicesByExternalId(["SP-DZ-0001"]) to the addressing token, then the
+		// credential, and binds its object to the result. So these patterns are a
+		// published contract with another repo's authored scene, not an internal naming
+		// choice — which is why they are padded to four digits they do not need: widening
+		// them later would rename every machine the scene knows.
+		//
+		// Each machine population round-robins across the three zones by its own index, so
+		// six of a kind lands two in each zone and eighteen machines land six per zone.
+		// That is the device's INITIAL placement — the platform's record of where the
+		// machine is anchored — not a live position; position is a LocationEvent the
+		// player emits.
 		Populations: []PopulationSpec{
 			{
-				OfType: SitepulseDeviceTypeToken,
-				Count:  sitepulseDozerCount,
-				// The externalId is the SCENE'S binding key (ADR-049): the player resolves
-				// devicesByExternalId(["SP-DZ-0001"]) to the addressing token, then the
-				// credential, and binds its dozer object to the result. So this pattern is a
-				// published contract with another repo's authored scene, not an internal
-				// naming choice — which is why it is padded to four digits it does not need at
-				// count=1: widening it later would rename every machine the scene knows.
+				OfType:            SitepulseDozerTypeToken,
+				Count:             sitepulseMachinesPerKind,
 				TokenPattern:      "sp-dozer-{n:02d}",
 				ExternalIdPattern: "SP-DZ-{n:04d}",
-				// Round-robin across the three zones, which at count=1 puts the sole dozer in
-				// the cut face and at S1's 18 lands six per zone with no remainder. It is the
-				// device's INITIAL placement — the platform's record of where the machine is
-				// anchored — not a live position; position is a LocationEvent the player emits.
-				DistributeAcross: []string{"area"},
+				DistributeAcross:  []string{"area"},
+			},
+			{
+				OfType:            SitepulseLoaderTypeToken,
+				Count:             sitepulseMachinesPerKind,
+				TokenPattern:      "sp-loader-{n:02d}",
+				ExternalIdPattern: "SP-LD-{n:04d}",
+				DistributeAcross:  []string{"area"},
+			},
+			{
+				OfType:            SitepulseHaulerTypeToken,
+				Count:             sitepulseMachinesPerKind,
+				TokenPattern:      "sp-hauler-{n:02d}",
+				ExternalIdPattern: "SP-HL-{n:04d}",
+				DistributeAcross:  []string{"area"},
+			},
+			{
+				// The one crusher. FixedCount: --devices sizes the machines, not the plant.
+				// With a population of one the round-robin anchors it to the first zone, the
+				// cut face, where the material comes out of the ground; without an area
+				// anchor its telemetry would be unreachable by any area-scoped query.
+				OfType:            SitepulsePlantTypeToken,
+				Count:             sitepulsePlantCount,
+				FixedCount:        true,
+				TokenPattern:      "sp-plant-{n:02d}",
+				ExternalIdPattern: "SP-PL-{n:04d}",
+				DistributeAcross:  []string{"area"},
 			},
 		},
-		// 🔴 NO DASHBOARD, DELIBERATELY. S0's acceptance criteria name none — they are
-		// four platform-side facts (externalId resolves, telemetry lands, the alarm raises
-		// and clears, the command reaches SUCCESSFUL), each read through GraphQL — and a
-		// board would drag in the frontend/testdata/sim-dashboards fixture and its
-		// TypeScript-side gate for a surface nothing in this slice looks at. S1's
-		// acceptance asks for one (fleet fuel + alarms beside the 3D window) and that is
-		// where it belongs. Note the shape this leaves BEHIND: Validate's control-widget
-		// gate is about a board with no far end, so a scenario with a far end and no board
-		// is unremarkable to it.
+		// 🔴 NO DASHBOARD YET, DELIBERATELY. The fleet fuel + alarms board S1's acceptance
+		// asks for is a separate slice: it would drag in the frontend/testdata/sim-dashboards
+		// fixture and its TypeScript-side gate, and it changes what a "named device" means
+		// for FixedTopology (a board binds devices by name). This slice grows the devices and
+		// the rules the board will read. Note the shape this leaves BEHIND: Validate's
+		// control-widget gate is about a board with no far end, so a scenario with a far end
+		// and no board is unremarkable to it.
 	})
 }
 
@@ -368,8 +496,9 @@ func (s *sitepulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 // 🔴 READ THIS BEFORE "FIXING" IT BY ADDING AN EMITTER. sitepulse is the first
 // scenario of the game/interactive archetype: the Unity player holds the device's own
 // MQTT session under the device's own credential and publishes fuel_pct,
-// engine_temp_c, engine_hours and its LocationEvents to
-// `{instance}/{tenant}/devices/{deviceToken}/events` itself. The machine's state — how
+// engine_temp_c, engine_hours, payload_t, tyre_pressure_kpa and its LocationEvents to
+// `{instance}/{tenant}/devices/{deviceToken}/events` itself, and the plant publishes
+// throughput_tph and plant_running the same way. The machine's state — how
 // fast the tank drains, where it is on the haul road, whether it has finished the
 // refuelling task — lives in the game loop, so the platform's view of it can only come
 // from there. A Go emitter here would not be a fallback: it would publish a SECOND,

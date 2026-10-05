@@ -188,9 +188,16 @@ type DashboardSpec struct {
 // scenario a customer assignment doesn't need spreading (see Expand), and
 // asset-tier assignment anchors are deferred entirely (assets are provisioned
 // but never assignment targets yet).
+//
+// FixedCount exempts a population from a device-count override. A scenario with
+// several populations is resizable only if it says which of them are a scale knob:
+// every population WITHOUT FixedCount takes the override, and one WITH it keeps its
+// declared Count — sitepulse's single crusher plant, which no number of machines
+// working the site changes. See withDeviceCount.
 type PopulationSpec struct {
 	OfType            string // device-type token this population instantiates
 	Count             int
+	FixedCount        bool
 	TokenPattern      string
 	ExternalIdPattern string
 	DistributeAcross  []string

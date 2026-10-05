@@ -90,20 +90,22 @@ func (l Load) TargetRate(n int) float64 {
 	return float64(n) / l.Interval().Seconds()
 }
 
-// withDeviceCount returns m with its single population resized to count.
+// withDeviceCount returns m with its populations resized to count.
 //
-// It returns an error rather than resizing "the first" population when a
-// manifest declares several: with more than one population, a single
-// DeviceCount has no unambiguous meaning (split evenly? scale proportionally?
-// apply to each?), and every answer silently produces a topology the caller did
-// not ask for.
+// A manifest with ONE population resizes it. A manifest with several is resized
+// only if it declares which populations are a scale knob, by marking the others
+// FixedCount: every population without that mark then takes count, and the marked
+// ones keep theirs. Several populations and no FixedCount mark is refused, because
+// a single count has no unambiguous meaning for them (split evenly? scaled
+// proportionally? applied to each?) and every undeclared answer silently produces a
+// topology the caller did not ask for.
 //
 // Two distinct refusals live here, and conflating them was the trap. A
-// multi-population manifest is AMBIGUOUS — a rule could be invented for it. A
-// FixedTopology manifest is not ambiguous but MEANINGLESS to resize, because
-// its dashboards name the devices they bind. widgetlab is both, and reporting
-// the ambiguity would have sent a reader looking for a sizing rule that should
-// never be written. TestEveryScenarioIsResizableOrSaysWhyNot holds each
+// multi-population manifest that declares no rule is AMBIGUOUS — a rule could be
+// declared for it. A FixedTopology manifest is not ambiguous but MEANINGLESS to
+// resize, because its dashboards name the devices they bind. widgetlab is that, and
+// reporting the ambiguity would have sent a reader looking for a sizing rule that
+// should never be written. TestEveryScenarioIsResizableOrSaysWhyNot holds each
 // registered scenario to whichever of the two it declares.
 func withDeviceCount(m SimManifest, count int) (SimManifest, error) {
 	if count <= 0 {
@@ -119,15 +121,28 @@ func withDeviceCount(m SimManifest, count int) (SimManifest, error) {
 				"it is a composed fixture, not a scale scenario",
 			m.Name, count)
 	}
-	if len(m.Populations) != 1 {
+	scalable, fixed := 0, 0
+	for _, pop := range m.Populations {
+		if pop.FixedCount {
+			fixed++
+		} else {
+			scalable++
+		}
+	}
+	if scalable == 0 || (len(m.Populations) != 1 && fixed == 0) {
 		return SimManifest{}, fmt.Errorf(
-			"scenario %q declares %d populations, so a single device count of %d is "+
-				"ambiguous; size its populations in the manifest instead",
+			"scenario %q declares %d populations with no way to size them from a single "+
+				"device count of %d: mark the populations that are not a scale knob "+
+				"FixedCount (and leave at least one that is), or size them in the manifest instead",
 			m.Name, len(m.Populations), count)
 	}
 	pops := make([]PopulationSpec, len(m.Populations))
 	copy(pops, m.Populations)
-	pops[0].Count = count
+	for i := range pops {
+		if !pops[i].FixedCount {
+			pops[i].Count = count
+		}
+	}
 	m.Populations = pops
 	return m, nil
 }
