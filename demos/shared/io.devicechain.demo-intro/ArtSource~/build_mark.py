@@ -48,7 +48,6 @@ BEVEL = 8.0                       # how far the frame's inner edge stands forwar
 DEPTH = 12.0                      # how far the frame's back sits behind the picture plane
 R_OUT, R_IN, R_CUBE = 51.965, 30.565, 25.98   # circumradii of the three hexagons
 CURVE_RES = 24                    # curve resolution for the wordmark's round letters
-CHAMFER = 0.55                    # the moving mark's chamfer, SVG units (about 0.6 % of its width)
 
 
 def args():
@@ -143,12 +142,10 @@ def plane(p, z):
 class MeshBuilder:
     def __init__(self):
         self.verts, self.faces, self.colors = [], [], []
-        self.deltas = []
 
-    def face(self, pts, color, deltas=None):
+    def face(self, pts, color):
         base = len(self.verts)
         self.verts.extend(pts)
-        self.deltas.extend(deltas or [(0.0, 0.0, 0.0)] * len(pts))
         self.faces.append(list(range(base, base + len(pts))))
         self.colors.append(color)
 
@@ -161,20 +158,6 @@ class MeshBuilder:
             for li in poly.loop_indices:
                 attr.data[li].color = col
         me.color_attributes.active_color = attr
-        # the chamfer (see chamfer()): each vertex's offset in the authoring frame, in two UV
-        # sets, (dx, dy) and (dz, 0); the glTF exporter flips V and glTFast flips it back
-        uv0 = me.uv_layers.new(name="UVMap")
-        uvxy = me.uv_layers.new(name="ChamferXY")
-        uvz = me.uv_layers.new(name="ChamferZ")
-        for poly in me.polygons:
-            for li in poly.loop_indices:
-                d = self.deltas[me.loops[li].vertex_index]
-                uv0.data[li].uv = (0.0, 0.0)
-                uvxy.data[li].uv = (d[0], d[1])
-                uvz.data[li].uv = (d[2], 0.0)
-        # flat faces; the chamfer's strips and corners have no area in the drawing's shape, so
-        # their normals here mean nothing: the intro's shader takes every normal from the
-        # surface it draws (screen-space derivatives), chamfered or not
         for poly in me.polygons:
             poly.use_smooth = False
         me.materials.append(material)
@@ -182,116 +165,6 @@ class MeshBuilder:
         bpy.context.collection.objects.link(ob)
         ob.parent = parent
         return ob
-
-
-def newell(pts):
-    """The right-handed normal of a planar polygon in the authoring frame (unnormalised)."""
-    n = Vector()
-    for i, a in enumerate(pts):
-        b = pts[(i + 1) % len(pts)]
-        n += Vector(((a[1] - b[1]) * (a[2] + b[2]), (a[2] - b[2]) * (a[0] + b[0]), (a[0] - b[0]) * (a[1] + b[1])))
-    return n
-
-
-def chamfer(mb, size, sharp_degrees=5.0):
-    """A chamfer that exists only while the mark moves. Every sharp edge (faces meeting at more
-    than sharp_degrees) gets a strip of width about `size`, every corner where sharp edges meet a
-    small polygon, and each face is inset to make room. The geometry is written in the drawing's
-    shape: the strips and corners have zero area and every face is exactly where it was; the
-    inset lives in each vertex's offset (MeshBuilder.deltas), which the intro's shader adds
-    times _Chamfer. At 0, at the lock, the mark is the drawing; at 1 its edges catch the light.
-
-    Faces are wound so that the authoring frame's right-handed normal points INTO the solid
-    (Unity is left-handed); outward normals are the negated Newell normals."""
-    reps = []
-
-    def key(p):
-        # the drawing's points and the computed hexagons differ by up to 0.01 SVG units, so
-        # points are welded within a tolerance, never by exact equality
-        for r in reps:
-            if (r - p).length < 5e-4:
-                return tuple(r)
-        reps.append(Vector(p))
-        return tuple(p)
-
-    faces = []
-    for f, col in zip(mb.faces, mb.colors):
-        pts = [Vector(mb.verts[i]) for i in f]
-        faces.append({"pts": pts, "keys": [key(p) for p in pts], "col": col, "n": -newell(pts).normalized()})
-    edges = {}
-    for fi, f in enumerate(faces):
-        k = f["keys"]
-        for i in range(len(k)):
-            a, b = k[i], k[(i + 1) % len(k)]
-            edges.setdefault((min(a, b), max(a, b)), []).append(fi)
-    cos_sharp = math.cos(math.radians(sharp_degrees))
-
-    def sharp(a, b):
-        fs = edges.get((min(a, b), max(a, b)), [])
-        return len(fs) == 2 and faces[fs[0]]["n"].dot(faces[fs[1]]["n"]) < cos_sharp
-
-    inset = {}                                     # (face, vertex key) -> chamfered position
-    own = {}                                       # (face, vertex key) -> the face's own point
-    for fi, f in enumerate(faces):
-        pts, k = f["pts"], f["keys"]
-        m = len(pts)
-        for i in range(m):
-            own[(fi, k[i])] = pts[i]
-            v, prev, nxt = pts[i], pts[i - 1], pts[(i + 1) % m]
-            u, w = (prev - v).normalized(), (nxt - v).normalized()
-            sin = u.cross(w).length
-            o_prev = size if sharp(k[i - 1], k[i]) else 0.0
-            o_next = size if sharp(k[i], k[(i + 1) % m]) else 0.0
-            inset[(fi, k[i])] = v + u * (o_next / sin) + w * (o_prev / sin)
-
-    lum = lambda c: 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
-    out = MeshBuilder()
-
-    def emit(base, moved, col, n_out):
-        loop = list(zip(base, moved))
-        # wind so the (chamfered) polygon's outward normal agrees with n_out
-        if (-newell([p for _, p in loop])).dot(n_out) < 0:
-            loop.reverse()
-        out.face([tuple(b) for b, _ in loop], col, [tuple(p - b) for b, p in loop])
-
-    for fi, f in enumerate(faces):
-        emit(f["pts"], [inset[(fi, k)] for k in f["keys"]], f["col"], f["n"])
-    for (a, b), fs in edges.items():
-        if not sharp(a, b):
-            continue
-        f, g = fs
-        n = (faces[f]["n"] + faces[g]["n"]).normalized()
-        col = max(faces[f]["col"], faces[g]["col"], key=lum)
-        emit([own[(f, a)], own[(f, b)], own[(g, b)], own[(g, a)]],
-             [inset[(f, a)], inset[(f, b)], inset[(g, b)], inset[(g, a)]], col, n)
-    corners = {}
-    for fi, f in enumerate(faces):
-        for k in f["keys"]:
-            corners.setdefault(k, []).append(fi)
-    sharp_at = set()
-    for a, b in edges:
-        if sharp(a, b):
-            sharp_at.update((a, b))
-    for k, fs in corners.items():
-        if k not in sharp_at:
-            continue
-        n = sum((faces[fi]["n"] for fi in fs), Vector()).normalized()
-        pts, base = [], []
-        for fi in fs:
-            p = inset[(fi, k)]
-            if all((p - q).length > 1e-7 for q in pts):
-                pts.append(p)
-                base.append(own[(fi, k)])
-        if len(pts) < 3:
-            continue
-        # order the corner's points round its normal
-        c = sum(pts, Vector()) / len(pts)
-        ref = (pts[0] - c).normalized()
-        side = n.cross(ref)
-        order = sorted(range(len(pts)), key=lambda i: math.atan2((pts[i] - c).dot(side), (pts[i] - c).dot(ref)))
-        col = max((faces[fi]["col"] for fi in fs), key=lum)
-        emit([base[i] for i in order], [pts[i] for i in order], col, n)
-    return out
 
 
 def facing_viewer(pts):
@@ -448,8 +321,8 @@ def main():
     root = bpy.data.objects.new("DeviceChainMark", None)
     bpy.context.collection.objects.link(root)
 
-    frame = chamfer(build_frame(shapes, base_fill), CHAMFER * SCALE).build("Frame", root, mat)
-    cube = chamfer(build_cube(shapes), CHAMFER * SCALE).build("Cube", root, mat)
+    frame = build_frame(shapes, base_fill).build("Frame", root, mat)
+    cube = build_cube(shapes).build("Cube", root, mat)
     word = build_wordmark(logo, mat).build("Wordmark", root, mat)
 
     report = {}

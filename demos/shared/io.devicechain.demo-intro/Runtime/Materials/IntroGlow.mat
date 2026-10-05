@@ -25,7 +25,6 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _DstBlend: 1
     - _Head: 0
     - _Intensity: 1
     - _Mode: 0
@@ -33,7 +32,6 @@ Material:
     - _Trace: 1
     - _ZTest: 4
     m_Colors:
-    - _Base: {r: 0, g: 0, b: 0, a: 0}
     - _Color: {r: 0.6, g: 0.81, b: 0.93, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

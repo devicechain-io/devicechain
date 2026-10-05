@@ -19,7 +19,6 @@ namespace DeviceChain.Demos.EditorTools
         public const string MarkMaterialPath = Root + "Materials/IntroMark.mat";
         public const string GlowMaterialPath = Root + "Materials/IntroGlow.mat";
         public const string HoleMaterialPath = Root + "Materials/IntroHole.mat";
-        public const string BloomMaterialPath = Root + "Materials/IntroBloom.mat";
         public const string OverlayMaterialPath = Root + "Materials/IntroOverlay.mat";
         public const string PrefabPath = Root + "Resources/" + DemoIntro.ResourceName + ".prefab";
 
@@ -31,7 +30,6 @@ namespace DeviceChain.Demos.EditorTools
             var markMat = Material(MarkMaterialPath, "DeviceChain/Intro/Mark");
             var glowMat = Material(GlowMaterialPath, "DeviceChain/Intro/Glow");
             var holeMat = Material(HoleMaterialPath, "DeviceChain/Intro/Hole");
-            var bloomMat = Material(BloomMaterialPath, "Hidden/DeviceChain/Intro/Bloom");
             var overlayMat = Material(OverlayMaterialPath, "Hidden/DeviceChain/Intro/Overlay");
 
             var go = new GameObject(DemoIntro.ResourceName);
@@ -42,7 +40,6 @@ namespace DeviceChain.Demos.EditorTools
                 intro.markMaterial = markMat;
                 intro.glowMaterial = glowMat;
                 intro.holeMaterial = holeMat;
-                intro.bloomMaterial = bloomMat;
                 intro.overlayMaterial = overlayMat;
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(PrefabPath)));
                 PrefabUtility.SaveAsPrefabAsset(go, PrefabPath);
