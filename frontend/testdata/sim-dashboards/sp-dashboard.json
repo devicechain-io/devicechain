@@ -1,0 +1,1083 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "gap": 8,
+      "rowHeight": 40
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 1,
+  "slots": {
+    "plant": {
+      "defaultBinding": {
+        "deviceToken": "sp-plant-01",
+        "kind": "device"
+      },
+      "label": "Crusher plant",
+      "type": "device"
+    },
+    "selectedMachine": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-01",
+        "kind": "device"
+      },
+      "label": "Machine",
+      "scope": {
+        "parent": "site",
+        "strategy": "manual"
+      },
+      "type": "device"
+    },
+    "site": {
+      "defaultBinding": {
+        "anchor": {
+          "relationship": "assigned",
+          "targetToken": "acme-earthworks",
+          "targetType": "customer"
+        },
+        "kind": "anchor"
+      },
+      "label": "Site",
+      "type": "anchor"
+    },
+    "sp-dozer-01": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-01",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0001",
+      "type": "device"
+    },
+    "sp-dozer-02": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-02",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0002",
+      "type": "device"
+    },
+    "sp-dozer-03": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-03",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0003",
+      "type": "device"
+    },
+    "sp-dozer-04": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-04",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0004",
+      "type": "device"
+    },
+    "sp-dozer-05": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-05",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0005",
+      "type": "device"
+    },
+    "sp-dozer-06": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-06",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0006",
+      "type": "device"
+    },
+    "sp-hauler-01": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-01",
+        "kind": "device"
+      },
+      "label": "SP-HL-0001",
+      "type": "device"
+    },
+    "sp-hauler-02": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-02",
+        "kind": "device"
+      },
+      "label": "SP-HL-0002",
+      "type": "device"
+    },
+    "sp-hauler-03": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-03",
+        "kind": "device"
+      },
+      "label": "SP-HL-0003",
+      "type": "device"
+    },
+    "sp-hauler-04": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-04",
+        "kind": "device"
+      },
+      "label": "SP-HL-0004",
+      "type": "device"
+    },
+    "sp-hauler-05": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-05",
+        "kind": "device"
+      },
+      "label": "SP-HL-0005",
+      "type": "device"
+    },
+    "sp-hauler-06": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-06",
+        "kind": "device"
+      },
+      "label": "SP-HL-0006",
+      "type": "device"
+    },
+    "sp-loader-01": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-01",
+        "kind": "device"
+      },
+      "label": "SP-LD-0001",
+      "type": "device"
+    },
+    "sp-loader-02": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-02",
+        "kind": "device"
+      },
+      "label": "SP-LD-0002",
+      "type": "device"
+    },
+    "sp-loader-03": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-03",
+        "kind": "device"
+      },
+      "label": "SP-LD-0003",
+      "type": "device"
+    },
+    "sp-loader-04": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-04",
+        "kind": "device"
+      },
+      "label": "SP-LD-0004",
+      "type": "device"
+    },
+    "sp-loader-05": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-05",
+        "kind": "device"
+      },
+      "label": "SP-LD-0005",
+      "type": "device"
+    },
+    "sp-loader-06": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-06",
+        "kind": "device"
+      },
+      "label": "SP-LD-0006",
+      "type": "device"
+    }
+  },
+  "title": "Site Pulse",
+  "widgets": [
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "site"
+      },
+      "id": "sp-alarms-critical",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "severity": "CRITICAL",
+        "state": "ACTIVE",
+        "title": "Critical alarms"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "site"
+      },
+      "id": "sp-alarms-major",
+      "layout": {
+        "base": {
+          "col": 6,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "severity": "MAJOR",
+        "state": "ACTIVE",
+        "title": "Major alarms"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "throughput_tph"
+        ],
+        "slot": "plant"
+      },
+      "id": "sp-plant-throughput",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "throughput_tph",
+        "precision": 0,
+        "title": "Crusher throughput",
+        "unit": "t/h"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "plant_running"
+        ],
+        "slot": "plant"
+      },
+      "id": "sp-plant-running",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "plant_running",
+        "precision": 0,
+        "title": "Crusher running (1 = yes, 0 = no)"
+      },
+      "type": "latest-card"
+    },
+    {
+      "id": "sp-fuel-label",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 24,
+          "row": 3,
+          "rowSpan": 1,
+          "z": 0
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 14,
+        "text": "Fuel level — the low-fuel alarm and refuel command fire below 15 %"
+      },
+      "type": "label"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-01"
+      },
+      "id": "sp-fuel-sp-dozer-01",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 4,
+          "row": 4,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-DZ-0001",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-02"
+      },
+      "id": "sp-fuel-sp-dozer-02",
+      "layout": {
+        "base": {
+          "col": 4,
+          "colSpan": 4,
+          "row": 4,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-DZ-0002",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-03"
+      },
+      "id": "sp-fuel-sp-dozer-03",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 4,
+          "row": 4,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-DZ-0003",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-04"
+      },
+      "id": "sp-fuel-sp-dozer-04",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 4,
+          "row": 4,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-DZ-0004",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-05"
+      },
+      "id": "sp-fuel-sp-dozer-05",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 4,
+          "row": 4,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-DZ-0005",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-06"
+      },
+      "id": "sp-fuel-sp-dozer-06",
+      "layout": {
+        "base": {
+          "col": 20,
+          "colSpan": 4,
+          "row": 4,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-DZ-0006",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-01"
+      },
+      "id": "sp-fuel-sp-loader-01",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 4,
+          "row": 6,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-LD-0001",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-02"
+      },
+      "id": "sp-fuel-sp-loader-02",
+      "layout": {
+        "base": {
+          "col": 4,
+          "colSpan": 4,
+          "row": 6,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-LD-0002",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-03"
+      },
+      "id": "sp-fuel-sp-loader-03",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 4,
+          "row": 6,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-LD-0003",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-04"
+      },
+      "id": "sp-fuel-sp-loader-04",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 4,
+          "row": 6,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-LD-0004",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-05"
+      },
+      "id": "sp-fuel-sp-loader-05",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 4,
+          "row": 6,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-LD-0005",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-06"
+      },
+      "id": "sp-fuel-sp-loader-06",
+      "layout": {
+        "base": {
+          "col": 20,
+          "colSpan": 4,
+          "row": 6,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-LD-0006",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-01"
+      },
+      "id": "sp-fuel-sp-hauler-01",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 4,
+          "row": 8,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-HL-0001",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-02"
+      },
+      "id": "sp-fuel-sp-hauler-02",
+      "layout": {
+        "base": {
+          "col": 4,
+          "colSpan": 4,
+          "row": 8,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-HL-0002",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-03"
+      },
+      "id": "sp-fuel-sp-hauler-03",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 4,
+          "row": 8,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-HL-0003",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-04"
+      },
+      "id": "sp-fuel-sp-hauler-04",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 4,
+          "row": 8,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-HL-0004",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-05"
+      },
+      "id": "sp-fuel-sp-hauler-05",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 4,
+          "row": 8,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-HL-0005",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-06"
+      },
+      "id": "sp-fuel-sp-hauler-06",
+      "layout": {
+        "base": {
+          "col": 20,
+          "colSpan": 4,
+          "row": 8,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "SP-HL-0006",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-01"
+      },
+      "id": "sp-payload-sp-hauler-01",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 4,
+          "row": 10,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "SP-HL-0001 payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-02"
+      },
+      "id": "sp-payload-sp-hauler-02",
+      "layout": {
+        "base": {
+          "col": 4,
+          "colSpan": 4,
+          "row": 10,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "SP-HL-0002 payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-03"
+      },
+      "id": "sp-payload-sp-hauler-03",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 4,
+          "row": 10,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "SP-HL-0003 payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-04"
+      },
+      "id": "sp-payload-sp-hauler-04",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 4,
+          "row": 10,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "SP-HL-0004 payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-05"
+      },
+      "id": "sp-payload-sp-hauler-05",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 4,
+          "row": 10,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "SP-HL-0005 payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-06"
+      },
+      "id": "sp-payload-sp-hauler-06",
+      "layout": {
+        "base": {
+          "col": 20,
+          "colSpan": 4,
+          "row": 10,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "SP-HL-0006 payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "site"
+      },
+      "id": "sp-alarms",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 12,
+          "row": 12,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "maxRows": 25,
+        "precision": 1,
+        "selectionTarget": "selectedMachine",
+        "state": "ACTIVE",
+        "title": "Active alarms"
+      },
+      "type": "alarm-table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "location": {
+          "series": "latest"
+        },
+        "measurements": [],
+        "slot": "site"
+      },
+      "id": "sp-map",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 6,
+          "row": 12,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Machine positions"
+      },
+      "type": "map"
+    },
+    {
+      "id": "sp-machine-select",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 12,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "selectionTarget": "selectedMachine",
+        "title": "Machine"
+      },
+      "type": "entity-selector"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "engine_temp_c"
+        ],
+        "slot": "selectedMachine"
+      },
+      "id": "sp-engine-temp",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 14,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "max": 130,
+        "measurement": "engine_temp_c",
+        "min": 0,
+        "title": "Engine temp — overheat above 105 °C",
+        "unit": "°C"
+      },
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "tyre_pressure_kpa"
+        ],
+        "slot": "selectedMachine"
+      },
+      "id": "sp-tyre",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 17,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "max": 1000,
+        "measurement": "tyre_pressure_kpa",
+        "min": 0,
+        "title": "Tyre pressure — low below 600 kPa",
+        "unit": "kPa"
+      },
+      "type": "gauge"
+    }
+  ]
+}

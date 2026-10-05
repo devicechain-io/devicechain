@@ -132,7 +132,7 @@ func TestEveryScenarioIsResizableOrSaysWhyNot(t *testing.T) {
 		if base.FixedTopology {
 			if err == nil {
 				t.Errorf("scenario %q declares FixedTopology but accepted a device count: "+
-					"its dashboards bind named devices, so the run would provision a "+
+					"its dashboards bind devices chosen in source for their behaviour, so the run would provision a "+
 					"topology those boards do not match", id)
 			}
 			continue

@@ -103,7 +103,10 @@ func (l Load) TargetRate(n int) float64 {
 // Two distinct refusals live here, and conflating them was the trap. A
 // multi-population manifest that declares no rule is AMBIGUOUS — a rule could be
 // declared for it. A FixedTopology manifest is not ambiguous but MEANINGLESS to
-// resize, because its dashboards name the devices they bind. widgetlab is that, and
+// resize, because its dashboards bind devices chosen in source for their behaviour,
+// which a resize cannot reproduce (a board built from the resized manifest's own
+// Expand, as buildingpulse's and sitepulse's are, binds named devices and stays
+// resizable). widgetlab is that, and
 // reporting the ambiguity would have sent a reader looking for a sizing rule that
 // should never be written. TestEveryScenarioIsResizableOrSaysWhyNot holds each
 // registered scenario to whichever of the two it declares.
@@ -116,7 +119,7 @@ func withDeviceCount(m SimManifest, count int) (SimManifest, error) {
 	// is meaningless, and the two deserve different messages.
 	if m.FixedTopology {
 		return SimManifest{}, fmt.Errorf(
-			"scenario %q has a fixed topology — its dashboards bind named devices, so a "+
+			"scenario %q has a fixed topology — its dashboards bind devices chosen in source for their behaviour, so a "+
 				"device count of %d would leave them bound to devices that do not exist; "+
 				"it is a composed fixture, not a scale scenario",
 			m.Name, count)

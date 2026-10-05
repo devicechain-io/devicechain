@@ -100,12 +100,12 @@ func buildTimeSeriesChartWidget(id string, b box, s widgetSubject, title string)
 	}
 }
 
-func buildLatestCardWidget(id string, b box, s widgetSubject, title, measurement, unit string) dashboardWidget {
+func buildLatestCardWidget(id string, b box, s widgetSubject, title, measurement, unit string, precision int, flash bool) dashboardWidget {
 	return dashboardWidget{
 		Id: id, Type: "latest-card", Layout: b.layout(), Datasource: s.datasource(),
 		Options: map[string]any{
 			"title": title, "measurement": measurement, "unit": unit,
-			"precision": 1, "flashOnChange": true,
+			"precision": precision, "flashOnChange": flash,
 		},
 	}
 }
@@ -168,11 +168,11 @@ func buildAlarmTableWidget(id string, b box, s widgetSubject, title, drillTo str
 // row, which is the authoring severity uppercased. Filtering on the lowercase
 // authoring form would match nothing and render a permanent zero that looks like a
 // quiet system.
-func buildAlarmCountWidget(id string, b box, s widgetSubject, title string) dashboardWidget {
+func buildAlarmCountWidget(id string, b box, s widgetSubject, title, severity string) dashboardWidget {
 	return dashboardWidget{
 		Id: id, Type: "alarm-count", Layout: b.layout(), Datasource: s.datasource(),
 		Options: map[string]any{
-			"title": title, "state": AlarmStateActiveWire, "severity": WidgetlabAlarmSeverityWire,
+			"title": title, "state": AlarmStateActiveWire, "severity": severity,
 		},
 	}
 }
@@ -327,10 +327,10 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 				"Widget Lab — one of every dashboard widget", "left", 20),
 
 			buildLatestCardWidget("wl-card", box{0, 6, 2, 4}, onSensor(WidgetlabTemperatureKey),
-				"Temperature", WidgetlabTemperatureKey, "C"),
+				"Temperature", WidgetlabTemperatureKey, "C", 1, true),
 			buildGaugeWidget("wl-gauge", box{6, 6, 2, 4}, onSensor(WidgetlabTemperatureKey),
 				"Temperature", WidgetlabTemperatureKey, "C", WidgetlabSweepMin, WidgetlabSweepMax),
-			buildAlarmCountWidget("wl-alarm-count", box{12, 6, 2, 4}, onZone, "Active alarms"),
+			buildAlarmCountWidget("wl-alarm-count", box{12, 6, 2, 4}, onZone, "Active alarms", WidgetlabAlarmSeverityWire),
 			buildImageWidget("wl-image", box{18, 6, 2, 4},
 				"Image", widgetlabImageDataURI, "A placeholder image", "contain"),
 

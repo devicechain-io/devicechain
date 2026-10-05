@@ -69,7 +69,7 @@ type dashboardWidget struct {
 
 // dashboardBox is one breakpoint's layout box as a CSS-Grid SPAN placement (WidgetBox
 // in types.ts): Col/Row are the 0-based start lines and ColSpan/RowSpan how many
-// tracks the widget covers. On the buildingpulse grid (dashboardGridColumns below)
+// tracks the widget covers. On the sim boards' grid (dashboardGridColumns below)
 // a half-width chart is ColSpan ~14 of 24 — the columns are fluid, so the widget
 // fills that fraction of whatever width the viewer has, not a fixed pixel count.
 type dashboardBox struct {
@@ -141,7 +141,7 @@ type dashboardAnchorTarget struct {
 	TargetToken  string `json:"targetToken"`
 }
 
-// The buildingpulse canvas grid: a 24-column fluid grid, 8px gutter, 40px rows —
+// The sim boards' canvas grid (shared by every scenario's board): a 24-column fluid grid, 8px gutter, 40px rows —
 // matching the frontend's DEFAULT_GRID. Widgets place by span across these columns.
 const (
 	dashboardGridColumns   = 24
