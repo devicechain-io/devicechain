@@ -439,7 +439,7 @@ def fleet(ground):
     # two loaders are not needed today: one is in the workshop, one is parked
     li5 = add_track("Loader", parked("Loader", -70.0, -35.5, 180.0, PARKED_LOADER))
     machines.append(dict(id="SP-LD-0005", kind="Loader", track=li5, offset=0.0))
-    li6 = add_track("Loader", parked("Loader", -93.5, -50.0, 90.0, PARKED_LOADER))
+    li6 = add_track("Loader", parked("Loader", -94.5, -53.0, 68.0, PARKED_LOADER))
     machines.append(dict(id="SP-LD-0006", kind="Loader", track=li6, offset=0.0))
 
     # dozers: one pushing up the muck pile at the toe of the north face, one ripping the pit
@@ -451,8 +451,9 @@ def fleet(ground):
     ]):
         di = add_track("Dozer", dozer_push(a, b, rip))
         machines.append(dict(id=f"SP-DZ-{k + 1:04d}", kind="Dozer", track=di, offset=round(k * 2.7, 3)))
-    for k, z in enumerate((-44.5, -39.5, -34.5)):
-        di = add_track("Dozer", parked("Dozer", -92.0, z, 90.0, PARKED_DOZER))
+    # parked where their drivers left them, not lined up for display
+    for k, (x, z, hd) in enumerate(((-92.0, -45.5, 78.0), (-90.2, -38.6, 103.0), (-93.4, -31.0, 86.0))):
+        di = add_track("Dozer", parked("Dozer", x, z, hd, PARKED_DOZER))
         machines.append(dict(id=f"SP-DZ-{k + 4:04d}", kind="Dozer", track=di, offset=0.0))
     return tracks, machines
 

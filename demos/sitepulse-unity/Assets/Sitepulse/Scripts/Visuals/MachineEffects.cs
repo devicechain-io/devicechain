@@ -20,7 +20,7 @@ namespace DeviceChain.Sitepulse.Visuals
         float budget = 1f;
 
         ParticleSystem dust, exhaust, pour, pourDust, bladeDust;
-        Transform exhaustTip, beaconNode, dumpBody, bucket;
+        Transform exhaustTip, beaconNode, dumpBody, bucket, pourFloor;
         MeshRenderer flare;
         MaterialPropertyBlock flareBlock, beaconBlock;
         Renderer[] beaconRenderers = System.Array.Empty<Renderer>();
@@ -77,6 +77,19 @@ namespace DeviceChain.Sitepulse.Visuals
                         pour = QuarryEffects.Emitter(bucket, "Pour", new Vector3(b.center.x, b.min.y + 0.3f, b.max.z - 0.2f), fx.rock, Max(90), fx.chunk);
                         QuarryEffects.AsChunks(pour, new Vector2(0.12f, 0.3f), 1.1f, new Vector2(0.3f, 1.2f));
                         QuarryEffects.Box(pour, new Vector3(b.size.x * 0.8f, 0.2f, 0.2f));
+                        // the rock lands in what the bucket is over (a truck body, a hopper) and
+                        // goes no further: a plane under the lip that every chunk dies on, so none
+                        // falls through a wall that is not there to stop it
+                        pourFloor = new GameObject("PourFloor") { hideFlags = HideFlags.DontSave }.transform;
+                        pourFloor.SetParent(transform, false);
+                        var col = pour.collision;
+                        col.enabled = true;
+                        col.type = ParticleSystemCollisionType.Planes;
+                        col.SetPlane(0, pourFloor);
+                        col.lifetimeLoss = 1f;
+                        col.bounce = 0f;
+                        col.dampen = 1f;
+                        col.radiusScale = 0.3f;
                         pourDust = QuarryEffects.Emitter(bucket, "PourDust", new Vector3(b.center.x, b.min.y - 0.5f, b.max.z), fx.dust, Max(30));
                         QuarryEffects.AsDust(pourDust, dustColor, new Vector2(2f, 3.6f), new Vector2(2.5f, 4.5f), 0.5f, 0.05f);
                         QuarryEffects.Box(pourDust, new Vector3(2.5f, 0.6f, 0.8f));
@@ -117,6 +130,9 @@ namespace DeviceChain.Sitepulse.Visuals
         }
 
         int Max(int n) => Mathf.Max(4, Mathf.RoundToInt(n * budget));
+
+        /// <summary>How far below a loader's bucket lip its falling rock lands (m).</summary>
+        public const float PourDepth = 1.1f;
 
         void OnDestroy() => QuarryEffects.Active.Remove(this);
 
@@ -174,7 +190,9 @@ namespace DeviceChain.Sitepulse.Visuals
             switch (rig.Kind)
             {
                 case MachineKind.Hauler:
-                    QuarryEffects.Rate(dust, budget * 22f * Mathf.Clamp01((speed - 0.5f) / 6.5f));
+                    // dust with speed, and more where the wheels work hardest: climbing with a load
+                    float haulDust = Mathf.Clamp01((speed - 0.5f) / 6.5f) + (rig.loaded ? 0.5f : 0.25f) * Mathf.Clamp01(climb / 0.25f) * Mathf.Clamp01(speed / 2f);
+                    QuarryEffects.Rate(dust, budget * 22f * haulDust);
                     // tipping: from the moment the body lifts until it starts back down
                     if (rig.dump > 4f && lastDump <= 4f) tipping = true;
                     if (rig.dump < lastDump - 0.01f) tipping = false;
@@ -190,7 +208,12 @@ namespace DeviceChain.Sitepulse.Visuals
                     float bflow = dumping ? Mathf.InverseLerp(25f, 60f, rig.bucket) : 0f;
                     QuarryEffects.Rate(pour, budget * 110f * bflow);
                     QuarryEffects.Rate(pourDust, budget * 12f * bflow);
-                    if (pour != null) pour.transform.rotation = Quaternion.LookRotation(Vector3.down, transform.forward);
+                    if (pour != null)
+                    {
+                        pour.transform.rotation = Quaternion.LookRotation(Vector3.down, transform.forward);
+                        // 1.1 m below the lip: inside a truck body or the hopper, under its rim
+                        pourFloor.SetPositionAndRotation(pour.transform.position + Vector3.down * PourDepth, Quaternion.identity);
+                    }
                     lastBucket = rig.bucket;
                     break;
                 case MachineKind.Dozer:

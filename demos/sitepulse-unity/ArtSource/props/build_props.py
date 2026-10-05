@@ -12,7 +12,9 @@ Same conventions as the machines (see sitepulse_kit.py): Unity metres, X right, 
 origin on the ground at the prop's footprint centre. Every prop has one node, Body, under Root;
 it does not move. A building's long axis is X and its open or front side faces +Z. The plant
 also has empty marker nodes under Root where material leaves it (StackerHead, SideHeadRight,
-SideHeadLeft, CrusherDischarge) and at its Hopper and Screen, for the scene's effects.
+SideHeadLeft, CrusherDischarge) and at its Hopper and Screen, for the scene's effects; its two
+flywheels (FlywheelLeft, FlywheelRight, turning about X) and its screen box (ScreenBox) are nodes
+of their own, so the scene can turn and shake them.
 
   conifer_a/_b/_c            stylized spruce, pine and young fir for Unity Terrain tree instances
   shrub_a, shrub_b           a low bush and a taller scrub clump
@@ -23,6 +25,7 @@ SideHeadLeft, CrusherDischarge) and at its Hopper and Screen, for the scene's ef
   fuel_tank                  bunded 8 m horizontal diesel tank with a dispenser
   light_tower                trailer-mounted light tower (mast 8.5 m), lamps face +Z
   cone, barrier, site_sign   small site furniture
+  worker                     a site worker in a high-visibility vest and hard hat
   crusher_plant              primary jaw crusher in a pocket below the pad, conveyor, screen tower,
                              radial stacker and two side conveyors; origin at the hopper centre,
                              material flows along +Z (see PLANT_SCALE)
@@ -470,10 +473,11 @@ def conveyor(p, a, b, width=0.9, legs=(), truss=False, walkway=True):
 
 # The plant is built at PLANT_SCALE (1.4 x the dimensions written below) so it stands right next
 # to the haul trucks, and its primary crusher sits PRIMARY_DROP metres (after scaling) down in a
-# concrete-lined pocket so that a loader on the pad tips over the hopper's rim. Both, and the
+# concrete-lined pocket so that a loader on the pad tips over the hopper's rim with its bucket's
+# lip half a metre clear of it. Both, and the
 # discharge points, are mirrored in ArtSource/terrain/quarry_heightmap.py (PLANT_*): keep them in step.
 PLANT_SCALE = 1.4
-PRIMARY_DROP = 1.6
+PRIMARY_DROP = 2.9
 POCKET = (-3.6, 3.6, -4.4, 8.8)              # x0, x1, z0, z1 of the pocket, metres after scaling
 
 
@@ -529,8 +533,6 @@ def crusher_plant(rng):
                 p.box((sx * 1.2 - 0.05, 0.5, z - 0.08), (sx * 1.2 + 0.05, 3.2, z + 0.08), "plant", 0.0)
     p.box((-0.92, 0.4, 2.4), (0.92, 3.3, 5.1), "paint_dark", 0.02)                          # jaw housing
     p.prism([(2.3, 3.5), (4.6, 3.5), (3.4, 4.2)], "x", -1.15, 1.15, "plant", 0.02)        # pitman cover
-    for sx in (-1, 1):                                                                      # flywheels
-        flywheel(p, (sx * 1.55, 2.25, 3.9), 1.25, 0.34)
     p.cyl((-1.8, 2.25, 3.9), (1.8, 2.25, 3.9), 0.16, "steel", 12)                          # shaft
     frustum(p, 0.4, 1.0, (-0.55, 0.55, 4.9, 5.8), (-0.95, 0.95, 4.4, 5.6), "paint_dark")  # discharge chute
     with p.detail():                                                                        # access platform
@@ -569,8 +571,10 @@ def crusher_plant(rng):
         for k in range(16):                                                                 # stair to the deck
             p.box((2.3, 0.35 * k, 15.2 - 0.3 * k + 4.8), (3.1, 0.35 * k + 0.05, 15.5 - 0.3 * k + 4.8), "worn", 0.0)
     _, _, su, sv, sw = _frame((0.0, 7.5, 17.4), (0.0, 6.5, 22.0))
-    p.obox(Vector((0.0, 7.05, 19.7)) + sv * 0.55, su, sv, 4.9, 1.1, 2.6, "plant")             # screen box
-    p.obox(Vector((0.0, 7.05, 19.7)) + sv * 1.15, su, sv, 4.6, 0.1, 2.2, "ore")              # material on the top deck
+    # the screen box shakes and the flywheels turn: each is its own node (see below)
+    screen = K.Piece(bevel=0.02)
+    screen.obox(Vector((0.0, 7.05, 19.7)) + sv * 0.55, su, sv, 4.9, 1.1, 2.6, "plant")        # screen box
+    screen.obox(Vector((0.0, 7.05, 19.7)) + sv * 1.15, su, sv, 4.6, 0.1, 2.2, "ore")         # material on the top deck
     p.box((1.35, 6.05, 18.4), (2.1, 6.75, 19.4), "plant", 0.02)                              # vibrator motor
     frustum(p, 3.2, 5.9, (-0.6, 0.6, 20.2, 21.2), (-1.4, 1.4, 18.0, 22.0), "paint_dark")   # under-screen chute
     # -- the main radial stacker, straight on
@@ -601,14 +605,48 @@ def crusher_plant(rng):
     p.lamp((2.6, 7.0, 22.6), "+z", 0.5, 0.3, 0.12)
     for v in p.bm.verts:                                                                     # to scale
         v.co *= PLANT_SCALE
+    S = PLANT_SCALE
     K.node("Root", None, (0, 0, 0))
     K.node("Body", "Root", (0, 0, 0))
-    S = PLANT_SCALE
+    # the flywheels turn about their shaft (the node's X axis) and the screen box shakes
+    for node, sx in (("FlywheelLeft", -1), ("FlywheelRight", 1)):
+        fw = K.Piece(bevel=0.02)
+        flywheel(fw, (sx * 1.55, 2.25 - drop, 3.9), 1.25, 0.34)
+        for v in fw.bm.verts:
+            v.co *= S
+        K.node(node, "Root", (sx * 1.55 * S, (2.25 - drop) * S, 3.9 * S))
+        K.attach(node, fw, smooth_angle=35)
+    for v in screen.bm.verts:
+        v.co *= S
+    K.node("ScreenBox", "Root", (0.0, 7.05 * S, 19.7 * S))
+    K.attach("ScreenBox", screen, smooth_angle=35)
     for name, pos in (("StackerHead", (0.0, 9.0, 39.2)), ("SideHeadRight", (12.35, 5.9, 19.7)),
                       ("SideHeadLeft", (-9.85, 4.5, 19.7)), ("CrusherDischarge", (0.0, 0.4 - drop, 5.4)),
                       ("Hopper", (0.0, 4.1 - drop, -0.2)), ("Screen", (0.0, 7.6, 19.7))):
         K.node(name, "Root", (pos[0] * S, pos[1] * S, pos[2] * S))
     K.attach("Body", p, smooth_angle=35)
+
+
+def worker(rng):
+    """A site worker, 1.78 m, standing: dark work clothes, a high-visibility vest with reflective
+    bands, a white hard hat. Faces +Z, right arm reaching forward (to a fuel nozzle)."""
+    p = K.Piece(bevel=0.01)
+    for sx in (-1, 1):                                                                      # legs and boots
+        p.box((sx * 0.13 - 0.07, 0.0, -0.06), (sx * 0.13 + 0.07, 0.1, 0.16), "rubber", 0.0)
+        p.box((sx * 0.13 - 0.075, 0.1, -0.07), (sx * 0.13 + 0.075, 0.86, 0.08), "workwear", 0.0)
+    p.box((-0.2, 0.84, -0.1), (0.2, 1.0, 0.1), "workwear", 0.0)                             # hips
+    p.box((-0.22, 1.0, -0.12), (0.22, 1.48, 0.12), "hivis", 0.02)                           # vest
+    for y in (1.12, 1.3):
+        p.box((-0.225, y, -0.125), (0.225, y + 0.05, 0.125), "reflect", 0.0)                # reflective bands
+    p.cyl((0.0, 1.48, 0.0), (0.0, 1.54, 0.0), 0.06, "skin", 8)                              # neck
+    p.cyl((0.0, 1.54, 0.01), (0.0, 1.7, 0.01), 0.1, "skin", 10, r2=0.09)                   # head
+    p.cyl((0.0, 1.68, 0.01), (0.0, 1.78, 0.01), 0.125, "reflect", 12, r2=0.09)             # hard hat
+    p.cyl((0.0, 1.68, 0.03), (0.0, 1.70, 0.03), 0.145, "reflect", 12)                       # its brim
+    p.cyl((-0.27, 1.44, 0.0), (-0.29, 0.98, 0.04), 0.055, "workwear", 6)                    # left arm, down
+    p.cyl((0.27, 1.44, 0.0), (0.3, 1.32, 0.36), 0.055, "workwear", 6)                       # right arm, forward
+    p.cyl((0.3, 1.32, 0.36), (0.3, 1.36, 0.55), 0.05, "workwear", 6)
+    p.box((0.26, 1.31, 0.55), (0.34, 1.41, 0.63), "skin", 0.0)                              # hand
+    single("worker", p)
 
 
 PROPS = {
@@ -620,7 +658,7 @@ PROPS = {
     "container_blue": (container("box_blue"), 0.6), "container_red": (container("box_red"), 0.6),
     "fuel_tank": (fuel_tank, 0.5), "light_tower": (light_tower, 0.5),
     "cone": (cone, 0.6), "barrier": (barrier, 0.8), "site_sign": (site_sign, 0.7),
-    "crusher_plant": (crusher_plant, 0.5),
+    "crusher_plant": (crusher_plant, 0.5), "worker": (worker, 0.6),
 }
 BUDGET = {"crusher_plant": 22000}            # triangles at LOD0; everything else 6000
 

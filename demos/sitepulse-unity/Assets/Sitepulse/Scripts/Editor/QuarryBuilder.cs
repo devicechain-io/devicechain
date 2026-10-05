@@ -82,8 +82,14 @@ namespace DeviceChain.Sitepulse.EditorTools
         [MenuItem("Sitepulse/Quarry/Configure Texture Imports")]
         public static void ConfigureImports()
         {
-            // the site colour map covers the whole terrain at half a metre per texel
-            var path = Terrain + "quarry_color.png";
+            // the site colour maps: the whole terrain at half a metre per texel, the work site at
+            // a quarter of a metre
+            foreach (var map in new[] { "quarry_color.png", "quarry_color_core.png" })
+                ConfigureColorMap(Terrain + map);
+        }
+
+        static void ConfigureColorMap(string path)
+        {
             var ti = (TextureImporter)AssetImporter.GetAtPath(path);
             if (ti == null) throw new FileNotFoundException(path);
             ti.textureType = TextureImporterType.Default;
@@ -142,6 +148,19 @@ namespace DeviceChain.Sitepulse.EditorTools
             return m;
         }
 
+        /// <summary>The machines' dust: a warm light earth colour, heavy over the lowest metre and a
+        /// bit, a light film above.</summary>
+        static Material MachineMaterial()
+        {
+            var m = LoadOrCreateMaterial(Materials + "M_MachineDust.mat", "Sitepulse/Machine Lit");
+            m.SetColor("_DustColor", new Color(0.66f, 0.60f, 0.51f));
+            m.SetFloat("_DustHeight", 1.4f);
+            m.SetFloat("_DustAmount", 0.62f);
+            m.SetFloat("_DustBase", 0.08f);
+            EditorUtility.SetDirty(m);
+            return m;
+        }
+
         static Material RockMaterial()
         {
             // the same rock as ArtSource/sitepulse_kit.py's palette (linear), shaded by vertex colour
@@ -164,6 +183,16 @@ namespace DeviceChain.Sitepulse.EditorTools
             var map = AssetDatabase.LoadAssetAtPath<Texture2D>(Terrain + "quarry_color.png")
                 ?? throw new FileNotFoundException(Terrain + "quarry_color.png");
             m.SetTexture("_ColorMap", map);
+            var core = AssetDatabase.LoadAssetAtPath<Texture2D>(Terrain + "quarry_color_core.png")
+                ?? throw new FileNotFoundException(Terrain + "quarry_color_core.png");
+            m.SetTexture("_ColorMapCore", core);
+            var info = JsonUtility.FromJson<FeatureTerrain>(File.ReadAllText(Terrain + "quarry_features.json")).terrain;
+            m.SetVector("_CoreRect", new Vector4(info.core.x0, info.core.z0, info.core.size, 0f));
+            // the ground cut into flat facets like the rocks: gentle and broad on worked ground,
+            // steeper and smaller on the crushed products
+            m.SetVector("_GroundFacet", new Vector4(3.2f, 0.05f, 0.025f, 0f));
+            m.SetVector("_PileFacet", new Vector4(1.5f, 0.42f, 0.06f, 0f));
+            m.SetFloat("_FacetFar", 190f);
             // the rock: strata of warm light, warm dark and cool grey bands about a bench face's
             // tenth high, broken into flat facets a few metres across; loose rock in smaller ones
             m.SetColor("_RockLight", new Color(0.70f, 0.66f, 0.60f));
@@ -183,6 +212,10 @@ namespace DeviceChain.Sitepulse.EditorTools
             EditorUtility.SetDirty(m);
             AssetDatabase.SaveAssets();
         }
+
+        [Serializable] sealed class FeatureTerrain { public TerrainBlock terrain; }
+        [Serializable] sealed class TerrainBlock { public CoreRect core; }
+        [Serializable] sealed class CoreRect { public float x0, z0, size; public int res; }
 
         static Material LoadOrCreateMaterial(string path, string shader)
         {
@@ -240,6 +273,38 @@ namespace DeviceChain.Sitepulse.EditorTools
         }
 
         /// <summary>A URP particle material: surface 0 opaque, 1 transparent; blend 0 alpha, 2 additive.</summary>
+        /// <summary>The overlay's dashed geofence line and its pulsing alert ring: unlit, drawn over
+        /// the scene's lighting so they read as data, not as things on the site.</summary>
+        static (Material line, Material ring) OverlayMaterials()
+        {
+            Directory.CreateDirectory(FxTextures);
+            Directory.CreateDirectory(FxMaterials);
+            var dash = WriteTexture(FxTextures + "T_OverlayDash.png", 64, (u, v) => Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.62f, 0.56f, u)) * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.0f, 0.06f, u)));
+            var ti = (TextureImporter)AssetImporter.GetAtPath(FxTextures + "T_OverlayDash.png");
+            ti.wrapMode = TextureWrapMode.Repeat;
+            ti.SaveAndReimport();
+            var ring = WriteTexture(FxTextures + "T_OverlayRing.png", 64, (u, v) => Mathf.Lerp(0.25f, 1f, v * v) * Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(1f, 0.82f, v)));
+            var line = ParticleMaterial(FxMaterials + "M_OverlayLine.mat", "Universal Render Pipeline/Particles/Unlit", dash, new Color(1f, 1f, 1f, 0.95f), 1f, 0f);
+            line.SetFloat("_SoftParticlesEnabled", 0f);
+            BaseShaderGUI.SetMaterialKeywords(line, null, ParticleGUI.SetMaterialKeywords);
+            var ringMat = ParticleMaterial(FxMaterials + "M_OverlayRing.mat", "Universal Render Pipeline/Particles/Unlit", ring, new Color(1f, 0.70f, 0.12f, 0.9f), 1f, 0f);
+            ringMat.SetFloat("_SoftParticlesEnabled", 0f);
+            BaseShaderGUI.SetMaterialKeywords(ringMat, null, ParticleGUI.SetMaterialKeywords);
+            EditorUtility.SetDirty(line);
+            EditorUtility.SetDirty(ringMat);
+            AssetDatabase.SaveAssets();
+            return (line, ringMat);
+        }
+
+        static Material HoseMaterial()
+        {
+            var m = LoadOrCreateMaterial(Materials + "M_FuelHose.mat", "Universal Render Pipeline/Lit");
+            m.SetColor("_BaseColor", new Color(0.05f, 0.05f, 0.055f));
+            m.SetFloat("_Smoothness", 0.35f);
+            EditorUtility.SetDirty(m);
+            return m;
+        }
+
         static Material ParticleMaterial(string path, string shader, Texture2D tex, Color color, float surface, float blend)
         {
             var m = LoadOrCreateMaterial(path, shader);
@@ -363,7 +428,14 @@ namespace DeviceChain.Sitepulse.EditorTools
                 var go = (GameObject)PrefabUtility.InstantiatePrefab(prefab, props.transform);
                 var rot = Quaternion.Euler(0f, p.heading, 0f);
                 go.transform.SetPositionAndRotation(new Vector3(p.x, GroundUnder(qt, go, p.x, p.z, rot), p.z), rot);
-                go.isStatic = true;
+                // the plant's flywheels and screen box move: everything else is static
+                foreach (var t in go.GetComponentsInChildren<Transform>(true))
+                {
+                    bool moving = false;
+                    for (var u = t; u != null && u != go.transform && !moving; u = u.parent)
+                        moving = PlantEffects.MovingNodes.Contains(u.name);
+                    t.gameObject.isStatic = !moving;
+                }
             }
 
             var fleetGo = new GameObject("Fleet Preview");
@@ -378,6 +450,7 @@ namespace DeviceChain.Sitepulse.EditorTools
             fleet.hauler = Model("hauler");
             fleet.haulerLod1 = Model("hauler_LOD1");
             fleet.effects = AssetDatabase.LoadAssetAtPath<QuarryEffects>(EffectsPath);
+            fleet.machineMaterial = MachineMaterial();
             fleet.time = 30f;
             fleetGo.SetActive(true);
             fleet.Seek(fleet.time);
@@ -394,6 +467,32 @@ namespace DeviceChain.Sitepulse.EditorTools
                 pfx.effects = fleet.effects;
                 pfxGo.SetActive(true);
             }
+
+            // the refuel bay at work: the attendant and the hose while a truck is in the bay
+            var tank = props.transform.Cast<Transform>().FirstOrDefault(t => t.name.StartsWith("fuel_tank", StringComparison.Ordinal));
+            if (tank != null)
+            {
+                var rvGo = new GameObject("Refuel Bay");
+                rvGo.SetActive(false);
+                var rv = rvGo.AddComponent<RefuelVignette>();
+                rv.fleet = fleet;
+                rv.terrain = qt;
+                rv.fuelTank = tank;
+                rv.worker = AssetDatabase.LoadAssetAtPath<GameObject>(Prefabs + "worker.prefab");
+                rv.hoseMaterial = HoseMaterial();
+                rvGo.SetActive(true);
+            }
+
+            // the data layer over the site: tags, the geofence, the load point, alerts
+            var ovGo = new GameObject("IoT Overlay");
+            ovGo.SetActive(false);
+            var ov = ovGo.AddComponent<IotOverlay>();
+            ov.fleet = fleet;
+            ov.terrain = qt;
+            ov.features = qt.features;
+            ov.plant = plantGo;
+            (ov.lineMaterial, ov.ringMaterial) = OverlayMaterials();
+            ovGo.SetActive(true);
 
             new GameObject("Benchmark").AddComponent<FrameTimeBenchmark>();
 

@@ -32,7 +32,8 @@ WHAT IT BUILDS
               Every road is a centreline with a design elevation profile and a crown; cuts and
               fills meet the natural ground with batters, rounded where they meet it, and the
               haul roads have safety windrows on their shoulders, open at every junction.
-    * LAYDOWN the ground between the yard road and the return road, stripped of its topsoil.
+    * LAYDOWN the ground between the yard road and the return road, stripped of its topsoil,
+              which stands in a long grassed bund down its middle.
     * PILES   a muck pile at the toe of the north face, stockpiles in the yard and tipped heaps
               on the dump pad.
 
@@ -45,13 +46,16 @@ OUTPUT (into --out, default ../../Assets/Sitepulse/Art/Terrain)
                              terrain "Import Raw" also reads (byte order Windows, flip vertically).
                              Row 0 is the SOUTH edge (z = -512), column 0 the WEST edge. A sample
                              s maps to elevation ELEV_MIN + s / 65535 * ELEV_RANGE.
-  quarry_color.png           the site's colours (sRGB, COLOR_RES square, top row NORTH): large
-                             fields of one colour per material from PALETTE; alpha marks loose
-                             broken rock (talus, berms, blasted piles). The terrain material
+  quarry_color.png           the site's colours (sRGB, COLOR_RES square, top row NORTH): one flat
+                             colour per material from PALETTE with crisp edges; alpha classes the
+                             ground for the shader's facets (0 natural, 1/3 worked, 2/3 crushed
+                             product, 1 loose broken rock). The terrain material
                              (Sitepulse/Stylized Terrain) adds the rock faces' strata and facets.
+  quarry_color_core.png      the same at a quarter of a metre per texel over the work site (CORE),
+                             so that the edges between materials stay crisp close up.
   quarry_features.json       terrain size and elevation mapping, zones, the road network
                              (centrelines with per-segment grade, for later route graphs), named
-                             spots, vegetation instances and prop placements. Positions are in
+                             spots, the cut's geofence, vegetation instances and prop placements. Positions are in
                              Unity metres: x east, z north, y = elevation - DATUM (the yard pad
                              is y = 0).
 
@@ -105,7 +109,7 @@ PLANT_HEAD = 53.9
 PLANT_SCREEN_Z = 27.6
 PLANT_SIDE_RIGHT = 16.8
 PLANT_SIDE_LEFT = 13.3
-PLANT_POCKET = dict(x0=-3.6, x1=3.6, z0=-4.4, z1=8.8, depth=1.6)
+PLANT_POCKET = dict(x0=-3.6, x1=3.6, z0=-4.4, z1=8.8, depth=2.9)
 
 
 def plant_xz(lx, lz):
@@ -121,12 +125,14 @@ PADS = [                   # level platforms: name, (x0, x1, z0, z1), corner, el
     dict(name="plant", rect=(-62.0, 42.0, -130.0, -79.0), corner=6.0, elev=100.0, cut=0.67, fill=0.5),
     # in the pit, a low bench beside the load point for the loader to work from, so that its
     # raised bucket clears the haul truck's body; the truck stands against its edge
-    dict(name="loading-bench", rect=(-6.0, 5.0, 38.1, 49.0), corner=1.5, elev=91.0, cut=None, fill=4.0),
+    # (fill_soft: its batter everywhere but the truck's side, a 45 degree slope of loose spill)
+    dict(name="loading-bench", rect=(-6.0, 5.0, 38.1, 49.0), corner=1.5, elev=91.0, cut=None, fill=4.0,
+         fill_soft=1.0),
 ]
 
 # Stripped ground between the yard road and the return road: topsoil taken off for the next
 # pad, so it is worked earth rather than an island of grass inside the haul loop.
-LAYDOWN = dict(rect=(-46.0, 66.0, -60.0, -32.0), corner=6.0)
+LAYDOWN = dict(rect=(-46.0, 82.0, -60.0, -32.0), corner=6.0)
 
 # Roads: control points (x, z, elevation). The centreline is a Catmull-Rom spline through the
 # points; the design elevation is linear in arc length between control points (None: graded
@@ -163,7 +169,8 @@ _PRODUCT_FINES = plant_xz(-PLANT_SIDE_LEFT - 1.0, PLANT_SCREEN_Z)
 PILES = [                  # heaps at the angle of repose: name, centre, height above base, base elevation;
                            # optional len/heading (a ridge), flat (top cut off), lumps (relief, m).
                            # kind sets the material: muck and feed are blasted rock, product-* the
-                           # crushed grades, stockpile a yard stockpile, heap tipped earth.
+                           # crushed grades, stockpile a yard stockpile, heap tipped earth, bund
+                           # grassed topsoil.
     dict(name="muck-pile", x=4.0, z=56.5, h=5.5, base=90.0, kind="muck", len=24.0, heading=90.0, flat=0.85, lumps=0.8),
     dict(name="pit-stockpile", x=50.0, z=46.0, h=4.5, base=90.0, kind="muck", len=6.0, heading=60.0, flat=0.8, lumps=0.6),
     dict(name="yard-stockpile-1", x=-98.0, z=-22.0, h=5.0, base=100.0, kind="stockpile", len=4.0, heading=100.0, flat=0.85),
@@ -172,6 +179,8 @@ PILES = [                  # heaps at the angle of repose: name, centre, height 
     dict(name="product-coarse", x=_PRODUCT_COARSE[0], z=_PRODUCT_COARSE[1], h=9.0, base=100.0, kind="product-coarse", lumps=0.3),
     dict(name="product-mid", x=_PRODUCT_MID[0], z=_PRODUCT_MID[1], h=6.5, base=100.0, kind="product-mid", lumps=0.2),
     dict(name="product-fines", x=_PRODUCT_FINES[0], z=_PRODUCT_FINES[1], h=5.0, base=100.0, kind="product-fines", lumps=0.12),
+    # the laydown's topsoil, pushed up into a long bund down its middle and grassed over
+    dict(name="topsoil-bund", x=12.0, z=-46.0, h=2.2, base=100.0, kind="bund", len=70.0, heading=92.0, flat=0.8, lumps=0.25),
     dict(name="fill-heap-1", x=104.5, z=-62.0, h=2.2, base=98.0, kind="heap", lumps=0.4),
     dict(name="fill-heap-2", x=104.0, z=-41.5, h=2.0, base=98.0, kind="heap", lumps=0.4),
     dict(name="fill-heap-3", x=104.0, z=-70.5, h=1.8, base=98.0, kind="heap", lumps=0.4),
@@ -202,15 +211,22 @@ SPOTS = {                  # named places the scene and the simulation refer to 
 # materials stay apart by brightness as well as by hue (product piles lightest and coolest,
 # then pads, rock faces, pit floor and wheel paths, then grass, then haul roads and feed rock).
 PALETTE = dict(
-    grass=(92, 108, 70), grass_dry=(112, 118, 80), grass_lush=(76, 94, 60), forest_floor=(60, 72, 48),
-    earth=(140, 121, 96), stripped=(124, 104, 82), fill=(136, 116, 92), heap=(122, 104, 84),
-    pad=(180, 170, 150), pad_edge=(146, 130, 106),
-    road=(92, 85, 77), wheel=(130, 122, 108), shoulder=(110, 99, 85), windrow=(122, 104, 84),
-    pit_floor=(148, 146, 140), pit_floor_dark=(104, 102, 98), berm=(150, 146, 136), talus=(124, 120, 113),
-    rock=(156, 149, 137),
-    muck=(96, 91, 85), feed=(82, 78, 74), stockpile=(164, 170, 180),
-    product_coarse=(146, 152, 162), product_mid=(164, 170, 180), product_fines=(180, 182, 186),
+    grass=(88, 102, 72), grass_dry=(110, 113, 84), grass_lush=(72, 88, 62), forest_floor=(60, 70, 50),
+    earth=(136, 120, 98), stripped=(122, 105, 85), fill=(132, 116, 94), heap=(128, 114, 96),
+    pad=(158, 150, 134), pad_edge=(132, 118, 98),
+    road=(90, 84, 77), wheel=(114, 108, 97), tyre=(88, 83, 76), shoulder=(108, 98, 86), windrow=(118, 104, 86),
+    pit_floor=(146, 144, 138), pit_floor_dark=(104, 102, 98), berm=(146, 142, 134), talus=(124, 120, 113),
+    bench=(152, 148, 140), rock=(156, 149, 137),
+    muck=(96, 91, 85), feed=(82, 78, 74), stockpile=(176, 174, 168), spill=(128, 124, 116), bund=(100, 108, 78),
+    product_coarse=(138, 135, 128), product_mid=(178, 175, 168), product_fines=(198, 195, 188),
 )
+# the colour of each kind of pile (PILES[].kind -> PALETTE key); the crushed products are three
+# clearly different greys, so that the grades read apart from each other and from the pads
+PILE_COLORS = {"muck": "muck", "feed": "feed", "stockpile": "stockpile", "heap": "heap", "bund": "bund",
+               "product-coarse": "product_coarse", "product-mid": "product_mid",
+               "product-fines": "product_fines"}
+# the high-resolution colour map over the work site: x0, z0, edge (m) and texels per edge
+CORE = dict(x0=-182.0, z0=-202.0, size=384.0, res=1536)   # 0.25 m per texel
 COLOR_RES = 2048          # quarry_color.png texels per edge: 0.5 m per texel
 
 VEGETATION = dict(
@@ -401,12 +417,23 @@ class Quarry:
         e = pd["elev"]
         # cut=None builds the pad up only (a bench on the pit floor must not cut into the walls)
         cut = np.minimum(H, e + d * pd["cut"]) if pd["cut"] is not None else H
-        fill = np.maximum(H, e - d * pd["fill"])
+        rate = np.full(Xs.shape, pd["fill"])
+        soft = "fill_soft" in pd
+        if soft:
+            # the soft batter is loose rock: a 45 degree slope with lumps of spill at its toe
+            rate = np.where(Zs < z0, pd["fill"], pd["fill_soft"])
+            lumps = 0.25 * np.maximum(fbm(self.noise[3], Xs, Zs, 1.8, 2, offset=31.0), 0.0)
+            rate = rate * (1.0 - lumps)
+        fill = np.maximum(H, e - d * rate)
         out = np.where(H > e, cut, fill)
         self.H[sl] = out
         mk = np.zeros_like(self.H, bool)
         mk[sl] = d <= 0.0
         self.masks["pad_" + pd["name"]] = mk
+        if soft:
+            bt = np.zeros_like(self.H, bool)
+            bt[sl] = (d > 0.0) & (out > H + 0.05) & (Zs >= z0 - 0.5)
+            self.masks["bench_batter"] = bt
 
     def _window(self, x0, x1, z0, z1):
         c0 = max(0, int((x0 + WORLD / 2) / CELL))
@@ -480,6 +507,14 @@ class Quarry:
             best = np.where(closer, dist, best)
             best_s = np.where(closer, s[i] + t * (s[i + 1] - s[i]), best_s)
         er = np.interp(best_s, s, elev)
+        # the distance to the nearest road's centreline and that road's half width, for the
+        # tyre tracks in the colour map
+        if not hasattr(self, "road_d"):
+            self.road_d = np.full(self.H.shape, 1e3)
+            self.road_w = np.full(self.H.shape, 6.0)
+        nearer = (best < self.road_d[sl]) & (best_s > 0.5) & (best_s < s[-1] - 0.5)
+        self.road_d[sl] = np.where(nearer, best, self.road_d[sl])
+        self.road_w[sl] = np.where(nearer, rd["width"] / 2, self.road_w[sl])
         H = self.H[sl]
         before = H.copy()
         # a cut side needs no shoulder (no windrow against rising ground); a fill side gets it
@@ -493,7 +528,9 @@ class Quarry:
         H = np.where(core, er + crown, H)
         # wheel paths: a band either side of each lane's centre (lanes at +-w/2 on a two-way road)
         frac = best / w
-        wheel = core & (((frac > 0.18) & (frac < 0.36)) | ((frac > 0.64) & (frac < 0.82)))
+        # (not round the end caps: a lane runs on into the next road, it does not turn back)
+        interior = (best_s > 0.5) & (best_s < s[-1] - 0.5)
+        wheel = core & interior & (((frac > 0.18) & (frac < 0.36)) | ((frac > 0.64) & (frac < 0.82)))
         wk = self.masks.setdefault("wheel", np.zeros_like(self.H, bool))
         wk[sl] |= wheel
         self.H[sl] = H
@@ -627,18 +664,70 @@ class Quarry:
         return np.clip(box / cnt * 3.0, 0.0, 1.0)
 
     # ---- colour --------------------------------------------------------------------
-    def colormap(self, veg):
-        """The site's albedo as large, soft fields of colour per material (PALETTE), at heightmap
-        resolution, then averaged onto COLOR_RES texels. The terrain shader adds the rock
-        faces' strata and facets and a little large-scale variation on top."""
+    def color_fields(self, veg):
+        """The inputs of the colour maps at heightmap resolution, computed once and resampled
+        onto each map's texels. A mask is stored lightly blurred, so that its 0.5 contour is a
+        smooth curve rather than a staircase of samples; colormap() cuts it there."""
         H, N, mk = self.H, self.N, self.masks
-        X, Z, n = self.X, self.Z, self.noise
-        P = {k: np.array(v, np.float64) / 255.0 for k, v in PALETTE.items()}
         slope = self.slope_deg()
         self.slope = slope
+        trees = np.zeros_like(H)
+        for v in veg:
+            if v["p"].startswith("rock"):
+                continue
+            ci = int(round((v["x"] + WORLD / 2) / CELL)); ri = int(round((v["z"] + WORLD / 2) / CELL))
+            if 0 <= ci < HEIGHT_RES and 0 <= ri < HEIGHT_RES:
+                trees[ri, ci] = 1.0
+        pads = mk["pad_yard"] | mk["pad_plant"]
+        F = dict(
+            slope=slope,
+            windrow=self.windrow_h,
+            canopy=np.clip(blur(blur(trees, 3.0), 3.0) * 30.0, 0.0, 1.0),
+            toe=self._near(slope > 45.0, 8.0),
+            pad_band=mk["pad_band"],
+            road_d=self.road_d,
+            road_w=self.road_w,
+        )
+        masks = dict(disturbed=np.abs(H - N) > 0.2, road=mk["road"], wheel=mk["wheel"],
+                     shoulder=mk["shoulder"] & ~mk["road"], pad_fill=mk["pad_fill"], pads=pads,
+                     bench=mk["pad_loading-bench"], bench_batter=mk["bench_batter"],
+                     pit_floor=mk["pit_floor"], berm=mk["berm"], talus=mk["talus"],
+                     running=mk["road"] | mk["shoulder"])
+        for kind in PILE_COLORS:
+            if ("pile_" + kind) in mk:
+                masks["pile_" + kind] = mk["pile_" + kind] > 0.3
+        for k, m in masks.items():
+            F["m_" + k] = blur(m.astype(np.float64), 0.5)
+        return F
 
-        def soft(m, r=0.5):
-            return blur(np.asarray(m, np.float64), r)
+    def colormap(self, F, x0, z0, size, res):
+        """The site's albedo over the square (x0, z0, size) at res texels per edge (row 0 =
+        south): one flat colour per material with crisp edges (a mask's edge is a step about a
+        texel wide, never a blur), a gentle large-scale variation within the natural ground,
+        and the haul roads' tyre tracks. The terrain shader adds the rock faces' strata, the
+        facets and a faint variation on top. Alpha classes the ground for the shader's facets:
+        0 natural ground, 1/3 worked ground, 2/3 crushed product, 1 loose broken rock."""
+        n = self.noise
+        P = {k: np.array(v, np.float64) / 255.0 for k, v in PALETTE.items()}
+        t = x0 + (np.arange(res) + 0.5) * (size / res)
+        u = z0 + (np.arange(res) + 0.5) * (size / res)
+        X, Z = np.meshgrid(t, u)
+        # bilinear resampling of the heightmap-resolution fields onto these texels
+        fc = np.clip((X + WORLD / 2) / CELL, 0.0, HEIGHT_RES - 1.001)
+        fr = np.clip((Z + WORLD / 2) / CELL, 0.0, HEIGHT_RES - 1.001)
+        c0, r0 = fc.astype(np.int64), fr.astype(np.int64)
+        wc, wr = fc - c0, fr - r0
+
+        def R(a):
+            return ((a[r0, c0] * (1 - wc) + a[r0, c0 + 1] * wc) * (1 - wr)
+                    + (a[r0 + 1, c0] * (1 - wc) + a[r0 + 1, c0 + 1] * wc) * wr)
+
+        def edge(name):
+            """A mask with a crisp edge, about 0.2 m wide, antialiased."""
+            key = "m_" + name
+            if key not in F:
+                return np.zeros_like(X)
+            return smoothstep(0.42, 0.58, R(F[key]))
 
         def mix(c, key, w):
             w = np.clip(w, 0.0, 1.0)[..., None]
@@ -650,71 +739,81 @@ class Quarry:
             v = fbm(n[4], X, Z, wavelength, 3, offset=off)
             return P[key][None, None, :] * (1.0 + amount * v)[..., None]
 
-        # natural ground: grass, drier in patches and on rises, lusher in hollows, darker under trees
+        # natural ground: grass, drier in broad patches and on rises, lusher in hollows, darker
+        # under trees
         dry = smoothstep(0.05, 0.45, fbm(n[1], X, Z, 70.0, 3, offset=9.0))
         lush = smoothstep(0.1, 0.5, -fbm(n[2], X, Z, 120.0, 3, offset=2.0))
-        c = tint("grass", 0.06, 25.0, 1.0)
+        c = tint("grass", 0.05, 25.0, 1.0)
         c = mix(c, "grass_dry", 0.75 * dry)
         c = mix(c, "grass_lush", 0.6 * lush * (1 - dry))
-        trees = np.zeros_like(H)
-        for v in veg:
-            if v["p"].startswith("rock"):
-                continue
-            ci = int(round((v["x"] + WORLD / 2) / CELL)); ri = int(round((v["z"] + WORLD / 2) / CELL))
-            if 0 <= ci < HEIGHT_RES and 0 <= ri < HEIGHT_RES:
-                trees[ri, ci] = 1.0
-        canopy = np.clip(blur(blur(trees, 3.0), 3.0) * 30.0, 0.0, 1.0)
-        c = mix(c, "forest_floor", 0.85 * canopy)
+        c = mix(c, "forest_floor", 0.85 * R(F["canopy"]))
+        worked = np.zeros_like(X)
         # worked ground: earth wherever the ground was cut or filled
-        disturbed = np.abs(H - N) > 0.2
-        c = mix(c, "earth", soft(disturbed, 1.0))
-        lay = sd_round_rect(X, Z, LAYDOWN["rect"], LAYDOWN["corner"])
-        lay_w = smoothstep(2.0, -3.0, lay + 2.5 * fbm(n[5], X, Z, 12.0, 2)) * ~mk["road"]
-        c = mix(c, tint("stripped", 0.08, 18.0, 4.0), lay_w)
-        self.laydown = lay_w > 0.3
-        c = mix(c, tint("fill", 0.07, 14.0, 5.0), soft(mk["pad_fill"]))
-        # pads: light compacted gravel, with a broken disturbed band around them
-        pads = mk["pad_yard"] | mk["pad_plant"]
-        broken = smoothstep(-0.2, 0.3, fbm(n[3], X, Z, 6.0, 2, offset=13.0))
-        c = mix(c, "pad_edge", mk["pad_band"] * (0.5 + 0.5 * broken))
-        # roads: dark compacted running surface, lighter wheel paths, loose shoulders and windrows;
-        # where a road runs onto a pad it fades into the pad's surface
-        c = mix(c, "shoulder", soft(mk["shoulder"] & ~mk["road"]))
-        c = mix(c, tint("road", 0.06, 20.0, 7.0), soft(mk["road"]))
-        c = mix(c, "wheel", 0.75 * soft(mk["wheel"], 0.9))
-        c = mix(c, "windrow", smoothstep(0.1, 0.6, self.windrow_h))
-        inner = blur(pads.astype(np.float64), 3.0)
-        c = mix(c, tint("pad", 0.05, 30.0, 6.0), soft(pads) * smoothstep(0.35, 0.9, inner))
+        w = edge("disturbed")
+        c = mix(c, tint("earth", 0.05, 30.0, 3.0), w)
+        worked = np.maximum(worked, w)
+        lay = sd_round_rect(X, Z, LAYDOWN["rect"], LAYDOWN["corner"]) + 2.5 * fbm(n[5], X, Z, 12.0, 2)
+        w = smoothstep(0.1, -0.1, lay) * (1.0 - edge("road"))
+        c = mix(c, tint("stripped", 0.06, 18.0, 4.0), w)
+        worked = np.maximum(worked, w)
+        c = mix(c, tint("fill", 0.05, 14.0, 5.0), edge("pad_fill"))
+        # pads: light compacted gravel, ringed by a broken band of darker disturbed ground
+        broken = smoothstep(-0.02, 0.02, fbm(n[3], X, Z, 6.0, 2, offset=13.0) + 0.1)
+        band = smoothstep(0.25, 0.35, R(F["pad_band"]))
+        c = mix(c, "earth", band)
+        c = mix(c, "pad_edge", band * broken)
+        worked = np.maximum(worked, band)
+        # roads: dark compacted running surface, lighter wheel paths with darker tyre tracks
+        # in them, loose shoulders and windrows
+        c = mix(c, "shoulder", edge("shoulder"))
+        road = edge("road")
+        c = mix(c, tint("road", 0.05, 20.0, 7.0), road)
+        c = mix(c, "wheel", 0.8 * edge("wheel"))
+        d = R(F["road_d"]) + 0.12 * fbm(n[0], X, Z, 14.0, 2, offset=6.0)
+        hw = R(F["road_w"])
+        tracks = np.zeros_like(X)
+        for lane in (0.27, 0.73):
+            for side in (-1.0, 1.0):
+                off = d - (lane * hw + side * 0.045 * hw)
+                tracks = np.maximum(tracks, smoothstep(0.035 * hw, 0.02 * hw, np.abs(off)))
+        c = mix(c, "tyre", 0.55 * tracks * edge("wheel"))
+        c = mix(c, "windrow", smoothstep(0.25, 0.4, R(F["windrow"])))
+        c = mix(c, tint("pad", 0.04, 30.0, 6.0), edge("pads"))
+        worked = np.maximum(worked, np.maximum(road, edge("shoulder")))
         # the pit: grey floor, darker towards the toe of the faces; berms; talus
-        toe = self._near(slope > 45.0, 8.0)
-        floor_col = P["pit_floor"] * (1 - toe[..., None]) + P["pit_floor_dark"] * toe[..., None]
-        c = mix(c, floor_col, soft(mk["pit_floor"]))
-        c = mix(c, tint("berm", 0.05, 15.0, 8.0), soft(mk["berm"]))
-        c = mix(c, "talus", soft(mk["talus"]))
-        # piles, by material
-        for kind, key in (("muck", "muck"), ("feed", "feed"), ("stockpile", "stockpile"), ("heap", "heap"),
-                          ("product-coarse", "product_coarse"), ("product-mid", "product_mid"),
-                          ("product-fines", "product_fines")):
-            m = mk.get("pile_" + kind)
-            if m is not None:
-                c = mix(c, tint(key, 0.04, 6.0, 10.0), soft(m))
+        toe = R(F["toe"])[..., None]
+        floor_col = P["pit_floor"] * (1 - toe) + P["pit_floor_dark"] * toe
+        w = edge("pit_floor")
+        c = mix(c, floor_col, w)
+        worked = np.maximum(worked, w)
+        c = mix(c, tint("berm", 0.04, 15.0, 8.0), edge("berm"))
+        c = mix(c, "bench", edge("bench"))
+        c = mix(c, "talus", np.maximum(edge("talus"), edge("bench_batter")))
+        # piles, by material; the crushed products with a darker ring of spill at the toe
+        for kind, key in PILE_COLORS.items():
+            w = edge("pile_" + kind)
+            if kind.startswith("product"):
+                inner = smoothstep(0.75, 0.9, R(F["m_pile_" + kind])) if ("m_pile_" + kind) in F else w
+                c = mix(c, "spill", w)
+                c = mix(c, tint(key, 0.03, 9.0, 10.0), inner)
+            else:
+                c = mix(c, tint(key, 0.04, 6.0, 10.0), w)
         # rock: every steep face (the shader adds the strata and facets)
-        c = mix(c, "rock", smoothstep(42.0, 52.0, slope))
+        c = mix(c, "rock", smoothstep(42.0, 52.0, R(F["slope"])))
         c = np.clip(c, 0.0, 1.0)
-        # alpha: where loose broken rock lies (talus, berms, blasted muck and feed), which the
-        # shader breaks into facets like the faces; crushed products and earth stay smooth
-        rubble = np.maximum(soft(mk["talus"]), 0.35 * soft(mk["berm"]))
-        for kind in ("muck", "feed"):
-            if ("pile_" + kind) in mk:
-                rubble = np.maximum(rubble, soft(mk["pile_" + kind]))
-        rubble = rubble * (1.0 - soft(mk["road"] | mk["shoulder"], 1.0))              # not on a running surface
-        c = np.concatenate([c, np.clip(rubble, 0.0, 1.0)[..., None]], axis=2)
-        # heightmap samples -> texels: each texel's centre lies midway between four samples
-        c = 0.25 * (c[:-1, :-1] + c[1:, :-1] + c[:-1, 1:] + c[1:, 1:])
-        f = (HEIGHT_RES - 1) // COLOR_RES
-        if f > 1:
-            c = c.reshape(COLOR_RES, f, COLOR_RES, f, 4).mean((1, 3))
-        return c
+        # alpha: the class of ground for the shader's facets
+        worked = np.maximum(worked, edge("berm"))
+        a = worked / 3.0
+        product = np.zeros_like(X)
+        for kind in ("product-coarse", "product-mid", "product-fines"):
+            product = np.maximum(product, edge("pile_" + kind))
+        a = a * (1 - product) + (2.0 / 3.0) * product
+        rubble = np.maximum(edge("talus"), edge("bench_batter"))
+        for kind in ("muck", "feed", "heap"):
+            rubble = np.maximum(rubble, edge("pile_" + kind))
+        rubble = rubble * (1.0 - edge("running"))                    # never on a running surface
+        a = a * (1 - rubble) + rubble
+        return np.concatenate([c, a[..., None]], axis=2)
 
     # ---- vegetation and props -------------------------------------------------------
     def vegetation(self):
@@ -875,6 +974,34 @@ def elevation_at(q, x, z):
                  + H[r0 + 1, c0] * (1 - fc) * fr + H[r0 + 1, c0 + 1] * fc * fr)
 
 
+def geofence(q, n=160, margin=4.0):
+    """The cut's geofence: a closed line round the pit's rim, `margin` metres outside the last
+    cut ground, found by marching out from the pit's centre along n rays, smoothed. Points are
+    {x, y, z} in Unity metres on the ground."""
+    x0, x1, z0, z1 = PIT["rect"]
+    cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+    pit = q.masks["pit"] | q.masks["pit_floor"]
+    radii = []
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        last = 0.0
+        for r in np.arange(0.0, 220.0, 0.5):
+            x, z = cx + r * math.sin(a), cz + r * math.cos(a)
+            c, rr = int(round((x + WORLD / 2) / CELL)), int(round((z + WORLD / 2) / CELL))
+            if pit[rr, c]:
+                last = r
+        radii.append(last + margin)
+    rad = np.array(radii)
+    for _ in range(3):                                       # smooth out the blast outlines
+        rad = np.maximum(rad, (np.roll(rad, 1) + rad + np.roll(rad, -1)) / 3.0)
+    pts = []
+    for k in range(n):
+        a = 2 * math.pi * k / n
+        x, z = cx + rad[k] * math.sin(a), cz + rad[k] * math.cos(a)
+        pts.append(dict(x=round(x, 2), y=round(elevation_at(q, x, z) - DATUM, 2), z=round(z, 2)))
+    return dict(token="sp-zone-cut", label="Cut", points=pts)
+
+
 def features(q, veg):
     roads = []
     for rd in q.roads:
@@ -890,7 +1017,7 @@ def features(q, veg):
                           points=pts, grade_pct=grades))
     return dict(
         generator="ArtSource/terrain/quarry_heightmap.py", seed=q.seed,
-        terrain=dict(size_m=WORLD, height_res=HEIGHT_RES, color_res=COLOR_RES, elev_min=ELEV_MIN,
+        terrain=dict(size_m=WORLD, height_res=HEIGHT_RES, color_res=COLOR_RES, core=CORE, elev_min=ELEV_MIN,
                      elev_range=ELEV_RANGE, datum=DATUM,
                      position=[-WORLD / 2, ELEV_MIN - DATUM, -WORLD / 2]),
         pit=dict(PIT, floor_y=PIT["floor"] - DATUM),
@@ -903,6 +1030,7 @@ def features(q, veg):
         spots={k: dict(x=round(v[0], 3), z=round(v[1], 3), y=round(elevation_at(q, v[0], v[1]) - DATUM, 3), heading=v[2])
                for k, v in SPOTS.items()},
         props=[dict(p=n, x=x, z=z, heading=hd) for n, x, z, hd in PROPS],
+        geofence=geofence(q),
         vegetation=veg,
     )
 
@@ -972,9 +1100,13 @@ def main():
     q = Quarry(a.seed)
     q.build()
     veg = q.vegetation()
-    color = q.colormap(veg)
+    F = q.color_fields(veg)
+    color = q.colormap(F, -WORLD / 2, -WORLD / 2, WORLD, COLOR_RES)
+    core = q.colormap(F, CORE["x0"], CORE["z0"], CORE["size"], CORE["res"])
     feats = features(q, veg)
     write(q, color, feats, a.out, a.raw)
+    rgba = np.round(np.flipud(core) * 255.0).astype(np.uint8)
+    Image.fromarray(rgba, "RGBA").save(os.path.join(a.out, "quarry_color_core.png"), optimize=True)
     if a.preview:
         preview(q, color, feats, a.preview)
     counts = {}

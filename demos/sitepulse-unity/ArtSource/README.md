@@ -17,7 +17,7 @@ with the code change, so the models in `Assets/Sitepulse/Art/Models/` always mat
 | `machines/loader.py` | Articulated wheel loader |
 | `machines/hauler.py` | Rigid-frame haul truck |
 | `machines/kit_selftest.py` | Exercises the kit builders the dozer does not use |
-| `props/build_props.py` | Site props and vegetation (site office, workshop, containers, fuel tank, light tower, cones, barriers, sign, conifers, shrubs, boulders) and the processing plant (jaw crusher in a pocket, conveyor, screen, radial stacker, side conveyors) |
+| `props/build_props.py` | Site props and vegetation (site office, workshop, containers, fuel tank, light tower, cones, barriers, sign, a site worker, conifers, shrubs, boulders) and the processing plant (jaw crusher in a pocket, with its flywheels and screen box as nodes that move, conveyor, screen, radial stacker, side conveyors) |
 | `terrain/quarry_heightmap.py` | The quarry terrain: heightmap, site colour map, roads, zones, vegetation and prop placement |
 | `terrain/quarry_fleet.py` | The 18-machine preview choreography played on the terrain |
 
@@ -95,10 +95,11 @@ python3 terrain/quarry_fleet.py [--preview out/terrain/fleet.png]
 ```
 
 `quarry_heightmap.py` writes straight into `../Assets/Sitepulse/Art/Terrain/`: the packed 16-bit
-heightmap, the site colour map `quarry_color.png` (the terrain's colours as broad fields, one per
-material, from its `PALETTE`; its alpha marks loose broken rock) and `quarry_features.json`
-(terrain size and elevation mapping, zones, roads with per-segment grade, named spots,
-vegetation and prop placements). The processing plant's position and scale (`PLANT`,
+heightmap, the site colour maps `quarry_color.png` (the whole terrain, half a metre per texel) and
+`quarry_color_core.png` (the work site, a quarter of a metre per texel), in which each material
+from its `PALETTE` is one flat colour with a crisp edge and the alpha classes the ground for the
+terrain shader's facets, and `quarry_features.json` (terrain size and elevation mapping, zones,
+roads with per-segment grade, named spots, the cut's geofence, vegetation and prop placements). The processing plant's position and scale (`PLANT`,
 `PLANT_SCALE`) are set there too: the plant prop is placed from them, and so are its pad, the
 crusher's pocket, the feed stockpile and the three product stockpiles under the conveyor heads.
 Its header documents the layout and every parameter; `--raw` also writes the plain RAW

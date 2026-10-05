@@ -10,8 +10,9 @@ namespace DeviceChain.Sitepulse.Visuals
     /// Brings the processing plant to life: its belts carry rock (the texture of the rock layer on
     /// each belt scrolls at the belt's speed), a stream of rock falls from each conveyor's head
     /// onto its stockpile, with dust where it lands, and a thin dust haze hangs over the crusher
-    /// and the screen. It finds the plant's marker nodes (StackerHead, SideHeadRight,
-    /// SideHeadLeft, Hopper, Screen, CrusherDischarge) by name. Local presentation only.
+    /// and the screen; the crusher's flywheels turn and the screen box shakes. It finds the
+    /// plant's nodes (StackerHead, SideHeadRight, SideHeadLeft, Hopper, Screen, CrusherDischarge,
+    /// FlywheelLeft, FlywheelRight, ScreenBox) by name. Local presentation only.
     /// </summary>
     [ExecuteAlways]
     public sealed class PlantEffects : MonoBehaviour, IQuarryEffect
@@ -24,11 +25,20 @@ namespace DeviceChain.Sitepulse.Visuals
         public float beltSpeed = 2.5f;
         [Tooltip("Metres of belt per repeat of the rock texture (ArtSource: 2 m, times the plant's scale).")]
         public float beltPeriod = 2.8f;
+        [Tooltip("Flywheel speed (rad/s).")]
+        public float flywheelSpeed = 4f;
+        [Tooltip("Screen box shake: amplitude (m) and frequency (Hz), exaggerated so that it reads.")]
+        public Vector2 screenShake = new Vector2(0.015f, 8f);
+
+        /// <summary>The nodes of the plant that move, which must not be marked static.</summary>
+        public static readonly string[] MovingNodes = { "FlywheelLeft", "FlywheelRight", "ScreenBox" };
 
         readonly List<ParticleSystem> systems = new List<ParticleSystem>();
         readonly List<(Renderer r, int slot)> belts = new List<(Renderer, int)>();
         MaterialPropertyBlock block;
         GameObject holder;
+        Transform flywheelLeft, flywheelRight, screenBox;
+        Vector3 screenRest;
         float clock;
 
         static readonly int BaseST = Shader.PropertyToID("baseColorTexture_ST");
@@ -99,6 +109,10 @@ namespace DeviceChain.Sitepulse.Visuals
                         belts.Add((r, i));
             }
             block ??= new MaterialPropertyBlock();
+            flywheelLeft = FleetRig.Find(plant, "FlywheelLeft");
+            flywheelRight = FleetRig.Find(plant, "FlywheelRight");
+            screenBox = FleetRig.Find(plant, "ScreenBox");
+            if (screenBox != null) screenRest = screenBox.localPosition;
             SetBelts(clock);
         }
 
@@ -136,6 +150,15 @@ namespace DeviceChain.Sitepulse.Visuals
             EnsureBuilt();
             clock += dt;
             SetBelts(clock);
+            // the flywheels turn about their shaft (X); the screen box shakes along and across its deck
+            var spin = Quaternion.Euler(Mathf.Repeat(clock * flywheelSpeed * Mathf.Rad2Deg, 360f), 0f, 0f);
+            if (flywheelLeft != null) flywheelLeft.localRotation = spin;
+            if (flywheelRight != null) flywheelRight.localRotation = spin;
+            if (screenBox != null)
+            {
+                float ph = clock * screenShake.y * Mathf.PI * 2f;
+                screenBox.localPosition = screenRest + screenShake.x * new Vector3(0f, Mathf.Sin(ph), Mathf.Cos(ph));
+            }
             foreach (var ps in systems) QuarryEffects.Advance(ps, dt, simulate);
         }
     }

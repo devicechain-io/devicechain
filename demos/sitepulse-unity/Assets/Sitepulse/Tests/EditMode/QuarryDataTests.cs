@@ -80,6 +80,48 @@ namespace DeviceChain.Sitepulse.Tests
             public int track;
         }
 
+        [System.Serializable] sealed class Point { public float x, y, z; }
+        [System.Serializable] sealed class Fence { public string token; public Point[] points; }
+        [System.Serializable] sealed class Rect4 { public float x0, z0, size; public int res; }
+        [System.Serializable] sealed class TerrainBlock { public float size_m; public Rect4 core; }
+        [System.Serializable] sealed class Pit { public float[] rect; }
+        [System.Serializable] sealed class Features { public TerrainBlock terrain; public Fence geofence; public Pit pit; }
+
+        [Test]
+        public void GeofenceEnclosesTheCutAndTheWorkSiteMapCoversIt()
+        {
+            var json = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Sitepulse/Art/Terrain/quarry_features.json");
+            Assert.IsNotNull(json);
+            var f = JsonUtility.FromJson<Features>(json.text);
+            Assert.AreEqual("sp-zone-cut", f.geofence.token);
+            Assert.GreaterOrEqual(f.geofence.points.Length, 16);
+            // every corner of the pit floor is inside the fence (crossing-number test)
+            float x0 = f.pit.rect[0], x1 = f.pit.rect[1], z0 = f.pit.rect[2], z1 = f.pit.rect[3];
+            foreach (var (x, z) in new[] { (x0, z0), (x0, z1), (x1, z0), (x1, z1) })
+            {
+                bool inside = false;
+                var p = f.geofence.points;
+                for (int i = 0, j = p.Length - 1; i < p.Length; j = i++)
+                    if ((p[i].z > z) != (p[j].z > z) && x < (p[j].x - p[i].x) * (z - p[i].z) / (p[j].z - p[i].z) + p[i].x)
+                        inside = !inside;
+                Assert.IsTrue(inside, $"pit floor corner ({x}, {z}) outside the geofence");
+            }
+            // the sharper colour map covers the whole fence and lies within the terrain
+            var c = f.terrain.core;
+            float half = f.terrain.size_m / 2f;
+            Assert.GreaterOrEqual(c.x0, -half);
+            Assert.GreaterOrEqual(c.z0, -half);
+            Assert.LessOrEqual(c.x0 + c.size, half);
+            Assert.LessOrEqual(c.z0 + c.size, half);
+            foreach (var q in f.geofence.points)
+            {
+                Assert.That(q.x, Is.InRange(c.x0, c.x0 + c.size));
+                Assert.That(q.z, Is.InRange(c.z0, c.z0 + c.size));
+            }
+            var core = AssetDatabase.LoadAssetAtPath<Texture2D>("Assets/Sitepulse/Art/Terrain/quarry_color_core.png");
+            Assert.IsNotNull(core);
+        }
+
         [Test]
         public void FleetChoreographyHasTheWholeFleet()
         {

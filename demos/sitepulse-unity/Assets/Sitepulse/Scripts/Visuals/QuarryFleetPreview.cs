@@ -27,6 +27,10 @@ namespace DeviceChain.Sitepulse.Visuals
         public GameObject dozer, dozerLod1, loader, loaderLod1, hauler, haulerLod1;
         [Tooltip("Dust, exhaust, beacons and falling material (cosmetic). None: no effects.")]
         public QuarryEffects effects;
+        [Tooltip("A Sitepulse/Machine Lit material with the site's dust settings. Each machine draws with "
+                 + "copies of it carrying its own glTF colours, so that its dust can follow its own ground. "
+                 + "None: the imported materials, clean.")]
+        public Material machineMaterial;
         [Tooltip("Seconds into the choreography (Edit mode pose; the start time in Play mode).")]
         public float time;
         public float timeScale = 1f;
@@ -66,12 +70,85 @@ namespace DeviceChain.Sitepulse.Visuals
             public float offset, travel;
             public bool posed;
             public float halfLength, halfWidth;
+            public Material[] dusty = Array.Empty<Material>();
+            public float dustGround = float.NaN;
+        }
+
+        static readonly int DustGround = Shader.PropertyToID("_DustGround");
+        static readonly string[] GltfColors = { "baseColorFactor", "emissiveFactor" };
+        static readonly string[] GltfFloats = { "metallicFactor", "roughnessFactor" };
+
+        /// <summary>Draw a machine with its own copies of <see cref="machineMaterial"/>, carrying
+        /// the colours, maps and finishes of the materials it was imported with.</summary>
+        Material[] Dirty(GameObject go)
+        {
+            if (machineMaterial == null) return Array.Empty<Material>();
+            var copies = new Dictionary<Material, Material>();
+            foreach (var r in go.GetComponentsInChildren<Renderer>(true))
+            {
+                var mats = r.sharedMaterials;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    var src = mats[i];
+                    if (src == null) continue;
+                    if (!copies.TryGetValue(src, out var m))
+                    {
+                        m = new Material(machineMaterial) { name = src.name + " (dust)", hideFlags = HideFlags.DontSave };
+                        foreach (var c in GltfColors)
+                            if (src.HasProperty(c)) m.SetColor(c, src.GetColor(c));
+                        foreach (var f in GltfFloats)
+                            if (src.HasProperty(f)) m.SetFloat(f, src.GetFloat(f));
+                        if (src.HasProperty("baseColorTexture"))
+                        {
+                            m.SetTexture("baseColorTexture", src.GetTexture("baseColorTexture"));
+                            m.SetTextureScale("baseColorTexture", src.GetTextureScale("baseColorTexture"));
+                            m.SetTextureOffset("baseColorTexture", src.GetTextureOffset("baseColorTexture"));
+                        }
+                        if (!src.IsKeywordEnabled("_EMISSIVE")) m.SetColor("emissiveFactor", Color.black);
+                        copies.Add(src, m);
+                    }
+                    mats[i] = m;
+                }
+                r.sharedMaterials = mats;
+            }
+            var list = new Material[copies.Count];
+            copies.Values.CopyTo(list, 0);
+            return list;
         }
 
         readonly List<Unit> units = new List<Unit>();
         Choreography data;
 
         public int Count => units.Count;
+
+        /// <summary>The machines, as spawned.</summary>
+        public IEnumerable<MachineRig> Machines
+        {
+            get
+            {
+                foreach (var u in units)
+                    if (u.rig != null) yield return u.rig;
+            }
+        }
+
+        /// <summary>The period (s) of the track machine <paramref name="id"/> plays, or 0.</summary>
+        public float CycleOf(string id)
+        {
+            foreach (var u in units)
+                if (u.rig != null && u.rig.name == id) return u.track.period;
+            return 0f;
+        }
+
+        /// <summary>The haul loop's cycle time (s): the period of the first hauler's track.</summary>
+        public float HaulCycle
+        {
+            get
+            {
+                foreach (var u in units)
+                    if (u.rig != null && u.rig.Kind == MachineKind.Hauler) return u.track.period;
+                return 0f;
+            }
+        }
 
         void OnEnable() => Spawn();
 
@@ -101,6 +178,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 foreach (var t in go.GetComponentsInChildren<Transform>(true))
                     t.gameObject.hideFlags = HideFlags.DontSave;
                 go.transform.SetParent(transform, false);
+                var dusty = Dirty(go);
                 var rig = go.AddComponent<MachineRig>();
                 rig.Bind(kind);
                 // ground contact patch: track length x gauge, or wheelbase x track width
@@ -116,7 +194,7 @@ namespace DeviceChain.Sitepulse.Visuals
                     fx = go.AddComponent<MachineEffects>();
                     fx.Bind(rig, effects);
                 }
-                units.Add(new Unit { rig = rig, effects = fx, track = data.tracks[m.track], offset = m.offset, halfLength = hl, halfWidth = hw });
+                units.Add(new Unit { rig = rig, effects = fx, track = data.tracks[m.track], offset = m.offset, halfLength = hl, halfWidth = hw, dusty = dusty });
             }
             Seek(time);
         }
@@ -124,7 +202,10 @@ namespace DeviceChain.Sitepulse.Visuals
         void Despawn()
         {
             foreach (var u in units)
+            {
                 if (u.rig != null) DestroyImmediate(u.rig.gameObject);
+                foreach (var m in u.dusty) DestroyImmediate(m);
+            }
             units.Clear();
         }
 
@@ -210,6 +291,11 @@ namespace DeviceChain.Sitepulse.Visuals
             float roll = Mathf.Atan2(hr - hl, 2f * u.halfWidth) * Mathf.Rad2Deg;
             float y = Mathf.Max((hf + hb) * 0.5f, (hl + hr) * 0.5f);
             u.rig.transform.SetPositionAndRotation(new Vector3(x, y, z), Quaternion.Euler(pitch, heading, roll));
+            if (!(Mathf.Abs(y - u.dustGround) <= 0.01f))          // NaN: never set
+            {
+                u.dustGround = y;
+                foreach (var m in u.dusty) m.SetFloat(DustGround, y);
+            }
         }
     }
 }

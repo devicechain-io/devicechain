@@ -1,12 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The quarry's terrain in the scene's stylized look. The ground's colour comes from one site
-// colour map that ArtSource/terrain/quarry_heightmap.py paints (large fields of one colour per
-// material), not from tiled photographic layers. On steep ground the shader draws rock instead:
+// The quarry's terrain in the scene's stylized look. The ground's colour comes from the site
+// colour maps that ArtSource/terrain/quarry_heightmap.py paints (one flat colour per material with
+// crisp edges), not from tiled photographic layers: a quarter-metre map over the work site and a
+// half-metre one over the whole terrain. On steep ground the shader draws rock instead:
 // horizontal strata whose bands wander a little, and flat facets from a 3D cell pattern in world
-// space, so a face is never stretched however steep it is. A faint large-scale variation keeps the
-// broad fields from looking printed.
+// space, so a face is never stretched however steep it is. The colour map's alpha classes the
+// ground, and the worked ground, the crushed products and loose rock get facets of their own, so
+// the ground is cut into the same flat planes as the rocks and the machines. A faint large-scale
+// variation keeps the broad fields from looking printed.
 //
 // It is a Unity Terrain material: the vertex stage, the shadow, depth and depth-normal passes are
 // URP's own Terrain/Lit code, so instancing, per-pixel normals and holes behave as they do there.
@@ -15,6 +18,8 @@ Shader "Sitepulse/Stylized Terrain"
     Properties
     {
         [NoScaleOffset] _ColorMap("Site colour map", 2D) = "grey" {}
+        [NoScaleOffset] _ColorMapCore("Work site colour map", 2D) = "grey" {}
+        _CoreRect("Work site map: x0, z0, edge (m)", Vector) = (0, 0, 1, 0)
         _RockLight("Rock, light bands", Color) = (0.70, 0.66, 0.60, 1)
         _RockDark("Rock, dark bands", Color) = (0.50, 0.47, 0.43, 1)
         _RockCool("Rock, cool bands", Color) = (0.56, 0.57, 0.58, 1)
@@ -26,6 +31,9 @@ Shader "Sitepulse/Stylized Terrain"
         _FacetShade("Facet brightness variation", Range(0, 0.3)) = 0.06
         _RubbleSize("Rubble facet size (m)", Float) = 0.9
         _RubbleTilt("Rubble facet tilt", Range(0, 1)) = 0.35
+        _GroundFacet("Worked ground facets: size (m), tilt, brightness", Vector) = (2.4, 0.1, 0.04, 0)
+        _PileFacet("Product pile facets: size (m), tilt, brightness", Vector) = (1.6, 0.4, 0.06, 0)
+        _FacetFar("Ground facets out to (m)", Float) = 220
         _GroundVariation("Ground variation", Range(0, 0.2)) = 0.05
         _Smoothness("Smoothness", Range(0, 1)) = 0.04
 
@@ -75,8 +83,10 @@ Shader "Sitepulse/Stylized Terrain"
             // Not in UnityPerMaterial: Terrain/Lit owns that buffer's layout, and a terrain is
             // never SRP-batched anyway.
             TEXTURE2D(_ColorMap); SAMPLER(sampler_ColorMap);
+            TEXTURE2D(_ColorMapCore); SAMPLER(sampler_ColorMapCore);
             half4 _RockLight, _RockDark, _RockCool;
-            float4 _RockSlope;
+            float4 _RockSlope, _CoreRect, _GroundFacet, _PileFacet;
+            float _FacetFar;
             float _StrataHeight, _StrataWarp, _FacetSize, _FacetTilt, _FacetShade, _GroundVariation, _Smoothness;
             float _RubbleSize, _RubbleTilt;
 
@@ -128,6 +138,38 @@ Shader "Sitepulse/Stylized Terrain"
                 return id;
             }
 
+            // The 2D version of CellOf, over the ground plan: half the cells to search, and enough
+            // for ground no steeper than a pile's angle of repose
+            float3 CellOf2(float2 p)
+            {
+                float2 i = floor(p), f = frac(p);
+                float2 o = step(0.5, f) - 1.0;
+                float best = 1e9;
+                float3 id = 0;
+                [unroll] for (int y = 0; y <= 1; y++)
+                [unroll] for (int x = 0; x <= 1; x++)
+                {
+                    float2 g = o + float2(x, y);
+                    float3 h = Hash33(float3(i + g, 7.0));
+                    float2 d = g + 0.25 + 0.5 * h.xy - f;
+                    float dd = dot(d, d);
+                    if (dd < best) { best = dd; id = h; }
+                }
+                return id;
+            }
+
+            // A flat facet: the normal tilted at random, one tilt per cell of the 2D pattern over
+            // the ground plan; w is that cell's random brightness, -1..1
+            half3 Facet(half3 n, float3 p, float size, float tilt, out float w)
+            {
+                float3 cell = CellOf2(p.xz / size);
+                half3 tangent = normalize(cross(n, half3(0, 0, 1)) + half3(0, 0, 1e-4));
+                half3 bitangent = cross(n, tangent);
+                float2 t = (cell.xy * 2.0 - 1.0) * tilt;
+                w = cell.z * 2.0 - 1.0;
+                return normalize(n + tangent * t.x + bitangent * t.y);
+            }
+
             void StylizedFragment(Varyings IN, out half4 outColor : SV_Target0
             #ifdef _WRITE_RENDERING_LAYERS
                 , out uint outRenderingLayers : SV_Target1
@@ -144,6 +186,12 @@ Shader "Sitepulse/Stylized Terrain"
                 float3 p = IN.positionWS;
                 half3 n = inputData.normalWS;
                 half4 site = SAMPLE_TEXTURE2D(_ColorMap, sampler_ColorMap, IN.uvMainAndLM.xy);
+                // the work site's sharper map, fading into the whole terrain's over its last metres
+                float2 cuv = (p.xz - _CoreRect.xy) / _CoreRect.z;
+                float2 inside = saturate(min(cuv, 1.0 - cuv) * (_CoreRect.z / 6.0));
+                half core = inside.x * inside.y;
+                UNITY_BRANCH if (core > 0.0)
+                    site = lerp(site, SAMPLE_TEXTURE2D(_ColorMapCore, sampler_ColorMapCore, cuv), core);
                 half3 albedo = site.rgb;
 
                 // a faint, large-scale variation over everything
@@ -178,18 +226,38 @@ Shader "Sitepulse/Stylized Terrain"
                     inputData.normalWS = normalize(lerp(n, faceted, rock));
                 }
 
-                // loose broken rock (the colour map's alpha): small facets, no strata
-                half rubble = site.a * (1.0 - rock);
+                // the colour map's alpha classes the ground: 0 natural, 1/3 worked ground, 2/3 crushed
+                // product, 1 loose broken rock; each but the natural ground is cut into facets
+                half a = site.a;
+                half worked = saturate(1.0 - abs(a - 0.3333) * 3.0) * (1.0 - rock);
+                half pile = saturate(1.0 - abs(a - 0.6667) * 3.0) * (1.0 - rock);
+                half rubble = saturate((a - 0.6667) * 3.0) * (1.0 - rock);
+                // facets are lost in the distance: leave them out past it
+                float far = saturate((_FacetFar - distance(p, _WorldSpaceCameraPos)) / 40.0);
+                worked *= far;
+                pile *= far;
+                rubble *= far;
+                half3 nn = inputData.normalWS;
+                UNITY_BRANCH if (worked > 0.01)
+                {
+                    float w;
+                    half3 f = Facet(nn, p, _GroundFacet.x, _GroundFacet.y, w);
+                    inputData.normalWS = normalize(lerp(inputData.normalWS, f, worked));
+                    albedo *= 1.0 + _GroundFacet.z * worked * w;
+                }
+                UNITY_BRANCH if (pile > 0.01)
+                {
+                    float w;
+                    half3 f = Facet(nn, p, _PileFacet.x, _PileFacet.y, w);
+                    inputData.normalWS = normalize(lerp(inputData.normalWS, f, pile));
+                    albedo *= 1.0 + _PileFacet.z * pile * w;
+                }
                 UNITY_BRANCH if (rubble > 0.01)
                 {
-                    float3 cell = CellOf(p / _RubbleSize);
-                    half3 nn = inputData.normalWS;
-                    half3 tangent = normalize(cross(nn, half3(0, 0, 1)) + half3(0, 0, 1e-4));
-                    half3 bitangent = cross(nn, tangent);
-                    float2 tilt = (cell.xy * 2.0 - 1.0) * _RubbleTilt;
-                    half3 faceted = normalize(nn + tangent * tilt.x + bitangent * tilt.y);
-                    inputData.normalWS = normalize(lerp(nn, faceted, rubble));
-                    albedo *= 1.0 + 0.1 * rubble * (cell.z * 2.0 - 1.0);
+                    float w;
+                    half3 f = Facet(nn, p, _RubbleSize, _RubbleTilt, w);
+                    inputData.normalWS = normalize(lerp(inputData.normalWS, f, rubble));
+                    albedo *= 1.0 + 0.1 * rubble * w;
                 }
 
                 InitializeBakedGIData(IN, inputData);

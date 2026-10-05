@@ -443,7 +443,7 @@ def build(K):
         fx = max(0.0, 1 - u * u)
         t = min(1.0, max(0.0, (v - 0.62) / 0.38))
         base = 3.60 + (floor_top(z0 + (z1 - z0) * v) + 0.06 - 3.60) * t * t * (3 - 2 * t)
-        return base + 0.85 * (fx ** 0.75) * (fz ** 0.7)
+        return base + 1.3 * (fx ** 0.75) * (fz ** 0.7)          # heaped well above the rails
     V = []
     for i in range(nz + 1):
         row = []

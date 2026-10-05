@@ -51,7 +51,8 @@ Assets/Sitepulse/
   Scripts/Domain/      machine and task state, free of Unity and transport types
   Scripts/Platform/    the DeviceChain connection
   Scripts/Simulation/  movement, tasks and the simulation clock
-  Scripts/Visuals/     machine rigs (FleetRig, MachineRig), the quarry terrain and the fleet preview
+  Scripts/Visuals/     machine rigs (FleetRig, MachineRig), the quarry terrain, the fleet preview,
+                       the effects and the data overlay
   Scripts/Editor/      the scene and prefab builder (Sitepulse > Quarry menu)
   Scripts/UI/          heads-up display and presenter controls
   Data/                site, route and preset data, and the fleet preview choreography
@@ -60,7 +61,7 @@ Assets/Sitepulse/
   Art/Terrain/         the quarry heightmap, layer masks and feature list, generated from ArtSource/
   Art/Prefabs/         prop prefabs with LODs, written by the builder
   Art/Materials/       the terrain, sky and particle materials, written by the builder
-  Art/Shaders/         the stylized terrain shader
+  Art/Shaders/         the stylized terrain, machine and vertex-colour shaders
   Art/Textures/        the effects' textures, drawn by the builder
   Settings/            the look profile and the effects' settings
   Tests/EditMode/      Edit Mode tests
@@ -84,25 +85,40 @@ wheels and scrolls track treads.
 ## The quarry
 
 `QuarryTerrain` builds a Unity terrain at scene start from the generated heightmap, site colour
-map and feature list in `Art/Terrain/`, so there is no terrain asset to keep in step: change the
+maps and feature list in `Art/Terrain/`, so there is no terrain asset to keep in step: change the
 generator, re-run it, and the scene follows. The terrain has no texture layers: its shader
-(`Art/Shaders/StylizedTerrain.shader`) colours the ground from the colour map, in which each
-material is a broad field of one colour (light pads, darker haul roads with lighter wheel paths,
-a grey pit floor darkening towards the faces, cool grey product piles, dark blasted rock, grass),
-and draws the steep faces itself as banded strata broken into flat facets, so nothing is stretched
-down a bench face. The haul roads are built into the ground with a crown and safety windrows,
-the pads have a softened, disturbed edge, and the ground between the haul roads is stripped. The features file also places the roads, the site
+(`Art/Shaders/StylizedTerrain.shader`) colours the ground from the colour maps, a quarter-metre
+one over the work site and a half-metre one over the whole terrain, in which each material is one
+flat colour with a crisp edge (light pads, darker haul roads with lighter wheel paths and darker
+tyre tracks, a grey pit floor darkening towards the faces, three greys of crushed product, dark
+blasted rock, grass). It draws the steep faces itself as banded strata broken into flat facets, so
+nothing is stretched down a bench face, and cuts the worked ground, the product piles and the
+loose rock into facets of their own, so the ground has the same flat planes as the rocks and the
+machines. The haul roads are built into the ground with a crown and safety windrows, the pads
+have a softened, disturbed edge, and the ground between the haul roads is stripped, its topsoil
+stacked in a long grassed bund. The features file also places the roads, the site
 buildings, the processing plant (primary crusher, screen and radial stacker, fed by a loader) and
 the vegetation. `QuarryFleetPreview` plays the choreography in `Data/quarry_fleet.json` (a loader
 on a low bench filling each haul truck in two passes, five trucks running the loop up the
 two-lane ramp, a sixth calling at the refuel bay, dozers working the cut and the dump, idle
 machines parked in the yard) through the same `MachineRig` the platform connection will drive.
 
-Cosmetic effects follow what the machines do: dust behind them that grows with speed, exhaust
-when they pull away or climb, rotating amber beacons on working machines, rock pouring from a
-tipping truck body or a loader's bucket, and at the plant moving belts, rock falling from each
-conveyor head and a light dust haze (`MachineEffects`, `PlantEffects`). They are local
-presentation, never evidence of platform state.
+Cosmetic effects follow what the machines do: dust behind them that grows with speed and with a
+loaded climb, exhaust when they pull away or climb, rotating amber beacons on working machines,
+rock pouring from a tipping truck body or a loader's bucket (it lands in the body or the hopper
+and goes no further), and at the plant turning flywheels, a shaking screen, moving belts, rock
+falling from each conveyor head and a light dust haze (`MachineEffects`, `PlantEffects`). The
+machines carry site dust, heavy low down and a light film above (`Art/Shaders/MachineLit.shader`),
+and at the refuel bay an attendant holds the dispenser's hose to a truck while it is in the bay
+(`RefuelVignette`). They are local presentation, never evidence of platform state.
+
+`IotOverlay` is the data layer a DeviceChain console would put over the site: a tag over each
+tagged machine (payload or bucket load, fuel, speed, what it is doing, a status dot), a pulsing
+ring under a machine with an alert, a dashed geofence round the rim of the cut, a callout at the
+load point with the haul cycle time, and the crusher's throughput. It is one overlay that is
+switched on and off as a whole, so the same scene also makes clean stills. Until the scene is
+connected to a DeviceChain instance its values are illustrative: they follow the preview
+choreography and are not platform data.
 `FrameTimeBenchmark` is off unless a player build is started with `-sitepulse-benchmark`; it
 flies a camera over the site and writes the average FPS and the 99th-percentile and worst frame
 times to `sitepulse-benchmark-<quality>.txt` beside the executable.
@@ -117,12 +133,11 @@ A player started with `-sitepulse-quality Laptop` runs at that level.
 
 ## Known limitations
 
-- The terrain's colour map is half a metre per texel, so ground edges read soft in the closest
-  shots. There are no ground detail meshes.
-- At the plant the belts and the falling streams move, but the crusher and the screen do not,
-  and no truck tips into the hopper.
+- There are no ground detail meshes, and the sky is a plain gradient.
+- No truck tips into the hopper: a loader feeds it from the feed stockpile.
 - The preview choreography is scripted local motion, not the site simulation; the haul trucks
   take the loaded buckets as one load, and the dump pad does not grow.
+- The overlay's values are illustrative until the platform connection lands.
 
 ## Tests
 
@@ -130,7 +145,8 @@ A player started with `-sitepulse-quality Laptop` runs at that level.
 rotation, the machine facing +Z, every driven pivot present and at rest, and that the rig rules
 (hydraulic aiming, the hauler's load rule) hold. It also checks the quarry data: the heightmap
 decoder round-trips and rejects a truncated file, and the fleet choreography holds all 18
-machines with tracks of the right length. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
+machines with tracks of the right length, and the geofence encloses the cut inside the
+work site's colour map. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
 or from the command line with the Editor closed:
 
 ```

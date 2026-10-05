@@ -86,6 +86,9 @@ PALETTE = {
     "plant":      ("M_Plant_Green",      (0.050, 0.140, 0.080),  0.60, 0.1, None),
     "ore":        ("M_Ore",              (0.300, 0.290, 0.270),  0.92, 0.0, None),
     "ore_belt":   ("M_Ore_Belt",         (1.0, 1.0, 1.0),        0.92, 0.0, None),   # + scrolling ore texture
+    "hivis":      ("M_HiVis_Orange",     (0.95, 0.30, 0.01),     0.60, 0.0, None),
+    "workwear":   ("M_Workwear",         (0.030, 0.036, 0.055),  0.85, 0.0, None),
+    "skin":       ("M_Skin",             (0.42, 0.26, 0.18),     0.70, 0.0, None),
 }
 
 S = dict(coll=None, nodes={}, mats={}, out=None, name=None)
