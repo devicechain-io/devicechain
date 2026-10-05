@@ -10,18 +10,25 @@ With no names every prop is built. Each prop is written as <name>.glb and <name>
 
 Same conventions as the machines (see sitepulse_kit.py): Unity metres, X right, Y up, Z forward,
 origin on the ground at the prop's footprint centre. Every prop has one node, Body, under Root;
-it does not move. A building's long axis is X and its open or front side faces +Z.
+it does not move. A building's long axis is X and its open or front side faces +Z. The plant
+also has empty marker nodes under Root where material leaves it (StackerHead, SideHeadRight,
+SideHeadLeft, CrusherDischarge) and at its Hopper and Screen, for the scene's effects.
 
-  pine, broadleaf, shrub     trees for Unity Terrain tree instances (scaled per instance)
-  rock_a, rock_b             boulders (terrain tree instances, no collider)
+  conifer_a/_b/_c            stylized spruce, pine and young fir for Unity Terrain tree instances
+  shrub_a, shrub_b           a low bush and a taller scrub clump
+  rock_a/_b/_c               faceted boulders (terrain tree instances, no collider)
   site_office                9.6 m portable site cabin on skids
   workshop                   18 m x 12 m open-fronted steel service shelter
   container_blue/_red        20 ft shipping container
   fuel_tank                  bunded 8 m horizontal diesel tank with a dispenser
   light_tower                trailer-mounted light tower (mast 8.5 m), lamps face +Z
   cone, barrier, site_sign   small site furniture
-  crusher_plant              primary jaw crusher and hopper, conveyor, screen tower and radial
-                             stacker; origin at the hopper centre, material flows along +Z
+  crusher_plant              primary jaw crusher in a pocket below the pad, conveyor, screen tower,
+                             radial stacker and two side conveyors; origin at the hopper centre,
+                             material flows along +Z (see PLANT_SCALE)
+
+Vegetation and rocks carry vertex colours (a soft gradient and a little per-face variation),
+which multiply their material's colour.
 """
 import math
 import os
@@ -84,56 +91,110 @@ def single(name, piece, smooth=35):
 
 
 # ==================================================================================
-# vegetation
+# vegetation and rocks: stylized, to sit with the machines. Crisp faceted shapes; each face gets
+# a soft gradient (darker low down, lighter on top) and a small random lift or drop in its
+# vertex colour, so a tree reads as a crisp shape with soft light rather than as flat colour.
 # ==================================================================================
-def pine(rng):
-    p = K.Piece()
-    p.cyl((0, 0, 0), (0, 9.0, 0), 0.24, "bark", 7, r2=0.07)
-    tiers = 5
+def shade(height, low=0.62, high=1.12, jitter=0.07, seed=0):
+    """Vertex-colour function: brightness from `low` at the ground to `high` at `height`,
+    with a per-face random variation of +-jitter."""
+    def fn(co, fc):
+        t = max(0.0, min(1.0, co[1] / height))
+        k = low + (high - low) * t
+        h = math.sin(fc[0] * 12.9898 + fc[1] * 78.233 + fc[2] * 37.719 + seed) * 43758.5453
+        k *= 1.0 + jitter * (2.0 * (h - math.floor(h)) - 1.0)
+        return (k, k, k)
+    return fn
+
+
+def tiered(p, rng, key, base, top, r0, tiers, n=8, jag=0.22, droop=0.35, tier_h=None):
+    """A stack of star-shaped cone tiers from `base` up to `top` metres, the lowest r0 wide."""
+    span = top - base
     for i in range(tiers):
-        f = i / (tiers - 1)
-        y0 = 1.7 + i * 1.6
-        spike_cone(p, (rng.uniform(-0.1, 0.1), y0, rng.uniform(-0.1, 0.1)), 2.35 * (1 - 0.72 * f),
-                   2.7 - 0.5 * f, "pine", rng, n=7 if i < 3 else 6, jag=0.28, droop=0.45 * (1 - 0.6 * f))
-    single("pine", p, smooth=25)
+        f = i / max(1, tiers - 1)
+        y0 = base + span * 0.78 * f
+        h = tier_h or span * (0.42 - 0.12 * f)
+        spike_cone(p, (rng.uniform(-0.08, 0.08), y0, rng.uniform(-0.08, 0.08)), r0 * (1.0 - 0.78 * f),
+                   h, key, rng, n=n if i < tiers - 1 else max(5, n - 2), jag=jag, droop=droop * (1.0 - 0.6 * f))
 
 
-def broadleaf(rng):
+def conifer_a(rng):
+    """Spruce, about 12 m: a narrow spire of drooping tiers over a short bare trunk."""
     p = K.Piece()
-    p.cyl((0, 0, 0), (0.05, 3.6, 0.02), 0.26, "bark", 7, r2=0.17)
-    with p.detail():
-        for a in (0.4, 2.5, 4.4):
-            tip = (1.1 * math.cos(a), 4.6, 1.1 * math.sin(a))
-            p.cyl((0.05, 3.3, 0.02), tip, 0.1, "bark", 5, r2=0.06)
-    for k in range(7):
-        a = k * 2.4 + rng.uniform(-0.3, 0.3)
-        d = 1.3 if k else 0.0
-        blob(p, (d * math.cos(a), 5.3 + rng.uniform(-0.6, 0.9) + (0.6 if k == 0 else 0), d * math.sin(a)),
-             rng.uniform(1.5, 2.0), "leaf", rng, scale=(1.0, 0.85, 1.0), subdiv=2, jitter=0.16)
-    single("broadleaf", p, smooth=25)
+    p.cyl((0, 0, 0), (0, 10.5, 0), 0.26, "bark", 7, r2=0.06)
+    tiered(p, rng, "spruce", 1.4, 12.0, 2.9, 6, n=8, jag=0.26, droop=0.55)
+    p.vcol = shade(12.0, seed=1)
+    p.one_material = "vegetation"
+    single("conifer_a", p, smooth=20)
 
 
-def shrub(rng):
+def conifer_b(rng):
+    """Pine, about 10 m: a tall bare trunk under a broad crown of a few flat tiers."""
+    p = K.Piece()
+    p.cyl((0, 0, 0), (0.1, 9.0, 0.05), 0.24, "bark", 7, r2=0.1)
+    for k, (y, r, h) in enumerate(((5.2, 2.6, 1.6), (6.6, 2.3, 1.5), (7.9, 1.7, 1.5), (9.0, 1.0, 1.3))):
+        spike_cone(p, (rng.uniform(-0.3, 0.3), y, rng.uniform(-0.3, 0.3)), r, h, "pine", rng,
+                   n=7, jag=0.3, droop=0.25)
+    p.vcol = shade(10.5, low=0.7, seed=2)
+    p.one_material = "vegetation"
+    single("conifer_b", p, smooth=20)
+
+
+def conifer_c(rng):
+    """Young fir, about 5 m: a short full cone to the ground, lighter green."""
+    p = K.Piece()
+    p.cyl((0, 0, 0), (0, 4.0, 0), 0.12, "bark", 6, r2=0.04)
+    tiered(p, rng, "fir", 0.5, 5.2, 1.7, 4, n=7, jag=0.22, droop=0.3)
+    p.vcol = shade(5.2, low=0.7, seed=3)
+    p.one_material = "vegetation"
+    single("conifer_c", p, smooth=20)
+
+
+def shrub_a(rng):
+    """Low rounded bush, about 1.3 m."""
     p = K.Piece()
     for k in range(4):
         a = k * 1.9
-        d = 0.0 if k == 0 else 0.55
-        blob(p, (d * math.cos(a), 0.55 + rng.uniform(-0.1, 0.15), d * math.sin(a)), rng.uniform(0.6, 0.85),
-             "shrub", rng, scale=(1.0, 0.75, 1.0), subdiv=2, jitter=0.18)
-    single("shrub", p, smooth=25)
+        d = 0.0 if k == 0 else 0.6
+        blob(p, (d * math.cos(a), 0.4 + rng.uniform(-0.1, 0.15), d * math.sin(a)), rng.uniform(0.6, 0.85),
+             "shrub", rng, scale=(1.0, 0.75, 1.0), subdiv=1, jitter=0.16)
+    p.vcol = shade(1.4, low=0.6, high=1.1, seed=4)
+    p.one_material = "vegetation"
+    single("shrub_a", p, smooth=20)
 
 
-def rock_a(rng):
+def shrub_b(rng):
+    """Taller scrub, about 2.4 m, in a loose clump."""
     p = K.Piece()
-    blob(p, (0, 0.3, 0), 1.0, "rock", rng, scale=(1.25, 0.7, 0.95), subdiv=3, jitter=0.12)
-    single("rock_a", p, smooth=12)
+    for k in range(6):
+        a = k * 1.3 + rng.uniform(-0.2, 0.2)
+        d = 0.0 if k == 0 else rng.uniform(0.7, 1.0)
+        blob(p, (d * math.cos(a), 0.9 + rng.uniform(0.0, 0.8) + (0.4 if k == 0 else 0.0), d * math.sin(a)),
+             rng.uniform(0.6, 0.9), "scrub", rng, scale=(1.0, 1.1, 1.0), subdiv=1, jitter=0.18)
+    p.vcol = shade(2.5, low=0.62, high=1.1, seed=5)
+    p.one_material = "vegetation"
+    single("shrub_b", p, smooth=20)
 
 
-def rock_b(rng):
-    p = K.Piece()
-    blob(p, (0, 0.35, 0), 0.9, "rock", rng, scale=(1.0, 0.85, 1.15), subdiv=2, jitter=0.22)
-    blob(p, (0.85, 0.15, 0.3), 0.45, "rock", rng, scale=(1.0, 0.7, 1.0), subdiv=2, jitter=0.22)
-    single("rock_b", p, smooth=12)
+def rock(name, shape, seed):
+    """A faceted boulder: an icosahedron, stretched to `shape`, pushed about at random and
+    sunk a little so that it sits in the ground."""
+    def build(rng):
+        p = K.Piece()
+        sx, sy, sz = shape
+        b0 = p._op()
+        res = bmesh.ops.create_icosphere(p.bm, subdivisions=1, radius=1.0)
+        for v in res["verts"]:
+            n = v.co.normalized()
+            k = 1.0 + rng.uniform(-0.22, 0.22)
+            y = n.y * sy * k
+            v.co = Vector((n.x * sx * k, max(y, -0.25 * sy) + 0.12 * sy, n.z * sz * k))
+        faces = list({f for v in res["verts"] for f in v.link_faces})
+        p._finish(res["verts"], faces, "rock", 0)
+        p._tag(b0)
+        p.vcol = shade(sy * 1.3, low=0.72, high=1.08, jitter=0.09, seed=seed)
+        single(name, p, smooth=18)
+    return build
 
 
 # ==================================================================================
@@ -302,19 +363,35 @@ def site_sign(rng):
 # ==================================================================================
 # processing plant
 # ==================================================================================
-def frustum(p, y0, y1, bot, top, key):
+def frustum(p, y0, y1, bot, top, key, open_top=False):
     """A closed box whose horizontal section goes from rectangle `bot` at y0 to `top` at y1;
-    each rectangle is (x0, x1, z0, z1). A hopper, a chute."""
+    each rectangle is (x0, x1, z0, z1). A hopper, a chute. open_top leaves the top off and adds
+    the inside of the walls (a hopper you can see into)."""
     b0 = p._op()
     def ring(y, r):
         x0, x1, z0, z1 = r
         return [p.bm.verts.new(v) for v in ((x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1))]
     a, b = ring(y0, bot), ring(y1, top)
-    faces = [p.bm.faces.new(list(reversed(a))), p.bm.faces.new(b)]
+    faces = [p.bm.faces.new(list(reversed(a)))]
+    if not open_top:
+        faces.append(p.bm.faces.new(b))
     for i in range(4):
         j = (i + 1) % 4
         faces.append(p.bm.faces.new((a[i], a[j], b[j], b[i])))
-    p._finish(a + b, faces, key, 0)
+    verts = a + b
+    if open_top:
+        # the inside: the same walls a little in, facing inwards, and a floor
+        def inset(r, d):
+            x0, x1, z0, z1 = r
+            return (x0 + d, x1 - d, z0 + d, z1 - d)
+        ai, bi = ring(y0 + 0.06, inset(bot, 0.06)), ring(y1, inset(top, 0.06))
+        faces.append(p.bm.faces.new(ai))
+        for i in range(4):
+            j = (i + 1) % 4
+            faces.append(p.bm.faces.new((bi[i], bi[j], ai[j], ai[i])))
+            faces.append(p.bm.faces.new((b[i], b[j], bi[j], bi[i])))                 # the rim's top
+        verts += ai + bi
+    p._finish(verts, faces, key, 0)
     p._tag(b0)
 
 
@@ -325,6 +402,19 @@ def _frame(a, b):
     up = Vector((0.0, 1.0, 0.0))
     v = (up - u * up.dot(u)).normalized()
     return a, b, u, v, u.cross(v)
+
+
+def belt_load(p, c, u, v, L, width, period=2.0):
+    """The layer of crushed rock riding on a belt: a flat box whose texture coordinates run
+    along the belt (U, one repeat every `period` metres), so that scrolling the texture in Unity
+    moves the rock along."""
+    before = set(p.bm.faces)
+    p.obox(c, u, v, L, 0.12, width, "ore_belt")
+    w = u.cross(v)
+    for f in set(p.bm.faces) - before:
+        for lp in f.loops:
+            d = lp.vert.co - c
+            lp[p.uv].uv = (d.dot(u) / period, d.dot(w) / width + 0.5)
 
 
 def conveyor(p, a, b, width=0.9, legs=(), truss=False, walkway=True):
@@ -338,7 +428,7 @@ def conveyor(p, a, b, width=0.9, legs=(), truss=False, walkway=True):
     for s in (-1, 1):
         p.obox(mid + w * s * (hw + 0.12) - v * 0.12, u, v, L, 0.32, 0.08, "paint_dark")      # stringers
     p.obox(mid + v * 0.06, u, v, L - 0.4, 0.05, width, "rubber")                           # belt
-    p.obox(mid + v * 0.13, u, v, L - 0.9, 0.12, width * 0.55, "ore")                       # material on it
+    belt_load(p, mid + v * 0.13, u, v, L - 0.9, width * 0.55)                              # material on it
     for t, r in ((0.0, 0.28), (1.0, 0.32)):                                                 # tail and head pulleys
         c = a + (b - a) * t
         p.cyl(c - w * (hw + 0.05), c + w * (hw + 0.05), r, "steel", 12)
@@ -378,46 +468,89 @@ def conveyor(p, a, b, width=0.9, legs=(), truss=False, walkway=True):
                     p.cyl(top, low, 0.04, "paint_dark", 5)
 
 
+# The plant is built at PLANT_SCALE (1.4 x the dimensions written below) so it stands right next
+# to the haul trucks, and its primary crusher sits PRIMARY_DROP metres (after scaling) down in a
+# concrete-lined pocket so that a loader on the pad tips over the hopper's rim. Both, and the
+# discharge points, are mirrored in ArtSource/terrain/quarry_heightmap.py (PLANT_*): keep them in step.
+PLANT_SCALE = 1.4
+PRIMARY_DROP = 1.6
+POCKET = (-3.6, 3.6, -4.4, 8.8)              # x0, x1, z0, z1 of the pocket, metres after scaling
+
+
+def flywheel(p, c, r, width, spokes=6):
+    """A crusher flywheel on the X axis at c: rim, hub and straight spokes."""
+    x, y, z = c
+    p.lathe_x(c, [(r, -width / 2), (r, width / 2), (r * 0.82, width / 2), (r * 0.82, -width / 2)], "steel", 24)
+    p.cyl((x - width * 0.7, y, z), (x + width * 0.7, y, z), r * 0.18, "paint_dark", 12)
+    for k in range(spokes):
+        a = 2 * math.pi * k / spokes + 0.3
+        p.cyl((x, y + r * 0.15 * math.sin(a), z + r * 0.15 * math.cos(a)),
+              (x, y + r * 0.84 * math.sin(a), z + r * 0.84 * math.cos(a)), width * 0.28, "steel", 6)
+
+
 def crusher_plant(rng):
-    """Primary jaw crusher with its feed hopper, a conveyor up to a screen on a steel tower, and
-    a radial stacker building the product stockpile. Origin: centre of the hopper, on the
-    ground; material flows along +Z. The stacker's head is at z = 38.5 m, 9 m up (the product
-    stockpile is placed under it by quarry_heightmap.py, PLANT_HEAD)."""
+    """Primary jaw crusher in a pocket below the pad, fed by a loader over the hopper's rim; a
+    conveyor up to a vibrating screen on a steel tower; three product conveyors from it: the
+    main radial stacker straight on, and a side conveyor to the right and one to the left.
+    Origin: centre of the hopper, on the pad; material flows along +Z. Named nodes mark where
+    material leaves each head and the crusher (for the scene's falling streams and dust)."""
     p = K.Piece(bevel=0.02)
-    # -- primary: skid, support columns, hopper, crusher, flywheels, motor
-    p.box((-1.9, 0.0, -3.2), (1.9, 0.45, 5.2), "paint_dark")                               # skid
+    drop = PRIMARY_DROP / PLANT_SCALE            # unscaled
+    x0, x1, z0, z1 = (q / PLANT_SCALE for q in POCKET)
+    # -- the pocket's retaining walls (a slot in the far wall lets the conveyor out)
+    t = 0.22
+    p.box((x0 - t, -drop, z0 - t), (x1 + t, 0.12, z0), "concrete", 0.02)
+    for sx, xx in ((-1, x0), (1, x1)):
+        p.box((xx - t if sx < 0 else xx, -drop, z0 - t), (xx if sx < 0 else xx + t, 0.12, z1 + t), "concrete", 0.02)
+    p.box((x0 - t, -drop, z1), (-0.75, 0.12, z1 + t), "concrete", 0.02)
+    p.box((0.75, -drop, z1), (x1 + t, 0.12, z1 + t), "concrete", 0.02)
+    p.box((x0, -drop - 0.05, z0), (x1, -drop + 0.05, z1), "concrete", 0.0)                 # floor slab
+    primary = set(p.bm.faces)
+    # -- primary: skid, columns, hopper, jaw crusher, flywheels, discharge chute
+    p.box((-1.9, 0.0, -3.0), (1.9, 0.4, 6.4), "paint_dark")                                # skid
     for x in (-1.6, 1.6):
         for z in (-2.4, 0.9):
-            p.box((x - 0.15, 0.45, z - 0.15), (x + 0.15, 2.5, z + 0.15), "paint_dark", 0.0)
+            p.box((x - 0.15, 0.4, z - 0.15), (x + 0.15, 2.5, z + 0.15), "paint_dark", 0.0)
     p.box((-2.0, 2.4, -2.7), (2.0, 2.6, 1.2), "paint_dark", 0.0)                            # feeder deck
-    frustum(p, 2.6, 3.95, (-1.0, 1.0, -1.3, 1.0), (-2.3, 2.3, -2.6, 2.3), "plant")       # hopper
-    p.box((-2.35, 3.95, -2.65), (2.35, 4.1, 2.35), "paint_dark", 0.0)                       # rim
-    p.box((-2.0, 3.85, -2.3), (2.0, 4.0, 2.0), "ore", 0.0)                                  # rock in it
-    for k in range(9):
-        blob(p, (rng.uniform(-1.6, 1.6), 4.0, rng.uniform(-1.9, 1.6)), rng.uniform(0.25, 0.5), "ore", rng,
-             scale=(1.0, 0.6, 1.0), subdiv=1, jitter=0.25)
-    p.box((-1.25, 0.45, 1.2), (1.25, 3.3, 3.9), "plant")                                    # jaw crusher body
-    p.box((-1.3, 3.0, 1.2), (1.3, 3.45, 3.0), "paint_dark", 0.02)
-    for sx in (-1, 1):                                                                      # flywheels
-        p.cyl((sx * 1.3, 2.55, 2.9), (sx * 1.5, 2.55, 2.9), 0.95, "steel", 20)
+    frustum(p, 2.6, 3.95, (-1.0, 1.0, -1.3, 1.0), (-2.3, 2.3, -2.6, 2.3), "plant", open_top=True)  # hopper
+    for (ax0, ax1, az0, az1) in ((-2.4, 2.4, -2.7, -2.5), (-2.4, 2.4, 2.2, 2.4),          # rim: a frame, open
+                                 (-2.4, -2.2, -2.7, 2.4), (2.2, 2.4, -2.7, 2.4)):          # in the middle
+        p.box((ax0, 3.95, az0), (ax1, 4.12, az1), "paint_dark", 0.0)
+    p.box((-1.7, 3.2, -2.0), (1.7, 3.35, 1.7), "ore", 0.0)                                  # rock in it
+    for k in range(14):
+        blob(p, (rng.uniform(-1.5, 1.5), 3.45 + rng.uniform(0.0, 0.25), rng.uniform(-1.8, 1.5)), rng.uniform(0.25, 0.55),
+             "ore", rng, scale=(1.0, 0.7, 1.0), subdiv=1, jitter=0.25)
+    # jaw crusher: two heavy side frames, sloped at the feed, with the swing-jaw housing between
+    side = [(2.3, 0.4), (5.3, 0.4), (5.3, 2.2), (4.6, 3.5), (2.3, 3.5)]                     # (z, y)
+    for sx in (-1, 1):
+        p.prism(side, "x", sx * 1.05 - 0.14, sx * 1.05 + 0.14, "plant", 0.03)
         with p.detail():
-            p.cyl((sx * 1.28, 2.55, 2.9), (sx * 1.56, 2.55, 2.9), 0.2, "paint", 10)
-    p.box((1.9, 0.45, 3.3), (2.9, 1.4, 4.8), "plant", 0.02)                                 # motor
-    p.box((1.55, 1.1, 2.5), (1.75, 2.9, 4.2), "paint", 0.01)                                # belt guard
-    frustum(p, 0.5, 1.2, (-0.6, 0.6, 3.6, 4.6), (-0.9, 0.9, 3.4, 4.4), "paint_dark")      # discharge chute
+            for z in (3.0, 3.8, 4.6):                                                       # stiffening ribs
+                p.box((sx * 1.2 - 0.05, 0.5, z - 0.08), (sx * 1.2 + 0.05, 3.2, z + 0.08), "plant", 0.0)
+    p.box((-0.92, 0.4, 2.4), (0.92, 3.3, 5.1), "paint_dark", 0.02)                          # jaw housing
+    p.prism([(2.3, 3.5), (4.6, 3.5), (3.4, 4.2)], "x", -1.15, 1.15, "plant", 0.02)        # pitman cover
+    for sx in (-1, 1):                                                                      # flywheels
+        flywheel(p, (sx * 1.55, 2.25, 3.9), 1.25, 0.34)
+    p.cyl((-1.8, 2.25, 3.9), (1.8, 2.25, 3.9), 0.16, "steel", 12)                          # shaft
+    frustum(p, 0.4, 1.0, (-0.55, 0.55, 4.9, 5.8), (-0.95, 0.95, 4.4, 5.6), "paint_dark")  # discharge chute
     with p.detail():                                                                        # access platform
         p.box((-3.0, 3.2, -2.8), (-2.3, 3.28, 2.4), "worn", 0.0)
         for z in (-2.7, -0.2, 2.3):
             p.cyl((-3.0, 3.25, z), (-3.0, 4.3, z), 0.025, "paint", 6)
         p.cyl((-3.0, 4.3, -2.7), (-3.0, 4.3, 2.3), 0.025, "paint", 6)
         p.cyl((-3.0, 3.75, -2.7), (-3.0, 3.75, 2.3), 0.025, "paint", 6)
-        for k in range(9):                                                                  # ladder
-            yy = 0.4 + k * 0.33
-            p.cyl((-3.0, yy, 2.55), (-3.0, yy, 2.95), 0.018, "worn", 5)
-        for zz in (2.55, 2.95):
-            p.cyl((-3.0, 0.0, zz), (-3.0, 3.25, zz), 0.03, "worn", 6)
-    # -- conveyor up to the screen
-    conveyor(p, (0.0, 0.95, 4.2), (0.0, 7.0, 17.6), width=0.9, legs=(0.45, 0.8))
+    primary = set(p.bm.faces) - primary
+    for v in {v for f in primary for v in f.verts}:                                         # down into the pocket
+        v.co.y -= drop
+    # the drive: an electric motor on the pad beside the pocket, belted to the right flywheel
+    p.box((2.95, 0.0, 3.1), (4.4, 0.35, 4.8), "paint_dark", 0.02)                           # motor base
+    p.cyl((3.0, 0.95, 3.95), (4.3, 0.95, 3.95), 0.55, "plant", 16)                          # motor
+    for k in range(5):
+        p.cyl((3.1 + 0.25 * k, 0.95, 3.95), (3.15 + 0.25 * k, 0.95, 3.95), 0.6, "plant", 16)   # cooling fins
+    _, _, gu, gv, gw = _frame((3.0, 0.95, 3.95), (1.75, 2.25 - drop, 3.9))
+    p.obox(Vector((2.35, (0.95 + 2.25 - drop) / 2, 3.92)), gu, Vector((0, 0, 1)), 1.9, 0.3, 1.1, "paint")  # belt guard
+    # -- conveyor up to the screen, out of the pocket through the slot in its far wall
+    conveyor(p, (0.0, 0.95 - drop, 5.4), (0.0, 7.0, 17.6), width=0.9, legs=(0.45, 0.8))
     # -- screen on its tower
     for x in (-2.1, 2.1):
         for z in (16.8, 22.2):
@@ -440,7 +573,7 @@ def crusher_plant(rng):
     p.obox(Vector((0.0, 7.05, 19.7)) + sv * 1.15, su, sv, 4.6, 0.1, 2.2, "ore")              # material on the top deck
     p.box((1.35, 6.05, 18.4), (2.1, 6.75, 19.4), "plant", 0.02)                              # vibrator motor
     frustum(p, 3.2, 5.9, (-0.6, 0.6, 20.2, 21.2), (-1.4, 1.4, 18.0, 22.0), "paint_dark")   # under-screen chute
-    # -- radial stacker
+    # -- the main radial stacker, straight on
     conveyor(p, (0.0, 1.5, 20.6), (0.0, 9.0, 38.5), width=0.8, legs=(), truss=True, walkway=False)
     p.box((-0.9, 0.0, 19.8), (0.9, 1.2, 21.4), "paint_dark", 0.02)                           # tail pivot
     _, _, su, sv, sw = _frame((0.0, 1.5, 20.6), (0.0, 9.0, 38.5))
@@ -450,9 +583,12 @@ def crusher_plant(rng):
     p.box((-2.1, 0.75, knee.z - 0.35), (2.1, 1.15, knee.z + 0.35), "paint_dark", 0.02)       # axle beam
     for sx in (-1, 1):
         p.cyl((sx * 1.85, 0.55, knee.z - 0.32), (sx * 1.85, 0.55, knee.z + 0.32), 0.55, "rubber", 16)
-    head = Vector((0.0, 9.0, 38.5))
     p.box((-0.75, 8.8, 38.3), (0.75, 9.8, 39.4), "paint_dark", 0.02)                         # discharge hood
-    blob(p, (0.0, 8.0, 39.5), 0.45, "ore", rng, scale=(0.9, 2.2, 0.9), subdiv=1, jitter=0.2)  # falling stream
+    # -- side conveyors under the screen: the middle grade to the right, the fines to the left
+    for sx, reach, top, legs in ((1, 12.0, 6.0, (0.35, 0.7)), (-1, 9.5, 4.6, (0.45,))):
+        a, b = (sx * 1.0, 1.1, 19.7), (sx * reach, top, 19.7)
+        conveyor(p, a, b, width=0.65, legs=legs, walkway=False)
+        p.box((b[0] - 0.55 + 0.35 * sx, top - 0.25, 19.15), (b[0] + 0.55 + 0.35 * sx, top + 0.55, 20.25), "paint_dark", 0.02)
     # -- electrical room beside the crusher
     p.box((-7.4, 0.0, 1.0), (-4.6, 0.35, 6.2), "steel", 0.0)
     p.box((-7.3, 0.35, 1.1), (-4.7, 2.95, 6.1), "cabin")
@@ -460,22 +596,33 @@ def crusher_plant(rng):
     p.box((-4.72, 0.45, 4.6), (-4.66, 2.4, 5.5), "paint_dark", 0.0)                          # door
     with p.detail():
         p.box((-7.75, 1.9, 2.0), (-7.3, 2.5, 2.8), "worn", 0.02)                             # air conditioner
-        p.tube([(-4.6, 2.6, 2.0), (-2.5, 2.6, 2.0), (-1.9, 1.6, 2.4)], 0.05, "rubber", 6)  # cable
-    p.lamp((0.0, 4.1, -2.65), "-z", 0.5, 0.3, 0.12)
+        p.tube([(-4.6, 2.6, 2.0), (-3.0, 2.6, 2.0), (-2.6, 0.2, 2.4)], 0.05, "rubber", 6)  # cable
+    p.lamp((0.0, 4.1 - drop, -2.65), "-z", 0.5, 0.3, 0.12)
     p.lamp((2.6, 7.0, 22.6), "+z", 0.5, 0.3, 0.12)
-    single("crusher_plant", p)
+    for v in p.bm.verts:                                                                     # to scale
+        v.co *= PLANT_SCALE
+    K.node("Root", None, (0, 0, 0))
+    K.node("Body", "Root", (0, 0, 0))
+    S = PLANT_SCALE
+    for name, pos in (("StackerHead", (0.0, 9.0, 39.2)), ("SideHeadRight", (12.35, 5.9, 19.7)),
+                      ("SideHeadLeft", (-9.85, 4.5, 19.7)), ("CrusherDischarge", (0.0, 0.4 - drop, 5.4)),
+                      ("Hopper", (0.0, 4.1 - drop, -0.2)), ("Screen", (0.0, 7.6, 19.7))):
+        K.node(name, "Root", (pos[0] * S, pos[1] * S, pos[2] * S))
+    K.attach("Body", p, smooth_angle=35)
 
 
 PROPS = {
-    "pine": (pine, 0.5), "broadleaf": (broadleaf, 0.45), "shrub": (shrub, 0.45),
-    "rock_a": (rock_a, 0.35), "rock_b": (rock_b, 0.5),
+    "conifer_a": (conifer_a, 0.3), "conifer_b": (conifer_b, 0.35), "conifer_c": (conifer_c, 0.35),
+    "shrub_a": (shrub_a, 0.55), "shrub_b": (shrub_b, 0.5),
+    "rock_a": (rock("rock_a", (1.3, 0.7, 1.0), 6), 0.6), "rock_b": (rock("rock_b", (1.0, 0.9, 1.1), 7), 0.6),
+    "rock_c": (rock("rock_c", (0.9, 0.6, 0.8), 8), 0.6),
     "site_office": (site_office, 0.6), "workshop": (workshop, 0.6),
     "container_blue": (container("box_blue"), 0.6), "container_red": (container("box_red"), 0.6),
     "fuel_tank": (fuel_tank, 0.5), "light_tower": (light_tower, 0.5),
     "cone": (cone, 0.6), "barrier": (barrier, 0.8), "site_sign": (site_sign, 0.7),
     "crusher_plant": (crusher_plant, 0.5),
 }
-BUDGET = {"crusher_plant": 16000}            # triangles at LOD0; everything else 6000
+BUDGET = {"crusher_plant": 22000}            # triangles at LOD0; everything else 6000
 
 
 def main():

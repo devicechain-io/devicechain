@@ -65,11 +65,17 @@ PALETTE = {
     "tail":       ("M_Light_Red",        (0.80, 0.02, 0.01),     0.30, 0.0, 2.0),
     "track":      ("M_Track",            (0.05, 0.05, 0.05),     0.85, 0.1, None),   # + tread texture
     # site props and vegetation (ArtSource/props)
-    "bark":       ("M_Bark",             (0.060, 0.040, 0.028),  0.90, 0.0, None),
-    "pine":       ("M_Foliage_Pine",     (0.018, 0.048, 0.022),  0.85, 0.0, None),
-    "leaf":       ("M_Foliage_Broadleaf", (0.045, 0.090, 0.022), 0.80, 0.0, None),
-    "shrub":      ("M_Foliage_Shrub",    (0.060, 0.080, 0.028),  0.85, 0.0, None),
-    "rock":       ("M_Rock",             (0.185, 0.175, 0.160),  0.88, 0.0, None),
+    "bark":       ("M_Bark",             (0.075, 0.052, 0.036),  0.90, 0.0, None),
+    # vegetation: muted greens a little apart in hue, multiplied by each tree's vertex colours
+    "spruce":     ("M_Foliage_Spruce",   (0.034, 0.070, 0.038),  0.85, 0.0, None),
+    "pine":       ("M_Foliage_Pine",     (0.044, 0.078, 0.048),  0.85, 0.0, None),
+    "fir":        ("M_Foliage_Fir",      (0.058, 0.096, 0.040),  0.85, 0.0, None),
+    "shrub":      ("M_Foliage_Shrub",    (0.075, 0.090, 0.042),  0.88, 0.0, None),
+    "scrub":      ("M_Foliage_Scrub",    (0.100, 0.104, 0.048),  0.88, 0.0, None),
+    "rock":       ("M_Rock",             (0.300, 0.282, 0.252),  0.90, 0.0, None),
+    # one white material for a whole tree, its bark and foliage colours in vertex colours, so a
+    # tree is one draw call (the forest has some ten thousand of them)
+    "vegetation": ("M_Vegetation",       (1.0, 1.0, 1.0),        0.88, 0.0, None),
     "cabin":      ("M_Cabin_White",      (0.60, 0.61, 0.60),     0.60, 0.0, None),
     "box_blue":   ("M_Container_Blue",   (0.022, 0.070, 0.180),  0.60, 0.2, None),
     "box_red":    ("M_Container_Red",    (0.200, 0.035, 0.018),  0.65, 0.2, None),
@@ -79,6 +85,7 @@ PALETTE = {
     "sign":       ("M_Sign_Green",       (0.010, 0.120, 0.050),  0.50, 0.0, None),
     "plant":      ("M_Plant_Green",      (0.050, 0.140, 0.080),  0.60, 0.1, None),
     "ore":        ("M_Ore",              (0.300, 0.290, 0.270),  0.92, 0.0, None),
+    "ore_belt":   ("M_Ore_Belt",         (1.0, 1.0, 1.0),        0.92, 0.0, None),   # + scrolling ore texture
 }
 
 S = dict(coll=None, nodes={}, mats={}, out=None, name=None)
@@ -121,6 +128,34 @@ def _tread_image(pitch_px=32):
     return img
 
 
+def _ore_image(w=64, h=16, seed=7):
+    """Tileable strip of crushed rock on a belt, for a texture that scrolls along U: blotches of
+    light and dark grey, darker towards the belt edges (V)."""
+    import random
+    rnd = random.Random(seed)
+    img = bpy.data.images.new("T_OreBelt", w, h)
+    base = [[0.0] * w for _ in range(h)]
+    for _ in range(46):                                    # lumps, wrapped in U
+        cx, cy, r = rnd.uniform(0, w), rnd.uniform(2, h - 2), rnd.uniform(1.5, 3.5)
+        tone = rnd.uniform(-1.0, 1.0)
+        for j in range(h):
+            for i in range(w):
+                dx = min(abs(i - cx), w - abs(i - cx))
+                if dx * dx + (j - cy) ** 2 < r * r:
+                    base[j][i] = tone
+    px = []
+    for j in range(h):
+        edge = 1.0 - 0.35 * (abs(j - (h - 1) / 2) / ((h - 1) / 2)) ** 2
+        for i in range(w):
+            c = (0.30 + 0.07 * base[j][i]) * edge
+            px += [c, c * 0.98, c * 0.95, 1.0]
+    img.pixels = px
+    img.filepath_raw = os.path.join(S["out"], "T_OreBelt.png")
+    img.file_format = "PNG"
+    img.save(); img.pack()
+    return img
+
+
 def mat(key):
     """Shared material by palette key (created on first use)."""
     if key in S["mats"]:
@@ -136,6 +171,9 @@ def mat(key):
     if emit:
         b.inputs["Emission Color"].default_value = (*col, 1)
         b.inputs["Emission Strength"].default_value = emit
+    if key == "ore_belt":
+        tex = nt.nodes.new("ShaderNodeTexImage"); tex.image = _ore_image(); tex.name = "Ore"
+        nt.links.new(tex.outputs["Color"], b.inputs["Base Color"])
     if key == "track":
         tex = nt.nodes.new("ShaderNodeTexImage"); tex.image = _tread_image(); tex.name = "Tread"
         tex.interpolation = "Closest"
@@ -160,6 +198,9 @@ class Piece:
         self._detail = 0
         self.bevel = bevel
         self.seg = seg
+        self.vcol = None          # optional fn(vertex (Unity frame), face centre) -> (r, g, b)
+        self.one_material = None  # optional palette key: bake each face's colour into its vertex
+                                  # colours and draw the whole piece with this one material
 
     # ---- bookkeeping ------------------------------------------------------------
     def mi(self, key):
@@ -334,10 +375,48 @@ def node(name, parent, pos_unity, rot_quat=None, size=0.25):
     return o
 
 
+def _activate_colors(me):
+    """The glTF exporter writes the ACTIVE colour attribute as COLOR_0 (and any other as COLOR_1):
+    make the piece's vertex colours the active ones."""
+    if "Color" in me.color_attributes:
+        me.color_attributes.active_color_name = "Color"
+        me.color_attributes.render_color_index = me.color_attributes.find("Color")
+
+
+def _srgb(c):
+    c = max(0.0, min(1.0, c))
+    return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+
+
 def attach(name, piece, local_blender=False, smooth_angle=35):
     """Turn a Piece into <name>_LOD0 under node <name> (vertices in the node's local frame)."""
     n = NODES[name]
     bm = piece.bm
+    if piece.vcol is not None:
+        # vertex colours (corner colours), evaluated in the authoring frame before it is converted
+        cl = bm.loops.layers.color.new("Color")
+        tint = {}
+        if piece.one_material:
+            # the face's own palette colour goes into the vertex colour (linear -> the sRGB a byte
+            # colour attribute stores), and every face moves to the one material
+            for i, m in enumerate(piece.mats):
+                key = next(k for k, v in PALETTE.items() if v[0] == m.name)
+                tint[i] = PALETTE[key][1]
+        for f in bm.faces:
+            fc = f.calc_center_median()
+            base = tint.get(f.material_index, (1.0, 1.0, 1.0))
+            for lp in f.loops:
+                r, g, b = piece.vcol(lp.vert.co, fc)
+                lin = (base[0] * r, base[1] * g, base[2] * b)
+                # a byte colour attribute stores sRGB; the glTF exporter writes it back as linear
+                lp[cl] = (*(_srgb(c) for c in (lin if piece.one_material else (r, g, b))), 1.0)
+        if piece.one_material:
+            one = piece.mi(piece.one_material)
+            for f in bm.faces:
+                f.material_index = one
+            piece.mats = [piece.mats[one]]
+            for f in bm.faces:
+                f.material_index = 0
     if not local_blender:
         inv = n.matrix_world.inverted()
         for v in bm.verts:
@@ -346,6 +425,7 @@ def attach(name, piece, local_blender=False, smooth_angle=35):
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     me = bpy.data.meshes.new(name + "_LOD0_Mesh")
     bm.to_mesh(me); bm.free()
+    _activate_colors(me)
     for m in piece.mats:
         me.materials.append(m)
     for p in me.polygons:
@@ -630,6 +710,7 @@ def make_lod1(ratio=0.45, keep_full=()):
             dg = bpy.context.evaluated_depsgraph_get()
             nm = bpy.data.meshes.new_from_object(o1.evaluated_get(dg))
             o1.modifiers.clear(); o1.data = nm; nm.name = o1.name + "_Mesh"
+        _activate_colors(o1.data)
     for o in lod_objects("LOD0"):                       # strip the tag from what gets exported
         a = o.data.attributes.get("detail")
         if a is not None:
@@ -715,9 +796,11 @@ def export(name=None):
     for lod in ("LOD0", "LOD1"):
         _select_only([NODES["Root"]] + empties + lod_objects(lod))
         fn = os.path.join(out, f"{name}.glb" if lod == "LOD0" else f"{name}_LOD1.glb")
+        has_colors = any(len(o.data.color_attributes) for o in lod_objects(lod))
         bpy.ops.export_scene.gltf(filepath=fn, export_format="GLB", use_selection=True,
                                   export_yup=True, export_apply=True, export_animations=False,
-                                  export_cameras=False, export_lights=False)
+                                  export_cameras=False, export_lights=False,
+                                  export_vertex_color="ACTIVE" if has_colors else "MATERIAL")
         files[lod] = fn
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, f"{name}.blend"))
     return files

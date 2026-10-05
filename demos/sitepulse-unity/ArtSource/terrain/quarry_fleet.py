@@ -20,8 +20,9 @@ WHAT IT MAKES
     run without crossing itself.
   * a 6th hauler out of the loop: from its parking place to the refuel bay (a lay-by beside the
     yard's through lane), a stop while it is fuelled, and back to park.
-  * 6 loaders: one loads the haulers, PASSES buckets per truck (its cycle is exactly the
-    haulers' spacing, timed so the buckets tip while a truck is standing at the load point);
+  * 6 loaders: one loads the haulers from the loading bench, PASSES buckets per truck (its
+    cycle is exactly the haulers' spacing, timed so the buckets tip while a truck is standing
+    at the load point);
     one rehandles the pit stockpile; at the plant one feeds the crusher's hopper from the feed
     stockpile and one works the product stockpile; two are parked (one in the workshop).
   * 6 dozers: one pushing up the muck pile at the toe of the north face, one ripping the pit
@@ -40,7 +41,9 @@ OUTPUT (default ../../Assets/Sitepulse/Data/quarry_fleet.json)
              flag (hauler: 1 = carrying a load).
   The script also checks every pair of machines for footprint overlap over two full loops and
   prints the closest approach; it exits non-zero if any two machines touch, or if two haul
-  trucks come within HAULER_CLEARANCE metres of each other.
+  trucks come within HAULER_CLEARANCE metres of each other. A haul truck's footprint is two
+  boxes (its wide front deck, its narrower body and rear tyres); a loader with its boom raised
+  is checked to its front tyres, since its bucket is then over the body it is tipping into.
 """
 import argparse
 import gzip
@@ -58,6 +61,8 @@ from quarry_heightmap import catmull_rom, stations   # noqa: E402
 CHANNELS = ["x", "z", "heading", "travel", "p1", "p2", "steer", "flag"]
 # footprint half-sizes (m): half width, half length front, half length rear, from the models
 FOOT = {"Dozer": (1.75, 3.7, 3.4), "Loader": (1.55, 5.2, 3.6), "Hauler": (2.85, 5.7, 4.6)}
+# a haul truck is narrower at its body and rear tyres than at its front deck: two boxes
+FOOT_PARTS = {"Hauler": [(2.85, 5.7, -1.2), (2.25, 1.2, 4.6)]}
 WHEELBASE = {"Dozer": 2.5, "Loader": 3.3, "Hauler": 4.2}
 STEER_LIMIT = {"Dozer": 0.0, "Loader": 40.0, "Hauler": 35.0}
 
@@ -319,8 +324,9 @@ def yard_hauler_runs():
 # ==================================================================================
 # loaders and dozers
 # ==================================================================================
-def loader_v(dig, rev, dump, dig_stop=1.6, dump_stop=3.6):
-    """Load-and-carry V: into the pile, back out, turn to the truck, tip, back out, return."""
+def loader_v(dig, rev, dump, dig_stop=1.6, dump_stop=3.6, via=()):
+    """Load-and-carry V: into the pile, back out, turn to the truck, tip, back out, return.
+    `via` bends the run to the truck so that the loader arrives square to the truck's side."""
     def at_dig(ts):
         return (BOOM_GROUND, lerp(BUCKET_FLAT, BUCKET_RACK, ts / 1.3))
     def at_dump(ts):
@@ -330,9 +336,10 @@ def loader_v(dig, rev, dump, dig_stop=1.6, dump_stop=3.6):
     return [
         Run([dig, rev], reverse=True, pose=lambda u: (lerp(BOOM_GROUND, BOOM_CARRY, u), BUCKET_RACK),
             stop=0.8, tag="back-out"),
-        Run([rev, dump], pose=lambda u: (lerp(BOOM_CARRY, BOOM_HIGH, ease(u)), BUCKET_RACK),
+        # the boom is fully up before the bucket reaches the truck's side
+        Run([rev, *via, dump], pose=lambda u: (lerp(BOOM_CARRY, BOOM_HIGH, ease(u / 0.6)), BUCKET_RACK),
             stop=dump_stop, stop_pose=at_dump, tag="to-truck"),
-        Run([dump, rev], reverse=True, pose=lambda u: (lerp(BOOM_HIGH, BOOM_CARRY, ease(u)), BUCKET_RACK),
+        Run([dump, *reversed(via), rev], reverse=True, pose=lambda u: (lerp(BOOM_HIGH, BOOM_CARRY, ease((u - 0.4) / 0.6)), BUCKET_RACK),
             stop=0.8, tag="back-off"),
         Run([rev, dig], pose=lambda u: (lerp(BOOM_CARRY, BOOM_GROUND, u), lerp(BUCKET_RACK, BUCKET_FLAT, u)),
             stop=dig_stop, stop_pose=at_dig, tag="to-pile"),
@@ -395,7 +402,11 @@ def fleet(ground):
     machines.append(dict(id=f"SP-HL-{HAULERS_ON_LOOP + 1:04d}", kind="Hauler", track=yh, offset=0.0))
 
     # the pit loader: PASSES buckets per truck, then waits at the pile for the next one
-    one = loader_v((-2.0, 46.0), (-4.5, 43.0), (1.2, 42.1))
+    # a V on the loading bench: it backs out of the pile and comes in to the truck's side at
+    # about 20 degrees off square, its front tyres at the bench's edge, so that its raised
+    # bucket tips over the body
+    pit_v = dict(dig=(-1.7, 46.3), rev=(-1.37, 44.56), dump=(0.0, 40.8), via=())
+    one = loader_v(pit_v["dig"], pit_v["rev"], pit_v["dump"], via=pit_v["via"])
     probe = plan("Loader", one, ground)
     cycle = probe["t"][-1]
     if PASSES * cycle > gap - 0.5 or (PASSES - 1) * cycle + 6.0 > LOAD_STOP:
@@ -403,7 +414,7 @@ def fleet(ground):
                          f"and a {gap:.1f} s truck spacing")
     lv = []
     for _ in range(PASSES):
-        lv += loader_v((-2.0, 46.0), (-4.5, 43.0), (1.2, 42.1))
+        lv += loader_v(pit_v["dig"], pit_v["rev"], pit_v["dump"], via=pit_v["via"])
     lv[-1].stop += gap - PASSES * cycle               # wait at the pile for the next truck
     li = add_track("Loader", lv, period=gap)
     tr = tracks[li]["raw"]
@@ -419,10 +430,11 @@ def fleet(ground):
     li2 = add_track("Loader", loader_rehandle((38.0, 40.5), (42.0, 42.5)))
     machines.append(dict(id="SP-LD-0002", kind="Loader", track=li2, offset=3.0))
     # the plant: one loader feeds the crusher's hopper from the feed stockpile...
-    li3 = add_track("Loader", loader_v((-28.5, -84.5), (-33.0, -91.0), (-26.5, -92.0)))
+    feed = ground.f["spots"]["plant-feed"]
+    li3 = add_track("Loader", loader_v((-51.5, -90.0), (-53.0, -99.0), (feed["x"], feed["z"])))
     machines.append(dict(id="SP-LD-0003", kind="Loader", track=li3, offset=0.0))
     # ...and one works the product stockpile under the stacker
-    li4 = add_track("Loader", loader_rehandle((35.0, -100.0), (31.0, -97.5)))
+    li4 = add_track("Loader", loader_rehandle((6.9, -114.5), (11.1, -110.3)))
     machines.append(dict(id="SP-LD-0004", kind="Loader", track=li4, offset=5.0))
     # two loaders are not needed today: one is in the workshop, one is parked
     li5 = add_track("Loader", parked("Loader", -70.0, -35.5, 180.0, PARKED_LOADER))
@@ -457,12 +469,17 @@ def _run_end(tr, runs, idx):
 # ==================================================================================
 # overlap check
 # ==================================================================================
-def corners(kind, x, z, hd):
-    w, f, r = FOOT[kind]
+def corners(kind, x, z, hd, p1=0.0):
+    """The machine's footprint as one or more boxes (each a list of four corners)."""
     s, c = math.sin(math.radians(hd)), math.cos(math.radians(hd))
     fwd, right = np.array([s, c]), np.array([c, -s])
     p = np.array([x, z])
-    return [p + fwd * f + right * w, p + fwd * f - right * w, p - fwd * r - right * w, p - fwd * r + right * w]
+    boxes = []
+    for w, f, r in FOOT_PARTS.get(kind, [FOOT[kind]]):
+        if kind == "Loader" and p1 < -40.0:
+            f = LOADER_RAISED_FRONT      # boom up: the bucket is over whatever it is tipping into
+        boxes.append([p + fwd * f + right * w, p + fwd * f - right * w, p - fwd * r - right * w, p - fwd * r + right * w])
+    return boxes
 
 
 def sat_gap(A, B):
@@ -479,6 +496,7 @@ def sat_gap(A, B):
 
 
 HAULER_CLEARANCE = 3.0          # metres two haul trucks must keep apart, passing or queueing
+LOADER_RAISED_FRONT = 2.6       # a loader's footprint front (m) with its boom raised: its front tyres
 
 
 def check(tracks, machines, frames, dt, horizon):
@@ -491,14 +509,14 @@ def check(tracks, machines, frames, dt, horizon):
     for m in machines:
         tr, fr = tracks[m["track"]], frames[m["track"]]
         idx = (((times - m["offset"]) % tr["period"]) / dt).astype(int) % len(fr["x"])
-        pos.append([corners(m["kind"], fr["x"][i], fr["z"][i], fr["heading"][i]) for i in idx])
+        pos.append([corners(m["kind"], fr["x"][i], fr["z"][i], fr["heading"][i], fr["p1"][i]) for i in idx])
     for a in range(len(machines)):
         for b in range(a + 1, len(machines)):
             for k in range(len(times)):
                 ca, cb = pos[a][k], pos[b][k]
-                if np.linalg.norm(ca[0] - cb[0]) > 30:
+                if np.linalg.norm(ca[0][0] - cb[0][0]) > 30:
                     continue
-                g = sat_gap(ca, cb)
+                g = min(sat_gap(qa, qb) for qa in ca for qb in cb)
                 if g < worst[0]:
                     worst = (g, (machines[a]["id"], machines[b]["id"], float(times[k])))
                 if machines[a]["kind"] == machines[b]["kind"] == "Hauler" and g < worst_hl[0]:

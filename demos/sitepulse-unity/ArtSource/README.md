@@ -17,10 +17,9 @@ with the code change, so the models in `Assets/Sitepulse/Art/Models/` always mat
 | `machines/loader.py` | Articulated wheel loader |
 | `machines/hauler.py` | Rigid-frame haul truck |
 | `machines/kit_selftest.py` | Exercises the kit builders the dozer does not use |
-| `props/build_props.py` | Site props and vegetation (site office, workshop, containers, fuel tank, light tower, cones, barriers, sign, trees, shrubs, boulders) and the processing plant (primary crusher, conveyor, screen, radial stacker) |
-| `terrain/quarry_heightmap.py` | The quarry terrain: heightmap, terrain-layer masks, roads, zones, vegetation and prop placement |
+| `props/build_props.py` | Site props and vegetation (site office, workshop, containers, fuel tank, light tower, cones, barriers, sign, conifers, shrubs, boulders) and the processing plant (jaw crusher in a pocket, conveyor, screen, radial stacker, side conveyors) |
+| `terrain/quarry_heightmap.py` | The quarry terrain: heightmap, site colour map, roads, zones, vegetation and prop placement |
 | `terrain/quarry_fleet.py` | The 18-machine preview choreography played on the terrain |
-| `textures/prepare_textures.py` | Fetches the CC0 terrain materials and prepares them for Unity terrain layers |
 
 Each machine module documents its rig in its header: every pivot node, its axis, its range and
 sign, and the rules that couple parts (for example the dozer blade's counter-rotation or the
@@ -96,10 +95,12 @@ python3 terrain/quarry_fleet.py [--preview out/terrain/fleet.png]
 ```
 
 `quarry_heightmap.py` writes straight into `../Assets/Sitepulse/Art/Terrain/`: the packed 16-bit
-heightmap, one mask per terrain layer and `quarry_features.json` (terrain size and elevation
-mapping, zones, roads with per-segment grade, named spots, vegetation and prop placements).
-The processing plant's position (`PLANT`) is set there too: the plant prop is placed from it, and
-so are its pad, its feed stockpile and the product stockpile under the stacker's head.
+heightmap, the site colour map `quarry_color.png` (the terrain's colours as broad fields, one per
+material, from its `PALETTE`; its alpha marks loose broken rock) and `quarry_features.json`
+(terrain size and elevation mapping, zones, roads with per-segment grade, named spots,
+vegetation and prop placements). The processing plant's position and scale (`PLANT`,
+`PLANT_SCALE`) are set there too: the plant prop is placed from them, and so are its pad, the
+crusher's pocket, the feed stockpile and the three product stockpiles under the conveyor heads.
 Its header documents the layout and every parameter; `--raw` also writes the plain RAW
 heightmap that Unity's terrain **Import Raw** reads. `quarry_fleet.py` then writes
 `../Assets/Sitepulse/Data/quarry_fleet.json` and fails if any two machines' footprints touch at
@@ -109,11 +110,3 @@ Unity builds the terrain from these files when the scene opens (`QuarryTerrain`)
 TerrainData asset to keep in step. After changing props or placements, run
 **Sitepulse > Quarry > Build Scene** to regenerate `Scenes/Quarry.unity`.
 
-## Terrain textures
-
-```
-python3 textures/prepare_textures.py
-```
-
-Downloads the four CC0 materials listed in `../THIRD_PARTY.md` and writes their albedo, normal
-and terrain mask maps into `../Assets/Sitepulse/Art/Textures/Terrain/`.

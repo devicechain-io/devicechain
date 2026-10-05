@@ -11,13 +11,14 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+using UnityEditor.Rendering.Universal.ShaderGUI;
 
 namespace DeviceChain.Sitepulse.EditorTools
 {
     /// <summary>
     /// Builds the Quarry scene and the assets it uses from the generated art: prop prefabs
-    /// (pairing each prop's two glTF levels in one LOD group), terrain layers and materials, the
-    /// scene itself with props placed from the terrain's feature file, and the URP look.
+    /// (pairing each prop's two glTF levels in one LOD group), the terrain material, the scene
+    /// itself with props placed from the terrain's feature file, and the URP look.
     /// Everything here can be re-run; it overwrites what it made before.
     /// </summary>
     public static class QuarryBuilder
@@ -27,22 +28,22 @@ namespace DeviceChain.Sitepulse.EditorTools
         const string PropModels = Models + "Props/";
         const string Prefabs = Root + "Art/Prefabs/";
         const string Terrain = Root + "Art/Terrain/";
-        const string TerrainTextures = Root + "Art/Textures/Terrain/";
         const string Materials = Root + "Art/Materials/";
         const string SettingsDir = Root + "Settings/";
         public const string ScenePath = Root + "Scenes/Quarry.unity";
 
-        static readonly string[] Layers = { "Rock", "Gravel", "Dirt", "Grass" };
-        // world metres per texture repeat for each layer
-        static readonly float[] LayerTile = { 10f, 6f, 7f, 11f };
-        static readonly string[] Vegetation = { "pine", "broadleaf", "shrub", "rock_a", "rock_b" };
+        // terrain tree prototypes (ArtSource/props/build_props.py), named as the feature file names them
+        static readonly string[] Vegetation = { "conifer_a", "conifer_b", "conifer_c", "shrub_a", "shrub_b", "rock_a", "rock_b", "rock_c" };
 
         [MenuItem("Sitepulse/Quarry/Rebuild Everything")]
         public static void BuildAll()
         {
+            // the benchmark reads GPU and CPU frame times from the frame timing stats
+            PlayerSettings.enableFrameTimingStats = true;
             ConfigureImports();
             BuildPropPrefabs();
             BuildMaterials();
+            BuildEffects();
             IncludeRuntimeTerrainShaders();
             BuildScene();
         }
@@ -81,42 +82,17 @@ namespace DeviceChain.Sitepulse.EditorTools
         [MenuItem("Sitepulse/Quarry/Configure Texture Imports")]
         public static void ConfigureImports()
         {
-            foreach (var layer in Layers)
-            {
-                Configure(TerrainTextures + $"T_{layer}_Albedo.jpg", TextureImporterType.Default, true, 1024);
-                Configure(TerrainTextures + $"T_{layer}_Normal.jpg", TextureImporterType.NormalMap, false, 1024);
-                Configure(TerrainTextures + $"T_{layer}_Mask.png", TextureImporterType.Default, false, 512);
-            }
-            foreach (var layer in Layers)
-            {
-                // the masks are read on the CPU to fill the alphamaps: readable, linear, exact
-                var path = Terrain + $"quarry_splat_{layer.ToLowerInvariant()}.png";
-                var ti = (TextureImporter)AssetImporter.GetAtPath(path);
-                if (ti == null) throw new FileNotFoundException(path);
-                ti.textureType = TextureImporterType.SingleChannel;
-                ti.textureShape = TextureImporterShape.Texture2D;
-                ti.isReadable = true;
-                ti.sRGBTexture = false;
-                ti.mipmapEnabled = false;
-                ti.npotScale = TextureImporterNPOTScale.None;
-                ti.textureCompression = TextureImporterCompression.Uncompressed;
-                ti.maxTextureSize = 2048;
-                var s = ti.GetDefaultPlatformTextureSettings();
-                s.format = TextureImporterFormat.R8;
-                ti.SetPlatformTextureSettings(s);
-                ti.SaveAndReimport();
-            }
-        }
-
-        static void Configure(string path, TextureImporterType type, bool srgb, int max)
-        {
+            // the site colour map covers the whole terrain at half a metre per texel
+            var path = Terrain + "quarry_color.png";
             var ti = (TextureImporter)AssetImporter.GetAtPath(path);
             if (ti == null) throw new FileNotFoundException(path);
-            ti.textureType = type;
-            ti.sRGBTexture = srgb;
-            ti.maxTextureSize = max;
+            ti.textureType = TextureImporterType.Default;
+            ti.sRGBTexture = true;
             ti.mipmapEnabled = true;
-            ti.anisoLevel = 4;
+            ti.wrapMode = TextureWrapMode.Clamp;
+            ti.filterMode = FilterMode.Trilinear;
+            ti.anisoLevel = 8;
+            ti.maxTextureSize = 2048;
             ti.textureCompression = TextureImporterCompression.CompressedHQ;
             ti.SaveAndReimport();
         }
@@ -135,75 +111,77 @@ namespace DeviceChain.Sitepulse.EditorTools
                 if (lod0 == null || lod1 == null) throw new FileNotFoundException("prop model " + name);
                 bool plant = Vegetation.Contains(name);
                 // Trees and boulders are many and small on screen: drop to LOD1 sooner and cull later.
-                var go = FleetRig.BuildMergedLod(lod0, lod1, name, out var error, plant ? 0.12f : 0.08f, plant ? 0.008f : 0.01f);
+                var go = FleetRig.BuildMergedLod(lod0, lod1, name, out var error, plant ? 0.07f : 0.08f, plant ? 0.008f : 0.01f);
                 if (go == null) throw new InvalidOperationException(name + ": " + error);
                 if (plant)
-                    foreach (var r in go.GetComponentsInChildren<Renderer>()) r.shadowCastingMode = ShadowCastingMode.On;
+                {
+                    // vegetation and rocks are coloured by their vertex colours, which the glTF
+                    // material does not read: draw them with the vertex-colour shader
+                    var vc = name.StartsWith("rock", StringComparison.Ordinal) ? RockMaterial() : VegetationMaterial();
+                    foreach (var r in go.GetComponentsInChildren<Renderer>())
+                        r.sharedMaterials = Enumerable.Repeat(vc, r.sharedMaterials.Length).ToArray();
+                    // the forest is some ten thousand instances: only the near, full-detail level
+                    // casts a shadow; past it the shadow would be lost in the cascades anyway
+                    var lods = go.GetComponent<LODGroup>().GetLODs();
+                    foreach (var r in lods[0].renderers) r.shadowCastingMode = ShadowCastingMode.On;
+                    foreach (var r in lods[1].renderers) r.shadowCastingMode = ShadowCastingMode.Off;
+                }
                 PrefabUtility.SaveAsPrefabAsset(go, Prefabs + name + ".prefab");
                 UnityEngine.Object.DestroyImmediate(go);
             }
             AssetDatabase.SaveAssets();
         }
 
+        static Material VegetationMaterial()
+        {
+            var m = LoadOrCreateMaterial(Materials + "M_Vegetation.mat", "Sitepulse/Vertex Color Lit");
+            m.SetColor("_BaseColor", Color.white);
+            m.SetFloat("_Smoothness", 0.08f);
+            m.enableInstancing = true;
+            EditorUtility.SetDirty(m);
+            return m;
+        }
+
+        static Material RockMaterial()
+        {
+            // the same rock as ArtSource/sitepulse_kit.py's palette (linear), shaded by vertex colour
+            var m = LoadOrCreateMaterial(Materials + "M_Rock.mat", "Sitepulse/Vertex Color Lit");
+            m.SetColor("_BaseColor", new Color(0.300f, 0.282f, 0.252f).gamma);
+            m.SetFloat("_Smoothness", 0.06f);
+            m.enableInstancing = true;
+            EditorUtility.SetDirty(m);
+            return m;
+        }
+
         // ------------------------------------------------------------------ materials
-        [MenuItem("Sitepulse/Quarry/Build Terrain Layers and Materials")]
+        const string TerrainMaterialPath = Materials + "Terrain/M_QuarryTerrain.mat";
+
+        [MenuItem("Sitepulse/Quarry/Build Terrain Material")]
         public static void BuildMaterials()
         {
             Directory.CreateDirectory(Materials + "Terrain");
-            for (int k = 0; k < Layers.Length; k++)
-            {
-                var layer = Layers[k];
-                var path = Materials + $"Terrain/TL_{layer}.terrainlayer";
-                var tl = AssetDatabase.LoadAssetAtPath<TerrainLayer>(path);
-                if (tl == null)
-                {
-                    tl = new TerrainLayer();
-                    AssetDatabase.CreateAsset(tl, path);
-                }
-                tl.diffuseTexture = Tex($"T_{layer}_Albedo.jpg");
-                tl.normalMapTexture = Tex($"T_{layer}_Normal.jpg");
-                tl.maskMapTexture = Tex($"T_{layer}_Mask.png");
-                tl.tileSize = new Vector2(LayerTile[k], LayerTile[k]);
-                tl.normalScale = 1f;
-                tl.metallic = 0f;
-                tl.smoothness = 0f;
-                // mask map: G = occlusion, B = height for height-based blending, A = smoothness
-                tl.maskMapRemapMin = new Vector4(0f, 0f, 0f, 0f);
-                tl.maskMapRemapMax = new Vector4(0f, 1f, 1f, 0.45f);
-                // dry grass rather than straw; worked earth a little less saturated than the photo
-                tl.diffuseRemapMax = layer == "Grass" ? new Vector4(0.9f, 1f, 0.82f, 1f)
-                    : layer == "Dirt" ? new Vector4(0.95f, 0.92f, 0.87f, 1f) : Vector4.one;
-                EditorUtility.SetDirty(tl);
-            }
-
-            var terrainMat = LoadOrCreateMaterial(Materials + "Terrain/M_QuarryTerrain.mat", "Universal Render Pipeline/Terrain/Lit");
-            terrainMat.SetFloat("_EnableHeightBlend", 1f);
-            terrainMat.SetFloat("_HeightTransition", 0.3f);
-            terrainMat.EnableKeyword("_TERRAIN_BLEND_HEIGHT");
-            terrainMat.SetFloat("_EnableInstancedPerPixelNormal", 1f);
-            terrainMat.EnableKeyword("_TERRAIN_INSTANCED_PERPIXEL_NORMAL");
-            terrainMat.enableInstancing = true;
-            EditorUtility.SetDirty(terrainMat);
-
-            var cliff = LoadOrCreateMaterial(Materials + "Terrain/M_CliffRock.mat", "Universal Render Pipeline/Lit");
-            cliff.SetTexture("_BaseMap", Tex("T_Rock_Albedo.jpg"));
-            cliff.SetTexture("_BumpMap", Tex("T_Rock_Normal.jpg"));
-            cliff.EnableKeyword("_NORMALMAP");
-            cliff.SetFloat("_BumpScale", 1.4f);
-            cliff.SetTexture("_OcclusionMap", null);
-            cliff.SetFloat("_Smoothness", 0.12f);
-            cliff.SetFloat("_Metallic", 0f);
-            cliff.SetColor("_BaseColor", new Color(1f, 0.98f, 0.95f));
-            cliff.enableInstancing = true;
-            EditorUtility.SetDirty(cliff);
+            var m = LoadOrCreateMaterial(TerrainMaterialPath, "Sitepulse/Stylized Terrain");
+            var map = AssetDatabase.LoadAssetAtPath<Texture2D>(Terrain + "quarry_color.png")
+                ?? throw new FileNotFoundException(Terrain + "quarry_color.png");
+            m.SetTexture("_ColorMap", map);
+            // the rock: strata of warm light, warm dark and cool grey bands about a bench face's
+            // tenth high, broken into flat facets a few metres across; loose rock in smaller ones
+            m.SetColor("_RockLight", new Color(0.70f, 0.66f, 0.60f));
+            m.SetColor("_RockDark", new Color(0.50f, 0.47f, 0.43f));
+            m.SetColor("_RockCool", new Color(0.56f, 0.57f, 0.58f));
+            m.SetVector("_RockSlope", new Vector4(44f, 54f, 0f, 0f));
+            m.SetFloat("_StrataHeight", 1.4f);
+            m.SetFloat("_StrataWarp", 1.1f);
+            m.SetFloat("_FacetSize", 3.2f);
+            m.SetFloat("_FacetTilt", 0.3f);
+            m.SetFloat("_FacetShade", 0.06f);
+            m.SetFloat("_RubbleSize", 0.9f);
+            m.SetFloat("_RubbleTilt", 0.35f);
+            m.SetFloat("_GroundVariation", 0.05f);
+            m.SetFloat("_Smoothness", 0.04f);
+            m.enableInstancing = true;
+            EditorUtility.SetDirty(m);
             AssetDatabase.SaveAssets();
-        }
-
-        static Texture2D Tex(string file)
-        {
-            var t = AssetDatabase.LoadAssetAtPath<Texture2D>(TerrainTextures + file);
-            if (t == null) throw new FileNotFoundException(TerrainTextures + file);
-            return t;
         }
 
         static Material LoadOrCreateMaterial(string path, string shader)
@@ -220,6 +198,110 @@ namespace DeviceChain.Sitepulse.EditorTools
                 m.shader = sh;
             }
             return m;
+        }
+
+        // ------------------------------------------------------------------ effects
+        const string FxTextures = Root + "Art/Textures/Fx/";
+        const string FxMaterials = Materials + "Fx/";
+        const string EffectsPath = SettingsDir + "QuarryEffects.asset";
+
+        /// <summary>
+        /// The effects' textures (drawn here, in code), their particle materials and the
+        /// <see cref="QuarryEffects"/> asset that holds them with the rock mesh falling material uses.
+        /// </summary>
+        [MenuItem("Sitepulse/Quarry/Build Effects")]
+        public static QuarryEffects BuildEffects()
+        {
+            Directory.CreateDirectory(FxTextures);
+            Directory.CreateDirectory(FxMaterials);
+            var puff = WriteTexture(FxTextures + "T_FxPuff.png", 64, Puff);
+            var glow = WriteTexture(FxTextures + "T_FxGlow.png", 64, Glow);
+
+            var dust = ParticleMaterial(FxMaterials + "M_FxDust.mat", "Universal Render Pipeline/Particles/Simple Lit", puff, Color.white, 1f, 0f);
+            var exhaust = ParticleMaterial(FxMaterials + "M_FxExhaust.mat", "Universal Render Pipeline/Particles/Simple Lit", puff, Color.white, 1f, 0f);
+            var rock = ParticleMaterial(FxMaterials + "M_FxRock.mat", "Universal Render Pipeline/Particles/Simple Lit", null, new Color(0.47f, 0.44f, 0.40f), 0f, 0f);
+            var flare = ParticleMaterial(FxMaterials + "M_FxBeacon.mat", "Universal Render Pipeline/Particles/Unlit", glow, new Color(1f, 0.55f, 0.12f), 1f, 2f);
+
+            var fx = AssetDatabase.LoadAssetAtPath<QuarryEffects>(EffectsPath);
+            if (fx == null)
+            {
+                fx = ScriptableObject.CreateInstance<QuarryEffects>();
+                AssetDatabase.CreateAsset(fx, EffectsPath);
+            }
+            fx.dust = dust;
+            fx.exhaust = exhaust;
+            fx.rock = rock;
+            fx.flare = flare;
+            var chunk = AssetDatabase.LoadAllAssetsAtPath(PropModels + "rock_c_LOD1.glb").OfType<Mesh>().FirstOrDefault();
+            fx.chunk = chunk != null ? chunk : throw new FileNotFoundException(PropModels + "rock_c_LOD1.glb (mesh)");
+            EditorUtility.SetDirty(fx);
+            AssetDatabase.SaveAssets();
+            return fx;
+        }
+
+        /// <summary>A URP particle material: surface 0 opaque, 1 transparent; blend 0 alpha, 2 additive.</summary>
+        static Material ParticleMaterial(string path, string shader, Texture2D tex, Color color, float surface, float blend)
+        {
+            var m = LoadOrCreateMaterial(path, shader);
+            m.SetTexture("_BaseMap", tex);
+            m.SetColor("_BaseColor", color);
+            m.SetFloat("_Surface", surface);
+            m.SetFloat("_Blend", blend);
+            m.SetFloat("_ReceiveShadows", 0f);
+            m.SetFloat("_SoftParticlesEnabled", surface > 0f && blend == 0f ? 1f : 0f);
+            m.SetVector("_SoftParticleFadeParams", new Vector4(0f, 1f / 1.5f, 0f, 0f));
+            m.SetFloat("_SoftParticlesNearFadeDistance", 0f);
+            m.SetFloat("_SoftParticlesFarFadeDistance", 1.5f);
+            m.SetFloat("_Smoothness", 0f);
+            BaseShaderGUI.SetMaterialKeywords(m, null, ParticleGUI.SetMaterialKeywords);
+            m.enableInstancing = true;
+            EditorUtility.SetDirty(m);
+            return m;
+        }
+
+        static Texture2D WriteTexture(string path, int n, Func<float, float, float> alpha)
+        {
+            var tex = new Texture2D(n, n, TextureFormat.RGBA32, false);
+            var px = new Color32[n * n];
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float a = Mathf.Clamp01(alpha((x + 0.5f) / n, (y + 0.5f) / n));
+                    px[y * n + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            tex.SetPixels32(px);
+            File.WriteAllBytes(path, tex.EncodeToPNG());
+            UnityEngine.Object.DestroyImmediate(tex);
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
+            var ti = (TextureImporter)AssetImporter.GetAtPath(path);
+            ti.textureType = TextureImporterType.Default;
+            ti.sRGBTexture = true;
+            ti.alphaIsTransparency = true;
+            ti.wrapMode = TextureWrapMode.Clamp;
+            ti.mipmapEnabled = true;
+            ti.textureCompression = TextureImporterCompression.Uncompressed;
+            ti.SaveAndReimport();
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+        }
+
+        // a puff: a few overlapping soft lumps, so it is not a perfect disc
+        static float Puff(float u, float v)
+        {
+            float a = 0f;
+            foreach (var (x, y, r) in new[] { (0.5f, 0.5f, 0.36f), (0.36f, 0.56f, 0.22f), (0.64f, 0.58f, 0.2f), (0.5f, 0.35f, 0.22f), (0.58f, 0.68f, 0.17f) })
+            {
+                float d = Mathf.Sqrt((u - x) * (u - x) + (v - y) * (v - y)) / r;
+                a = Mathf.Max(a, Mathf.SmoothStep(1f, 0f, d) * 0.9f);
+            }
+            float edge = Mathf.Sqrt((u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f));
+            return a * Mathf.SmoothStep(0.5f, 0.38f, edge);
+        }
+
+        // a glow: a bright core with a soft halo
+        static float Glow(float u, float v)
+        {
+            float d = Mathf.Sqrt((u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f)) * 2f;
+            return Mathf.Pow(Mathf.Clamp01(1f - d), 3f) + 0.6f * Mathf.Pow(Mathf.Clamp01(1f - d * 3f), 2f);
         }
 
         // ------------------------------------------------------------------ scene
@@ -245,9 +327,7 @@ namespace DeviceChain.Sitepulse.EditorTools
             var sun = sunGo.AddComponent<Light>();
             sun.type = LightType.Directional;
             sun.shadows = LightShadows.Soft;
-            // late-morning sun from the south-south-east: it lights the pit's north wall, the faces
-            // the scene is about, and rakes across the benches instead of flattening them
-            sunGo.transform.rotation = Quaternion.Euler(36f, 335f, 0f);
+            sunGo.transform.rotation = SunRotation;
             RenderSettings.sun = sun;
 
             var camGo = new GameObject("Main Camera") { tag = "MainCamera" };
@@ -268,10 +348,7 @@ namespace DeviceChain.Sitepulse.EditorTools
             var qt = terrainGo.AddComponent<QuarryTerrain>();
             qt.heightmap = AssetDatabase.LoadAssetAtPath<TextAsset>(Terrain + "quarry_height.bytes");
             qt.features = AssetDatabase.LoadAssetAtPath<TextAsset>(Terrain + "quarry_features.json");
-            qt.masks = Layers.Select(l => AssetDatabase.LoadAssetAtPath<Texture2D>(Terrain + $"quarry_splat_{l.ToLowerInvariant()}.png")).ToArray();
-            qt.layers = Layers.Select(l => AssetDatabase.LoadAssetAtPath<TerrainLayer>(Materials + $"Terrain/TL_{l}.terrainlayer")).ToArray();
-            qt.terrainMaterial = AssetDatabase.LoadAssetAtPath<Material>(Materials + "Terrain/M_QuarryTerrain.mat");
-            qt.cliffMaterial = AssetDatabase.LoadAssetAtPath<Material>(Materials + "Terrain/M_CliffRock.mat");
+            qt.terrainMaterial = AssetDatabase.LoadAssetAtPath<Material>(TerrainMaterialPath);
             qt.treePrefabs = Vegetation.Select(v => AssetDatabase.LoadAssetAtPath<GameObject>(Prefabs + v + ".prefab")).ToArray();
             terrainGo.isStatic = true;
             terrainGo.SetActive(true);                      // builds the terrain
@@ -300,9 +377,23 @@ namespace DeviceChain.Sitepulse.EditorTools
             fleet.loaderLod1 = Model("loader_LOD1");
             fleet.hauler = Model("hauler");
             fleet.haulerLod1 = Model("hauler_LOD1");
+            fleet.effects = AssetDatabase.LoadAssetAtPath<QuarryEffects>(EffectsPath);
             fleet.time = 30f;
             fleetGo.SetActive(true);
             fleet.Seek(fleet.time);
+
+            // the plant's moving belts, falling streams and dust
+            var plantGo = props.transform.Cast<Transform>().FirstOrDefault(t => t.name.StartsWith("crusher_plant", StringComparison.Ordinal));
+            if (plantGo != null)
+            {
+                var pfxGo = new GameObject("Plant Effects");
+                pfxGo.SetActive(false);
+                var pfx = pfxGo.AddComponent<PlantEffects>();
+                pfx.plant = plantGo;
+                pfx.terrain = qt;
+                pfx.effects = fleet.effects;
+                pfxGo.SetActive(true);
+            }
 
             new GameObject("Benchmark").AddComponent<FrameTimeBenchmark>();
 
@@ -343,42 +434,47 @@ namespace DeviceChain.Sitepulse.EditorTools
         /// </summary>
         public static void ApplyLook(bool on)
         {
-            var rp = (UniversalRenderPipelineAsset)GraphicsSettings.defaultRenderPipeline;
-            var rpQuality = QualitySettings.renderPipeline as UniversalRenderPipelineAsset;
-            foreach (var a in new[] { rp, rpQuality }.Where(a => a != null).Distinct())
-            {
-                // far enough that the wide shots keep every machine's shadow under it
-                a.shadowDistance = on ? 320f : 50f;
-                a.shadowCascadeCount = 4;
-                a.cascade4Split = on ? new Vector3(0.035f, 0.1f, 0.32f) : new Vector3(0.067f, 0.2f, 0.467f);
-                a.msaaSampleCount = on ? 4 : 1;
-                EditorUtility.SetDirty(a);
-                SetSsao(a, on);
-            }
+            var pc = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(PcPipeline)
+                ?? throw new FileNotFoundException(PcPipeline);
+            // far enough that the wide shots keep every machine's shadow under it
+            pc.shadowDistance = on ? PcShadowDistance : 50f;
+            pc.shadowCascadeCount = on ? 3 : 4;
+            pc.cascade3Split = new Vector2(0.06f, 0.22f);
+            pc.cascade4Split = new Vector3(0.067f, 0.2f, 0.467f);
+            pc.msaaSampleCount = on ? PcMsaa : 1;
+            // nothing samples the opaque colour; the depth copy is for soft particles and the AO
+            pc.supportsCameraOpaqueTexture = !on;
+            pc.supportsCameraDepthTexture = true;
+            SetSoftShadowQuality(pc, on ? 2 : 3);
+            EditorUtility.SetDirty(pc);
+            SetSsao(pc, on);
+            if (on) ConfigureLaptop(pc);
 
             var sun = RenderSettings.sun != null ? RenderSettings.sun : UnityEngine.Object.FindAnyObjectByType<Light>();
             if (sun != null)
             {
-                sun.color = on ? new Color(1f, 0.9f, 0.78f) : new Color(1f, 0.957f, 0.839f);
-                sun.intensity = on ? 2.4f : 1f;
-                sun.shadowStrength = on ? 0.92f : 1f;
+                sun.color = on ? new Color(1f, 0.86f, 0.70f) : new Color(1f, 0.957f, 0.839f);
+                sun.intensity = on ? 1.85f : 1f;
+                sun.shadowStrength = on ? 0.88f : 1f;
+                if (on) sun.transform.rotation = SunRotation;
             }
 
+            // warm key, cool fill: a blue sky over a neutral horizon and a dark earthy ground
             RenderSettings.ambientMode = on ? AmbientMode.Trilight : AmbientMode.Skybox;
-            RenderSettings.ambientSkyColor = new Color(0.50f, 0.60f, 0.74f);
-            RenderSettings.ambientEquatorColor = new Color(0.52f, 0.48f, 0.42f);
-            RenderSettings.ambientGroundColor = new Color(0.20f, 0.17f, 0.14f);
+            RenderSettings.ambientSkyColor = new Color(0.40f, 0.50f, 0.66f);
+            RenderSettings.ambientEquatorColor = new Color(0.46f, 0.46f, 0.45f);
+            RenderSettings.ambientGroundColor = new Color(0.22f, 0.20f, 0.17f);
             RenderSettings.ambientIntensity = 1f;
-            // aerial perspective: a light haze that greys the far hills, matched by the sky's
-            // horizon and ground colour so the terrain's edge melts into it
+            // aerial perspective: haze that only builds up towards the horizon, matched by the
+            // sky's horizon and ground colour so the terrain's edge melts into it
             RenderSettings.fog = on;
             RenderSettings.fogMode = FogMode.ExponentialSquared;
-            RenderSettings.fogDensity = 0.0021f;
-            RenderSettings.fogColor = new Color(0.70f, 0.75f, 0.81f);
+            RenderSettings.fogDensity = 0.0012f;
+            RenderSettings.fogColor = new Color(0.71f, 0.76f, 0.82f);
             RenderSettings.skybox = on ? Sky() : AssetDatabase.GetBuiltinExtraResource<Material>("Default-Skybox.mat");
 
             // the volume may be inactive (look off), which GameObject.Find would not see
-            var volGo = UnityEngine.Object.FindObjectsByType<Volume>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+            var volGo = UnityEngine.Object.FindObjectsByType<Volume>(FindObjectsInactive.Include)
                 .Select(v => v.gameObject).FirstOrDefault(g => g.name == "Look");
             if (volGo == null)
             {
@@ -399,6 +495,101 @@ namespace DeviceChain.Sitepulse.EditorTools
                     data.antialiasingQuality = AntialiasingQuality.High;
                 }
             }
+            AssetDatabase.SaveAssets();
+        }
+
+        /// <summary>The sun's elevation above the horizon (degrees). Low enough that the bench faces
+        /// carry shadow lines, high enough that the pit floor is still in the sun.</summary>
+        public static float SunElevation = 30f;
+
+        /// <summary>The compass bearing the sun shines from (degrees clockwise from north): the
+        /// south-east, so its light rakes across the pit's north wall from the side.</summary>
+        public static float SunAzimuth = 140f;
+
+        static Quaternion SunRotation => Quaternion.Euler(SunElevation, SunAzimuth + 180f, 0f);
+
+        const string PcPipeline = "Assets/Settings/PC_RPAsset.asset";
+        const string LaptopPipeline = "Assets/Settings/Laptop_RPAsset.asset";
+        const string LaptopRenderer = "Assets/Settings/Laptop_Renderer.asset";
+
+        /// <summary>The PC look's shadow reach (m) and MSAA samples.</summary>
+        public static float PcShadowDistance = 240f;
+        public static int PcMsaa = 2;
+
+        // 1 low, 2 medium, 3 high (URP's SoftShadowQuality)
+        static void SetSoftShadowQuality(UniversalRenderPipelineAsset a, int quality)
+        {
+            var so = new SerializedObject(a);
+            so.FindProperty("m_SoftShadowQuality").intValue = quality;
+            so.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        /// <summary>
+        /// The Laptop quality level: the PC pipeline with its costs cut for integrated or
+        /// entry graphics. No MSAA (the camera's SMAA still smooths edges), no screen-space
+        /// ambient occlusion, half the shadow reach in two cascades at a smaller map, a coarser
+        /// terrain mesh and a shorter tree distance; the effects halve their emission
+        /// (<see cref="QuarryEffects.LaptopQuality"/>). It is added to the quality levels after PC.
+        /// </summary>
+        [MenuItem("Sitepulse/Quarry/Configure Laptop Quality")]
+        public static void ConfigureLaptop() => ConfigureLaptop(AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(PcPipeline));
+
+        static void ConfigureLaptop(UniversalRenderPipelineAsset pc)
+        {
+            var pcRenderer = pc.rendererDataList[0] ?? throw new InvalidOperationException("PC pipeline has no renderer");
+            if (AssetDatabase.LoadAssetAtPath<ScriptableRendererData>(LaptopRenderer) == null)
+                AssetDatabase.CopyAsset(AssetDatabase.GetAssetPath(pcRenderer), LaptopRenderer);
+            if (AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(LaptopPipeline) == null)
+                AssetDatabase.CopyAsset(PcPipeline, LaptopPipeline);
+            var renderer = AssetDatabase.LoadAssetAtPath<ScriptableRendererData>(LaptopRenderer);
+            foreach (var f in renderer.rendererFeatures)
+                if (f != null && f.GetType().Name == "ScreenSpaceAmbientOcclusion") f.SetActive(false);
+            EditorUtility.SetDirty(renderer);
+            var laptop = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(LaptopPipeline);
+            var so = new SerializedObject(laptop);
+            var list = so.FindProperty("m_RendererDataList");
+            list.arraySize = 1;
+            list.GetArrayElementAtIndex(0).objectReferenceValue = renderer;
+            so.FindProperty("m_DefaultRendererIndex").intValue = 0;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            laptop.msaaSampleCount = 1;
+            laptop.supportsCameraOpaqueTexture = false;
+            laptop.shadowDistance = 140f;
+            laptop.shadowCascadeCount = 2;
+            laptop.cascade2Split = 0.25f;
+            laptop.mainLightShadowmapResolution = 2048;
+            SetSoftShadowQuality(laptop, 1);
+            EditorUtility.SetDirty(laptop);
+
+            var qs = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/QualitySettings.asset")[0];
+            var q = new SerializedObject(qs);
+            var levels = q.FindProperty("m_QualitySettings");
+            int pcIndex = -1, laptopIndex = -1;
+            for (int i = 0; i < levels.arraySize; i++)
+            {
+                var n = levels.GetArrayElementAtIndex(i).FindPropertyRelative("name").stringValue;
+                if (n == "PC") pcIndex = i;
+                if (n == QuarryEffects.LaptopQuality) laptopIndex = i;
+            }
+            if (pcIndex < 0) throw new InvalidOperationException("no PC quality level");
+            if (laptopIndex < 0)
+            {
+                levels.InsertArrayElementAtIndex(pcIndex);             // a copy of PC, after it
+                laptopIndex = pcIndex + 1;
+            }
+            var el = levels.GetArrayElementAtIndex(laptopIndex);
+            el.FindPropertyRelative("name").stringValue = QuarryEffects.LaptopQuality;
+            el.FindPropertyRelative("customRenderPipeline").objectReferenceValue = laptop;
+            el.FindPropertyRelative("lodBias").floatValue = 1f;
+            el.FindPropertyRelative("antiAliasing").intValue = 0;
+            // terrain overrides: pixel error (1) and tree distance (16)
+            el.FindPropertyRelative("terrainQualityOverrides").intValue = 1 | 16;
+            el.FindPropertyRelative("terrainPixelError").floatValue = 8f;
+            el.FindPropertyRelative("terrainTreeDistance").floatValue = 700f;
+            var pcEl = levels.GetArrayElementAtIndex(pcIndex);
+            pcEl.FindPropertyRelative("name").stringValue = "PC";
+            pcEl.FindPropertyRelative("customRenderPipeline").objectReferenceValue = pc;
+            q.ApplyModifiedPropertiesWithoutUndo();
             AssetDatabase.SaveAssets();
         }
 
@@ -430,6 +621,13 @@ namespace DeviceChain.Sitepulse.EditorTools
                     so.FindProperty("m_Settings.Radius").floatValue = 0.3f;
                     so.FindProperty("m_Settings.DirectLightingStrength").floatValue = on ? 0.2f : 0.25f;
                     so.FindProperty("m_Settings.Falloff").floatValue = on ? 120f : 100f;
+                    so.FindProperty("m_Settings.Downsample").boolValue = on;
+                    // from the depth copy after the opaques, not a depth-normals prepass that would
+                    // draw the whole site (terrain, thousands of trees) a second time
+                    so.FindProperty("m_Settings.Source").enumValueIndex = on ? 0 : 1;
+                    so.FindProperty("m_Settings.AfterOpaque").boolValue = on;
+                    so.FindProperty("m_Settings.Samples").enumValueIndex = 1;
+                    so.FindProperty("m_Settings.BlurQuality").enumValueIndex = on ? 1 : 0;
                     so.ApplyModifiedPropertiesWithoutUndo();
                     EditorUtility.SetDirty(f);
                 }
@@ -461,11 +659,16 @@ namespace DeviceChain.Sitepulse.EditorTools
             bloom.intensity.Override(0.25f);
             bloom.scatter.Override(0.6f);
             var ca = Get<ColorAdjustments>(p);
-            ca.postExposure.Override(Tonemap == TonemappingMode.Neutral ? 0.1f : 0.25f);
-            ca.contrast.Override(10f);
-            ca.saturation.Override(Tonemap == TonemappingMode.Neutral ? 0f : 4f);
+            ca.postExposure.Override(Tonemap == TonemappingMode.Neutral ? 0.05f : 0.25f);
+            ca.contrast.Override(14f);
+            ca.saturation.Override(Tonemap == TonemappingMode.Neutral ? -4f : 0f);
+            // a light grade: cooler shadows, warmer highlights
+            var smh = Get<ShadowsMidtonesHighlights>(p);
+            smh.shadows.Override(new Vector4(0.94f, 0.98f, 1.08f, 0f));
+            smh.midtones.Override(new Vector4(1f, 1f, 1f, 0f));
+            smh.highlights.Override(new Vector4(1.04f, 1.01f, 0.95f, 0f));
             var vig = Get<Vignette>(p);
-            vig.intensity.Override(0.16f);
+            vig.intensity.Override(0.18f);
             vig.smoothness.Override(0.5f);
             EditorUtility.SetDirty(p);
             AssetDatabase.SaveAssets();

@@ -25,6 +25,8 @@ namespace DeviceChain.Sitepulse.Visuals
         public TextAsset choreography;
         public QuarryTerrain terrain;
         public GameObject dozer, dozerLod1, loader, loaderLod1, hauler, haulerLod1;
+        [Tooltip("Dust, exhaust, beacons and falling material (cosmetic). None: no effects.")]
+        public QuarryEffects effects;
         [Tooltip("Seconds into the choreography (Edit mode pose; the start time in Play mode).")]
         public float time;
         public float timeScale = 1f;
@@ -59,6 +61,7 @@ namespace DeviceChain.Sitepulse.Visuals
         sealed class Unit
         {
             public MachineRig rig;
+            public MachineEffects effects;
             public Track track;
             public float offset, travel;
             public bool posed;
@@ -107,7 +110,13 @@ namespace DeviceChain.Sitepulse.Visuals
                     MachineKind.Loader => (1.65f, 1.15f),
                     _ => (2.1f, 2.2f),
                 };
-                units.Add(new Unit { rig = rig, track = data.tracks[m.track], offset = m.offset, halfLength = hl, halfWidth = hw });
+                MachineEffects fx = null;
+                if (effects != null)
+                {
+                    fx = go.AddComponent<MachineEffects>();
+                    fx.Bind(rig, effects);
+                }
+                units.Add(new Unit { rig = rig, effects = fx, track = data.tracks[m.track], offset = m.offset, halfLength = hl, halfWidth = hw });
             }
             Seek(time);
         }
@@ -124,6 +133,23 @@ namespace DeviceChain.Sitepulse.Visuals
             if (!Application.isPlaying) return;
             time += Time.deltaTime * timeScale;
             Seek(time);
+            foreach (var u in units)
+                if (u.effects != null) u.effects.Step(Time.deltaTime * timeScale, false);
+        }
+
+        /// <summary>
+        /// Edit mode: play the scene from <paramref name="from"/> to <paramref name="to"/> seconds in
+        /// fixed steps, simulating every effect as it goes, so that a still taken at the end shows
+        /// dust and falling rock with the history they would have in play.
+        /// </summary>
+        public void Advance(float from, float to, float step = 1f / 30f)
+        {
+            foreach (var e in QuarryEffects.Active) e.ClearParticles();
+            for (float t = from; t < to + step * 0.5f; t += step)
+            {
+                Seek(t);
+                foreach (var e in QuarryEffects.Active.ToArray()) e.Step(step, true);
+            }
         }
 
         /// <summary>Pose every machine at <paramref name="t"/> seconds into the choreography.</summary>

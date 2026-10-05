@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b8a0d17b5d9818b44b25c61cf6703b8c, type: 3}
+  m_Name: QuarryEffects
+  m_EditorClassIdentifier: DeviceChain.Sitepulse::DeviceChain.Sitepulse.Visuals.QuarryEffects
+  dust: {fileID: 2100000, guid: 9e7c1cf8110bfe040983ac805e2ed963, type: 2}
+  exhaust: {fileID: 2100000, guid: 8c94d13ccbd72104994593b93200c66c, type: 2}
+  rock: {fileID: 2100000, guid: 3703c98bc3fd3a44f8b733eac5a49038, type: 2}
+  flare: {fileID: 2100000, guid: 5b371a922d5956b448757d96dccf3f5c, type: 2}
+  chunk: {fileID: -4143699932470910475, guid: 05bc10ec9eef17046b6867b5b1e62c48, type: 3}
+  budget: 1
