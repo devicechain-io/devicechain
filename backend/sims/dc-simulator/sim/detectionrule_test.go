@@ -96,6 +96,19 @@ func soleDetectionRule(t *testing.T, p ProfileSpec) DetectionRuleSpec {
 	return p.DetectionRules[0]
 }
 
+// ruleByToken returns the rule a profile declares under token, for a profile that
+// carries several. soleDetectionRule stays strict for the single-rule profiles that use it.
+func ruleByToken(t *testing.T, p ProfileSpec, token string) DetectionRuleSpec {
+	t.Helper()
+	for _, r := range p.DetectionRules {
+		if r.Token == token {
+			return r
+		}
+	}
+	t.Fatalf("profile %q declares no detection rule %q", p.Token, token)
+	return DetectionRuleSpec{}
+}
+
 // ---- The type itself ----------------------------------------------------------
 
 // The seam ThresholdAlarmRule exists to close: DetectionRuleSpec.Metric and the

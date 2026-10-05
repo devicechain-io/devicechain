@@ -187,8 +187,11 @@ then **`deviceCredentials(criteria: {device: "<token>", credentialType: "ACCESS_
 gives the credential. 🔑 Not `deviceCredentialsByToken` — that takes the CREDENTIAL's own token, and
 `type Device` exposes no credentials field, so holding a device token leaves you nothing to pass it.
 For an `ACCESS_TOKEN` credential the `credentialId` **is** the bearer.
-`dcctl sim create <name> --manifest sitepulse` provisions a device and the low-fuel rule if you have
-no other one to hand.
+`dcctl sim create <name> --manifest sitepulse` provisions the whole site (18 machines and one
+crusher plant, 19 devices) and its three rules (low fuel, engine overheat, low tyre pressure) if you
+have no other one to hand. 🔑 Point stage 4 at a **machine** token (`sp-dozer-01`, `SP-DZ-0001`): the
+plant (`sp-plant-01`, `SP-PL-0001`) has its own profile with no `fuel_pct` and no commands, so the
+command stage reports exit 3 against it, which looks like a platform fault and is not.
 
 | exit | meaning |
 | --- | --- |

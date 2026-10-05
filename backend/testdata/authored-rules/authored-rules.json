@@ -33,6 +33,22 @@
       "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"low-fuel\"},\"type\":\"raiseAlarm\"},{\"sendCommand\":{\"command\":\"goto-refuel\"},\"type\":\"sendCommand\"}],\"name\":\"Site Pulse low fuel\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"fuel_pct\",\"op\":\"lt\",\"threshold\":15}}"
     },
     {
+      "producer": "sitepulse",
+      "ruleToken": "sp-rule-overheat",
+      "profileToken": "sp-equipment-profile",
+      "enabled": true,
+      "alarmSeverityWire": "CRITICAL",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"engine-overheat\"},\"type\":\"raiseAlarm\"}],\"name\":\"Site Pulse engine overheat\",\"severity\":\"critical\",\"type\":\"threshold\",\"when\":{\"metric\":\"engine_temp_c\",\"op\":\"gt\",\"threshold\":105}}"
+    },
+    {
+      "producer": "sitepulse",
+      "ruleToken": "sp-rule-tyre-low",
+      "profileToken": "sp-equipment-profile",
+      "enabled": true,
+      "alarmSeverityWire": "MAJOR",
+      "definition": "{\"actions\":[{\"raiseAlarm\":{\"alarmKey\":\"tyre-pressure-low\"},\"type\":\"raiseAlarm\"}],\"name\":\"Site Pulse low tyre pressure\",\"severity\":\"major\",\"type\":\"threshold\",\"when\":{\"metric\":\"tyre_pressure_kpa\",\"op\":\"lt\",\"threshold\":600}}"
+    },
+    {
       "producer": "widgetlab",
       "ruleToken": "wl-over-temp",
       "profileToken": "wl-sensor-profile",

@@ -204,21 +204,30 @@ var harnessRuleBuilders = []harnessRuleBuilder{
 	},
 }
 
-// mirroredAlarmSeverityWire maps a producer to the WIRE-form alarm severity constant it
-// mirrors — the uppercase tier a raise lands at on the durable row, which the sim copies
-// by hand because it cannot import device-management.
+// mirroredAlarmSeverityWire maps a RULE (see mirrorKey) to the WIRE-form alarm severity
+// constant it mirrors — the uppercase tier a raise lands at on the durable row, which the
+// sim copies by hand because it cannot import device-management. It is keyed per rule
+// rather than per producer because one scenario can author rules at different tiers
+// (sitepulse: low fuel is major, engine overheat is critical), and a per-producer entry
+// would record one rule's tier against another's.
 //
-// A producer whose rule raises an alarm MUST have an entry, and buildAuthoredRules
+// A rule that raises an alarm MUST have an entry, and buildAuthoredRules
 // refuses to write a fixture otherwise. That is deliberate pressure: a new scenario
 // authoring a raiseAlarm rule has to state the tier it expects on the wire, and stating
 // it is what puts it in front of device-management's gate. Without the refusal, such a
 // scenario would simply carry an empty mirror and be waved through.
 var mirroredAlarmSeverityWire = map[string]string{
-	"buildingpulse": sim.BuildingpulseAlarmSeverityWire,
-	"widgetlab":     sim.WidgetlabAlarmSeverityWire,
-	"sitepulse":     sim.SitepulseAlarmSeverityWire,
-	"loadtest":      harnessAlarmSeverityWire,
+	mirrorKey("buildingpulse", sim.BuildingpulseRuleToken): sim.BuildingpulseAlarmSeverityWire,
+	mirrorKey("widgetlab", sim.WidgetlabRuleToken):         sim.WidgetlabAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseRuleToken):         sim.SitepulseAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseOverheatRuleToken): sim.SitepulseOverheatAlarmSeverityWire,
+	mirrorKey("sitepulse", sim.SitepulseTyreRuleToken):     sim.SitepulseTyreAlarmSeverityWire,
+	mirrorKey("loadtest", HarnessRuleToken):                harnessAlarmSeverityWire,
+	mirrorKey("loadtest", HarnessCommandRuleToken):         harnessAlarmSeverityWire,
 }
+
+// mirrorKey is the mirroredAlarmSeverityWire key for one producer's rule.
+func mirrorKey(producer, ruleToken string) string { return producer + "/" + ruleToken }
 
 // raisesAlarm reports whether a published definition carries a raiseAlarm action. The
 // decode is deliberately lenient: the rule GRAMMAR is event-processing's authority and is
@@ -270,13 +279,13 @@ func buildAuthoredRules(t *testing.T) []authoredRule {
 	var out []authoredRule
 
 	add := func(producer, ruleToken, profileToken string, enabled bool, definition string) {
-		wire := mirroredAlarmSeverityWire[producer]
+		wire := mirroredAlarmSeverityWire[mirrorKey(producer, ruleToken)]
 		if raisesAlarm(t, producer, ruleToken, definition) {
 			if wire == "" {
-				t.Fatalf("%s/%s raises an alarm but %q registers no mirrored wire severity — "+
+				t.Fatalf("%s/%s raises an alarm but %q has no mirrored wire severity — "+
 					"the tier its alarm lands at would be checked by nothing. Add an entry to "+
 					"mirroredAlarmSeverityWire naming the constant the scenario mirrors.",
-					producer, ruleToken, producer)
+					producer, ruleToken, mirrorKey(producer, ruleToken))
 			}
 		} else {
 			// A rule that raises no alarm has no tier to mirror. Blanking it here keeps

@@ -71,8 +71,18 @@ func TestDeviceCountOverrideResizesTheRenderedTopology(t *testing.T) {
 				t.Fatalf("NewSim: %v", err)
 			}
 			devices := s.Manifest().Expand(1)
-			if len(devices) != 500 {
-				t.Fatalf("device count = %d, want 500", len(devices))
+			// Every population takes the override except those that declare FixedCount,
+			// which keep their own size (sitepulse's single plant).
+			want := 0
+			for _, pop := range Registry[id](1, Load{}).Manifest().Populations {
+				if pop.FixedCount {
+					want += pop.Count
+				} else {
+					want += 500
+				}
+			}
+			if len(devices) != want {
+				t.Fatalf("device count = %d, want %d", len(devices), want)
 			}
 
 			// Distinct tokens, or "500 devices" is 500 emits against far fewer
@@ -136,6 +146,48 @@ func TestEveryScenarioIsResizableOrSaysWhyNot(t *testing.T) {
 	}
 }
 
+// A manifest with several populations is resizable only if it says which are a scale knob.
+// Without that declaration a single count has no unambiguous meaning, and the refusal must
+// stay; and a declaration that leaves nothing to scale (or scales everything) is no rule.
+func TestSeveralPopulationsNeedADeclaredSizingRule(t *testing.T) {
+	pop := func(of string, count int, fixed bool) PopulationSpec {
+		return PopulationSpec{OfType: of, Count: count, FixedCount: fixed}
+	}
+	cases := []struct {
+		name string
+		pops []PopulationSpec
+		want []int // nil means refused
+	}{
+		{"one population", []PopulationSpec{pop("a", 1, false)}, []int{9}},
+		{"two undeclared", []PopulationSpec{pop("a", 1, false), pop("b", 1, false)}, nil},
+		{"one fixed", []PopulationSpec{pop("a", 1, true)}, nil},
+		{"all fixed", []PopulationSpec{pop("a", 1, true), pop("b", 1, true)}, nil},
+		{"mixed", []PopulationSpec{pop("a", 1, false), pop("b", 2, false), pop("c", 1, true)}, []int{9, 9, 1}},
+	}
+	for _, tc := range cases {
+		got, err := withDeviceCount(SimManifest{Name: tc.name, Populations: tc.pops}, 9)
+		if tc.want == nil {
+			if err == nil {
+				t.Errorf("%s: a device count of 9 was accepted with no way to size the populations", tc.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		for i, w := range tc.want {
+			if got.Populations[i].Count != w {
+				t.Errorf("%s: population %d has count %d, want %d", tc.name, i, got.Populations[i].Count, w)
+			}
+		}
+		// The caller's manifest is not mutated through the shared backing array.
+		if tc.pops[0].Count == 9 && len(tc.pops) > 1 {
+			t.Errorf("%s: the input manifest's populations were modified in place", tc.name)
+		}
+	}
+}
+
 // ---- Resizable is NOT load-drivable --------------------------------------------
 
 // The two lists must stay distinguishable for the same reason the two resize refusals
@@ -143,7 +195,7 @@ func TestEveryScenarioIsResizableOrSaysWhyNot(t *testing.T) {
 // scenarios running — so every consumer that wanted one and reached for the other was
 // correct by coincidence, and stayed correct until a scenario broke the tie.
 //
-// sitepulse is that scenario: resizable (its population is a genuine scale knob) and
+// sitepulse is that scenario: resizable (its machine populations are a genuine scale knob) and
 // NOT load-drivable (its devices publish their own telemetry, so Sim.Tick emits
 // nothing). A load tool offering the resizable list would advertise it, and a run
 // against it holds for its whole window, applies zero load, and fails the min-accepted

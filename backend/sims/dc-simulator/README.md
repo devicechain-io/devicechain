@@ -48,7 +48,8 @@ go run . --handshake /path/to/handshake.json [--port 8090]
 ### Driving load
 
 The built-in scenarios are sized as **demos** — devicepulse is 1 device,
-buildingpulse is 12, widgetlab is 7 and fleetpulse is 6, all at a 5s cadence, which is
+buildingpulse is 12, widgetlab is 7, fleetpulse is 6 and sitepulse is 19 (18 machines and one
+plant; its devices publish their own telemetry, so the sim itself emits nothing), all at a 5s cadence, which is
 the right default for watching the presentation page and far too small to measure what
 an instance costs. Three flags override that; each also reads an env var, and each
 defaults to the scenario's own sizing:
@@ -63,7 +64,9 @@ defaults to the scenario's own sizing:
 named devices is a composed fixture, not a scale vehicle: resizing it would leave
 its boards pointing at devices the run never provisions, so it refuses the flag at
 startup rather than provisioning a topology its own boards do not match. widgetlab
-is one. devicepulse, buildingpulse and fleetpulse take any size.
+is one. devicepulse, buildingpulse and fleetpulse take any size. sitepulse takes any
+machine count: `--devices n` gives each of its three machine kinds `n` devices and leaves
+its single crusher plant at one.
 
 ⚠️ **A small buildingpulse is a quieter demo, not a broken one.** Every device raises and
 clears at any size, but below a handful the tenant-wide view has moments with no active
@@ -194,7 +197,7 @@ on its manifest, which has three settings:
 | `internal` | this process, per device | yes | allowed |
 | `external` | a presentation client in another process — a Unity player that IS the device | no | allowed |
 
-widgetlab is `internal`; devicepulse and buildingpulse are `none`. Both far-end modes
+widgetlab is `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
 must still declare a command vocabulary on a profile: for `external` that vocabulary
 is the whole contract with the other process, since it is what that client subscribes
 for and what the board's widget enqueues against.
