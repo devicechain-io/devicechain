@@ -349,12 +349,18 @@ process and a client that is not this process:
   "tenant": "acme",
   "manifestId": "sitepulse",
   "wsUrl": "ws://localhost/api/event-management/graphql",
+  "apiOrigin": "http://localhost",
   "token": "<tenant-admin access token>",
   "instanceId": "dc",
   "mqttBroker": "ssl://localhost:1883",
   "mqttTLSInsecure": true
 }
 ```
+
+`apiOrigin` is the origin (`scheme://host[:port]`, no path) a client uses for the
+platform's GraphQL HTTP and WS endpoints, with `ws`/`wss` mapped to `http`/`https`. It
+is derived from the same endpoint `wsUrl` comes from, so the two cannot disagree; if no
+origin can be derived the request fails with a 502 rather than returning a guess.
 
 The token is minted per request, so a page opened long after startup still gets a
 live one. The last three fields are what an `external` far end needs to hold its own

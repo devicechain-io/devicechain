@@ -4,13 +4,15 @@
 package sim
 
 import (
+	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 )
 
 // presentationConfig is what a presentation client fetches on load to learn how to
 // reach the platform: tenant/manifestId identify the scenario, wsUrl+token drive the
-// graphql-ws subscribe, and the mqtt* fields let an out-of-process client BE the
+// graphql-ws subscribe, apiOrigin names the platform's HTTP/WS origin, and the mqtt* fields let an out-of-process client BE the
 // device far end (FarEndExternal) rather than only watch one.
 //
 // It is the subscribe leg of the Seam D presentation descriptor, and it does NOT have
@@ -93,7 +95,14 @@ type presentationConfig struct {
 	Tenant     string `json:"tenant"`
 	ManifestId string `json:"manifestId"`
 	WsUrl      string `json:"wsUrl"`
-	Token      string `json:"token"`
+
+	// ApiOrigin is the origin (scheme://host[:port]) a client uses for the platform's
+	// GraphQL HTTP and WS endpoints. It is derived from the same address wsUrl is
+	// served from (see apiOriginFromWS), so the two cannot name different hosts, and
+	// it is a separate key because a client should not have to re-parse a URL it was
+	// handed whole. It carries no credential and no path.
+	ApiOrigin string `json:"apiOrigin"`
+	Token     string `json:"token"`
 
 	// InstanceId is what makes a client id the MQTT gateway will accept: its auth
 	// callout REFUSES any client id but `{instance}:{tenant}:{deviceToken}`, so a
@@ -144,6 +153,30 @@ type presentationConfig struct {
 	MqttTLSInsecure bool `json:"mqttTLSInsecure"`
 }
 
+// apiOriginFromWS reduces the event-management WS endpoint to its origin, mapping
+// ws to http and wss to https. It refuses an address with no usable scheme or host
+// rather than guessing one: a plausible default would send a client to the wrong
+// platform and fail later, somewhere the cause is not visible.
+func apiOriginFromWS(wsURL string) (string, error) {
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		return "", fmt.Errorf("cannot determine the API origin: parse %q: %w", wsURL, err)
+	}
+	var scheme string
+	switch u.Scheme {
+	case "ws", "http":
+		scheme = "http"
+	case "wss", "https":
+		scheme = "https"
+	default:
+		return "", fmt.Errorf("cannot determine the API origin: endpoint %q has scheme %q, want ws, wss, http or https", wsURL, u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return "", fmt.Errorf("cannot determine the API origin: endpoint %q has no host", wsURL)
+	}
+	return scheme + "://" + u.Host, nil
+}
+
 // RegisterPresentation mounts the static presentation page (served from
 // webFS, rooted at "web/") and its /config.json endpoint on mux. The token is
 // resolved fresh on every /config.json request so a page opened well after
@@ -160,10 +193,17 @@ func RegisterPresentation(mux *http.ServeMux, webFS fs.FS, rt *Runtime, manifest
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
+		// Refused like the token: an unknowable origin is a 502 here, not a guess.
+		origin, err := apiOriginFromWS(rt.Endpoints.EventMgmtWS)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusOK, presentationConfig{
 			Tenant:     rt.Tenant,
 			ManifestId: manifestId,
 			WsUrl:      rt.Endpoints.EventMgmtWS,
+			ApiOrigin:  origin,
 			Token:      token,
 			// 🔴 The flattened Runtime fields, not rt.Endpoints.*: MqttTLSInsecure lives
 			// only on Runtime (it is a Handshake field, not an Endpoints one), and every

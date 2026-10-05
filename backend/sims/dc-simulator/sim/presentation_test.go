@@ -157,6 +157,7 @@ func TestPresentationConfigWireNamesAreTheContract(t *testing.T) {
 		"tenant":          "tenant-under-test",
 		"manifestId":      "manifest-under-test",
 		"wsUrl":           "wss://events.example.invalid/graphql",
+		"apiOrigin":       "https://events.example.invalid",
 		"token":           "access-tok",
 		"instanceId":      "instance-under-test",
 		"mqttBroker":      "ssl://broker.example.invalid:1883",
@@ -283,5 +284,49 @@ func TestPresentationConfigServesTheSessionsToken(t *testing.T) {
 	if got := cfg["token"]; got != "distinctive-access-token" {
 		t.Errorf("/config.json token is %#v, want the session's %q",
 			got, "distinctive-access-token")
+	}
+}
+
+// apiOrigin is the scheme://host[:port] a client uses for the platform's GraphQL HTTP
+// and WS endpoints. It is derived from the one address the runner already holds
+// (the event-management WS endpoint) and never guessed: if that address yields no
+// origin the config is refused, because a plausible-looking default would send the
+// player to the wrong host.
+func TestPresentationConfigDerivesAPIOriginFromTheWSEndpoint(t *testing.T) {
+	cases := map[string]string{
+		"ws://localhost/api/event-management/graphql":          "http://localhost",
+		"wss://dc.example.invalid:8443/api/event-management/x": "https://dc.example.invalid:8443",
+		"https://dc.example.invalid/graphql":                   "https://dc.example.invalid",
+		"http://h.example.invalid/graphql":                     "http://h.example.invalid",
+		// userinfo, path and query are all dropped: the body is unauthenticated.
+		"ws://u:p@h.example.invalid:9/x?q=1": "http://h.example.invalid:9",
+	}
+	for ws, want := range cases {
+		mux, _ := presentationFixture(t, &fakeAuthServer{accessToken: "t"}, func(rt *Runtime) {
+			rt.Endpoints.EventMgmtWS = ws
+		})
+		if got := configMap(t, mux)["apiOrigin"]; got != want {
+			t.Errorf("apiOrigin for %q is %#v, want %q", ws, got, want)
+		}
+	}
+}
+
+func TestPresentationConfigRefusesWhenAPIOriginCannotBeDetermined(t *testing.T) {
+	for _, ws := range []string{
+		"",
+		"no-scheme-here",     // parses, but with an empty scheme
+		"ftp://host/graphql", // unsupported scheme
+		"ws:///path-only",    // no host
+		"ws://:8080/x",       // a port with no host
+		"ws://[::1",          // url.Parse itself fails: missing ']'
+		"ws://host:bad/x",    // url.Parse itself fails: invalid port
+	} {
+		mux, _ := presentationFixture(t, &fakeAuthServer{accessToken: "t"}, func(rt *Runtime) {
+			rt.Endpoints.EventMgmtWS = ws
+		})
+		code, body := fetchConfig(t, mux)
+		if code != http.StatusBadGateway {
+			t.Errorf("wsUrl %q: status %d, want 502 (body %s)", ws, code, body)
+		}
 	}
 }
