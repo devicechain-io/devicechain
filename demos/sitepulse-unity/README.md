@@ -11,8 +11,8 @@ sent from it. The scene shows what the platform observed and what the machine di
 so a viewer can follow a command from the console to the machine and back.
 
 **Status: early.** This project holds the machine models and their rigs, the quarry terrain with
-its roads, site props and vegetation, and a looping preview of an 18-machine fleet working the
-site (`Scenes/Quarry.unity`). The connection to a DeviceChain instance through the
+its roads, site props, processing plant and vegetation, and a looping preview of an 18-machine
+fleet working the site (`Scenes/Quarry.unity`). The connection to a DeviceChain instance through the
 [Unity SDK](../../sdks/unity) comes next. Nothing here talks to a platform yet, and the scene's
 look is still being worked on (see [Known limitations](#known-limitations)).
 
@@ -83,20 +83,22 @@ wheels and scrolls track treads.
 `QuarryTerrain` builds a Unity terrain at scene start from the generated heightmap, layer masks
 and feature list in `Art/Terrain/`, so there is no terrain asset to keep in step: change the
 generator, re-run it, and the scene follows. The features file also places the roads, the site
-buildings and the vegetation. `QuarryFleetPreview` plays the choreography in
-`Data/quarry_fleet.json` (loaders loading haul trucks, trucks running the ramp, dozers working
-the dump pad) through the same `MachineRig` the platform connection will drive.
+buildings, the processing plant (primary crusher, screen and radial stacker, fed by a loader) and
+the vegetation. `QuarryFleetPreview` plays the choreography in `Data/quarry_fleet.json` (a loader
+filling each haul truck in two passes, five trucks running the loop up the two-lane ramp, a
+sixth calling at the refuel bay, dozers working the cut and the dump, idle machines parked in
+the yard) through the same `MachineRig` the platform connection will drive.
 `FrameTimeBenchmark` is off unless a player build is started with `-sitepulse-benchmark`; it
 flies a camera over the site and writes the average FPS and the 99th-percentile and worst frame
 times to `sitepulse-benchmark.txt` beside the executable.
 
 ## Known limitations
 
-- The scene has not had its final look pass: materials, lighting and post-processing are
-  first-cut, and the terrain's bench geometry is regular.
-- There is no processing plant (crusher, conveyors) yet.
-- The preview choreography is simple: some machines work in place and haul trucks share a
-  narrow two-way ramp.
+- The look is not final: there are no effects yet (dust, exhaust, beacons), no ground detail
+  meshes, and the boulders and trees are low-detail.
+- The plant is scenery: no truck tips into it, and nothing on it moves.
+- The preview choreography is scripted local motion, not the site simulation; the haul trucks
+  take the loaded buckets as one load, and the dump pad does not grow.
 
 ## Tests
 

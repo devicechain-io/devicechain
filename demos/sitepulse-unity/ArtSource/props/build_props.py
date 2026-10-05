@@ -20,6 +20,8 @@ it does not move. A building's long axis is X and its open or front side faces +
   fuel_tank                  bunded 8 m horizontal diesel tank with a dispenser
   light_tower                trailer-mounted light tower (mast 8.5 m), lamps face +Z
   cone, barrier, site_sign   small site furniture
+  crusher_plant              primary jaw crusher and hopper, conveyor, screen tower and radial
+                             stacker; origin at the hopper centre, material flows along +Z
 """
 import math
 import os
@@ -297,6 +299,173 @@ def site_sign(rng):
     single("site_sign", p)
 
 
+# ==================================================================================
+# processing plant
+# ==================================================================================
+def frustum(p, y0, y1, bot, top, key):
+    """A closed box whose horizontal section goes from rectangle `bot` at y0 to `top` at y1;
+    each rectangle is (x0, x1, z0, z1). A hopper, a chute."""
+    b0 = p._op()
+    def ring(y, r):
+        x0, x1, z0, z1 = r
+        return [p.bm.verts.new(v) for v in ((x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1))]
+    a, b = ring(y0, bot), ring(y1, top)
+    faces = [p.bm.faces.new(list(reversed(a))), p.bm.faces.new(b)]
+    for i in range(4):
+        j = (i + 1) % 4
+        faces.append(p.bm.faces.new((a[i], a[j], b[j], b[i])))
+    p._finish(a + b, faces, key, 0)
+    p._tag(b0)
+
+
+def _frame(a, b):
+    """Unit axes along a -> b: u along, v the 'up' normal to it, w across."""
+    a, b = Vector(a), Vector(b)
+    u = (b - a).normalized()
+    up = Vector((0.0, 1.0, 0.0))
+    v = (up - u * up.dot(u)).normalized()
+    return a, b, u, v, u.cross(v)
+
+
+def conveyor(p, a, b, width=0.9, legs=(), truss=False, walkway=True):
+    """A troughed belt conveyor from tail a to head b (Unity metres): stringers, belt with a
+    stream of rock on it, idlers, pulleys, a walkway with handrail on one side, and legs down to
+    the ground at the given fractions along it. truss=True hangs a lattice truss under it."""
+    a, b, u, v, w = _frame(a, b)
+    L = (b - a).length
+    mid = (a + b) / 2
+    hw = width / 2
+    for s in (-1, 1):
+        p.obox(mid + w * s * (hw + 0.12) - v * 0.12, u, v, L, 0.32, 0.08, "paint_dark")      # stringers
+    p.obox(mid + v * 0.06, u, v, L - 0.4, 0.05, width, "rubber")                           # belt
+    p.obox(mid + v * 0.13, u, v, L - 0.9, 0.12, width * 0.55, "ore")                       # material on it
+    for t, r in ((0.0, 0.28), (1.0, 0.32)):                                                 # tail and head pulleys
+        c = a + (b - a) * t
+        p.cyl(c - w * (hw + 0.05), c + w * (hw + 0.05), r, "steel", 12)
+    with p.detail():
+        n = max(2, int(L / 1.6))
+        for i in range(1, n):                                                               # idlers
+            c = a + (b - a) * (i / n) - v * 0.02
+            p.cyl(c - w * hw, c + w * hw, 0.07, "steel", 6)
+        if walkway:
+            p.obox(mid + w * (hw + 0.6) - v * 0.25, u, v, L, 0.05, 0.75, "worn")              # grating
+            for t in (1.0, 0.9):
+                off = w * (hw + 0.95) + v * t
+                p.cyl(a + off, b + off, 0.025, "paint", 6)
+            k = max(2, int(L / 2.5))
+            for i in range(k + 1):
+                c = a + (b - a) * (i / k) + w * (hw + 0.95)
+                p.cyl(c - v * 0.25, c + v * 1.0, 0.025, "paint", 6)
+    for t in legs:                                                                          # support legs
+        c = a + (b - a) * t - v * 0.28
+        for s in (-1, 1):
+            foot = Vector((c.x, 0.0, c.z)) + w * s * (hw + 0.55)
+            p.cyl(foot, c + w * s * (hw + 0.1), 0.09, "paint_dark", 8)
+        with p.detail():
+            p.cyl(c + w * (hw + 0.1) + Vector((0, -1.2, 0)), c - w * (hw + 0.1) + Vector((0, -1.2, 0)), 0.05, "paint_dark", 6)
+    if truss:
+        depth = 1.1
+        bot = [a + (b - a) * t - v * depth for t in (0.05, 0.95)]
+        for s in (-1, 1):
+            p.cyl(bot[0] + w * s * hw, bot[1] + w * s * hw, 0.07, "paint_dark", 6)          # bottom chords
+        with p.detail():
+            k = max(3, int(L / 1.8))
+            for i in range(k):
+                t0, t1 = 0.05 + 0.9 * i / k, 0.05 + 0.9 * (i + 1) / k
+                for s in (-1, 1):
+                    top = a + (b - a) * t0 - v * 0.28 + w * s * (hw + 0.1)
+                    low = a + (b - a) * t1 - v * depth + w * s * hw
+                    p.cyl(top, low, 0.04, "paint_dark", 5)
+
+
+def crusher_plant(rng):
+    """Primary jaw crusher with its feed hopper, a conveyor up to a screen on a steel tower, and
+    a radial stacker building the product stockpile. Origin: centre of the hopper, on the
+    ground; material flows along +Z. The stacker's head is at z = 38.5 m, 9 m up (the product
+    stockpile is placed under it by quarry_heightmap.py, PLANT_HEAD)."""
+    p = K.Piece(bevel=0.02)
+    # -- primary: skid, support columns, hopper, crusher, flywheels, motor
+    p.box((-1.9, 0.0, -3.2), (1.9, 0.45, 5.2), "paint_dark")                               # skid
+    for x in (-1.6, 1.6):
+        for z in (-2.4, 0.9):
+            p.box((x - 0.15, 0.45, z - 0.15), (x + 0.15, 2.5, z + 0.15), "paint_dark", 0.0)
+    p.box((-2.0, 2.4, -2.7), (2.0, 2.6, 1.2), "paint_dark", 0.0)                            # feeder deck
+    frustum(p, 2.6, 3.95, (-1.0, 1.0, -1.3, 1.0), (-2.3, 2.3, -2.6, 2.3), "plant")       # hopper
+    p.box((-2.35, 3.95, -2.65), (2.35, 4.1, 2.35), "paint_dark", 0.0)                       # rim
+    p.box((-2.0, 3.85, -2.3), (2.0, 4.0, 2.0), "ore", 0.0)                                  # rock in it
+    for k in range(9):
+        blob(p, (rng.uniform(-1.6, 1.6), 4.0, rng.uniform(-1.9, 1.6)), rng.uniform(0.25, 0.5), "ore", rng,
+             scale=(1.0, 0.6, 1.0), subdiv=1, jitter=0.25)
+    p.box((-1.25, 0.45, 1.2), (1.25, 3.3, 3.9), "plant")                                    # jaw crusher body
+    p.box((-1.3, 3.0, 1.2), (1.3, 3.45, 3.0), "paint_dark", 0.02)
+    for sx in (-1, 1):                                                                      # flywheels
+        p.cyl((sx * 1.3, 2.55, 2.9), (sx * 1.5, 2.55, 2.9), 0.95, "steel", 20)
+        with p.detail():
+            p.cyl((sx * 1.28, 2.55, 2.9), (sx * 1.56, 2.55, 2.9), 0.2, "paint", 10)
+    p.box((1.9, 0.45, 3.3), (2.9, 1.4, 4.8), "plant", 0.02)                                 # motor
+    p.box((1.55, 1.1, 2.5), (1.75, 2.9, 4.2), "paint", 0.01)                                # belt guard
+    frustum(p, 0.5, 1.2, (-0.6, 0.6, 3.6, 4.6), (-0.9, 0.9, 3.4, 4.4), "paint_dark")      # discharge chute
+    with p.detail():                                                                        # access platform
+        p.box((-3.0, 3.2, -2.8), (-2.3, 3.28, 2.4), "worn", 0.0)
+        for z in (-2.7, -0.2, 2.3):
+            p.cyl((-3.0, 3.25, z), (-3.0, 4.3, z), 0.025, "paint", 6)
+        p.cyl((-3.0, 4.3, -2.7), (-3.0, 4.3, 2.3), 0.025, "paint", 6)
+        p.cyl((-3.0, 3.75, -2.7), (-3.0, 3.75, 2.3), 0.025, "paint", 6)
+        for k in range(9):                                                                  # ladder
+            yy = 0.4 + k * 0.33
+            p.cyl((-3.0, yy, 2.55), (-3.0, yy, 2.95), 0.018, "worn", 5)
+        for zz in (2.55, 2.95):
+            p.cyl((-3.0, 0.0, zz), (-3.0, 3.25, zz), 0.03, "worn", 6)
+    # -- conveyor up to the screen
+    conveyor(p, (0.0, 0.95, 4.2), (0.0, 7.0, 17.6), width=0.9, legs=(0.45, 0.8))
+    # -- screen on its tower
+    for x in (-2.1, 2.1):
+        for z in (16.8, 22.2):
+            p.box((x - 0.14, 0.0, z - 0.14), (x + 0.14, 5.9, z + 0.14), "paint_dark", 0.0)
+    p.box((-2.6, 5.9, 16.4), (2.6, 6.05, 22.6), "worn", 0.0)                                # deck
+    with p.detail():
+        for x in (-2.1, 2.1):                                                               # bracing
+            p.cyl((x, 0.3, 16.8), (x, 5.6, 22.2), 0.05, "paint_dark", 5)
+            p.cyl((x, 0.3, 22.2), (x, 5.6, 16.8), 0.05, "paint_dark", 5)
+        for z in (16.4, 22.6):
+            p.cyl((-2.6, 7.0, z), (2.6, 7.0, z), 0.025, "paint", 6)
+        for x in (-2.6, 2.6):
+            p.cyl((x, 7.0, 16.4), (x, 7.0, 22.6), 0.025, "paint", 6)
+            for z in (16.4, 19.5, 22.6):
+                p.cyl((x, 6.05, z), (x, 7.0, z), 0.025, "paint", 6)
+        for k in range(16):                                                                 # stair to the deck
+            p.box((2.3, 0.35 * k, 15.2 - 0.3 * k + 4.8), (3.1, 0.35 * k + 0.05, 15.5 - 0.3 * k + 4.8), "worn", 0.0)
+    _, _, su, sv, sw = _frame((0.0, 7.5, 17.4), (0.0, 6.5, 22.0))
+    p.obox(Vector((0.0, 7.05, 19.7)) + sv * 0.55, su, sv, 4.9, 1.1, 2.6, "plant")             # screen box
+    p.obox(Vector((0.0, 7.05, 19.7)) + sv * 1.15, su, sv, 4.6, 0.1, 2.2, "ore")              # material on the top deck
+    p.box((1.35, 6.05, 18.4), (2.1, 6.75, 19.4), "plant", 0.02)                              # vibrator motor
+    frustum(p, 3.2, 5.9, (-0.6, 0.6, 20.2, 21.2), (-1.4, 1.4, 18.0, 22.0), "paint_dark")   # under-screen chute
+    # -- radial stacker
+    conveyor(p, (0.0, 1.5, 20.6), (0.0, 9.0, 38.5), width=0.8, legs=(), truss=True, walkway=False)
+    p.box((-0.9, 0.0, 19.8), (0.9, 1.2, 21.4), "paint_dark", 0.02)                           # tail pivot
+    _, _, su, sv, sw = _frame((0.0, 1.5, 20.6), (0.0, 9.0, 38.5))
+    knee = Vector((0.0, 1.5, 20.6)) + (Vector((0.0, 9.0, 38.5)) - Vector((0.0, 1.5, 20.6))) * 0.62 - sv * 1.1
+    for sx in (-1, 1):                                                                      # A-frame to the bogie
+        p.cyl((sx * 1.7, 1.0, knee.z), (sx * 0.45, knee.y, knee.z), 0.11, "paint_dark", 8)
+    p.box((-2.1, 0.75, knee.z - 0.35), (2.1, 1.15, knee.z + 0.35), "paint_dark", 0.02)       # axle beam
+    for sx in (-1, 1):
+        p.cyl((sx * 1.85, 0.55, knee.z - 0.32), (sx * 1.85, 0.55, knee.z + 0.32), 0.55, "rubber", 16)
+    head = Vector((0.0, 9.0, 38.5))
+    p.box((-0.75, 8.8, 38.3), (0.75, 9.8, 39.4), "paint_dark", 0.02)                         # discharge hood
+    blob(p, (0.0, 8.0, 39.5), 0.45, "ore", rng, scale=(0.9, 2.2, 0.9), subdiv=1, jitter=0.2)  # falling stream
+    # -- electrical room beside the crusher
+    p.box((-7.4, 0.0, 1.0), (-4.6, 0.35, 6.2), "steel", 0.0)
+    p.box((-7.3, 0.35, 1.1), (-4.7, 2.95, 6.1), "cabin")
+    p.box((-7.4, 2.95, 1.0), (-4.6, 3.07, 6.2), "paint_dark", 0.01)
+    p.box((-4.72, 0.45, 4.6), (-4.66, 2.4, 5.5), "paint_dark", 0.0)                          # door
+    with p.detail():
+        p.box((-7.75, 1.9, 2.0), (-7.3, 2.5, 2.8), "worn", 0.02)                             # air conditioner
+        p.tube([(-4.6, 2.6, 2.0), (-2.5, 2.6, 2.0), (-1.9, 1.6, 2.4)], 0.05, "rubber", 6)  # cable
+    p.lamp((0.0, 4.1, -2.65), "-z", 0.5, 0.3, 0.12)
+    p.lamp((2.6, 7.0, 22.6), "+z", 0.5, 0.3, 0.12)
+    single("crusher_plant", p)
+
+
 PROPS = {
     "pine": (pine, 0.5), "broadleaf": (broadleaf, 0.45), "shrub": (shrub, 0.45),
     "rock_a": (rock_a, 0.35), "rock_b": (rock_b, 0.5),
@@ -304,7 +473,9 @@ PROPS = {
     "container_blue": (container("box_blue"), 0.6), "container_red": (container("box_red"), 0.6),
     "fuel_tank": (fuel_tank, 0.5), "light_tower": (light_tower, 0.5),
     "cone": (cone, 0.6), "barrier": (barrier, 0.8), "site_sign": (site_sign, 0.7),
+    "crusher_plant": (crusher_plant, 0.5),
 }
+BUDGET = {"crusher_plant": 16000}            # triangles at LOD0; everything else 6000
 
 
 def main():
@@ -321,7 +492,7 @@ def main():
         K.reset(name, out)
         fn(random.Random("sitepulse-" + name))                 # deterministic per prop
         K.make_lod1(ratio)
-        rep = K.report(budget_lod0=6000)
+        rep = K.report(budget_lod0=BUDGET.get(name, 6000))
         K.export(name)
         summary[name] = dict(tris_LOD0=rep["tris_LOD0"], tris_LOD1=rep["tris_LOD1"], bbox=rep["bbox_unity_m"],
                              materials=rep["materials"], ok=rep["budget"]["ok"])

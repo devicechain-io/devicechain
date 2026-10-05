@@ -77,6 +77,8 @@ PALETTE = {
     "cone":       ("M_Cone_Orange",      (0.90, 0.15, 0.01),     0.50, 0.0, None),
     "reflect":    ("M_Reflective_White", (0.80, 0.80, 0.80),     0.35, 0.0, None),
     "sign":       ("M_Sign_Green",       (0.010, 0.120, 0.050),  0.50, 0.0, None),
+    "plant":      ("M_Plant_Green",      (0.050, 0.140, 0.080),  0.60, 0.1, None),
+    "ore":        ("M_Ore",              (0.300, 0.290, 0.270),  0.92, 0.0, None),
 }
 
 S = dict(coll=None, nodes={}, mats={}, out=None, name=None)

@@ -34,7 +34,7 @@ namespace DeviceChain.Sitepulse.EditorTools
 
         static readonly string[] Layers = { "Rock", "Gravel", "Dirt", "Grass" };
         // world metres per texture repeat for each layer
-        static readonly float[] LayerTile = { 9f, 5f, 7f, 8f };
+        static readonly float[] LayerTile = { 10f, 6f, 7f, 11f };
         static readonly string[] Vegetation = { "pine", "broadleaf", "shrub", "rock_a", "rock_b" };
 
         [MenuItem("Sitepulse/Quarry/Rebuild Everything")]
@@ -43,7 +43,38 @@ namespace DeviceChain.Sitepulse.EditorTools
             ConfigureImports();
             BuildPropPrefabs();
             BuildMaterials();
+            IncludeRuntimeTerrainShaders();
             BuildScene();
+        }
+
+        // The terrain is made when the scene loads, so a build sees no TerrainData in the scene and
+        // leaves out the shaders the terrain engine needs at run time. Without the normal map
+        // generator an instanced terrain draws black in a player while it looks right in the Editor.
+        static readonly string[] RuntimeTerrainShaders =
+        {
+            "Hidden/TerrainEngine/GenerateNormalmap",
+            "Hidden/Nature/Terrain/Utilities",
+            "Hidden/Universal Render Pipeline/Terrain/Lit (Basemap Gen)",
+        };
+
+        [MenuItem("Sitepulse/Quarry/Include Runtime Terrain Shaders")]
+        public static void IncludeRuntimeTerrainShaders()
+        {
+            var gs = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>("ProjectSettings/GraphicsSettings.asset");
+            var so = new SerializedObject(gs);
+            var list = so.FindProperty("m_AlwaysIncludedShaders");
+            foreach (var name in RuntimeTerrainShaders)
+            {
+                var sh = Shader.Find(name) ?? throw new InvalidOperationException("shader not found: " + name);
+                bool present = false;
+                for (int i = 0; i < list.arraySize; i++)
+                    present |= list.GetArrayElementAtIndex(i).objectReferenceValue == sh;
+                if (present) continue;
+                list.InsertArrayElementAtIndex(list.arraySize);
+                list.GetArrayElementAtIndex(list.arraySize - 1).objectReferenceValue = sh;
+            }
+            so.ApplyModifiedPropertiesWithoutUndo();
+            AssetDatabase.SaveAssets();
         }
 
         // ------------------------------------------------------------------ imports
@@ -139,7 +170,9 @@ namespace DeviceChain.Sitepulse.EditorTools
                 // mask map: G = occlusion, B = height for height-based blending, A = smoothness
                 tl.maskMapRemapMin = new Vector4(0f, 0f, 0f, 0f);
                 tl.maskMapRemapMax = new Vector4(0f, 1f, 1f, 0.45f);
-                tl.diffuseRemapMax = Vector4.one;
+                // dry grass rather than straw; worked earth a little less saturated than the photo
+                tl.diffuseRemapMax = layer == "Grass" ? new Vector4(0.9f, 1f, 0.82f, 1f)
+                    : layer == "Dirt" ? new Vector4(0.95f, 0.92f, 0.87f, 1f) : Vector4.one;
                 EditorUtility.SetDirty(tl);
             }
 
@@ -156,11 +189,11 @@ namespace DeviceChain.Sitepulse.EditorTools
             cliff.SetTexture("_BaseMap", Tex("T_Rock_Albedo.jpg"));
             cliff.SetTexture("_BumpMap", Tex("T_Rock_Normal.jpg"));
             cliff.EnableKeyword("_NORMALMAP");
-            cliff.SetFloat("_BumpScale", 1.2f);
+            cliff.SetFloat("_BumpScale", 1.4f);
             cliff.SetTexture("_OcclusionMap", null);
             cliff.SetFloat("_Smoothness", 0.12f);
             cliff.SetFloat("_Metallic", 0f);
-            cliff.SetColor("_BaseColor", new Color(0.92f, 0.9f, 0.88f));
+            cliff.SetColor("_BaseColor", new Color(1f, 0.98f, 0.95f));
             cliff.enableInstancing = true;
             EditorUtility.SetDirty(cliff);
             AssetDatabase.SaveAssets();
@@ -212,7 +245,9 @@ namespace DeviceChain.Sitepulse.EditorTools
             var sun = sunGo.AddComponent<Light>();
             sun.type = LightType.Directional;
             sun.shadows = LightShadows.Soft;
-            sunGo.transform.rotation = Quaternion.Euler(38f, 222f, 0f);
+            // late-morning sun from the south-south-east: it lights the pit's north wall, the faces
+            // the scene is about, and rakes across the benches instead of flattening them
+            sunGo.transform.rotation = Quaternion.Euler(36f, 335f, 0f);
             RenderSettings.sun = sun;
 
             var camGo = new GameObject("Main Camera") { tag = "MainCamera" };
@@ -312,9 +347,10 @@ namespace DeviceChain.Sitepulse.EditorTools
             var rpQuality = QualitySettings.renderPipeline as UniversalRenderPipelineAsset;
             foreach (var a in new[] { rp, rpQuality }.Where(a => a != null).Distinct())
             {
-                a.shadowDistance = on ? 220f : 50f;
+                // far enough that the wide shots keep every machine's shadow under it
+                a.shadowDistance = on ? 320f : 50f;
                 a.shadowCascadeCount = 4;
-                a.cascade4Split = on ? new Vector3(0.04f, 0.12f, 0.36f) : new Vector3(0.067f, 0.2f, 0.467f);
+                a.cascade4Split = on ? new Vector3(0.035f, 0.1f, 0.32f) : new Vector3(0.067f, 0.2f, 0.467f);
                 a.msaaSampleCount = on ? 4 : 1;
                 EditorUtility.SetDirty(a);
                 SetSsao(a, on);
@@ -333,20 +369,25 @@ namespace DeviceChain.Sitepulse.EditorTools
             RenderSettings.ambientEquatorColor = new Color(0.52f, 0.48f, 0.42f);
             RenderSettings.ambientGroundColor = new Color(0.20f, 0.17f, 0.14f);
             RenderSettings.ambientIntensity = 1f;
+            // aerial perspective: a light haze that greys the far hills, matched by the sky's
+            // horizon and ground colour so the terrain's edge melts into it
             RenderSettings.fog = on;
             RenderSettings.fogMode = FogMode.ExponentialSquared;
-            RenderSettings.fogDensity = 0.0016f;
-            RenderSettings.fogColor = new Color(0.66f, 0.72f, 0.80f);
+            RenderSettings.fogDensity = 0.0021f;
+            RenderSettings.fogColor = new Color(0.70f, 0.75f, 0.81f);
+            RenderSettings.skybox = on ? Sky() : AssetDatabase.GetBuiltinExtraResource<Material>("Default-Skybox.mat");
 
-            var volGo = GameObject.Find("Look");
+            // the volume may be inactive (look off), which GameObject.Find would not see
+            var volGo = UnityEngine.Object.FindObjectsByType<Volume>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                .Select(v => v.gameObject).FirstOrDefault(g => g.name == "Look");
             if (volGo == null)
             {
                 volGo = new GameObject("Look");
                 var v = volGo.AddComponent<Volume>();
                 v.isGlobal = true;
                 v.priority = 10f;
-                v.sharedProfile = LookProfile();
             }
+            volGo.GetComponent<Volume>().sharedProfile = LookProfile();
             volGo.SetActive(on);
             var cam = Camera.main;
             if (cam != null)
@@ -359,6 +400,21 @@ namespace DeviceChain.Sitepulse.EditorTools
                 }
             }
             AssetDatabase.SaveAssets();
+        }
+
+        const string SkyPath = Materials + "M_Sky.mat";
+
+        /// <summary>A procedural sky whose ground half is the fog colour, so the hazy horizon has no edge.</summary>
+        static Material Sky()
+        {
+            var m = LoadOrCreateMaterial(SkyPath, "Skybox/Procedural");
+            m.SetFloat("_SunSize", 0.035f);
+            m.SetFloat("_AtmosphereThickness", 0.85f);
+            m.SetColor("_SkyTint", new Color(0.52f, 0.56f, 0.62f));
+            m.SetColor("_GroundColor", new Color(0.62f, 0.66f, 0.71f));
+            m.SetFloat("_Exposure", 1.15f);
+            EditorUtility.SetDirty(m);
+            return m;
         }
 
         static void SetSsao(UniversalRenderPipelineAsset a, bool on)
@@ -382,33 +438,43 @@ namespace DeviceChain.Sitepulse.EditorTools
 
         const string LookProfilePath = SettingsDir + "QuarryLook.asset";
 
-        /// <summary>The look's post-processing profile, created on first use.</summary>
+        /// <summary>Tone mapping for the look. Compared on the same frames, Neutral keeps the
+        /// machines' yellow paint yellow and the dry grass green-grey, where ACES pushed the paint
+        /// toward orange and the grass toward straw.</summary>
+        public static TonemappingMode Tonemap = TonemappingMode.Neutral;
+
+        /// <summary>The look's post-processing profile, created on first use and brought up to
+        /// date with the settings here every time.</summary>
         public static VolumeProfile LookProfile()
         {
             var p = AssetDatabase.LoadAssetAtPath<VolumeProfile>(LookProfilePath);
-            if (p != null) return p;
-            Directory.CreateDirectory(SettingsDir);
-            p = ScriptableObject.CreateInstance<VolumeProfile>();
-            AssetDatabase.CreateAsset(p, LookProfilePath);
-            var tm = Add<Tonemapping>(p);
-            tm.mode.Override(TonemappingMode.ACES);
-            var bloom = Add<Bloom>(p);
+            if (p == null)
+            {
+                Directory.CreateDirectory(SettingsDir);
+                p = ScriptableObject.CreateInstance<VolumeProfile>();
+                AssetDatabase.CreateAsset(p, LookProfilePath);
+            }
+            var tm = Get<Tonemapping>(p);
+            tm.mode.Override(Tonemap);
+            var bloom = Get<Bloom>(p);
             bloom.threshold.Override(1.1f);
             bloom.intensity.Override(0.25f);
             bloom.scatter.Override(0.6f);
-            var ca = Add<ColorAdjustments>(p);
-            ca.postExposure.Override(0.25f);
-            ca.contrast.Override(8f);
-            ca.saturation.Override(4f);
-            var vig = Add<Vignette>(p);
+            var ca = Get<ColorAdjustments>(p);
+            ca.postExposure.Override(Tonemap == TonemappingMode.Neutral ? 0.1f : 0.25f);
+            ca.contrast.Override(10f);
+            ca.saturation.Override(Tonemap == TonemappingMode.Neutral ? 0f : 4f);
+            var vig = Get<Vignette>(p);
             vig.intensity.Override(0.16f);
             vig.smoothness.Override(0.5f);
+            EditorUtility.SetDirty(p);
             AssetDatabase.SaveAssets();
             return p;
         }
 
-        static T Add<T>(VolumeProfile p) where T : VolumeComponent
+        static T Get<T>(VolumeProfile p) where T : VolumeComponent
         {
+            if (p.TryGet<T>(out var existing)) return existing;
             var c = p.Add<T>(true);
             c.name = typeof(T).Name;
             c.hideFlags = HideFlags.HideInInspector | HideFlags.HideInHierarchy;

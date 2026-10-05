@@ -25,10 +25,10 @@ import zipfile
 from PIL import Image, ImageChops
 
 MATERIALS = {               # layer -> ambientCG asset id
-    "Rock": "Rock028",
-    "Gravel": "Gravel040",
-    "Dirt": "Ground081",
-    "Grass": "Ground037",
+    "Rock": "Rock027",      # freshly fractured grey rock: blasted faces and berms
+    "Gravel": "Ground091",  # fine compacted grey gravel: the yard pad
+    "Dirt": "Ground081",    # rocky brown earth: haul roads, pit floor, batters, piles
+    "Grass": "Ground013",   # dry, thin grassland
 }
 URL = "https://ambientcg.com/get?file={id}_1K-JPG.zip"
 

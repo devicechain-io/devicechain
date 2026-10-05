@@ -53,3 +53,4 @@ __pycache__/
 # Player builds and the benchmark's result file
 /Build/
 sitepulse-benchmark.txt
+sitepulse-benchmark.png

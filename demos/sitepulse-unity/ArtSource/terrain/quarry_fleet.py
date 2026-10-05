@@ -13,15 +13,20 @@ benchmark something realistic to draw; it is not the site simulation, which driv
 from commands, and none of it is platform data.
 
 WHAT IT MAKES
-  * 6 haulers on one closed haul loop, spaced a sixth of the loop apart in time: load at the
+  * 5 haulers on one closed haul loop, spaced a fifth of the loop apart in time: load at the
     muck pile in the pit, up the ramp, out to the dump pad, reverse to the tipping edge and
     dump, back along the return road, through the yard past the refuel bay, and down the ramp.
-    Traffic keeps LEFT, which lets the loop run without crossing itself.
-  * 6 loaders: one loads the haulers (its cycle is exactly the haulers' spacing, timed so the
-    bucket tips while a truck is standing at the load point); the rest rehandle the pit and
-    yard stockpiles, or stand at the workshop and the refuel bay working their arms.
-  * 6 dozers: pushing at the toe of the north face and on the first bench, spreading on the dump
-    pad, and pushing up a yard stockpile.
+    Traffic keeps LEFT, each direction on its own lane of the 20 m ramp, which lets the loop
+    run without crossing itself.
+  * a 6th hauler out of the loop: from its parking place to the refuel bay (a lay-by beside the
+    yard's through lane), a stop while it is fuelled, and back to park.
+  * 6 loaders: one loads the haulers, PASSES buckets per truck (its cycle is exactly the
+    haulers' spacing, timed so the buckets tip while a truck is standing at the load point);
+    one rehandles the pit stockpile; at the plant one feeds the crusher's hopper from the feed
+    stockpile and one works the product stockpile; two are parked (one in the workshop).
+  * 6 dozers: one pushing up the muck pile at the toe of the north face, one ripping the pit
+    floor, one spreading on the dump pad, and three parked in the yard.
+  Parked machines do not move: idle is a real state for a fleet, and the scene shows it.
   Speeds depend on grade and load (a loaded truck climbs the 10 % ramp at about 13 km/h), on
   path curvature and on acceleration limits; machines pause at every change of direction.
 
@@ -33,8 +38,9 @@ OUTPUT (default ../../Assets/Sitepulse/Data/quarry_fleet.json)
              metres along the ground, for wheel and track animation), p1, p2 (dozer: blade arm,
              ripper; loader: boom, bucket; hauler: dump raise, unused), steer (deg, + right),
              flag (hauler: 1 = carrying a load).
-  The script also checks every pair of machines for footprint overlap over a full loop and
-  prints the closest approach; it exits non-zero if any two machines touch.
+  The script also checks every pair of machines for footprint overlap over two full loops and
+  prints the closest approach; it exits non-zero if any two machines touch, or if two haul
+  trucks come within HAULER_CLEARANCE metres of each other.
 """
 import argparse
 import gzip
@@ -121,8 +127,12 @@ def speed_limit(kind, grade, loaded, reverse):
     return 1.8                                               # dozer pushing or backing
 
 
-def plan(kind, runs, ground, accel=0.7, decel=1.1, lat=1.6, step=0.5):
+ACCEL = {"Dozer": (0.7, 1.1), "Loader": (1.3, 1.6), "Hauler": (0.7, 1.1)}   # m/s2 speeding up, braking
+
+
+def plan(kind, runs, ground, lat=1.6, step=0.5):
     """Time the runs. Returns per-sample arrays t, x, z, heading, travel, p1, p2, flag."""
+    accel, decel = ACCEL[kind]
     out = {k: [] for k in ("t", "x", "z", "heading", "travel", "p1", "p2", "flag")}
     t, travel = 0.0, 0.0
     last_pose = (0.0, 0.0)
@@ -234,12 +244,32 @@ def resample(kind, tr, dt, period):
 # ==================================================================================
 # the haul loop
 # ==================================================================================
-LOAD_STOP, DUMP_STOP, CUSP_STOP = 15.0, 14.0, 1.2
+HAULERS_ON_LOOP = 5
+PASSES = 2                      # loader buckets per truck
+LOAD_STOP, DUMP_STOP, CUSP_STOP = 32.0, 14.0, 1.2
 DUMP_UP, DUMP_HOLD = 5.0, 3.5
+LANE = 5.0                      # lane centre offset from the ramp's centreline (20 m ramp, keep left)
 
 
-def haul_runs():
-    loaded_pose = lambda u: (0.0, 0.0)
+def ramp_lane(ground, side, x_from=-14.0):
+    """The ramp centreline from x_from to the top, offset LANE metres to the left (side=+1) or
+    right (side=-1) of the uphill direction, as (x, z) points about 8 m apart."""
+    rd = next(r for r in ground.f["roads"] if r["name"] == "pit-ramp")
+    pts = np.array([(p[0], p[2]) for p in rd["points"]])
+    i0 = int(np.argmax(pts[:, 0] >= x_from))
+    pts = pts[i0:]
+    d = np.gradient(pts, axis=0)
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
+    left = np.stack([-d[:, 1], d[:, 0]], 1)
+    lane = pts + left * LANE * side
+    keep = [0]
+    for i in range(1, len(lane)):
+        if np.linalg.norm(lane[i] - lane[keep[-1]]) >= 8.0 or i == len(lane) - 1:
+            keep.append(i)
+    return [tuple(map(float, lane[i])) for i in keep]
+
+
+def haul_runs(ground):
     def dump_pose(ts):
         if ts < 1.0:
             return (0.0, 0.0)
@@ -251,44 +281,59 @@ def haul_runs():
             return (50.0, 0.0)
         ts -= DUMP_HOLD
         return (50.0 * (1 - ease(ts / DUMP_UP)), 0.0)
-    # 1: loaded, from the load point to the turn-round on the dump pad (left-hand traffic)
-    out = [(4.0, 33.0), (16.0, 33.0), (27.0, 33.5), (33.5, 29.0), (29.0, 24.5), (16.0, 24.0), (-4.0, 24.0),
-           (-14.0, 24.5), (-19.5, 21.0), (-18.0, 16.0), (-10.0, 14.6), (20.0, 14.0), (54.0, 14.5),
-           (70.2, 5.4), (75.0, -11.0), (80.5, -20.0), (88.0, -31.0), (93.5, -39.0), (90.0, -45.0),
-           (86.0, -49.5), (80.0, -51.0)]
+    up = ramp_lane(ground, +1)                 # loaded, uphill, north/east lane
+    down = list(reversed(ramp_lane(ground, -1)))
+    # 1: loaded, from the load point round the pit floor, up the ramp, to the turn-round on the dump pad
+    out = ([(4.0, 35.5), (16.0, 35.5), (27.0, 36.0), (33.5, 31.5), (29.0, 27.0), (16.0, 26.5), (-4.0, 26.5),
+            (-14.0, 26.5), (-19.5, 22.5), (-18.0, 17.0)] + up[1:]
+           + [(80.5, -20.0), (88.0, -31.0), (93.5, -39.0), (90.0, -45.0), (86.0, -49.5), (80.0, -51.0)])
     # 2: reverse to the tipping edge
     back = [(80.0, -51.0), (101.0, -51.0)]
-    # 3: empty, back along the return road, through the yard, down the ramp, round to the load point
-    home = [(101.0, -51.0), (94.0, -53.0), (89.0, -58.0), (84.0, -62.0), (79.0, -67.0), (60.0, -70.0),
-            (30.0, -68.0), (0.0, -64.0), (-30.0, -62.0), (-44.0, -61.5), (-51.0, -58.0), (-53.0, -50.0),
-            (-51.0, -38.0), (-44.0, -30.5), (-10.0, -30.0), (30.0, -26.0), (52.0, -21.5), (59.5, -15.5),
-            (62.5, 1.0), (52.0, 6.8), (20.0, 6.0), (-16.3, 7.7), (-31.0, 21.0), (-28.5, 30.0),
-            (-24.0, 34.5), (-16.0, 33.5), (-6.0, 33.0), (4.0, 33.0)]
+    # 3: empty, back along the return road, through the yard past the refuel bay, down the ramp,
+    #    round to the load point
+    home = ([(101.0, -51.0), (94.0, -53.0), (89.0, -58.0), (84.0, -62.0), (79.0, -67.0), (60.0, -70.0),
+             (30.0, -68.0), (0.0, -64.0), (-30.0, -62.0), (-44.0, -61.5), (-47.5, -58.0), (-49.0, -52.0),
+             (-49.0, -40.0), (-44.0, -30.5), (-10.0, -30.0), (30.0, -26.0), (52.0, -21.5), (61.0, -14.0)]
+            + down[:-1] + [(-17.0, 6.0), (-31.0, 21.0), (-29.0, 31.0), (-24.0, 36.5), (-16.0, 36.0),
+                           (-6.0, 35.5), (4.0, 35.5)])
     return [
-        Run(out, loaded=True, pose=loaded_pose, stop=CUSP_STOP, tag="haul-loaded"),
+        Run(out, loaded=True, stop=CUSP_STOP, tag="haul-loaded"),
         Run(back, reverse=True, loaded=True, stop=DUMP_STOP, stop_pose=dump_pose, tag="dump"),
         Run(home, loaded=False, stop=LOAD_STOP, tag="load"),
+    ]
+
+
+def yard_hauler_runs():
+    """A truck out of the loop for its service: from its parking place round to the refuel bay
+    (a lay-by beside the through lane), a stop while it is fuelled, and back to park."""
+    to_bay = [(-82.0, -57.0), (-82.0, -63.0), (-77.0, -68.0), (-68.0, -68.0), (-61.5, -64.0), (-59.5, -59.0),
+              (-59.5, -56.5)]
+    to_park = [(-59.5, -56.5), (-59.5, -51.0), (-62.5, -47.0), (-68.0, -46.8), (-76.0, -47.0), (-80.5, -50.0),
+               (-82.0, -54.0), (-82.0, -57.0)]
+    return [
+        Run(to_bay, stop=40.0, tag="refuel"),
+        Run(to_park, stop=50.0, tag="parked"),
     ]
 
 
 # ==================================================================================
 # loaders and dozers
 # ==================================================================================
-def loader_v(dig, rev, dump, dig_stop=3.0, dump_stop=4.5):
+def loader_v(dig, rev, dump, dig_stop=1.6, dump_stop=3.6):
     """Load-and-carry V: into the pile, back out, turn to the truck, tip, back out, return."""
     def at_dig(ts):
-        return (BOOM_GROUND, lerp(BUCKET_FLAT, BUCKET_RACK, ts / 1.5))
+        return (BOOM_GROUND, lerp(BUCKET_FLAT, BUCKET_RACK, ts / 1.3))
     def at_dump(ts):
         if ts < 1.6:
             return (BOOM_HIGH, lerp(BUCKET_RACK, BUCKET_DUMP, ease(ts / 1.6)))
-        return (BOOM_HIGH, lerp(BUCKET_DUMP, BUCKET_RACK, ease((ts - 2.6) / 1.4)))
+        return (BOOM_HIGH, lerp(BUCKET_DUMP, BUCKET_RACK, ease((ts - 2.2) / 1.4)))
     return [
         Run([dig, rev], reverse=True, pose=lambda u: (lerp(BOOM_GROUND, BOOM_CARRY, u), BUCKET_RACK),
-            stop=CUSP_STOP, tag="back-out"),
+            stop=0.8, tag="back-out"),
         Run([rev, dump], pose=lambda u: (lerp(BOOM_CARRY, BOOM_HIGH, ease(u)), BUCKET_RACK),
             stop=dump_stop, stop_pose=at_dump, tag="to-truck"),
         Run([dump, rev], reverse=True, pose=lambda u: (lerp(BOOM_HIGH, BOOM_CARRY, ease(u)), BUCKET_RACK),
-            stop=CUSP_STOP, tag="back-off"),
+            stop=0.8, tag="back-off"),
         Run([rev, dig], pose=lambda u: (lerp(BOOM_CARRY, BOOM_GROUND, u), lerp(BUCKET_RACK, BUCKET_FLAT, u)),
             stop=dig_stop, stop_pose=at_dig, tag="to-pile"),
     ]
@@ -317,15 +362,16 @@ def loader_rehandle(a, b):
                    stop_pose=lambda ts: (BOOM_GROUND, lerp(BUCKET_FLAT, BUCKET_RACK, ts / 2.0)))
 
 
-def stationary(kind, x, z, heading, cycle, pose):
-    """A machine that stays put and works its implement: a tiny out-and-back so it has a heading."""
+def parked(kind, x, z, heading, pose):
+    """A machine standing parked with its engine off: it does not move at all (two points a
+    couple of centimetres apart give it its heading)."""
     hx, hz = math.sin(math.radians(heading)), math.cos(math.radians(heading))
-    a, b = (x, z), (x + hx * 0.6, z + hz * 0.6)
-    return [
-        Run([a, b], vmax=0.3, pose=lambda u: pose(0.0), stop=cycle / 2, stop_pose=lambda ts: pose(ts / cycle), tag="work"),
-        Run([b, a], reverse=True, vmax=0.3, pose=lambda u: pose(0.5), stop=cycle / 2,
-            stop_pose=lambda ts: pose(0.5 + ts / cycle), tag="work"),
-    ]
+    a, b = (x - hx * 0.01, z - hz * 0.01), (x + hx * 0.01, z + hz * 0.01)
+    return [Run([a, b], vmax=0.05, pose=lambda u: pose, stop=30.0, stop_pose=lambda ts: pose, tag="parked")]
+
+
+PARKED_LOADER = (BOOM_GROUND, BUCKET_FLAT)       # bucket flat on the ground
+PARKED_DOZER = (0.0, 0.0)                        # blade resting on the ground
 
 
 def fleet(ground):
@@ -337,57 +383,65 @@ def fleet(ground):
         tracks.append(dict(kind=kind, raw=tr, period=float(T)))
         return len(tracks) - 1
 
-    # haulers
-    hl = add_track("Hauler", haul_runs())
+    # haulers on the loop
+    hl = add_track("Hauler", haul_runs(ground))
     T = tracks[hl]["period"]
-    raw = tracks[hl]["raw"]
-    # when does hauler 0 stand at the load point? the load stop ends the loop
-    load_start = T - LOAD_STOP
-    gap = T / 6.0
-    for k in range(6):
+    load_start = T - LOAD_STOP                        # the load stop ends the loop
+    gap = T / HAULERS_ON_LOOP
+    for k in range(HAULERS_ON_LOOP):
         machines.append(dict(id=f"SP-HL-{k + 1:04d}", kind="Hauler", track=hl, offset=round(-k * gap, 3)))
+    # the sixth truck is out of the loop, going to the refuel bay and back to park
+    yh = add_track("Hauler", yard_hauler_runs())
+    machines.append(dict(id=f"SP-HL-{HAULERS_ON_LOOP + 1:04d}", kind="Hauler", track=yh, offset=0.0))
 
-    # the pit loader: one bucket per truck, timed to tip mid-way through each load stop
-    lv = loader_v((-2.0, 43.5), (-4.5, 40.5), (1.2, 39.6))
-    probe = plan("Loader", lv, ground)
-    natural = probe["t"][-1]
-    if natural > gap - 0.5:
-        raise SystemExit(f"pit loader cycle {natural:.1f} s is longer than the truck spacing {gap:.1f} s")
-    lv[-1].stop += gap - natural                     # wait at the pile for the next truck
+    # the pit loader: PASSES buckets per truck, then waits at the pile for the next one
+    one = loader_v((-2.0, 46.0), (-4.5, 43.0), (1.2, 42.1))
+    probe = plan("Loader", one, ground)
+    cycle = probe["t"][-1]
+    if PASSES * cycle > gap - 0.5 or (PASSES - 1) * cycle + 6.0 > LOAD_STOP:
+        raise SystemExit(f"{PASSES} loader passes of {cycle:.1f} s do not fit a {LOAD_STOP:.0f} s load stop "
+                         f"and a {gap:.1f} s truck spacing")
+    lv = []
+    for _ in range(PASSES):
+        lv += loader_v((-2.0, 46.0), (-4.5, 43.0), (1.2, 42.1))
+    lv[-1].stop += gap - PASSES * cycle               # wait at the pile for the next truck
     li = add_track("Loader", lv, period=gap)
     tr = tracks[li]["raw"]
-    # time within the loader cycle when the bucket is fully tipped (end of run 2 + 1.6 s)
+    # time within the loader cycle when the first bucket is fully tipped (end of run 2 + 1.6 s)
     t_tip = _run_end(tr, lv, 1) + 1.6
-    t_want = load_start + 8.0                         # hauler 0 is 8 s into its load stop
-    machines.append(dict(id="SP-LD-0001", kind="Loader", track=li, offset=round((t_tip - t_want) % gap, 3)))
-    # the hauler shows its load once the bucket has tipped
+    t_want = load_start + 4.0                         # hauler 0 has been standing 4 s
+    # a machine plays its track at (time - offset): tip at loader time t_tip when the scene is at t_want
+    machines.append(dict(id="SP-LD-0001", kind="Loader", track=li, offset=round((t_want - t_tip) % gap, 3)))
+    # the hauler shows its load once the first bucket has tipped
     tracks[hl]["load_from"] = t_want + 0.6
 
-    # other loaders
-    li2 = add_track("Loader", loader_rehandle((37.0, 40.5), (40.5, 42.5)))
+    # loader rehandling the pit stockpile
+    li2 = add_track("Loader", loader_rehandle((38.0, 40.5), (42.0, 42.5)))
     machines.append(dict(id="SP-LD-0002", kind="Loader", track=li2, offset=3.0))
-    li3 = add_track("Loader", loader_rehandle((-98.0, -36.5), (-98.0, -32.6)))
+    # the plant: one loader feeds the crusher's hopper from the feed stockpile...
+    li3 = add_track("Loader", loader_v((-28.5, -84.5), (-33.0, -91.0), (-26.5, -92.0)))
     machines.append(dict(id="SP-LD-0003", kind="Loader", track=li3, offset=0.0))
-    li4 = add_track("Loader", loader_rehandle((-87.5, -34.5), (-86.0, -30.2)))
+    # ...and one works the product stockpile under the stacker
+    li4 = add_track("Loader", loader_rehandle((35.0, -100.0), (31.0, -97.5)))
     machines.append(dict(id="SP-LD-0004", kind="Loader", track=li4, offset=5.0))
-    boom_test = lambda c: (lerp(BOOM_CARRY, -60.0, ease(1 - abs(2 * (c % 1.0) - 1))), lerp(BUCKET_RACK, 10.0, ease(1 - abs(2 * ((c * 2) % 1.0) - 1))))
-    li5 = add_track("Loader", stationary("Loader", -72.0, -38.0, 180.0, 16.0, boom_test))
+    # two loaders are not needed today: one is in the workshop, one is parked
+    li5 = add_track("Loader", parked("Loader", -70.0, -35.5, 180.0, PARKED_LOADER))
     machines.append(dict(id="SP-LD-0005", kind="Loader", track=li5, offset=0.0))
-    idle = lambda c: (lerp(BOOM_CARRY, -18.0, ease(1 - abs(2 * (c % 1.0) - 1))), BUCKET_RACK)
-    li6 = add_track("Loader", stationary("Loader", -58.0, -66.0, 90.0, 22.0, idle))
+    li6 = add_track("Loader", parked("Loader", -93.5, -50.0, 90.0, PARKED_LOADER))
     machines.append(dict(id="SP-LD-0006", kind="Loader", track=li6, offset=0.0))
 
-    # dozers
+    # dozers: one pushing up the muck pile at the toe of the north face, one ripping the pit
+    # floor, one spreading on the dump pad; the other three are parked in the yard
     for k, (a, b, rip) in enumerate([
-        ((17.0, 48.8), (8.5, 48.8), False),            # toe of the north face, pushing to the muck pile
-        ((-21.0, 48.8), (-12.5, 48.8), True),
-        ((24.0, 58.4), (40.0, 58.4), False),            # first bench
-        ((91.0, -67.5), (101.0, -67.5), False),         # spreading on the dump pad
-        ((90.0, -72.0), (100.0, -72.0), False),
-        ((-70.5, -24.5), (-77.0, -22.0), False),        # yard stockpile
+        ((-30.0, 51.0), (-16.5, 51.0), False),
+        ((45.0, 28.0), (57.0, 28.0), True),
+        ((90.0, -70.0), (100.0, -69.0), False),
     ]):
         di = add_track("Dozer", dozer_push(a, b, rip))
         machines.append(dict(id=f"SP-DZ-{k + 1:04d}", kind="Dozer", track=di, offset=round(k * 2.7, 3)))
+    for k, z in enumerate((-44.5, -39.5, -34.5)):
+        di = add_track("Dozer", parked("Dozer", -92.0, z, 90.0, PARKED_DOZER))
+        machines.append(dict(id=f"SP-DZ-{k + 4:04d}", kind="Dozer", track=di, offset=0.0))
     return tracks, machines
 
 
@@ -424,8 +478,14 @@ def sat_gap(A, B):
     return best
 
 
+HAULER_CLEARANCE = 3.0          # metres two haul trucks must keep apart, passing or queueing
+
+
 def check(tracks, machines, frames, dt, horizon):
+    """Closest approach over the horizon: (gap, ids, time) for any two machines, and the same
+    for any two haul trucks."""
     worst = (1e9, None)
+    worst_hl = (1e9, None)
     times = np.arange(0.0, horizon, 0.5)
     pos = []
     for m in machines:
@@ -441,7 +501,9 @@ def check(tracks, machines, frames, dt, horizon):
                 g = sat_gap(ca, cb)
                 if g < worst[0]:
                     worst = (g, (machines[a]["id"], machines[b]["id"], float(times[k])))
-    return worst
+                if machines[a]["kind"] == machines[b]["kind"] == "Hauler" and g < worst_hl[0]:
+                    worst_hl = (g, (machines[a]["id"], machines[b]["id"], float(times[k])))
+    return worst, worst_hl
 
 
 def main():
@@ -463,7 +525,7 @@ def main():
             fr["flag"] = fr["flag"] | (tg >= tr["load_from"])
         frames.append(fr)
     horizon = max(tr["period"] for tr in tracks) * 2
-    worst = check(tracks, machines, frames, a.dt, horizon)
+    worst, worst_hl = check(tracks, machines, frames, a.dt, horizon)
     out = dict(generator="ArtSource/terrain/quarry_fleet.py", dt=a.dt, channels=CHANNELS, tracks=[], machines=machines)
     for tr, fr in zip(tracks, frames):
         data = np.stack([fr["x"], fr["z"], fr["heading"], fr["travel"], fr["p1"], fr["p2"], fr["steer"],
@@ -474,13 +536,14 @@ def main():
     with open(a.out, "w") as f:
         json.dump(out, f, separators=(",", ":"))
         f.write("\n")
-    print("haul loop %.1f s, truck spacing %.1f s" % (tracks[0]["period"], tracks[0]["period"] / 6))
+    print("haul loop %.1f s, truck spacing %.1f s" % (tracks[0]["period"], tracks[0]["period"] / HAULERS_ON_LOOP))
     for i, tr in enumerate(tracks):
         print("track %2d %-6s period %6.1f s" % (i, tr["kind"], tr["period"]))
     print("closest approach %.2f m (%s)" % worst)
+    print("closest haul trucks %.2f m (%s)" % worst_hl)
     if a.preview:
         preview(ground, tracks, frames, a.preview)
-    if worst[0] < 0.0:
+    if worst[0] < 0.0 or worst_hl[0] < HAULER_CLEARANCE:
         sys.exit(2)
 
 

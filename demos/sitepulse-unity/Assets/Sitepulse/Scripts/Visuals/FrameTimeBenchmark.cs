@@ -12,7 +12,8 @@ namespace DeviceChain.Sitepulse.Visuals
     /// <c>-sitepulse-benchmark</c>. It turns vsync off, sets 1920x1080, flies the main camera on a
     /// slow orbit over the site, waits out a warm-up, then records every frame's time for a fixed
     /// window and writes the average FPS, the 99th-percentile and worst frame times to
-    /// <c>sitepulse-benchmark.txt</c> beside the executable before quitting.
+    /// <c>sitepulse-benchmark.txt</c> beside the executable before quitting. It also saves the
+    /// first measured frame as <c>sitepulse-benchmark.png</c>, as a record of what was drawn.
     /// </summary>
     public sealed class FrameTimeBenchmark : MonoBehaviour
     {
@@ -20,8 +21,8 @@ namespace DeviceChain.Sitepulse.Visuals
 
         public float warmupSeconds = 10f;
         public float windowSeconds = 30f;
-        public Vector3 orbitCentre = new Vector3(5f, 0f, -5f);
-        public float orbitRadius = 175f;
+        public Vector3 orbitCentre = new Vector3(0f, 0f, -25f);
+        public float orbitRadius = 190f;
         public float orbitHeight = 70f;
         [Tooltip("Seconds per full orbit.")]
         public float orbitPeriod = 120f;
@@ -57,6 +58,7 @@ namespace DeviceChain.Sitepulse.Visuals
             if (start < 0f)
             {
                 start = now;
+                ScreenCapture.CaptureScreenshot(Path.Combine(OutputDir, "sitepulse-benchmark.png"));
                 return;
             }
             samples.Add(Time.unscaledDeltaTime);
@@ -65,6 +67,8 @@ namespace DeviceChain.Sitepulse.Visuals
             Application.Quit();
             enabled = false;
         }
+
+        static string OutputDir => Path.GetDirectoryName(Application.dataPath) ?? ".";
 
         void Report()
         {
@@ -77,7 +81,9 @@ namespace DeviceChain.Sitepulse.Visuals
             var sorted = new List<float>(samples);
             sorted.Sort();
             float p99 = sorted[Mathf.Min(sorted.Count - 1, (int)(sorted.Count * 0.99f))];
-            int machines = FindObjectsByType<MachineRig>(FindObjectsSortMode.None).Length;
+            // the preview's machines are DontSave objects, which FindObjectsByType does not return
+            int machines = 0;
+            foreach (var f in FindObjectsByType<QuarryFleetPreview>(FindObjectsSortMode.None)) machines += f.Count;
             var terrain = Terrain.activeTerrain;
             int trees = terrain != null && terrain.terrainData != null ? terrain.terrainData.treeInstanceCount : 0;
             string line =
@@ -85,7 +91,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 $"p99_ms={1000 * p99:F2} max_ms={1000 * max:F2} res={Screen.width}x{Screen.height} machines={machines} trees={trees} " +
                 $"gpu=\"{SystemInfo.graphicsDeviceName}\" cpu=\"{SystemInfo.processorType}\" quality={QualitySettings.names[QualitySettings.GetQualityLevel()]} " +
                 $"backend={(Application.isEditor ? "editor" : SystemInfo.graphicsDeviceType.ToString())}";
-            File.WriteAllText(Path.Combine(Path.GetDirectoryName(Application.dataPath) ?? ".", "sitepulse-benchmark.txt"), line + "\n");
+            File.WriteAllText(Path.Combine(OutputDir, "sitepulse-benchmark.txt"), line + "\n");
             Debug.Log("[benchmark] " + line);
         }
     }

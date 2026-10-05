@@ -14,12 +14,16 @@ WHAT IT BUILDS
   the terrain; elevations in metres above an arbitrary datum, with the yard pad at 100 m):
 
     * CUT     an open pit, floor at 90 m, cut into the south slope of a hill. Its walls are
-              benched: 9 m faces at ~72 degrees with 7 m berms, as many benches as the hill is
-              high (four on the north wall, one or two elsewhere).
-    * RAMP    a 16 m two-way haul ramp from the pit floor up to the yard level at about 9-10 %
+              benched: faces of 8.5-10 m at 70-75 degrees with berms of 6-8 m, as many benches
+              as the hill is high (four on the north wall, one or two elsewhere), each face
+              with a talus apron at its toe and blast-irregular outlines.
+    * RAMP    a 20 m two-way haul ramp from the pit floor up to the yard level at about 9-10 %
               grade, cut into the pit's south wall, with a safety windrow on its drop side.
     * FILL    a dump pad at 98 m pushed out over a gully to the east, with a tipping face at the
               angle of repose and a windrow along its crest.
+    * PLANT   a level pad at 100 m south of the return road for the primary crusher, screen and
+              radial stacker, with the feed stockpile beside the crusher's hopper and the
+              product stockpile under the stacker's head, and a spur road from the return road.
     * YARD    a level pad at 100 m (parking, workshop, site office, containers) with the refuel
               bay at its south-east corner.
     * ROADS   haul and service roads joining them into one loop (cut -> fill -> yard -> cut).
@@ -70,19 +74,31 @@ DATUM = 100.0             # elevation that maps to Unity y = 0 (the yard pad)
 CELL = WORLD / (HEIGHT_RES - 1)
 
 PIT = dict(                # the cut
-    rect=(-35.0, 55.0, 20.0, 52.0),   # floor x0, x1, z0, z1
+    rect=(-38.0, 62.0, 20.0, 56.0),   # floor x0, x1, z0, z1
     corner=8.0,                         # floor corner radius
     floor=90.0,
-    bench_h=9.0,                        # face height
-    face_deg=72.0,                      # face angle
-    berm=7.0,                           # berm width
-    edge_noise=0.9,                     # +- metres of irregularity along the faces
+    # one entry per bench, from the floor up: face height (m), face angle (deg), berm width (m).
+    # Real benches are blasted to a design but never come out identical.
+    benches=[(9.0, 74.0, 6.5), (10.0, 71.0, 8.0), (8.5, 75.0, 6.0), (9.5, 70.0, 7.5),
+             (9.0, 73.0, 6.5), (9.0, 72.0, 7.0), (9.0, 72.0, 7.0), (9.0, 72.0, 7.0)],
+    berm_noise=1.8,                     # +- metres the berm width wanders along its length
+    edge_noise=2.4,                     # +- metres of low-frequency wander of the faces (blast outlines)
+    edge_rough=0.6,                     # +- metres of short-wavelength roughness on the faces
+    scree=(0.8, 2.6),                   # talus at the toe of each face: min and max height (m)
 )
 
 PADS = [                   # level platforms: name, (x0, x1, z0, z1), corner, elevation, cut and fill batters (rise per run)
     dict(name="yard", rect=(-108.0, -46.0, -76.0, -14.0), corner=6.0, elev=100.0, cut=0.67, fill=0.5),
     dict(name="fill", rect=(78.0, 108.0, -74.0, -36.0), corner=6.0, elev=98.0, cut=0.67, fill=0.73),
+    dict(name="plant", rect=(-42.0, 38.0, -107.0, -75.0), corner=4.0, elev=100.0, cut=0.67, fill=0.5),
 ]
+
+# The processing plant (ArtSource/props/build_props.py, crusher_plant): its origin is the centre of
+# the primary crusher's feed hopper and material flows along its +Z, through the crusher, up a
+# conveyor to the screen and up the radial stacker, whose head discharges PLANT_HEAD metres
+# downstream onto the product stockpile.
+PLANT = dict(x=-20.0, z=-92.0, heading=90.0)
+PLANT_HEAD = 38.5
 
 # Roads: control points (x, z, elevation). The centreline is a Catmull-Rom spline through the
 # points; the design elevation is linear in arc length between control points (None: graded
@@ -90,7 +106,7 @@ PADS = [                   # level platforms: name, (x0, x1, z0, z1), corner, el
 # full running width; cut/fill are batter steepness (rise per metre of run) where the road
 # meets the existing surface; windrow raises a safety bund on any edge that drops > 1 m.
 ROADS = [
-    dict(name="pit-ramp", kind="haul-ramp", width=16.0, cut=2.5, fill=2.5, windrow=True,
+    dict(name="pit-ramp", kind="haul-ramp", width=20.0, cut=2.5, fill=2.5, windrow=True,
          pts=[(-24.0, 30.0, 90.0), (-27.0, 20.0, 90.0), (-14.0, 11.0, None), (20.0, 10.0, None),
               (54.0, 10.5, None), (68.0, 2.0, 100.0), (71.0, -12.0, 100.0)]),
     dict(name="fill-road", kind="haul-road", width=14.0, cut=0.67, fill=0.6, windrow=True,
@@ -98,44 +114,55 @@ ROADS = [
     dict(name="fill-return", kind="haul-road", width=12.0, cut=0.67, fill=0.5, windrow=True,
          pts=[(80.0, -66.0, 98.0), (60.0, -70.0, 98.8), (30.0, -68.0, 99.6), (0.0, -64.0, 100.0),
               (-30.0, -62.0, 100.0), (-44.0, -62.0, 100.0)]),
+    dict(name="plant-road", kind="service-road", width=10.0, cut=0.67, fill=0.5, windrow=False,
+         pts=[(6.0, -64.0, 100.0), (8.0, -72.0, 100.0), (10.0, -78.0, 100.0)]),
     dict(name="yard-road", kind="haul-road", width=12.0, cut=0.67, fill=0.5, windrow=False,
          pts=[(-44.0, -30.0, 100.0), (-10.0, -30.0, 100.0), (30.0, -26.0, 100.0), (55.0, -20.0, 100.0),
               (71.0, -12.0, 100.0)]),
 ]
 
-PILES = [                  # cones at the angle of repose: name, centre, peak height above base, base elevation
-    dict(name="muck-pile", x=-2.0, z=57.0, h=7.0, base=90.0, kind="muck"),
-    dict(name="pit-stockpile", x=47.0, z=44.0, h=4.5, base=90.0, kind="stockpile"),
-    dict(name="yard-stockpile-1", x=-98.0, z=-22.0, h=5.0, base=100.0, kind="stockpile"),
-    dict(name="yard-stockpile-2", x=-84.0, z=-21.0, h=4.0, base=100.0, kind="stockpile"),
-    dict(name="fill-heap-1", x=97.0, z=-66.0, h=2.2, base=98.0, kind="heap"),
-    dict(name="fill-heap-2", x=102.0, z=-58.0, h=2.0, base=98.0, kind="heap"),
-    dict(name="fill-heap-3", x=89.0, z=-70.0, h=1.8, base=98.0, kind="heap"),
+PILES = [                  # heaps at the angle of repose: name, centre, height above base, base elevation;
+                           # optional len/heading (a ridge), flat (top cut off), lumps (relief, m)
+    dict(name="muck-pile", x=4.0, z=56.5, h=5.5, base=90.0, kind="muck", len=24.0, heading=90.0, flat=0.85, lumps=0.7),
+    dict(name="pit-stockpile", x=50.0, z=46.0, h=4.5, base=90.0, kind="stockpile", len=6.0, heading=60.0, flat=0.8, lumps=0.4),
+    dict(name="yard-stockpile-1", x=-98.0, z=-22.0, h=5.0, base=100.0, kind="stockpile", len=4.0, heading=100.0, flat=0.85),
+    dict(name="yard-stockpile-2", x=-84.0, z=-21.0, h=4.0, base=100.0, kind="stockpile", flat=0.8),
+    dict(name="feed-stockpile", x=-23.0, z=-78.5, h=4.2, base=100.0, kind="stockpile", len=8.0, heading=120.0, flat=0.8, lumps=0.5),
+    dict(name="product-stockpile", x=PLANT["x"] + PLANT_HEAD + 1.5, z=PLANT["z"], h=7.0, base=100.0, kind="stockpile", lumps=0.2),
+    dict(name="fill-heap-1", x=104.5, z=-62.0, h=2.2, base=98.0, kind="heap", lumps=0.4),
+    dict(name="fill-heap-2", x=104.0, z=-41.5, h=2.0, base=98.0, kind="heap", lumps=0.4),
+    dict(name="fill-heap-3", x=104.0, z=-70.5, h=1.8, base=98.0, kind="heap", lumps=0.4),
 ]
 REPOSE_DEG = 37.0
 
 ZONES = [                  # labelled areas (Unity x/z bounds), matching the platform's area tokens
-    dict(token="sp-zone-cut", label="Cut", rect=(-35.0, 55.0, 20.0, 52.0)),
+    dict(token="sp-zone-cut", label="Cut", rect=(-38.0, 62.0, 20.0, 56.0)),
     dict(token="sp-zone-fill", label="Fill", rect=(78.0, 108.0, -74.0, -36.0)),
     dict(token="sp-zone-yard", label="Yard", rect=(-108.0, -46.0, -76.0, -14.0)),
 ]
 
 SPOTS = {                  # named places the scene and the simulation refer to (x, z, heading deg from north)
-    "refuel-bay": (-56.0, -66.0, 90.0),
-    "refuel-queue": (-72.0, -66.0, 90.0),
+    "refuel-bay": (-59.5, -56.5, 0.0),          # a lay-by beside the yard's through lane
+    "refuel-queue": (-59.5, -64.0, 0.0),
     "workshop": (-70.0, -36.0, 0.0),
     "site-office": (-96.0, -64.0, 0.0),
-    "parking": (-96.0, -45.0, 90.0),
-    "load-point": (4.0, 33.0, 90.0),
+    "parking": (-92.0, -40.0, 90.0),
+    "load-point": (4.0, 35.5, 90.0),
     "dump-point": (101.0, -51.0, 270.0),
+    "plant-hopper": (PLANT["x"], PLANT["z"], PLANT["heading"]),
+    "plant-feed": (PLANT["x"] - 6.5, PLANT["z"], PLANT["heading"]),   # where a loader tips into the hopper
 }
 
 VEGETATION = dict(
     spacing=6.5,           # jittered grid pitch (m)
-    clearance=14.0,        # keep this far from any worked ground
+    clearance=14.0,        # keep trees this far from any worked ground...
+    fringe=5.0,            # ...but let scrub (shrubs, small broadleaves) grow up to this close
+    fringe_keep=0.32,      # chance a candidate in that fringe gets a plant
     max_slope_deg=30.0,
     forest_cover=0.10,     # fBm threshold for forest patches (lower = more forest)
+    horizon_cover=0.16,    # how much lower that threshold falls on the far hills (denser forest)
     sparse_keep=0.05,      # chance a candidate outside the forest patches still gets a tree
+    pine_share=0.36,       # share of pines in the forest patches (more on high ground)
 )
 
 # ==================================================================================
@@ -252,25 +279,52 @@ class Quarry:
 
     # ---- the pit -----------------------------------------------------------------
     def pit(self):
+        """Benched walls around the floor. Each bench has its own face height, face angle and
+        berm width; the berm width also wanders along its length, the outline wanders at a
+        blast's scale, crests are sharp and each face has a talus apron at its toe."""
         p = PIT
-        X, Z = self.X, self.Z
-        d = sd_round_rect(X, Z, p["rect"], p["corner"])
-        d = d + p["edge_noise"] * fbm(self.noise[4], X, Z, 9.0, 2)      # blast-irregular faces
-        fw = p["bench_h"] / math.tan(math.radians(p["face_deg"]))
-        period = fw + p["berm"]
+        X, Z, n = self.X, self.Z, self.noise
+        d0 = sd_round_rect(X, Z, p["rect"], p["corner"])
+        # the south wall is where the ramp comes down and the trucks turn: keep its toe clean
+        # and on its line, with no talus or wander reaching into the haul road on the floor
+        worked = smoothstep(p["rect"][2] - 2.0, p["rect"][2] + 10.0, Z)
+        d = (d0 + worked * p["edge_noise"] * fbm(n[4], X, Z, 38.0, 3)       # blast outlines
+             + worked * p["edge_rough"] * fbm(n[5], X, Z, 7.0, 2, offset=4.0))   # face roughness
         dd = np.maximum(d, 0.0)
-        k = np.floor(dd / period)
-        rr = dd - k * period
-        rise = np.clip(rr / fw, 0.0, 1.0)
-        rise = rise * rise * (3 - 2 * rise) * 0.25 + rise * 0.75         # soften crest and toe slightly
-        stair = p["floor"] + (k + rise) * p["bench_h"]
-        stair = stair + 0.12 * fbm(self.noise[5], X, Z, 6.0, 2) * (d < 0) # rough floor
+        floor = p["floor"]
+        stair = np.full(X.shape, floor)
+        start = np.zeros(X.shape)                                            # where this bench's face begins
+        base = floor
+        is_berm = np.zeros(X.shape, bool)
+        talus = np.full(X.shape, -np.inf)
+        smin, smax = p["scree"]
+        tan_r = math.tan(math.radians(REPOSE_DEG))
+        for k, (h, deg, berm) in enumerate(p["benches"]):
+            fw = h / math.tan(math.radians(deg))
+            bw = berm + p["berm_noise"] * fbm(n[1], X, Z, 26.0, 2, offset=11.0 * k)
+            u = dd - start                                                   # metres into this bench
+            on_face = (u >= 0) & (u < fw)
+            on_berm = (u >= fw) & (u < fw + bw)
+            stair = np.where(on_face, base + h * u / fw, stair)
+            stair = np.where(u >= fw, base + h, stair)
+            is_berm |= on_berm
+            # talus: loose rock at 37 degrees against the toe, its height wandering along the face
+            sh = (smin + (smax - smin) * smoothstep(-0.3, 0.5, fbm(n[3], X, Z, 13.0, 2, offset=7.0 * k + 3.0))) * worked + 1e-3
+            u_meet = sh / (h / fw - tan_r)
+            us = d - start                                                   # signed: the floor's apron is at d < 0
+            near = (us > -sh / tan_r) & (us < u_meet)
+            talus = np.where(near, np.maximum(talus, base + sh + us * tan_r), talus)
+            start = start + fw + bw
+            base += h
+        stair = np.where(dd >= start, np.inf, stair)                       # past the last bench: no cut
+        stair = np.maximum(stair, talus)
+        stair = stair + 0.12 * fbm(n[5], X, Z, 6.0, 2) * (d < 0)          # rough floor
         cut = stair < self.H
         self.H = np.where(cut, stair, self.H)
         self.masks["pit"] = cut
         self.masks["pit_floor"] = cut & (d <= 0.0)
-        self.masks["berm"] = cut & (rr >= fw) & (d > 0.0)
-        self.pit_fw = fw
+        self.masks["berm"] = cut & is_berm & (d > 0.0)
+        self.masks["talus"] = cut & np.isfinite(talus) & (talus >= stair - 0.05)
 
     # ---- level pads --------------------------------------------------------------
     def pad(self, pd):
@@ -298,16 +352,32 @@ class Quarry:
 
     # ---- piles -------------------------------------------------------------------
     def pile(self, pl):
-        rad = pl["h"] / math.tan(math.radians(REPOSE_DEG))
+        """A heap at the angle of repose around a point, or around a segment `len` metres long
+        at `heading` (a ridge, as a row of truck loads or a muck pile along a face makes). Its
+        outline wobbles, a `flat` fraction below 1 cuts the top off where a machine has worked
+        it, and `lumps` metres of low-frequency relief keep it from reading as a cone."""
+        tan_r = math.tan(math.radians(REPOSE_DEG))
+        h, L = pl["h"], pl.get("len", 0.0)
+        rad = h / tan_r * 1.3 + L / 2
         sl = self._window(pl["x"] - rad - 2, pl["x"] + rad + 2, pl["z"] - rad - 2, pl["z"] + rad + 2)
         Xs, Zs = self.X[sl], self.Z[sl]
-        dist = np.hypot(Xs - pl["x"], Zs - pl["z"])
-        ang = np.arctan2(Zs - pl["z"], Xs - pl["x"])
-        wob = 1.0 + 0.08 * np.sin(3 * ang + pl["x"]) + 0.05 * np.sin(5 * ang + pl["z"])
-        cone = pl["h"] - dist / wob * math.tan(math.radians(REPOSE_DEG))
+        hd = math.radians(pl.get("heading", 0.0))
+        ux, uz = math.sin(hd), math.cos(hd)
+        along = np.clip((Xs - pl["x"]) * ux + (Zs - pl["z"]) * uz, -L / 2, L / 2)
+        dx, dz = Xs - (pl["x"] + along * ux), Zs - (pl["z"] + along * uz)
+        dist = np.hypot(dx, dz)
+        ang = np.arctan2(dz, dx)
+        ph = sum(ord(c) for c in pl["name"]) * 0.37
+        wob = (1.0 + 0.10 * np.sin(2 * ang + ph) + 0.08 * np.sin(3 * ang + 2.1 * ph)
+               + 0.05 * np.sin(5 * ang + 0.7 * ph))
+        cone = h - dist / wob * tan_r
+        cone = np.minimum(cone, h * pl.get("flat", 1.0))
         cone = np.where(cone > 0.6, cone, 0.6 * smoothstep(-0.6, 0.6, cone))   # soft toe
-        top = pl["base"] + cone
-        top = top + 0.15 * fbm(self.noise[3], Xs, Zs, 2.5, 2) * (cone > 0.2)
+        lumps = pl.get("lumps", 0.3)
+        relief = (lumps * fbm(self.noise[3], Xs, Zs, 4.5, 2, offset=ph)
+                  + 0.15 * fbm(self.noise[5], Xs, Zs, 1.6, 2, offset=ph))
+        top = pl["base"] + cone + relief * smoothstep(0.1, 1.2, cone)
+        top = np.where(h - dist / wob * tan_r > -0.6, top, -np.inf)          # nothing past the toe
         cur = self.H[sl]
         self.H[sl] = np.maximum(cur, top)
         mk = self.masks.setdefault("pile", np.zeros_like(self.H, bool))
@@ -354,6 +424,11 @@ class Quarry:
             wm = self.masks.setdefault("windrow", np.zeros_like(self.H, bool))
             wm[sl] |= drop & (prof > 0.2)
             core = core & ~(drop & (prof > 0.2))
+        # wheel paths: a band either side of each lane's centre (lanes at +-w/2 on a two-way road)
+        frac = best / w
+        wheel = core & (((frac > 0.18) & (frac < 0.36)) | ((frac > 0.64) & (frac < 0.82)))
+        wk = self.masks.setdefault("wheel", np.zeros_like(self.H, bool))
+        wk[sl] |= wheel
         self.H[sl] = H
         rm = self.masks.setdefault("road", np.zeros_like(self.H, bool))
         rm[sl] |= core
@@ -384,20 +459,27 @@ class Quarry:
         X, Z, n = self.X, self.Z, self.noise
         slope = self.slope_deg()
         disturbed = np.abs(H - N) > 0.25
-        worked = mk["road"] | mk["pad_yard"] | mk["pad_fill"] | mk["pit_floor"]
+        pads = mk["pad_yard"] | mk["pad_plant"]                          # compacted gravel
+        earth = mk["road"] | mk["pad_fill"] | mk["pit_floor"]            # worked rocky earth
+        worked = pads | earth
         rock = smoothstep(38.0, 50.0, slope)
-        rock = np.maximum(rock, mk["berm"] * 0.35)                       # rubble on the berms
-        grav = worked * 1.0 + mk["berm"] * 0.65
-        grav = np.where(mk["pit_floor"], 0.75 + 0.25 * fbm(n[5], X, Z, 14.0, 2), grav)
-        dirt = (disturbed & ~worked) * 1.0 + mk.get("pile", 0) * 1.0 + mk.get("windrow", 0) * 1.0
-        dirt = dirt + mk["pit_floor"] * 0.3 * (fbm(n[4], X, Z, 11.0, 3) > 0.1)
+        rock = np.maximum(rock, mk["berm"] * 0.45)                       # rubble on the berms
+        rock = np.maximum(rock, mk["talus"] * 0.55)                      # loose rock at the toes
+        grav = pads * 1.0
+        # wheel paths: compacted, lighter bands along each lane of the roads
+        grav = np.maximum(grav, mk["wheel"] * 0.45)
+        dirt = (disturbed & ~pads) * 1.0 + mk.get("pile", 0) * 1.0 + mk.get("windrow", 0) * 1.0
+        dirt = dirt + earth * 1.0 + mk["berm"] * 0.6
+        # the pit floor is rock fines: greyer than the haul roads, with darker earthy patches
+        grav = grav + mk["pit_floor"] * (0.45 + 0.4 * smoothstep(-0.1, 0.3, fbm(n[4], X, Z, 11.0, 3)))
+        dirt = np.where(mk["pit_floor"] & ~mk.get("pile", False), 0.5, dirt)
         # natural ground: grass, thinning to dirt on steeper ground and in patches
         patch = smoothstep(0.25, 0.55, fbm(n[1], X, Z, 35.0, 4, offset=9.0))
         natural = ~disturbed
         grass = natural * (1.0 - smoothstep(24.0, 36.0, slope)) * (1.0 - 0.85 * patch)
         dirt = dirt + natural * (1.0 - grass) * 0.9
-        # vehicle wear: dirt fringes either side of the roads
-        grass = grass * (1.0 - 0.6 * self._near(mk["road"] | mk["pad_yard"], 4.0))
+        # vehicle wear: dirt fringes either side of the roads and pads
+        grass = grass * (1.0 - 0.6 * self._near(mk["road"] | pads, 4.0))
         w = np.stack([rock, grav * (1 - rock), dirt * (1 - rock), grass * (1 - rock)])
         w = np.maximum(w, 0.0)
         w[2] = np.where(w.sum(0) < 1e-3, 1.0, w[2])
@@ -434,20 +516,28 @@ class Quarry:
         gx, gz = gx.ravel(), gz.ravel()
         ci = np.clip(np.round((gx + WORLD / 2) / CELL).astype(int), 0, HEIGHT_RES - 1)
         ri = np.clip(np.round((gz + WORLD / 2) / CELL).astype(int), 0, HEIGHT_RES - 1)
-        ok = (~near[ri, ci]) & (self.slope[ri, ci] < v["max_slope_deg"])
-        ok &= (np.abs(gx) < WORLD / 2 - 6) & (np.abs(gz) < WORLD / 2 - 6)
+        inner = self._near(self.disturbed, v["fringe"]) > 0.0
+        flat = self.slope[ri, ci] < v["max_slope_deg"]
+        inside = (np.abs(gx) < WORLD / 2 - 6) & (np.abs(gz) < WORLD / 2 - 6)
+        ok = (~near[ri, ci]) & flat & inside
+        fringe = near[ri, ci] & ~inner[ri, ci] & flat & inside & (rng.random(gx.shape) < v["fringe_keep"])
         forest = fbm(self.noise[2], gx, gz, 90.0, 4, offset=3.0)
-        dense = forest > v["forest_cover"]
+        thr = v["forest_cover"] - v["horizon_cover"] * smoothstep(220.0, 420.0, np.hypot(gx, gz))
+        dense = forest > thr
         keep = ok & (dense | (rng.random(gx.shape) < v["sparse_keep"]))
         # thin the forest a little at its edges
-        keep &= ~(dense & (forest < v["forest_cover"] + 0.06) & (rng.random(gx.shape) < 0.5))
+        keep &= ~(dense & (forest < thr + 0.06) & (rng.random(gx.shape) < 0.5))
+        keep |= fringe
         out = []
         r = rng.random(gx.shape)
         for i in np.nonzero(keep)[0]:
             elevation = self.H[ri[i], ci[i]]
             hi_ground = elevation > DATUM + 18.0
-            if dense[i]:
-                kind = "pine" if (r[i] < 0.62 or hi_ground) else ("broadleaf" if r[i] < 0.9 else "shrub")
+            if fringe[i]:
+                kind = "shrub" if r[i] < 0.6 else "broadleaf"
+            elif dense[i]:
+                pine = v["pine_share"] + (0.12 if hi_ground else 0.0)
+                kind = "pine" if r[i] < pine else ("broadleaf" if r[i] < pine + (1 - pine) * 0.75 else "shrub")
             else:
                 kind = "shrub" if r[i] < 0.45 else ("broadleaf" if r[i] < 0.75 else "pine")
             s = float(rng.uniform(0.8, 1.25))
@@ -488,7 +578,7 @@ def _in_rect(x, z, rect, inset=0.0):
 
 # props: prefab name, x, z, heading (deg, clockwise from north)
 PROPS = [
-    # yard: office, workshop, containers, parking, sign, light
+    # yard: offices, workshop, containers, fuel station, sign, lights
     ("site_office", -96.0, -66.0, 0.0),
     ("site_office", -96.0, -56.5, 0.0),
     ("workshop", -70.0, -36.0, 180.0),
@@ -496,16 +586,19 @@ PROPS = [
     ("container_red", -100.5, -40.0, 90.0),
     ("container_blue", -104.0, -48.0, 90.0),
     ("container_red", -86.0, -74.0, 0.0),
-    ("fuel_tank", -56.0, -73.5, 0.0),
-    ("light_tower", -60.0, -58.0, 225.0),
+    ("fuel_tank", -66.5, -56.5, 90.0),          # dispenser faces the refuel bay
+    ("light_tower", -71.0, -60.5, 30.0),
     ("light_tower", -48.0, -20.0, 200.0),
     ("light_tower", 30.0, 26.0, 330.0),
     ("light_tower", 90.0, -34.0, 160.0),
+    ("light_tower", -36.0, -78.0, 140.0),
     ("site_sign", -40.0, -24.0, 270.0),
-] + [("cone", -64.0 + 3.0 * i, -60.0, 0.0) for i in range(6)] \
-  + [("cone", -50.0, -61.0 - 2.5 * i, 0.0) for i in range(4)] \
-  + [("barrier", -46.0, -40.0 - 3.2 * i, 90.0) for i in range(6)] \
-  + [("barrier", -108.0 + 3.2 * i, -78.5, 0.0) for i in range(5)]
+    # the processing plant
+    ("crusher_plant", PLANT["x"], PLANT["z"], PLANT["heading"]),
+] + [("cone", -55.6, -64.0 + 3.0 * i, 0.0) for i in range(7)] \
+  + [("barrier", -45.0, -40.0 - 3.2 * i, 90.0) for i in range(6)] \
+  + [("barrier", -108.0 + 3.2 * i, -78.5, 0.0) for i in range(5)] \
+  + [("barrier", -41.0 + 3.2 * i, -107.5, 0.0) for i in range(4)]
 
 
 def elevation_at(q, x, z):
@@ -537,7 +630,7 @@ def features(q, veg):
                      elev_range=ELEV_RANGE, datum=DATUM,
                      position=[-WORLD / 2, ELEV_MIN - DATUM, -WORLD / 2],
                      layers=["rock", "gravel", "dirt", "grass"]),
-        pit=dict(PIT, floor_y=PIT["floor"] - DATUM, face_width_m=round(q.pit_fw, 3)),
+        pit=dict(PIT, floor_y=PIT["floor"] - DATUM),
         pads=[dict(name=p["name"], rect=p["rect"], y=p["elev"] - DATUM) for p in PADS],
         zones=ZONES,
         roads=roads,

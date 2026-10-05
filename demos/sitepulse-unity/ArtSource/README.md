@@ -17,7 +17,7 @@ with the code change, so the models in `Assets/Sitepulse/Art/Models/` always mat
 | `machines/loader.py` | Articulated wheel loader |
 | `machines/hauler.py` | Rigid-frame haul truck |
 | `machines/kit_selftest.py` | Exercises the kit builders the dozer does not use |
-| `props/build_props.py` | Site props and vegetation (site office, workshop, containers, fuel tank, light tower, cones, barriers, sign, trees, shrubs, boulders) |
+| `props/build_props.py` | Site props and vegetation (site office, workshop, containers, fuel tank, light tower, cones, barriers, sign, trees, shrubs, boulders) and the processing plant (primary crusher, conveyor, screen, radial stacker) |
 | `terrain/quarry_heightmap.py` | The quarry terrain: heightmap, terrain-layer masks, roads, zones, vegetation and prop placement |
 | `terrain/quarry_fleet.py` | The 18-machine preview choreography played on the terrain |
 | `textures/prepare_textures.py` | Fetches the CC0 terrain materials and prepares them for Unity terrain layers |
@@ -98,6 +98,8 @@ python3 terrain/quarry_fleet.py [--preview out/terrain/fleet.png]
 `quarry_heightmap.py` writes straight into `../Assets/Sitepulse/Art/Terrain/`: the packed 16-bit
 heightmap, one mask per terrain layer and `quarry_features.json` (terrain size and elevation
 mapping, zones, roads with per-segment grade, named spots, vegetation and prop placements).
+The processing plant's position (`PLANT`) is set there too: the plant prop is placed from it, and
+so are its pad, its feed stockpile and the product stockpile under the stacker's head.
 Its header documents the layout and every parameter; `--raw` also writes the plain RAW
 heightmap that Unity's terrain **Import Raw** reads. `quarry_fleet.py` then writes
 `../Assets/Sitepulse/Data/quarry_fleet.json` and fails if any two machines' footprints touch at
