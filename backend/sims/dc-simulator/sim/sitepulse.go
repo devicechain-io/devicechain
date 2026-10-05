@@ -11,7 +11,8 @@ import (
 
 // sitepulse is the slice-4 heavy-equipment construction-site scenario
 // (sim-slice4-sitepulse-spec.md), at its S1 size: eighteen machines (six dozers, six
-// wheel loaders, six haul trucks) and one crusher plant on a site of three zones. The
+// wheel loaders, six haul trucks) and one crusher plant on a site of three zones, with a geofence round the
+// pit. The
 // closed loop each machine can run is
 //
 //	fuel_pct drains -> sp-rule-lowfuel fires below 15% -> raiseAlarm("low-fuel")
@@ -352,6 +353,7 @@ func (s *sitepulse) Manifest() SimManifest {
 		Assets: []AssetSpec{
 			{Token: SitepulseRefuelStationToken, Name: "Refuelling Station", AssetTypeToken: SitepulseAssetTypeToken},
 		},
+		GeoFences: sitepulseGeoFences(),
 		Profiles: []ProfileSpec{
 			{
 				Token:    SitepulseProfileToken,
