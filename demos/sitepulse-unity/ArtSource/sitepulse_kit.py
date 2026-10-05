@@ -77,6 +77,8 @@ PALETTE = {
     # tree is one draw call (the forest has some ten thousand of them)
     "vegetation": ("M_Vegetation",       (1.0, 1.0, 1.0),        0.88, 0.0, None),
     "cabin":      ("M_Cabin_White",      (0.60, 0.61, 0.60),     0.60, 0.0, None),
+    "tank":       ("M_Tank_Sage",        (0.230, 0.300, 0.250),  0.62, 0.1, None),   # the diesel tank's shell
+    "grime":      ("M_Grime",            (0.085, 0.078, 0.066),  0.90, 0.0, None),   # road dirt up a tank's lower side
     "box_blue":   ("M_Container_Blue",   (0.022, 0.070, 0.180),  0.60, 0.2, None),
     "box_red":    ("M_Container_Red",    (0.200, 0.035, 0.018),  0.65, 0.2, None),
     "concrete":   ("M_Concrete",         (0.40, 0.39, 0.36),     0.92, 0.0, None),
@@ -237,7 +239,7 @@ class Piece:
         for f in faces:
             f.material_index = idx
         if bevel > 0:
-            edges = list({e for v in verts for e in v.link_edges})
+            edges = list(dict.fromkeys(e for v in verts for e in v.link_edges))      # ordered, not a set
             bmesh.ops.bevel(self.bm, geom=edges + list(verts), offset=bevel, segments=segs,
                             profile=0.5, affect="EDGES", clamp_overlap=True, material=idx)
 
@@ -298,7 +300,7 @@ class Piece:
                                     radius1=r, radius2=r if r2 is None else r2,
                                     depth=d.length, matrix=M)
         verts = res["verts"]
-        faces = list({f for v in verts for f in v.link_faces})
+        faces = list(dict.fromkeys(f for v in verts for f in v.link_faces))
         self._finish(verts, faces, key, bevel)
         self._tag(b0)
 
@@ -394,6 +396,50 @@ def _srgb(c):
     return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
 
 
+def canonical_order(bm):
+    """Put the faces and vertices in an order that depends only on the geometry. Without it the
+    same model came out of two builds with its faces in a different order and some polygons
+    started at a different corner (so cut into different triangles): the same surfaces, the same
+    look, but a different file. With it a rebuild is byte-identical."""
+    def r(v):
+        return tuple(round(c, 5) for c in v)
+    # each face starts at its lowest corner, so a polygon is cut into the same triangles: a
+    # rebuilt face may start anywhere round its loop, and the triangles follow the start
+    color_layers = [lay for coll in (bm.loops.layers.color, bm.loops.layers.float_color) for lay in coll.values()]
+    uv_layers = list(bm.loops.layers.uv.values())
+    face_layers = [lay for coll in (bm.faces.layers.int, bm.faces.layers.float) for lay in coll.values()]
+    for f in list(bm.faces):
+        loops = list(f.loops)
+        k = min(range(len(loops)), key=lambda i: r(loops[i].vert.co))
+        if k == 0:
+            continue
+        verts = [lp.vert for lp in loops[k:] + loops[:k]]
+        data = {lp.vert: ([tuple(lp[lay]) for lay in color_layers], [tuple(lp[lay].uv) for lay in uv_layers])
+                for lp in loops}
+        fdata = [f[lay] for lay in face_layers]
+        mat, smooth = f.material_index, f.smooth
+        bm.faces.remove(f)
+        g = bm.faces.new(verts)
+        g.material_index, g.smooth = mat, smooth
+        for lay, val in zip(face_layers, fdata):
+            g[lay] = val
+        for lp in g.loops:
+            cols, uvs = data[lp.vert]
+            for lay, val in zip(color_layers, cols):
+                lp[lay] = val
+            for lay, val in zip(uv_layers, uvs):
+                lp[lay].uv = val
+    bm.normal_update()
+    # BMesh sorts by a number, so rank the elements first
+    vrank = {v: i for i, v in enumerate(sorted(bm.verts, key=lambda v: r(v.co)))}
+    bm.verts.sort(key=lambda v: vrank[v])
+    frank = {f: i for i, f in enumerate(sorted(bm.faces, key=lambda f: (
+        f.material_index, r(f.calc_center_median()), r(f.normal), tuple(sorted(r(v.co) for v in f.verts)))))}
+    bm.faces.sort(key=lambda f: frank[f])
+    bm.verts.index_update()
+    bm.faces.index_update()
+
+
 def attach(name, piece, local_blender=False, smooth_angle=35):
     """Turn a Piece into <name>_LOD0 under node <name> (vertices in the node's local frame)."""
     n = NODES[name]
@@ -429,6 +475,7 @@ def attach(name, piece, local_blender=False, smooth_angle=35):
             v.co = inv @ U(*v.co)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    canonical_order(bm)
     me = bpy.data.meshes.new(name + "_LOD0_Mesh")
     bm.to_mesh(me); bm.free()
     _activate_colors(me)
@@ -693,9 +740,13 @@ def lod_objects(lod):
     return [o for o in S["coll"].objects if o.type == "MESH" and o.name.endswith("_" + lod)]
 
 
-def make_lod1(ratio=0.45, keep_full=()):
+def make_lod1(ratio=0.45, keep_full=(), planar=False):
     """LOD1 = LOD0 minus detail-tagged faces, collapse-decimated to `ratio` (nodes in keep_full
-    keep their stripped mesh undecimated -- e.g. tiny parts decimation would destroy)."""
+    keep their stripped mesh undecimated -- e.g. tiny parts decimation would destroy). With
+    planar, faces that lie in one plane are merged instead (a planar dissolve of 5 degrees), which
+    keeps every edge of a boxy structure. Collapse decimation gave the plant (many repeated
+    railings, ladders and trusses) a different LOD1 from one build to the next, even in a fresh,
+    single-threaded Blender; a planar dissolve gives the same one every time."""
     for o in lod_objects("LOD0"):
         bm = bmesh.new(); bm.from_mesh(o.data)
         dl = bm.faces.layers.int.get("detail")
@@ -711,8 +762,12 @@ def make_lod1(ratio=0.45, keep_full=()):
         o1.parent = o.parent
         if len(me.polygons) and o.parent.name not in keep_full:
             mod = o1.modifiers.new("dec", "DECIMATE")
-            mod.ratio = ratio
-            mod.use_collapse_triangulate = True
+            if planar:
+                mod.decimate_type = "DISSOLVE"
+                mod.angle_limit = math.radians(5.0)
+            else:
+                mod.ratio = ratio
+                mod.use_collapse_triangulate = True
             dg = bpy.context.evaluated_depsgraph_get()
             nm = bpy.data.meshes.new_from_object(o1.evaluated_get(dg))
             o1.modifiers.clear(); o1.data = nm; nm.name = o1.name + "_Mesh"

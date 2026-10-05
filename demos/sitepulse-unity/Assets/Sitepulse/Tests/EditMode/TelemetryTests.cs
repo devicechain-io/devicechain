@@ -39,7 +39,10 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(new[] { "low-fuel" }, truck.Alarms);
             Assert.Throws<ArgumentException>(() => truck.Raise("brake-wear"));
             var plant = new DeviceReading("SP-PL-0001", DeviceReading.Profile.Plant);
-            Assert.Throws<ArgumentException>(() => plant.Raise(AlarmKeys.Overheat));
+            Assert.Throws<ArgumentException>(() => plant.Raise(AlarmKeys.EngineOverheat));
+            // spelled as the platform's rules spell them
+            Assert.AreEqual(new[] { "low-fuel", "engine-overheat", "tyre-pressure-low" }, AlarmKeys.All);
+            Assert.Throws<ArgumentException>(() => truck.Raise("overheat"));
         }
 
         [Test]
@@ -56,6 +59,59 @@ namespace DeviceChain.Sitepulse.Tests
             r.Set(MeasurementKeys.PayloadT, 0);
             Assert.AreEqual("0 t", r.Format(MeasurementKeys.PayloadT));
             Assert.IsNull(new DeviceReading("x", DeviceReading.Profile.Plant).Format(MeasurementKeys.ThroughputTph));
+        }
+
+        [Test]
+        public void TheRunningStateIsThePlantsBooleanMetric()
+        {
+            var plant = new DeviceReading("SP-PL-0001", DeviceReading.Profile.Plant).Set(MeasurementKeys.PlantRunning, true);
+            Assert.IsTrue(plant.TryGetFlag(MeasurementKeys.PlantRunning, out bool running) && running);
+            Assert.AreEqual("Yes", plant.Format(MeasurementKeys.PlantRunning));
+            plant.Set(MeasurementKeys.PlantRunning, false);
+            Assert.AreEqual("No", plant.Format(MeasurementKeys.PlantRunning));
+            // a boolean is not a number, and the equipment profile has no running state
+            Assert.Throws<ArgumentException>(() => plant.Set(MeasurementKeys.PlantRunning, 1.0));
+            Assert.Throws<ArgumentException>(() => plant.Set(MeasurementKeys.ThroughputTph, true));
+            Assert.Throws<ArgumentException>(() => new DeviceReading("SP-HL-0001", DeviceReading.Profile.Equipment).Set(MeasurementKeys.PlantRunning, true));
+        }
+
+        [Test]
+        public void OnlyTheProfilesCommandsCanBeRecorded()
+        {
+            var truck = new DeviceReading("SP-HL-0006", DeviceReading.Profile.Equipment);
+            truck.SetCommand(CommandKeys.GotoRefuel, CommandState.Sent);
+            Assert.AreEqual("goto-refuel", truck.Command);
+            Assert.AreEqual(CommandState.Sent, truck.CommandState);
+            truck.SetCommand(CommandKeys.GotoArea, CommandState.Queued);
+            Assert.AreEqual("goto-area", truck.Command);
+            Assert.AreEqual(new[] { "goto-area", "goto-refuel" }, CommandKeys.Equipment);
+
+            // a command the profile does not define is refused and leaves the last one in place
+            Assert.Throws<ArgumentException>(() => truck.SetCommand("return-to-base", CommandState.Sent));
+            Assert.Throws<ArgumentException>(() => truck.SetCommand("sp-cmd-refuel", CommandState.Sent));   // a definition token, not a key
+            Assert.Throws<ArgumentException>(() => truck.SetCommand(null, CommandState.Sent));
+            Assert.AreEqual("goto-area", truck.Command);
+            Assert.AreEqual(CommandState.Queued, truck.CommandState);
+
+            // the plant answers no commands
+            var plant = new DeviceReading("SP-PL-0001", DeviceReading.Profile.Plant);
+            Assert.Throws<ArgumentException>(() => plant.SetCommand(CommandKeys.GotoRefuel, CommandState.Sent));
+        }
+
+        [Test]
+        public void CardsShowLabelsForTheKeys()
+        {
+            var labels = new System.Collections.Generic.List<string>();
+            foreach (var k in MeasurementKeys.Equipment) labels.Add(MeasurementKeys.Label(k));
+            Assert.AreEqual(new[] { "Fuel", "Engine temp", "Engine hours", "Payload", "Tyre pressure" }, labels);
+            Assert.AreEqual("Throughput", MeasurementKeys.Label(MeasurementKeys.ThroughputTph));
+            Assert.AreEqual("Running", MeasurementKeys.Label(MeasurementKeys.PlantRunning));
+            Assert.AreEqual("Low fuel", AlarmKeys.Label(AlarmKeys.LowFuel));
+            Assert.AreEqual("Go refuel", CommandKeys.Label(CommandKeys.GotoRefuel));
+            Assert.Throws<ArgumentException>(() => MeasurementKeys.Label("haul_cycle_s"));
+            Assert.AreEqual(MeasurementKeys.FuelPct, AlarmKeys.Metric(AlarmKeys.LowFuel));
+            Assert.AreEqual(MeasurementKeys.EngineTempC, AlarmKeys.Metric(AlarmKeys.EngineOverheat));
+            Assert.AreEqual(MeasurementKeys.TyrePressureKpa, AlarmKeys.Metric(AlarmKeys.TyrePressureLow));
         }
 
         [Test]

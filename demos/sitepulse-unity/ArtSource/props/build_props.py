@@ -5,8 +5,9 @@ Sitepulse site props and vegetation, built as code with the machine kit.
 
     blender --background --python props/build_props.py -- [name ...] [--out DIR]
 
-With no names every prop is built. Each prop is written as <name>.glb and <name>_LOD1.glb
-(same node tree, as for the machines) plus one props_check.json with the triangle counts.
+With no names every prop is built, each in a Blender of its own, so the files are the same
+byte for byte on every build. Each prop is written as <name>.glb and <name>_LOD1.glb (same node
+tree, as for the machines) plus one props_check.json with the triangle counts.
 
 Same conventions as the machines (see sitepulse_kit.py): Unity metres, X right, Y up, Z forward,
 origin on the ground at the prop's footprint centre. Every prop has one node, Body, under Root;
@@ -44,6 +45,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 import sitepulse_kit as K                                   # noqa: E402
 
 import bmesh                                                # noqa: E402
+import bpy                                                  # noqa: E402
 from mathutils import Vector                                # noqa: E402
 
 
@@ -59,7 +61,7 @@ def blob(p, c, r, key, rng, scale=(1.0, 1.0, 1.0), subdiv=2, jitter=0.15):
         n = v.co.normalized()
         k = 1.0 + rng.uniform(-jitter, jitter)
         v.co = Vector((c[0] + n.x * r * scale[0] * k, c[1] + n.y * r * scale[1] * k, c[2] + n.z * r * scale[2] * k))
-    faces = list({f for v in verts for f in v.link_faces})
+    faces = list(dict.fromkeys(f for v in verts for f in v.link_faces))
     p._finish(verts, faces, key, 0)
     p._tag(b0)
 
@@ -192,7 +194,7 @@ def rock(name, shape, seed):
             k = 1.0 + rng.uniform(-0.22, 0.22)
             y = n.y * sy * k
             v.co = Vector((n.x * sx * k, max(y, -0.25 * sy) + 0.12 * sy, n.z * sz * k))
-        faces = list({f for v in res["verts"] for f in v.link_faces})
+        faces = list(dict.fromkeys(f for v in res["verts"] for f in v.link_faces))
         p._finish(res["verts"], faces, "rock", 0)
         p._tag(b0)
         p.vcol = shade(sy * 1.3, low=0.72, high=1.08, jitter=0.09, seed=seed)
@@ -285,14 +287,28 @@ def fuel_tank(rng):
         p.box((sx * BX - 0.1, 0, -BZ), (sx * BX + 0.1, BH, BZ), "concrete", 0.01)
         p.box((-BX, 0, sx * BZ - 0.1), (BX, BH, sx * BZ + 0.1), "concrete", 0.01)
     for x in (-3.0, 0.0, 3.0):                                                               # saddles
-        p.box((x - 0.25, 0.1, -1.0), (x + 0.25, 0.85, 1.0), "steel", 0.0)
+        p.box((x - 0.25, 0.1, -1.0), (x + 0.25, 0.85, 1.0), "paint_dark", 0.0)
     y, r = 2.05, 1.3
-    p.cyl((-4.0, y, 0), (4.0, y, 0), r, "cabin", 24)
+    # the shell in a muted sage, not white, so it sits in the site's palette; stiffener rings
+    # and the dished ends in bare plate, and a band of road dirt along its lower side
+    p.cyl((-4.0, y, 0), (4.0, y, 0), r, "tank", 24)
     for sx in (-1, 1):
-        p.cyl((sx * 4.0, y, 0), (sx * 4.25, y, 0), r, "cabin", 24, r2=r * 0.78)
+        p.cyl((sx * 4.0, y, 0), (sx * 4.25, y, 0), r, "tank", 24, r2=r * 0.78)
+        p.cyl((sx * 4.0, y, 0), (sx * 4.08, y, 0), r + 0.04, "plate", 24)                    # end ring
+        p.cyl((sx * 4.25, y, 0), (sx * 4.28, y, 0), r * 0.42, "plate", 16)                   # manway
+    for x in (-2.0, 2.0):
+        p.cyl((x - 0.05, y, 0), (x + 0.05, y, 0), r + 0.035, "plate", 24)                    # stiffener ring
+    # the grime: a thin curved skin over the lower part of the shell, from low on one side,
+    # under the tank, to low on the other ((z, y) profile, extruded along the tank)
+    arc = [math.radians(a) for a in range(196, 345, 8)]
+    skin = [((r + 0.015) * math.cos(a), y + (r + 0.015) * math.sin(a)) for a in arc]
+    skin += [((r - 0.04) * math.cos(a), y + (r - 0.04) * math.sin(a)) for a in reversed(arc)]
+    p.prism(skin, "x", -4.0, 4.0, "grime", 0.0)
     p.box((-1.2, y + r - 0.05, -0.45), (1.2, y + r + 0.05, 0.45), "steel", 0.0)              # top walkway
-    p.box((-4.0, y - 0.18, r - 0.02), (4.0, y + 0.18, r + 0.03), "paint", 0.0)               # diesel band
-    p.box((-4.0, y - 0.18, -r - 0.03), (4.0, y + 0.18, -r + 0.02), "paint", 0.0)
+    p.box((-3.6, y - 0.16, r - 0.02), (3.6, y + 0.16, r + 0.04), "paint", 0.0)               # diesel band
+    p.box((-3.6, y - 0.16, -r - 0.04), (3.6, y + 0.16, -r + 0.02), "paint", 0.0)
+    p.box((0.9, y + 0.25, r - 0.03), (2.3, y + 0.75, r + 0.05), "reflect", 0.0)              # product placard
+    p.box((-2.3, y + 0.25, -r - 0.05), (-0.9, y + 0.75, -r + 0.03), "reflect", 0.0)
     with p.detail():
         p.tube([(-1.1, y + r, 0.45), (-1.1, y + r + 1.0, 0.45), (1.1, y + r + 1.0, 0.45), (1.1, y + r, 0.45)], 0.025, "paint", 6)
         for zz in (-0.25, 0.25):                                                             # ladder
@@ -680,6 +696,19 @@ PROPS = {
     "crusher_plant": (crusher_plant, 0.5), "worker": (worker, 0.6),
 }
 BUDGET = {"crusher_plant": 22000}            # triangles at LOD0; everything else 6000
+PLANAR_LOD1 = {"crusher_plant"}              # LOD1 by planar dissolve (see sitepulse_kit.make_lod1)
+
+
+def build(name, out):
+    fn, ratio = PROPS[name]
+    K.reset(name, out)
+    fn(random.Random("sitepulse-" + name))                     # deterministic per prop
+    K.make_lod1(ratio, planar=name in PLANAR_LOD1)
+    rep = K.report(budget_lod0=BUDGET.get(name, 6000))
+    K.export(name)
+    print(f"{name:<16} LOD0 {rep['tris_LOD0']:>6}  LOD1 {rep['tris_LOD1']:>6}  {rep['bbox_unity_m']}", flush=True)
+    return dict(tris_LOD0=rep["tris_LOD0"], tris_LOD1=rep["tris_LOD1"], bbox=rep["bbox_unity_m"],
+                materials=rep["materials"], ok=rep["budget"]["ok"])
 
 
 def main():
@@ -689,18 +718,27 @@ def main():
         i = argv.index("--out")
         out = argv[i + 1]
         del argv[i:i + 2]
+    if "--one" in argv:
+        # a child: build one prop and leave its summary for the parent
+        name = argv[argv.index("--one") + 1]
+        with open(os.path.join(out, f".check_{name}.json"), "w") as f:
+            json.dump(build(name, out), f)
+        return
+    # Every prop is built in a fresh Blender, so no prop's files depend on what was built
+    # before it in the same session or on which props were asked for.
+    import subprocess
     names = argv or list(PROPS)
+    os.makedirs(out, exist_ok=True)
     summary = {}
     for name in names:
-        fn, ratio = PROPS[name]
-        K.reset(name, out)
-        fn(random.Random("sitepulse-" + name))                 # deterministic per prop
-        K.make_lod1(ratio)
-        rep = K.report(budget_lod0=BUDGET.get(name, 6000))
-        K.export(name)
-        summary[name] = dict(tris_LOD0=rep["tris_LOD0"], tris_LOD1=rep["tris_LOD1"], bbox=rep["bbox_unity_m"],
-                             materials=rep["materials"], ok=rep["budget"]["ok"])
-        print(f"{name:<16} LOD0 {rep['tris_LOD0']:>6}  LOD1 {rep['tris_LOD1']:>6}  {rep['bbox_unity_m']}", flush=True)
+        if name not in PROPS:
+            raise SystemExit(f"unknown prop: {name}")
+        subprocess.run([bpy.app.binary_path, "--background", "--factory-startup", "--python", os.path.abspath(__file__),
+                        "--", "--one", name, "--out", out], check=True)
+        check = os.path.join(out, f".check_{name}.json")
+        with open(check) as f:
+            summary[name] = json.load(f)
+        os.remove(check)
     with open(os.path.join(out, "props_check.json"), "w") as f:
         json.dump(summary, f, indent=1)
     print("ALL_OK", all(v["ok"] for v in summary.values()))

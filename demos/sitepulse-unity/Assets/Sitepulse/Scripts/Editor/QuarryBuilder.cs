@@ -729,7 +729,8 @@ namespace DeviceChain.Sitepulse.EditorTools
 
         /// <summary>The stylized sky (Art/Shaders/StylizedSky.shader): a soft gradient whose horizon is
         /// the fog colour, so the hazy horizon has no edge, a warm glow round the sun and a few flat,
-        /// two-tone cumulus low over the horizon.</summary>
+        /// softly shaded cumulus low over the horizon, low enough to sit in the sky of a shot taken
+        /// from the pit floor.</summary>
         static Material Sky()
         {
             var m = LoadOrCreateMaterial(SkyPath, "Sitepulse/Stylized Sky");
@@ -740,8 +741,9 @@ namespace DeviceChain.Sitepulse.EditorTools
             m.SetColor("_CloudShade", new Color(0.73f, 0.79f, 0.88f));
             m.SetFloat("_CloudCover", 0.6f);
             m.SetFloat("_CloudSlices", 9f);
-            m.SetFloat("_CloudSize", 0.34f);
-            m.SetVector("_CloudElevation", new Vector4(5f, 22f, 0f, 0f));
+            m.SetFloat("_CloudSize", 0.4f);
+            m.SetVector("_CloudElevation", new Vector4(4f, 13f, 0f, 0f));
+            m.SetFloat("_CloudAzimuth", 0f);
             m.SetFloat("_CloudSeed", 3.7f);
             EditorUtility.SetDirty(m);
             return m;

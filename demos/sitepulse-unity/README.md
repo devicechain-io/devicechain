@@ -120,15 +120,20 @@ cards, a pulsing ring under a machine with an active alarm, and a dashed geofenc
 of the cut with the zone's name on the line. A card shows only what the Sitepulse device profiles
 model, under the platform's own measurement keys: for a dozer, loader or haul truck `fuel_pct`,
 `engine_temp_c`, `engine_hours`, `payload_t` and `tyre_pressure_kpa`, its speed (derived from its
-location), its active alarms (`low-fuel`, `overheat`, `tyre-pressure-low`) and the state of the
-last command sent to it (QUEUED, SENT, SUCCESSFUL or FAILED); for the primary crusher
-`throughput_tph` and whether it is running. Each card draws one small typed record,
-`DeviceReading` (`Scripts/Domain/Telemetry.cs`), which refuses a key its profile does not define.
+location), its active alarms (`low-fuel`, `engine-overheat`, `tyre-pressure-low`) and the state
+of the last command sent to it (`goto-area` or `goto-refuel`; QUEUED, SENT, SUCCESSFUL or
+FAILED); for the primary crusher `throughput_tph` and `plant_running`, a boolean. Each card draws
+one small typed record, `DeviceReading` (`Scripts/Domain/Telemetry.cs`), keyed by those platform
+keys, which refuses a key, an alarm or a command its profile does not define. The keys stay the
+data model; the card shows each one by a short label with its unit ("Fuel 57 %", "Tyre pressure
+690 kPa", "Throughput 720 t/h", "Running Yes"), the values set in a monospaced face.
 The example alarm is a truck at the refuel bay with `low-fuel` raised and the `goto-refuel`
 command that the low-fuel rule sends. Every frame the overlay finds each target's bounds on
 screen, lands its leader on the machine's cab roof (or on the crusher's hopper), and places its
-card where it covers no machine and as little of the cut as it can; a target hidden by the
-ground gets no card. It is one overlay that is switched on and off as a whole, so the same scene
+card where it covers no machine, no card's target, no other card or leader and as little of the
+cut as it can; no two leaders cross or run alongside each other, so leaders from neighbouring
+targets fan out. A target hidden by the ground gets no card, nor does a machine much smaller on
+screen than the largest one in view, and the zone's name never sits over a card's target. It is one overlay that is switched on and off as a whole, so the same scene
 also makes clean stills.
 
 **The values are illustrative.** Until the scene is connected to a DeviceChain instance the
@@ -138,8 +143,9 @@ data. Connecting the scene replaces that method's source with the observed readi
 and the records do not change.
 
 The sky (`Art/Shaders/StylizedSky.shader`) is drawn as code to match: a soft gradient whose
-horizon is the scene's fog colour, a warm glow round the sun, and a few flat, two-tone cumulus
-low over the horizon.
+horizon is the scene's fog colour, a warm glow round the sun, and a few flat cumulus low over the
+horizon, shaded softly from a cool base to a lit crown. `_CloudAzimuth` on the sky material
+turns the cloud layer round the horizon, to keep a cloud clear of the frame's edge in a still.
 
 `FrameTimeBenchmark` is off unless a player build is started with `-sitepulse-benchmark`; it
 flies a camera over the site and writes the average FPS and the 99th-percentile and worst frame

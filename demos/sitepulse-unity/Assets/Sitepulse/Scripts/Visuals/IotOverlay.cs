@@ -26,9 +26,15 @@ namespace DeviceChain.Sitepulse.Visuals
     ///
     /// Layout is done every frame in screen space: each target's on-screen bounds are taken from
     /// its renderers, its leader lands on the top of those bounds, and its card is placed where it
-    /// covers no machine, no other card and as little of the cut as it can.
+    /// covers no machine, no other card, no other leader and as little of the cut as it can. A
+    /// machine much smaller on screen than the largest one in view gets no card, since its leader
+    /// would point at a speck; the zone's name never sits over a card's target; and no two
+    /// leaders cross or run alongside each other, so leaders from neighbouring targets fan out.
     /// </summary>
+    // laid out in LateUpdate after everything else, so after a camera that moves in LateUpdate
+    // (the benchmark's fly-over, a follow camera)
     [ExecuteAlways]
+    [DefaultExecutionOrder(1000)]
     public sealed class IotOverlay : MonoBehaviour, IQuarryEffect
     {
         public QuarryFleetPreview fleet;
@@ -49,11 +55,13 @@ namespace DeviceChain.Sitepulse.Visuals
         public string alarmKey = AlarmKeys.LowFuel;
         [Tooltip("The plant device's id.")]
         public string plantId = "SP-PL-0001";
+        [Tooltip("A machine gets a card only if it is at least this share of the height of the largest machine in view.")]
+        [Range(0f, 1f)] public float minTargetShare = 0.35f;
         [Tooltip("Card size relative to a 1080-pixel-high frame.")]
         [Range(0.5f, 2f)] public float cardScale = 1f;
         public Material lineMaterial, ringMaterial;
 
-        static readonly Color Panel = new Color(0.06f, 0.08f, 0.10f, 0.88f);
+        static readonly Color Panel = new Color(0.06f, 0.08f, 0.10f, 0.96f);
         static readonly Color Accent = new Color(0.36f, 0.86f, 0.96f, 1f);
         static readonly Color Ok = new Color(0.36f, 0.86f, 0.46f, 1f);
         static readonly Color Warn = new Color(1f, 0.70f, 0.12f, 1f);
@@ -61,7 +69,9 @@ namespace DeviceChain.Sitepulse.Visuals
         static readonly Color Muted = new Color(0.60f, 0.68f, 0.72f, 1f);
 
         const float RefH = 1080f;                     // layout units: pixels of a 1080-high frame
-        const float CardW = 248f, Pad = 12f, HeadH = 46f, RowH = 23f, AlarmH = 26f, Margin = 18f;
+        const float CardW = 252f, Pad = 12f, HeadH = 46f, RowH = 23f, AlarmH = 26f, Margin = 18f;
+        const float LeaderGap = 28f;                  // how close two leaders may run, away from their pins
+        const float LeaderFree = 30f;                 // the length of a leader next to its pin the gap ignores
         const int MaxRows = 4;
 
         [Serializable] sealed class Spot { public float x, y, z; }
@@ -102,6 +112,8 @@ namespace DeviceChain.Sitepulse.Visuals
         readonly List<Rect> blockers = new List<Rect>();
         readonly List<Rect> placed = new List<Rect>();
         readonly List<Target> chosen = new List<Target>();
+        readonly List<(Vector2 a, Vector2 b)> leaders = new List<(Vector2, Vector2)>();
+        readonly List<Rect> targetRects = new List<Rect>();
         readonly List<Vector2> fenceScreen = new List<Vector2>();
         Rect fenceBox;
         readonly Vector3[] corners = new Vector3[8];
@@ -117,7 +129,7 @@ namespace DeviceChain.Sitepulse.Visuals
         List<Vector3> fenceBySouth = new List<Vector3>();
         float clock;
         static Texture2D dotTexture;
-        static Font font;
+        static Font font, mono;
 
         /// <summary>The readings the cards show, by device id.</summary>
         public IEnumerable<DeviceReading> Readings
@@ -128,12 +140,38 @@ namespace DeviceChain.Sitepulse.Visuals
             }
         }
 
-        void OnEnable() => QuarryEffects.Active.Add(this);
+        void OnEnable()
+        {
+            QuarryEffects.Active.Add(this);
+            RenderPipelineManager.beginCameraRendering += OnBeginCamera;
+        }
 
         void OnDisable()
         {
+            RenderPipelineManager.beginCameraRendering -= OnBeginCamera;
             QuarryEffects.Active.Remove(this);
             Clear();
+        }
+
+        /// <summary>
+        /// The cards hang on a plane just in front of the camera, so the plane must be where the
+        /// camera is when it draws. Placed in LateUpdate, it lagged a camera that something moved
+        /// later in the frame by that frame's motion, and at half a metre from the lens a few
+        /// centimetres of travel threw every card and pin some hundred pixels off its target. The
+        /// layout itself is in screen terms and stays as it was laid out.
+        /// </summary>
+        void OnBeginCamera(ScriptableRenderContext context, Camera cam)
+        {
+            if (root != null && show && canvasRect != null && cam == Camera.main) PlaceCanvas(cam);
+        }
+
+        void PlaceCanvas(Camera cam)
+        {
+            // the canvas: a plane just beyond the near clip, filling the view
+            float d = cam.nearClipPlane * 1.5f;
+            float hWorld = 2f * d * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+            canvasRect.SetPositionAndRotation(cam.transform.position + cam.transform.forward * d, cam.transform.rotation);
+            canvasRect.localScale = Vector3.one * (hWorld / RefH);
         }
 
         void Clear()
@@ -154,6 +192,10 @@ namespace DeviceChain.Sitepulse.Visuals
             root = new GameObject("IoT Overlay (generated)") { hideFlags = HideFlags.DontSave };
             root.transform.SetParent(transform, false);
             font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            // values are set in a monospaced face, so digits line up from card to card and frame
+            // to frame; the first of these the system has, else the card's own face
+            mono = mono != null ? mono : Font.CreateDynamicFontFromOSFont(new[] { "Consolas", "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono", "Menlo", "Courier New" }, 16);
+            if (mono == null) mono = font;
             dotTexture = dotTexture != null ? dotTexture : Disc(32);
 
             // one canvas just in front of the camera, laid out in pixels of a 1080-high frame
@@ -287,8 +329,9 @@ namespace DeviceChain.Sitepulse.Visuals
                 t.rows[i] = new Row
                 {
                     label = Label(card, "Key" + i, Vector2.zero, new Vector2(CardW * 0.55f, 20f), 15, FontStyle.Normal, Muted),
-                    value = Label(card, "Value" + i, Vector2.zero, new Vector2(CardW * 0.45f - Pad, 20f), 17, FontStyle.Bold, Ink),
+                    value = Label(card, "Value" + i, Vector2.zero, new Vector2(CardW * 0.45f - Pad, 20f), 16, FontStyle.Normal, Ink),
                 };
+                t.rows[i].value.font = mono;
                 t.rows[i].value.alignment = TextAnchor.UpperRight;
             }
             // the leader and the dot that marks where it lands
@@ -444,7 +487,6 @@ namespace DeviceChain.Sitepulse.Visuals
         /// <summary>A wheel loader's bucket load (t), and the loader that feeds the crusher.</summary>
         const float LoaderBucket = 6.2f;
         const string PlantFeeder = "SP-LD-0003";
-        const string RefuelCommand = "goto-refuel";
 
         static int Hash(string s)
         {
@@ -468,7 +510,7 @@ namespace DeviceChain.Sitepulse.Visuals
                     float cycle = fleet.CycleOf(PlantFeeder);
                     float tph = cycle > 0f ? LoaderBucket / cycle * 3600f : 0f;
                     r.Set(MeasurementKeys.ThroughputTph, Mathf.Round(tph / 10f) * 10f);
-                    r.Running = tph > 0f;
+                    r.Set(MeasurementKeys.PlantRunning, tph > 0f);
                     continue;
                 }
                 var rig = t.rig;
@@ -487,9 +529,9 @@ namespace DeviceChain.Sitepulse.Visuals
                     // the low-fuel rule sends the truck to the refuel bay: sent while it drives
                     // there, successful once it stands in the bay
                     r.Set(MeasurementKeys.FuelPct, 11);
-                    r.SetCommand(RefuelCommand, t.speed < 0.3f ? CommandState.Successful : CommandState.Sent);
+                    r.SetCommand(CommandKeys.GotoRefuel, t.speed < 0.3f ? CommandState.Successful : CommandState.Sent);
                 }
-                if (alarm && alarmKey == AlarmKeys.Overheat) r.Set(MeasurementKeys.EngineTempC, 112);
+                if (alarm && alarmKey == AlarmKeys.EngineOverheat) r.Set(MeasurementKeys.EngineTempC, 112);
                 r.SpeedKmh = Math.Round(t.speed * 3.6f);
                 r.ClearAlarms();
                 if (alarm) r.Raise(alarmKey);
@@ -498,39 +540,37 @@ namespace DeviceChain.Sitepulse.Visuals
             foreach (var t in targets) Fill(t);
         }
 
-        static string KeyOf(string alarm) => alarm switch
-        {
-            AlarmKeys.LowFuel => MeasurementKeys.FuelPct,
-            AlarmKeys.Overheat => MeasurementKeys.EngineTempC,
-            _ => MeasurementKeys.TyrePressureKpa,
-        };
-
         /// <summary>Write a reading into its card: the rows it shows, its alarm and its status.</summary>
         void Fill(Target t)
         {
             var r = t.reading;
             int n = 0;
-            string alarmKeyRow = r.HasAlarm ? KeyOf(r.Alarms[0]) : null;
-            void RowOf(string key, string value, bool warn = false)
+            string alarmKeyRow = r.HasAlarm ? AlarmKeys.Metric(r.Alarms[0]) : null;
+            // each row: the label a person reads, and the value with its unit; the platform key
+            // stays the data model underneath
+            void RowOf(string label, string value, bool warn = false)
             {
                 if (n >= MaxRows || value == null) return;
                 var row = t.rows[n++];
-                Set(row.label, key);
+                Set(row.label, label);
                 Set(row.value, value);
                 row.value.color = warn ? Warn : Ink;
             }
+            void Metric(string key, bool warn = false) => RowOf(MeasurementKeys.Label(key), r.Format(key), warn);
+            bool stopped = false;
             if (r.Kind == DeviceReading.Profile.Plant)
             {
-                RowOf(MeasurementKeys.ThroughputTph, r.Format(MeasurementKeys.ThroughputTph));
-                RowOf("state", r.Running == true ? "Running" : "Stopped");
+                Metric(MeasurementKeys.ThroughputTph);
+                Metric(MeasurementKeys.PlantRunning);
+                stopped = r.TryGetFlag(MeasurementKeys.PlantRunning, out bool running) && !running;
             }
             else
             {
-                if (alarmKeyRow != null) RowOf(alarmKeyRow, r.Format(alarmKeyRow), warn: true);
-                RowOf(MeasurementKeys.PayloadT, r.Format(MeasurementKeys.PayloadT));
-                if (alarmKeyRow != MeasurementKeys.FuelPct) RowOf(MeasurementKeys.FuelPct, r.Format(MeasurementKeys.FuelPct));
-                RowOf("speed", r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null);
-                if (r.CommandState.HasValue) RowOf(r.Command, DeviceReading.Label(r.CommandState.Value));
+                if (alarmKeyRow != null) Metric(alarmKeyRow, warn: true);
+                Metric(MeasurementKeys.PayloadT);
+                if (alarmKeyRow != MeasurementKeys.FuelPct) Metric(MeasurementKeys.FuelPct);
+                RowOf("Speed", r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null);
+                if (r.CommandState.HasValue) RowOf(CommandKeys.Label(r.Command), DeviceReading.Label(r.CommandState.Value));
             }
             for (int i = 0; i < MaxRows; i++)
             {
@@ -539,8 +579,8 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             bool alarm = r.HasAlarm;
             t.alarmBar.gameObject.SetActive(alarm);
-            if (alarm) Set(t.alarmText, "ALARM  " + r.Alarms[0]);
-            var status = alarm ? Warn : (r.Running == false ? Muted : Ok);
+            if (alarm) Set(t.alarmText, "ALARM  " + AlarmKeys.Label(r.Alarms[0]));
+            var status = alarm ? Warn : (stopped ? Muted : Ok);
             t.dotImage.color = status;
             t.edge.color = alarm ? Warn : Accent;
             t.leaderImage.color = alarm ? Warn : Accent;
@@ -586,15 +626,11 @@ namespace DeviceChain.Sitepulse.Visuals
             if (root == null || cam == null) return;
             root.SetActive(show);
             if (!show) return;
-            float aspect = cam.pixelHeight > 0 ? cam.pixelWidth / (float)cam.pixelHeight : 16f / 9f;
+            float aspect = cam.aspect > 0f ? cam.aspect : 16f / 9f;            // the projection's, which places the targets
             float refW = RefH * aspect;
 
-            // the canvas: a plane just beyond the near clip, filling the view
-            float d = cam.nearClipPlane * 1.5f;
-            float hWorld = 2f * d * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
-            canvasRect.SetPositionAndRotation(cam.transform.position + cam.transform.forward * d, cam.transform.rotation);
             canvasRect.sizeDelta = new Vector2(refW, RefH);
-            canvasRect.localScale = Vector3.one * (hWorld / RefH);
+            PlaceCanvas(cam);
 
             // every machine on screen is something a card must not cover
             blockers.Clear();
@@ -619,12 +655,19 @@ namespace DeviceChain.Sitepulse.Visuals
                 if (t.rig == null) blockers.Add(Inflate(t.screen, 2f));
             }
 
-            // the cards: the alarm first, then the plant, then by how large the machine is on screen
+            // the cards: the alarm first, then the plant, then by how large the machine is on
+            // screen; a machine far smaller than the largest in view is a speck, and gets none
+            float largest = 0f;
+            foreach (var t in targets)
+                if (t.visible && t.rig != null) largest = Mathf.Max(largest, t.screen.height);
             chosen.Clear();
             foreach (var t in targets)
-                if (t.visible) chosen.Add(t);
+                if (t.visible && (t.rig == null || t.screen.height >= minTargetShare * largest)) chosen.Add(t);
             chosen.Sort(byPriority ??= (a, b) => Priority(b).CompareTo(Priority(a)));
             if (chosen.Count > maxCards) chosen.RemoveRange(maxCards, chosen.Count - maxCards);
+            // nothing is laid over a target that has a card: not the zone's name, not another card
+            targetRects.Clear();
+            foreach (var t in chosen) targetRects.Add(Inflate(t.screen, 6f));
 
             // the cut, on screen: cards may cover it, at a cost
             fenceScreen.Clear();
@@ -647,6 +690,7 @@ namespace DeviceChain.Sitepulse.Visuals
             }
 
             placed.Clear();
+            leaders.Clear();
             if (fenceChip != null)
             {
                 var size = fenceChip.sizeDelta * cardScale;
@@ -658,6 +702,7 @@ namespace DeviceChain.Sitepulse.Visuals
                     var v = cam.WorldToViewportPoint(p);
                     at = new Vector2(v.x * refW - size.x / 2f, v.y * RefH - size.y / 2f);
                     on = v.z > 0f && at.x > Margin && at.x + size.x < refW - Margin && at.y > Margin && at.y + size.y < RefH - Margin
+                         && !Hits(new Rect(at, size), targetRects) && !Hits(new Rect(at, size), blockers)
                          && !Hidden(cam, p + Vector3.up * 0.4f);
                     if (on) break;
                 }
@@ -739,8 +784,8 @@ namespace DeviceChain.Sitepulse.Visuals
                     if (r.xMin < Margin || r.yMin < Margin || r.xMax > refW - Margin || r.yMax > RefH - Margin) continue;
                     float cost = len + Mathf.Abs(ang - 90f) * 0.6f;
                     if (cost >= best) continue;
-                    if (Hits(r, placed) || Hits(r, blockers)) continue;
-                    if (LeaderHits(t.anchor, e, placed)) continue;
+                    if (Hits(r, placed) || Hits(r, blockers) || Hits(r, targetRects)) continue;
+                    if (LeaderHits(t.anchor, e, placed) || CoversLeader(r) || LeaderClash(t.anchor, e)) continue;
                     cost += CutCover(r) * 900f;
                     if (cost < best)
                     {
@@ -752,6 +797,7 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             if (float.IsPositiveInfinity(best)) return false;
             placed.Add(Inflate(bestRect, 8f));
+            leaders.Add((t.anchor, bestElbow));
             t.card.anchoredPosition = bestRect.position;
             t.card.localScale = Vector3.one * cardScale;
             var seg = bestElbow - t.anchor;
@@ -767,6 +813,53 @@ namespace DeviceChain.Sitepulse.Visuals
             foreach (var o in list)
                 if (o.Overlaps(r)) return true;
             return false;
+        }
+
+        /// <summary>Whether a card would sit over a leader already drawn.</summary>
+        bool CoversLeader(Rect r)
+        {
+            var big = Inflate(r, 6f);
+            foreach (var (a, b) in leaders)
+                for (int i = 0; i <= 12; i++)
+                    if (big.Contains(Vector2.Lerp(a, b, i / 12f))) return true;
+            return false;
+        }
+
+        /// <summary>Whether a leader from <paramref name="a"/> to <paramref name="b"/> crosses one
+        /// already drawn, or runs within <see cref="LeaderGap"/> of it anywhere beyond the first
+        /// <see cref="LeaderFree"/> of either from its pin. Two targets side by side may have pins
+        /// close together; their leaders must still part at once and go to different places.</summary>
+        bool LeaderClash(Vector2 a, Vector2 b)
+        {
+            float len = Vector2.Distance(a, b);
+            foreach (var (c, d) in leaders)
+            {
+                if (SegmentsCross(a, b, c, d)) return true;
+                float lenO = Vector2.Distance(c, d);
+                var c2 = lenO > LeaderFree ? Vector2.Lerp(c, d, LeaderFree / lenO) : d;
+                for (float s = LeaderFree; s <= len; s += 6f)
+                    if (DistanceToSegment(Vector2.Lerp(a, b, s / len), c2, d) < LeaderGap) return true;
+                // and the other way round, so a short new leader cannot end beside a long one
+                var a2 = len > LeaderFree ? Vector2.Lerp(a, b, LeaderFree / len) : b;
+                for (float s = LeaderFree; s <= lenO; s += 6f)
+                    if (DistanceToSegment(Vector2.Lerp(c, d, s / lenO), a2, b) < LeaderGap) return true;
+            }
+            return false;
+        }
+
+        static bool SegmentsCross(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+        {
+            static float Cross(Vector2 o, Vector2 p, Vector2 q) => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+            float d1 = Cross(c, d, a), d2 = Cross(c, d, b), d3 = Cross(a, b, c), d4 = Cross(a, b, d);
+            return d1 * d2 < 0f && d3 * d4 < 0f;
+        }
+
+        static float DistanceToSegment(Vector2 p, Vector2 a, Vector2 b)
+        {
+            var ab = b - a;
+            float l2 = ab.sqrMagnitude;
+            float t = l2 > 1e-6f ? Mathf.Clamp01(Vector2.Dot(p - a, ab) / l2) : 0f;
+            return Vector2.Distance(p, a + ab * t);
         }
 
         static bool LeaderHits(Vector2 a, Vector2 b, List<Rect> list)

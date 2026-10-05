@@ -80,7 +80,12 @@ blender --background --python props/build_props.py -- [name ...] --out out/props
 ```
 
 Builds every prop (or the ones named) with the same kit, writing `<name>.glb`, `<name>_LOD1.glb`
-and `props_check.json`; copy the `.glb` files into `../Assets/Sitepulse/Art/Models/Props/`. In
+and `props_check.json`; copy the `.glb` files into `../Assets/Sitepulse/Art/Models/Props/`.
+A rebuild is byte-identical, so a changed file is a changed model: each prop is built in a
+Blender of its own, the kit puts every mesh's faces and vertices in an order that depends only
+on the geometry (without it, two builds of one model differed in face order and triangulation),
+and the plant's LOD1 merges coplanar faces rather than collapsing edges, since collapse
+decimation gave the plant a different LOD1 from one build to the next. In
 Unity, **Sitepulse > Quarry > Build Prop Prefabs** pairs the two levels of each prop into a
 prefab with a `LODGroup` under `Assets/Sitepulse/Art/Prefabs/`.
 

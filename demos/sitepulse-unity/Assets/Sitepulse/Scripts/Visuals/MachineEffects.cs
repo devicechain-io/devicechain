@@ -29,7 +29,7 @@ namespace DeviceChain.Sitepulse.Visuals
         Vector3 lastPos;
         bool hasLast;
         float speed, accel, climb, clock, lastMove = -1e6f, phase;
-        float lastDump, lastBucket;
+        float lastDump, lastBucket, bucketTipped;
         bool tipping;
 
         static readonly int FlareColor = Shader.PropertyToID("_BaseColor");
@@ -74,8 +74,8 @@ namespace DeviceChain.Sitepulse.Visuals
                     if (bucket != null)
                     {
                         var b = LocalBounds(bucket, null);
-                        pour = QuarryEffects.Emitter(bucket, "Pour", new Vector3(b.center.x, b.min.y + 0.3f, b.max.z - 0.2f), fx.rock, Max(90), fx.chunk);
-                        QuarryEffects.AsChunks(pour, new Vector2(0.12f, 0.3f), 1.1f, new Vector2(0.3f, 1.2f));
+                        pour = QuarryEffects.Emitter(bucket, "Pour", new Vector3(b.center.x, b.min.y + 0.3f, b.max.z - 0.2f), fx.rock, Max(140), fx.chunk);
+                        QuarryEffects.AsChunks(pour, new Vector2(0.18f, 0.42f), 1.1f, new Vector2(0.3f, 1.2f));
                         QuarryEffects.Box(pour, new Vector3(b.size.x * 0.8f, 0.2f, 0.2f));
                         // the rock lands in what the bucket is over (a truck body, a hopper) and
                         // goes no further: a plane under the lip that every chunk dies on, so none
@@ -90,8 +90,8 @@ namespace DeviceChain.Sitepulse.Visuals
                         col.bounce = 0f;
                         col.dampen = 1f;
                         col.radiusScale = 0.3f;
-                        pourDust = QuarryEffects.Emitter(bucket, "PourDust", new Vector3(b.center.x, b.min.y - 0.5f, b.max.z), fx.dust, Max(30));
-                        QuarryEffects.AsDust(pourDust, dustColor, new Vector2(2f, 3.6f), new Vector2(2.5f, 4.5f), 0.5f, 0.05f);
+                        pourDust = QuarryEffects.Emitter(bucket, "PourDust", new Vector3(b.center.x, b.min.y - 0.5f, b.max.z), fx.dust, Max(40));
+                        QuarryEffects.AsDust(pourDust, dustColor, new Vector2(2.4f, 4.2f), new Vector2(2.5f, 4.5f), 0.6f, 0.08f);
                         QuarryEffects.Box(pourDust, new Vector3(2.5f, 0.6f, 0.8f));
                     }
                     break;
@@ -162,6 +162,12 @@ namespace DeviceChain.Sitepulse.Visuals
             foreach (var ps in new[] { dust, exhaust, pour, pourDust, bladeDust })
                 if (ps != null) ps.Clear(true);
             hasLast = false;
+            // start the clock over too, so a still stepped up to a moment shows the same beacon
+            // phase and the same working state whatever was stepped before it
+            clock = 0f;
+            lastMove = -1e6f;
+            bucketTipped = 0f;
+            speed = accel = climb = 0f;
         }
 
         public void Step(float dt, bool simulate)
@@ -203,11 +209,13 @@ namespace DeviceChain.Sitepulse.Visuals
                     break;
                 case MachineKind.Loader:
                     QuarryEffects.Rate(dust, budget * 9f * Mathf.Clamp01((speed - 0.5f) / 2.5f));
-                    // tipping the bucket with the boom up: rock out over the lip
-                    bool dumping = rig.boom < -35f && rig.bucket > 25f && rig.bucket >= lastBucket - 0.01f;
-                    float bflow = dumping ? Mathf.InverseLerp(25f, 60f, rig.bucket) : 0f;
-                    QuarryEffects.Rate(pour, budget * 110f * bflow);
-                    QuarryEffects.Rate(pourDust, budget * 12f * bflow);
+                    // tipping the bucket with the boom up: rock out over the lip, for as long as the
+                    // bucket is held tipped (it may settle back a little) until it is empty
+                    bool dumping = rig.boom < -35f && rig.bucket > 25f && rig.bucket >= lastBucket - dt * 20f;
+                    bucketTipped = dumping ? bucketTipped + dt : 0f;
+                    float bflow = dumping ? Mathf.InverseLerp(25f, 60f, rig.bucket) * (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(2f, 3.2f, bucketTipped))) : 0f;
+                    QuarryEffects.Rate(pour, budget * 170f * bflow);
+                    QuarryEffects.Rate(pourDust, budget * 20f * bflow);
                     if (pour != null)
                     {
                         pour.transform.rotation = Quaternion.LookRotation(Vector3.down, transform.forward);
@@ -232,25 +240,27 @@ namespace DeviceChain.Sitepulse.Visuals
             if (flare != null)
             {
                 flare.enabled = working;
-                // a rotating beacon seen from one side: two sharp flashes per turn
+                // a rotating beacon seen from one side: a lens that always glows amber, and two
+                // sharp flashes per turn on top of it
                 float s = Mathf.Sin((clock * 1.3f + phase) * Mathf.PI * 2f);
-                float pulse = Mathf.Pow(Mathf.Abs(s), 8f);
+                float pulse = Mathf.Pow(Mathf.Abs(s), 6f);
                 var cam = Camera.main;
                 if (working && cam != null)
                 {
                     var t = flare.transform;
                     t.rotation = Quaternion.LookRotation(t.position - cam.transform.position, cam.transform.up);
                     float dist = Vector3.Distance(t.position, cam.transform.position);
-                    float size = (0.25f + 1.1f * pulse) * Mathf.Clamp(dist / 40f, 1f, 3f);
+                    float size = (0.6f + 1.0f * pulse) * Mathf.Clamp(dist / 40f, 1f, 3f);
                     t.localScale = new Vector3(size, size, size);
-                    flareBlock.SetColor(FlareColor, new Color(3f, 1.65f, 0.36f, 0.15f + 0.85f * pulse));
+                    // amber kept below the tone mapper's shoulder, which would turn a hotter one yellow
+                    flareBlock.SetColor(FlareColor, new Color(1.6f, 0.5f, 0.06f, 0.5f + 0.5f * pulse));
                     flare.SetPropertyBlock(flareBlock);
                 }
                 foreach (var r in beaconRenderers)
                 {
                     if (r == null || r == flare) continue;
                     r.GetPropertyBlock(beaconBlock);
-                    beaconBlock.SetColor(Emissive, beaconBase * (working ? 0.4f + 2.2f * pulse : 0.15f));
+                    beaconBlock.SetColor(Emissive, beaconBase * (working ? 1.1f + 2.0f * pulse : 0.15f));
                     r.SetPropertyBlock(beaconBlock);
                 }
             }
