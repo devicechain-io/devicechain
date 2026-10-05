@@ -31,6 +31,8 @@ namespace DeviceChain.Sitepulse.EditorTools
         const string Materials = Root + "Art/Materials/";
         const string SettingsDir = Root + "Settings/";
         public const string ScenePath = Root + "Scenes/Quarry.unity";
+        // the shared demo intro (demos/shared/io.devicechain.demo-intro)
+        const string IntroPrefab = "Packages/io.devicechain.demo-intro/Runtime/Resources/DeviceChainDemoIntro.prefab";
 
         // terrain tree prototypes (ArtSource/props/build_props.py), named as the feature file names them
         static readonly string[] Vegetation = { "conifer_a", "conifer_b", "conifer_c", "shrub_a", "shrub_b", "rock_a", "rock_b", "rock_c" };
@@ -515,6 +517,11 @@ namespace DeviceChain.Sitepulse.EditorTools
             ovGo.SetActive(true);
 
             new GameObject("Benchmark").AddComponent<FrameTimeBenchmark>();
+
+            // the DeviceChain intro opens the demo over this first shot, then dissolves into it
+            var intro = AssetDatabase.LoadAssetAtPath<GameObject>(IntroPrefab);
+            if (intro == null) throw new FileNotFoundException(IntroPrefab);
+            PrefabUtility.InstantiatePrefab(intro);
 
             ApplyLook(true);
             Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));

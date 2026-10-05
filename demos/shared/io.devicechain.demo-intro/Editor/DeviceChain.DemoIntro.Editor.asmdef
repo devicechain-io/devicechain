@@ -1,17 +1,17 @@
 {
-    "name": "DeviceChain.Sitepulse",
-    "rootNamespace": "DeviceChain.Sitepulse",
+    "name": "DeviceChain.DemoIntro.Editor",
+    "rootNamespace": "DeviceChain.Demos.EditorTools",
     "references": [
-        "Unity.RenderPipelines.Core.Runtime",
-        "Unity.RenderPipelines.Universal.Runtime",
         "DeviceChain.DemoIntro"
     ],
-    "includePlatforms": [],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
     "noEngineReferences": false

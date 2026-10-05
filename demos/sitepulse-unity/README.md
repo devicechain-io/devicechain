@@ -151,6 +151,16 @@ turns the cloud layer round the horizon, to keep a cloud clear of the frame's ed
 flies a camera over the site and writes the average FPS and the 99th-percentile and worst frame
 times to `sitepulse-benchmark-<quality>.txt` beside the executable.
 
+## The intro
+
+The scene opens with the animated DeviceChain logo intro shared by the DeviceChain demos, from the
+local package [`../shared/io.devicechain.demo-intro`](../shared/io.devicechain.demo-intro)
+(listed in `Packages/manifest.json`). The scene builder places its prefab in the scene; it plays
+over the quarry's first shot for about 3.5 seconds and dissolves into it. Any key, click or tap
+skips it; start the player with `-reduced-motion` for the still lockup and a short fade, or with
+`-no-intro` to leave it out. The frame-time benchmark (`-sitepulse-benchmark`) always runs without
+it.
+
 ## Quality levels
 
 - **PC**: the full look (MSAA, screen-space ambient occlusion, long four-cascade shadows).

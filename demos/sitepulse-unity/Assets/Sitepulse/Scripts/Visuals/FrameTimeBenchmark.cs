@@ -33,6 +33,8 @@ namespace DeviceChain.Sitepulse.Visuals
         static void SelectQuality()
         {
             var args = System.Environment.GetCommandLineArgs();
+            // the logo intro would be measured as the scene's first frames: a benchmark runs without it
+            if (System.Array.IndexOf(args, Flag) >= 0) DeviceChain.Demos.DemoIntro.Disabled = true;
             int i = System.Array.IndexOf(args, QualityFlag);
             if (i < 0 || i + 1 >= args.Length) return;
             int level = System.Array.IndexOf(QualitySettings.names, args[i + 1]);

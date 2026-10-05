@@ -1,10 +1,11 @@
 {
-    "name": "DeviceChain.Sitepulse",
-    "rootNamespace": "DeviceChain.Sitepulse",
+    "name": "DeviceChain.DemoIntro",
+    "rootNamespace": "DeviceChain.Demos",
     "references": [
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
-        "DeviceChain.DemoIntro"
+        "UnityEngine.UI",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -13,6 +14,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.inputsystem",
+            "expression": "1.0.0",
+            "define": "DC_INTRO_INPUT_SYSTEM"
+        }
+    ],
     "noEngineReferences": false
 }

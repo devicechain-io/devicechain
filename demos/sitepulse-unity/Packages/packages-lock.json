@@ -199,6 +199,16 @@
         "com.unity.modules.physics": "1.0.0"
       }
     },
+    "io.devicechain.demo-intro": {
+      "version": "file:../../shared/io.devicechain.demo-intro",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {
+        "com.unity.render-pipelines.universal": "17.5.0",
+        "com.unity.cloud.gltfast": "6.20.0",
+        "com.unity.ugui": "2.5.0"
+      }
+    },
     "com.unity.modules.accessibility": {
       "version": "1.0.0",
       "depth": 0,
