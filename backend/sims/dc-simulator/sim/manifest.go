@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/geo"
 )
 
 // MetricSpec is one numeric, unit-bearing metric a ProfileSpec declares (ADR-016).
@@ -147,6 +148,55 @@ type AreaSpec struct {
 	Token         string
 	Name          string
 	AreaTypeToken string
+}
+
+// geoFenceKindPolygon2D is the geometry kind the platform's geofence document names. A
+// hand mirror, like the rest of this module's wire vocabulary (this process is an
+// untrusted external client and cannot import the owning type). It is SENT, never
+// compared on a branch where a non-match reads as success, so a drift fails loudly at
+// createGeoFence rather than silently.
+const geoFenceKindPolygon2D = "POLYGON_2D"
+
+// GeoFenceSpec is one authored geofence: a POLYGON_2D region a DETECT rule can test a
+// device's position against. Like AreaSpec it is a static singleton the manifest declares
+// directly; unlike AreaSpec it carries CONTENT, so Provision converges it rather than
+// only checking that it exists (see ensureGeoFence).
+//
+// Ring is the exterior ring as GeoJSON positions, [longitude, latitude] in WGS84
+// degrees, CLOSED (the first position repeated last). Winding is free: the platform
+// normalizes it. There are no holes: nothing needs one.
+type GeoFenceSpec struct {
+	Token       string
+	Name        string
+	Description string
+	Ring        [][2]float64
+}
+
+// geometryDocument is the self-describing document createGeoFence takes: a kind
+// discriminator plus a GeoJSON Polygon. [2]float64 marshals as [lon, lat].
+func (g GeoFenceSpec) geometryDocument() (string, error) {
+	doc := map[string]any{
+		"kind": geoFenceKindPolygon2D,
+		"geometry": map[string]any{
+			"type":        "Polygon",
+			"coordinates": [][][2]float64{g.Ring},
+		},
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ringSlices adapts the ring to the []float64 positions core/geo takes. The field stays
+// [2]float64 so a three-ordinate position cannot be written at all.
+func (g GeoFenceSpec) ringSlices() [][]float64 {
+	out := make([][]float64, len(g.Ring))
+	for i := range g.Ring {
+		out[i] = []float64{g.Ring[i][0], g.Ring[i][1]}
+	}
+	return out
 }
 
 type AssetTypeSpec struct {
@@ -369,6 +419,7 @@ type SimManifest struct {
 	Areas         []AreaSpec
 	AssetTypes    []AssetTypeSpec
 	Assets        []AssetSpec
+	GeoFences     []GeoFenceSpec
 	Profiles      []ProfileSpec
 	DeviceTypes   []DeviceTypeSpec
 	Populations   []PopulationSpec
@@ -570,6 +621,28 @@ func (m SimManifest) Validate() error {
 			return fmt.Errorf("asset %q references unknown asset type %q", a.Token, a.AssetTypeToken)
 		}
 		assetTokens[a.Token] = true
+	}
+
+	geoFenceTokens := make(map[string]bool, len(m.GeoFences))
+	for _, g := range m.GeoFences {
+		if err := core.ValidateToken(g.Token); err != nil {
+			return fmt.Errorf("geofence token: %w", err)
+		}
+		if geoFenceTokens[g.Token] {
+			return fmt.Errorf("geofence %q is declared more than once", g.Token)
+		}
+		geoFenceTokens[g.Token] = true
+		if g.Name == "" {
+			return fmt.Errorf("geofence %q declares no name", g.Token)
+		}
+		// The SAME gate device-management authors a fence with (core/geo is the one
+		// implementation of the ring rules), so a ring the platform would refuse fails
+		// here, before any network call and with the fence named. Size ceilings are
+		// deliberately not checked: they belong to the tenant's tier, and the platform
+		// refuses loudly when one is exceeded.
+		if err := geo.ValidateClosedRing(g.ringSlices()); err != nil {
+			return fmt.Errorf("geofence %q has an unusable ring: %w", g.Token, err)
+		}
 	}
 
 	profileTokens := make(map[string]bool, len(m.Profiles))

@@ -162,3 +162,38 @@ func TestTheAuthoringUpdateDocumentsValidateAgainstTheServedSchema(t *testing.T)
 		}
 	})
 }
+
+// The geofence documents, validated with the variables ensureGeoFence really sends. Both
+// mutations take NON-NULL arguments in the served schema, unlike createArea, so a document
+// copied from the area one declares its variables nullable and is refused.
+func TestTheGeoFenceDocumentsValidateAgainstTheServedSchema(t *testing.T) {
+	schema := servedSchema(t, "device-management")
+	g := GeoFenceSpec{
+		Token: "gf-1", Name: "Fence", Description: "d",
+		Ring: [][2]float64{{-117, 39}, {-116.999, 39}, {-116.999, 39.001}, {-117, 39.001}, {-117, 39}},
+	}
+	doc, err := g.geometryDocument()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := map[string]any{"token": g.Token, "name": g.Name, "description": g.Description, "geometry": doc}
+	cases := []struct {
+		name string
+		doc  string
+		vars map[string]any
+	}{
+		{"geoFencesByToken", queryGeoFencesByToken, map[string]any{"tokens": []string{g.Token}}},
+		{"createGeoFence", mutationCreateGeoFence, map[string]any{"request": req}},
+		{"updateGeoFence", mutationUpdateGeoFence, map[string]any{"token": g.Token, "request": asUpdateRequest(req)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if errs := schema.ValidateWithVariables(c.doc, c.vars); len(errs) > 0 {
+				t.Fatalf("%s does not validate against the served schema: %v", c.name, errs)
+			}
+			if err := gqlcore.CheckWork(c.doc); err != nil {
+				t.Fatalf("%s exceeds the served root-field ceiling: %v", c.name, err)
+			}
+		})
+	}
+}
