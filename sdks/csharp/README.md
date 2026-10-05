@@ -196,10 +196,32 @@ MQTT client. If the process crashes between admission and completion, that messa
 redelivered at the higher setting (it is not run), where at 1 it would be redelivered and run
 again, because the de-duplication history lives in memory.
 
-🔴 **A response is not held across a disconnect, at any setting.** A handler that finishes while the
-session is reconnecting has its response dropped, and nothing re-dispatches a command the platform
-already sent over MQTT, so the command stays `SENT` until it times out. A longer-running handler
-widens that window.
+**Arrival order.** Every command handed to your handler carries `DeviceCommand.Sequence`, a number
+that increases in the order the session received the commands. It is assigned on the receive path,
+before any handler or lane selector runs, so it stays correct above 1 where two commands delivered
+together can reach your code in either order. Use it to decide which of two commands is newer, for
+example to let the newest movement command supersede the running one:
+
+```csharp
+if (incoming.Sequence > running.Sequence) { /* the incoming command wins */ }
+```
+
+A repeat delivery of a command the session has already seen never reaches the handler, so a command
+keeps the number it was first given. Numbers are not guaranteed to be consecutive, they restart from
+1 with each new session, and they say nothing about commands sent to other devices.
+
+**A response that cannot be sent yet is held, not dropped.** A handler that finishes while the
+session is reconnecting, or whose response publish fails, does not lose its answer. Nothing
+re-dispatches a command the platform already sent over MQTT, so a dropped answer would leave it
+`SENT` until it timed out. The session keeps the outcome, one per command and no more than
+`CommandHistorySize` of them (the oldest give way), and publishes it when the session next
+connects and subscribes (a failed publish on a connection that stays up waits for the next
+reconnect). It goes out under the dispatch nonce of the latest delivery the
+device received for that command: if the platform sent the command again while the device was away,
+the answer to that delivery replaces the held one. Each held answer is sent once per reconnect. A
+publish that failed after the broker had already accepted it can arrive twice; the platform records
+the second as unanswerable instead of settling anything twice. Held answers live in memory, so a
+process restart loses them, and disposing the session discards them.
 
 **Dispose.** Disposing the session at a value above 1 first stops the executor: commands still
 waiting are never started and are not answered (they stay `SENT` until they time out), then it

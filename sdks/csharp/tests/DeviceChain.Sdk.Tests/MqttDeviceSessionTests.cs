@@ -1043,6 +1043,401 @@ public class MqttDeviceSessionTests
         Assert.Equal(1, options.MaxConcurrentCommands);
     }
 
+    // ── command arrival sequence ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task ArrivalSequenceIncreasesInDeliveryOrderAndADuplicateDoesNotChangeIt()
+    {
+        var connection = new FakeMqttConnection();
+        var seen = new List<(string Token, long Sequence)>();
+        await using var session = new MqttDeviceSession(Options(), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, (c, _) =>
+        {
+            lock (seen) { seen.Add((c.Token, c.Sequence)); }
+            return Task.FromResult(CommandOutcome.Succeeded());
+        });
+
+        await connection.DeliverCommandAsync("a", "go", dispatchNonce: "n1");
+        await connection.DeliverCommandAsync("a", "go", dispatchNonce: "n2");
+        await connection.DeliverCommandAsync("b", "go", dispatchNonce: "n3");
+        await connection.DeliverCommandAsync("c", "go", dispatchNonce: "n4");
+
+        Assert.Equal(new[] { "a", "b", "c" }, seen.Select(s => s.Token).ToArray());
+        Assert.True(seen[0].Sequence > 0, "a command must carry a sequence");
+        Assert.True(seen[0].Sequence < seen[1].Sequence);
+        Assert.True(seen[1].Sequence < seen[2].Sequence);
+    }
+
+    // Commands delivered together run on separate workers, so the order their handlers start in
+    // is not the order they arrived in. The sequence is what still tells them apart.
+    [Fact]
+    public async Task ArrivalSequenceFollowsDeliveryOrderWhenHandlersRunConcurrently()
+    {
+        var connection = new FakeMqttConnection();
+        var seen = new Dictionary<string, long>();
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new MqttDeviceSession(ConcurrentOptions(4), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, async (c, _) =>
+        {
+            lock (seen) { seen[c.Token] = c.Sequence; }
+            await gate.Task;
+            return CommandOutcome.Succeeded();
+        });
+
+        var tokens = new[] { "c1", "c2", "c3", "c4" };
+        foreach (var token in tokens)
+        {
+            await connection.DeliverCommandAsync(token, "go");
+        }
+
+        // A duplicate of a running command coalesces onto it and shows the handler nothing.
+        await connection.DeliverCommandAsync("c2", "go", dispatchNonce: "nonce-2");
+
+        var deadline = DateTime.UtcNow + Timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (seen) { if (seen.Count == tokens.Length) { break; } }
+            await Task.Delay(10);
+        }
+
+        gate.TrySetResult(true);
+        lock (seen)
+        {
+            Assert.Equal(tokens.Length, seen.Count);
+            Assert.True(seen["c1"] > 0);
+            for (var i = 1; i < tokens.Length; i++)
+            {
+                Assert.True(seen[tokens[i - 1]] < seen[tokens[i]], $"{tokens[i - 1]} must precede {tokens[i]}");
+            }
+        }
+    }
+
+    // ── a response that completes while the connection is down ───────────────
+
+    private static MqttSessionOptions ReconnectOptions()
+    {
+        var options = Options();
+        options.ReconnectInitialDelay = TimeSpan.FromMilliseconds(20);
+        return options;
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task AResponseCompletedDuringADisconnectIsPublishedOnceAfterReconnect(int concurrency)
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        var options = ReconnectOptions();
+        options.MaxConcurrentCommands = concurrency;
+        var probe = new HandlerProbe();
+        await using var session = new MqttDeviceSession(options, new FakeMqttClientFactory(first, second));
+        await StartAsync(session, first, probe.Handler);
+
+        var delivery = first.DeliverInOrder("cmd-1", "goRefuel", "nonce-1");
+        await probe.Entered("cmd-1").WaitAsync(Timeout);
+
+        first.DropConnection(new Exception("broker restarted"));
+        probe.Release("cmd-1");
+        await probe.Exited("cmd-1").WaitAsync(Timeout);
+        await delivery.WaitAsync(Timeout);
+        await Task.Delay(100);
+        Assert.Empty(first.Published);
+
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        second.CompleteSubscribe();
+        await second.WaitForPublishedAsync(1).WaitAsync(Timeout);
+        await Task.Delay(200);
+
+        var response = Assert.Single(second.Responses());
+        Assert.Equal("cmd-1", response.CommandToken);
+        Assert.True(response.Success);
+        Assert.Equal("nonce-1", response.DispatchNonce);
+        Assert.Equal(DevicePlane.CommandResponsesTopic("inst", "acme", "sensor-001"), second.Published[0].Topic);
+    }
+
+    // The platform may have sent the command again while the device was away. That frame names a
+    // new dispatch, and the answer to it is the one that settles the command; the held answer for
+    // the old dispatch must not follow it out.
+    [Fact]
+    public async Task ARedeliveryDuringTheReconnectSupersedesTheHeldResponse()
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(ReconnectOptions(), new FakeMqttClientFactory(first, second));
+        var invocations = 0;
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await StartAsync(session, first, async (_, _) =>
+        {
+            Interlocked.Increment(ref invocations);
+            await release.Task;
+            return CommandOutcome.Succeeded();
+        });
+
+        var delivery = first.DeliverInOrder("cmd-1", "goRefuel", "nonce-1");
+        first.DropConnection(new Exception("broker restarted"));
+        release.SetResult(true);
+        await delivery.WaitAsync(Timeout);
+
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        // Connected, subscribe not yet granted: the frame arrives before the held answer is flushed.
+        await second.DeliverCommandAsync("cmd-1", "goRefuel", dispatchNonce: "nonce-2");
+        second.CompleteSubscribe();
+        await Task.Delay(300);
+
+        Assert.Equal(1, invocations);
+        var response = Assert.Single(second.Responses());
+        Assert.Equal("nonce-2", response.DispatchNonce);
+    }
+
+    // A publish that throws on a connection that still looks up is the same loss, and the answer
+    // is kept for the next connection rather than dropped.
+    [Fact]
+    public async Task AResponseWhosePublishFailedIsPublishedAfterReconnect()
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(ReconnectOptions(), new FakeMqttClientFactory(first, second));
+        await StartAsync(session, first, (_, _) => Task.FromResult(CommandOutcome.Failed("stuck")));
+
+        first.FailPublishes = true;
+        await first.DeliverCommandAsync("cmd-1", "go", dispatchNonce: "nonce-1");
+        Assert.Empty(first.Published);
+
+        first.DropConnection(new Exception("socket closed"));
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        second.CompleteSubscribe();
+        await second.WaitForPublishedAsync(1).WaitAsync(Timeout);
+
+        var response = Assert.Single(second.Responses());
+        Assert.False(response.Success);
+        Assert.Equal("stuck", response.Error);
+        Assert.Equal("nonce-1", response.DispatchNonce);
+    }
+
+    // What is held is bounded by the same size as the command history: the newest answers are
+    // kept and the oldest give way.
+    [Fact]
+    public async Task HeldResponsesAreBoundedByTheCommandHistorySize()
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        var options = ReconnectOptions();
+        options.CommandHistorySize = 2;
+        await using var session = new MqttDeviceSession(options, new FakeMqttClientFactory(first, second));
+        await StartAsync(session, first, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        first.FailPublishes = true;
+        await first.DeliverCommandAsync("a", "go", dispatchNonce: "na");
+        await first.DeliverCommandAsync("b", "go", dispatchNonce: "nb");
+        await first.DeliverCommandAsync("c", "go", dispatchNonce: "nc");
+        first.DropConnection(new Exception("gone"));
+
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        second.CompleteSubscribe();
+        await second.WaitForPublishedAsync(2).WaitAsync(Timeout);
+        await Task.Delay(200);
+
+        Assert.Equal(new[] { "b", "c" }, second.Responses().Select(r => r.CommandToken).ToArray());
+    }
+
+    // The counterweight: with the connection up nothing is held, and nothing is published twice
+    // by a later reconnect.
+    [Fact]
+    public async Task AResponsePublishedWhileConnectedIsNotRepublishedAfterAReconnect()
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(ReconnectOptions(), new FakeMqttClientFactory(first, second));
+        await StartAsync(session, first, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        await first.DeliverCommandAsync("cmd-1", "go");
+        Assert.Single(first.Published);
+
+        first.DropConnection(new Exception("broker restarted"));
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        second.CompleteSubscribe();
+        await WaitForStateAsync(session, MqttSessionState.Ready);
+        await Task.Delay(200);
+
+        Assert.Empty(second.Published);
+    }
+
+    // The redelivery joins a handler that is still running and is answered from a separate
+    // continuation, so which answer is written last is up to the scheduler. The held answer must
+    // be the one for the newer delivery either way.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task ARedeliveryJoiningARunningHandlerAcrossAReconnectIsAnsweredUnderTheNewNonce(int concurrency)
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        var options = ReconnectOptions();
+        options.MaxConcurrentCommands = concurrency;
+        var probe = new HandlerProbe();
+        await using var session = new MqttDeviceSession(options, new FakeMqttClientFactory(first, second));
+        await StartAsync(session, first, probe.Handler);
+
+        _ = first.DeliverInOrder("cmd-1", "goRefuel", "nonce-1");
+        await probe.Entered("cmd-1").WaitAsync(Timeout);
+        first.DropConnection(new Exception("broker restarted"));
+
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        _ = second.DeliverCommandAsync("cmd-1", "goRefuel", dispatchNonce: "nonce-2");
+        await Task.Delay(50);
+        probe.Release("cmd-1");
+        await probe.Exited("cmd-1").WaitAsync(Timeout);
+        await Task.Delay(100);
+        second.CompleteSubscribe();
+        await second.WaitForPublishedAsync(1).WaitAsync(Timeout);
+        await Task.Delay(200);
+
+        Assert.Equal(1, probe.Invocations("cmd-1"));
+        Assert.Equal("nonce-2", Assert.Single(second.Responses()).DispatchNonce);
+        Assert.Empty(first.Published);
+    }
+
+    // The number is taken on receipt. x2 queues behind x1 in lane X; y1 arrives later but starts
+    // at once. A number taken when the handler starts would put y1 before x2.
+    [Fact]
+    public async Task ArrivalSequenceIsTakenOnReceiptNotWhenTheHandlerStarts()
+    {
+        var connection = new FakeMqttConnection();
+        var seen = new Dictionary<string, long>();
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new MqttDeviceSession(
+            ConcurrentOptions(3, c => c.Name), new FakeMqttClientFactory(connection));
+        await StartAsync(session, connection, async (command, _) =>
+        {
+            lock (seen)
+            {
+                seen[command.Token] = command.Sequence;
+            }
+
+            if (command.Token == "y1")
+            {
+                started.TrySetResult(true);
+            }
+
+            if (command.Token == "x1")
+            {
+                await gate.Task;
+            }
+
+            return CommandOutcome.Succeeded();
+        });
+
+        try
+        {
+            await connection.DeliverInOrder("x1", "X");
+            await connection.DeliverInOrder("x2", "X");
+            await connection.DeliverInOrder("y1", "Y");
+            await started.Task.WaitAsync(Timeout);
+            gate.TrySetResult(true);
+            await connection.WaitForPublishedAsync(3).WaitAsync(Timeout);
+
+            lock (seen)
+            {
+                Assert.True(seen["x2"] < seen["y1"], $"x2={seen["x2"]} must precede y1={seen["y1"]}");
+            }
+        }
+        finally
+        {
+            gate.TrySetResult(true);
+        }
+    }
+
+    // If the connection drops while the held answers go out, the reconnect loop must be free to
+    // start again, or the session never recovers and the remaining answers are never sent.
+    [Fact]
+    public async Task ADropDuringTheFlushStartsAnotherReconnectAndTheAnswersStillArrive()
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        var third = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(ReconnectOptions(), new FakeMqttClientFactory(first, second, third));
+        await StartAsync(session, first, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        first.FailPublishes = true;
+        await first.DeliverCommandAsync("a", "go", dispatchNonce: "na");
+        await first.DeliverCommandAsync("b", "go", dispatchNonce: "nb");
+        first.DropConnection(new Exception("gone"));
+
+        var dropped = 0;
+        second.BeforePublish = () =>
+        {
+            if (Interlocked.Exchange(ref dropped, 1) == 0)
+            {
+                second.FailPublishes = true;
+                second.DropConnection(new Exception("gone again"));
+            }
+        };
+
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        second.CompleteSubscribe();
+        await third.SubscribeCalled.Task.WaitAsync(Timeout);
+        third.CompleteSubscribe();
+        await third.WaitForPublishedAsync(2).WaitAsync(Timeout);
+
+        Assert.Equal(new[] { "a", "b" }, third.Responses().Select(r => r.CommandToken).OrderBy(t => t).ToArray());
+        Assert.Empty(second.Published);
+    }
+
+    // A held answer is sent by the reconnect that follows and by no later one.
+    [Fact]
+    public async Task AHeldResponseIsNotRepublishedByASecondReconnect()
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        var third = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(ReconnectOptions(), new FakeMqttClientFactory(first, second, third));
+        await StartAsync(session, first, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        first.FailPublishes = true;
+        await first.DeliverCommandAsync("cmd-1", "go", dispatchNonce: "nonce-1");
+        first.DropConnection(new Exception("gone"));
+
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        second.CompleteSubscribe();
+        await second.WaitForPublishedAsync(1).WaitAsync(Timeout);
+
+        second.DropConnection(new Exception("gone again"));
+        await third.SubscribeCalled.Task.WaitAsync(Timeout);
+        third.CompleteSubscribe();
+        await WaitForStateAsync(session, MqttSessionState.Ready);
+        await Task.Delay(200);
+
+        Assert.Single(second.Published);
+        Assert.Empty(third.Published);
+    }
+
+    // A held answer names a dispatch the platform has since moved off once a newer delivery has
+    // been answered; it must not follow that answer out on the next reconnect.
+    [Fact]
+    public async Task AHeldResponseIsDroppedOnceANewerDeliveryHasBeenAnswered()
+    {
+        var first = new FakeMqttConnection();
+        var second = new FakeMqttConnection();
+        await using var session = new MqttDeviceSession(ReconnectOptions(), new FakeMqttClientFactory(first, second));
+        await StartAsync(session, first, (_, _) => Task.FromResult(CommandOutcome.Succeeded()));
+
+        first.FailPublishes = true;
+        await first.DeliverCommandAsync("cmd-1", "go", dispatchNonce: "nonce-1");
+        first.FailPublishes = false;
+        await first.DeliverCommandAsync("cmd-1", "go", dispatchNonce: "nonce-2");
+        Assert.Equal("nonce-2", Assert.Single(first.Responses()).DispatchNonce);
+
+        first.DropConnection(new Exception("gone"));
+        await second.SubscribeCalled.Task.WaitAsync(Timeout);
+        second.CompleteSubscribe();
+        await WaitForStateAsync(session, MqttSessionState.Ready);
+        await Task.Delay(200);
+
+        Assert.Empty(second.Published);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static async Task WaitForStateAsync(MqttDeviceSession session, MqttSessionState expected)
@@ -1288,6 +1683,9 @@ public class MqttDeviceSessionTests
 
         public bool RefuseSubscribe { get; set; }
 
+        // Makes every publish fail the way a transport that has lost its socket does.
+        public bool FailPublishes { get; set; }
+
         public MqttConnectOptions? Options { get; private set; }
 
         public string? SubscribedFilter { get; private set; }
@@ -1383,8 +1781,17 @@ public class MqttDeviceSessionTests
 
         public void CompleteSubscribe() => _subackGate.TrySetResult(true);
 
+        // Runs at the start of every publish, so a test can drop the connection mid-flush.
+        public Action? BeforePublish { get; set; }
+
         public Task PublishAsync(string topic, byte[] payload, MqttQos qos, CancellationToken cancellationToken)
         {
+            BeforePublish?.Invoke();
+            if (FailPublishes)
+            {
+                throw new MqttConnectionException("publish failed");
+            }
+
             List<TaskCompletionSource<bool>> ready = new();
             lock (_publishedLock)
             {

@@ -72,6 +72,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     private readonly string _eventsTopic;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly CommandHistory _history;
+    private readonly PendingResponses _pending;
     private readonly CancellationTokenSource _stopped = new();
 
     // A dedicated lock object rather than locking something disposable that this class also owns.
@@ -124,6 +125,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     private int _started;
     private int _reconnectRunning;
     private int _malformedFrames;
+    private long _arrivalSequence;
 
     /// <summary>Creates a session for one device.</summary>
     /// <param name="options">The device's session options.</param>
@@ -141,6 +143,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         _responsesTopic = DevicePlane.CommandResponsesTopic(options.InstanceId, options.Tenant, options.DeviceToken);
         _eventsTopic = DevicePlane.EventsTopic(options.InstanceId, options.Tenant, options.DeviceToken);
         _history = new CommandHistory(options.CommandHistorySize);
+        _pending = new PendingResponses(options.CommandHistorySize);
 
         // The options setters already refuse out-of-range values, and the options class is sealed.
         _maxConcurrent = options.MaxConcurrentCommands;
@@ -372,6 +375,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
     private async Task ReconnectLoopAsync()
     {
+        var reconnected = false;
         try
         {
             var delay = _options.ReconnectInitialDelay;
@@ -411,6 +415,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
                     }
 
                     await ConnectAndSubscribeAsync(_stopped.Token).ConfigureAwait(false);
+                    reconnected = true;
                     return;
                 }
                 catch (MqttSubscribeRefusedException)
@@ -446,6 +451,28 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         finally
         {
             Volatile.Write(ref _reconnectRunning, 0);
+
+            // After the loop has released its claim, so a connection that drops again while the
+            // held answers go out starts a new loop that flushes whatever is still held.
+            if (reconnected)
+            {
+                await FlushPendingResponsesAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    // Publishes the answers that could not be sent while the connection was down. Each goes out
+    // through the ordinary publish, which holds it again if this connection fails too.
+    private async Task FlushPendingResponsesAsync()
+    {
+        foreach (var held in _pending.TakeAll())
+        {
+            if (_stopped.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            await PublishResponseAsync(held.Token, held.Outcome, held.DispatchNonce, held.Sequence).ConfigureAwait(false);
         }
     }
 
@@ -486,6 +513,15 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             return;
         }
 
+        // 🔑 THE ARRIVAL NUMBER IS TAKEN HERE, ON THE RECEIVE PATH, BEFORE ANYTHING CAN REORDER
+        // THE COMMAND. The transport calls this callback one frame at a time, so the order of
+        // these increments is the platform's delivery order. Above MaxConcurrentCommands = 1 each
+        // handler is started on its own worker and two commands delivered together can reach user
+        // code in either order, so the number must already be on the command by then. A duplicate
+        // takes a number too but never shows it to a handler (it is answered from the first
+        // execution), so the numbers a handler sees are increasing and may have gaps.
+        var sequence = Interlocked.Increment(ref _arrivalSequence);
+
         // 🔴 DE-DUPE BY COMMAND TOKEN, INCLUDING WHILE THE HANDLER IS STILL RUNNING. Delivery is
         // at-least-once, so the same token can arrive more than once — a redelivery must NOT run
         // the handler again (a machine would move twice), but it must still be ANSWERED, or the
@@ -512,7 +548,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         // outside a lane.
         if (_maxConcurrent > 1)
         {
-            AdmitConcurrent(envelope, handler);
+            AdmitConcurrent(envelope, handler, sequence);
             return;
         }
 
@@ -544,7 +580,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             // it is answering, which is what lets a re-dispatched command be settled by the device
             // that had already carried it out.
             var previous = await existing.ConfigureAwait(false);
-            await PublishResponseAsync(envelope.Token, previous, envelope.DispatchNonce)
+            await PublishResponseAsync(envelope.Token, previous, envelope.DispatchNonce, sequence)
                 .ConfigureAwait(false);
             return;
         }
@@ -553,7 +589,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         try
         {
             outcome = await handler(
-                new DeviceCommand(envelope.Token, envelope.Name ?? string.Empty, envelope.Payload),
+                new DeviceCommand(envelope.Token, envelope.Name ?? string.Empty, envelope.Payload, sequence),
                 _stopped.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -571,19 +607,21 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         }
 
         owned!.TrySetResult(outcome);
-        await PublishResponseAsync(envelope.Token, outcome, envelope.DispatchNonce)
+        await PublishResponseAsync(envelope.Token, outcome, envelope.DispatchNonce, sequence)
             .ConfigureAwait(false);
     }
 
-    private async Task PublishResponseAsync(string commandToken, CommandOutcome outcome, string? dispatchNonce)
+    private async Task PublishResponseAsync(
+        string commandToken, CommandOutcome outcome, string? dispatchNonce, long sequence)
     {
         var connection = Volatile.Read(ref _connection);
         if (connection == null || !connection.IsConnected)
         {
-            // 🔴 THIS ANSWER IS DROPPED, NOT HELD FOR THE RECONNECT. A handler that finishes while
-            // the session is reconnecting has its response lost, and nothing re-dispatches a SENT
-            // MQTT command, so it stays SENT until it times out. That is true at any concurrency;
-            // a longer-running handler just makes the window wider.
+            // 🔴 HELD FOR THE RECONNECT, NOT DROPPED. Nothing re-dispatches a command the platform
+            // already sent over MQTT, so an answer that is thrown away here leaves the command at
+            // SENT until it expires, however long ago the device carried it out. It is published
+            // when the session is next connected and subscribed (see FlushPendingResponsesAsync).
+            _pending.Hold(commandToken, outcome, dispatchNonce, sequence);
             return;
         }
 
@@ -608,15 +646,23 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             // message that drives the durable command to its terminal state.
             await connection.PublishAsync(_responsesTopic, payload, MqttQos.AtLeastOnce, _stopped.Token)
                 .ConfigureAwait(false);
+
+            // Answered. Any older answer held for this command named an earlier dispatch and is
+            // now moot.
+            _pending.Remove(commandToken, sequence);
         }
         catch (Exception)
         {
-            // 🔴 NOTHING WILL REDELIVER THE COMMAND IF THIS NEVER LANDED. A platform command
-            // reaches the device at QoS 0, which the broker does not store or redeliver, so the
-            // command stays SENT until it times out. The outcome IS recorded in the history, so
-            // if the platform does re-dispatch the command (a publish that reported an error but
-            // landed is released and sent again under a new nonce), that delivery is answered
-            // from the history without re-running the handler.
+            // 🔴 A PUBLISH THAT FAILED IS HELD, NOT FORGOTTEN: a platform command reaches the
+            // device at QoS 0, which the broker neither stores nor redelivers, so if this answer
+            // is lost nothing will ask again. It goes out after the next reconnect, under the
+            // nonce of the delivery it answers. (A publish that failed after the broker already
+            // had it can be sent twice; the platform refuses the second as unanswerable and
+            // records it, which is the right price for never losing the first.)
+            if (!_stopped.IsCancellationRequested)
+            {
+                _pending.Hold(commandToken, outcome, dispatchNonce, sequence);
+            }
         }
     }
 
@@ -656,10 +702,10 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
     // The N > 1 receive path. It never awaits a handler: it decides, under the lock, what this
     // delivery is, and returns.
-    private void AdmitConcurrent(CommandDeliveryEnvelope envelope, CommandHandler handler)
+    private void AdmitConcurrent(CommandDeliveryEnvelope envelope, CommandHandler handler, long sequence)
     {
         var token = envelope.Token!;
-        var command = new DeviceCommand(token, envelope.Name ?? string.Empty, envelope.Payload);
+        var command = new DeviceCommand(token, envelope.Name ?? string.Empty, envelope.Payload, sequence);
 
         // User code, so outside the lock. A throw is captured, not propagated.
         string? lane = null;
@@ -727,10 +773,10 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         switch (admission)
         {
             case Admission.AnswerFrom:
-                RunReserved(() => AnswerAsync(answerFrom!, envelope));
+                RunReserved(() => AnswerAsync(answerFrom!, envelope, sequence));
                 break;
             case Admission.LaneFailed:
-                RunReserved(() => PublishResponseAsync(token, laneFailure!, envelope.DispatchNonce));
+                RunReserved(() => PublishResponseAsync(token, laneFailure!, envelope.DispatchNonce, sequence));
                 break;
             case Admission.Queued:
                 StartJobs(toStart!);
@@ -849,11 +895,11 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         // handler invocation to handler return, not through the publish.
         StartJobs(next);
 
-        await PublishResponseAsync(job.Envelope.Token!, outcome, job.Envelope.DispatchNonce)
+        await PublishResponseAsync(job.Envelope.Token!, outcome, job.Envelope.DispatchNonce, job.Command.Sequence)
             .ConfigureAwait(false);
     }
 
-    private async Task AnswerAsync(Task<CommandOutcome> existing, CommandDeliveryEnvelope envelope)
+    private async Task AnswerAsync(Task<CommandOutcome> existing, CommandDeliveryEnvelope envelope, long sequence)
     {
         CommandOutcome previous;
         try
@@ -866,7 +912,7 @@ public sealed class MqttDeviceSession : IAsyncDisposable
             return;
         }
 
-        await PublishResponseAsync(envelope.Token!, previous, envelope.DispatchNonce)
+        await PublishResponseAsync(envelope.Token!, previous, envelope.DispatchNonce, sequence)
             .ConfigureAwait(false);
     }
 
@@ -1025,6 +1071,100 @@ public sealed class MqttDeviceSession : IAsyncDisposable
         {
             // Expected: the drain won.
         }
+    }
+
+    /// <summary>
+    /// The answers that could not be published yet, at most one per command and bounded.
+    /// </summary>
+    /// <remarks>
+    /// One per command because a newer delivery's nonce is the only one the platform can still be
+    /// waiting on: holding a second would publish an answer for a dispatch it has moved off. When
+    /// the bound is reached the oldest is given up, the same trade the command history makes.
+    /// </remarks>
+    private sealed class PendingResponses
+    {
+        private readonly int _capacity;
+        private readonly Dictionary<string, Held> _byToken = new(StringComparer.Ordinal);
+        private readonly LinkedList<string> _order = new();
+        private readonly object _lock = new();
+
+        public PendingResponses(int capacity) => _capacity = capacity < 1 ? 1 : capacity;
+
+        // Ordered by the arrival number of the delivery being answered, not by when the answer was
+        // written: a delivery that joined a running handler is answered from a separate
+        // continuation, and whichever of the two writes last must not win.
+        public void Hold(string token, CommandOutcome outcome, string? dispatchNonce, long sequence)
+        {
+            lock (_lock)
+            {
+                if (_byToken.TryGetValue(token, out var existing))
+                {
+                    if (existing.Sequence > sequence)
+                    {
+                        return;
+                    }
+                }
+                else
+                {
+                    _order.AddLast(token);
+                }
+
+                _byToken[token] = new Held(token, outcome, dispatchNonce, sequence);
+                while (_order.Count > _capacity)
+                {
+                    _byToken.Remove(_order.First!.Value);
+                    _order.RemoveFirst();
+                }
+            }
+        }
+
+        // Only an answer to a delivery at least as new as the held one makes it moot.
+        public void Remove(string token, long sequence)
+        {
+            lock (_lock)
+            {
+                if (_byToken.TryGetValue(token, out var existing) && existing.Sequence <= sequence)
+                {
+                    _byToken.Remove(token);
+                    _order.Remove(token);
+                }
+            }
+        }
+
+        public List<Held> TakeAll()
+        {
+            lock (_lock)
+            {
+                var all = new List<Held>(_order.Count);
+                foreach (var token in _order)
+                {
+                    all.Add(_byToken[token]);
+                }
+
+                _byToken.Clear();
+                _order.Clear();
+                return all;
+            }
+        }
+    }
+
+    private readonly struct Held
+    {
+        public Held(string token, CommandOutcome outcome, string? dispatchNonce, long sequence)
+        {
+            Sequence = sequence;
+            Token = token;
+            Outcome = outcome;
+            DispatchNonce = dispatchNonce;
+        }
+
+        public string Token { get; }
+
+        public CommandOutcome Outcome { get; }
+
+        public string? DispatchNonce { get; }
+
+        public long Sequence { get; }
     }
 
     /// <summary>
