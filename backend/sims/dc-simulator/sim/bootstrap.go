@@ -19,7 +19,7 @@ import (
 // device-management's (and, for dashboards, dashboard-management's) tenant
 // GraphQL API, in the order a real scenario's references demand:
 //
-//  1. customer/area/asset classifier types, then their instances
+//  1. customer/area/asset classifier types, then their instances, and geofences
 //  2. device profile(s) (+ metrics + commands + detection rules) -> publish
 //  3. device type(s)
 //  4. devices (+ credentials)
@@ -30,7 +30,9 @@ import (
 // only if it comes back empty), so re-running Provision against an already-
 // provisioned tenant is a no-op except for whatever is genuinely missing —
 // this is what makes `reset` an idempotent re-Bootstrap rather than a
-// drop-and-recreate. Everything a profile version snapshots — metrics, commands,
+// drop-and-recreate. Profiles and geofences also CONVERGE to the manifest's content
+// when they already exist (see ensureProfile and ensureGeoFence).
+// Everything a profile version snapshots — metrics, commands,
 // detection rules — is created before publish (phase 2's own ordering, inside
 // ensureProfile) since ADR-045's draft is inert until publish, and ensureProfile
 // republishes when a re-run added any of them.
@@ -104,6 +106,11 @@ func Provision(ctx context.Context, rt *Runtime, manifest SimManifest) error {
 	for _, a := range manifest.Assets {
 		if err := ensureAsset(ctx, rt, a); err != nil {
 			return fmt.Errorf("provision asset %q: %w", a.Token, err)
+		}
+	}
+	for _, g := range manifest.GeoFences {
+		if err := ensureGeoFence(ctx, rt, g); err != nil {
+			return fmt.Errorf("provision geofence %q: %w", g.Token, err)
 		}
 	}
 
@@ -893,6 +900,91 @@ func ensureAsset(ctx context.Context, rt *Runtime, a AssetSpec) error {
 		return fmt.Errorf("createAsset: %w", err)
 	}
 	log.Info().Str("token", a.Token).Msg("created asset")
+	return nil
+}
+
+// Both mutation arguments are NON-NULL in the served schema, unlike createArea's, so the
+// area documents above are not a template for these: a nullable variable bound to a
+// non-null argument is refused at validation. documents_test.go holds them to the schema.
+const queryGeoFencesByToken = `query($tokens:[String!]!){geoFencesByToken(tokens:$tokens){token name description geometry}}`
+
+const mutationCreateGeoFence = `mutation($request:GeoFenceCreateRequest!){createGeoFence(request:$request){token}}`
+
+const mutationUpdateGeoFence = `mutation($token:String!,$request:GeoFenceUpdateRequest!){` +
+	`updateGeoFence(token:$token,request:$request){token}}`
+
+// ensureGeoFence creates the fence if it is missing and CONVERGES one that differs.
+//
+// Converged rather than existence-only (areas, assets) because a fence is the one spec
+// here whose content is a contract with another process: the scene draws the same
+// outline, so a corrected ring left silently stale on every reset would make the two
+// disagree with nothing to say so.
+//
+// Compare-then-write rather than an unconditional update, matching ensureDetectionRule:
+// an unchanged fence costs no write, no tier-cap resolution and no updatedAt bump on a
+// reset. (The platform itself mints a new fence-set version only when the stored shape
+// changes, so a redundant write would not churn versions either; it would only be work.)
+// The geometry is compared as JSON VALUES because the stored document is re-rendered by
+// the database, with different whitespace and key order.
+func ensureGeoFence(ctx context.Context, rt *Runtime, g GeoFenceSpec) error {
+	doc, err := g.geometryDocument()
+	if err != nil {
+		return fmt.Errorf("render geometry: %w", err)
+	}
+	req := map[string]any{
+		"token":       g.Token,
+		"name":        g.Name,
+		"description": g.Description,
+		"geometry":    doc,
+	}
+
+	var existing struct {
+		GeoFencesByToken []struct {
+			Token       string  `json:"token"`
+			Name        *string `json:"name"`
+			Description *string `json:"description"`
+			Geometry    string  `json:"geometry"`
+		} `json:"geoFencesByToken"`
+	}
+	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryGeoFencesByToken,
+		map[string]any{"tokens": []string{g.Token}}, &existing); err != nil {
+		return fmt.Errorf("geoFencesByToken: %w", err)
+	}
+
+	if len(existing.GeoFencesByToken) > 0 {
+		cur := existing.GeoFencesByToken[0]
+		deref := func(s *string) string {
+			if s == nil {
+				return ""
+			}
+			return *s
+		}
+		if deref(cur.Name) == g.Name && deref(cur.Description) == g.Description && sameJSON(cur.Geometry, doc) {
+			return nil
+		}
+		var updated struct {
+			UpdateGeoFence struct {
+				Token string `json:"token"`
+			} `json:"updateGeoFence"`
+		}
+		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationUpdateGeoFence,
+			map[string]any{"token": g.Token, "request": asUpdateRequest(req)}, &updated); err != nil {
+			return fmt.Errorf("updateGeoFence: %w", err)
+		}
+		log.Info().Str("token", g.Token).Msg("updated geofence")
+		return nil
+	}
+
+	var created struct {
+		CreateGeoFence struct {
+			Token string `json:"token"`
+		} `json:"createGeoFence"`
+	}
+	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationCreateGeoFence,
+		map[string]any{"request": req}, &created); err != nil {
+		return fmt.Errorf("createGeoFence: %w", err)
+	}
+	log.Info().Str("token", g.Token).Msg("created geofence")
 	return nil
 }
 

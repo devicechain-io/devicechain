@@ -188,7 +188,8 @@ gives the credential. 🔑 Not `deviceCredentialsByToken` — that takes the CRE
 `type Device` exposes no credentials field, so holding a device token leaves you nothing to pass it.
 For an `ACCESS_TOKEN` credential the `credentialId` **is** the bearer.
 `dcctl sim create <name> --manifest sitepulse` provisions the whole site (18 machines and one
-crusher plant, 19 devices), its three rules (low fuel, engine overheat, low tyre pressure) and its site dashboard
+crusher plant, 19 devices), its three rules (low fuel, engine overheat, low tyre pressure), its pit geofence
+(`sp-geofence-pit`) and its site dashboard
 (`sp-dashboard`) if you have no other one to hand. Bootstrap now also publishes that board, so
 it needs the handshake's `dashboardMgmtGraphQL` endpoint (`dcctl sim create` always writes it; a
 hand-written or older handshake without it fails fast at bootstrap). 🔑 Point stage 4 at a **machine** token (`sp-dozer-01`, `SP-DZ-0001`): the

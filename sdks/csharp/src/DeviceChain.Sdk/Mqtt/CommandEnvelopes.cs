@@ -93,11 +93,12 @@ public sealed class CommandResponseEnvelope
 public sealed class DeviceCommand
 {
     /// <summary>Creates a command.</summary>
-    public DeviceCommand(string token, string name, JsonElement? payload)
+    public DeviceCommand(string token, string name, JsonElement? payload, long sequence = 0)
     {
         Token = token;
         Name = name;
         Payload = payload;
+        Sequence = sequence;
     }
 
     /// <summary>The command's token.</summary>
@@ -108,6 +109,18 @@ public sealed class DeviceCommand
 
     /// <summary>The command's parameters as raw JSON, if any.</summary>
     public JsonElement? Payload { get; }
+
+    /// <summary>
+    /// The order this command arrived in on this session: increasing, assigned when the frame was
+    /// received and before any handler or lane selector runs.
+    /// </summary>
+    /// <remarks>
+    /// A later delivery of a command the session has already seen is answered without running the
+    /// handler again, so the handler only ever sees the number the command was first given. Numbers
+    /// are not guaranteed to be consecutive, and they restart from 1 with a new session. Compare
+    /// them to decide which of two commands is newer; do not use them as an identity.
+    /// </remarks>
+    public long Sequence { get; }
 }
 
 /// <summary>

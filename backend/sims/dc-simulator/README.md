@@ -17,8 +17,10 @@ identity and drives the same tenant-facing surfaces a real integration would.
 3. **Provisions** its manifest's topology through device-management's tenant
    GraphQL API: a device profile + metric definition, published; a device
    type; one device with an `externalId` (ADR-049) and an `ACCESS_TOKEN`
-   credential (ADR-014). Every step is create-or-ignore-if-exists, so bootstrap
-   (and `reset`, which just re-runs it) is idempotent.
+   credential (ADR-014), and, for a scenario that declares them, geofences
+   (sitepulse's pit). Every step checks by token first and creates what is
+   missing; profiles and geofences also converge to the manifest's content, so
+   bootstrap (and `reset`, which just re-runs it) is idempotent.
 4. **Emits** measurements — and, for a scenario that reports position,
    **locations** — over the real device-plane HTTP ingress
    (`POST /{instanceId}/{tenant}/events`), authenticated by the provisioned
@@ -211,6 +213,15 @@ sitepulse's board (`sp-dashboard`) carries no command widget yet; the console di
 button is the next slice. `Manifest.Validate` would accept one, because its gate refuses a
 control widget only under `none`, so a test keeps it off until then.
 
+sitepulse also provisions a geofence, `sp-geofence-pit` ("Pit"): a polygon round the pit rim,
+derived from the scene's own rim outline through a documented site origin (39.0, -117.0;
+the conversion is recorded in `sim/sitepulse_geofence.go`). The Unity player must convert its
+location reports with the same origin and formula for the fence and the machine positions to
+agree. The fence is a boundary of the pit, not of zone `sp-zone-cut` (the zone's crusher
+plant is outside it), and the platform has no fence-to-area link, so the description is the
+only tie. No rule uses it yet, and the dashboard map does not draw fences; the console's
+Areas, Geofences page does.
+
 `external` attaches nothing here on purpose. A Go receiver running alongside the real
 device would answer `SUCCESSFUL` for a command only that client can act on — the
 machine on screen never moves and every layer reports success, which is worse than
@@ -349,12 +360,18 @@ process and a client that is not this process:
   "tenant": "acme",
   "manifestId": "sitepulse",
   "wsUrl": "ws://localhost/api/event-management/graphql",
+  "apiOrigin": "http://localhost",
   "token": "<tenant-admin access token>",
   "instanceId": "dc",
   "mqttBroker": "ssl://localhost:1883",
   "mqttTLSInsecure": true
 }
 ```
+
+`apiOrigin` is the origin (`scheme://host[:port]`, no path) a client uses for the
+platform's GraphQL HTTP and WS endpoints, with `ws`/`wss` mapped to `http`/`https`. It
+is derived from the same endpoint `wsUrl` comes from, so the two cannot disagree; if no
+origin can be derived the request fails with a 502 rather than returning a guess.
 
 The token is minted per request, so a page opened long after startup still gets a
 live one. The last three fields are what an `external` far end needs to hold its own

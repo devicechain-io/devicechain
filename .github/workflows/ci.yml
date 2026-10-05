@@ -270,6 +270,15 @@ jobs:
             ${{ matrix.module }}/go.mod
             ${{ matrix.module }}/go.sum
 
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh "${{ matrix.module }}"
+
       - name: gofmt
         working-directory: ${{ matrix.module }}
         run: |
@@ -659,6 +668,15 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh --workspace
+
       # Proves the checker can still fail, BEFORE its green run is read as
       # evidence. It plants a bare subscribe in a package inside backend/core, so
       # the analyzer is exercised against the REAL nats.go and paho rather than
@@ -717,6 +735,15 @@ jobs:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
+
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh --workspace
 
       # Proves the checker can still fail BEFORE its green run is read as evidence.
       # It plants seven distinct evasion shapes, requires each to be caught AND
@@ -787,6 +814,15 @@ jobs:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
+
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh --workspace
 
       # Self-test first, as with every guard here — this one is a grep, and a grep
       # whose pattern or path has drifted reports a clean tree it never read. It
@@ -908,6 +944,15 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh --workspace
+
       # Proves the duplicate-index check can fail, BEFORE its green run is used as
       # evidence of anything. Plants a duplicate in a copy of the goldens and
       # requires detection, then requires the clean goldens to still pass.
@@ -995,6 +1040,15 @@ jobs:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
+
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh --workspace
 
       # The guard before the gate, the way the other hack/ checks do it. A `-run` filter that
       # matches nothing exits 0 with "no tests to run", which is indistinguishable from a pass
@@ -1196,6 +1250,12 @@ jobs:
       # its enumeration still finds the object store's pin.
       - name: image-pull check self-test (offline)
         run: hack/check-image-pulls.sh --self-test-offline
+
+      # The module-prefetch retry loop is what lets a dropped proxy stream not fail a job, so
+      # prove it can still tell a retry from a fallback from an honest failure. Fully offline
+      # (a stand-in `go`), so it cannot flake on the network it exists to survive.
+      - name: go mod download retry self-test
+        run: hack/go-mod-download.sh --self-test
 
       # Every setup-go must take its version from go.work, not a module go.mod.
       # setup-go pins GOTOOLCHAIN=local, so a module's LANGUAGE floor (routinely
@@ -1452,6 +1512,16 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        working-directory: .
+        run: hack/go-mod-download.sh backend/core
+
       - name: Start the MQTT broker the platform ships
         working-directory: backend/core
         run: |
@@ -1604,6 +1674,15 @@ jobs:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
+
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/core
 
       # The tenant-egress boundary is written twice — in Go for the paths that have a
       # dialer, in the chart's NetworkPolicy for the three that do not — and nothing at
@@ -2149,6 +2228,15 @@ jobs:
           # persisted and it recompiled cold on nearly every run. A per-module key gives
           # each entry its own cache to restore from.
           cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      # Prefetch the module graph with a bounded retry, then a different-infrastructure
+      # fallback, so one dropped stream from the module proxy does not fail this job
+      # before it builds anything. See hack/go-mod-download.sh for why the last attempt
+      # rewrites the proxy list with `|` (any error) rather than the default `,` (404/410
+      # only), and for the fact that checksum verification stays on. It resolves the module
+      # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
+      - name: go mod download
+        run: hack/go-mod-download.sh "${{ matrix.module }}"
 
       # Install ko ourselves rather than via ko-build/setup-ko. The action has now
       # failed this job in two different ways, and both come from it fetching over the
