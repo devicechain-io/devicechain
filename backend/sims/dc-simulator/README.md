@@ -26,7 +26,7 @@ identity and drives the same tenant-facing surfaces a real integration would.
    population default to the scenario's own demo sizing (~5s) and are
    overridable — see [Driving load](#driving-load).
 5. **Receives** commands, for a scenario whose manifest declares a **command far
-   end** (widgetlab). Telemetry over HTTP ingress is one-way, so a scenario whose
+   end** (widgetlab; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
    dashboard offers a command-button otherwise enqueues real commands nothing
    answers: they reach `SENT` and expire days later, with every layer reporting
    success. Such a scenario subscribes every device to its own command topic on
@@ -61,12 +61,17 @@ defaults to the scenario's own sizing:
 | `--concurrency <n>` | `DC_SIM_CONCURRENCY` | Max emits in flight per tick (`0` derives it). |
 
 **`--devices` does not apply to every scenario.** A scenario whose dashboards bind
-named devices is a composed fixture, not a scale vehicle: resizing it would leave
-its boards pointing at devices the run never provisions, so it refuses the flag at
-startup rather than provisioning a topology its own boards do not match. widgetlab
-is one. devicepulse, buildingpulse and fleetpulse take any size. sitepulse takes any
-machine count: `--devices n` gives each of its three machine kinds `n` devices and leaves
-its single crusher plant at one.
+devices chosen in source for their behaviour is a composed fixture, not a scale vehicle:
+resizing it would leave its boards pointing at devices the run never provisions, so it
+refuses the flag at startup rather than provisioning a topology its own boards do not
+match. widgetlab is one. devicepulse, buildingpulse and fleetpulse take any size
+(buildingpulse's board binds named devices too, but it is rebuilt from the resized
+population). sitepulse takes any machine count: `--devices n` gives each of its three
+machine kinds `n` devices and leaves its single crusher plant at one. Its board
+(`sp-dashboard`) shows one fuel card per machine, up to six per kind, and says so when
+it is showing fewer than the fleet; it is the 18-machine demo's board, and its site-wide
+alarm widgets query once per member device and read at most 500 members, so a very large
+`--devices` run makes it both expensive and partial.
 
 ⚠️ **A small buildingpulse is a quieter demo, not a broken one.** Every device raises and
 clears at any size, but below a handful the tenant-wide view has moments with no active
@@ -201,6 +206,10 @@ widgetlab is `internal`; sitepulse is `external`; devicepulse and buildingpulse 
 must still declare a command vocabulary on a profile: for `external` that vocabulary
 is the whole contract with the other process, since it is what that client subscribes
 for and what the board's widget enqueues against.
+
+sitepulse's board (`sp-dashboard`) carries no command widget yet; the console dispatch
+button is the next slice. `Manifest.Validate` would accept one, because its gate refuses a
+control widget only under `none`, so a test keeps it off until then.
 
 `external` attaches nothing here on purpose. A Go receiver running alongside the real
 device would answer `SUCCESSFUL` for a command only that client can act on — the

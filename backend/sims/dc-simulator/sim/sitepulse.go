@@ -312,13 +312,15 @@ func NewSitepulse(seed int64, load Load) Sim {
 }
 
 func (s *sitepulse) Manifest() SimManifest {
-	return resize(s.load, SimManifest{
+	manifest := SimManifest{
 		Name: "sitepulse",
 		Seed: s.seed,
-		// A legitimate scale knob, unlike widgetlab: nothing here binds a named device (no
-		// dashboard yet, and the scene resolves whatever externalIds exist), so `--devices`
-		// genuinely means "more machines of each kind". It sizes the three machine
-		// populations and leaves the single plant alone (PopulationSpec.FixedCount).
+		// A legitimate scale knob, unlike widgetlab: the board does bind named machines,
+		// but it is built below from the RESIZED population, so `--devices` cannot leave
+		// it pointing at a device the run lacks (its card rows cap at one row per kind and
+		// say so), and the scene resolves whatever externalIds exist. `--devices` means
+		// "more machines of each kind": it sizes the three machine populations and leaves
+		// the single plant alone (PopulationSpec.FixedCount).
 		FixedTopology: false,
 		// The Unity player publishes this scenario's telemetry, so Sim.Tick emits
 		// nothing (see Tick). Declared, because "resizable" is not "load-drivable": a
@@ -476,14 +478,30 @@ func (s *sitepulse) Manifest() SimManifest {
 				DistributeAcross:  []string{"area"},
 			},
 		},
-		// 🔴 NO DASHBOARD YET, DELIBERATELY. The fleet fuel + alarms board S1's acceptance
-		// asks for is a separate slice: it would drag in the frontend/testdata/sim-dashboards
-		// fixture and its TypeScript-side gate, and it changes what a "named device" means
-		// for FixedTopology (a board binds devices by name). This slice grows the devices and
-		// the rules the board will read. Note the shape this leaves BEHIND: Validate's
-		// control-widget gate is about a board with no far end, so a scenario with a far end
-		// and no board is unremarkable to it.
-	})
+	}
+
+	// The S1 board (fleet fuel + alarms beside the 3D window) is built from the RESIZED
+	// population, resize first and Expand second, so it binds only machines this run
+	// provisions. Manifest.Validate does not check dashboard bindings. See
+	// buildSitepulseDashboard, including why it carries no command widget yet.
+	//
+	// Having a dashboard makes Provision require the handshake's dashboard-management
+	// endpoint, which a sitepulse handshake did not need before; `dcctl sim create`
+	// always writes it.
+	manifest = resize(s.load, manifest)
+	definition, err := buildSitepulseDashboard(manifest.Expand(manifest.Seed))
+	if err != nil {
+		// A population this scenario declares always has a plant and a dozer, so this is a
+		// programming error, not a runtime condition.
+		panic(fmt.Sprintf("sitepulse: build dashboard definition: %v", err))
+	}
+	manifest.Dashboards = []DashboardSpec{{
+		Token:       SitepulseDashboardToken,
+		Name:        sitepulseDashboardName,
+		Description: "Fleet fuel, haul-truck payload, active site alarms, machine positions and the crusher plant for the Site Pulse construction-site scenario.",
+		Definition:  definition,
+	}}
+	return manifest
 }
 
 func (s *sitepulse) Bootstrap(ctx context.Context, rt *Runtime) error {

@@ -36,6 +36,7 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..',
 const GALLERY = 'wl-gallery';
 const STRESS = 'wl-stress';
 const BUILDINGPULSE = 'bp-dashboard';
+const SITEPULSE = 'sp-dashboard';
 
 // Every fixture on disk. The per-board block below walks THIS list rather than a
 // hand-written one, so a board added by any scenario is covered by every generic
@@ -88,7 +89,7 @@ describe('the sim dashboard fixtures', () => {
   // side's manifest/disk equality and by the named tests below failing to read a file
   // that moved.
   it('are exactly the boards this file knows about', () => {
-    expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, STRESS].sort());
+    expect(fixtureTokens()).toEqual([BUILDINGPULSE, GALLERY, SITEPULSE, STRESS].sort());
   });
 
   it('parse without throwing', () => {

@@ -304,10 +304,13 @@ type SimManifest struct {
 	Name string
 	Seed int64
 	// FixedTopology marks a scenario whose device set is a composed FIXTURE
-	// rather than a scale knob: its dashboards bind named devices in named
-	// areas, so resizing it leaves a board pointing at a device that no longer
-	// exists — a dashboard that renders an empty pane on a topology nobody
-	// asked for. withDeviceCount refuses an override against such a manifest.
+	// rather than a scale knob: its dashboards bind devices chosen in source for
+	// their behaviour (widgetlab's edge sensors), which a resize cannot
+	// reproduce, so resizing it leaves a board pointing at a device that no
+	// longer exists — a dashboard that renders an empty pane on a topology
+	// nobody asked for. withDeviceCount refuses an override against such a
+	// manifest. A board built from the resized manifest's own Expand
+	// (buildingpulse, sitepulse) binds named devices and stays resizable.
 	//
 	// It is declared rather than inferred from the population count on purpose.
 	// "One population" and "resizable" are different facts that happen to
