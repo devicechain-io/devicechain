@@ -97,8 +97,11 @@ loose rock into facets of their own, so the ground has the same flat planes as t
 machines. The haul roads are built into the ground with a crown and safety windrows, the pads
 have a softened, disturbed edge, and the ground between the haul roads is stripped, its topsoil
 stacked in a long grassed bund. The features file also places the roads, the site
-buildings, the processing plant (primary crusher, screen and radial stacker, fed by a loader) and
-the vegetation. `QuarryFleetPreview` plays the choreography in `Data/quarry_fleet.json` (a loader
+buildings, the processing plant and the vegetation. The plant stands on its pad with its primary
+jaw crusher reaching down into a concrete-lined pocket: a loader tips over the yellow rim of a
+splayed steel feed hopper, lined inside with dark wear plates, and the crusher's body, flywheels
+and motor stand beside it, before a conveyor carries the crushed rock up to the screen and the
+radial stacker. `QuarryFleetPreview` plays the choreography in `Data/quarry_fleet.json` (a loader
 on a low bench filling each haul truck in two passes, five trucks running the loop up the
 two-lane ramp, a sixth calling at the refuel bay, dozers working the cut and the dump, idle
 machines parked in the yard) through the same `MachineRig` the platform connection will drive.
@@ -112,13 +115,32 @@ machines carry site dust, heavy low down and a light film above (`Art/Shaders/Ma
 and at the refuel bay an attendant holds the dispenser's hose to a truck while it is in the bay
 (`RefuelVignette`). They are local presentation, never evidence of platform state.
 
-`IotOverlay` is the data layer a DeviceChain console would put over the site: a tag over each
-tagged machine (payload or bucket load, fuel, speed, what it is doing, a status dot), a pulsing
-ring under a machine with an alert, a dashed geofence round the rim of the cut, a callout at the
-load point with the haul cycle time, and the crusher's throughput. It is one overlay that is
-switched on and off as a whole, so the same scene also makes clean stills. Until the scene is
-connected to a DeviceChain instance its values are illustrative: they follow the preview
-choreography and are not platform data.
+`IotOverlay` is the data layer a DeviceChain console would put over the site: a few device
+cards, a pulsing ring under a machine with an active alarm, and a dashed geofence round the rim
+of the cut with the zone's name on the line. A card shows only what the Sitepulse device profiles
+model, under the platform's own measurement keys: for a dozer, loader or haul truck `fuel_pct`,
+`engine_temp_c`, `engine_hours`, `payload_t` and `tyre_pressure_kpa`, its speed (derived from its
+location), its active alarms (`low-fuel`, `overheat`, `tyre-pressure-low`) and the state of the
+last command sent to it (QUEUED, SENT, SUCCESSFUL or FAILED); for the primary crusher
+`throughput_tph` and whether it is running. Each card draws one small typed record,
+`DeviceReading` (`Scripts/Domain/Telemetry.cs`), which refuses a key its profile does not define.
+The example alarm is a truck at the refuel bay with `low-fuel` raised and the `goto-refuel`
+command that the low-fuel rule sends. Every frame the overlay finds each target's bounds on
+screen, lands its leader on the machine's cab roof (or on the crusher's hopper), and places its
+card where it covers no machine and as little of the cut as it can; a target hidden by the
+ground gets no card. It is one overlay that is switched on and off as a whole, so the same scene
+also makes clean stills.
+
+**The values are illustrative.** Until the scene is connected to a DeviceChain instance the
+readings are derived from the preview choreography (whether a truck is loaded, how fast it moves,
+which loader feeds the crusher) in one method, `IotOverlay.UpdateReadings`, and are not platform
+data. Connecting the scene replaces that method's source with the observed readings; the cards
+and the records do not change.
+
+The sky (`Art/Shaders/StylizedSky.shader`) is drawn as code to match: a soft gradient whose
+horizon is the scene's fog colour, a warm glow round the sun, and a few flat, two-tone cumulus
+low over the horizon.
+
 `FrameTimeBenchmark` is off unless a player build is started with `-sitepulse-benchmark`; it
 flies a camera over the site and writes the average FPS and the 99th-percentile and worst frame
 times to `sitepulse-benchmark-<quality>.txt` beside the executable.
@@ -133,11 +155,12 @@ A player started with `-sitepulse-quality Laptop` runs at that level.
 
 ## Known limitations
 
-- There are no ground detail meshes, and the sky is a plain gradient.
+- There are no ground detail meshes.
 - No truck tips into the hopper: a loader feeds it from the feed stockpile.
 - The preview choreography is scripted local motion, not the site simulation; the haul trucks
   take the loaded buckets as one load, and the dump pad does not grow.
-- The overlay's values are illustrative until the platform connection lands.
+- The overlay's values are illustrative until the platform connection lands, and only the
+  machines and the plant listed in `IotOverlay` carry a card.
 
 ## Tests
 
@@ -146,7 +169,8 @@ rotation, the machine facing +Z, every driven pivot present and at rest, and tha
 (hydraulic aiming, the hauler's load rule) hold. It also checks the quarry data: the heightmap
 decoder round-trips and rejects a truncated file, and the fleet choreography holds all 18
 machines with tracks of the right length, and the geofence encloses the cut inside the
-work site's colour map. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
+work site's colour map, and that a device card's record holds only the profiles' measurement
+keys, alarms and command states. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
 or from the command line with the Editor closed:
 
 ```

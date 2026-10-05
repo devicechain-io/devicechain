@@ -139,17 +139,6 @@ namespace DeviceChain.Sitepulse.Visuals
             return 0f;
         }
 
-        /// <summary>The haul loop's cycle time (s): the period of the first hauler's track.</summary>
-        public float HaulCycle
-        {
-            get
-            {
-                foreach (var u in units)
-                    if (u.rig != null && u.rig.Kind == MachineKind.Hauler) return u.track.period;
-                return 0f;
-            }
-        }
-
         void OnEnable() => Spawn();
 
         void OnDisable() => Despawn();

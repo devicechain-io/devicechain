@@ -366,10 +366,10 @@ def site_sign(rng):
 # ==================================================================================
 # processing plant
 # ==================================================================================
-def frustum(p, y0, y1, bot, top, key, open_top=False):
+def frustum(p, y0, y1, bot, top, key, open_top=False, inner_key=None):
     """A closed box whose horizontal section goes from rectangle `bot` at y0 to `top` at y1;
     each rectangle is (x0, x1, z0, z1). A hopper, a chute. open_top leaves the top off and adds
-    the inside of the walls (a hopper you can see into)."""
+    the inside of the walls (a hopper you can see into), in inner_key if given."""
     b0 = p._op()
     def ring(y, r):
         x0, x1, z0, z1 = r
@@ -394,6 +394,12 @@ def frustum(p, y0, y1, bot, top, key, open_top=False):
             faces.append(p.bm.faces.new((bi[i], bi[j], ai[j], ai[i])))
             faces.append(p.bm.faces.new((b[i], b[j], bi[j], bi[i])))                 # the rim's top
         verts += ai + bi
+        if inner_key is not None:
+            inner = faces[-8::2] + [faces[-9]]                                              # inside walls, floor
+            p._finish(verts, [f for f in faces if f not in inner], key, 0)
+            p._finish([], inner, inner_key, 0)
+            p._tag(b0)
+            return
     p._finish(verts, faces, key, 0)
     p._tag(b0)
 
@@ -516,13 +522,19 @@ def crusher_plant(rng):
         for z in (-2.4, 0.9):
             p.box((x - 0.15, 0.4, z - 0.15), (x + 0.15, 2.5, z + 0.15), "paint_dark", 0.0)
     p.box((-2.0, 2.4, -2.7), (2.0, 2.6, 1.2), "paint_dark", 0.0)                            # feeder deck
-    frustum(p, 2.6, 3.95, (-1.0, 1.0, -1.3, 1.0), (-2.3, 2.3, -2.6, 2.3), "plant", open_top=True)  # hopper
-    for (ax0, ax1, az0, az1) in ((-2.4, 2.4, -2.7, -2.5), (-2.4, 2.4, 2.2, 2.4),          # rim: a frame, open
-                                 (-2.4, -2.2, -2.7, 2.4), (2.2, 2.4, -2.7, 2.4)):          # in the middle
-        p.box((ax0, 3.95, az0), (ax1, 4.12, az1), "paint_dark", 0.0)
-    p.box((-1.7, 3.2, -2.0), (1.7, 3.35, 1.7), "ore", 0.0)                                  # rock in it
-    for k in range(14):
-        blob(p, (rng.uniform(-1.5, 1.5), 3.45 + rng.uniform(0.0, 0.25), rng.uniform(-1.8, 1.5)), rng.uniform(0.25, 0.55),
+    # the feed hopper: splayed steel plate walls, lined with dark wear plates inside,
+    # widest towards the loader so the bucket tips well inside the rim, which is a yellow frame
+    frustum(p, 2.55, 4.0, (-1.0, 1.0, -1.2, 1.0), (-2.6, 2.6, -3.3, 2.5), "plate", open_top=True, inner_key="liner")
+    for (ax0, ax1, az0, az1) in ((-2.7, 2.7, -3.4, -3.2), (-2.7, 2.7, 2.4, 2.6),          # rim: a frame, open
+                                 (-2.7, -2.5, -3.4, 2.6), (2.5, 2.7, -3.4, 2.6)):          # in the middle
+        p.box((ax0, 4.0, az0), (ax1, 4.14, az1), "paint", 0.0)
+    with p.detail():
+        for sx in (-1, 1):                                                                  # stiffeners outside,
+            for z in (-1.9, -0.5, 0.9):                                                     # along the splayed walls
+                p.cyl((sx * 1.08, 2.62, z * 0.45), (sx * 2.68, 3.98, z), 0.07, "paint_dark", 6)
+    p.box((-1.4, 3.2, -1.9), (1.4, 3.35, 1.6), "ore", 0.0)                                  # rock in it
+    for k in range(18):
+        blob(p, (rng.uniform(-1.6, 1.6), 3.5 + rng.uniform(0.0, 0.3), rng.uniform(-2.2, 1.5)), rng.uniform(0.25, 0.55),
              "ore", rng, scale=(1.0, 0.7, 1.0), subdiv=1, jitter=0.25)
     # jaw crusher: two heavy side frames, sloped at the feed, with the swing-jaw housing between
     side = [(2.3, 0.4), (5.3, 0.4), (5.3, 2.2), (4.6, 3.5), (2.3, 3.5)]                     # (z, y)
@@ -595,9 +607,16 @@ def crusher_plant(rng):
         p.box((b[0] - 0.55 + 0.35 * sx, top - 0.25, 19.15), (b[0] + 0.55 + 0.35 * sx, top + 0.55, 20.25), "paint_dark", 0.02)
     # -- electrical room beside the crusher
     p.box((-7.4, 0.0, 1.0), (-4.6, 0.35, 6.2), "steel", 0.0)
-    p.box((-7.3, 0.35, 1.1), (-4.7, 2.95, 6.1), "cabin")
+    p.box((-7.3, 0.35, 1.1), (-4.7, 2.95, 6.1), "mcc")
     p.box((-7.4, 2.95, 1.0), (-4.6, 3.07, 6.2), "paint_dark", 0.01)
     p.box((-4.72, 0.45, 4.6), (-4.66, 2.4, 5.5), "paint_dark", 0.0)                          # door
+    p.box((-4.70, 1.75, 3.7), (-4.64, 2.15, 4.1), "paint", 0.0)                              # warning plate
+    with p.detail():
+        for k in range(5):                                                                  # louvres
+            y = 1.0 + 0.16 * k
+            p.box((-4.72, y, 1.6), (-4.62, y + 0.07, 3.0), "paint_dark", 0.0)
+        for z in (2.2, 3.6, 4.4):                                                           # wall seams
+            p.box((-7.33, 0.4, z - 0.02), (-7.27, 2.9, z + 0.02), "paint_dark", 0.0)
     with p.detail():
         p.box((-7.75, 1.9, 2.0), (-7.3, 2.5, 2.8), "worn", 0.02)                             # air conditioner
         p.tube([(-4.6, 2.6, 2.0), (-3.0, 2.6, 2.0), (-2.6, 0.2, 2.4)], 0.05, "rubber", 6)  # cable

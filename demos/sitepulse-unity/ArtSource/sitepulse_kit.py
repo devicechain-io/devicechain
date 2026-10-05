@@ -84,6 +84,9 @@ PALETTE = {
     "reflect":    ("M_Reflective_White", (0.80, 0.80, 0.80),     0.35, 0.0, None),
     "sign":       ("M_Sign_Green",       (0.010, 0.120, 0.050),  0.50, 0.0, None),
     "plant":      ("M_Plant_Green",      (0.050, 0.140, 0.080),  0.60, 0.1, None),
+    "liner":      ("M_Steel_Liner",      (0.060, 0.057, 0.054),  0.78, 0.35, None),  # a hopper's worn wear plates
+    "plate":      ("M_Steel_Plate",      (0.150, 0.152, 0.155),  0.62, 0.40, None),  # unpainted structural plate
+    "mcc":        ("M_Paint_SlateBlue",  (0.085, 0.120, 0.165),  0.62, 0.0, None),   # the plant's electrical room
     "ore":        ("M_Ore",              (0.300, 0.290, 0.270),  0.92, 0.0, None),
     "ore_belt":   ("M_Ore_Belt",         (1.0, 1.0, 1.0),        0.92, 0.0, None),   # + scrolling ore texture
     "hivis":      ("M_HiVis_Orange",     (0.95, 0.30, 0.01),     0.60, 0.0, None),

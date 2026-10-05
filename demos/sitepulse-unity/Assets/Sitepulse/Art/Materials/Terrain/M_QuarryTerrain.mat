@@ -120,8 +120,8 @@ Material:
     m_Colors:
     - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
     - _CoreRect: {r: -182, g: -202, b: 384, a: 0}
-    - _GroundFacet: {r: 3.2, g: 0.05, b: 0.025, a: 0}
-    - _PileFacet: {r: 1.5, g: 0.42, b: 0.06, a: 0}
+    - _GroundFacet: {r: 1, g: 0.045, b: 0.02, a: 0}
+    - _PileFacet: {r: 1, g: 0.28, b: 0.045, a: 0}
     - _RockCool: {r: 0.56, g: 0.57, b: 0.58, a: 1}
     - _RockDark: {r: 0.5, g: 0.47, b: 0.43, a: 1}
     - _RockLight: {r: 0.7, g: 0.66, b: 0.6, a: 1}

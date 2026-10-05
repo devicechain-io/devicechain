@@ -188,10 +188,11 @@ namespace DeviceChain.Sitepulse.EditorTools
             m.SetTexture("_ColorMapCore", core);
             var info = JsonUtility.FromJson<FeatureTerrain>(File.ReadAllText(Terrain + "quarry_features.json")).terrain;
             m.SetVector("_CoreRect", new Vector4(info.core.x0, info.core.z0, info.core.size, 0f));
-            // the ground cut into flat facets like the rocks: gentle and broad on worked ground,
-            // steeper and smaller on the crushed products
-            m.SetVector("_GroundFacet", new Vector4(3.2f, 0.05f, 0.025f, 0f));
-            m.SetVector("_PileFacet", new Vector4(1.5f, 0.42f, 0.06f, 0f));
+            // the ground cut into flat facets like the rocks, all of about the same size (a metre)
+            // so piles and ground read as one material at one scale: gentle on worked ground,
+            // steeper on the crushed products, as the loose rock
+            m.SetVector("_GroundFacet", new Vector4(1.0f, 0.045f, 0.02f, 0f));
+            m.SetVector("_PileFacet", new Vector4(1.0f, 0.28f, 0.045f, 0f));
             m.SetFloat("_FacetFar", 190f);
             // the rock: strata of warm light, warm dark and cool grey bands about a bench face's
             // tenth high, broken into flat facets a few metres across; loose rock in smaller ones
@@ -273,7 +274,7 @@ namespace DeviceChain.Sitepulse.EditorTools
         }
 
         /// <summary>A URP particle material: surface 0 opaque, 1 transparent; blend 0 alpha, 2 additive.</summary>
-        /// <summary>The overlay's dashed geofence line and its pulsing alert ring: unlit, drawn over
+        /// <summary>The overlay's dashed geofence line and its pulsing alarm ring: unlit, drawn over
         /// the scene's lighting so they read as data, not as things on the site.</summary>
         static (Material line, Material ring) OverlayMaterials()
         {
@@ -374,6 +375,20 @@ namespace DeviceChain.Sitepulse.EditorTools
         sealed class PropList
         {
             public Prop[] props;
+            public PlantInfo plant;
+        }
+
+        [Serializable]
+        sealed class PlantInfo
+        {
+            public float x, z, heading;
+            public Pocket pocket;
+        }
+
+        [Serializable]
+        sealed class Pocket
+        {
+            public float x0, x1, z0, z1, depth;
         }
 
         [Serializable]
@@ -427,7 +442,12 @@ namespace DeviceChain.Sitepulse.EditorTools
                 if (prefab == null) throw new FileNotFoundException("prop prefab " + p.p);
                 var go = (GameObject)PrefabUtility.InstantiatePrefab(prefab, props.transform);
                 var rot = Quaternion.Euler(0f, p.heading, 0f);
-                go.transform.SetPositionAndRotation(new Vector3(p.x, GroundUnder(qt, go, p.x, p.z, rot), p.z), rot);
+                // the plant's origin is over its own pocket, which is no ground to stand on: it
+                // stands on the pad at the pocket's rim, and its crusher reaches down into it
+                float y = p.p.StartsWith("crusher_plant", StringComparison.Ordinal) && list.plant?.pocket != null
+                    ? PocketRim(qt, list.plant, rot)
+                    : GroundUnder(qt, go, p.x, p.z, rot);
+                go.transform.SetPositionAndRotation(new Vector3(p.x, y, p.z), rot);
                 // the plant's flywheels and screen box move: everything else is static
                 foreach (var t in go.GetComponentsInChildren<Transform>(true))
                 {
@@ -483,7 +503,7 @@ namespace DeviceChain.Sitepulse.EditorTools
                 rvGo.SetActive(true);
             }
 
-            // the data layer over the site: tags, the geofence, the load point, alerts
+            // the data layer over the site: device cards, the geofence, an alarm
             var ovGo = new GameObject("IoT Overlay");
             ovGo.SetActive(false);
             var ov = ovGo.AddComponent<IotOverlay>();
@@ -508,6 +528,19 @@ namespace DeviceChain.Sitepulse.EditorTools
         {
             var go = AssetDatabase.LoadAssetAtPath<GameObject>(Models + name + ".glb");
             return go != null ? go : throw new FileNotFoundException(Models + name + ".glb");
+        }
+
+        /// <summary>The pad's height a metre outside the crusher pocket's corners (the lowest of them).</summary>
+        static float PocketRim(QuarryTerrain qt, PlantInfo plant, Quaternion rot)
+        {
+            var k = plant.pocket;
+            float y = float.PositiveInfinity;
+            foreach (var (lx, lz) in new[] { (k.x0 - 1f, k.z0 - 1f), (k.x0 - 1f, k.z1 + 1f), (k.x1 + 1f, k.z0 - 1f), (k.x1 + 1f, k.z1 + 1f) })
+            {
+                var c = rot * new Vector3(lx, 0f, lz);
+                y = Mathf.Min(y, qt.HeightAt(plant.x + c.x, plant.z + c.z));
+            }
+            return y;
         }
 
         /// <summary>The lowest terrain height under a prop's footprint, so nothing floats on a slope.</summary>
@@ -694,15 +727,22 @@ namespace DeviceChain.Sitepulse.EditorTools
 
         const string SkyPath = Materials + "M_Sky.mat";
 
-        /// <summary>A procedural sky whose ground half is the fog colour, so the hazy horizon has no edge.</summary>
+        /// <summary>The stylized sky (Art/Shaders/StylizedSky.shader): a soft gradient whose horizon is
+        /// the fog colour, so the hazy horizon has no edge, a warm glow round the sun and a few flat,
+        /// two-tone cumulus low over the horizon.</summary>
         static Material Sky()
         {
-            var m = LoadOrCreateMaterial(SkyPath, "Skybox/Procedural");
-            m.SetFloat("_SunSize", 0.035f);
-            m.SetFloat("_AtmosphereThickness", 0.85f);
-            m.SetColor("_SkyTint", new Color(0.52f, 0.56f, 0.62f));
-            m.SetColor("_GroundColor", new Color(0.62f, 0.66f, 0.71f));
-            m.SetFloat("_Exposure", 1.15f);
+            var m = LoadOrCreateMaterial(SkyPath, "Sitepulse/Stylized Sky");
+            m.SetColor("_ZenithColor", new Color(0.33f, 0.52f, 0.78f));
+            m.SetColor("_MidColor", new Color(0.55f, 0.69f, 0.86f));
+            m.SetFloat("_SunGlow", 0.55f);
+            m.SetColor("_CloudLit", new Color(0.98f, 0.98f, 0.96f));
+            m.SetColor("_CloudShade", new Color(0.73f, 0.79f, 0.88f));
+            m.SetFloat("_CloudCover", 0.6f);
+            m.SetFloat("_CloudSlices", 9f);
+            m.SetFloat("_CloudSize", 0.34f);
+            m.SetVector("_CloudElevation", new Vector4(5f, 22f, 0f, 0f));
+            m.SetFloat("_CloudSeed", 3.7f);
             EditorUtility.SetDirty(m);
             return m;
         }

@@ -95,7 +95,14 @@ namespace DeviceChain.Sitepulse.Visuals
                 cd.renderPostProcessing = false;
             Application.targetFrameRate = -1;
             Screen.SetResolution(1920, 1080, FullScreenMode.Windowed);
+            // -sitepulse-no-overlay measures the scene without its data layer
+            overlayOn = System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-sitepulse-no-overlay") < 0;
+            if (!overlayOn)
+                foreach (var o in FindObjectsByType<IotOverlay>(FindObjectsInactive.Include))
+                    o.show = false;
         }
+
+        bool overlayOn = true;
 
         void LateUpdate()
         {
@@ -171,6 +178,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 $"p99_ms={1000 * p99:F2} max_ms={1000 * max:F2} gpu_median_p99_ms={Pct(gpu)} cpu_median_p99_ms={Pct(cpu)} " +
                 $"res={Screen.width}x{Screen.height} machines={machines} trees={trees} " + CounterText() +
                 $"gpu=\"{SystemInfo.graphicsDeviceName}\" cpu=\"{SystemInfo.processorType}\" quality={QualityName} " +
+                $"overlay={(overlayOn ? "on" : "off")} " +
                 $"backend={(Application.isEditor ? "editor" : SystemInfo.graphicsDeviceType.ToString())}";
             File.WriteAllText(Path.Combine(OutputDir, $"sitepulse-benchmark-{QualityName}.txt"), line + "\n");
             // every frame, for finding where on the flight the slow frames are
