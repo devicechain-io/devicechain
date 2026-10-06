@@ -75,6 +75,55 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [UnityTest]
+        public IEnumerator ASocketClosedForItsOldTokenDoesNotKillTheRenewedOne()
+        {
+            // a subscription socket connected with the first token; the broker then renews; the server
+            // closes the socket with 4401 when the FIRST token expires. Only that token was refused.
+            now = 10_000 - 300;
+            var first = PlatformTestData.JwtExp(10_000);
+            var second = PlatformTestData.JwtExp(10_900);
+            serve = () => second;
+            var b = Broker(10_000);
+            var socket = new HandedToken(b);
+            var handed = socket.Provider(default);
+            while (!handed.IsCompleted) yield return null;
+            Assert.AreEqual(first, socket.Last);
+
+            now = 10_000 - 100;                                   // inside the margin: renew
+            b.Tick();
+            for (var i = 0; i < 300 && b.ExpiresAt != DateTimeOffset.FromUnixTimeSeconds(10_900); i++) yield return null;
+            Assert.AreEqual(DateTimeOffset.FromUnixTimeSeconds(10_900), b.ExpiresAt, "renewed");
+            var fetchesBefore = fetches;
+
+            now = 10_001;                                         // the first token expires; the socket is closed 4401
+            var refreshed = socket.RefreshAfterRejection(default);
+            while (!refreshed.IsCompleted) yield return null;
+            Assert.AreEqual(TokenState.Fresh, b.State, "the renewed token is still good");
+            Assert.AreEqual(fetchesBefore, fetches, "nothing to refetch: the broker already holds a newer token");
+            var next = b.Get(default);
+            while (!next.IsCompleted) yield return null;
+            Assert.AreEqual(second, next.Result);
+        }
+
+        [UnityTest]
+        public IEnumerator ASocketWhoseOwnCurrentTokenIsRefusedGetsANewOne()
+        {
+            now = 5_000;
+            var held = PlatformTestData.JwtExp(10_000);
+            serve = () => PlatformTestData.JwtExp(10_900);
+            var b = Broker(10_000);
+            var socket = new HandedToken(b);
+            var handed = socket.Provider(default);
+            while (!handed.IsCompleted) yield return null;
+            Assert.AreEqual(held, socket.Last);
+
+            var refreshed = socket.RefreshAfterRejection(default);
+            while (!refreshed.IsCompleted) yield return null;
+            Assert.AreEqual(1, fetches, "a refused current token is replaced");
+            Assert.AreEqual(DateTimeOffset.FromUnixTimeSeconds(10_900), b.ExpiresAt);
+        }
+
+        [UnityTest]
         public IEnumerator AfterA401TheSameTokenStaysExpired()
         {
             now = 5_000;
