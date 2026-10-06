@@ -272,10 +272,11 @@ public sealed class MqttConnectOptions
     /// caller sees an opaque socket error naming a host that is demonstrably reachable, which
     /// sends you looking at TLS or credentials instead of at name resolution.
     /// <para>
-    /// Left <see cref="System.Net.Sockets.AddressFamily.Unspecified"/> the connection tries the
-    /// resolver's own order and, if that fails while the host has addresses in both families,
-    /// retries ONCE over IPv4 — so the common case heals itself rather than requiring the caller
-    /// to have diagnosed it first. Set it explicitly to pin the choice and skip the fallback.
+    /// Left <see cref="System.Net.Sockets.AddressFamily.Unspecified"/> the connection races the
+    /// host's addresses (the next is tried as soon as the previous fails, or after a short
+    /// stagger) and connects to the first that answers — so the common case heals itself, and an
+    /// address that never answers does not stall the connect. Set it explicitly to pin the choice
+    /// and skip the race.
     /// </para>
     /// </remarks>
     public AddressFamily AddressFamily { get; set; } = AddressFamily.Unspecified;
