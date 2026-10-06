@@ -1,0 +1,6 @@
+{
+  "runnerUrl": "http://localhost:8090",
+  "caPemPath": "C:\\Users\\YOU\\sitepulse\\broker-ca.pem",
+  "expectInstance": "sitepulse",
+  "expectTenant": "sim-sitepulse"
+}

@@ -161,6 +161,32 @@ skips it; start the player with `-reduced-motion` for the still lockup and a sho
 `-no-intro` to leave it out. The frame-time benchmark (`-sitepulse-benchmark`) always runs without
 it.
 
+## Modes
+
+The player starts in one of three modes, chosen once at startup with `-sitepulse-mode`, and the
+badge in the top-left corner always says which:
+
+- `choreographed` (the default): the scripted preview, with illustrative values on the cards.
+- `live`: the scene binds its 19 machines and the plant to a running DeviceChain instance and the
+  Sitepulse simulation's runner. In this build Live shows how far each device got (resolved on the
+  platform, credentials found) and grey placeholders for any machine the platform does not know;
+  the cards stay hidden until observed values replace the illustrative ones.
+- `replay`: not in this build; it says so rather than starting another mode.
+
+Live mode needs the runner's address and the broker's CA certificate. Copy `live.example.json` to
+`%USERPROFILE%\AppData\LocalLow\DeviceChain\Sitepulse\live.json` and set `caPemPath`, or pass
+`-dc-runner <url> -dc-ca <path>` on the command line. The file holds no secrets: the operator
+token comes from the runner at startup and device credentials are looked up then, kept in memory
+only and never logged.
+
+The C# SDK is a local package (`sdks/unity/io.devicechain.sdk`). Its DLLs are build outputs: run
+`sdks/unity/stage-sdk.sh`, then remove the five assemblies Unity already ships, as the package's
+`VERIFICATION.md` lists.
+
+`Scenes/LiveSmoke.unity` is the smallest live check: built as a player, it fetches the runner's
+config, resolves the scene's devices and opens one measurement subscription, then writes
+`live-smoke.log` beside the player log and quits.
+
 ## Quality levels
 
 - **PC**: the full look (MSAA, screen-space ambient occlusion, long four-cascade shadows).
@@ -175,8 +201,8 @@ A player started with `-sitepulse-quality Laptop` runs at that level.
 - No truck tips into the hopper: a loader feeds it from the feed stockpile.
 - The preview choreography is scripted local motion, not the site simulation; the haul trucks
   take the loaded buckets as one load, and the dump pad does not grow.
-- The overlay's values are illustrative until the platform connection lands, and only the
-  machines and the plant listed in `IotOverlay` carry a card.
+- The overlay's values are illustrative until the observer lands; Live mode hides the cards
+  meanwhile. Only the machines and the plant listed in `IotOverlay` carry a card.
 
 ## Tests
 
@@ -186,7 +212,9 @@ rotation, the machine facing +Z, every driven pivot present and at rest, and tha
 decoder round-trips and rejects a truncated file, and the fleet choreography holds all 18
 machines with tracks of the right length, and the geofence encloses the cut inside the
 work site's colour map, and that a device card's record holds only the profiles' measurement
-keys, alarms and command states. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
+keys, alarms and command states. The platform tests cover the runner config and `live.json`
+validation, the token refresh schedule, device binding and the credential cross-check over canned
+responses, and the log redactor. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
 or from the command line with the Editor closed:
 
 ```

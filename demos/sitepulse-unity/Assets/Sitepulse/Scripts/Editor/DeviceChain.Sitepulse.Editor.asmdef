@@ -3,9 +3,12 @@
     "rootNamespace": "DeviceChain.Sitepulse.EditorTools",
     "references": [
         "DeviceChain.Sitepulse",
+        "DeviceChain.Sitepulse.App",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
-        "Unity.RenderPipelines.Universal.Editor"
+        "Unity.RenderPipelines.Universal.Editor",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
     ],
     "includePlatforms": [
         "Editor"

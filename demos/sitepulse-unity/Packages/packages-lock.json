@@ -209,6 +209,12 @@
         "com.unity.ugui": "2.5.0"
       }
     },
+    "io.devicechain.sdk": {
+      "version": "file:../../../sdks/unity/io.devicechain.sdk",
+      "depth": 0,
+      "source": "local",
+      "dependencies": {}
+    },
     "com.unity.modules.accessibility": {
       "version": "1.0.0",
       "depth": 0,

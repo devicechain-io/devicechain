@@ -44,7 +44,8 @@
     "com.unity.modules.video": "1.0.0",
     "com.unity.modules.wind": "1.0.0",
     "com.unity.modules.xr": "1.0.0",
-    "io.devicechain.demo-intro": "file:../../shared/io.devicechain.demo-intro"
+    "io.devicechain.demo-intro": "file:../../shared/io.devicechain.demo-intro",
+    "io.devicechain.sdk": "file:../../../sdks/unity/io.devicechain.sdk"
   },
   "testables": [
     "io.devicechain.demo-intro"

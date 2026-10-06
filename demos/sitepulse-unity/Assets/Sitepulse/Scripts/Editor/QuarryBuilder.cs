@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Visuals;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -515,6 +516,7 @@ namespace DeviceChain.Sitepulse.EditorTools
             ov.plant = plantGo;
             (ov.lineMaterial, ov.ringMaterial) = OverlayMaterials();
             ovGo.SetActive(true);
+            AddApp(ov, fleet);
 
             new GameObject("Benchmark").AddComponent<FrameTimeBenchmark>();
 
@@ -529,6 +531,36 @@ namespace DeviceChain.Sitepulse.EditorTools
             var scenes = EditorBuildSettings.scenes.Where(s => s.path != ScenePath && File.Exists(s.path)).ToList();
             scenes.Insert(0, new EditorBuildSettingsScene(ScenePath, true));
             EditorBuildSettings.scenes = scenes.ToArray();
+        }
+
+        /// <summary>The composition root: picks the mode, shows the badge, and in Live binds the fleet.</summary>
+        static void AddApp(IotOverlay ov, QuarryFleetPreview fleet)
+        {
+            var appGo = new GameObject("Sitepulse App");
+            var app = appGo.AddComponent<SitepulseApp>();
+            app.overlay = ov;
+            app.fleet = fleet;
+        }
+
+        /// <summary>Adds the app to the open scene without rebuilding it. Safe to re-run.</summary>
+        [MenuItem("Sitepulse/Quarry/Add Sitepulse App To Scene")]
+        public static void AddAppToScene()
+        {
+            var scene = EditorSceneManager.GetActiveScene();
+            var ov = UnityEngine.Object.FindFirstObjectByType<IotOverlay>();
+            var fleet = UnityEngine.Object.FindFirstObjectByType<QuarryFleetPreview>();
+            if (ov == null || fleet == null) throw new InvalidOperationException("the open scene has no IoT Overlay and fleet; open Quarry.unity first");
+            var app = UnityEngine.Object.FindFirstObjectByType<SitepulseApp>();
+            if (app == null) AddApp(ov, fleet);
+            else
+            {
+                app.overlay = ov;
+                app.fleet = fleet;
+                EditorUtility.SetDirty(app);
+            }
+
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
         }
 
         static GameObject Model(string name)
