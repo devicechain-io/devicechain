@@ -184,7 +184,7 @@ $held"
 ensure_cluster() {
 	mkdir -p "$SP_HOME/.kube" "$RUN_DIR" "$STATE_DIR"
 	chmod 700 "$SP_HOME"
-	if ! spenv kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
+	if ! grep -qx "$CLUSTER" <<<"$(spenv kind get clusters 2>/dev/null)"; then
 		# A fresh cluster: whatever was recorded about an earlier one is void.
 		rm -f "$STATE_DIR"/*.done
 	fi
@@ -373,7 +373,7 @@ cmd_down() {
 		if [ "$(container_state "$NODE")" = exited ]; then
 			docker start "$NODE" >/dev/null
 		fi
-		if spenv kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
+		if grep -qx "$CLUSTER" <<<"$(spenv kind get clusters 2>/dev/null)"; then
 			spenv "$DCCTL" sim destroy "$SIM" --instance "$INSTANCE" || log "sim destroy failed; continuing"
 			spenv "$DCCTL" destroy "$INSTANCE" --yes || log "instance destroy failed; continuing"
 			log "deleting kind cluster $CLUSTER"

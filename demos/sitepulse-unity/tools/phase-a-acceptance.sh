@@ -127,8 +127,8 @@ EOF
 		rm -f "$PROJECT/EditorScratch/phaseA_build.result.txt"
 		log "building through the open Editor (an IL2CPP build takes several minutes)"
 		"$UNITY_EVAL" phaseA_build.cs 60 >/dev/null || true
-		local i
-		for i in $(seq 1 480); do
+		local _
+		for _ in $(seq 1 480); do
 			sleep 5
 			grep -q '^RUNNING' "$PROJECT/EditorScratch/phaseA_build.result.txt" 2>/dev/null || break
 		done
@@ -173,7 +173,7 @@ PLAYER_JOB=""   # the WSL-side job, for its exit code
 launch_player() {
 	local dir="$1" ca="$2"
 	shift 2
-	local before after pid i
+	local before after pid _
 	before="$(win_pids | tr '\n' ' ')"
 	"$PLAYER" -sitepulse-mode live -sitepulse-acceptance phaseA \
 		-sitepulse-acceptance-dir "$(win "$dir")" \
@@ -184,7 +184,7 @@ launch_player() {
 		-no-intro "$@" >/dev/null 2>&1 &
 	PLAYER_JOB=$!
 	PLAYER_PID=""
-	for i in $(seq 1 20); do
+	for _ in $(seq 1 20); do
 		sleep 1
 		after="$(win_pids | tr '\n' ' ')"
 		for pid in $after; do
@@ -196,14 +196,14 @@ launch_player() {
 	log "player started (windows pid $PLAYER_PID) -> $dir"
 }
 
-player_alive() { [ -n "$PLAYER_PID" ] && win_pids | grep -qx "$PLAYER_PID"; }
+player_alive() { [ -n "$PLAYER_PID" ] && grep -qx "$PLAYER_PID" <<<"$(win_pids)"; }
 
 # wait_player <seconds>: waits for the player to exit; kills ONLY the pid this script started if it will not.
 # Sets PLAYER_EXIT (the player's own exit code, or 'killed').
 wait_player() {
-	local secs="$1" i
+	local secs="$1" _
 	PLAYER_EXIT=killed
-	for i in $(seq 1 "$secs"); do
+	for _ in $(seq 1 "$secs"); do
 		player_alive || {
 			wait "$PLAYER_JOB" 2>/dev/null && PLAYER_EXIT=0 || PLAYER_EXIT=$?
 			return 0
