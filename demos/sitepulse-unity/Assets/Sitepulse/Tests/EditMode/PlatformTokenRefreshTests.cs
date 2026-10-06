@@ -30,9 +30,12 @@ namespace DeviceChain.Sitepulse.Tests
                 () => DateTimeOffset.FromUnixTimeSeconds(now));
         }
 
-        static IEnumerator Settle(int frames = 10)
+        // Wait for what the test is about to assert, with a bounded budget of frames and of time: a
+        // loaded Editor can take many frames to finish a refresh, and a fixed few were not always enough.
+        static IEnumerator Until(Func<bool> condition, int maxFrames = 300, double maxSeconds = 20)
         {
-            for (var i = 0; i < frames; i++) yield return null;
+            var end = DateTime.UtcNow.AddSeconds(maxSeconds);
+            for (var i = 0; i < maxFrames && DateTime.UtcNow < end && !condition(); i++) yield return null;
         }
 
         [UnityTest]
@@ -42,7 +45,7 @@ namespace DeviceChain.Sitepulse.Tests
             serve = () => PlatformTestData.JwtExp(10_900);
             var b = Broker(10_000);
             b.Tick();
-            yield return Settle();
+            yield return Until(() => b.ExpiresAt == DateTimeOffset.FromUnixTimeSeconds(10_900) && b.State == TokenState.Fresh);
             Assert.AreEqual(1, fetches);
             Assert.AreEqual(DateTimeOffset.FromUnixTimeSeconds(10_900), b.ExpiresAt);
             Assert.AreEqual(TokenState.Fresh, b.State);
@@ -56,14 +59,17 @@ namespace DeviceChain.Sitepulse.Tests
             var held = PlatformTestData.JwtExp(10_000);
             serve = () => held;
             var b = Broker(10_000);
-            for (var i = 0; i < 30; i++) { b.Tick(); yield return null; }
+            // let the one ask finish, then keep ticking for many frames: still one ask, not one a frame
+            b.Tick();
+            yield return Until(() => fetches >= 1 && b.State == TokenState.Fresh);
+            for (var i = 0; i < 60; i++) { b.Tick(); yield return null; }
             Assert.AreEqual(1, fetches, "one ask, then wait for the retry interval");
             Assert.AreEqual(TokenState.Fresh, b.State);
 
             now += 16;                                            // past the retry interval
             serve = () => PlatformTestData.JwtExp(10_900);
             b.Tick();
-            yield return Settle();
+            yield return Until(() => fetches >= 2 && b.ExpiresAt == DateTimeOffset.FromUnixTimeSeconds(10_900));
             Assert.AreEqual(2, fetches);
             Assert.AreEqual(DateTimeOffset.FromUnixTimeSeconds(10_900), b.ExpiresAt);
         }

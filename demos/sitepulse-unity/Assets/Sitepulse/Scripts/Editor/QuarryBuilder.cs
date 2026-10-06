@@ -540,7 +540,22 @@ namespace DeviceChain.Sitepulse.EditorTools
             var app = appGo.AddComponent<SitepulseApp>();
             app.overlay = ov;
             app.fleet = fleet;
+            WireLiveChoreography(app);
         }
+
+        /// <summary>
+        /// Live plays quarry_fleet_live.json (six haulers on the loop, no scripted refuel), wired here by
+        /// path. When the file is absent the field stays empty and Live mode refuses to start, visibly.
+        /// </summary>
+        static void WireLiveChoreography(SitepulseApp app)
+        {
+            app.liveChoreography = AssetDatabase.LoadAssetAtPath<TextAsset>(LiveChoreographyPath);
+            if (app.liveChoreography == null)
+                UnityEngine.Debug.LogWarning($"[sitepulse] {LiveChoreographyPath} does not exist: Live mode will refuse to start until it does and the app is re-wired");
+            EditorUtility.SetDirty(app);
+        }
+
+        const string LiveChoreographyPath = Root + "Data/quarry_fleet_live.json";
 
         /// <summary>Adds the app to the open scene without rebuilding it. Safe to re-run.</summary>
         [MenuItem("Sitepulse/Quarry/Add Sitepulse App To Scene")]
@@ -556,6 +571,7 @@ namespace DeviceChain.Sitepulse.EditorTools
             {
                 app.overlay = ov;
                 app.fleet = fleet;
+                WireLiveChoreography(app);
                 EditorUtility.SetDirty(app);
             }
 

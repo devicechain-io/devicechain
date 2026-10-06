@@ -820,6 +820,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: DeviceChain.Sitepulse.App::DeviceChain.Sitepulse.App.SitepulseApp
   overlay: {fileID: 300757091}
   fleet: {fileID: 1866587543}
+  liveChoreography: {fileID: 4900000, guid: aa1b13647af2b2047a3ed1bd0b5c9b9e, type: 3}
   editorMode: 0
 --- !u!4 &338519043
 Transform:

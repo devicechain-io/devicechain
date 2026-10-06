@@ -1,10 +1,9 @@
 {
-    "name": "DeviceChain.Sitepulse.App",
-    "rootNamespace": "DeviceChain.Sitepulse.App",
+    "name": "DeviceChain.Sitepulse.DevicePlane",
+    "rootNamespace": "DeviceChain.Sitepulse.DevicePlane",
     "references": [
         "DeviceChain.Sitepulse",
         "DeviceChain.Sitepulse.Platform",
-        "DeviceChain.Sitepulse.DevicePlane",
         "DeviceChain.Sdk.Unity"
     ],
     "includePlatforms": [],

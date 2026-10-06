@@ -167,10 +167,19 @@ The player starts in one of three modes, chosen once at startup with `-sitepulse
 badge in the top-left corner always says which:
 
 - `choreographed` (the default): the scripted preview, with illustrative values on the cards.
-- `live`: the scene binds its 19 machines and the plant to a running DeviceChain instance and the
-  Sitepulse simulation's runner. In this build Live shows how far each device got (resolved on the
-  platform, credentials found) and grey placeholders for any machine the platform does not know;
-  the cards stay hidden until observed values replace the illustrative ones.
+- `live`: the scene binds its 18 machines and the plant to a running DeviceChain instance and the
+  Sitepulse simulation's runner, and each one becomes a real device: it connects over MQTT with
+  its own credential and publishes its measurements once a second and its location (with speed,
+  heading and elevation) twice a second while moving. All six haul trucks run the haul loop
+  (`Data/quarry_fleet_live.json`); the scripted refuel visit of the preview is not played. A
+  readiness panel shows how far each device got, and any machine without a working session is
+  drawn as a grey placeholder. The cards stay hidden until observed values replace the
+  illustrative ones, and commands are answered as failed: this build does not execute them yet.
+
+  Positions are reported in a site frame whose centre is latitude 39.0, longitude -117.0 (open
+  high desert in central Nevada, chosen to imply no real operator), with X east and Z north in
+  metres; `Scripts/Simulation/SiteDefinition.cs` holds it, and the simulation's site geofence
+  uses the same origin.
 - `replay`: not in this build; it says so rather than starting another mode.
 
 Live mode needs the runner's address and the broker's CA certificate. Copy `live.example.json` to
