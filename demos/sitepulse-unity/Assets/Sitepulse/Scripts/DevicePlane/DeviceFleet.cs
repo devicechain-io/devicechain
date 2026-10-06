@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
+using DeviceChain.Sitepulse.Domain;
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {
@@ -171,9 +172,31 @@ namespace DeviceChain.Sitepulse.DevicePlane
             board.Evaluate(now ?? DateTimeOffset.UtcNow);
         }
 
+        /// <summary>
+        /// Sees every event just before the plane acts on it, on the main thread (the recorder's view of what the devices did). A tap
+        /// that throws is dropped, once and with a warning: watching must never stop the plane.
+        /// </summary>
+        public Action<DeviceEvent> OnEvent { get; set; }
+
+        void Tap(DeviceEvent e)
+        {
+            var tap = OnEvent;
+            if (tap == null) return;
+            try
+            {
+                tap(e);
+            }
+            catch (Exception ex)
+            {
+                OnEvent = null;
+                PlatformLog.Warn($"the device plane's tap failed and was removed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
         void Apply(DeviceEvent e)
         {
             if (!byId.TryGetValue(e.ExternalId, out var host)) return;
+            Tap(e);
             var id = e.ExternalId;
             var d = board[id];
             switch (e.Kind)

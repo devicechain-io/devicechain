@@ -1,0 +1,457 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using DeviceChain.Sitepulse.Recording;
+
+namespace DeviceChain.Sitepulse.Replay
+{
+    /// <summary>A shots file, or a recording, that cannot be rendered from. The message says which shot and why; nothing is rendered on a guess.</summary>
+    public sealed class ShotException : Exception
+    {
+        public ShotException(string message) : base(message)
+        {
+        }
+    }
+
+    /// <summary>
+    /// A recorded event a shot starts from, by what it IS rather than when it happened:
+    /// <list type="bullet">
+    /// <item><c>{"kind":"alarm","key":"low-fuel","state":"ACTIVE","device":"SP-HL-0006"}</c> an alarm line the observer received;</item>
+    /// <item><c>{"kind":"command","name":"goto-refuel","status":"SENT","device":"SP-HL-0006"}</c> a command row the observer received;</item>
+    /// <item><c>{"kind":"measurement","name":"fuel_pct","below":15,"device":"SP-HL-0006"}</c> the first sample on the far side of a line (<c>above</c> too);</item>
+    /// <item><c>{"kind":"timeline","device":"SP-HL-0006","rowKind":"arrived","contains":"bay"}</c> a row of the machine's own timeline;</item>
+    /// <item><c>{"kind":"runStart"}</c> the first moment of the recording.</item>
+    /// </list>
+    /// <c>occurrence</c> (default 0) picks the n-th match. <c>device</c> is the scene id (SP-HL-0006), as the recording's header maps it.
+    /// A selector that matches nothing is an error that names what the recording does hold.
+    /// </summary>
+    public sealed class EventSelector
+    {
+        public string Kind { get; set; }
+        public string Device { get; set; }
+        public string Key { get; set; }
+        public string State { get; set; }
+        public string Name { get; set; }
+        public string Status { get; set; }
+        public string RowKind { get; set; }
+        public string Contains { get; set; }
+        public double? Below { get; set; }
+        public double? Above { get; set; }
+        public int Occurrence { get; set; }
+
+        public static EventSelector Read(JsonElement e, string where)
+        {
+            if (e.ValueKind != JsonValueKind.Object) throw new ShotException(where + ": startEvent must be an object");
+            var s = new EventSelector
+            {
+                Kind = JsonIo.Str(e, "kind"),
+                Device = JsonIo.Str(e, "device"),
+                Key = JsonIo.Str(e, "key"),
+                State = JsonIo.Str(e, "state"),
+                Name = JsonIo.Str(e, "name"),
+                Status = JsonIo.Str(e, "status"),
+                RowKind = JsonIo.Str(e, "rowKind"),
+                Contains = JsonIo.Str(e, "contains"),
+                Below = JsonIo.NumOrNull(e, "below"),
+                Above = JsonIo.NumOrNull(e, "above"),
+                Occurrence = (int)JsonIo.Long(e, "occurrence"),
+            };
+            var known = new HashSet<string> { "kind", "device", "key", "state", "name", "status", "rowKind", "contains", "below", "above", "occurrence" };
+            foreach (var p in e.EnumerateObject())
+                if (!known.Contains(p.Name)) throw new ShotException($"{where}: startEvent has an unknown field \"{p.Name}\" (a misspelt field would select the wrong event)");
+            if (s.Occurrence < 0) throw new ShotException(where + ": occurrence cannot be negative");
+            switch (s.Kind)
+            {
+                case "alarm":
+                    if (s.Key == null) throw new ShotException(where + ": an alarm event needs \"key\"");
+                    break;
+                case "command":
+                    if (s.Name == null) throw new ShotException(where + ": a command event needs \"name\"");
+                    break;
+                case "measurement":
+                    if (s.Name == null || (!s.Below.HasValue && !s.Above.HasValue)) throw new ShotException(where + ": a measurement event needs \"name\" and \"below\" or \"above\"");
+                    break;
+                case "timeline":
+                    if (s.Device == null) throw new ShotException(where + ": a timeline event needs \"device\"");
+                    break;
+                case "runStart":
+                    break;
+                default:
+                    throw new ShotException($"{where}: startEvent kind \"{s.Kind}\" is not one of alarm, command, measurement, timeline, runStart");
+            }
+
+            return s;
+        }
+
+        public override string ToString()
+        {
+            var sb = new StringBuilder(Kind);
+            void Add(string k, string v)
+            {
+                if (v != null) sb.Append(' ').Append(k).Append('=').Append(v);
+            }
+
+            Add("device", Device); Add("key", Key); Add("state", State); Add("name", Name); Add("status", Status); Add("rowKind", RowKind); Add("contains", Contains);
+            if (Below.HasValue) Add("below", Below.Value.ToString(CultureInfo.InvariantCulture));
+            if (Above.HasValue) Add("above", Above.Value.ToString(CultureInfo.InvariantCulture));
+            if (Occurrence > 0) Add("occurrence", Occurrence.ToString(CultureInfo.InvariantCulture));
+            return sb.ToString();
+        }
+
+        /// <summary>The recorded moment the event happened for the viewer (seconds into the run), and its time of day.</summary>
+        public ResolvedEvent Resolve(RecordingData data)
+        {
+            var h = data.Header;
+            string token = null;
+            if (Device != null && Kind != "timeline")
+            {
+                token = h.TokenOf(Device);
+                if (token == null) throw new ShotException($"no recorded event: the recording has no device \"{Device}\" (it holds: {string.Join(", ", DeviceIds(h))})");
+            }
+
+            var seen = 0;
+            switch (Kind)
+            {
+                case "runStart":
+                    return new ResolvedEvent(0.0, h.StartedAtUtc, "the start of the recording");
+                case "alarm":
+                    foreach (var l in data.Observed)
+                    {
+                        if (l.K != ObservedKinds.Alarm || l.Name != Key || (State != null && l.State != State) || (token != null && l.Device != token)) continue;
+                        if (seen++ == Occurrence) return new ResolvedEvent(l.T, l.Utc, $"alarm {l.Name} {l.State} on {h.IdOf(l.Device) ?? l.Device}");
+                    }
+
+                    break;
+                case "command":
+                    foreach (var l in data.Observed)
+                    {
+                        if (l.K != ObservedKinds.Command || l.Name != Name || (Status != null && l.State != Status) || (token != null && l.Device != token)) continue;
+                        if (seen++ == Occurrence) return new ResolvedEvent(l.T, l.Utc, $"command {l.Name} {l.State} on {h.IdOf(l.Device) ?? l.Device}");
+                    }
+
+                    break;
+                case "measurement":
+                    foreach (var l in data.Observed)
+                    {
+                        if (l.K != ObservedKinds.Measurement || l.FromSnapshot || l.Name != Name || (token != null && l.Device != token)) continue;
+                        if (Below.HasValue && !(l.Value < Below.Value)) continue;
+                        if (Above.HasValue && !(l.Value > Above.Value)) continue;
+                        if (seen++ == Occurrence) return new ResolvedEvent(l.T, l.Utc, $"{l.Name} {l.Value.ToString("0.##", CultureInfo.InvariantCulture)} on {h.IdOf(l.Device) ?? l.Device}");
+                    }
+
+                    break;
+                case "timeline":
+                    foreach (var l in data.Device)
+                    {
+                        if (l.K != DeviceKinds.Timeline || l.Device != Device || (RowKind != null && l.RowKind != RowKind) || (Contains != null && l.Text.IndexOf(Contains, StringComparison.OrdinalIgnoreCase) < 0)) continue;
+                        if (seen++ == Occurrence) return new ResolvedEvent(l.T, l.Utc, $"{l.Device} timeline {l.RowKind}: {l.Text}");
+                    }
+
+                    break;
+            }
+
+            throw new ShotException($"no recorded event matches [{this}]" + (seen > 0 ? $": it matches {seen} time(s), occurrence {Occurrence} does not exist" : ": " + Holds(data)));
+        }
+
+        string Holds(RecordingData data)
+        {
+            var kinds = new SortedSet<string>(StringComparer.Ordinal);
+            switch (Kind)
+            {
+                case "alarm":
+                    foreach (var l in data.Observed)
+                        if (l.K == ObservedKinds.Alarm) kinds.Add(l.Name + " " + l.State);
+                    return "the recording holds alarm events: " + (kinds.Count == 0 ? "none" : string.Join(", ", kinds));
+                case "command":
+                    foreach (var l in data.Observed)
+                        if (l.K == ObservedKinds.Command) kinds.Add(l.Name + " " + l.State);
+                    return "the recording holds command rows: " + (kinds.Count == 0 ? "none" : string.Join(", ", kinds));
+                case "measurement":
+                    foreach (var l in data.Observed)
+                        if (l.K == ObservedKinds.Measurement) kinds.Add(l.Name);
+                    return "the recording holds measurements: " + (kinds.Count == 0 ? "none" : string.Join(", ", kinds));
+                default:
+                    foreach (var l in data.Device)
+                        if (l.K == DeviceKinds.Timeline && l.Device == Device) kinds.Add(l.RowKind);
+                    return $"{Device}'s timeline holds rows of kind: " + (kinds.Count == 0 ? "none" : string.Join(", ", kinds));
+            }
+        }
+
+        static IEnumerable<string> DeviceIds(RunHeader h)
+        {
+            foreach (var d in h.Devices) yield return d.Id;
+        }
+    }
+
+    /// <summary>Where a shot's event was, in the recording.</summary>
+    public readonly struct ResolvedEvent
+    {
+        public ResolvedEvent(double t, DateTimeOffset utc, string description)
+        {
+            T = t;
+            Utc = utc;
+            Description = description;
+        }
+
+        public double T { get; }
+        public DateTimeOffset Utc { get; }
+        public string Description { get; }
+    }
+
+    public enum RigKind { Fixed, Orbit, Follow }
+
+    /// <summary>
+    /// A camera, authored as parameters. <c>fixed</c>: <c>pos</c> and <c>lookAt</c> (a point, or a machine id as <c>lookAtTarget</c>), with an
+    /// optional <c>to</c> (a second <c>pos</c>/<c>lookAt</c>/<c>fov</c> it eases to over the shot: a crane). <c>orbit</c>: round <c>target</c> or <c>point</c>
+    /// at <c>radius</c> and <c>height</c>, <c>degreesPerSecond</c> from <c>startDegrees</c>. <c>follow</c>: behind <c>target</c> by <c>back</c> metres, <c>up</c> above and
+    /// <c>side</c> to the right (negative: the left), looking at it. Positions are Unity metres (x east, y up, z north). Every pose is a function of
+    /// the recorded machine pose and the time into the shot, so a render is repeatable.
+    /// </summary>
+    public sealed class CameraSpec
+    {
+        public RigKind Rig { get; set; }
+        public float Fov { get; set; } = 50f;
+        public float[] Pos { get; set; }
+        public float[] LookAt { get; set; }
+        public string LookAtTarget { get; set; }
+        public float[] ToPos { get; set; }
+        public float[] ToLookAt { get; set; }
+        public float? ToFov { get; set; }
+        public string Target { get; set; }
+        public float[] Point { get; set; }
+        public float Radius { get; set; } = 25f;
+        public float Height { get; set; } = 12f;
+        public float DegreesPerSecond { get; set; } = 10f;
+        public float StartDegrees { get; set; }
+        public float Back { get; set; } = 12f;
+        public float Up { get; set; } = 4f;
+        public float Side { get; set; } = -3f;
+        public float LookHeight { get; set; } = 1.5f;
+
+        public static CameraSpec Read(JsonElement e, string where)
+        {
+            if (e.ValueKind != JsonValueKind.Object) throw new ShotException(where + ": camera must be an object");
+            var rig = JsonIo.Str(e, "rig");
+            var c = new CameraSpec();
+            switch (rig)
+            {
+                case "fixed": c.Rig = RigKind.Fixed; break;
+                case "orbit": c.Rig = RigKind.Orbit; break;
+                case "follow": c.Rig = RigKind.Follow; break;
+                default: throw new ShotException($"{where}: camera rig \"{rig}\" is not one of fixed, orbit, follow");
+            }
+
+            var known = new HashSet<string> { "rig", "fov", "pos", "lookAt", "lookAtTarget", "to", "target", "point", "radius", "height", "degreesPerSecond", "startDegrees", "back", "up", "side", "lookHeight" };
+            foreach (var p in e.EnumerateObject())
+                if (!known.Contains(p.Name)) throw new ShotException($"{where}: camera has an unknown field \"{p.Name}\"");
+            c.Fov = (float)JsonIo.Num(e, "fov", 50.0);
+            c.Pos = Vec(e, "pos", where);
+            c.LookAt = Vec(e, "lookAt", where);
+            c.LookAtTarget = JsonIo.Str(e, "lookAtTarget");
+            c.Target = JsonIo.Str(e, "target");
+            c.Point = Vec(e, "point", where);
+            c.Radius = (float)JsonIo.Num(e, "radius", c.Radius);
+            c.Height = (float)JsonIo.Num(e, "height", c.Height);
+            c.DegreesPerSecond = (float)JsonIo.Num(e, "degreesPerSecond", c.DegreesPerSecond);
+            c.StartDegrees = (float)JsonIo.Num(e, "startDegrees", 0.0);
+            c.Back = (float)JsonIo.Num(e, "back", c.Back);
+            c.Up = (float)JsonIo.Num(e, "up", c.Up);
+            c.Side = (float)JsonIo.Num(e, "side", c.Side);
+            c.LookHeight = (float)JsonIo.Num(e, "lookHeight", c.LookHeight);
+            if (e.TryGetProperty("to", out var to))
+            {
+                if (to.ValueKind != JsonValueKind.Object) throw new ShotException(where + ": camera.to must be an object");
+                foreach (var p in to.EnumerateObject())
+                    if (p.Name != "pos" && p.Name != "lookAt" && p.Name != "fov") throw new ShotException($"{where}: camera.to has an unknown field \"{p.Name}\"");
+                c.ToPos = Vec(to, "pos", where);
+                c.ToLookAt = Vec(to, "lookAt", where);
+                var f = JsonIo.NumOrNull(to, "fov");
+                c.ToFov = f.HasValue ? (float)f.Value : (float?)null;
+            }
+
+            switch (c.Rig)
+            {
+                case RigKind.Fixed:
+                    if (c.Pos == null || (c.LookAt == null && c.LookAtTarget == null)) throw new ShotException(where + ": a fixed camera needs \"pos\" and \"lookAt\" (or \"lookAtTarget\")");
+                    break;
+                case RigKind.Orbit:
+                    if (c.Target == null && c.Point == null) throw new ShotException(where + ": an orbit camera needs \"target\" or \"point\"");
+                    break;
+                case RigKind.Follow:
+                    if (c.Target == null) throw new ShotException(where + ": a follow camera needs \"target\"");
+                    break;
+            }
+
+            if (c.Fov < 5f || c.Fov > 120f) throw new ShotException($"{where}: fov {c.Fov} is outside 5 to 120");
+            return c;
+        }
+
+        static float[] Vec(JsonElement e, string name, string where)
+        {
+            if (!e.TryGetProperty(name, out var v)) return null;
+            if (v.ValueKind != JsonValueKind.Array || v.GetArrayLength() != 3) throw new ShotException($"{where}: \"{name}\" must be [x, y, z]");
+            var r = new float[3];
+            var i = 0;
+            foreach (var n in v.EnumerateArray())
+            {
+                if (n.ValueKind != JsonValueKind.Number) throw new ShotException($"{where}: \"{name}\" must be numbers");
+                r[i++] = (float)n.GetDouble();
+            }
+
+            return r;
+        }
+
+        /// <summary>The machines this camera looks at or follows (they must exist in the recording).</summary>
+        public IEnumerable<string> Machines()
+        {
+            if (Target != null) yield return Target;
+            if (LookAtTarget != null) yield return LookAtTarget;
+        }
+    }
+
+    /// <summary>One shot of a shots file.</summary>
+    public sealed class Shot
+    {
+        public string Name { get; set; }
+        public EventSelector StartEvent { get; set; }
+        public double Offset { get; set; }
+        public double Duration { get; set; }
+        public double Preroll { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public string Aspect { get; set; }
+        public CameraSpec Camera { get; set; }
+    }
+
+    /// <summary>A shots file: the frame rate and the shots.</summary>
+    public sealed class ShotFile
+    {
+        public const double DefaultPreroll = 3.0;
+        public int Fps { get; set; } = 60;
+        public List<Shot> Shots { get; } = new List<Shot>();
+
+        public static ShotFile Parse(string json)
+        {
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(json); }
+            catch (JsonException e) { throw new ShotException("the shots file is not JSON: " + e.Message); }
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) throw new ShotException("the shots file must be an object with a \"shots\" array");
+                foreach (var p in root.EnumerateObject())
+                    if (p.Name != "fps" && p.Name != "shots" && p.Name != "description") throw new ShotException($"the shots file has an unknown field \"{p.Name}\"");
+                var file = new ShotFile { Fps = (int)JsonIo.Long(root, "fps", 60) };
+                if (file.Fps != 30 && file.Fps != 60) throw new ShotException($"fps {file.Fps} is not 30 or 60");
+                if (!root.TryGetProperty("shots", out var shots) || shots.ValueKind != JsonValueKind.Array || shots.GetArrayLength() == 0)
+                    throw new ShotException("the shots file has no \"shots\"");
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                var n = 0;
+                foreach (var s in shots.EnumerateArray())
+                {
+                    n++;
+                    if (s.ValueKind != JsonValueKind.Object) throw new ShotException($"shot {n} is not an object");
+                    var name = JsonIo.Str(s, "name");
+                    var where = $"shot {n}" + (name != null ? $" ({name})" : "");
+                    if (string.IsNullOrEmpty(name) || !IsSafeName(name)) throw new ShotException(where + ": \"name\" is required and may hold only letters, digits, - and _ (it is a directory name)");
+                    if (!names.Add(name)) throw new ShotException(where + ": the name is used twice");
+                    foreach (var p in s.EnumerateObject())
+                        if (p.Name != "name" && p.Name != "startEvent" && p.Name != "offset" && p.Name != "duration" && p.Name != "preroll" && p.Name != "aspect" && p.Name != "width" && p.Name != "height" && p.Name != "camera")
+                            throw new ShotException($"{where}: unknown field \"{p.Name}\"");
+                    if (!s.TryGetProperty("startEvent", out var se)) throw new ShotException(where + ": \"startEvent\" is required: a shot starts from a recorded event, never from a time");
+                    if (!s.TryGetProperty("camera", out var cam)) throw new ShotException(where + ": \"camera\" is required");
+                    var shot = new Shot
+                    {
+                        Name = name,
+                        StartEvent = EventSelector.Read(se, where),
+                        Offset = JsonIo.Num(s, "offset"),
+                        Duration = JsonIo.Num(s, "duration", -1),
+                        Preroll = JsonIo.Num(s, "preroll", DefaultPreroll),
+                        Aspect = JsonIo.Str(s, "aspect", "16:9"),
+                        Camera = CameraSpec.Read(cam, where),
+                    };
+                    if (!(shot.Duration > 0 && shot.Duration <= 600)) throw new ShotException(where + ": \"duration\" is required, in seconds, up to 600");
+                    if (shot.Preroll < 0 || shot.Preroll > 60) throw new ShotException(where + ": \"preroll\" is 0 to 60 seconds");
+                    var w = (int)JsonIo.Long(s, "width");
+                    var h = (int)JsonIo.Long(s, "height");
+                    if (w == 0 && h == 0)
+                    {
+                        switch (shot.Aspect)
+                        {
+                            case "16:9": w = 1920; h = 1080; break;
+                            case "9:16": w = 1080; h = 1920; break;
+                            default: throw new ShotException($"{where}: aspect \"{shot.Aspect}\" is not 16:9 or 9:16");
+                        }
+                    }
+                    else if (w < 16 || h < 16 || w > 8192 || h > 8192 || (w & 1) != 0 || (h & 1) != 0)
+                        throw new ShotException($"{where}: width and height must both be given, even, and 16 to 8192");
+                    shot.Width = w;
+                    shot.Height = h;
+                    file.Shots.Add(shot);
+                }
+
+                return file;
+            }
+        }
+
+        static bool IsSafeName(string s)
+        {
+            foreach (var c in s)
+                if (!(char.IsLetterOrDigit(c) && c < 128 || c == '-' || c == '_')) return false;
+            return s.Length <= 64;
+        }
+    }
+
+    /// <summary>A shot after its event was found: where it starts and ends in the recording, and how many frames it has.</summary>
+    public sealed class PlannedShot
+    {
+        public Shot Shot { get; set; }
+        public ResolvedEvent Event { get; set; }
+
+        /// <summary>Seconds into the recording the first frame shows.</summary>
+        public double Start { get; set; }
+
+        public int Frames { get; set; }
+
+        /// <summary>Where the pre-roll (frames simulated but not saved, so dust and exhaust have a history) begins.</summary>
+        public double PrerollFrom { get; set; }
+    }
+
+    public static class ShotPlanner
+    {
+        /// <summary>
+        /// Resolves every shot against the recording before anything is rendered: a shot whose event is absent, whose machine is not in the
+        /// recording, or that would run past its end stops the whole render, so a half-rendered set never passes for a whole one.
+        /// </summary>
+        public static List<PlannedShot> Plan(ShotFile file, RecordingData data)
+        {
+            var plan = new List<PlannedShot>();
+            foreach (var shot in file.Shots)
+            {
+                var ev = shot.StartEvent.Resolve(data);
+                foreach (var m in shot.Camera.Machines())
+                    if (!data.Sim.TryIndexOf(m, out _)) throw new ShotException($"shot {shot.Name}: the camera names machine \"{m}\", which the recording does not hold");
+                var start = ev.T + shot.Offset;
+                if (start < 0) start = 0;
+                var end = start + shot.Duration;
+                if (end > data.Duration + 1e-6)
+                    throw new ShotException($"shot {shot.Name}: starts at {start:0.0} s and lasts {shot.Duration:0.0} s, but the recording is {data.Duration:0.0} s long");
+                plan.Add(new PlannedShot
+                {
+                    Shot = shot,
+                    Event = ev,
+                    Start = start,
+                    Frames = (int)Math.Round(shot.Duration * file.Fps),
+                    PrerollFrom = Math.Max(0.0, start - shot.Preroll),
+                });
+            }
+
+            return plan;
+        }
+    }
+}

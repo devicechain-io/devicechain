@@ -1,0 +1,19 @@
+{
+    "name": "DeviceChain.Sitepulse.Recording",
+    "rootNamespace": "DeviceChain.Sitepulse.Recording",
+    "references": [
+        "DeviceChain.Sitepulse"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

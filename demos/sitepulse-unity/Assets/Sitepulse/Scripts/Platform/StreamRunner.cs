@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using DeviceChain.Sdk;
+using DeviceChain.Sitepulse.Domain;
 
 namespace DeviceChain.Sitepulse.Platform
 {

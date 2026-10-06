@@ -1,0 +1,26 @@
+{
+  "description": "Two sample shots for the Sitepulse feature video: the establishing crane (S02) and the low-fuel alarm on SP-HL-0006 (S09). Each starts from an event the recording holds, never from a time. For portrait, add \"aspect\": \"9:16\" to a shot.",
+  "fps": 60,
+  "shots": [
+    {
+      "name": "s02-establishing-crane",
+      "startEvent": { "kind": "runStart" },
+      "offset": 20,
+      "duration": 6,
+      "camera": {
+        "rig": "fixed",
+        "pos": [-130, 64, -165],
+        "lookAt": [6, -8, -32],
+        "fov": 42,
+        "to": { "pos": [-110, 40, -145], "fov": 38 }
+      }
+    },
+    {
+      "name": "s09-low-fuel-alarm",
+      "startEvent": { "kind": "alarm", "key": "low-fuel", "state": "ACTIVE", "device": "SP-HL-0006" },
+      "offset": -2,
+      "duration": 8,
+      "camera": { "rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 4, "side": -3, "fov": 50 }
+    }
+  ]
+}

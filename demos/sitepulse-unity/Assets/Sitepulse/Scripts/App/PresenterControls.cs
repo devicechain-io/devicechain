@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
+using DeviceChain.Sitepulse.Domain;
 
 namespace DeviceChain.Sitepulse.App
 {
@@ -49,9 +50,13 @@ namespace DeviceChain.Sitepulse.App
 
         public string Selected => director.Machines.Count == 0 ? null : director.Machines[Math.Max(0, Math.Min(selected, director.Machines.Count - 1))];
 
+        /// <summary>Raised with what a presenter action said, as it says it (a recording listens here).</summary>
+        public event Action<string> Said;
+
         void Say(string text)
         {
             Message = text;
+            Said?.Invoke(text);
             MessageAt = clock();
             Version++;
             PlatformLog.Info("presenter · " + text);

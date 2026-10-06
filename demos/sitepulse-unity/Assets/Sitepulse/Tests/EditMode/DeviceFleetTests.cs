@@ -184,6 +184,35 @@ namespace DeviceChain.Sitepulse.Tests
             return fleet;
         }
 
+        // ---- the recorder's tap
+
+        [Test]
+        public void ATapSeesEveryEventThePlaneActsOnAndAThrowingTapIsDroppedWithoutStoppingThePlane()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = new DeviceFleet(board, creds, factory);
+            var seen = new List<DeviceEvent>();
+            fleet.OnEvent = e => seen.Add(e);
+            fleet.StartAll().GetAwaiter().GetResult();
+            fleet.Pump();
+            try
+            {
+                var ready = seen.Where(e => e.Kind == DeviceEventKind.LinkState && e.State == LinkState.Ready).Select(e => e.ExternalId).Distinct().ToList();
+                Assert.AreEqual(10, ready.Count, "every session's Ready reached the tap: " + string.Join(", ", seen.Select(e => e.Kind + ":" + e.ExternalId)));
+
+                fleet.OnEvent = _ => throw new InvalidOperationException("the recorder broke");
+                factory.Links["SP-HL-0001"].Raise(LinkState.Reconnecting);
+                Assert.IsTrue(WaitFor(() =>
+                {
+                    fleet.Pump();
+                    return fleet.OnEvent == null;
+                }), "a tap that throws is removed");
+                Assert.AreEqual(DeviceSide.Reconnecting, board["SP-HL-0001"].Side, "and the plane still acted on the event it threw on");
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
         // ---- start order and the ladder
 
         [Test]

@@ -146,6 +146,15 @@ namespace DeviceChain.Sitepulse.Visuals
         public Action<float, List<Rect>> Obstacles;
 
         /// <summary>
+        /// The time a card's values are judged against (their age, their freshness). The wall clock, until the composition root of
+        /// a replay hands in the recording's own: a card replayed must age as it did live, not against today.
+        /// </summary>
+        public Func<DateTimeOffset> Clock;
+
+        /// <summary>A replayed card says "replayed" in its status tag. An offline render switches it off: the footage is disclosed in its description and captions, never on the frame.</summary>
+        public bool ReplayTag = true;
+
+        /// <summary>
         /// Where the cards' values come from. Until the composition root sets one the overlay is
         /// illustrative, as the scene always was. Changing it drops the cards, which are rebuilt with
         /// readings of the new source's provenance.
@@ -520,7 +529,7 @@ namespace DeviceChain.Sitepulse.Visuals
         /// <summary>Asks the source to refresh every card's reading, then draws them.</summary>
         void UpdateReadings()
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = Clock != null ? Clock() : DateTimeOffset.UtcNow;
             var src = source;
             alarmTarget = null;
             foreach (var t in targets)
@@ -542,7 +551,7 @@ namespace DeviceChain.Sitepulse.Visuals
         {
             var r = t.reading;
             int n = 0;
-            bool observed = r.Provenance == Provenance.Observed;
+            bool observed = r.Provenance != Provenance.Illustrative;
             string alarmKeyRow = r.HasAlarm ? AlarmKeys.Metric(r.FirstAlarm.Key) : null;
             void Draw(string label, RowView v)
             {
@@ -584,7 +593,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 Set(t.alarmText, (string.IsNullOrEmpty(a0.Severity) ? "ALARM" : a0.Severity) + "  " + AlarmKeys.Label(a0.Key));
             }
 
-            var sv = CardPresenter.Status(r.Provenance, r.NewestOccurredAt, now, live, alarm, stopped);
+            var sv = CardPresenter.Status(r.Provenance, r.NewestOccurredAt, now, live, alarm, stopped, ReplayTag);
             var status = sv.Dot == DotTone.Ok ? Ok : sv.Dot == DotTone.Warn ? Warn : sv.Dot == DotTone.Muted ? Muted : Grey;
             var tag = sv.Tag;
 

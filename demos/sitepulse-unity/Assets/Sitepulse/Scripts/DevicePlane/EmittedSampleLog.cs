@@ -10,9 +10,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Sitepulse.Domain;
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {
+    /// <summary>Told of each sample the broker took, on a pool thread, once the publish is done.</summary>
+    public interface IAckedSampleSink
+    {
+        void Record(string externalId, string deviceToken, Sample sample);
+    }
+
     /// <summary>
     /// The samples this run's devices handed to the broker, one JSON line each: the device (its scene id and
     /// platform token), the kind, the time the sample occurred and its values. An acceptance run writes it so
@@ -21,7 +28,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
     /// Callers are pool threads; the writer is serialised. Nothing secret is in a line, and each line passes
     /// the Redactor all the same.
     /// </summary>
-    public sealed class EmittedSampleLog : IDisposable
+    public sealed class EmittedSampleLog : IAckedSampleSink, IDisposable
     {
         readonly StreamWriter writer;
         readonly object gate = new object();
@@ -113,13 +120,29 @@ namespace DeviceChain.Sitepulse.DevicePlane
         }
     }
 
+    /// <summary>Hands each sample to every sink.</summary>
+    public sealed class SampleSinks : IAckedSampleSink
+    {
+        readonly IAckedSampleSink[] sinks;
+
+        public SampleSinks(params IAckedSampleSink[] sinks)
+        {
+            this.sinks = sinks ?? throw new ArgumentNullException(nameof(sinks));
+        }
+
+        public void Record(string externalId, string deviceToken, Sample sample)
+        {
+            foreach (var s in sinks) s.Record(externalId, deviceToken, sample);
+        }
+    }
+
     /// <summary>A factory whose links record every sample that was published through them, and otherwise behave as the inner one does.</summary>
     public sealed class RecordingLinkFactory : IDeviceLinkFactory
     {
         readonly IDeviceLinkFactory inner;
-        readonly EmittedSampleLog log;
+        readonly IAckedSampleSink log;
 
-        public RecordingLinkFactory(IDeviceLinkFactory inner, EmittedSampleLog log)
+        public RecordingLinkFactory(IDeviceLinkFactory inner, IAckedSampleSink log)
         {
             this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
             this.log = log ?? throw new ArgumentNullException(nameof(log));
@@ -132,9 +155,9 @@ namespace DeviceChain.Sitepulse.DevicePlane
         {
             readonly IDeviceLink link;
             readonly string externalId, deviceToken;
-            readonly EmittedSampleLog log;
+            readonly IAckedSampleSink log;
 
-            public RecordingLink(IDeviceLink link, string externalId, string deviceToken, EmittedSampleLog log)
+            public RecordingLink(IDeviceLink link, string externalId, string deviceToken, IAckedSampleSink log)
             {
                 this.link = link;
                 this.externalId = externalId;

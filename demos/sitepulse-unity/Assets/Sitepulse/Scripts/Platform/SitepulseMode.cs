@@ -15,7 +15,7 @@ namespace DeviceChain.Sitepulse.Platform
         /// <summary>Bound to a DeviceChain instance; values are observed from it.</summary>
         Live,
 
-        /// <summary>A recorded live run. Not in this build.</summary>
+        /// <summary>A recorded live run played back, or rendered from offline. No network: its root is in an assembly that cannot see the platform.</summary>
         Replay,
     }
 
@@ -66,7 +66,7 @@ namespace DeviceChain.Sitepulse.Platform
                 case SitepulseMode.Choreographed:
                     return "CHOREOGRAPHED · illustrative values";
                 case SitepulseMode.Replay:
-                    return "REPLAY · not in this build";
+                    return "REPLAY · recorded live run";
                 default:
                     throw new ArgumentOutOfRangeException(nameof(mode), mode, null);
             }

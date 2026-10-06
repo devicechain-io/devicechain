@@ -1,0 +1,21 @@
+{
+    "name": "DeviceChain.Sitepulse.Replay",
+    "rootNamespace": "DeviceChain.Sitepulse.Replay",
+    "references": [
+        "DeviceChain.Sitepulse",
+        "DeviceChain.Sitepulse.Recording",
+        "Unity.InputSystem"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

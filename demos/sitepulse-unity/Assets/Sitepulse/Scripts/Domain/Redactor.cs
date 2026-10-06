@@ -5,9 +5,8 @@ using System;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using UnityEngine;
 
-namespace DeviceChain.Sitepulse.Platform
+namespace DeviceChain.Sitepulse.Domain
 {
     /// <summary>
     /// Every log line from the Platform code passes through here. A device credential is a 32-hex
@@ -39,13 +38,5 @@ namespace DeviceChain.Sitepulse.Platform
             for (var i = 0; i < 4; i++) sb.Append(hash[i].ToString("x2"));
             return sb.ToString();
         }
-    }
-
-    /// <summary>The Platform code's only way to log.</summary>
-    public static class PlatformLog
-    {
-        public static void Info(string line) => Debug.Log("[sitepulse] " + Redactor.Redact(line));
-        public static void Warn(string line) => Debug.LogWarning("[sitepulse] " + Redactor.Redact(line));
-        public static void Error(string line) => Debug.LogError("[sitepulse] " + Redactor.Redact(line));
     }
 }

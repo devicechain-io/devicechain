@@ -80,15 +80,23 @@ namespace DeviceChain.Sitepulse.Domain
         /// The status dot and tag. An observed card's dot is the freshness of the device's own newest
         /// measurement (<paramref name="newestOccurredAt"/>); the alarm keeps the card's edge and bar.
         /// </summary>
-        public static StatusView Status(Provenance provenance, DateTimeOffset? newestOccurredAt, DateTimeOffset now, bool streamLive, bool alarm, bool stopped)
+        public static StatusView Status(Provenance provenance, DateTimeOffset? newestOccurredAt, DateTimeOffset now, bool streamLive, bool alarm, bool stopped, bool replayTag = true)
         {
-            if (provenance != Provenance.Observed)
-                return new StatusView(alarm ? DotTone.Warn : stopped ? DotTone.Muted : DotTone.Ok, provenance == Provenance.Illustrative ? "illustrative" : "replayed");
+            if (provenance == Provenance.Illustrative)
+                return new StatusView(alarm ? DotTone.Warn : stopped ? DotTone.Muted : DotTone.Ok, "illustrative");
             var f = newestOccurredAt.HasValue ? FreshnessRule.Classify(newestOccurredAt.Value, now, streamLive) : Freshness.Gone;
             var age = newestOccurredAt.HasValue ? (int)Math.Max(0.0, (now - newestOccurredAt.Value).TotalSeconds) : 0;
             var dot = f == Freshness.Fresh ? DotTone.Ok : f == Freshness.Stale ? DotTone.Warn : DotTone.Grey;
             var tag = f == Freshness.Fresh ? "observed" : f == Freshness.Stale ? "stale " + age + " s"
                 : !newestOccurredAt.HasValue ? "no data" : f == Freshness.Gone ? "no data > 1 min" : "no data " + age + " s";
+            if (provenance == Provenance.Replayed)
+            {
+                // a replayed card ages as the live one did (the clock it is judged by is the recording's), and says it is a replay;
+                // an offline render turns the words off (the footage is disclosed in its description), and a fresh card then says nothing
+                if (!replayTag) tag = f == Freshness.Fresh ? "" : tag;
+                else tag = f == Freshness.Fresh ? "replayed" : "replayed · " + tag;
+            }
+
             return new StatusView(dot, tag);
         }
     }

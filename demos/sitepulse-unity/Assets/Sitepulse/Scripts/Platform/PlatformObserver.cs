@@ -277,8 +277,33 @@ namespace DeviceChain.Sitepulse.Platform
         public IReadOnlyList<string> Pump()
         {
             newlyObserved.Clear();
-            inbox.Drain(Generation, item => ObserverApplier.Apply(State, Status, item, newlyObserved));
+            inbox.Drain(Generation, item =>
+            {
+                Tap(item);
+                ObserverApplier.Apply(State, Status, item, newlyObserved);
+            });
             return newlyObserved;
+        }
+
+        /// <summary>
+        /// Sees every item just before it is applied, on the main thread, in the order it is applied (the recorder's view of what the
+        /// viewer was shown). A tap that throws is dropped, once and with a warning: watching must never stop the observer.
+        /// </summary>
+        public Action<ObserverItem> OnItem { get; set; }
+
+        void Tap(ObserverItem item)
+        {
+            var tap = OnItem;
+            if (tap == null) return;
+            try
+            {
+                tap(item);
+            }
+            catch (Exception e)
+            {
+                OnItem = null;
+                PlatformLog.Warn($"the observer's tap failed and was removed: {e.GetType().Name}: {e.Message}");
+            }
         }
 
         public void Dispose()

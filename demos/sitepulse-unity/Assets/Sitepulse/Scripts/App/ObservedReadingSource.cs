@@ -20,14 +20,13 @@ namespace DeviceChain.Sitepulse.App
     /// </summary>
     public sealed class ObservedReadingSource : IReadingSource
     {
-        public const double MetresPerSecondToKmh = 3.6;
+        public const double MetresPerSecondToKmh = FactsFiller.MetresPerSecondToKmh;
 
         readonly ObservedState state;
         readonly Func<string, string> tokenOf;
         readonly Func<bool> streamLive;
-        readonly List<ObservedAlarm> scratch = new List<ObservedAlarm>();
-        readonly HashSet<string> raisedKeys = new HashSet<string>(StringComparer.Ordinal);
-        readonly HashSet<string> warned = new HashSet<string>(StringComparer.Ordinal);
+        readonly FactsFiller filler = new FactsFiller(Provenance.Observed, PlatformLog.Warn);
+        readonly Facts facts = new Facts();
 
         /// <param name="tokenOf">A scene device's id to its platform token; null while it has none.</param>
         /// <param name="streamLive">Whether the measurement stream is live right now.</param>
@@ -44,65 +43,66 @@ namespace DeviceChain.Sitepulse.App
 
         public void Fill(in ReadingSubject subject, DeviceReading reading, DateTimeOffset now)
         {
-            const Provenance P = Provenance.Observed;
-            reading.ClearAlarms();
-            reading.ClearCommand();
             var token = tokenOf(subject.DeviceId);
-            if (token == null || !state.TryGet(token, out var device)) return;
-
-            var keys = reading.Kind == DeviceReading.Profile.Equipment ? MeasurementKeys.Equipment : MeasurementKeys.Plant;
-            foreach (var key in keys)
-                if (device.Measurements.TryGetValue(key, out var v)) reading.Set(key, v.Value, P, new Observation(v.OccurredAt, v.ObservedAt));
-            if (reading.Kind == DeviceReading.Profile.Plant)
-                foreach (var key in MeasurementKeys.PlantFlags)
-                    if (device.Measurements.TryGetValue(key, out var v)) reading.Set(key, v.Value != 0.0, P, new Observation(v.OccurredAt, v.ObservedAt));
-
-            if (reading.Kind != DeviceReading.Profile.Equipment) return;
-
-            var loc = device.Location;
-            if (loc != null && loc.SpeedMps.HasValue)
-                reading.SetSpeedKmh(loc.SpeedMps.Value * MetresPerSecondToKmh, P, new Observation(loc.OccurredAt, loc.ObservedAt));
-
-            // the newest active alarm first: it is the one the card's bar names
-            scratch.Clear();
-            foreach (var a in device.Alarms.Values)
-                if (a.IsActive) scratch.Add(a);
-            scratch.Sort((x, y) => y.OccurredAt != x.OccurredAt ? y.OccurredAt.CompareTo(x.OccurredAt) : string.CompareOrdinal(x.Token, y.Token));
-            raisedKeys.Clear();
-            foreach (var a in scratch)
+            if (token == null || !state.TryGet(token, out var device))
             {
-                if (!Contains(AlarmKeys.All, a.AlarmKey))
+                filler.Fill(subject.DeviceId, null, reading);
+                return;
+            }
+
+            facts.Device = device;
+            filler.Fill(subject.DeviceId, facts, reading);
+            facts.Device = null;
+        }
+
+        /// <summary>One device's observed state as the facts a card is filled from.</summary>
+        sealed class Facts : IDeviceFacts
+        {
+            public ObservedDevice Device;
+
+            public bool TryMeasurement(string key, out MeasuredValue value)
+            {
+                if (Device.Measurements.TryGetValue(key, out var v))
                 {
-                    Warn("alarm:" + a.AlarmKey, $"the platform raised alarm \"{a.AlarmKey}\" on {subject.DeviceId}, which no Sitepulse card knows how to show");
-                    continue;
+                    value = new MeasuredValue(v.Value, v.OccurredAt, v.ObservedAt);
+                    return true;
                 }
 
-                // one alarm per key on a card, and it is the newest one's: DeviceReading.Raise replaces an earlier
-                // raise of the same key, so an older alarm met later must not overwrite the newer one
-                if (!raisedKeys.Add(a.AlarmKey)) continue;
-                reading.Raise(a.AlarmKey, P, a.Severity, a.State, new Observation(a.OccurredAt, a.ObservedAt));
+                value = default;
+                return false;
             }
 
-            var c = device.LastCommand;
-            if (c != null)
+            public bool TryLocation(out LocationFact location)
             {
-                if (Contains(CommandKeys.Equipment, c.Name))
-                    reading.SetCommand(c.Name, CommandStatus.Parse(c.Status), P, new Observation(c.QueuedAt, c.ObservedAt));
-                else
-                    Warn("command:" + c.Name, $"the platform has command \"{c.Name}\" for {subject.DeviceId}, which no Sitepulse card knows how to show");
+                var loc = Device.Location;
+                if (loc != null && loc.SpeedMps.HasValue)
+                {
+                    location = new LocationFact(loc.SpeedMps.Value, loc.OccurredAt, loc.ObservedAt);
+                    return true;
+                }
+
+                location = default;
+                return false;
             }
-        }
 
-        void Warn(string key, string line)
-        {
-            if (warned.Add(key)) PlatformLog.Warn(line);
-        }
+            public void ActiveAlarms(List<AlarmFact> into)
+            {
+                foreach (var a in Device.Alarms.Values)
+                    if (a.IsActive) into.Add(new AlarmFact(a.Token, a.AlarmKey, a.State, a.Severity, a.OccurredAt, a.ObservedAt));
+            }
 
-        static bool Contains(IReadOnlyList<string> list, string key)
-        {
-            for (var i = 0; i < list.Count; i++)
-                if (list[i] == key) return true;
-            return false;
+            public bool TryLastCommand(out CommandFact command)
+            {
+                var c = Device.LastCommand;
+                if (c == null)
+                {
+                    command = default;
+                    return false;
+                }
+
+                command = new CommandFact(c.Name, c.Status, c.QueuedAt, c.ObservedAt);
+                return true;
+            }
         }
     }
 }

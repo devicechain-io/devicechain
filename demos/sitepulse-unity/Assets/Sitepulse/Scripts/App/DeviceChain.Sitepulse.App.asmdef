@@ -5,6 +5,8 @@
         "DeviceChain.Sitepulse",
         "DeviceChain.Sitepulse.Platform",
         "DeviceChain.Sitepulse.DevicePlane",
+        "DeviceChain.Sitepulse.Replay",
+        "DeviceChain.Sitepulse.Recording",
         "DeviceChain.Sdk.Unity",
         "Unity.InputSystem"
     ],

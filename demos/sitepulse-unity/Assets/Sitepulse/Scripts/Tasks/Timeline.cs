@@ -59,13 +59,18 @@ namespace DeviceChain.Sitepulse.Tasks
         /// <summary>The machine that most recently received a command; null before any.</summary>
         public string LastCommanded { get; private set; }
 
+        /// <summary>Raised for every row, as it is added (the machine and the row). A recording listens here.</summary>
+        public event Action<string, TimelineRow> Added;
+
         public void Add(string machine, string kind, string text)
         {
             if (!rows.TryGetValue(machine, out var list)) rows[machine] = list = new List<TimelineRow>();
-            list.Add(new TimelineRow(clock(), kind, text));
+            var row = new TimelineRow(clock(), kind, text);
+            list.Add(row);
             if (list.Count > MaxRowsPerMachine) list.RemoveRange(0, list.Count - MaxRowsPerMachine);
             if (kind == TimelineKinds.Received) LastCommanded = machine;
             Version++;
+            Added?.Invoke(machine, row);
         }
 
         public IReadOnlyList<TimelineRow> Rows(string machine) =>
