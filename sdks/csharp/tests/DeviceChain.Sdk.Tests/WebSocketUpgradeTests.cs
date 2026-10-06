@@ -258,8 +258,9 @@ public class WebSocketUpgradeTests
         });
         using var conn = new ClientWebSocketConnection();
 
-        await conn.ConnectAsync(new Uri($"ws://127.0.0.1:{server.Port}/x"), "graphql-transport-ws", CancellationToken.None);
-        WebSocketMessage first = await conn.ReceiveAsync(CancellationToken.None);
+        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5)); // a lost frame fails, not hangs
+        await conn.ConnectAsync(new Uri($"ws://127.0.0.1:{server.Port}/x"), "graphql-transport-ws", bound.Token);
+        WebSocketMessage first = await conn.ReceiveAsync(bound.Token);
 
         Assert.Equal("early", first.Text);
     }
@@ -309,7 +310,107 @@ public class WebSocketUpgradeTests
 
         conn.Abort();
 
+        Assert.Same(connect, await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(5))));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+    }
+
+    [Fact]
+    public async Task Dispose_twice_and_abort_after_dispose_do_not_throw()
+    {
+        var never = new ClientWebSocketConnection();
+        never.Dispose();
+        never.Dispose();
+        never.Abort();
+
+        using var server = new Server(async (req, s) =>
+        {
+            await s.WriteAsync(Ok(req));
+            await Task.Delay(1000);
+        });
+        var conn = new ClientWebSocketConnection();
+        await conn.ConnectAsync(new Uri($"ws://127.0.0.1:{server.Port}/x"), "graphql-transport-ws", CancellationToken.None);
+        conn.Dispose();
+        conn.Abort();
+        conn.Dispose();
+        Assert.False(conn.IsOpen);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task A_cancelled_connect_never_leaves_an_open_socket()
+    {
+        using var server = new Server(async (req, s) =>
+        {
+            await s.WriteAsync(Ok(req));
+            await Task.Delay(1000);
+        });
+        using var conn = new ClientWebSocketConnection();
+        conn.Abort(); // lands before the connect starts, so the whole connect runs cancelled
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            conn.ConnectAsync(new Uri($"ws://127.0.0.1:{server.Port}/x"), "graphql-transport-ws", CancellationToken.None));
+        Assert.False(conn.IsOpen);
+    }
+
+    [Fact]
+    public async Task A_response_carrying_an_unrequested_extension_or_subprotocol_is_refused()
+    {
+        using var ext = new Server(async (req, s) => await s.WriteAsync(Encoding.ASCII.GetBytes(
+            $"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {AcceptFor(req)}\r\nSec-WebSocket-Protocol: graphql-transport-ws\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n")));
+        Assert.Contains("Sec-WebSocket-Extensions", (await ConnectFailure(ext)).Message);
+
+        using var proto = new Server(async (req, s) => await s.WriteAsync(Ok(req, protocol: "surprise")));
+        Exception ex = await ConnectFailure(proto, subProtocol: "");
+        Assert.Contains("Sec-WebSocket-Protocol", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_refused_upgrade_closes_the_connection()
+    {
+        var closed = new TaskCompletionSource<bool>();
+        using var server = new Server(async (_, s) =>
+        {
+            await s.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"));
+            var buf = new byte[16];
+            try
+            {
+                while (await s.ReadAsync(buf, 0, buf.Length) > 0) { }
+            }
+            catch (IOException) { }
+            closed.TrySetResult(true);
+        });
+
+        await ConnectFailure(server);
+        // Disposing the stream closes the socket at once. A connection left for the finalizer to close
+        // is closed only on a later collection, over a second after this point.
+        Assert.Same(closed.Task, await Task.WhenAny(closed.Task, Task.Delay(TimeSpan.FromMilliseconds(700))));
+    }
+
+    [Fact]
+    public async Task Cancelling_a_secure_connect_stuck_in_the_tls_handshake_stops_it()
+    {
+        // Accepts the connection and never answers the ClientHello. AuthenticateAsClientAsync takes
+        // no token, so only disposing the stream on cancellation can end the wait.
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        TcpClient? held = null;
+        _ = Task.Run(async () => held = await listener.AcceptTcpClientAsync());
+        try
+        {
+            using var conn = new ClientWebSocketConnection();
+            using var cts = new CancellationTokenSource(200);
+
+            Task connect = conn.ConnectAsync(
+                new Uri($"wss://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/x"), "graphql-transport-ws", cts.Token);
+
+            Assert.Same(connect, await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(5))));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
+        }
+        finally
+        {
+            listener.Stop();
+            held?.Dispose();
+        }
     }
 
     [Fact]

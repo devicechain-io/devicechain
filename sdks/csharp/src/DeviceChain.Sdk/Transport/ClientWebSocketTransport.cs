@@ -69,6 +69,13 @@ public sealed class ClientWebSocketConnection : IWebSocketConnection
             _stream = stream;
             _ws = WebSocket.CreateFromStream(
                 stream, isServer: false, string.IsNullOrEmpty(subProtocol) ? null : subProtocol, WebSocket.DefaultKeepAliveInterval);
+            if (token.IsCancellationRequested)
+            {
+                // An Abort that landed while the socket was being built found nothing to abort; do it now
+                // so a connection that was cancelled never reports itself open.
+                _ws.Abort();
+                throw new OperationCanceledException(token);
+            }
         }
         catch
         {
@@ -123,7 +130,8 @@ public sealed class ClientWebSocketConnection : IWebSocketConnection
         _lifetime.Cancel();
         _ws?.Dispose();
         _stream?.Dispose();
-        _lifetime.Dispose();
+        // _lifetime is deliberately not disposed: it has no timer or wait handle to release, and a
+        // later Abort or second Dispose (as ClientWebSocket allowed) must still be able to cancel it.
     }
 
     private WebSocket Connected => _ws ?? throw new InvalidOperationException("The WebSocket is not connected.");

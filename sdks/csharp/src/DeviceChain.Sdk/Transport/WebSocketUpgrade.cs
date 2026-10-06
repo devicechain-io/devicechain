@@ -110,6 +110,7 @@ internal static class WebSocketUpgrade
         }
 
         string? upgrade = null, connection = null, accept = null, protocol = null;
+        bool extensions = false;
         for (int i = 1; i < lines.Length; i++)
         {
             int colon = lines[i].IndexOf(':');
@@ -123,6 +124,7 @@ internal static class WebSocketUpgrade
             else if (name.Equals("Connection", StringComparison.OrdinalIgnoreCase)) { connection = connection == null ? value : connection + "," + value; }
             else if (name.Equals("Sec-WebSocket-Accept", StringComparison.OrdinalIgnoreCase)) { accept = value; }
             else if (name.Equals("Sec-WebSocket-Protocol", StringComparison.OrdinalIgnoreCase)) { protocol = value; }
+            else if (name.Equals("Sec-WebSocket-Extensions", StringComparison.OrdinalIgnoreCase)) { extensions = true; }
         }
 
         if (!string.Equals(upgrade, "websocket", StringComparison.OrdinalIgnoreCase))
@@ -144,6 +146,18 @@ internal static class WebSocketUpgrade
             throw new WebSocketException("The WebSocket handshake response has a missing or wrong Sec-WebSocket-Accept header.");
         }
 
+        // The client offers no extensions, and offers a subprotocol only when asked to; anything
+        // else in the answer is a protocol violation and is refused here rather than surfacing later.
+        if (extensions)
+        {
+            throw new WebSocketException(
+                "The WebSocket handshake response carries a Sec-WebSocket-Extensions header, but no extension was requested.");
+        }
+        if (string.IsNullOrEmpty(subProtocol) && protocol != null)
+        {
+            throw new WebSocketException(
+                $"The WebSocket handshake response carries a Sec-WebSocket-Protocol header ('{protocol}'), but no subprotocol was requested.");
+        }
         if (!string.IsNullOrEmpty(subProtocol) && !string.Equals(protocol, subProtocol, StringComparison.Ordinal))
         {
             throw new WebSocketException(

@@ -30,7 +30,7 @@ internal static class AddressDialer
     {
         IPAddress[] addresses = IPAddress.TryParse(host, out IPAddress? literal)
             ? new[] { literal }
-            : await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+            : await ResolveAsync(host, cancellationToken).ConfigureAwait(false);
         if (addresses.Length == 0)
         {
             throw new IOException($"'{host}' did not resolve to any address.");
@@ -38,6 +38,27 @@ internal static class AddressDialer
         return await ConnectAsync(
             addresses, (address, token) => ConnectOneAsync(address, port, token), DefaultAttemptDelay, port, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    // Dns.GetHostAddressesAsync takes no token on every target, so a stuck lookup is raced against
+    // the token instead; an abandoned lookup finishes on its own and its result is dropped.
+    private static async Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken)
+    {
+        Task<IPAddress[]> lookup = Dns.GetHostAddressesAsync(host);
+        if (!cancellationToken.CanBeCanceled)
+        {
+            return await lookup.ConfigureAwait(false);
+        }
+        var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (cancellationToken.Register(static s => ((TaskCompletionSource<bool>)s!).TrySetResult(true), cancelled))
+        {
+            if (await Task.WhenAny(lookup, cancelled.Task).ConfigureAwait(false) != lookup)
+            {
+                _ = lookup.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                throw new OperationCanceledException(cancellationToken);
+            }
+        }
+        return await lookup.ConfigureAwait(false);
     }
 
     /// <summary>
@@ -181,6 +202,10 @@ internal static class AddressDialer
         var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         try
         {
+            // Cancelling disposes the socket, which aborts the pending connect. Not covered by a test:
+            // it would need a destination that neither answers nor refuses, i.e. network topology. If it
+            // were missing, the connect would linger only until the OS connect timeout, when the catch
+            // below disposes the socket.
             using (token.Register(static s => ((Socket)s!).Dispose(), socket))
             {
                 token.ThrowIfCancellationRequested();

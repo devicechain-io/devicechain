@@ -74,7 +74,7 @@ await publisher.EmitMeasurementsAsync("car-42", credentialId,
 | Transport seam | `Transport.IHttpTransport` / `Transport.IWebSocketFactory` — pluggable, so the SDK runs where `HttpClient` and `ClientWebSocket` do not (Unity WebGL) |
 | Facade | `DeviceChainClient` — wires all of the above against one origin |
 
-The default WebSocket transport dials the endpoint's resolved addresses in parallel (so `localhost` does not
+The default WebSocket transport tries the endpoint's resolved addresses in staggered, overlapping attempts (so `localhost` does not
 stall on an unused `::1`) and performs the upgrade itself rather than using `ClientWebSocket`. As a result it
 does not use a system HTTP proxy; inject your own `IWebSocketFactory` if you need one.
 

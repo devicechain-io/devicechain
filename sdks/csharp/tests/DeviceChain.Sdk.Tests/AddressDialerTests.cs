@@ -110,8 +110,9 @@ public class AddressDialerTests
         script.On(V6, script.Hang(V6)).On(V4, script.Ok(V4));
         var sw = Stopwatch.StartNew();
 
+        using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5)); // one-at-a-time dialling fails here instead of hanging
         Conn won = await AddressDialer.ConnectAsync(
-            new[] { V6, V4 }, script.Connect, TimeSpan.FromMilliseconds(150), 80, CancellationToken.None);
+            new[] { V6, V4 }, script.Connect, TimeSpan.FromMilliseconds(150), 80, bound.Token);
 
         sw.Stop();
         Assert.Equal(V4, won.Address);
@@ -140,7 +141,7 @@ public class AddressDialerTests
     public async Task Every_address_failing_throws_one_exception_naming_each()
     {
         var script = new Script();
-        script.On(V6, script.Refuse()).On(V4, script.Refuse());
+        script.On(V6, script.Refuse()).On(V4, _ => Task.FromException<Conn>(new SocketException((int)SocketError.HostUnreachable)));
 
         IOException ex = await Assert.ThrowsAsync<IOException>(() => AddressDialer.ConnectAsync(
             new[] { V6, V4 }, script.Connect, TimeSpan.FromMilliseconds(50), 80, CancellationToken.None));
@@ -148,7 +149,8 @@ public class AddressDialerTests
         Assert.Contains(V6.ToString(), ex.Message);
         Assert.Contains(V4.ToString(), ex.Message);
         Assert.Contains("80", ex.Message);
-        Assert.IsType<SocketException>(ex.InnerException);
+        // The inner exception is the last failure, not the first.
+        Assert.Equal(SocketError.HostUnreachable, Assert.IsType<SocketException>(ex.InnerException).SocketErrorCode);
     }
 
     [Fact]
