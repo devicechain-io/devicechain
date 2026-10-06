@@ -271,6 +271,45 @@ namespace DeviceChain.Sitepulse.Visuals
             if (u.rig.Kind != MachineKind.Dozer) u.rig.steer = steer;
         }
 
+        /// <summary>
+        /// Replay: puts a detached machine exactly where and how a recording says it was drawn: its position and attitude as
+        /// recorded (nothing is re-grounded on the terrain), its implement angles, steering and load, and its wheels turned by
+        /// <paramref name="distance"/> metres since the last call.
+        /// </summary>
+        public bool PoseRecorded(string id, Vector3 position, float heading, float pitch, float roll, float p1, float p2, float steer, bool loaded, float distance)
+        {
+            var u = Find(id);
+            if (u == null || !u.detached) return false;
+            var rig = u.rig;
+            rig.transform.SetPositionAndRotation(position, Quaternion.Euler(pitch, heading, roll));
+            if (!(Mathf.Abs(position.y - u.dustGround) <= 0.01f))
+            {
+                u.dustGround = position.y;
+                foreach (var m in u.dusty) m.SetFloat(DustGround, position.y);
+            }
+
+            if (distance != 0f) rig.AddTravel(distance);
+            switch (rig.Kind)
+            {
+                case MachineKind.Dozer:
+                    rig.bladeArm = p1;
+                    rig.ripper = p2;
+                    break;
+                case MachineKind.Loader:
+                    rig.boom = p1;
+                    rig.bucket = p2;
+                    rig.steer = steer;
+                    break;
+                case MachineKind.Hauler:
+                    rig.dump = p1;
+                    rig.steer = steer;
+                    rig.loaded = loaded;
+                    break;
+            }
+
+            return true;
+        }
+
         /// <summary>The place on the machine's own track nearest to a point: its position, heading and how far into the loop it is.</summary>
         public bool TryNearestTrackPoint(string id, float x, float z, out Vector2 position, out float heading, out float trackSeconds)
         {

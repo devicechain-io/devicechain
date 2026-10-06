@@ -19,13 +19,17 @@ namespace DeviceChain.Sitepulse.EditorTools
     {
         public const string DefaultResultPath = "EditorScratch/tests.result.txt";
 
-        public static string Start(string resultPath = DefaultResultPath)
+        /// <param name="resultPath">The summary file.</param>
+        /// <param name="groupRegex">Only the tests whose full name matches this regular expression (all of them when null).</param>
+        public static string Start(string resultPath = DefaultResultPath, string groupRegex = null)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(resultPath));
             File.WriteAllText(resultPath, "RUNNING");
             var api = ScriptableObject.CreateInstance<TestRunnerApi>();
             api.RegisterCallbacks(new Summary(resultPath));
-            api.Execute(new ExecutionSettings(new Filter { testMode = TestMode.EditMode }));
+            var filter = new Filter { testMode = TestMode.EditMode };
+            if (groupRegex != null) filter.groupNames = new[] { groupRegex };
+            api.Execute(new ExecutionSettings(filter));
             return "started";
         }
 

@@ -10,6 +10,8 @@ using DeviceChain.Sdk;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
+using DeviceChain.Sitepulse.Recording;
+using DeviceChain.Sitepulse.Replay;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
 using DeviceChain.Sitepulse.Visuals;
@@ -25,8 +27,9 @@ namespace DeviceChain.Sitepulse.App
     /// cards and all. Live gives the cards an observed source for good (an illustrative value on a Live
     /// screen is the one thing the demo must never do), reads the runner's config, binds the scene's 19
     /// devices to the platform, starts the 19 device sessions, and starts the observer, whose reports are
-    /// all the cards show. Replay is not in this build and says so in plain sight; it does not borrow
-    /// another mode. A mode that cannot start shows why and stays stopped.
+    /// all the cards show, and records the run (on by default). Replay plays a recorded run back through
+    /// the same scene by a root of its own that holds no network object (<see cref="ReplayRoot"/>), or renders shots from it offline. A mode
+    /// that cannot start shows why and stays stopped.
     ///
     /// Runs before the data layer's first frame so its cards are never drawn for a frame in a mode
     /// that forbids them.
@@ -84,6 +87,11 @@ namespace DeviceChain.Sitepulse.App
         float nextStatusLog;
         const float StatusLogEverySeconds = 10f;
 
+        // recording (Live): on by default
+        RecordOptions recordOptions;
+        LiveRecorder liveRecorder;
+        readonly SampleRelay sampleRelay = new SampleRelay();
+
         // acceptance (-sitepulse-acceptance): null in every normal run
         AcceptanceOptions acceptance;
         PhaseAProbe probe;
@@ -132,6 +140,24 @@ namespace DeviceChain.Sitepulse.App
 
             if (!present && Application.isEditor && editorMode != EditorModeOverride.None)
                 mode = (SitepulseMode)Enum.Parse(typeof(SitepulseMode), editorMode.ToString());
+            // a replay or a render is asked for by its own flags, and they are a mode of their own: a line that names another mode and
+            // also asks for a replay is contradicting itself, and is refused rather than guessed at
+            if (ReplayOptions.Wanted(args))
+            {
+                if (present && mode != SitepulseMode.Replay)
+                {
+                    const string clash = "the replay flags (-sitepulse-replay, -sitepulse-render, -sitepulse-out, -sitepulse-replay-start) need -sitepulse-mode replay, or no -sitepulse-mode at all";
+                    HideCards();
+                    hud.SetBadge("MODE ERROR · nothing is running", BadgeTone.Error);
+                    hud.ShowError("The mode could not be chosen", clash);
+                    PlatformLog.Error(clash);
+                    AbortAcceptanceWith(acceptance, clash);
+                    return;
+                }
+
+                mode = SitepulseMode.Replay;
+            }
+
             started = true;
 
             switch (mode)
@@ -140,10 +166,7 @@ namespace DeviceChain.Sitepulse.App
                     hud.SetBadge(SitepulseModes.Badge(mode), BadgeTone.Illustrative);
                     break;
                 case SitepulseMode.Replay:
-                    HideCards();
-                    hud.SetBadge(SitepulseModes.Badge(mode), BadgeTone.Error);
-                    hud.ShowError("Replay is not in this build", "Start with -sitepulse-mode live or choreographed.");
-                    PlatformLog.Error("Replay is not in this build");
+                    StartReplay(args);
                     break;
                 case SitepulseMode.Live:
                     // a Live run is a device on the network: it keeps publishing when the window loses focus
@@ -179,20 +202,80 @@ namespace DeviceChain.Sitepulse.App
         void UseLiveChoreography()
         {
             if (fleet == null) return;
-            if (liveChoreography == null)
+            if (!PlayLiveFleet())
             {
                 blocked = true;
                 fleet.enabled = false;
                 Stop("Live mode cannot start", "the Sitepulse App has no live choreography (Assets/Sitepulse/Data/quarry_fleet_live.json): rebuild the scene or run Sitepulse > Quarry > Add Sitepulse App To Scene");
-                return;
             }
+        }
 
+        /// <summary>Gives the fleet the live file's 18 machines (a replay stands the same machines up). False when the app has none to give.</summary>
+        bool PlayLiveFleet()
+        {
+            if (liveChoreography == null) return false;
             fleet.choreography = liveChoreography;
             if (fleet.isActiveAndEnabled)
             {
                 fleet.enabled = false;
                 fleet.enabled = true;
             }
+
+            return true;
+        }
+
+        // ------------------------------------------------------------------ replay
+
+        /// <summary>
+        /// Replay's whole composition: its own root, in an assembly that cannot see the platform or the device plane, handed the scene's fleet
+        /// and data layer and (unless this is an offline render) a screen. No token broker, no observer, no session is created here or there.
+        /// </summary>
+        void StartReplay(string[] args)
+        {
+            var options = ReplayOptions.Parse(args, out var error);
+            if (options == null)
+            {
+                HideCards();
+                hud.SetBadge("MODE ERROR · nothing is running", BadgeTone.Error);
+                hud.ShowError("The replay cannot start", error);
+                PlatformLog.Error("replay: " + error);
+                if (ReplayOptions.Get(args, ReplayOptions.RenderFlag, out _) != null) Application.Quit(1);
+                return;
+            }
+
+            var composition = ReplayComposition.For(options);
+            if (!composition.Hud)
+            {
+                // an offline render has nothing of the app's own on its frames
+                if (overlay != null) overlay.Obstacles = null;
+                hud.Destroy();
+                hud = null;
+            }
+
+            if (fleet == null || !PlayLiveFleet())
+            {
+                const string why = "the Sitepulse App has no live choreography (Assets/Sitepulse/Data/quarry_fleet_live.json): rebuild the scene or run Sitepulse > Quarry > Add Sitepulse App To Scene";
+                HideCards();
+                if (hud != null)
+                {
+                    hud.SetBadge("REPLAY · not running", BadgeTone.Error);
+                    hud.ShowError("The replay cannot start", why);
+                }
+
+                PlatformLog.Error("replay: " + why);
+                if (options.Render) Application.Quit(1);
+                return;
+            }
+
+            ReplayRoot.Begin(gameObject, new ReplayRoot.Inputs
+            {
+                Fleet = fleet,
+                Overlay = overlay,
+                Options = options,
+                Screen = composition.Hud ? new HudReplayScreen(hud) : null,
+                DefaultRecordings = System.IO.Path.Combine(Application.persistentDataPath, "Recordings"),
+                RenderBuild = BuildInfo.Read(LiveRecorder.FindBuildInfo()),
+            });
         }
 
         async void Start()
@@ -312,6 +395,13 @@ namespace DeviceChain.Sitepulse.App
 
         async Task RunLive(CancellationToken ct)
         {
+            recordOptions = RecordOptions.Parse(Environment.GetCommandLineArgs(), out var recordError);
+            if (recordOptions == null)
+            {
+                Stop("Live mode cannot start", recordError);
+                return;
+            }
+
             var path = Path.Combine(Application.persistentDataPath, LiveSettingsLoader.FileName);
             var settings = LiveSettingsLoader.Resolve(Environment.GetCommandLineArgs(), path, File.Exists, File.ReadAllText);
             if (!settings.Ok)
@@ -399,11 +489,16 @@ namespace DeviceChain.Sitepulse.App
             // sessions: one per credentialed device; a device without one is grey and does not publish
             poses = new RigPoseSource(fleet, overlay);
             IDeviceLinkFactory links = new SdkDeviceLinkFactory(cfg.Value, caPem);
+            var sinks = new List<IAckedSampleSink>();
             if (acceptance != null)
             {
                 sampleLog = new EmittedSampleLog(Path.Combine(AcceptanceDir(), PhaseAProbe.SampleFile));
-                links = new RecordingLinkFactory(links, sampleLog);
+                sinks.Add(sampleLog);
             }
+
+            // the recorder is built once the plane and the observer exist; until then the relay holds nothing
+            if (recordOptions.Enabled) sinks.Add(sampleRelay);
+            if (sinks.Count > 0) links = new RecordingLinkFactory(links, new SampleSinks(sinks.ToArray()));
 
             plane = new DeviceFleet(board, credentials, links, platformState: lastState, sceneHasZone: site.HasZone);
             _ = plane.StartAll();
@@ -417,7 +512,33 @@ namespace DeviceChain.Sitepulse.App
             observer = new PlatformObserver(cfg.Value, broker, watched, observed, observerStatus);
             observer.Start();
             board.BeginObserver();
+            StartRecorder(cfg.Value, devices.Count);
             Render();
+        }
+
+        // The recording of this run (on by default). It is built last, when there is something to record, and it watches: a recorder that
+        // cannot start leaves a logged reason and a run that goes on without it.
+        void StartRecorder(RunnerConfig cfg, int deviceCount)
+        {
+            if (recordOptions == null || !recordOptions.Enabled) return;
+            var bound = new List<RunDevice>();
+            foreach (var d in board.Devices)
+                if (!d.Failed && d.Bind != null && d.Bind.IsBound)
+                    bound.Add(new RunDevice { Id = d.Device.ExternalId, Token = d.Bind.DeviceToken, Kind = d.Device.Kind.ToString() });
+            liveRecorder = LiveRecorder.TryStart(recordOptions, new LiveRecorderWorld
+            {
+                Fleet = fleet,
+                Plane = plane,
+                Director = director,
+                Timeline = timeline,
+                Presenter = presenter,
+                Observer = observer,
+                Devices = bound,
+                Tenant = cfg.Tenant,
+                Instance = cfg.InstanceId,
+                Manifest = $"{(fleet.choreography != null ? fleet.choreography.name : "fleet")} · {deviceCount} devices",
+            }, PlatformLog.Info);
+            sampleRelay.Target = liveRecorder;
         }
 
         // every machine that has a session also has a task layer: a command it is sent drives its rig. The
@@ -545,6 +666,7 @@ namespace DeviceChain.Sitepulse.App
             if (plane == null || stopped || poses == null) return;
             var scale = fleet != null ? fleet.timeScale : 1f;
             plane.Advance(DateTimeOffset.UtcNow, poses, Time.deltaTime * scale);
+            liveRecorder?.Tick();
         }
 
         string TokenLine()
@@ -594,7 +716,17 @@ namespace DeviceChain.Sitepulse.App
             }
         }
 
+        // the sessions go first so the answers they publish on the way down are in the recording, which is closed last
         void Teardown()
+        {
+            TeardownRun();
+            if (liveRecorder == null) return;
+            sampleRelay.Target = null;
+            liveRecorder.Dispose();
+            liveRecorder = null;
+        }
+
+        void TeardownRun()
         {
             if (observer != null)
             {

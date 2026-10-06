@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using DeviceChain.Sitepulse.Platform;
 using NUnit.Framework;
 using static DeviceChain.Sitepulse.Tests.PlatformTestData;
+using DeviceChain.Sitepulse.Domain;
 
 namespace DeviceChain.Sitepulse.Tests
 {

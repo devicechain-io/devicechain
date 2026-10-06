@@ -178,6 +178,7 @@ launch_player() {
 	"$PLAYER" -sitepulse-mode live -sitepulse-acceptance phaseA \
 		-sitepulse-acceptance-dir "$(win "$dir")" \
 		-dc-runner "$RUNNER" -dc-ca "$(win "$ca")" \
+		-sitepulse-platform-version "$DC_VERSION" \
 		-logFile "$(win "$RAW")" \
 		-screen-fullscreen 0 \
 		-sitepulse-screenshot "$(win "$dir/screenshot.png")" -sitepulse-screenshot-after "$SHOT_AFTER" \

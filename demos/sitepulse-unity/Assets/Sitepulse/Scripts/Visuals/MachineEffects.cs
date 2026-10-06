@@ -160,7 +160,7 @@ namespace DeviceChain.Sitepulse.Visuals
         public void ClearParticles()
         {
             foreach (var ps in new[] { dust, exhaust, pour, pourDust, bladeDust })
-                if (ps != null) ps.Clear(true);
+                QuarryEffects.Restart(ps);
             hasLast = false;
             // start the clock over too, so a still stepped up to a moment shows the same beacon
             // phase and the same working state whatever was stepped before it

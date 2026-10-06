@@ -10,7 +10,7 @@ using UnityEngine.UI;
 
 namespace DeviceChain.Sitepulse.App
 {
-    public enum BadgeTone { Live, Illustrative, Error }
+    public enum BadgeTone { Live, Illustrative, Error, Replay }
 
     /// <summary>
     /// The screen-space HUD: the mode badge, always on screen at the top left, and the readiness
@@ -30,6 +30,7 @@ namespace DeviceChain.Sitepulse.App
         static readonly Color Ink = new Color(0.93f, 0.95f, 0.96f, 1f);
         static readonly Color Muted = new Color(0.60f, 0.68f, 0.72f, 1f);
         static readonly Color Fault = new Color(1f, 0.42f, 0.38f, 1f);
+        static readonly Color Replay = new Color(0.74f, 0.62f, 1f, 1f);
 
         const float RefH = 1080f, Margin = 18f, PanelW = 860f, CompactW = 640f, Pad = 14f, ChipH = 36f;
 
@@ -173,7 +174,7 @@ namespace DeviceChain.Sitepulse.App
         public void SetBadge(string text, BadgeTone tone)
         {
             chipText.text = text;
-            chipText.color = tone == BadgeTone.Live ? Accent : tone == BadgeTone.Illustrative ? Warn : Fault;
+            chipText.color = tone == BadgeTone.Live ? Accent : tone == BadgeTone.Illustrative ? Warn : tone == BadgeTone.Replay ? Replay : Fault;
             var w = chipText.preferredWidth + 24f;
             chip.anchoredPosition = new Vector2(Margin, -Margin);
             chip.sizeDelta = new Vector2(w, ChipH);

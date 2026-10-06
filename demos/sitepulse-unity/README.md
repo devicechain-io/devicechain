@@ -206,7 +206,9 @@ badge in the top-left corner always says which:
   high desert in central Nevada, chosen to imply no real operator), with X east and Z north in
   metres; `Scripts/Simulation/SiteDefinition.cs` holds it, and the simulation's site geofence
   uses the same origin.
-- `replay`: not in this build; it says so rather than starting another mode.
+- `replay`: a recorded live run played back through the same scene, with no network at all (see
+  [Recording, replay and rendering](#recording-replay-and-rendering)). Its badge says
+  `REPLAY · recorded live run <runId> · <date>`, and replayed values are labelled replayed, never observed.
 
 Live mode needs the runner's address and the broker's CA certificate. Copy `live.example.json` to
 `%USERPROFILE%\AppData\LocalLow\DeviceChain\Sitepulse\live.json` and set `caPemPath`, or pass
@@ -309,6 +311,41 @@ alone is a startup error, and a control run says so in the badge (amber, `ACCEPT
 log and in `phaseA-result.json`. The checker's pure parts have unit tests: `cd tools && python3 -m unittest
 test_phase_a_check`.
 
+## Recording, replay and rendering
+
+**Recording.** A Live run records itself, unless started with `-sitepulse-no-record`. The recording is a folder
+`Recordings/<runId>/` (under the player's persistent data path, or `<dir>/<runId>/` with `-sitepulse-record <dir>`;
+an existing run is never overwritten) holding:
+
+| file | what it holds |
+| --- | --- |
+| `run.json` | the header: run id, UTC start, the build (git SHA, whether the tracked tree was clean, SDK commit, from `build-info.json` beside the player), platform version (`-sitepulse-platform-version`, which the acceptance script fills), instance, tenant, the 19 devices with their platform tokens, the clock segments (real or accelerated, from when the scene's clock changed speed), the presenter presets, and at the end how it ended and what it cost. No credential or token: every value passes the redactor |
+| `sim.bin` | every machine as it was **drawn** 20 times a second: position and attitude, rig inputs, distance travelled, what the task layer was doing, the local model's values. Little-endian, versioned: a header (`SPSB`, version, machine table) then 8 + 64 bytes per machine per frame; the layout is documented in `Scripts/Recording/SimBin.cs` and a file that is not a whole number of frames is refused. 1160 bytes a frame for the 18 machines, 23 KB a second |
+| `observed.ndjson` | every item the observer handed the app, as received and when (run seconds and UTC): measurements, alarms, the alarm snapshot, locations, command rows, presence, stream status |
+| `device.ndjson` | what the devices did: samples the broker acknowledged, link states, each command received (token, key, payload, arrival sequence) and what became of it, every row of each machine's timeline |
+| `presenter.ndjson` | what the presenter did, and changes of the scene's clock speed |
+
+The recorder is a passenger: a disk that fills stops the recording (logged once), never the run. Its size and write
+cost are logged every minute and when it closes, and kept in `run.json`.
+
+**Replay.** `Sitepulse.exe -sitepulse-replay <runId|path> [-sitepulse-record <dir>] [-sitepulse-replay-start <s>]`
+(add `-sitepulse-mode replay` if you like). Machines stand where they were drawn (interpolated, never re-simulated), the
+cards are filled from the recorded observations and age against the recording's own clock, and the timeline panel is the
+recorded one. Space pauses, Left/Right move 5 seconds, Home restarts, `[` `]` pick a machine, T shows the timeline.
+The replay root lives in an assembly that references neither the platform nor the device plane, so it holds no network
+object (a test reads the assembly graph).
+
+**Offline render.** `Sitepulse.exe -sitepulse-render <shots.json> -sitepulse-replay <runId|path> -sitepulse-out <dir>`
+renders PNG sequences, one folder per shot (`<dir>/<shot>/frame_000001.png`), stepping the replay exactly one frame of
+time per rendered frame (`Time.captureDeltaTime`). A shot is `{name, startEvent, offset, duration, camera, aspect}`,
+and `startEvent` names a recorded event (an alarm, a command row, a measurement crossing a line, a timeline row, or the
+start of the run), never a time: see `tools/shots/sitepulse-video-sample.json`. Every shot is resolved against the
+recording before any frame is written, and a shot whose event is absent stops the render. Rendered frames carry no HUD,
+no badge and no replay tag; `<dir>/render.json` is the account of what they are (a replay of a recorded live run, which
+one, when it was recorded, where each shot starts and which shots ran under an accelerated clock and need that caption)
+and is what the video's description and captions are written from. `tools/frames-to-mp4.sh <dir>` makes an mp4 of each
+shot (it needs ffmpeg and says so when it is missing).
+
 ## Quality levels
 
 - **PC**: the full look (MSAA, screen-space ambient occlusion, long four-cascade shadows).
@@ -340,7 +377,9 @@ machines with tracks of the right length, and the geofence encloses the cut insi
 work site's colour map, and that a device card's record holds only the profiles' measurement
 keys, alarms and command states. The platform tests cover the runner config and `live.json`
 validation, the token refresh schedule, device binding and the credential cross-check over canned
-responses, and the log redactor; the acceptance tests cover its flags, its injected faults, the emitted-sample
+responses, and the log redactor; the recording and replay tests write short synthetic runs through the real recorder and read
+them back, and check the format, the redaction of every recording file, the shot selectors and the replay root's assembly
+references; the acceptance tests cover its flags, its injected faults, the emitted-sample
 log and the probe. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
 or from the command line with the Editor closed:
 
