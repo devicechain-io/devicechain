@@ -712,14 +712,37 @@ def preflight_low_fuel(platform, tokens):
     return low, a.Item("precondition-low-fuel", f"machines starting at or below {PRECONDITION_FUEL_PCT:g}% fuel, or with a low-fuel alarm still ACTIVE", None, detail)
 
 
-def run_preconditions(platform, tokens, low, timeout=PRECONDITION_REFUEL_TIMEOUT_S):
+# A command the platform will still hand to the device. SENT is different: it was handed to SOME session,
+# and over MQTT the platform does not hand it again, so a SENT row from before this run is stale (its
+# player is gone: it will only end at its TTL) and waiting on it would wait forever.
+DELIVERABLE = ("QUEUED", "HELD", "PARKED")
+
+
+def live_pending(commands, run_started):
+    """The goto-refuel commands worth waiting on: still deliverable, or SENT during this run."""
+    out = []
+    for c in commands:
+        if c.get("name") != "goto-refuel" or c.get("status") in a.TERMINAL:
+            continue
+        if c.get("status") in DELIVERABLE:
+            out.append(c)
+        elif c.get("status") == "SENT" and c.get("sentTime") and a.parse_time(c["sentTime"]) >= run_started:
+            out.append(c)
+    return out
+
+
+def run_preconditions(platform, tokens, low, timeout=PRECONDITION_REFUEL_TIMEOUT_S, run_started=None):
     """What a site operator would do: send goto-refuel to each low machine, one at a time (the bay is one slot), and wait for SUCCESSFUL."""
     items = []
     for ext, why in low:
         item_id = f"precondition-refuel-{ext}"
         desc = f"{ext} ({why}) is refuelled by a goto-refuel the operator sends, ended SUCCESSFUL"
         try:
-            pending = [c for c in platform.commands_of(tokens[ext]) if c.get("name") == "goto-refuel" and c.get("status") not in a.TERMINAL]
+            mine = [c for c in platform.commands_of(tokens[ext]) if c.get("name") == "goto-refuel" and c.get("status") not in a.TERMINAL]
+            pending = live_pending(mine, run_started) if run_started is not None else mine
+            stale = [c for c in mine if c not in pending]
+            if stale:
+                a.say(f"{ext}: {len(stale)} goto-refuel(s) SENT before this run will never be answered (their player is gone); sending a new one")
             if pending:
                 token = pending[0]["token"]
                 a.say(f"{ext}: a goto-refuel is already pending; waiting for it")
@@ -759,7 +782,7 @@ def run_soak(args, platform, since_dt):
     try:
         low, info = preflight_low_fuel(platform, tokens)
         items.append(info)
-        items += run_preconditions(platform, tokens, low)
+        items += run_preconditions(platform, tokens, low, run_started=since_dt)
     except a.PlatformError as e:
         items.append(a.Item("precondition-low-fuel", "the fleet's starting fuel and alarms were read", False, f"platform error: {e}"))
     finally:

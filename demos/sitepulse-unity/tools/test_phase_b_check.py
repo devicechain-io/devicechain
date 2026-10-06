@@ -415,6 +415,30 @@ class Preconditions(unittest.TestCase):
         self.assertTrue(items[0].ok)
         p.create_command.assert_not_called()
 
+    def test_a_refuel_sent_before_this_run_is_stale_and_a_new_one_is_sent(self):
+        # an aborted run's player took the command to its grave: over MQTT the platform never hands it again
+        run_started = a.parse_time("2026-10-06T16:00:00Z")
+        stale = {"token": "old", "name": "goto-refuel", "status": "SENT", "sentTime": "2026-10-06T15:44:48.194658Z"}
+        ok = {"token": "pre-1", "status": "SUCCESSFUL", "sentTime": "s", "respondedTime": "r"}
+        p = self._platform({"pre-1": ok}, pending=[stale])
+        items = b.run_preconditions(p, {"SP-HL-0004": "tok4"}, [("SP-HL-0004", "x")], timeout=5, run_started=run_started)
+        self.assertTrue(items[0].ok)
+        p.create_command.assert_called_once()
+
+    def test_a_refuel_sent_during_this_run_is_waited_on(self):
+        run_started = a.parse_time("2026-10-06T16:00:00Z")
+        live = {"token": "now", "name": "goto-refuel", "status": "SENT", "sentTime": "2026-10-06T16:01:00Z"}
+        ok = {"token": "now", "status": "SUCCESSFUL", "sentTime": "s", "respondedTime": "r"}
+        p = self._platform({"now": ok}, pending=[live])
+        items = b.run_preconditions(p, {"SP-HL-0004": "tok4"}, [("SP-HL-0004", "x")], timeout=5, run_started=run_started)
+        self.assertTrue(items[0].ok)
+        p.create_command.assert_not_called()
+
+    def test_a_deliverable_refuel_is_waited_on_whenever_it_was_made(self):
+        run_started = a.parse_time("2026-10-06T16:00:00Z")
+        queued = {"token": "q", "name": "goto-refuel", "status": "QUEUED", "queuedTime": "2026-10-06T15:00:00Z"}
+        self.assertEqual(b.live_pending([queued], run_started), [queued])
+
     def test_a_refuel_that_never_finishes_fails_after_its_bound(self):
         p = self._platform({"pre-1": {"token": "pre-1", "status": "SENT"}})
         with mock.patch.object(a.time, "sleep"):
