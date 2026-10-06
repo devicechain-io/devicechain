@@ -159,6 +159,8 @@ namespace DeviceChain.Sitepulse.Visuals
         readonly Vector3[] corners = new Vector3[8];
         GameObject root;
         RectTransform canvasRect, fenceChip;
+        CanvasGroup fenceChipGroup;
+        readonly LabelPlacer labelPlacer = new LabelPlacer();
         Text fenceChipText;
         LineRenderer fenceLine;
         MeshRenderer ring;
@@ -824,24 +826,27 @@ namespace DeviceChain.Sitepulse.Visuals
             if (fenceChip != null)
             {
                 var size = fenceChip.sizeDelta * cardScale;
-                Vector2 at = default;
-                bool on = false;
-                for (int i = 0; i < fenceBySouth.Count; i += 6)
+                // every sixth fence point, south first, is a place the label may sit; it keeps its point while that
+                // place stays clear and moves calmly when it does not (LabelPlacer: the cards' rules)
+                labelPlacer.Step((fenceBySouth.Count + 5) / 6, i =>
                 {
-                    var p = fenceBySouth[i];
+                    var p = fenceBySouth[i * 6];
                     var v = cam.WorldToViewportPoint(p);
-                    at = new Vector2(v.x * refW - size.x / 2f, v.y * RefH - size.y / 2f);
-                    on = v.z > 0f && at.x > Margin && at.x + size.x < refW - Margin && at.y > Margin && at.y + size.y < RefH - Margin
-                         && !Hits(new Rect(at, size), targetRects) && !Hits(new Rect(at, size), blockers)
-                         && !Hidden(cam, p + Vector3.up * 0.4f);
-                    if (on) break;
-                }
+                    var at = new Vector2(v.x * refW - size.x / 2f, v.y * RefH - size.y / 2f);
+                    bool valid = v.z > 0f && at.x > Margin && at.x + size.x < refW - Margin && at.y > Margin && at.y + size.y < RefH - Margin
+                                 && !Hits(new Rect(at, size), targetRects) && !Hits(new Rect(at, size), blockers)
+                                 && !Hidden(cam, p + Vector3.up * 0.4f);
+                    return (at, valid);
+                }, snap ? 10f : dt, reduced);
+                bool on = labelPlacer.Alpha > 0f;
                 fenceChip.gameObject.SetActive(on);
                 if (on)
                 {
-                    fenceChip.anchoredPosition = at;
+                    fenceChip.anchoredPosition = labelPlacer.Position;
                     fenceChip.localScale = Vector3.one * cardScale;
-                    placed.Add(Inflate(new Rect(at, size), 6f));
+                    if (fenceChipGroup == null) fenceChipGroup = fenceChip.gameObject.AddComponent<CanvasGroup>();
+                    fenceChipGroup.alpha = snap ? 1f : labelPlacer.Alpha;
+                    placed.Add(Inflate(new Rect(labelPlacer.Position, size), 6f));
                 }
             }
 

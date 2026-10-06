@@ -165,3 +165,77 @@ namespace DeviceChain.Sitepulse.Visuals
         }
     }
 }
+
+namespace DeviceChain.Sitepulse.Visuals
+{
+    /// <summary>
+    /// The geofence label's calm, the same rules as a card's: it keeps the fence point it labels while that point's
+    /// place on screen is valid, moves only after the place has been invalid for <see cref="CardTiming.HoldSeconds"/>
+    /// (a truck driving past does not move it), picks a new point at most once per
+    /// <see cref="CardTiming.SolveIntervalSeconds"/>, glides to it, and fades in and out instead of popping.
+    /// </summary>
+    public sealed class LabelPlacer
+    {
+        readonly SolveGate gate = new SolveGate();
+        Vector2 shown, glide, velocity;
+        float invalidFor, alpha;
+        bool placedOnce;
+
+        /// <summary>The fence point being labelled, or -1.</summary>
+        public int Index { get; private set; } = -1;
+
+        /// <summary>Where the label is drawn this frame.</summary>
+        public Vector2 Position => shown;
+
+        public float Alpha => alpha;
+
+        /// <summary>
+        /// One frame. <paramref name="candidates"/> is the number of fence points in preference order;
+        /// <paramref name="placeOf"/> gives a point's label position and whether that place is valid now.
+        /// </summary>
+        public void Step(int candidates, System.Func<int, (Vector2 at, bool valid)> placeOf, float dt, bool reduced)
+        {
+            gate.Tick(dt);
+            bool keep = false;
+            Vector2 target = shown;
+            if (Index >= 0 && Index < candidates)
+            {
+                var (at, valid) = placeOf(Index);
+                invalidFor = valid ? 0f : invalidFor + dt;
+                keep = invalidFor <= CardTiming.HoldSeconds;
+                target = at;
+            }
+
+            if (!keep && gate.TryTake())
+            {
+                Index = -1;
+                for (int i = 0; i < candidates; i++)
+                {
+                    var (at, valid) = placeOf(i);
+                    if (!valid) continue;
+                    // a new point: start from where the label is drawn and glide the difference away
+                    glide = placedOnce && !reduced ? shown - at : Vector2.zero;
+                    velocity = Vector2.zero;
+                    placedOnce = true;
+                    Index = i;
+                    invalidFor = 0f;
+                    target = at;
+                    keep = true;
+                    break;
+                }
+            }
+
+            bool on = keep && Index >= 0;
+            if (on)
+            {
+                // the label rides its fence point exactly (the point moves with the camera); only the jump
+                // between two points is eased out, as an offset decaying to zero
+                glide = reduced ? Vector2.zero : Vector2.SmoothDamp(glide, Vector2.zero, ref velocity, CardTiming.GlideSeconds / 3f, CardTiming.GlideMaxSpeed, dt);
+                shown = target + glide;
+            }
+
+            float fade = reduced ? CardTiming.ReducedFadeSeconds : CardTiming.FadeSeconds;
+            alpha = Mathf.MoveTowards(alpha, on ? 1f : 0f, dt / fade);
+        }
+    }
+}
