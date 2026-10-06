@@ -131,9 +131,13 @@ check_liveness() {
   fi
 
   local last
-  # Successful scheduled OR manual runs both count as proof of life.
+  # Successful scheduled OR manual runs both count as proof of life. Ask for a
+  # page of them and take the newest, rather than trusting the first row of a
+  # one-row page: GitHub's status-filtered run list has answered `--limit 1`
+  # with nothing, and with a run 55 days old while a 6-day-old success existed,
+  # which failed every pull request on a bumper that was working.
   last="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status success \
-            --limit 1 --json updatedAt -q '.[0].updatedAt' 2>/dev/null || true)"
+            --limit 50 --json updatedAt -q 'map(.updatedAt) | max' 2>/dev/null || true)"
 
   if [ -z "$last" ] || [ "$last" = "null" ]; then
     # A workflow that has never run is the state right after it is added. Say so
