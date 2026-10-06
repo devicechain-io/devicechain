@@ -325,6 +325,31 @@ namespace DeviceChain.Sitepulse.Tests
             StringAssert.Contains("cancelled 3", result.Describe());
         }
 
+        // a platform that holds <total> unfinished commands and serves them a page at a time
+        static QueryFn Paged(int total) => (query, vars, ct) =>
+        {
+            using var doc = JsonDocument.Parse(vars);
+            var c = doc.RootElement.GetProperty("c");
+            var page = c.GetProperty("pageNumber").GetInt32();
+            var size = c.GetProperty("pageSize").GetInt32();
+            var from = (page - 1) * size;
+            var items = Enumerable.Range(from, Math.Max(0, Math.Min(size, total - from)))
+                .Select(i => "{\"token\":\"t" + i + "\",\"deviceToken\":\"dev-" + i + "\",\"name\":\"goto-refuel\",\"status\":\"QUEUED\",\"queuedTime\":\"2026-10-05T10:00:00Z\"}");
+            return Task.FromResult("{\"commands\":{\"results\":[" + string.Join(",", items) + "]}}");
+        };
+
+        [TestCase(499, false)]
+        [TestCase(500, false)]
+        [TestCase(501, true)]
+        [TestCase(1200, true)]
+        public void FreshRunSaysThereIsMoreOnlyWhenThereIsMoreBeyondThePagesRead(int total, bool more)
+        {
+            var plan = FreshRun.ListAsync(Paged(total), () => DateTimeOffset.UtcNow, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.AreEqual(Math.Min(total, FreshRun.PageSize * FreshRun.MaxPages), plan.Total);
+            Assert.AreEqual(more, plan.Truncated);
+            Assert.AreEqual(more, plan.Describe().Contains("more beyond the pages read"));
+        }
+
         [Test]
         public void FreshRunReportsACancelThatFailedOrFoundTheCommandAlreadyMovedOn()
         {

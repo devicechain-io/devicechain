@@ -35,12 +35,13 @@ namespace DeviceChain.Sitepulse.Simulation
     /// <summary>
     /// Permission to put fuel into a tank. The ONLY way fuel rises in <see cref="MachineModel"/> is
     /// <see cref="MachineModel.Refill"/>, and that takes one of these. The constructor is not public,
-    /// so nothing outside this assembly can make one, and inside it exactly one place does: the
-    /// <c>Refuelling</c> task state (<c>RefuelService</c>). That is what makes the
+    /// so nothing outside this assembly can make one, and the type is abstract: the only class that derives
+    /// from it, and so the only way to have one, is the private permit inside the <c>Refuelling</c> task state
+    /// (<c>RefuelService</c>). That is what makes the
     /// phase B negative control mean something: a machine that is not refuelling cannot get fuel back,
     /// whatever else is wrong, and a rule that fires on a falling tank has nothing to hide behind.
     /// </summary>
-    public sealed class RefuelPermit
+    public abstract class RefuelPermit
     {
         internal RefuelPermit(string deviceId, double targetPct)
         {

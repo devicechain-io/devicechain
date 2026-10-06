@@ -37,6 +37,9 @@ namespace DeviceChain.Sitepulse.Tests
         public double Travelled;
         public TrackPoint? LastAttach;
 
+        /// <summary>Where the machine stood when it was put back on its track (the place it had driven to, before the jump to the track).</summary>
+        public (double X, double Z)? AttachedFrom;
+
         public void Detach()
         {
             Attached = false;
@@ -72,6 +75,7 @@ namespace DeviceChain.Sitepulse.Tests
             Attached = true;
             Attaches++;
             LastAttach = point;
+            AttachedFrom = (X, Z);
             X = point.X;
             Z = point.Z;
             HeadingDegrees = point.HeadingDegrees;

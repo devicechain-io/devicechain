@@ -12,10 +12,17 @@ namespace DeviceChain.Sitepulse.Tasks
     /// state, wherever else it is and whatever else is wrong, gets no fuel back. Each tick it asks for the
     /// next small step of the tank's way to <see cref="TargetPct"/> over <see cref="DurationSeconds"/> of
     /// simulation time (so fuel climbs as the service goes, not all at the end), with a permit of its own
-    /// for each step. A guard test reads the source and fails if a second call site appears.
+    /// for each step. The permit type has no constructor anyone can call: it is abstract, and the one class that
+    /// derives from it is the private <see cref="Permit"/> below, so nothing else can make one. A guard test reads
+    /// the source and fails if anything else names the permit or calls the model's refill.
     /// </summary>
     internal sealed class RefuelService
     {
+        sealed class Permit : RefuelPermit
+        {
+            public Permit(string deviceId, double targetPct) : base(deviceId, targetPct) { }
+        }
+
         public const double TargetPct = 95.0;
         public const double DurationSeconds = 40.0;
 
@@ -39,7 +46,7 @@ namespace DeviceChain.Sitepulse.Tasks
             if (!(dt > 0) || Done) return;
             ElapsedSeconds += dt;
             var target = Done ? TargetPct : Math.Min(TargetPct, model.FuelPct + ratePerSecond * dt);
-            model.Refill(new RefuelPermit(model.DeviceId, target));
+            model.Refill(new Permit(model.DeviceId, target));
         }
     }
 }

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Simulation;
@@ -301,6 +302,7 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual("refuel bay wait exceeded 120 s", res.Reason);
             Assert.IsNull(r.Bay.Holder);
             Assert.AreEqual(0, r.Bay.Waiting, "it left the line");
+            Assert.AreEqual(MachineMode.Returning, r.Controller.Mode, "and the truck drives out of the queue rather than parking in it");
         }
 
         [Test]
@@ -387,24 +389,149 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void OnlyTheRefuellingServiceCanMakeARefuelPermit()
+        public void OnlyTheRefuellingServiceCanMakeOrUseARefuelPermit()
         {
-            // A source guard, the structural half of "fuel rises only in Refuelling": the permit's constructor is
-            // internal, and exactly one place in the program calls it.
+            // The structural half of "fuel rises only in Refuelling". The compiler: the permit is abstract with no
+            // public constructor, so nothing can `new` one, and the one class that derives from it is a private
+            // type nested in the service.
+            Assert.IsTrue(typeof(RefuelPermit).IsAbstract);
+            Assert.IsEmpty(typeof(RefuelPermit).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+            var heirs = typeof(RefuelPermit).Assembly.GetTypes().Where(t => t != typeof(RefuelPermit) && typeof(RefuelPermit).IsAssignableFrom(t)).ToList();
+            Assert.AreEqual(1, heirs.Count, string.Join(", ", heirs.Select(h => h.FullName)));
+            Assert.IsTrue(heirs[0].IsNestedPrivate, "the heir is private to its service");
+            Assert.AreEqual("RefuelService", heirs[0].DeclaringType.Name);
+
+            // The source: nothing but the model and the service so much as names the permit or calls the model's refill
+            // (a target-typed `model.Refill(new(...))` has no `new RefuelPermit` in it).
             var scripts = Path.Combine(UnityEngine.Application.dataPath, "Sitepulse", "Scripts");
-            var sites = new List<string>();
+            var strays = new List<string>();
+            var inService = new List<string>();
             foreach (var file in Directory.GetFiles(scripts, "*.cs", SearchOption.AllDirectories))
             {
+                var name = Path.GetFileName(file);
                 var n = 0;
                 foreach (var line in File.ReadAllLines(file))
                 {
+                    n++;
                     var code = line.TrimStart();
-                    if (code.StartsWith("//") || code.StartsWith("///") || code.StartsWith("*")) continue;
-                    if (code.Contains("new RefuelPermit(")) sites.Add(Path.GetFileName(file) + ":" + (++n));
+                    if (code.StartsWith("//") || code.StartsWith("*") || code.StartsWith("/*")) continue;
+                    var mentions = code.Contains("RefuelPermit") || code.Contains("Refill(");
+                    if (!mentions) continue;
+                    if (name == "RefuelService.cs") inService.Add(code);
+                    else if (name != "MachineModel.cs") strays.Add(name + ":" + n + " " + code);
                 }
             }
 
-            Assert.AreEqual(new[] { "RefuelService.cs:1" }, sites.ToArray(), "a second place that makes a permit is a second way to refuel");
+            Assert.IsEmpty(strays, "a second place that names the permit or refills a tank is a second way to refuel");
+            Assert.AreEqual(1, inService.Count(l => l.Contains(".Refill(")), "the service calls the refill once");
+            Assert.AreEqual(1, inService.Count(l => l.Contains("new Permit(")), "and makes its permit in one place");
+        }
+
+        // counts every rise of a tank, and in which task state the step that raised it started
+        sealed class FuelLedger
+        {
+            readonly Rig rig;
+            double last;
+            TaskPhase phase;
+
+            public FuelLedger(Rig rig)
+            {
+                this.rig = rig;
+                last = rig.Model.FuelPct;
+                phase = rig.Controller.Phase;
+            }
+
+            public int Outside, Inside;
+
+            public bool Tick(Func<bool> done = null)
+            {
+                var now = rig.Model.FuelPct;
+                if (now > last + 1e-9)
+                {
+                    if (phase == TaskPhase.Refuelling) Inside++;
+                    else Outside++;
+                }
+
+                last = now;
+                phase = rig.Controller.Phase;
+                return done != null && done();
+            }
+        }
+
+        [Test]
+        public void NoPathThroughTheTaskLayerRaisesAFuelTankOutsideRefuelling()
+        {
+            var r = new Rig();
+            r.Model.Restore(60.0, 1000);
+            var ledger = new FuelLedger(r);
+            Func<Func<bool>, double, bool> go = (done, secs) => r.Run(() => ledger.Tick(done), secs);
+
+            // P: the presenter's low-fuel cycle only ever lowers
+            PresenterActions.PrepareLowFuel(r.Id, r.Model, r.Timeline);
+            Assert.IsTrue(go(() => r.Model.FuelPct < 15.0, 300), "the cycle crosses the line");
+
+            // a command that parks the machine, and G: resume work
+            var area = r.Send("goto-area", Yard);
+            Assert.IsTrue(go(() => area.IsComplete, 1500));
+            Assert.IsNull(r.Controller.Resume());
+            Assert.IsTrue(go(() => r.Controller.Mode == MachineMode.Working, 1500));
+
+            // refused commands of each kind, a supersede of one command by another and a refuel interrupted by a command
+            r.Send("goto-area", "sp-zone-moon");
+            r.Send("self-destruct");
+            var refuel = r.Send("goto-refuel");
+            Assert.IsTrue(go(() => r.Controller.Phase == TaskPhase.Refuelling, 1500));
+            go(() => false, 10);
+            var elsewhere = r.Send("goto-area", Fill);
+            Assert.IsTrue(refuel.IsComplete && !refuel.Completion.Result.Succeeded);
+            Assert.IsTrue(go(() => elsewhere.IsComplete, 1500));
+            Assert.IsNull(r.Controller.Resume());
+            Assert.IsTrue(go(() => r.Controller.Mode == MachineMode.Working, 1500));
+
+            // a refuel that gives up on the bay, one that completes, one cut off by the end of the run
+            r.World.BayBusy = true;
+            var waits = r.Send("goto-refuel");
+            Assert.IsTrue(go(() => waits.IsComplete, 3000));
+            Assert.IsTrue(go(() => r.Controller.Mode == MachineMode.Working, 1500));
+            r.World.BayBusy = false;
+            var served = r.Send("goto-refuel");
+            Assert.IsTrue(go(() => served.IsComplete, 3000));
+            Assert.IsTrue(served.Completion.Result.Succeeded);
+            Assert.IsTrue(go(() => r.Controller.Mode == MachineMode.Working, 1500));
+            var cut = r.Send("goto-refuel");
+            Assert.IsTrue(go(() => r.Controller.Phase == TaskPhase.Refuelling, 1500));
+            go(() => false, 5);
+            Assert.AreEqual(1, r.Controller.FailAll(TaskReasons.Reset));
+            go(() => false, 30);
+
+            Assert.AreEqual(0, ledger.Outside, "no step outside the Refuelling state ever raised a tank: " + Rows(r));
+            Assert.Greater(ledger.Inside, 100, "and the service itself did");
+        }
+
+        [Test]
+        public void ASupersedeDuringServiceStopsTheFuelAndSaysWhereItStopped()
+        {
+            var r = new Rig();
+            r.Model.Restore(14.0, 1000);
+            var old = r.Send("goto-refuel", token: "c-old");
+            Assert.IsTrue(r.Run(() => r.Controller.Phase == TaskPhase.Refuelling));
+            r.Run(() => false, 10);
+            var at = r.Model.FuelPct;
+            Assert.Greater(at, 20.0, "the service is well under way");
+            var ledger = new FuelLedger(r);
+
+            var area = r.Send("goto-area", Yard, "c-area");
+            Assert.IsTrue(old.IsComplete);
+            Assert.IsFalse(old.Completion.Result.Succeeded);
+            Assert.AreEqual("superseded by c-area", old.Completion.Result.Reason);
+            StringAssert.Contains("refuelling: service stopped at " + at.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "% fuel", Rows(r));
+            Assert.IsNull(r.Bay.Holder);
+
+            Assert.IsTrue(r.Run(() => ledger.Tick(() => area.IsComplete)));
+            Assert.IsTrue(area.Completion.Result.Succeeded);
+            Assert.AreEqual(0, ledger.Outside);
+            Assert.AreEqual(0, ledger.Inside, "not one more rise after the supersede");
+            Assert.LessOrEqual(r.Model.FuelPct, at + 1e-9);
         }
 
         [Test]

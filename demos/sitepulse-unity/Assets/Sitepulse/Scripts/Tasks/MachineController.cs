@@ -81,6 +81,7 @@ namespace DeviceChain.Sitepulse.Tasks
         TrackPoint returnPoint;
         double elapsedSim, elapsedWall, budgetSim, capWall, bayWait, returnWall;
         bool reset;
+        bool wasAtBay;   // the task that just ended was at or in the bay (or its queue): a machine left standing there drives out
 
         public MachineController(IMachineBody body, MachineModel model, SiteGeometry site, RouteGraph graph, BayReservations bay, ParkingLot parking, Timeline timeline, ITaskWorld world)
         {
@@ -109,7 +110,10 @@ namespace DeviceChain.Sitepulse.Tasks
         static string F0(double v) => v.ToString("0", CultureInfo.InvariantCulture);
         static string F1(double v) => v.ToString("0.0", CultureInfo.InvariantCulture);
 
-        static string Short(string token) => token == null ? "?" : token.Length > 12 ? token.Substring(0, 12) : token;
+        public const int TokenTail = 10;
+
+        // the END of a token is what tells two commands apart (they share a long prefix)
+        static string Short(string token) => token == null ? "?" : token.Length > TokenTail ? "\u2026" + token.Substring(token.Length - TokenTail) : token;
 
         /// <summary>One line on what the machine is doing, for the timeline panel's header.</summary>
         public string Status()
@@ -159,8 +163,11 @@ namespace DeviceChain.Sitepulse.Tasks
             if (decision.Superseded != null)
             {
                 var reason = TaskReasons.SupersededBy(request.Token);
-                timeline.Add(id, TimelineKinds.Superseded, decision.Superseded.Key + " " + Short(decision.Superseded.Token) + " " + reason);
-                decision.Superseded.Complete(TaskResult.Fail(reason));
+                // only the answer that stands is reported: a command the session had already answered was not superseded by this one
+                if (decision.Superseded.Complete(TaskResult.Fail(reason)))
+                    timeline.Add(id, TimelineKinds.Superseded, decision.Superseded.Key + " " + Short(decision.Superseded.Token) + " " + reason);
+                else
+                    timeline.Add(id, TimelineKinds.Outcome, "dropped: " + decision.Superseded.Key + " " + Short(decision.Superseded.Token) + " had already been answered by the session");
                 ReleaseTask();
             }
 
@@ -175,20 +182,36 @@ namespace DeviceChain.Sitepulse.Tasks
             else Refuse(request, "unknown command " + request.Key);
         }
 
+        // A refused command never took the machine over, so it changes nothing about what the machine is doing: a
+        // truck driving back to its track keeps driving, a parked one keeps its slot. The one exception is the
+        // command it superseded a moment ago: that one's task is already gone, and the machine is left to stand down.
         void Refuse(TaskRequest request, string reason)
         {
             timeline.Add(id, TimelineKinds.Refused, reason);
             request.Complete(TaskResult.Fail(reason));
             arbiter.Finished(request);
+            if (Mode == MachineMode.Commanded && active == null) Stand();
+        }
+
+        /// <summary>No task is running and none will: a machine that was at the bay drives out of it, any other stops where it is.</summary>
+        void Stand()
+        {
             parking.Release(id);
             slot = null;
-            ReleaseTask();
-            if (Mode == MachineMode.Commanded) Mode = MachineMode.Parked;
+            if (wasAtBay)
+            {
+                wasAtBay = false;
+                StartReturn();
+                return;
+            }
+
+            Mode = MachineMode.Parked;
         }
 
         void TakeOver(TaskRequest request, Route route, double shownMetres, double eta, double budget, double cap, string label)
         {
             if (body.Attached) body.Detach();
+            wasAtBay = false;
             active = request;
             Mode = MachineMode.Commanded;
             elapsedSim = elapsedWall = bayWait = 0;
@@ -206,7 +229,8 @@ namespace DeviceChain.Sitepulse.Tasks
                 return;
             }
 
-            var claimed = parking.Claim(id, zone, body.X, body.Z, (x, z) => world.Occupied(id, x, z));
+            var before = slot;
+            var claimed = parking.Claim(id, zone, body.X, body.Z, (x, z) => world.Occupied(id, x, z), ParkingLot.Margin(body.Kind));
             if (claimed == null)
             {
                 Refuse(request, "no free parking slot in " + request.Area);
@@ -216,6 +240,8 @@ namespace DeviceChain.Sitepulse.Tasks
             var route = graph.Plan(body.X, body.Z, claimed.Value.X, claimed.Value.Z);
             if (route == null)
             {
+                parking.Release(id);
+                if (before.HasValue) parking.Hold(id, before.Value);
                 Refuse(request, "no route to " + request.Area);
                 return;
             }
@@ -246,7 +272,8 @@ namespace DeviceChain.Sitepulse.Tasks
             var into = Route.Straight(queue.X, queue.Z, bayAt.X, bayAt.Z, SpeedModel.BayApproachFactor);
             var eta = route.Eta(kin.Cruise) + into.Eta(kin.Cruise);
             Phase = TaskPhase.ToQueue;
-            TakeOver(request, route, route.Length + into.Length, eta, TaskBudgets.EtaFactor * eta + TaskBudgets.BayWaitSeconds + RefuelService.DurationSeconds,
+            // the budget is for the DRIVING; the wait in line has its own limit and the service takes as long as it takes
+            TakeOver(request, route, route.Length + into.Length, eta, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds,
                 TaskBudgets.RefuelWallCapSeconds, "refuel bay");
         }
 
@@ -282,11 +309,20 @@ namespace DeviceChain.Sitepulse.Tasks
         {
             if (active == null)
             {
-                Mode = MachineMode.Parked;
+                Stand();
                 return;
             }
 
-            elapsedSim += simDt;
+            // answered by someone else (the session gave up on it): nothing is waiting on this task any more
+            if (active.IsComplete)
+            {
+                var said = active.Completion.Result;
+                Fail("the session had already answered it (" + (said.Reason ?? "no reason") + ")", false, true);
+                return;
+            }
+
+            // waiting in line and being served are not the machine's travelling: neither runs the simulation-time budget
+            if (Phase != TaskPhase.WaitingForBay && Phase != TaskPhase.Refuelling) elapsedSim += simDt;
             elapsedWall += wallDt;
             if (elapsedWall > capWall)
             {
@@ -384,10 +420,11 @@ namespace DeviceChain.Sitepulse.Tasks
             request.Complete(TaskResult.Ok(note));
         }
 
-        void Fail(string reason, bool stalled)
+        void Fail(string reason, bool stalled, bool answeredElsewhere = false)
         {
             var request = active;
-            timeline.Add(id, TimelineKinds.Outcome, "FAILED: " + reason);
+            var atBay = WantsBay;
+            timeline.Add(id, TimelineKinds.Outcome, (answeredElsewhere ? "DROPPED: " : "FAILED: ") + reason);
             ReleaseTask();
             parking.Release(id);
             slot = null;
@@ -398,11 +435,17 @@ namespace DeviceChain.Sitepulse.Tasks
             if (stalled) timeline.Add(id, TimelineKinds.Stalled, "out of fuel: stopped where it stood");
             arbiter.Finished(request);
             request.Complete(TaskResult.Fail(reason));
+            wasAtBay = false;
+            // a machine that fails at the bay or in its queue drives out: it never stays parked where the next one must stand
+            if (!stalled && atBay) StartReturn();
         }
 
         /// <summary>Gives back what a task held: the bay and the service. (Parking is kept or dropped by the caller.)</summary>
         void ReleaseTask()
         {
+            if (Phase == TaskPhase.Refuelling && service != null && !service.Done)
+                timeline.Add(id, TimelineKinds.Refuelling, "service stopped at " + F1(model.FuelPct) + "% fuel");
+            wasAtBay = WantsBay;
             bay.Release(id);
             service = null;
             follow.Clear();
@@ -492,11 +535,11 @@ namespace DeviceChain.Sitepulse.Tasks
 
         // ---------------------------------------------------------------- the run ends
 
-        /// <summary>The simulation is ending: the running command (if any) is answered failed, and nothing new will run.</summary>
-        public void FailAll(string reason)
+        /// <summary>The simulation is ending: the running command (if any) is answered failed, and nothing new will run. Returns how many it answered (0 or 1).</summary>
+        public int FailAll(string reason)
         {
             reset = true;
-            if (active == null) return;
+            if (active == null) return 0;
             var request = active;
             timeline.Add(id, TimelineKinds.Reset, reason);
             ReleaseTask();
@@ -504,7 +547,8 @@ namespace DeviceChain.Sitepulse.Tasks
             slot = null;
             arbiter.Finished(request);
             Mode = MachineMode.Parked;
-            request.Complete(TaskResult.Fail(reason));
+            wasAtBay = false;
+            return request.Complete(TaskResult.Fail(reason)) ? 1 : 0;
         }
     }
 }

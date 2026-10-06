@@ -195,6 +195,8 @@ namespace DeviceChain.Sitepulse.App
         {
             PlatformLog.Error(title + ": " + message);
             stopped = true;
+            // nothing will step the task layer or drain the plane again: whatever is running or waiting is answered now
+            Teardown();
             HideCards();
             hud.SetBanner(null);
             hud.SetBadge("LIVE · not running", BadgeTone.Error);
@@ -475,8 +477,8 @@ namespace DeviceChain.Sitepulse.App
             plane = null;
             // the run is over: whatever a machine was doing is answered failed (reset), the handlers are given a
             // moment to return and the SDK to publish what they returned, and only then do the sessions go
-            director?.FailAll();
-            var unanswered = p.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(300));
+            var answered = director != null ? director.FailAll() : 0;
+            var unanswered = p.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(300), answered);
             if (unanswered > 0) PlatformLog.Warn($"{unanswered} command handler(s) had not returned when the sessions were closed");
             if (!p.Shutdown(DeviceFleet.DisposeTimeout + TimeSpan.FromSeconds(1)))
                 PlatformLog.Warn("device sessions did not all close in time");

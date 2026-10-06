@@ -134,7 +134,12 @@ namespace DeviceChain.Sitepulse.Platform
                 var rows = ObserverQueries.ParseCommands(data, clock());
                 all.AddRange(rows);
                 if (rows.Count < PageSize) break;
-                if (page == MaxPages) truncated = true;
+                if (page == MaxPages)
+                {
+                    // a full last page is not "more": it is only more when one row follows it
+                    var next = await commands(ObserverQueries.CommandsQuery(false), ListVariables(page + 1), ct).ConfigureAwait(false);
+                    truncated = ObserverQueries.ParseCommands(next, clock()).Count > 0;
+                }
             }
 
             return Plan(all, truncated);

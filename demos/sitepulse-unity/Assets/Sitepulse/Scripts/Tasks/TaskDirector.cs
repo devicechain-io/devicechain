@@ -88,11 +88,13 @@ namespace DeviceChain.Sitepulse.Tasks
             foreach (var id in order) controllers[id].Step(simDt, wallDt);
         }
 
-        /// <summary>The run is ending: every running task is answered with <paramref name="reason"/>, and later commands are too.</summary>
-        public void FailAll(string reason = TaskReasons.Reset)
+        /// <summary>The run is ending: every running task is answered with <paramref name="reason"/>, and later commands are too. Returns how many tasks it answered.</summary>
+        public int FailAll(string reason = TaskReasons.Reset)
         {
             reset = true;
-            foreach (var id in order) controllers[id].FailAll(reason);
+            var answered = 0;
+            foreach (var id in order) answered += controllers[id].FailAll(reason);
+            return answered;
         }
 
         public bool IsReset => reset;

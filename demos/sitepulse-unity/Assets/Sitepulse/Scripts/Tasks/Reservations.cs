@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Sitepulse.Simulation;
 
 namespace DeviceChain.Sitepulse.Tasks
 {
@@ -71,26 +72,43 @@ namespace DeviceChain.Sitepulse.Tasks
     }
 
     /// <summary>
-    /// Parking slots inside a zone: a grid inset from the zone's edge, nearest the way in first, claimed
-    /// by one machine each. A machine that leaves (a new command, resumed work) gives its slot back.
+    /// Parking slots inside a zone: a grid inset from the zone's edge so that the machine's whole footprint
+    /// (<see cref="Margin"/>) stays inside it, nearest the way in first, claimed by one machine each. A machine
+    /// that leaves (a new command, resumed work) gives its slot back.
     /// </summary>
     public sealed class ParkingLot
     {
         public const double Spacing = 14.0, Inset = 8.0, ClearRadius = 6.0;
 
+        /// <summary>How long a machine is, in metres (its pose is its middle), for how far from a zone's edge it must park.</summary>
+        public static double LengthOf(EquipmentKind kind)
+        {
+            switch (kind)
+            {
+                case EquipmentKind.Hauler: return 12.0;
+                case EquipmentKind.Loader: return 10.0;
+                default: return 8.0;
+            }
+        }
+
+        /// <summary>The nearest a machine of this kind parks to its zone's edge: half its length and a metre more, and never nearer than <see cref="Inset"/>.</summary>
+        public static double Margin(EquipmentKind kind) => Math.Max(Inset, LengthOf(kind) / 2.0 + 1.0);
+
         readonly Dictionary<string, string> claims = new Dictionary<string, string>(StringComparer.Ordinal); // "zone#index" -> owner
         readonly Dictionary<string, string> byOwner = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        /// <summary>Every slot of a zone, nearest (<paramref name="gateX"/>, <paramref name="gateZ"/>) first.</summary>
-        public static List<ParkingSlot> Slots(Rect2 zone, double gateX, double gateZ)
+        /// <summary>
+        /// Every slot of a zone, nearest (<paramref name="gateX"/>, <paramref name="gateZ"/>) first, each at least
+        /// <paramref name="margin"/> from the zone's edge. A zone too small for that has no slots: nothing is parked half outside it.
+        /// </summary>
+        public static List<ParkingSlot> Slots(Rect2 zone, double gateX, double gateZ, double margin = Inset)
         {
             var slots = new List<ParkingSlot>();
-            var x0 = zone.X0 + Inset;
-            var x1 = zone.X1 - Inset;
-            var z0 = zone.Z0 + Inset;
-            var z1 = zone.Z1 - Inset;
-            if (x1 < x0) x0 = x1 = zone.CentreX;
-            if (z1 < z0) z0 = z1 = zone.CentreZ;
+            var x0 = zone.X0 + margin;
+            var x1 = zone.X1 - margin;
+            var z0 = zone.Z0 + margin;
+            var z1 = zone.Z1 - margin;
+            if (x1 < x0 || z1 < z0) return slots;
             var nx = (int)Math.Floor((x1 - x0) / Spacing) + 1;
             var nz = (int)Math.Floor((z1 - z0) / Spacing) + 1;
             // spread the grid across the inset area, so a zone of one slot parks in its middle
@@ -112,21 +130,33 @@ namespace DeviceChain.Sitepulse.Tasks
         /// <summary>
         /// The first slot of the zone nobody holds and nothing stands on (<paramref name="occupied"/> says whether
         /// something stands within <see cref="ClearRadius"/> of a point), claimed for <paramref name="owner"/>;
-        /// null when the zone is full. An owner holds one slot: a claim replaces its last.
+        /// null when the zone is full. An owner holds one slot: a claim that succeeds replaces its last, and one
+        /// that fails leaves it where it was.
         /// </summary>
-        public ParkingSlot? Claim(string owner, Rect2 zone, double gateX, double gateZ, Func<double, double, bool> occupied)
+        public ParkingSlot? Claim(string owner, Rect2 zone, double gateX, double gateZ, Func<double, double, bool> occupied, double margin = Inset)
         {
-            Release(owner);
-            foreach (var slot in Slots(zone, gateX, gateZ))
+            foreach (var slot in Slots(zone, gateX, gateZ, margin))
             {
-                if (claims.ContainsKey(Key(slot.Zone, slot.Index))) continue;
+                var key = Key(slot.Zone, slot.Index);
+                if (claims.TryGetValue(key, out var holder) && holder != owner) continue;
                 if (occupied != null && occupied(slot.X, slot.Z)) continue;
-                claims[Key(slot.Zone, slot.Index)] = owner;
-                byOwner[owner] = Key(slot.Zone, slot.Index);
+                Release(owner);
+                claims[key] = owner;
+                byOwner[owner] = key;
                 return slot;
             }
 
             return null;
+        }
+
+        /// <summary>Gives an owner back exactly this slot (when nobody else holds it), after a claim it could not use.</summary>
+        public void Hold(string owner, ParkingSlot slot)
+        {
+            var key = Key(slot.Zone, slot.Index);
+            if (claims.TryGetValue(key, out var holder) && holder != owner) return;
+            Release(owner);
+            claims[key] = owner;
+            byOwner[owner] = key;
         }
 
         public void Release(string owner)

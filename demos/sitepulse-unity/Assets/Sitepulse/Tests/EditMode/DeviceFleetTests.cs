@@ -869,11 +869,48 @@ namespace DeviceChain.Sitepulse.Tests
             var handler = c.Factory.Links["SP-HL-0005"].Handler;
             var t = Task.Run(() => handler(new DeviceCommand("c-1", "goto-refuel", null, 1), CancellationToken.None));
             Assert.IsTrue(WaitRunning(c, "SP-HL-0005", "c-1"));
-            c.Director.FailAll();
-            var unanswered = c.Fleet.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.Zero);
+            var answered = c.Director.FailAll();
+            Assert.AreEqual(1, answered, "the running command was answered by the task layer's reset");
+            var unanswered = c.Fleet.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.Zero, answered);
             Assert.AreEqual(0, unanswered, "every handler has returned");
             Assert.IsTrue(t.IsCompleted);
             Assert.AreEqual("simulation reset before completion", t.Result.Error);
+        }
+
+        [Test]
+        public void AShutdownAnswersACommandThatWasPostedAndNeverDrained()
+        {
+            using var c = Commanded();
+            var handler = c.Factory.Links["SP-HL-0005"].Handler;
+            var t = Task.Run(() => handler(new DeviceCommand("c-1", "goto-refuel", null, 1), CancellationToken.None));
+            Assert.IsTrue(WaitFor(() => c.Fleet.Inbox.Pending == 1), "the handler posted its request; nothing pumps the plane again");
+            var answered = c.Director.FailAll();
+            Assert.AreEqual(0, answered, "the task layer never saw it");
+            var unanswered = c.Fleet.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.Zero, answered);
+            Assert.AreEqual(0, unanswered);
+            Assert.IsTrue(t.Wait(2000), "the handler returned");
+            Assert.AreEqual("simulation reset before completion", t.Result.Error);
+        }
+
+        [Test]
+        public void TheShutdownGraceIsGivenWhenAnythingWasAnsweredEvenIfEveryHandlerHasAlreadyReturned()
+        {
+            using var c = Commanded();
+            var handler = c.Factory.Links["SP-HL-0005"].Handler;
+            var t = Task.Run(() => handler(new DeviceCommand("c-1", "goto-refuel", null, 1), CancellationToken.None));
+            Assert.IsTrue(WaitRunning(c, "SP-HL-0005", "c-1"));
+            var answered = c.Director.FailAll();
+            Assert.AreEqual(1, answered);
+            Assert.IsTrue(t.Wait(5000), "the handler returned on its own, before the shutdown looked");
+            Assert.AreEqual(0, c.Fleet.Hosts.Sum(h => h.CommandsInFlight));
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Assert.AreEqual(0, c.Fleet.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(400), answered));
+            Assert.GreaterOrEqual(sw.ElapsedMilliseconds, 350, "its answer still has to be published before the session closes");
+
+            sw.Restart();
+            Assert.AreEqual(0, c.Fleet.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(400), 0));
+            Assert.Less(sw.ElapsedMilliseconds, 300, "with nothing answered and nothing in flight there is nothing to wait for");
         }
     }
 }

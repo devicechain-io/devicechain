@@ -286,6 +286,12 @@ namespace DeviceChain.Sitepulse.Tests
             }
         }
 
+        // the permit is abstract: the program has one heir (the refuel service's own); this one is the model's test double
+        sealed class TestPermit : RefuelPermit
+        {
+            public TestPermit(string deviceId, double targetPct) : base(deviceId, targetPct) { }
+        }
+
         [Test]
         public void APermitedRefillDoesRaiseFuelSoTheGuardIsTheOnlyPath()
         {
@@ -293,18 +299,18 @@ namespace DeviceChain.Sitepulse.Tests
             for (var i = 0; i < 7200; i++) m.Step(1, new MachineInput(3, true));
             var low = m.FuelPct;
 
-            var permit = new RefuelPermit("SP-HL-0001", 95.0);
+            var permit = new TestPermit("SP-HL-0001", 95.0);
             m.Refill(permit);
             Assert.AreEqual(95.0, m.FuelPct, 1e-9);
             Assert.Greater(m.FuelPct, low);
 
             Assert.Throws<InvalidOperationException>(() => m.Refill(permit), "a permit is single use");
-            Assert.Throws<InvalidOperationException>(() => m.Refill(new RefuelPermit("SP-HL-0002", 95.0)), "and names one device");
+            Assert.Throws<InvalidOperationException>(() => m.Refill(new TestPermit("SP-HL-0002", 95.0)), "and names one device");
             Assert.Throws<ArgumentNullException>(() => m.Refill(null));
-            Assert.Throws<InvalidOperationException>(() => new MachineModel(EquipmentKind.Plant, "SP-PL-0001").Refill(new RefuelPermit("SP-PL-0001", 90)));
+            Assert.Throws<InvalidOperationException>(() => new MachineModel(EquipmentKind.Plant, "SP-PL-0001").Refill(new TestPermit("SP-PL-0001", 90)));
 
             // a permit never lowers the tank
-            m.Refill(new RefuelPermit("SP-HL-0001", 10.0));
+            m.Refill(new TestPermit("SP-HL-0001", 10.0));
             Assert.AreEqual(95.0, m.FuelPct, 1e-9);
         }
 

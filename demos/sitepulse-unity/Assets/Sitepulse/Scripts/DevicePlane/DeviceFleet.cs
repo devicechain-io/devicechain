@@ -283,19 +283,23 @@ namespace DeviceChain.Sitepulse.DevicePlane
         }
 
         /// <summary>
-        /// The end of a run, before the sessions go: answers every command still queued for the main thread, then gives
-        /// the handlers that are waiting on the simulation (already answered, by the task layer's own reset) up to
-        /// <paramref name="timeout"/> to return, and the SDK a short moment to publish what they returned. Call it
-        /// after the task layer has failed its running tasks. Blocks the calling thread; returns how many handlers had not returned.
+        /// The end of a run, before the sessions go: answers every command still queued for the main thread (again on
+        /// every pass, so one a handler posts a moment late is answered too), then gives the handlers that are waiting
+        /// on the simulation up to <paramref name="timeout"/> to return, and the SDK a short moment
+        /// (<paramref name="publishGrace"/>) to publish what they returned. The grace is given whenever any command was
+        /// answered at all (<paramref name="answeredByTaskLayer"/> is what the task layer's own reset answered, and
+        /// the queued ones are counted here) or any handler was still in flight: a handler that has already returned
+        /// has still to have its answer published. Call it after the task layer has failed its running tasks. Blocks
+        /// the calling thread; returns how many handlers had not returned.
         /// </summary>
-        public int QuiesceCommands(TimeSpan timeout, TimeSpan publishGrace)
+        public int QuiesceCommands(TimeSpan timeout, TimeSpan publishGrace, int answeredByTaskLayer)
         {
-            inbox.FailQueuedTasks(TaskReasons.Reset);
             var deadline = DateTime.UtcNow + timeout;
             var pending = 0;
-            var any = false;
+            var any = answeredByTaskLayer > 0;
             while (true)
             {
+                if (inbox.FailQueuedTasks(TaskReasons.Reset) > 0) any = true;
                 pending = 0;
                 foreach (var h in hosts) pending += h.CommandsInFlight;
                 if (pending > 0) any = true;
