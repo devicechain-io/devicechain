@@ -12,6 +12,13 @@
 #   live-env.sh sample <label> <seconds> <interval>
 #                                 footprint: docker stats of the node, the runner, the VM
 #   live-env.sh verify            confirms the scenario's objects through the platform GraphQL
+#   live-env.sh replicas [<deploy>]
+#                                 read-only: the instance namespace's deployments as "name desired ready", or
+#                                 one of them (an acceptance control reads the count it must put back)
+#   live-env.sh scale <deploy> <n>
+#                                 set one deployment's replica count in the instance namespace (the observer-outage
+#                                 acceptance control scales event-management to 0 and back). Only ever the
+#                                 isolated cluster: kubectl is pinned to its context and kubeconfig.
 #
 # What `up` builds:
 #
@@ -462,6 +469,36 @@ except OSError:
 PY
 }
 
+# replicas: read-only. No argument lists every deployment of the instance namespace; one names a deployment.
+cmd_replicas() {
+	local deploy="${1:-}"
+	[ "$(container_state "$NODE")" = running ] || die "the node $NODE is not running"
+	if [ -z "$deploy" ]; then
+		kc -n "$NS" get deploy -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.replicas}{" "}{.status.readyReplicas}{"\n"}{end}'
+		return
+	fi
+	valid_deploy "$deploy"
+	kc -n "$NS" get deploy "$deploy" -o 'jsonpath={.metadata.name}{" "}{.spec.replicas}{" "}{.status.readyReplicas}{"\n"}'
+}
+
+valid_deploy() {
+	[[ "$1" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || die "'$1' is not a deployment name"
+}
+
+# scale: the one mutation of the cluster this script offers beyond up/down. It names its deployment and its
+# count, and refuses anything that is not a small non-negative integer.
+cmd_scale() {
+	local deploy="${1:-}" n="${2:-}"
+	[ -n "$deploy" ] && [ -n "$n" ] || die "usage: $0 scale <deploy> <n>"
+	valid_deploy "$deploy"
+	[[ "$n" =~ ^[0-9]{1,2}$ ]] || die "'$n' is not a replica count (0-99)"
+	[ "$(container_state "$NODE")" = running ] || die "the node $NODE is not running"
+	[ "$(spenv kubectl config current-context)" = "kind-$CLUSTER" ] || die "isolated kubeconfig does not point at kind-$CLUSTER"
+	kc -n "$NS" get deploy "$deploy" >/dev/null || die "no deployment $deploy in $NS"
+	log "scaling $NS/$deploy to $n"
+	kc -n "$NS" scale deploy "$deploy" --replicas="$n" >/dev/null
+}
+
 cmd_verify() {
 	need python3
 	exec python3 "$(dirname "$0")/live-env-verify.py"
@@ -483,8 +520,16 @@ sample)
 	cmd_sample "$@"
 	;;
 verify) cmd_verify ;;
+replicas)
+	shift
+	cmd_replicas "$@"
+	;;
+scale)
+	shift
+	cmd_scale "$@"
+	;;
 *)
-	echo "usage: $0 up | status | down [--stop] | runner stop|start | sample <label> [seconds] [interval] | verify" >&2
+	echo "usage: $0 up | status | down [--stop] | runner stop|start | sample <label> [seconds] [interval] | verify | replicas [<deploy>] | scale <deploy> <n>" >&2
 	exit 2
 	;;
 esac

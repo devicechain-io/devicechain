@@ -262,6 +262,7 @@ tools/phase-a-acceptance.sh --build editor|batch      # build the player first (
 tools/phase-a-acceptance.sh                           # the run, with the player already built
 tools/phase-a-acceptance.sh --controls                # the run, then every negative control
 tools/phase-a-acceptance.sh --controls-only
+tools/phase-a-acceptance.sh --soak [MINUTES]          # the soak (default 30): a long Live run of its own (see below)
 ```
 
 The player is built by `DeviceChain.Sitepulse.EditorTools.BuildPlayer.Windows64Il2Cpp` (Windows x64,
@@ -306,10 +307,58 @@ runner is stopped for a minute while the fleet runs: observation goes on, becaus
 platform and not the runner, so no banner appears within the operator token's 15 minutes; the control
 records that and does not exercise the token's expiry).
 
+Phase B adds three controls to the list (`rule-disabled`, `redelivery`, `observer-outage`), each of which
+changes, or would change, something other than the player:
+
+- `rule-disabled`: the checker records the equipment profile's state (the rule's flag and definition, the active
+  version) in `rule-state.json`, then disables `sp-rule-lowfuel` on the draft and publishes (the platform's own
+  authoring calls), and confirms through `ruleHealth` that the engine no longer runs it while the other two
+  rules still do. Only then does it write `phaseA-go`; the player prepares a low tank on SP-HL-0006, as **P**
+  does. The player judges: the tank crossed 15 %; its own timeline holds no received, accepted, serviced or arrived
+  row; the truck never left its routine track or queued for the bay; the tank never rose; and the observer saw the
+  platform's own fuel reading below 15 % with no low-fuel alarm and no command. The checker adds the platform's
+  side: no command created for the device in the window, no low-fuel alarm raised, a stored fuel series that
+  crossed 15 % and never rose. Then the rule is put back: the draft re-enabled and the profile rolled back to the
+  version it was (a non-destructive pointer flip; the extra published version stays in the history, as published
+  versions do), and the checker verifies the draft, the active version, the definition and `ruleHealth`. The
+  restore runs from a `finally` in the checker and again from a trap in the script, from the undo record; a
+  restore that does not verify fails the run and keeps the record. After the restore the checker also confirms the
+  platform did not send the (now stopped) device anything.
+- `redelivery` is **not run live and not faked**: it is recorded as an info item in `SUMMARY.md`. A redelivery over
+  MQTT is the broker re-sending a QoS 1 command the device never acknowledged; the platform's stranded-SENT
+  reconciler acts on LwM2M devices only, nothing else re-dispatches a SENT command, and the Sitepulse sessions run
+  `MaxConcurrentCommands = 4`, so the SDK acknowledges a command as it admits it. A live run therefore has no honest
+  trigger, and a fault that held an acknowledgement back would be inventing the behaviour it claims to test. The
+  property is proven where it can be driven without faking, in the SDK's tests (`MqttRealBrokerTests` against a real
+  nats-server MQTT gateway, and `MqttDeviceSessionTests`).
+- `observer-outage`: on the isolated `sitepulse` cluster only (through `live-env.sh`, which pins its kubeconfig and
+  context), the checker scales `event-management` to zero for about 40 s once the player reports a steady Live
+  stream, then back to the replica count it read first (`live-env.sh replicas`, `live-env.sh scale`), with the same
+  undo-record-first and verify discipline (`scale-pending.tsv`). The player judges: the measurement stream left
+  Live; the banner said "Observer reconnecting — values frozen"; no card value or dot read fresh, and every value was
+  grey 20 s in; every device kept publishing (no send errors); the stream returned to Live with a counted reconnect
+  and a snapshot refresh; the banner went away; and all 19 devices were observed again within 60 s. The checker
+  adds that the stream was Live within 120 s of the deployment returning, and that every sample published during
+  the outage is stored once event-management is back.
+
+`--soak [MINUTES]` (default 30) is the Phase C stability gate, one long Live run of all 18 machines with all 19
+devices and no fault. The probe prepares a low tank on a different truck every 6 minutes (SP-HL-0006, -0005, ...), so
+several real low-fuel -> platform `goto-refuel` -> refuel cycles run, and samples every device twice a second. The
+player asserts: each cycle's device log (received, accepted, serviced, SUCCESS); the plane held 19 sessions
+throughout; every device stayed observed with no gap over 15 s; no outbound sample dropped; the bay is free, empty
+and was never held past its budget, and no truck is left off its track. The checker asserts, from the platform:
+every `goto-refuel` it created is SUCCESSFUL (and there is one per cycle); no command is left non-terminal and none
+ended otherwise; no low-fuel alarm is still active; the platform's own presence shows all 19 active; and every
+emitted sample is stored. It records, in `soak/soak.json` and a SUMMARY table: frame time p50/p95/p99 (the probe
+samples `Time.unscaledDeltaTime` every frame once the fleet is up), observation lag p50/p95 (observed receivedAt
+minus occurredTime of each streamed measurement), the player's working set every minute (read from Windows with
+`Get-Process`), the publish rate each device actually achieved, per-minute sessions/observed/dropped/bay, and the
+reference hardware (CPU, GPU, RAM, OS from Windows). A soak shorter than 6 minutes is stretched to hold its one cycle.
+
 The injected faults are flags that only exist under `-sitepulse-acceptance`: `-sitepulse-control <spec>`
 alone is a startup error, and a control run says so in the badge (amber, `ACCEPTANCE CONTROL ...`), in the
-log and in `phaseA-result.json`. The checker's pure parts have unit tests: `cd tools && python3 -m unittest
-test_phase_a_check`.
+log and in `phaseA-result.json`. The checker's pure parts have unit tests: `cd tools && python3 -m unittest`
+(`test_phase_a_check`, `test_phase_b_check`).
 
 ## Recording, replay and rendering
 

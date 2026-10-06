@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -598,6 +599,12 @@ def bundle(d, header_path):
             with open(os.path.join(sub, n), encoding="utf-8") as f:
                 doc = json.load(f)
             sections.append((doc["title"], [Item(i["id"], i["description"], i["pass"], i["detail"]) for i in doc["items"]]))
+    soak_dir = os.path.join(d, "soak")
+    if os.path.isdir(soak_dir):
+        for n in sorted(x for x in os.listdir(soak_dir) if x.startswith("checker-") and x.endswith(".json")):
+            with open(os.path.join(soak_dir, n), encoding="utf-8") as f:
+                doc = json.load(f)
+            sections.append((doc["title"], [Item(i["id"], i["description"], i["pass"], i["detail"]) for i in doc["items"]]))
     every = [i for _, items in sections for i in items]
     ok = overall(every)
     header = ""
@@ -612,6 +619,11 @@ def bundle(d, header_path):
             mark = "PASS" if i.ok else ("FAIL" if i.ok is False else "info")
             lines.append(f"| {mark} | {i.description} (`{i.id}`) | {i.detail.replace('|', '/').replace(chr(10), ' ')} |")
         lines.append("")
+    soak_json = os.path.join(soak_dir, "soak.json")
+    if os.path.exists(soak_json):
+        import phase_b_check as b
+        with open(soak_json, encoding="utf-8") as f:
+            lines += b.soak_section(json.load(f)) + [""]
     with open(os.path.join(d, "SUMMARY.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     with open(os.path.join(d, "report.json"), "w", encoding="utf-8") as f:
@@ -782,6 +794,9 @@ def run_control(args, platform, since_dt):
     d = args.dir
     if kind == "runner-stop":
         return run_runner_stop(args, platform, since_dt)
+    if kind in ("rule-disabled", "observer-outage"):
+        import phase_b_check as b
+        return (b.run_rule_disabled if kind == "rule-disabled" else b.run_observer_outage)(args, platform, since_dt)
 
     say(f"control {args.control}: waiting for the player's verdict")
     final = wait_result(d, lambda r: bool(r.get("final")), args.finish_timeout + 120)
@@ -877,9 +892,30 @@ def run_unknown_command(args, platform, since_dt):
 # ---------------------------------------------------------------------------------------------
 
 
+def restore_mode(args):
+    """rule-restore / scale-restore: put back what a control changed. Silent when there is nothing to undo."""
+    import phase_b_check as b
+    if args.mode == "rule-restore":
+        items = b.restore_rule(Platform(args.runner), args.state)
+    else:
+        items = b.restore_scale(args.live_env, args.state)
+    if not items:
+        print("nothing to restore")
+        return 0
+    ok = overall(items)
+    out = args.out or os.path.dirname(args.state)
+    doc = {"title": f"Sitepulse restore after a control ({args.mode})", "pass": ok, "since": iso(datetime.datetime.now(datetime.timezone.utc)),
+           "items": [i.as_dict() for i in items], "report": {}}
+    with open(os.path.join(out, f"checker-{args.mode}.json"), "w", encoding="utf-8") as f:
+        f.write(redact(json.dumps(doc, indent=2, default=str)))
+    for i in items:
+        print(f"{'PASS' if i.ok else ('FAIL' if i.ok is False else 'info')}  {i.id}: {i.detail}")
+    return 0 if ok else 1
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["run", "control", "unknown-command", "leakscan", "bundle", "stamp-build", "build-current"])
+    p.add_argument("mode", choices=["run", "control", "unknown-command", "leakscan", "bundle", "stamp-build", "build-current", "soak", "rule-restore", "scale-restore"])
     p.add_argument("--files", nargs="*", default=[], help="leakscan: the files to scan")
     p.add_argument("--info", help="stamp-build, build-current: the build-info.json")
     p.add_argument("--commit", help="stamp-build: the commit built from (written as 12 characters)")
@@ -891,7 +927,11 @@ def main(argv=None):
     p.add_argument("--dir", help="the evidence directory the player writes its files into")
     p.add_argument("--runner", default="http://localhost:8090")
     p.add_argument("--since", help="RFC 3339 instant the run began (events before it are not this run's)")
-    p.add_argument("--control", help="bogus-binding:<id> | bad-credential:<id> | wrong-ca | runner-stop")
+    p.add_argument("--control", help="bogus-binding:<id> | bad-credential:<id> | wrong-ca | runner-stop | rule-disabled | observer-outage")
+    p.add_argument("--state", help="rule-restore: the rule-state.json; scale-restore: the scale-pending.tsv")
+    p.add_argument("--soak-minutes", type=int, default=30, help="soak: how long the Live run lasts")
+    p.add_argument("--outage-seconds", type=float, default=40, help="observer-outage: how long the deployment stays at zero")
+    p.add_argument("--outage-deploy", default="event-management", help="observer-outage: the deployment scaled to zero")
     p.add_argument("--live-env", help="path of live-env.sh (runner-stop only)")
     p.add_argument("--out", help="where to write report.json and SUMMARY.md (default --dir)")
     p.add_argument("--reach-timeout", type=float, default=240)
@@ -922,6 +962,11 @@ def main(argv=None):
                 f.write("\t".join(["PASS" if item.ok else "FAIL", item.id, item.description, item.detail]) + "\n")
         return 0 if item.ok else 1
 
+    # a SIGTERM (the script stopping a checker whose player crashed) must still run the finally blocks that put the platform back
+    signal.signal(signal.SIGTERM, lambda _sig, _frame: sys.exit(143))
+    if args.mode in ("rule-restore", "scale-restore"):
+        return restore_mode(args)
+
     since_dt = parse_time(args.since) if args.since else datetime.datetime.now(datetime.timezone.utc)
     out = args.out or args.dir
     try:
@@ -932,6 +977,10 @@ def main(argv=None):
         elif args.mode == "control":
             items, report = run_control(args, platform, since_dt)
             title = f"Sitepulse Phase A control: {args.control}"
+        elif args.mode == "soak":
+            import phase_b_check as b
+            items, report = b.run_soak(args, platform, since_dt)
+            title = f"Sitepulse soak: {args.soak_minutes} minute(s) of Live"
         else:
             items, report = run_unknown_command(args, platform, since_dt)
             title = "Sitepulse Phase A control: unknown-command"

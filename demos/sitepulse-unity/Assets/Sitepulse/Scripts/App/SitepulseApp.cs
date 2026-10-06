@@ -346,8 +346,33 @@ namespace DeviceChain.Sitepulse.App
                 SamplePath = Path.Combine(dir, PhaseAProbe.SampleFile),
                 SampleLines = () => sampleLog?.Lines ?? 0,
                 UnityVersion = Application.unityVersion,
+                CardStreamLive = () => overlay != null && overlay.Source != null ? overlay.Source.StreamLive : (bool?)null,
+                Observer = observerStatus,
+                Machine = ProbeMachine,
+                Bay = () => director != null ? new BayView(director.Bay.Holder, director.Bay.Waiting) : (BayView?)null,
+                SessionCount = () => plane != null ? plane.Hosts.Count : 0,
+                DroppedSamples = () => SumOverHosts(h => h.Ring.Dropped),
+                SendErrors = () => SumOverHosts(h => h.SendErrors),
+                FrameSeconds = () => Time.unscaledDeltaTime,
             };
             probe = new PhaseAProbe(acceptance, world, appStartedAt, null, PlatformLog.Info);
+        }
+
+        // a machine's controller state and its own tank, for the acceptance probe; null while it has no session or no task layer
+        MachineView? ProbeMachine(string id)
+        {
+            if (director == null || plane == null || !director.TryController(id, out var controller)) return null;
+            foreach (var host in plane.Hosts)
+                if (host.ExternalId == id) return new MachineView(controller.Mode, controller.Phase, host.Simulation.Model.FuelPct, controller.WantsBay);
+            return null;
+        }
+
+        long SumOverHosts(Func<DeviceSessionHost, long> read)
+        {
+            var total = 0L;
+            if (plane == null) return total;
+            foreach (var host in plane.Hosts) total += read(host);
+            return total;
         }
 
         void TickProbe()
