@@ -18,11 +18,12 @@ namespace DeviceChain.Sitepulse.Visuals
     /// geofence round the rim of the cut, its name on the line. One overlay, switched on and off
     /// as a whole (<see cref="show"/>), so the same scene gives clean stills.
     ///
-    /// Each card draws a <see cref="DeviceReading"/> keyed by the platform's measurement keys.
-    /// Until the scene is connected to a DeviceChain instance the readings are illustrative:
-    /// <see cref="UpdateReadings"/> derives them from the preview choreography (whether a truck is
-    /// loaded, how fast it moves, which loader feeds the crusher). Connecting the scene replaces
-    /// that one method with the observed readings; the cards do not change.
+    /// Each card draws a <see cref="DeviceReading"/> keyed by the platform's measurement keys, filled
+    /// by an <see cref="IReadingSource"/> the composition root hands in. The overlay never knows which:
+    /// the illustrative source derives readings from the preview choreography (whether a truck is
+    /// loaded, how fast it moves, which loader feeds the crusher) and is labelled as such; the observed
+    /// source reads what the platform reported. A reading has its source's provenance for life, so a
+    /// value of the other kind cannot reach a card. An observed card shows how fresh each value is.
     ///
     /// Layout is done every frame in screen space: each target's on-screen bounds are taken from
     /// its renderers, its leader lands on the top of those bounds, and its card is placed where it
@@ -59,6 +60,8 @@ namespace DeviceChain.Sitepulse.Visuals
         [Range(0f, 1f)] public float minTargetShare = 0.35f;
         [Tooltip("Card size relative to a 1080-pixel-high frame.")]
         [Range(0.5f, 2f)] public float cardScale = 1f;
+        [Tooltip("The geofence's name on its label: the platform geofence the demo draws is named Pit.")]
+        public string geofenceName = "Pit";
         public Material lineMaterial, ringMaterial;
 
         static readonly Color Panel = new Color(0.06f, 0.08f, 0.10f, 0.96f);
@@ -67,6 +70,8 @@ namespace DeviceChain.Sitepulse.Visuals
         static readonly Color Warn = new Color(1f, 0.70f, 0.12f, 1f);
         static readonly Color Ink = new Color(0.93f, 0.95f, 0.96f, 1f);
         static readonly Color Muted = new Color(0.60f, 0.68f, 0.72f, 1f);
+        static readonly Color Dim = new Color(0.62f, 0.66f, 0.66f, 1f);
+        static readonly Color Grey = new Color(0.40f, 0.44f, 0.46f, 1f);
 
         const float RefH = 1080f;                     // layout units: pixels of a 1080-high frame
         const float CardW = 252f, Pad = 12f, HeadH = 46f, RowH = 23f, AlarmH = 26f, Margin = 18f;
@@ -98,7 +103,7 @@ namespace DeviceChain.Sitepulse.Visuals
             public RectTransform card, panel, edgeRect, leader, pin, dot, alarmBar;
             public Image edge, leaderImage;
             public RawImage dotImage, pinImage;
-            public Text title, kind, alarmText;
+            public Text title, kind, tag, alarmText;
             public readonly Row[] rows = new Row[MaxRows];
             public float height;
 
@@ -130,6 +135,31 @@ namespace DeviceChain.Sitepulse.Visuals
         float clock;
         static Texture2D dotTexture;
         static Font font, mono;
+        IReadingSource source;
+        readonly List<Rect> obstacleScratch = new List<Rect>();
+
+        /// <summary>
+        /// Screen space the overlay must not put a card or the zone's name on: the composition root's own
+        /// HUD (badge, readiness panel, banner). Called each layout with the layout's width (the height is
+        /// 1080) and a list to add rects to, in the same bottom-left-origin units the cards are laid out in.
+        /// </summary>
+        public Action<float, List<Rect>> Obstacles;
+
+        /// <summary>
+        /// Where the cards' values come from. Until the composition root sets one the overlay is
+        /// illustrative, as the scene always was. Changing it drops the cards, which are rebuilt with
+        /// readings of the new source's provenance.
+        /// </summary>
+        public IReadingSource Source
+        {
+            get => source;
+            set
+            {
+                if (ReferenceEquals(source, value)) return;
+                source = value;
+                Clear();
+            }
+        }
 
         /// <summary>The readings the cards show, by device id.</summary>
         public IEnumerable<DeviceReading> Readings
@@ -189,6 +219,7 @@ namespace DeviceChain.Sitepulse.Visuals
         {
             Clear();
             if (!Ready || features == null) return;
+            source ??= new IllustrativeReadingSource(fleet, alarmMachine, alarmKey);
             root = new GameObject("IoT Overlay (generated)") { hideFlags = HideFlags.DontSave };
             root.transform.SetParent(transform, false);
             font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
@@ -213,7 +244,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 foreach (var m in fleet.Machines)
                     if (m.name == id) rig = m;
                 if (rig == null) continue;
-                var reading = new DeviceReading(id, DeviceReading.Profile.Equipment);
+                var reading = new DeviceReading(id, DeviceReading.Profile.Equipment, source.Provenance);
                 var t = new Target
                 {
                     reading = reading, rig = rig, renderers = Lod0(rig.gameObject), cab = CabOf(rig, Lod0(rig.gameObject)),
@@ -227,12 +258,12 @@ namespace DeviceChain.Sitepulse.Visuals
             hopper = plant != null ? FleetRig.Find(plant, "Hopper") : null;
             if (hopper != null)
             {
-                var t = new Target { reading = new DeviceReading(plantId, DeviceReading.Profile.Plant), kindLabel = "Primary crusher" };
+                var t = new Target { reading = new DeviceReading(plantId, DeviceReading.Profile.Plant, source.Provenance), kindLabel = "Primary crusher" };
                 MakeCard(t);
                 targets.Add(t);
             }
 
-            fence = Parse(features.text, out var zone);
+            fence = Parse(features.text, geofenceName, out var zone);
             if (fence.Count > 2 && lineMaterial != null)
             {
                 var go = new GameObject("Geofence") { hideFlags = HideFlags.DontSave };
@@ -314,6 +345,8 @@ namespace DeviceChain.Sitepulse.Visuals
             t.title.text = t.reading.DeviceId;
             t.kind = Label(card, "Kind", Vector2.zero, new Vector2(CardW - 24f, 18f), 14, FontStyle.Normal, Muted);
             t.kind.text = t.kindLabel;
+            t.tag = Label(card, "Tag", Vector2.zero, new Vector2(120f, 18f), 13, FontStyle.Normal, Muted);
+            t.tag.alignment = TextAnchor.UpperRight;
             var dot = new GameObject("Status", typeof(RectTransform)).AddComponent<RawImage>();
             dot.transform.SetParent(card, false);
             dot.texture = dotTexture;
@@ -433,7 +466,7 @@ namespace DeviceChain.Sitepulse.Visuals
         }
 
         /// <summary>The geofence's points and its label from the feature file.</summary>
-        static List<Vector3> Parse(string json, out string label)
+        static List<Vector3> Parse(string json, string name, out string label)
         {
             var fence = new List<Vector3>();
             var f = JsonUtility.FromJson<FeatureFile>(json);
@@ -442,7 +475,7 @@ namespace DeviceChain.Sitepulse.Visuals
             {
                 if (f.geofence.points != null)
                     foreach (var p in f.geofence.points) fence.Add(new Vector3(p.x, p.y, p.z));
-                label = "Geofence  " + f.geofence.token;
+                label = "Geofence  " + name;
             }
             return fence;
         }
@@ -484,79 +517,43 @@ namespace DeviceChain.Sitepulse.Visuals
             UpdateReadings();
         }
 
-        /// <summary>A wheel loader's bucket load (t), and the loader that feeds the crusher.</summary>
-        const float LoaderBucket = 6.2f;
-        const string PlantFeeder = "SP-LD-0003";
-
-        static int Hash(string s)
-        {
-            int h = 17;
-            foreach (char c in s) h = h * 31 + c;
-            return Mathf.Abs(h);
-        }
-
-        /// <summary>
-        /// The illustrative data source: readings derived from the choreography, under the
-        /// platform's measurement keys. This is the one method a live connection replaces.
-        /// </summary>
+        /// <summary>Asks the source to refresh every card's reading, then draws them.</summary>
         void UpdateReadings()
         {
+            var now = DateTimeOffset.UtcNow;
+            var src = source;
+            alarmTarget = null;
             foreach (var t in targets)
             {
-                var r = t.reading;
-                if (t.rig == null)
-                {
-                    // what the feeding loader delivers: a bucket a cycle
-                    float cycle = fleet.CycleOf(PlantFeeder);
-                    float tph = cycle > 0f ? LoaderBucket / cycle * 3600f : 0f;
-                    r.Set(MeasurementKeys.ThroughputTph, Mathf.Round(tph / 10f) * 10f);
-                    r.Set(MeasurementKeys.PlantRunning, tph > 0f);
-                    continue;
-                }
-                var rig = t.rig;
-                int h = Hash(rig.name);
-                bool loaded = rig.Kind == MachineKind.Loader ? rig.boom < -10f : rig.loaded && rig.dump < 2f;
-                float payload = rig.Kind == MachineKind.Loader ? LoaderBucket : 86 + h % 9;
-                r.Set(MeasurementKeys.PayloadT, loaded ? payload : 0f);
-                r.Set(MeasurementKeys.FuelPct, 38 + h % 50);
-                r.Set(MeasurementKeys.EngineTempC, 86 + h % 5 + (loaded ? 5 : 0));
-                r.Set(MeasurementKeys.EngineHours, 4200 + h % 3800);
-                bool alarm = rig.name == alarmMachine;
-                r.Set(MeasurementKeys.TyrePressureKpa, alarm && alarmKey == AlarmKeys.TyrePressureLow ? 540 : 690 + h % 25);
-                r.ClearCommand();
-                if (alarm && alarmKey == AlarmKeys.LowFuel)
-                {
-                    // the low-fuel rule sends the truck to the refuel bay: sent while it drives
-                    // there, successful once it stands in the bay
-                    r.Set(MeasurementKeys.FuelPct, 11);
-                    r.SetCommand(CommandKeys.GotoRefuel, t.speed < 0.3f ? CommandState.Successful : CommandState.Sent);
-                }
-                if (alarm && alarmKey == AlarmKeys.EngineOverheat) r.Set(MeasurementKeys.EngineTempC, 112);
-                r.SpeedKmh = Math.Round(t.speed * 3.6f);
-                r.ClearAlarms();
-                if (alarm) r.Raise(alarmKey);
-                if (alarm) alarmTarget = t;
+                // the choreography's inputs go only to a source that is illustrative; an observed one is handed an id
+                (src as IllustrativeReadingSource)?.SetModel(t.reading.DeviceId, t.rig, t.speed);
+                src.Fill(new ReadingSubject(t.reading.DeviceId), t.reading, now);
+                if (t.rig != null && t.reading.HasAlarm) alarmTarget = t;
             }
-            foreach (var t in targets) Fill(t);
+
+            foreach (var t in targets) Fill(t, now, src.StreamLive);
         }
 
-        /// <summary>Write a reading into its card: the rows it shows, its alarm and its status.</summary>
-        void Fill(Target t)
+        static Color InkOf(RowTone tone) => tone == RowTone.Dim ? Dim : tone == RowTone.Ink ? Ink : tone == RowTone.Warn ? Warn : Grey;
+
+        /// <summary>Write a reading into its card: the rows it shows, its alarm and its status. What each
+        /// row and the status say is decided by <see cref="CardPresenter"/>; this only draws it.</summary>
+        void Fill(Target t, DateTimeOffset now, bool live)
         {
             var r = t.reading;
             int n = 0;
-            string alarmKeyRow = r.HasAlarm ? AlarmKeys.Metric(r.Alarms[0]) : null;
-            // each row: the label a person reads, and the value with its unit; the platform key
-            // stays the data model underneath
-            void RowOf(string label, string value, bool warn = false)
+            bool observed = r.Provenance == Provenance.Observed;
+            string alarmKeyRow = r.HasAlarm ? AlarmKeys.Metric(r.FirstAlarm.Key) : null;
+            void Draw(string label, RowView v)
             {
-                if (n >= MaxRows || value == null) return;
+                if (!v.Shown || n >= MaxRows) return;
                 var row = t.rows[n++];
                 Set(row.label, label);
-                Set(row.value, value);
-                row.value.color = warn ? Warn : Ink;
+                Set(row.value, v.Text);
+                row.value.color = InkOf(v.Tone);
             }
-            void Metric(string key, bool warn = false) => RowOf(MeasurementKeys.Label(key), r.Format(key), warn);
+            DateTimeOffset? StampOf(string key) => r.TryGetStamp(key, out var st) ? st.OccurredAt : (DateTimeOffset?)null;
+            void Metric(string key, bool warn = false) => Draw(MeasurementKeys.Label(key), CardPresenter.Row(observed, r.Format(key), StampOf(key), now, live, warn));
             bool stopped = false;
             if (r.Kind == DeviceReading.Profile.Plant)
             {
@@ -569,8 +566,10 @@ namespace DeviceChain.Sitepulse.Visuals
                 if (alarmKeyRow != null) Metric(alarmKeyRow, warn: true);
                 Metric(MeasurementKeys.PayloadT);
                 if (alarmKeyRow != MeasurementKeys.FuelPct) Metric(MeasurementKeys.FuelPct);
-                RowOf("Speed", r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null);
-                if (r.CommandState.HasValue) RowOf(CommandKeys.Label(r.Command), DeviceReading.Label(r.CommandState.Value));
+                Draw("Speed", CardPresenter.Row(observed, r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null,
+                    r.SpeedStamp?.OccurredAt, now, live, false, FreshnessRule.LocationFreshWithin));
+                if (r.CommandStatus.HasValue)
+                    Draw(CommandKeys.Label(r.Command), CardPresenter.CommandRow(observed, r.CommandStatus.Value.Label, r.CommandStatus.Value.IsTerminal, r.CommandStamp?.ObservedAt, now, live));
             }
             for (int i = 0; i < MaxRows; i++)
             {
@@ -579,8 +578,17 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             bool alarm = r.HasAlarm;
             t.alarmBar.gameObject.SetActive(alarm);
-            if (alarm) Set(t.alarmText, "ALARM  " + AlarmKeys.Label(r.Alarms[0]));
-            var status = alarm ? Warn : (stopped ? Muted : Ok);
+            if (alarm)
+            {
+                var a0 = r.FirstAlarm;
+                Set(t.alarmText, (string.IsNullOrEmpty(a0.Severity) ? "ALARM" : a0.Severity) + "  " + AlarmKeys.Label(a0.Key));
+            }
+
+            var sv = CardPresenter.Status(r.Provenance, r.NewestOccurredAt, now, live, alarm, stopped);
+            var status = sv.Dot == DotTone.Ok ? Ok : sv.Dot == DotTone.Warn ? Warn : sv.Dot == DotTone.Muted ? Muted : Grey;
+            var tag = sv.Tag;
+
+            Set(t.tag, tag);
             t.dotImage.color = status;
             t.edge.color = alarm ? Warn : Accent;
             t.leaderImage.color = alarm ? Warn : Accent;
@@ -602,6 +610,7 @@ namespace DeviceChain.Sitepulse.Visuals
             t.title.rectTransform.anchoredPosition = new Vector2(Pad + 4f, y - Pad - 22f);
             t.dot.anchoredPosition = new Vector2(CardW - Pad - 14f, y - Pad - 17f);
             t.kind.rectTransform.anchoredPosition = new Vector2(Pad + 4f, y - Pad - 40f);
+            t.tag.rectTransform.anchoredPosition = new Vector2(CardW - Pad - 120f, y - Pad - 40f);
             y -= Pad + HeadH;
             for (int i = 0; i < n; i++)
             {
@@ -636,6 +645,7 @@ namespace DeviceChain.Sitepulse.Visuals
             blockers.Clear();
             foreach (var rs in machineRenderers)
                 if (ScreenRect(cam, Bounds(rs), refW, out var r)) blockers.Add(Inflate(r, 4f));
+            AddObstacles(Obstacles, refW, obstacleScratch, blockers);
 
             foreach (var t in targets)
             {
@@ -755,7 +765,7 @@ namespace DeviceChain.Sitepulse.Visuals
         {
             if (t.reading.HasAlarm) return 1e6f;
             if (t.rig == null) return 1e5f;
-            if (t.rig.name == PlantFeeder) return 1e4f + t.screen.height;
+            if (t.rig.name == IllustrativeReadingSource.PlantFeeder) return 1e4f + t.screen.height;
             return t.screen.height;
         }
 
@@ -892,6 +902,15 @@ namespace DeviceChain.Sitepulse.Visuals
                     && p.x < (poly[j].x - poly[i].x) * (p.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x)
                     c = !c;
             return c;
+        }
+
+        /// <summary>Adds the screen space the HUD holds to the layout's blockers, a little inflated so a card clears it.</summary>
+        public static void AddObstacles(Action<float, List<Rect>> obstacles, float frameWidth, List<Rect> scratch, List<Rect> blockers)
+        {
+            if (obstacles == null) return;
+            scratch.Clear();
+            obstacles(frameWidth, scratch);
+            foreach (var o in scratch) blockers.Add(Inflate(o, 6f));
         }
 
         static Rect Inflate(Rect r, float by) => new Rect(r.xMin - by, r.yMin - by, r.width + 2f * by, r.height + 2f * by);

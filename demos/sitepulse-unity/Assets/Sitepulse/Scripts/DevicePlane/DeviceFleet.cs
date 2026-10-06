@@ -207,7 +207,8 @@ namespace DeviceChain.Sitepulse.DevicePlane
                     Retire(host);
                     break;
                 case DeviceEventKind.FirstPublish:
-                    board.SetStage(id, DeviceStage.Publishing);
+                    // the platform may already have reported the device's telemetry: never step back down a rung
+                    if (d.Stage < DeviceStage.Publishing) board.SetStage(id, DeviceStage.Publishing);
                     break;
                 case DeviceEventKind.Command:
                     board.SetCommand(id, e.Text);
