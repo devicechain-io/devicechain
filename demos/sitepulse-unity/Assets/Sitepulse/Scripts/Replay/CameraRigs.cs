@@ -61,8 +61,15 @@ namespace DeviceChain.Sitepulse.Replay
                 {
                     var s = poseOf(c.Target);
                     var yaw = Quaternion.Euler(0f, s.Heading, 0f);
-                    var pos = Where(s) + yaw * new Vector3(c.Side, c.Up, -c.Back);
-                    return new CameraPose(pos, Where(s) + Vector3.up * c.LookHeight, c.Fov);
+                    var w = duration > 0 ? (float)Math.Max(0.0, Math.Min(1.0, t / duration)) : 0f;
+                    w = w * w * (3f - 2f * w);
+                    var back = Mathf.Lerp(c.Back, c.ToBack ?? c.Back, w);
+                    var up = Mathf.Lerp(c.Up, c.ToUp ?? c.Up, w);
+                    var side = Mathf.Lerp(c.Side, c.ToSide ?? c.Side, w);
+                    var look = Mathf.Lerp(c.LookHeight, c.ToLookHeight ?? c.LookHeight, w);
+                    var fov = Mathf.Lerp(c.Fov, c.ToFov ?? c.Fov, w);
+                    var pos = Where(s) + yaw * new Vector3(side, up, -back);
+                    return new CameraPose(pos, Where(s) + yaw * new Vector3(c.LookSide, 0f, 0f) + Vector3.up * look, fov);
                 }
 
                 default:

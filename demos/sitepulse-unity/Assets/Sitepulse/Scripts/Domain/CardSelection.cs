@@ -78,13 +78,22 @@ namespace DeviceChain.Sitepulse.Domain
             }
         }
 
+        static bool IsPinned(IReadOnlyList<string> pinned, string id)
+        {
+            if (pinned == null) return false;
+            for (var i = 0; i < pinned.Count; i++)
+                if (string.Equals(pinned[i], id, StringComparison.Ordinal)) return true;
+            return false;
+        }
+
         /// <summary>Whether a command card is still wanted: in flight now, or finished less than the linger ago.</summary>
         public bool CommandActive(string id, double now) => inFlightAt.TryGetValue(id, out var at) && now - at <= CommandLingerSeconds;
 
         /// <param name="now">Seconds on any steady clock.</param>
         /// <param name="selected">The one selected device, or null.</param>
         /// <param name="chosen">Receives the ids, best first.</param>
-        public void Choose(double now, IReadOnlyList<CardInput> inputs, string selected, List<string> chosen)
+        /// <param name="pinned">Devices shown like the selected one (a rendered shot's list), or null.</param>
+        public void Choose(double now, IReadOnlyList<CardInput> inputs, string selected, List<string> chosen, IReadOnlyList<string> pinned = null)
         {
             chosen.Clear();
             scratch.Clear();
@@ -93,7 +102,7 @@ namespace DeviceChain.Sitepulse.Domain
             foreach (var d in inputs)
             {
                 if (!d.Visible) continue;
-                bool isSelected = selected != null && string.Equals(d.Id, selected, StringComparison.Ordinal);
+                bool isSelected = selected != null && string.Equals(d.Id, selected, StringComparison.Ordinal) || IsPinned(pinned, d.Id);
                 int priority;
                 if (isSelected) priority = SelectedBase;
                 else if (d.AlarmRank > 0) priority = AlarmBase + d.AlarmRank;

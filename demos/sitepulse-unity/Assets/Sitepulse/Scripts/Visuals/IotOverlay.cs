@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using DeviceChain.Demos;
 using DeviceChain.Sitepulse.Domain;
+using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Sitepulse.Tasks;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
@@ -87,7 +89,8 @@ namespace DeviceChain.Sitepulse.Visuals
 
         [Serializable] sealed class Spot { public float x, y, z; }
         [Serializable] sealed class Geofence { public string token; public Spot[] points; }
-        [Serializable] sealed class FeatureFile { public Geofence geofence; }
+        [Serializable] sealed class ZoneEntry { public string token, label; public float[] rect; }
+        [Serializable] sealed class FeatureFile { public Geofence geofence; public ZoneEntry[] zones; }
 
         sealed class Row
         {
@@ -172,8 +175,25 @@ namespace DeviceChain.Sitepulse.Visuals
         float clock;
         static Texture2D dotTexture;
         static Font font, mono;
+
+        /// <summary>The monospaced face the cards' values are set in (the elements added beside the cards use it too).</summary>
+        internal static Font CardMono => mono;
         IReadingSource source;
         readonly List<Rect> obstacleScratch = new List<Rect>();
+        ProofDrawerView drawerView = new ProofDrawerView();
+        MachinePanelView panelView = new MachinePanelView();
+        ChipsView chipsView = new ChipsView();
+        RouteHighlight routeView = new RouteHighlight();
+        readonly List<ZoneLabel> zoneLabels = new List<ZoneLabel>();
+        readonly List<string> machineIds = new List<string>();
+
+        sealed class ZoneLabel
+        {
+            public Vector3 at;
+            public RectTransform chip;
+            public CanvasGroup group;
+            public readonly LabelPlacer placer = new LabelPlacer();
+        }
 
         /// <summary>
         /// Screen space the overlay must not put a card or the zone's name on: the composition root's own
@@ -215,6 +235,32 @@ namespace DeviceChain.Sitepulse.Visuals
 
         /// <summary>Whether a device's own task is still running (its card shows while it is, as it does for a command the platform has not finished). Null: never.</summary>
         public Func<string, bool> TaskRunning;
+
+        /// <summary>
+        /// Which parts of the data layer are drawn: the cards, the proof drawer, the selected-machine panel, the route highlight and the zone
+        /// names. A person at the keyboard starts with the cards and the route; a rendered shot says what it wants (and never the HUD).
+        /// </summary>
+        public OverlayLayers Layers { get; set; } = OverlayLayers.InteractiveDefault;
+
+        /// <summary>Where the proof drawer's rows come from (the live app's log, or a replay's, rebuilt from the recording). Null: no drawer.</summary>
+        public IProofRows Proof { get; set; }
+
+        /// <summary>The route a machine is driving, by id (the task layer's, or a replay's from the recording); null for none.</summary>
+        public Func<string, RoutePolyline> RouteOf { get; set; }
+
+        /// <summary>Devices whose cards show besides alarms, commands and the selected one (a rendered shot's list); null for none.</summary>
+        public IReadOnlyList<string> Pinned { get; set; }
+
+        /// <summary>A rendered shot's chips (small print drawn into the frame) and the seconds into the shot now. Null: none, which is every live and interactive run.</summary>
+        public IReadOnlyList<ChipView> Chips { get; set; }
+
+        public double ShotTime { get; set; }
+
+        /// <summary>A measurement drawn first on the selected machine's card (a shot's <c>featured</c>); null for none.</summary>
+        public string Featured { get; set; }
+
+        /// <summary>Share of the frame's height kept clear at the top and bottom of a portrait frame (platform captions sit there): no card, panel or drawer goes in it.</summary>
+        public Vector2 SafeInsets { get; set; }
 
         /// <summary>The devices that carry a card now, best first.</summary>
         public IReadOnlyList<string> CardIds => chosenIds;
@@ -270,6 +316,13 @@ namespace DeviceChain.Sitepulse.Visuals
             chosenIds.Clear();
             loggedIds.Clear();
             alarmTarget = null;
+            routeView.Clear();
+            drawerView = new ProofDrawerView();
+            panelView = new MachinePanelView();
+            chipsView = new ChipsView();
+            routeView = new RouteHighlight();
+            zoneLabels.Clear();
+            machineIds.Clear();
             if (root != null) DestroyImmediate(root);
             root = null;
         }
@@ -303,6 +356,7 @@ namespace DeviceChain.Sitepulse.Visuals
             foreach (var rig in fleet.Machines)
             {
                 var id = rig.name;
+                machineIds.Add(id);
                 var lod0 = Lod0(rig.gameObject);
                 AddTarget(new Target
                 {
@@ -348,6 +402,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 fenceChipText.text = zone;
                 fenceChip.sizeDelta = new Vector2(fenceChipText.preferredWidth + 24f, 26f);
             }
+            BuildZoneLabels();
             if (ringMaterial != null)
             {
                 var go = new GameObject("Alarm Ring") { hideFlags = HideFlags.DontSave };
@@ -360,6 +415,28 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             UpdateReadings();
             Refresh(Camera.main);
+        }
+
+        /// <summary>One name over each of the site's zones: the platform's own name for the area, the feature file's label where the platform has none.</summary>
+        void BuildZoneLabels()
+        {
+            var file = JsonUtility.FromJson<FeatureFile>(features.text);
+            if (file == null || file.zones == null) return;
+            foreach (var z in file.zones)
+            {
+                if (z.rect == null || z.rect.Length != 4) continue;
+                float cx = (z.rect[0] + z.rect[1]) / 2f, cz = (z.rect[2] + z.rect[3]) / 2f;
+                var chip = Image(canvasRect, "Zone " + z.token, Vector2.zero, new Vector2(10f, 30f), Panel);
+                Image(chip, "Edge", Vector2.zero, new Vector2(4f, 30f), Ok);
+                var text = Label(chip, "Text", new Vector2(14f, 4f), new Vector2(400f, 24f), 19, FontStyle.Bold, Ink);
+                text.text = ZoneNames.Of(z.token, z.label);
+                chip.sizeDelta = new Vector2(text.preferredWidth + 28f, 30f);
+                var group = chip.gameObject.AddComponent<CanvasGroup>();
+                group.interactable = false;
+                group.blocksRaycasts = false;
+                chip.gameObject.SetActive(false);
+                zoneLabels.Add(new ZoneLabel { at = new Vector3(cx, terrain.HeightAt(cx, cz) + 6f, cz), chip = chip, group = group });
+            }
         }
 
         void AddTarget(Target t)
@@ -452,7 +529,7 @@ namespace DeviceChain.Sitepulse.Visuals
             return g;
         }
 
-        static void Place(RectTransform r, Vector2 min, Vector2 size)
+        internal static void Place(RectTransform r, Vector2 min, Vector2 size)
         {
             r.anchorMin = r.anchorMax = Vector2.zero;
             r.pivot = Vector2.zero;
@@ -460,7 +537,7 @@ namespace DeviceChain.Sitepulse.Visuals
             r.sizeDelta = size;
         }
 
-        static RectTransform Image(Transform parent, string name, Vector2 min, Vector2 size, Color color)
+        internal static RectTransform Image(Transform parent, string name, Vector2 min, Vector2 size, Color color)
         {
             var img = new GameObject(name, typeof(RectTransform)).AddComponent<Image>();
             img.transform.SetParent(parent, false);
@@ -470,7 +547,7 @@ namespace DeviceChain.Sitepulse.Visuals
             return img.rectTransform;
         }
 
-        static Text Label(Transform parent, string name, Vector2 min, Vector2 size, int fontSize, FontStyle style, Color color)
+        internal static Text Label(Transform parent, string name, Vector2 min, Vector2 size, int fontSize, FontStyle style, Color color)
         {
             var t = new GameObject(name, typeof(RectTransform)).AddComponent<Text>();
             t.transform.SetParent(parent, false);
@@ -627,6 +704,19 @@ namespace DeviceChain.Sitepulse.Visuals
             }
         }
 
+        /// <summary>The metric a shot features, when this is the selected machine and its profile has the metric (a dozer has no tyres).</summary>
+        string FeaturedFor(Target t)
+        {
+            if (Featured == null || Selected != t.reading.DeviceId) return null;
+            foreach (var key in KeysOf(t))
+                if (key == Featured) return key;
+            return null;
+        }
+
+        /// <summary>The measurement keys the target's profile reports, from the simulation's own list for its kind.</summary>
+        static IReadOnlyList<string> KeysOf(Target t) =>
+            MachineModel.KeysFor(t.rig == null ? EquipmentKind.Plant : t.rig.Kind == MachineKind.Hauler ? EquipmentKind.Hauler : t.rig.Kind == MachineKind.Loader ? EquipmentKind.Loader : EquipmentKind.Dozer);
+
         static Color InkOf(RowTone tone) => tone == RowTone.Dim ? Dim : tone == RowTone.Ink ? Ink : tone == RowTone.Warn ? Warn : Grey;
 
         /// <summary>Write a reading into its card: the rows it shows, its alarm and its status. What each
@@ -656,9 +746,11 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             else
             {
-                if (alarmKeyRow != null) Metric(alarmKeyRow, warn: true);
-                Metric(MeasurementKeys.PayloadT);
-                if (alarmKeyRow != MeasurementKeys.FuelPct) Metric(MeasurementKeys.FuelPct);
+                // the alarm's own metric first and inked as a warning; else, on the selected machine, the metric a shot features
+                var first = alarmKeyRow ?? FeaturedFor(t);
+                if (first != null) Metric(first, warn: alarmKeyRow != null);
+                if (first != MeasurementKeys.PayloadT) Metric(MeasurementKeys.PayloadT);
+                if (first != MeasurementKeys.FuelPct) Metric(MeasurementKeys.FuelPct);
                 Draw("Speed", CardPresenter.Row(observed, r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null,
                     r.SpeedStamp?.OccurredAt, now, live, false, FreshnessRule.LocationFreshWithin));
                 if (r.CommandStatus.HasValue)
@@ -762,11 +854,13 @@ namespace DeviceChain.Sitepulse.Visuals
             }
 
             AddObstacles(Obstacles, refW, obstacleScratch, blockers);
+            AddElements(refW, dt, reduced, snap);
 
             // the cards: alarms, commands and the selected machine, at most a few, none for a speck
             inputs.Clear();
             foreach (var t in targets)
             {
+                if (!Layers.Cards) break;
                 var r = t.reading;
                 int rank = r.HasAlarm ? CardSelection.AlarmRank(r.FirstAlarm.Severity) : 0;
                 bool inFlight = (r.CommandStatus.HasValue && !r.CommandStatus.Value.IsTerminal && QueuedThisSession(r))
@@ -777,7 +871,7 @@ namespace DeviceChain.Sitepulse.Visuals
 
             policy.MaxCards = maxCards;
             policy.MinShare = minTargetShare;
-            policy.Choose(uiClock, inputs, Selected, chosenIds);
+            policy.Choose(uiClock, inputs, Layers.Cards ? Selected : null, chosenIds, Layers.Cards ? Pinned : null);
             LogChosen();
             chosen.Clear();
             foreach (var t in targets) t.wanted = false;
@@ -817,6 +911,7 @@ namespace DeviceChain.Sitepulse.Visuals
                     fenceScreen.Add(q);
                 }
                 float dist = Vector3.Distance(cam.transform.position, fenceCentre);
+                fenceLine.enabled = Layers.FenceVisible;
                 fenceLine.widthMultiplier = Mathf.Clamp(dist * 0.0035f, 0.25f, 1.6f);
                 fenceLine.textureScale = new Vector2(1f / (fenceLine.widthMultiplier * 6f), 1f);
             }
@@ -828,7 +923,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 var size = fenceChip.sizeDelta * cardScale;
                 // every sixth fence point, south first, is a place the label may sit; it keeps its point while that
                 // place stays clear and moves calmly when it does not (LabelPlacer: the cards' rules)
-                labelPlacer.Step((fenceBySouth.Count + 5) / 6, i =>
+                labelPlacer.Step(Layers.FenceVisible ? (fenceBySouth.Count + 5) / 6 : 0, i =>
                 {
                     var p = fenceBySouth[i * 6];
                     var v = cam.WorldToViewportPoint(p);
@@ -850,13 +945,15 @@ namespace DeviceChain.Sitepulse.Visuals
                 }
             }
 
+            foreach (var z in zoneLabels) StepZone(z, cam, refW, dt, snap, reduced);
+
             LayOut(dt, refW, reduced);
             foreach (var t in targets)
                 if (t.card != null) Draw(t, dt, reduced, snap);
 
             if (ring != null)
             {
-                bool on = alarmTarget != null && alarmTarget.rig != null;
+                bool on = Layers.Cards && alarmTarget != null && alarmTarget.rig != null;
                 ring.gameObject.SetActive(on);
                 if (on)
                 {
@@ -867,6 +964,53 @@ namespace DeviceChain.Sitepulse.Visuals
                     ring.transform.localScale = new Vector3(s, 1f, s);
                 }
             }
+
+            if (lineMaterial != null) routeView.Update(root.transform, lineMaterial, terrain, cam, machineIds, RouteOf, Layers.Route, dt, snap);
+        }
+
+        /// <summary>
+        /// The panel, the drawer and a render's chips, drawn where the layers say, and the screen they take, so no card is placed over them.
+        /// All three follow the selected device; a portrait frame keeps its top and bottom clear.
+        /// </summary>
+        void AddElements(float refW, float dt, bool reduced, bool snap)
+        {
+            var at = Clock != null ? Clock() : DateTimeOffset.UtcNow;
+            PanelView panel = null;
+            if (Layers.Panel && Selected != null && byId.TryGetValue(Selected, out var sel))
+                panel = PanelModel.Build(sel.reading, sel.kindLabel, KeysOf(sel), at, source.StreamLive);
+            AddBlocker(panelView.Update(canvasRect, panel, refW, dt, reduced, snap));
+            AddBlocker(drawerView.Update(canvasRect, Layers.Drawer, Selected, Proof, refW, dt, reduced, snap));
+            chipsView.Update(canvasRect, Chips, ShotTime, refW, SafeInsets.x, snap);
+            foreach (var r in chipsView.Rects) AddBlocker(r);
+            if (SafeInsets.x > 0f) blockers.Add(new Rect(0f, RefH * (1f - SafeInsets.x), refW, RefH * SafeInsets.x));
+            if (SafeInsets.y > 0f) blockers.Add(new Rect(0f, 0f, refW, RefH * SafeInsets.y));
+        }
+
+        void AddBlocker(Rect r)
+        {
+            if (r.width > 0f) blockers.Add(Inflate(r, 6f));
+        }
+
+        /// <summary>A zone's name: it rides the zone's point while that place is clear, and fades out (rather than jumps) when it is not.</summary>
+        void StepZone(ZoneLabel z, Camera cam, float refW, float dt, bool snap, bool reduced)
+        {
+            var size = z.chip.sizeDelta * cardScale;
+            z.placer.Step(Layers.ZoneLabels ? 1 : 0, _ =>
+            {
+                var v = cam.WorldToViewportPoint(z.at);
+                var at = new Vector2(v.x * refW - size.x / 2f, v.y * RefH - size.y / 2f);
+                var rect = new Rect(at, size);
+                bool valid = v.z > 0f && at.x > Margin && at.x + size.x < refW - Margin && at.y > Margin && at.y + size.y < RefH - Margin
+                             && !Hits(rect, targetRects) && !Hits(rect, blockers) && !Hits(rect, placed) && !Hidden(cam, z.at);
+                return (at, valid);
+            }, snap ? 10f : dt, reduced);
+            bool on = z.placer.Alpha > 0f;
+            z.chip.gameObject.SetActive(on);
+            if (!on) return;
+            z.chip.anchoredPosition = z.placer.Position;
+            z.chip.localScale = Vector3.one * cardScale;
+            z.group.alpha = snap ? 1f : z.placer.Alpha;
+            placed.Add(Inflate(new Rect(z.placer.Position, size), 6f));
         }
 
         /// <summary>How long this frame took, once per frame however many times the overlay is refreshed in it. Zero outside play, where nothing animates.</summary>

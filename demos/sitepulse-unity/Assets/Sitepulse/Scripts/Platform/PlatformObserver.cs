@@ -285,18 +285,38 @@ namespace DeviceChain.Sitepulse.Platform
         /// </summary>
         public Action<ObserverItem> OnItem { get; set; }
 
+        /// <summary>
+        /// A second tap, for what only watches (the proof drawer's log), so it never competes with the recorder for <see cref="OnItem"/>. The
+        /// same rules: it sees each item just before it is applied, on the main thread, and one that throws is dropped, once and with a warning.
+        /// </summary>
+        public Action<ObserverItem> Watch { get; set; }
+
         void Tap(ObserverItem item)
         {
             var tap = OnItem;
-            if (tap == null) return;
+            if (tap != null)
+            {
+                try
+                {
+                    tap(item);
+                }
+                catch (Exception e)
+                {
+                    OnItem = null;
+                    PlatformLog.Warn($"the observer's tap failed and was removed: {e.GetType().Name}: {e.Message}");
+                }
+            }
+
+            var watch = Watch;
+            if (watch == null) return;
             try
             {
-                tap(item);
+                watch(item);
             }
             catch (Exception e)
             {
-                OnItem = null;
-                PlatformLog.Warn($"the observer's tap failed and was removed: {e.GetType().Name}: {e.Message}");
+                Watch = null;
+                PlatformLog.Warn($"the observer's watcher failed and was removed: {e.GetType().Name}: {e.Message}");
             }
         }
 

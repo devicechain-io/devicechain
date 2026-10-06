@@ -358,7 +358,7 @@ reference hardware (CPU, GPU, RAM, OS from Windows). A soak shorter than 6 minut
 The injected faults are flags that only exist under `-sitepulse-acceptance`: `-sitepulse-control <spec>`
 alone is a startup error, and a control run says so in the badge (amber, `ACCEPTANCE CONTROL ...`), in the
 log and in `phaseA-result.json`. The checker's pure parts have unit tests: `cd tools && python3 -m unittest`
-(`test_phase_a_check`, `test_phase_b_check`).
+(`test_phase_a_check`, `test_phase_b_check`, `test_video_take`).
 
 ## Recording, replay and rendering
 
@@ -371,7 +371,7 @@ an existing run is never overwritten) holding:
 | `run.json` | the header: run id, UTC start, the build (git SHA, whether the tracked tree was clean, SDK commit, from `build-info.json` beside the player), platform version (`-sitepulse-platform-version`, which the acceptance script fills), instance, tenant, the 19 devices with their platform tokens, the clock segments (real or accelerated, from when the scene's clock changed speed), the presenter presets, and at the end how it ended and what it cost. No credential or token: every value passes the redactor |
 | `sim.bin` | every machine as it was **drawn** 20 times a second: position and attitude, rig inputs, distance travelled, what the task layer was doing, the local model's values. Little-endian, versioned: a header (`SPSB`, version, machine table) then 8 + 64 bytes per machine per frame; the layout is documented in `Scripts/Recording/SimBin.cs` and a file that is not a whole number of frames is refused. 1160 bytes a frame for the 18 machines, 23 KB a second |
 | `observed.ndjson` | every item the observer handed the app, as received and when (run seconds and UTC): measurements, alarms, the alarm snapshot, locations, command rows, presence, stream status |
-| `device.ndjson` | what the devices did: samples the broker acknowledged, link states, each command received (token, key, payload, arrival sequence) and what became of it, every row of each machine's timeline |
+| `device.ndjson` | what the devices did: samples the broker acknowledged, link states, each command received (token, key, payload, arrival sequence) and what became of it, every row of each machine's timeline, and the route each machine starts and stops driving (`route`, as points on the ground) |
 | `presenter.ndjson` | what the presenter did, and changes of the scene's clock speed |
 
 The recorder is a passenger: a disk that fills stops the recording (logged once), never the run. Its size and write
@@ -394,6 +394,28 @@ no badge and no replay tag; `<dir>/render.json` is the account of what they are 
 one, when it was recorded, where each shot starts and which shots ran under an accelerated clock and need that caption)
 and is what the video's description and captions are written from. `tools/frames-to-mp4.sh <dir>` makes an mp4 of each
 shot (it needs ffmpeg and says so when it is missing).
+
+**What a shot may ask the data layer for.** Besides `focus` (the selected machine) a shot says what is drawn, with the flags
+`cards` (`false`, or a list of machine ids whose cards show, one more each `cardStagger` seconds), `drawer` (`true`,
+`"full"`), `panel`, `route`, `zoneLabels` (`true`, or the seconds into the shot they fade in), `featured` (a measurement
+drawn first on the selected card), `cardScale` and `chips`. The **proof drawer** lists what happened to the selected
+machine, each row with its time (UTC) and who says so: the platform (a sample below a rule's line, an alarm changing state,
+a command changing state), the device (its own timeline), the presenter. It draws only what happened: a state the observer
+never saw has no row, and a device's SUCCESS is never drawn as the platform's SUCCESSFUL. The **machine panel** shows the
+machine's own profile metrics with units and the time each was last observed (a dozer's three, a truck's five). The
+**route highlight** draws the route the machine is driving on the terrain, from the task layer live and from the
+recorded `route` lines of `device.ndjson` in a replay. A **chip** is small print rendered into the frame
+(`{"text":"Command sent","event":{...},"duration":3}` starts when its recorded event did); only a shot file gives one.
+There is no flag for the badge, the readiness panel, the key help or a replay tag: a render has none, and a shot file that
+asks for one is refused. In the app, **D** toggles the drawer, **I** the panel and **Z** the zone names (named as the platform
+names the areas); **K** punctures the selected machine's tyre (a slow leak through the model's own publish path, the
+presenter's input like **P**).
+
+**The feature video.** `tools/video-take.sh` records the one live take (the player's `-sitepulse-video-run`: steady work,
+the low-fuel cycle on SP-HL-0006, the puncture on SP-HL-0003, then the operator's `goto-area sp-zone-yard` to SP-HL-0003,
+which you send from the console or, with `--unattended`, `tools/video_take.py operator` sends). The shots are
+`tools/shots/sitepulse-video.json` (every Unity shot of the script, 16:9), `sitepulse-video-9x16.json` (the portrait cut)
+and `sitepulse-website-loop.json` (a 25 s seamless loop for the website).
 
 ## Quality levels
 

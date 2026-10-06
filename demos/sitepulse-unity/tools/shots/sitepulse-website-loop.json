@@ -1,0 +1,110 @@
+{
+  "description": "A 25 s seamless loop for the website, 16:9, no dialog: telemetry, the low-fuel rule firing (the card goes amber), the command arriving, the truck rerouting and refuelling, the alarm clearing, the truck back at work. Seven consecutive cuts of ONE recorded cycle on SP-HL-0006 (the waits between them are cut, not sped up: the scene's clock is real time), each with the identical follow camera so the first and last frames share a camera pose and the truck is working at both ends. Chips are rendered into the frames and each starts when its recorded event did. Disclose it as a replay of a recorded live run, cut for length (render.json carries the run and the date). Join the seven shot directories in order; a half-second cross-dissolve at the loop point hides the truck's position change.",
+  "fps": 30,
+  "shots": [
+    {
+      "name": "loop-1-telemetry",
+      "startEvent": {"kind": "measurement", "name": "fuel_pct", "below": 15, "device": "SP-HL-0006"},
+      "offset": -12,
+      "duration": 4.5,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 20, "up": 11, "side": -9, "fov": 42, "lookHeight": 2.0},
+      "focus": "SP-HL-0006",
+      "cards": true,
+      "route": true,
+      "featured": "fuel_pct",
+      "chips": [
+        {"text": "Telemetry over MQTT", "at": 0.4, "duration": 3.6}
+      ]
+    },
+    {
+      "name": "loop-2-rule-fires",
+      "startEvent": {"kind": "alarm", "key": "low-fuel", "state": "ACTIVE", "device": "SP-HL-0006"},
+      "offset": -1.0,
+      "duration": 3.5,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 20, "up": 11, "side": -9, "fov": 42, "lookHeight": 2.0},
+      "focus": "SP-HL-0006",
+      "cards": true,
+      "route": true,
+      "featured": "fuel_pct",
+      "chips": [
+        {
+          "text": "Rule fires: low fuel",
+          "event": {"kind": "alarm", "key": "low-fuel", "state": "ACTIVE", "device": "SP-HL-0006"},
+          "offset": 0,
+          "duration": 2.5
+        }
+      ]
+    },
+    {
+      "name": "loop-3-command",
+      "startEvent": {"kind": "command", "name": "goto-refuel", "device": "SP-HL-0006"},
+      "offset": -0.5,
+      "duration": 3.5,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 20, "up": 11, "side": -9, "fov": 42, "lookHeight": 2.0},
+      "focus": "SP-HL-0006",
+      "cards": true,
+      "route": true,
+      "featured": "fuel_pct",
+      "chips": [
+        {
+          "text": "Command sent",
+          "event": {"kind": "command", "name": "goto-refuel", "status": "SENT", "device": "SP-HL-0006"},
+          "offset": 0,
+          "duration": 2.5
+        }
+      ]
+    },
+    {
+      "name": "loop-4-reroute",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "accepted", "contains": "refuel bay"},
+      "offset": -0.3,
+      "duration": 4.5,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 20, "up": 11, "side": -9, "fov": 42, "lookHeight": 2.0},
+      "focus": "SP-HL-0006",
+      "cards": true,
+      "route": true,
+      "featured": "fuel_pct"
+    },
+    {
+      "name": "loop-5-refuel",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "refuelling", "contains": "service started"},
+      "offset": 0.5,
+      "duration": 3.5,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 20, "up": 11, "side": -9, "fov": 42, "lookHeight": 2.0},
+      "focus": "SP-HL-0006",
+      "cards": true,
+      "route": true,
+      "featured": "fuel_pct"
+    },
+    {
+      "name": "loop-6-success",
+      "startEvent": {"kind": "command", "name": "goto-refuel", "status": "SUCCESSFUL", "device": "SP-HL-0006"},
+      "offset": -1.2,
+      "duration": 2.5,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 20, "up": 11, "side": -9, "fov": 42, "lookHeight": 2.0},
+      "focus": "SP-HL-0006",
+      "cards": true,
+      "route": true,
+      "featured": "fuel_pct",
+      "chips": [
+        {
+          "text": "Device confirms SUCCESSFUL",
+          "event": {"kind": "command", "name": "goto-refuel", "status": "SUCCESSFUL", "device": "SP-HL-0006"},
+          "offset": 0,
+          "duration": 1.3
+        }
+      ]
+    },
+    {
+      "name": "loop-7-back-to-work",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "working", "contains": "back on its track"},
+      "offset": -2.5,
+      "duration": 3.0,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 20, "up": 11, "side": -9, "fov": 42, "lookHeight": 2.0},
+      "focus": "SP-HL-0006",
+      "cards": true,
+      "route": true,
+      "featured": "fuel_pct"
+    }
+  ]
+}

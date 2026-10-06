@@ -166,6 +166,9 @@ namespace DeviceChain.Sitepulse.Replay
             overlay.Clock = () => session.WallClock;
             overlay.ReplayTag = composition.ReplayTag;
             overlay.CommandsSince = session.Header.StartedAtUtc;
+            // the drawer's rows and the route highlight come from the recording, rebuilt by the code the live app runs
+            overlay.Proof = session.Proof;
+            overlay.RouteOf = session.RouteOf;
             return source;
         }
 
@@ -216,7 +219,11 @@ namespace DeviceChain.Sitepulse.Replay
             else StepInteractive();
 
             ApplyPoses();
-            if (inputs.Options.Render) PlaceCamera();
+            if (inputs.Options.Render)
+            {
+                PlaceCamera();
+                ApplyShotLayers();
+            }
         }
 
         bool AttachFleet()
@@ -252,6 +259,9 @@ namespace DeviceChain.Sitepulse.Replay
                 if (kb.leftBracketKey.wasPressedThisFrame) { selected = (selected + recorded.Count - 1) % recorded.Count; manualSelection = true; overlay.Selected = recorded[selected]; }
                 if (kb.rightBracketKey.wasPressedThisFrame) { selected = (selected + 1) % recorded.Count; manualSelection = true; overlay.Selected = recorded[selected]; }
                 if (kb.tKey.wasPressedThisFrame) showTimeline = !showTimeline;
+                if (kb.dKey.wasPressedThisFrame) overlay.Layers = overlay.Layers.With(drawer: overlay.Layers.Drawer == DrawerMode.Off ? DrawerMode.Side : DrawerMode.Off);
+                if (kb.iKey.wasPressedThisFrame) overlay.Layers = overlay.Layers.With(panel: !overlay.Layers.Panel);
+                if (kb.zKey.wasPressedThisFrame) overlay.Layers = overlay.Layers.With(zoneLabels: !overlay.Layers.ZoneLabels);
             }
 
             if (jumped)
@@ -287,7 +297,7 @@ namespace DeviceChain.Sitepulse.Replay
                 screen.ShowTimeline(text);
             }
 
-            var help = $"{Clock(session.Time)} / {Clock(session.Duration)}{(endAnnounced ? " · end" : paused ? " · paused" : "")} · SPACE pause · LEFT/RIGHT 5 s · HOME restart · [ ] machine · T timeline";
+            var help = $"{Clock(session.Time)} / {Clock(session.Duration)}{(endAnnounced ? " · end" : paused ? " · paused" : "")} · SPACE pause · LEFT/RIGHT 5 s · HOME restart · [ ] machine · T timeline · D proof drawer · I machine panel · Z zone names";
             if (help != shownHelp)
             {
                 shownHelp = help;
@@ -394,6 +404,8 @@ namespace DeviceChain.Sitepulse.Replay
             cam.targetTexture = target;
             // the follow camera's target (or the shot's own focus) is the selected machine: its card shows, whatever its state
             overlay.Selected = p.Shot.Selected;
+            overlay.Pinned = null;
+            overlay.Chips = null;
             session.Seek(p.PrerollFrom);
             Jumped();
             written[p.Shot.Name] = 0;
@@ -401,6 +413,34 @@ namespace DeviceChain.Sitepulse.Replay
             Debug.Log($"[sitepulse] render: shot {p.Shot.Name} · {p.Event.Description} at run {p.Event.T:0.0} s · {p.Frames} frames {p.Shot.Width}x{p.Shot.Height}");
             StartCoroutine(CaptureLoop());
         }
+
+        readonly List<string> pinnedNow = new List<string>();
+
+        /// <summary>
+        /// What the shot asks the data layer to draw, for this frame of it: the layers (the zone names fade in after their delay), the
+        /// pinned cards (one more each stagger), the chips and the shot's clock, the featured metric and the card size. A portrait frame keeps
+        /// its top and bottom clear. Never the badge, readiness panel, key help or a replay tag: this assembly draws none of them in a render.
+        /// </summary>
+        void ApplyShotLayers()
+        {
+            if (phase != Phase.Preroll && phase != Phase.Capture) return;
+            var p = plan[shotIndex];
+            var shot = p.Shot;
+            var t = session.Time - p.Start;
+            overlay.Layers = ShotDressing.LayersAt(shot, t);
+            pinnedNow.Clear();
+            var count = ShotDressing.PinnedCount(shot, t);
+            for (var i = 0; i < count; i++) pinnedNow.Add(shot.PinnedCards[i]);
+            overlay.Pinned = pinnedNow;
+            overlay.Chips = p.Chips.Count == 0 ? null : p.Chips;
+            overlay.ShotTime = t;
+            overlay.Featured = shot.Featured;
+            overlay.cardScale = shot.CardScale;
+            overlay.SafeInsets = shot.Height > shot.Width ? new Vector2(PortraitSafeTop, PortraitSafeBottom) : Vector2.zero;
+        }
+
+        /// <summary>The share of a portrait frame's height the platforms' own captions and buttons cover at the top and the bottom.</summary>
+        public const float PortraitSafeTop = 0.14f, PortraitSafeBottom = 0.20f;
 
         void PlaceCamera()
         {

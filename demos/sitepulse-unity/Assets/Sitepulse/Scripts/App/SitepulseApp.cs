@@ -70,6 +70,15 @@ namespace DeviceChain.Sitepulse.App
         TaskDirector director;
         RefuelVignette vignette;
         PresenterControls presenter;
+
+        // the proof drawer's log (fed by the observer and the device timeline) and the route highlight's source: Live's own, as a replay has its own
+        readonly ProofLog proofLog = new ProofLog();
+        readonly RouteCache routeCache = new RouteCache();
+        readonly Dictionary<string, string> idByToken = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // the feature video's one live take (-sitepulse-video-run): null in every other run
+        VideoRun videoRun;
+        bool videoRunRequested;
         string focusShown;
         SiteGeometry site;
         Timeline timeline;
@@ -143,6 +152,20 @@ namespace DeviceChain.Sitepulse.App
                 return;
             }
 
+            videoRunRequested = VideoRunFlags.Requested(args);
+            if (videoRunRequested && (mode != SitepulseMode.Live || !present || acceptance != null))
+            {
+                var need = acceptance != null
+                    ? $"{VideoRunFlags.Flag} is a take of its own: it cannot be combined with {AcceptanceFlags.Flag}"
+                    : $"{VideoRunFlags.Flag} needs -sitepulse-mode live";
+                HideCards();
+                hud.SetBadge("MODE ERROR · nothing is running", BadgeTone.Error);
+                hud.ShowError("The mode could not be chosen", need);
+                PlatformLog.Error(need);
+                videoRunRequested = false;
+                return;
+            }
+
             if (!present && Application.isEditor && editorMode != EditorModeOverride.None)
                 mode = (SitepulseMode)Enum.Parse(typeof(SitepulseMode), editorMode.ToString());
             // a replay or a render is asked for by its own flags, and they are a mode of their own: a line that names another mode and
@@ -198,6 +221,7 @@ namespace DeviceChain.Sitepulse.App
             if (overlay == null) return;
             overlay.Source = new ObservedReadingSource(observed, id => board?.TokenOf(id), () => observerStatus.Measurements.IsLive);
             overlay.CommandsSince = sessionStart;
+            overlay.Proof = proofLog;
         }
 
         /// <summary>
@@ -323,7 +347,7 @@ namespace DeviceChain.Sitepulse.App
         // ------------------------------------------------------------------ acceptance
 
         string LiveBadge(string tenantName = null, string instance = null)
-            => SitepulseModes.Badge(mode, tenantName, instance) + (acceptance != null ? " · " + acceptance.RunLabel : "");
+            => SitepulseModes.Badge(mode, tenantName, instance) + (acceptance != null ? " · " + acceptance.RunLabel : "") + (videoRunRequested ? " · VIDEO RUN" : "");
 
         // a control is amber, so a run with a fault injected can never be taken for a normal one
         BadgeTone LiveTone() => acceptance != null && acceptance.IsControl ? BadgeTone.Illustrative : BadgeTone.Live;
@@ -542,10 +566,78 @@ namespace DeviceChain.Sitepulse.App
             foreach (var d in board.Devices)
                 if (!d.Failed && d.Bind != null && d.Bind.IsBound) watched.Add(d.Bind.DeviceToken);
             observer = new PlatformObserver(cfg.Value, broker, watched, observed, observerStatus);
+            WatchObserver(observer);
             observer.Start();
             board.BeginObserver();
             StartRecorder(cfg.Value, devices.Count);
+            if (videoRunRequested) videoRun = new VideoRun(VideoWorld());
             Render();
+        }
+
+        // What the observer is told goes to the proof log through the same function a replay uses on the recorded lines, so the drawer holds the same rows.
+        void WatchObserver(PlatformObserver o)
+        {
+            idByToken.Clear();
+            foreach (var d in board.Devices)
+                if (d.Bind != null && d.Bind.IsBound) idByToken[d.Bind.DeviceToken] = d.Device.ExternalId;
+            string IdOf(string token) => token != null && idByToken.TryGetValue(token, out var id) ? id : null;
+            o.Watch = item =>
+            {
+                var line = RecordingMaps.Observed(item);
+                if (line != null) ProofFeed.Apply(proofLog, line, IdOf);
+            };
+        }
+
+        // the video run's eyes and hands: what the platform said (observed state), the device's own account, and the presenter's keys
+        VideoRunWorld VideoWorld() => new VideoRunWorld
+        {
+            Clock = () => DateTimeOffset.UtcNow,
+            FleetObserved = () =>
+            {
+                if (board == null || board.Total == 0) return false;
+                foreach (var d in board.Devices)
+                    if (d.Stage < DeviceStage.Observed || d.Failed) return false;
+                return true;
+            },
+            PrepareLowFuel = id => presenter?.PrepareLowFuel(id),
+            PrepareTyreLeak = id => presenter?.PrepareTyreLeak(id),
+            AlarmActive = (id, key) =>
+            {
+                var token = board?.TokenOf(id);
+                if (token == null || !observed.TryGet(token, out var dev)) return false;
+                foreach (var a in dev.Alarms.Values)
+                    if (a.IsActive && a.AlarmKey == key) return true;
+                return false;
+            },
+            CommandSuccessful = (id, name, since) =>
+            {
+                var token = board?.TokenOf(id);
+                if (token == null || !observed.TryGet(token, out var dev)) return false;
+                var c = dev.LastCommand;
+                return c != null && c.Name == name && c.Status == "SUCCESSFUL" && c.QueuedAt >= since;
+            },
+            OnTrack = id => ProbeMachine(id)?.OnTrack ?? false,
+            Log = PlatformLog.Info,
+            Quit = code =>
+            {
+                WriteVideoRun();
+                PlatformLog.Info($"video-run · {(code == 0 ? "complete" : "INCOMPLETE")} · quitting with exit code {code}");
+                Application.Quit(code);
+            },
+        };
+
+        // beside the recording, so what the take did and what it did not see travels with it
+        void WriteVideoRun()
+        {
+            try
+            {
+                var dir = liveRecorder != null ? liveRecorder.Directory : Application.persistentDataPath;
+                WriteAtomically(Path.Combine(dir, "video-run.json"), videoRun.ToJson());
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                PlatformLog.Warn("video-run: cannot write video-run.json: " + e.Message);
+            }
         }
 
         // The recording of this run (on by default). It is built last, when there is something to record, and it watches: a recorder that
@@ -584,6 +676,7 @@ namespace DeviceChain.Sitepulse.App
             foreach (var host in plane.Hosts)
                 if (rigs.TryGetValue(host.ExternalId, out var rig)) machines.Add((new FleetBody(fleet, rig), host.Simulation.Model));
             timeline = new Timeline();
+            timeline.Added += (machine, row) => proofLog.DeviceRow(machine, row.At, row.Kind, row.Text);
             director = new TaskDirector(site, RouteGraph.Build(site), timeline, machines, plane.Generation);
             plane.Tasks = director;
             // the bay's attendant serves the machine the Refuelling state names, not whoever stands in the bay
@@ -593,7 +686,12 @@ namespace DeviceChain.Sitepulse.App
             presenter = new PresenterControls(director, id => plane[id].Simulation.Model,
                 () => runnerConfig == null || broker == null ? null : OperatorQueries.Create(runnerConfig, broker, Area.CommandDelivery).AsQueryFn());
             // a machine whose own task is still running keeps its card, as one with an unfinished command does
-            if (overlay != null) overlay.TaskRunning = id => director != null && director.TryController(id, out var c) && c.Running != null;
+            if (overlay != null)
+            {
+                overlay.TaskRunning = id => director != null && director.TryController(id, out var c) && c.Running != null;
+                // the route a machine is driving is drawn on the terrain; a replay draws it from the recording of the same
+                overlay.RouteOf = id => director != null && director.TryController(id, out var c) ? routeCache.Of(id, c.CurrentRoute) : null;
+            }
         }
 
         /// <summary>A click on the scene: the presenter and the overlay share the one selected machine.</summary>
@@ -625,6 +723,7 @@ namespace DeviceChain.Sitepulse.App
                 hud.SetBanner(ObserverBanner.Text(observerStatus, observed));
                 UpdateSimulation();
                 UpdatePresenter();
+                videoRun?.Tick();
                 // the header in the log too, so an unattended (batchmode) run can be read afterwards
                 if (Time.unscaledTime >= nextStatusLog)
                 {
@@ -666,6 +765,13 @@ namespace DeviceChain.Sitepulse.App
                 if (kb.rightBracketKey.wasPressedThisFrame) presenter.Select(1);
                 if (kb.tKey.wasPressedThisFrame) showTimeline = !showTimeline;
                 if (kb.pKey.wasPressedThisFrame) presenter.PrepareLowFuel();
+                if (kb.kKey.wasPressedThisFrame) presenter.PrepareTyreLeak();
+                if (overlay != null)
+                {
+                    if (kb.dKey.wasPressedThisFrame) overlay.Layers = overlay.Layers.With(drawer: overlay.Layers.Drawer == DrawerMode.Off ? DrawerMode.Side : DrawerMode.Off);
+                    if (kb.iKey.wasPressedThisFrame) overlay.Layers = overlay.Layers.With(panel: !overlay.Layers.Panel);
+                    if (kb.zKey.wasPressedThisFrame) overlay.Layers = overlay.Layers.With(zoneLabels: !overlay.Layers.ZoneLabels);
+                }
                 if (kb.gKey.wasPressedThisFrame) presenter.Resume();
                 if (kb.fKey.wasPressedThisFrame) RunPresenterAsync(presenter.BeginFresh);
                 if (presenter.Fresh == FreshState.Confirm)

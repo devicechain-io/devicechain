@@ -64,6 +64,14 @@ namespace DeviceChain.Sitepulse.Tasks
 
         public MachineController this[string id] => controllers[id];
 
+        /// <summary>
+        /// Raised, after a step, when a machine starts driving a route (the route), changes to another, or stops driving (null). The route
+        /// highlight and the recording listen here, so the highlight can be drawn again from the recording.
+        /// </summary>
+        public event Action<string, Route> RouteChanged;
+
+        readonly Dictionary<string, Route> routesAnnounced = new Dictionary<string, Route>(StringComparer.Ordinal);
+
         public bool TryController(string id, out MachineController controller) => controllers.TryGetValue(id, out controller);
 
         public void Submit(string externalId, TaskRequest request)
@@ -108,6 +116,19 @@ namespace DeviceChain.Sitepulse.Tasks
                 if (!controllers.TryGetValue(queued, out var q) || !q.WantsBay) bay.Release(queued);
 
             foreach (var id in order) controllers[id].Step(simDt, wallDt);
+            AnnounceRoutes();
+        }
+
+        void AnnounceRoutes()
+        {
+            foreach (var id in order)
+            {
+                var route = controllers[id].CurrentRoute;
+                routesAnnounced.TryGetValue(id, out var was);
+                if (ReferenceEquals(route, was)) continue;
+                routesAnnounced[id] = route;
+                RouteChanged?.Invoke(id, route);
+            }
         }
 
         /// <summary>The run is ending: every running task is answered with <paramref name="reason"/>, and later commands are too. Returns how many tasks it answered.</summary>

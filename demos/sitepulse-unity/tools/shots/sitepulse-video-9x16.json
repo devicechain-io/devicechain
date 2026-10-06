@@ -1,0 +1,118 @@
+{
+  "description": "The 9:16 variant for the social cut (script 5.3): the crane (S02) and the signature loop (S08-S13) rendered natively in portrait, not cropped from the 16:9 master, so the cards stack above the machine. Cards are drawn smaller (cardScale), the top 14% and bottom 20% of the frame are kept clear of cards, the drawer and the chips (the platforms' own captions sit there), and the proof drawer sits under the subject. Same events and the same disclosure as the 16:9 file: a replay of a recorded live run, said in the description and captions.",
+  "fps": 60,
+  "shots": [
+    {
+      "name": "s02-establishing-crane-9x16",
+      "startEvent": {"kind": "runStart"},
+      "offset": 30,
+      "duration": 6,
+      "camera": {
+        "rig": "fixed",
+        "pos": [-130, 64, -165],
+        "lookAt": [6, -8, -32],
+        "fov": 58,
+        "to": {"pos": [-109.6, 44, -145.0], "lookAt": [6, -8, -32]}
+      },
+      "cards": false,
+      "zoneLabels": 3.0,
+      "aspect": "9:16",
+      "cardScale": 1.0
+    },
+    {
+      "name": "s08-fuel-draining-9x16",
+      "startEvent": {"kind": "measurement", "name": "fuel_pct", "below": 15, "device": "SP-HL-0006"},
+      "offset": -7,
+      "duration": 6,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 4, "side": -4, "fov": 62},
+      "focus": "SP-HL-0006",
+      "featured": "fuel_pct",
+      "aspect": "9:16",
+      "cardScale": 0.8
+    },
+    {
+      "name": "s09-alarm-low-fuel-9x16",
+      "startEvent": {"kind": "alarm", "key": "low-fuel", "state": "ACTIVE", "device": "SP-HL-0006"},
+      "offset": -1.2,
+      "duration": 4,
+      "camera": {
+        "rig": "follow",
+        "target": "SP-HL-0006",
+        "back": 3.5,
+        "up": 1.8,
+        "side": -2.2,
+        "fov": 62,
+        "lookHeight": 2.0,
+        "to": {"back": 12, "up": 4, "side": -3, "lookHeight": 1.5}
+      },
+      "focus": "SP-HL-0006",
+      "drawer": true,
+      "featured": "fuel_pct",
+      "aspect": "9:16",
+      "cardScale": 0.8
+    },
+    {
+      "name": "s10-command-arrives-9x16",
+      "startEvent": {"kind": "command", "name": "goto-refuel", "device": "SP-HL-0006"},
+      "offset": -0.5,
+      "duration": 4,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 4, "side": -6, "fov": 62},
+      "focus": "SP-HL-0006",
+      "drawer": true,
+      "aspect": "9:16",
+      "cardScale": 0.8
+    },
+    {
+      "name": "s11-reroute-9x16",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "accepted", "contains": "refuel bay"},
+      "offset": -0.5,
+      "duration": 5,
+      "camera": {
+        "rig": "follow",
+        "target": "SP-HL-0006",
+        "back": 0.5,
+        "up": 60,
+        "side": 0,
+        "fov": 52,
+        "lookHeight": 0,
+        "to": {"back": 28, "up": 28, "lookHeight": 0.5}
+      },
+      "focus": "SP-HL-0006",
+      "route": true,
+      "aspect": "9:16",
+      "cardScale": 0.8
+    },
+    {
+      "name": "s12-refuel-bay-9x16",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "refuelling", "contains": "service started"},
+      "offset": -1,
+      "duration": 5,
+      "camera": {"rig": "fixed", "pos": [-64, 3.2, -46], "lookAt": [-62, 1.8, -58], "fov": 62},
+      "focus": "SP-HL-0006",
+      "featured": "fuel_pct",
+      "aspect": "9:16",
+      "cardScale": 0.8
+    },
+    {
+      "name": "s13a-alarm-clears-9x16",
+      "startEvent": {"kind": "alarm", "key": "low-fuel", "state": "CLEARED", "device": "SP-HL-0006"},
+      "offset": -1,
+      "duration": 3,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 4.5, "up": 2, "side": -2.5, "fov": 50, "lookHeight": 1.8},
+      "focus": "SP-HL-0006",
+      "featured": "fuel_pct",
+      "aspect": "9:16",
+      "cardScale": 0.8
+    },
+    {
+      "name": "s13b-command-successful-9x16",
+      "startEvent": {"kind": "command", "name": "goto-refuel", "status": "SUCCESSFUL", "device": "SP-HL-0006"},
+      "offset": -1,
+      "duration": 3,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 4.5, "up": 2, "side": -2.5, "fov": 50, "lookHeight": 1.8},
+      "focus": "SP-HL-0006",
+      "aspect": "9:16",
+      "cardScale": 0.8
+    }
+  ]
+}

@@ -104,6 +104,9 @@ namespace DeviceChain.Sitepulse.Tasks
         public TaskRequest Running => active;
         public double SpeedMps => follow.Speed;
 
+        /// <summary>The route the machine is driving now (to a destination, to the queue, into the bay, back to its track); null when it is not driving one.</summary>
+        public Route CurrentRoute => follow.Route;
+
         /// <summary>The bay is held or waited for by this machine.</summary>
         public bool WantsBay => Phase == TaskPhase.WaitingForBay || Phase == TaskPhase.EnteringBay || Phase == TaskPhase.Refuelling;
 
