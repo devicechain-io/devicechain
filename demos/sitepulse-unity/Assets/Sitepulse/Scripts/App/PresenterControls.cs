@@ -72,6 +72,28 @@ namespace DeviceChain.Sitepulse.App
             Version++;
         }
 
+        /// <summary>The machine the presenter picked (a key or a click), whose card shows whatever its state; null when it is only following the latest command.</summary>
+        public string Focus => manual ? Selected : null;
+
+        /// <summary>Selects a machine by a click and holds it. False for an id that is not one of the director's machines (the plant).</summary>
+        public bool Pick(string id)
+        {
+            var i = id == null ? -1 : IndexOf(id);
+            if (i < 0) return false;
+            selected = i;
+            manual = true;
+            Version++;
+            return true;
+        }
+
+        /// <summary>Drops the held selection: the panel follows the latest command again.</summary>
+        public void ClearFocus()
+        {
+            if (!manual) return;
+            manual = false;
+            Version++;
+        }
+
         /// <summary>Follows the machine most recently commanded, unless the presenter picked one since.</summary>
         public void FollowLatest(string latestCommanded)
         {

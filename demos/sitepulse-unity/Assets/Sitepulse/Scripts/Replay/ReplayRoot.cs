@@ -149,6 +149,7 @@ namespace DeviceChain.Sitepulse.Replay
                 screen.SetBadge(Badge(data.Header.RunId, date), false);
             }
 
+            if (!given.Options.Render) overlay.Picked += OnPicked;
             ready = true;
             phase = given.Options.Render ? Phase.ShotBegin : Phase.Playing;
             return true;
@@ -164,6 +165,7 @@ namespace DeviceChain.Sitepulse.Replay
             overlay.Source = source;
             overlay.Clock = () => session.WallClock;
             overlay.ReplayTag = composition.ReplayTag;
+            overlay.CommandsSince = session.Header.StartedAtUtc;
             return source;
         }
 
@@ -247,8 +249,8 @@ namespace DeviceChain.Sitepulse.Replay
                 if (kb.leftArrowKey.wasPressedThisFrame) { delta = -KeySeekSeconds; jumped = true; }
                 if (kb.rightArrowKey.wasPressedThisFrame) { delta = KeySeekSeconds; jumped = true; }
                 if (kb.homeKey.wasPressedThisFrame) { session.Seek(0); Jumped(); }
-                if (kb.leftBracketKey.wasPressedThisFrame) { selected = (selected + recorded.Count - 1) % recorded.Count; manualSelection = true; }
-                if (kb.rightBracketKey.wasPressedThisFrame) { selected = (selected + 1) % recorded.Count; manualSelection = true; }
+                if (kb.leftBracketKey.wasPressedThisFrame) { selected = (selected + recorded.Count - 1) % recorded.Count; manualSelection = true; overlay.Selected = recorded[selected]; }
+                if (kb.rightBracketKey.wasPressedThisFrame) { selected = (selected + 1) % recorded.Count; manualSelection = true; overlay.Selected = recorded[selected]; }
                 if (kb.tKey.wasPressedThisFrame) showTimeline = !showTimeline;
             }
 
@@ -390,6 +392,8 @@ namespace DeviceChain.Sitepulse.Replay
             }
 
             cam.targetTexture = target;
+            // the follow camera's target (or the shot's own focus) is the selected machine: its card shows, whatever its state
+            overlay.Selected = p.Shot.Selected;
             session.Seek(p.PrerollFrom);
             Jumped();
             written[p.Shot.Name] = 0;
@@ -456,8 +460,17 @@ namespace DeviceChain.Sitepulse.Replay
             }
         }
 
+        // a click on a machine selects it, a click on nothing lets the panel follow the latest command again
+        void OnPicked(string id)
+        {
+            var i = id == null ? -1 : recorded.IndexOf(id);
+            manualSelection = i >= 0;
+            if (i >= 0) selected = i;
+        }
+
         void OnDestroy()
         {
+            if (overlay != null) overlay.Picked -= OnPicked;
             if (inputs != null && inputs.Options.Render) Time.captureDeltaTime = 0f;
             Time.timeScale = 1f;
             if (cam != null) cam.targetTexture = null;

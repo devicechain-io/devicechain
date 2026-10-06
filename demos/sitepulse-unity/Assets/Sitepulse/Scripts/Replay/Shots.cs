@@ -326,6 +326,12 @@ namespace DeviceChain.Sitepulse.Replay
         public int Height { get; set; }
         public string Aspect { get; set; }
         public CameraSpec Camera { get; set; }
+
+        /// <summary>The machine whose card is shown for the shot, besides alarms and commands; null: the follow camera's target, if there is one.</summary>
+        public string Focus { get; set; }
+
+        /// <summary>The machine selected while the shot renders.</summary>
+        public string Selected => Focus ?? (Camera != null && Camera.Rig == RigKind.Follow ? Camera.Target : null);
     }
 
     /// <summary>A shots file: the frame rate and the shots.</summary>
@@ -361,7 +367,7 @@ namespace DeviceChain.Sitepulse.Replay
                     if (string.IsNullOrEmpty(name) || !IsSafeName(name)) throw new ShotException(where + ": \"name\" is required and may hold only letters, digits, - and _ (it is a directory name)");
                     if (!names.Add(name)) throw new ShotException(where + ": the name is used twice");
                     foreach (var p in s.EnumerateObject())
-                        if (p.Name != "name" && p.Name != "startEvent" && p.Name != "offset" && p.Name != "duration" && p.Name != "preroll" && p.Name != "aspect" && p.Name != "width" && p.Name != "height" && p.Name != "camera")
+                        if (p.Name != "name" && p.Name != "startEvent" && p.Name != "offset" && p.Name != "duration" && p.Name != "preroll" && p.Name != "aspect" && p.Name != "width" && p.Name != "height" && p.Name != "camera" && p.Name != "focus")
                             throw new ShotException($"{where}: unknown field \"{p.Name}\"");
                     if (!s.TryGetProperty("startEvent", out var se)) throw new ShotException(where + ": \"startEvent\" is required: a shot starts from a recorded event, never from a time");
                     if (!s.TryGetProperty("camera", out var cam)) throw new ShotException(where + ": \"camera\" is required");
@@ -374,6 +380,7 @@ namespace DeviceChain.Sitepulse.Replay
                         Preroll = JsonIo.Num(s, "preroll", DefaultPreroll),
                         Aspect = JsonIo.Str(s, "aspect", "16:9"),
                         Camera = CameraSpec.Read(cam, where),
+                        Focus = JsonIo.Str(s, "focus"),
                     };
                     if (!(shot.Duration > 0 && shot.Duration <= 600)) throw new ShotException(where + ": \"duration\" is required, in seconds, up to 600");
                     if (shot.Preroll < 0 || shot.Preroll > 60) throw new ShotException(where + ": \"preroll\" is 0 to 60 seconds");
@@ -439,6 +446,7 @@ namespace DeviceChain.Sitepulse.Replay
             foreach (var shot in file.Shots)
             {
                 var ev = shot.StartEvent.Resolve(data);
+                if (shot.Focus != null && !data.Sim.TryIndexOf(shot.Focus, out _)) throw new ShotException($"shot {shot.Name}: focus names machine \"{shot.Focus}\", which the recording does not hold");
                 foreach (var m in shot.Camera.Machines())
                     if (!data.Sim.TryIndexOf(m, out _)) throw new ShotException($"shot {shot.Name}: the camera names machine \"{m}\", which the recording does not hold");
                 var start = ev.T + shot.Offset;
