@@ -96,6 +96,18 @@ a server close as a `Closed` message carrying the spec close code — so the SDK
 is identical no matter which transport backs it. The `TransportSeamTests` exercise the SDK end-to-end
 over in-memory fakes that are neither `HttpClient` nor `ClientWebSocket`, proving the WebGL substitution.
 
+## WebSocket dialing and proxies
+
+The default `ClientWebSocketFactory` does not use `System.Net.WebSockets.ClientWebSocket`. It opens the
+TCP connection itself, racing the host's resolved addresses (the next address is tried as soon as the
+previous one fails, or after 250 ms), then performs the WebSocket upgrade over that stream. This keeps a
+name such as `localhost`, which commonly resolves to `::1` and `127.0.0.1`, from stalling for the OS
+connect timeout when nothing listens on the first address. The `Host` header and the TLS server name stay
+the endpoint's host. A refused upgrade now reports the HTTP status line (for example `404 Not Found`).
+
+Because it no longer goes through `ClientWebSocket`, the subscription transport does not use a system HTTP
+proxy. If you need one, inject your own `IWebSocketFactory`.
+
 ## Build & test
 
 ```bash
