@@ -25,10 +25,11 @@ namespace DeviceChain.Sitepulse.Platform
     /// <summary>
     /// The smallest scene that proves the live path in a player before any overlay work depends on
     /// it: the runner's /config.json over UnityWebRequest, one GraphQL query over the SDK's HTTP
-    /// transport, and one GraphQL-over-WebSocket subscription over <c>ClientWebSocket</c> — the one
-    /// path no IL2CPP player had run. It also times raw TCP connects to <c>localhost</c> by address
-    /// family, because on Windows <c>localhost</c> resolves to <c>::1</c> first and, under WSL
-    /// mirrored networking, nothing answers there: the connect hangs instead of being refused.
+    /// transport, and a round trip: a measurement subscription over the SDK's WebSocket transport,
+    /// then one measurement published as the plant over MQTT, which must come back on it. It also
+    /// times raw TCP connects to <c>localhost</c> by address family, because on Windows
+    /// <c>localhost</c> resolves to <c>::1</c> first and, under WSL mirrored networking, nothing
+    /// answers there: a connect that tries <c>::1</c> alone hangs instead of being refused.
     /// Results go to the player log and to <c>live-smoke.log</c> beside it; the runner's token is
     /// never written anywhere. Quits when done, so it can run unattended
     /// (<c>-batchmode -nographics</c>).
@@ -36,7 +37,7 @@ namespace DeviceChain.Sitepulse.Platform
     public sealed class LiveSmokeProbe : MonoBehaviour
     {
         [SerializeField] private string runnerUrl = "http://localhost:8090";
-        [SerializeField] private float subscribeSeconds = 35f;
+        [SerializeField] private float roundTripSeconds = 40f;
         [SerializeField] private bool quitWhenDone = true;
 
         private static readonly JsonTypeInfo<JsonElement> Json = PlatformJson.Element;
@@ -118,43 +119,87 @@ namespace DeviceChain.Sitepulse.Platform
             Line($"devicesByExternalId {sw.ElapsedMilliseconds} ms · {devices.GetArrayLength()} of {ids.Count} resolved");
             if (devices.GetArrayLength() != ids.Count) Fail("not every scene device resolved");
 
-            await RawWebSocket(wsUrl);
-            await RawWebSocket("ws://127.0.0.1/api/event-management/graphql");
-            await DialedWebSocket(wsUrl, token);
+            // 4. One subscription through the SDK, and one measurement published to it over MQTT
+            //    as the plant: the Sitepulse runner emits nothing itself (the player is the
+            //    device), so the round trip is the only way to see an item arrive.
+            string plantToken = null;
+            foreach (var d in devices.EnumerateArray())
+                if (d.GetProperty("externalId").GetString() == "SP-PL-0001") plantToken = d.GetProperty("token").GetString();
+            if (plantToken == null) { Fail("SP-PL-0001 did not resolve"); return; }
 
-            // 4. One subscription over ClientWebSocket: connect, first item, items in a window.
             var ws = new GraphQlWsClient(new ClientWebSocketFactory(), new Uri(wsUrl), tokens);
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(subscribeSeconds));
-            var empty = JsonDocument.Parse("{}").RootElement;
-            var count = 0;
-            long first = -1;
-            var seen = new HashSet<string>();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(roundTripSeconds));
+            long opened = -1, arrived = -1;
+            var marker = 1000 + new System.Random().Next(9000) + 0.25;
+            var connected = new TaskCompletionSource<bool>();
             sw.Restart();
-            try
+            var listen = Listen();
+            async Task Listen()
             {
-                await foreach (var item in ws.SubscribeAsync("subscription { measurementStream { deviceToken name value occurredTime } }",
-                                   empty, Json, Json, cts.Token))
+                try
                 {
-                    if (first < 0) first = sw.ElapsedMilliseconds;
-                    count++;
-                    seen.Add(item.GetProperty("measurementStream").GetProperty("name").GetString());
+                    var stream = ws.SubscribeAsync("subscription($d: String) { measurementStream(deviceToken: $d) { deviceToken name value occurredTime } }",
+                        JsonDocument.Parse("{\"d\":\"" + plantToken + "\"}").RootElement,
+                        Json, Json, cts.Token).GetAsyncEnumerator(cts.Token);
+                    var next = stream.MoveNextAsync();
+                    opened = sw.ElapsedMilliseconds;
+                    connected.TrySetResult(true);
+                    while (await next)
+                    {
+                        var m = stream.Current.GetProperty("measurementStream");
+                        if (m.GetProperty("name").GetString() == "throughput_tph" && Math.Abs(m.GetProperty("value").GetDouble() - marker) < 0.001)
+                        {
+                            arrived = sw.ElapsedMilliseconds;
+                            cts.Cancel();
+                            break;
+                        }
+                        next = stream.MoveNextAsync();
+                    }
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                // the window closing is the expected end
-            }
-            catch (Exception e)
-            {
-                Fail($"measurementStream after {sw.ElapsedMilliseconds} ms: {Chain(e)}");
-            }
-            finally
-            {
-                await ws.DisposeAsync();
+                catch (OperationCanceledException) { }
+                catch (Exception e) { Fail($"measurementStream after {sw.ElapsedMilliseconds} ms: {Chain(e)}"); }
+                finally { connected.TrySetResult(false); }
             }
 
-            Line($"measurementStream · first item {(first < 0 ? "never" : first + " ms")} · {count} items in {subscribeSeconds:0} s · metrics: {string.Join(",", seen)}");
-            if (count == 0) Fail("no measurement arrived over the subscription");
+            await connected.Task;
+            await Task.Delay(1500);                                // let the subscribe frame reach the server
+
+            var settings = LiveSettingsLoader.Resolve(Environment.GetCommandLineArgs(),
+                Path.Combine(Application.persistentDataPath, LiveSettingsLoader.FileName), File.Exists, File.ReadAllText);
+            if (!settings.Ok) { Fail("live settings: " + settings.Error); return; }
+            var credData = await gql.SendAsync(Area.DeviceManagement,
+                "query Creds($t: [String!]!) { deviceCredentialsByToken(tokens: $t) { credentialId device { token } } }",
+                JsonDocument.Parse(VarsJson.StringList("t", new[] { plantToken + "-cred" })).RootElement, Json, Json);
+            var rows = credData.GetProperty("deviceCredentialsByToken");
+            if (rows.GetArrayLength() != 1) { Fail("plant credential not found"); return; }
+            var credentialId = rows[0].GetProperty("credentialId").GetString();
+
+            var mqttSw = Stopwatch.StartNew();
+            var options = new DeviceChain.Sdk.Mqtt.MqttSessionOptions(new Uri(Str("mqttBroker")), Str("instanceId"), Str("tenant"), plantToken, credentialId)
+            {
+                Trust = MqttTrust.PinnedCa(File.ReadAllBytes(settings.Value.CaPemPath)),
+            };
+            await using (var session = new DeviceChain.Sdk.Mqtt.MqttDeviceSession(options))
+            {
+                try
+                {
+                    await session.StartAsync((c, _) => Task.FromResult(DeviceChain.Sdk.Mqtt.CommandOutcome.Failed("smoke probe accepts no commands")), CancellationToken.None);
+                    Line($"mqtt session ready in {mqttSw.ElapsedMilliseconds} ms");
+                    var publisher = new DeviceChain.Sdk.Ingest.DeviceEventPublisher(new DeviceChain.Sdk.Ingest.MqttDeviceEventCarrier(session, plantToken));
+                    await publisher.EmitMeasurementsAsync(plantToken, credentialId, new Dictionary<string, double> { ["throughput_tph"] = marker });
+                    Line($"published throughput_tph={marker} as SP-PL-0001 at {sw.ElapsedMilliseconds} ms");
+                }
+                catch (Exception e)
+                {
+                    Fail($"mqtt after {mqttSw.ElapsedMilliseconds} ms: {Chain(e)}");
+                }
+
+                await listen;
+            }
+
+            await ws.DisposeAsync();
+            Line($"measurementStream · open {opened} ms · our measurement {(arrived < 0 ? "NEVER arrived" : "arrived at " + arrived + " ms")}");
+            if (arrived < 0) Fail("the published measurement did not come back over the subscription");
         }
 
         private async Task TimeTcp(string host, int port, AddressFamily family)
@@ -173,88 +218,6 @@ namespace DeviceChain.Sitepulse.Platform
             {
                 Line($"tcp {host}:{port} family={family} failed after {sw.ElapsedMilliseconds} ms: {e.GetType().Name}: {e.Message}");
             }
-        }
-
-        private async Task RawWebSocket(string url)
-        {
-            var sw = Stopwatch.StartNew();
-            using var socket = new System.Net.WebSockets.ClientWebSocket();
-            socket.Options.AddSubProtocol("graphql-transport-ws");
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                await socket.ConnectAsync(new Uri(url), cts.Token);
-                Line($"raw ClientWebSocket {url} → {socket.State} in {sw.ElapsedMilliseconds} ms (subprotocol {socket.SubProtocol})");
-            }
-            catch (Exception e)
-            {
-                Line($"raw ClientWebSocket {url} failed after {sw.ElapsedMilliseconds} ms: {Chain(e)}");
-            }
-        }
-
-        // Prototype: race the resolver's addresses (each next family 250 ms after the last), keep the
-        // first socket that connects, do the HTTP/1.1 upgrade by hand so Host stays the URI's host,
-        // then let the runtime frame the stream.
-        private async Task DialedWebSocket(string url, string token)
-        {
-            var sw = Stopwatch.StartNew();
-            var uri = new Uri(url);
-            try
-            {
-                var addrs = await Dns.GetHostAddressesAsync(uri.Host);
-                var pending = new List<Task<Socket>>();
-                var winner = (Socket)null;
-                using var giveUp = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                foreach (var a in addrs)
-                {
-                    var s = new Socket(a.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-                    pending.Add(s.ConnectAsync(a, uri.Port).ContinueWith(t => { if (t.IsFaulted) { s.Dispose(); throw t.Exception.InnerException; } return s; }));
-                    var settled = await Task.WhenAny(Task.WhenAny(pending), Task.Delay(250));
-                    winner = FirstConnected(pending);
-                    if (winner != null) break;
-                }
-                while (winner == null && pending.Exists(t => !t.IsCompleted))
-                {
-                    await Task.WhenAny(pending.FindAll(t => !t.IsCompleted));
-                    winner = FirstConnected(pending);
-                }
-                foreach (var t in pending) if (t.Status == TaskStatus.RanToCompletion && t.Result != winner) t.Result.Dispose();
-                if (winner == null) throw new SocketException((int)SocketError.HostUnreachable);
-                var dialMs = sw.ElapsedMilliseconds;
-                var via = ((IPEndPoint)winner.RemoteEndPoint).Address;
-                var stream = new NetworkStream(winner, ownsSocket: true);
-                var key = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
-                var req = $"GET {uri.PathAndQuery} HTTP/1.1\r\nHost: {uri.Host}{(uri.IsDefaultPort ? "" : ":" + uri.Port)}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: graphql-transport-ws\r\n\r\n";
-                var bytes = Encoding.ASCII.GetBytes(req);
-                await stream.WriteAsync(bytes, 0, bytes.Length);
-                var head = new StringBuilder();
-                var one = new byte[1];
-                while (!head.ToString().EndsWith("\r\n\r\n"))
-                {
-                    if (await stream.ReadAsync(one, 0, 1) == 0) throw new IOException("closed during handshake");
-                    head.Append((char)one[0]);
-                }
-                var status = head.ToString().Split('\n')[0].Trim();
-                if (!status.Contains(" 101 ")) throw new IOException("upgrade refused: " + status);
-                var ws = System.Net.WebSockets.WebSocket.CreateFromStream(stream, false, "graphql-transport-ws", TimeSpan.FromSeconds(30));
-                var init = Encoding.UTF8.GetBytes("{\"type\":\"connection_init\",\"payload\":{\"Authorization\":\"Bearer " + token + "\"}}");
-                await ws.SendAsync(new ArraySegment<byte>(init), System.Net.WebSockets.WebSocketMessageType.Text, true, CancellationToken.None);
-                var buf = new byte[4096];
-                var r = await ws.ReceiveAsync(new ArraySegment<byte>(buf), giveUp.Token);
-                var reply = Encoding.UTF8.GetString(buf, 0, r.Count);
-                Line($"dialed WebSocket {url} → dial {dialMs} ms via {via}, open+ack {sw.ElapsedMilliseconds} ms, state={ws.State}, first frame type={(reply.Contains("connection_ack") ? "connection_ack" : reply.Substring(0, Math.Min(60, reply.Length)))}");
-                await ws.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-            }
-            catch (Exception e)
-            {
-                Fail($"dialed WebSocket {url} failed after {sw.ElapsedMilliseconds} ms: {Chain(e)}");
-            }
-        }
-
-        private static Socket FirstConnected(List<Task<Socket>> pending)
-        {
-            foreach (var t in pending) if (t.Status == TaskStatus.RanToCompletion) return t.Result;
-            return null;
         }
 
         private static string Chain(Exception e)
