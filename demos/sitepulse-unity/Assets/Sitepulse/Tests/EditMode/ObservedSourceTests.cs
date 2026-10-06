@@ -345,7 +345,7 @@ namespace DeviceChain.Sitepulse.Tests
         {
             public event Action<LinkState> StateChanged { add { } remove { } }
             public bool CanPublish => false;
-            public Task StartAsync(string refusalReason, Action<string> onCommand, CancellationToken cancellationToken) => Task.CompletedTask;
+            public Task StartAsync(DeviceChain.Sdk.Mqtt.CommandHandler handler, CancellationToken cancellationToken) => Task.CompletedTask;
             public Task PublishAsync(Sample sample, CancellationToken cancellationToken) => Task.CompletedTask;
             public ValueTask DisposeAsync() => default;
         }

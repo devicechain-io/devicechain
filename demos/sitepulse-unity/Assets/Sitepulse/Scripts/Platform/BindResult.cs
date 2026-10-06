@@ -29,6 +29,9 @@ namespace DeviceChain.Sitepulse.Platform
         public string Detail { get; set; }
         public IReadOnlyList<string> UnmappedAreas { get; set; } = Array.Empty<string>();
 
+        /// <summary>Every area the device's goto-area command accepts (the profile's enum), mapped or not. Empty when the profile lists none.</summary>
+        public IReadOnlyList<string> Areas { get; set; } = Array.Empty<string>();
+
         public bool IsBound => Outcome == BindOutcome.Bound;
 
         /// <summary>The line the readiness panel shows for a device that is not bound.</summary>

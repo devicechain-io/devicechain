@@ -188,8 +188,11 @@ namespace DeviceChain.Sitepulse.Platform
                 if (!TryEnumValues(schema, out var values, out var why))
                     problems.Add($"command {c.AreaCommand} has an unreadable parameterSchema: {why}");
                 else
+                {
+                    r.Areas = values;
                     foreach (var area in values)
                         if (!c.Zones.Contains(area)) unmapped.Add(area);
+                }
             }
 
             if (problems.Count > 0)

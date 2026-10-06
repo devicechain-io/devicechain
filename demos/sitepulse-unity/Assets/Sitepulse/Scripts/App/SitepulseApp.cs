@@ -10,6 +10,7 @@ using DeviceChain.Sdk;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Sitepulse.Tasks;
 using DeviceChain.Sitepulse.Visuals;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -62,6 +63,14 @@ namespace DeviceChain.Sitepulse.App
         readonly HashSet<string> greyed = new HashSet<string>(StringComparer.Ordinal);
         DeviceFleet plane;
         RigPoseSource poses;
+        TaskDirector director;
+        RefuelVignette vignette;
+        PresenterControls presenter;
+        SiteGeometry site;
+        Timeline timeline;
+        string tasksShown;
+        bool showTimeline = true;
+        RunnerConfig runnerConfig;
         PlatformObserver observer;
         ObservedState observed;
         readonly ObserverStatus observerStatus = new ObserverStatus();
@@ -186,6 +195,8 @@ namespace DeviceChain.Sitepulse.App
         {
             PlatformLog.Error(title + ": " + message);
             stopped = true;
+            // nothing will step the task layer or drain the plane again: whatever is running or waiting is answered now
+            Teardown();
             HideCards();
             hud.SetBanner(null);
             hud.SetBadge("LIVE · not running", BadgeTone.Error);
@@ -210,6 +221,15 @@ namespace DeviceChain.Sitepulse.App
 
             var devices = SitepulseScene.Devices(fleet.choreography.text, overlay.plantId);
             var contract = SitepulseScene.Contract(SitepulseScene.Zones(overlay.features.text));
+            try
+            {
+                site = SiteGeometryReader.Parse(overlay.features.text);
+            }
+            catch (Exception e) when (e is FormatException || e is System.Text.Json.JsonException || e is InvalidOperationException)
+            {
+                Stop("Live mode cannot start", "the quarry feature file cannot be used for routing: " + e.Message);
+                return;
+            }
 
             var client = new RunnerConfigClient(settings.Value);
             var cfg = await client.Fetch(ct);
@@ -220,6 +240,7 @@ namespace DeviceChain.Sitepulse.App
             }
 
             tenant = cfg.Value.Tenant;
+            runnerConfig = cfg.Value;
             hud.SetBadge(SitepulseModes.Badge(mode, cfg.Value.Tenant, cfg.Value.InstanceId), BadgeTone.Live);
             PlatformLog.Info($"live · {cfg.Value} · api {cfg.Value.ApiOrigin}");
 
@@ -255,8 +276,9 @@ namespace DeviceChain.Sitepulse.App
 
             // sessions: one per credentialed device; a device without one is grey and does not publish
             poses = new RigPoseSource(fleet, overlay);
-            plane = new DeviceFleet(board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem), platformState: lastState);
+            plane = new DeviceFleet(board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem), platformState: lastState, sceneHasZone: site.HasZone);
             _ = plane.StartAll();
+            BuildTaskLayer();
 
             // the observer: the platform's own report of what the 19 devices are doing. It starts after the
             // sessions so the first thing it can honestly confirm is the telemetry they publish.
@@ -269,6 +291,27 @@ namespace DeviceChain.Sitepulse.App
             Render();
         }
 
+        // every machine that has a session also has a task layer: a command it is sent drives its rig. The
+        // director is wired to the plane before the plane's first Pump, so no command meets a plane without one.
+        void BuildTaskLayer()
+        {
+            if (plane == null || fleet == null) return;
+            var rigs = new Dictionary<string, MachineRig>(StringComparer.Ordinal);
+            foreach (var rig in fleet.Machines) rigs[rig.name] = rig;
+            var machines = new List<(IMachineBody, MachineModel)>();
+            foreach (var host in plane.Hosts)
+                if (rigs.TryGetValue(host.ExternalId, out var rig)) machines.Add((new FleetBody(fleet, rig), host.Simulation.Model));
+            timeline = new Timeline();
+            director = new TaskDirector(site, RouteGraph.Build(site), timeline, machines, plane.Generation);
+            plane.Tasks = director;
+            // the bay's attendant serves the machine the Refuelling state names, not whoever stands in the bay
+            vignette = FindAnyObjectByType<RefuelVignette>();
+            if (vignette != null) vignette.drivenByState = true;
+            PlatformLog.Info($"task layer · {machines.Count} machines · route network of {director.Graph.NodeCount} nodes in {director.Graph.Components()} piece(s)");
+            presenter = new PresenterControls(director, id => plane[id].Simulation.Model,
+                () => runnerConfig == null || broker == null ? null : OperatorQueries.Create(runnerConfig, broker, Area.CommandDelivery).AsQueryFn());
+        }
+
         void Update()
         {
             if (broker == null) return;
@@ -276,6 +319,9 @@ namespace DeviceChain.Sitepulse.App
             if (plane != null && !stopped)
             {
                 plane.Pump();
+                var scale = fleet != null ? fleet.timeScale : 1f;
+                director?.Step(Time.deltaTime * scale, Time.unscaledDeltaTime);
+                if (vignette != null && director != null) vignette.Servicing = director.Servicing;
                 ApplyGhosts();
             }
 
@@ -285,6 +331,7 @@ namespace DeviceChain.Sitepulse.App
                 board.EvaluateObserved(DateTimeOffset.UtcNow, observed.NewestOwnRunAt);
                 hud.SetBanner(ObserverBanner.Text(observerStatus, observed));
                 UpdateSimulation();
+                UpdatePresenter();
                 // the header in the log too, so an unattended (batchmode) run can be read afterwards
                 if (Time.unscaledTime >= nextStatusLog)
                 {
@@ -312,6 +359,53 @@ namespace DeviceChain.Sitepulse.App
             if (!showSimulation || plane == null || Time.unscaledTime < nextSimulation) return;
             nextSimulation = Time.unscaledTime + RenderEverySeconds;
             hud.ShowSimulation(LocalSimulationView.Text(plane.Hosts, DateTimeOffset.UtcNow));
+        }
+
+        // The presenter's keys (design 4.5): inputs only, and each says what it did in the timeline panel.
+        void UpdatePresenter()
+        {
+            if (presenter == null) return;
+            hud.ShowHelp(PresenterControls.HelpLine);
+            var kb = Keyboard.current;
+            if (kb != null)
+            {
+                if (kb.leftBracketKey.wasPressedThisFrame) presenter.Select(-1);
+                if (kb.rightBracketKey.wasPressedThisFrame) presenter.Select(1);
+                if (kb.tKey.wasPressedThisFrame) showTimeline = !showTimeline;
+                if (kb.pKey.wasPressedThisFrame) presenter.PrepareLowFuel();
+                if (kb.gKey.wasPressedThisFrame) presenter.Resume();
+                if (kb.fKey.wasPressedThisFrame) RunPresenterAsync(presenter.BeginFresh);
+                if (presenter.Fresh == FreshState.Confirm)
+                {
+                    if (kb.yKey.wasPressedThisFrame) RunPresenterAsync(presenter.ConfirmFresh);
+                    else if (kb.nKey.wasPressedThisFrame || kb.escapeKey.wasPressedThisFrame) presenter.DeclineFresh();
+                }
+            }
+
+            presenter.FollowLatest(timeline?.LastCommanded);
+            var text = showTimeline ? presenter.PanelText(DateTimeOffset.UtcNow) : null;
+            // the panel's text moves with the clock (a message ages out), so it is set when it differs
+            if (text != tasksShown)
+            {
+                tasksShown = text;
+                hud.ShowTasks(text != null ? HudText.Esc(text) : null);
+            }
+        }
+
+        async void RunPresenterAsync(Func<CancellationToken, Task> action)
+        {
+            try
+            {
+                await action(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // the app is going away
+            }
+            catch (Exception e)
+            {
+                PlatformLog.Warn($"presenter action failed: {e.GetType().Name}: {e.Message}");
+            }
         }
 
         // After every Update has run, so the fleet has already moved the machines for this frame: the pose is
@@ -381,6 +475,11 @@ namespace DeviceChain.Sitepulse.App
             if (plane == null) return;
             var p = plane;
             plane = null;
+            // the run is over: whatever a machine was doing is answered failed (reset), the handlers are given a
+            // moment to return and the SDK to publish what they returned, and only then do the sessions go
+            var answered = director != null ? director.FailAll() : 0;
+            var unanswered = p.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(300), answered);
+            if (unanswered > 0) PlatformLog.Warn($"{unanswered} command handler(s) had not returned when the sessions were closed");
             if (!p.Shutdown(DeviceFleet.DisposeTimeout + TimeSpan.FromSeconds(1)))
                 PlatformLog.Warn("device sessions did not all close in time");
         }

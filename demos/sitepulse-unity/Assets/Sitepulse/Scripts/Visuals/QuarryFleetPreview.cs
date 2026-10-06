@@ -70,6 +70,7 @@ namespace DeviceChain.Sitepulse.Visuals
             public float offset, travel;
             public bool posed;
             public float halfLength, halfWidth;
+            public bool detached;
             public Material[] dusty = Array.Empty<Material>();
             public float dustGround = float.NaN;
         }
@@ -222,6 +223,102 @@ namespace DeviceChain.Sitepulse.Visuals
             }
         }
 
+        // ---- task control: a machine taken off its track is driven by someone else (the task layer) -----------
+
+        Unit Find(string id)
+        {
+            foreach (var u in units)
+                if (u.rig != null && u.rig.name == id) return u;
+            return null;
+        }
+
+        /// <summary>Whether the machine is on its routine track (an unknown id answers false).</summary>
+        public bool IsOnTrack(string id) => Find(id) is Unit u && !u.detached;
+
+        /// <summary>
+        /// Takes the machine off its track at the pose it has now, with its implements stowed for travel:
+        /// from here on only <see cref="Drive"/> moves it, until <see cref="Attach"/> puts it back.
+        /// </summary>
+        public void Detach(string id)
+        {
+            var u = Find(id);
+            if (u == null || u.detached) return;
+            u.detached = true;
+            var rig = u.rig;
+            switch (rig.Kind)
+            {
+                case MachineKind.Dozer:
+                    rig.bladeArm = FleetRig.DozerBladeRaised;
+                    rig.ripper = 0f;
+                    break;
+                case MachineKind.Loader:
+                    rig.boom = 0f;
+                    rig.bucket = -4f;
+                    break;
+                case MachineKind.Hauler:
+                    rig.dump = 0f;
+                    break;
+            }
+        }
+
+        /// <summary>Puts a detached machine on the ground at a place, facing a way, having moved <paramref name="distance"/> metres (wheels turn by it).</summary>
+        public void Drive(string id, float x, float z, float heading, float distance, float steer)
+        {
+            var u = Find(id);
+            if (u == null || !u.detached || terrain == null || !terrain.Built) return;
+            Place(u, x, z, heading);
+            if (distance != 0f) u.rig.AddTravel(distance);
+            if (u.rig.Kind != MachineKind.Dozer) u.rig.steer = steer;
+        }
+
+        /// <summary>The place on the machine's own track nearest to a point: its position, heading and how far into the loop it is.</summary>
+        public bool TryNearestTrackPoint(string id, float x, float z, out Vector2 position, out float heading, out float trackSeconds)
+        {
+            position = default;
+            heading = 0f;
+            trackSeconds = 0f;
+            var u = Find(id);
+            if (u == null || data == null) return false;
+            var tr = u.track;
+            int frames = tr.data.Length / Stride;
+            int best = -1;
+            float bestD = float.MaxValue;
+            for (int i = 0; i < frames; i++)
+            {
+                float dx = tr.data[i * Stride] - x, dz = tr.data[i * Stride + 1] - z;
+                float d = dx * dx + dz * dz;
+                if (d < bestD) { bestD = d; best = i; }
+            }
+            if (best < 0) return false;
+            position = new Vector2(tr.data[best * Stride], tr.data[best * Stride + 1]);
+            heading = tr.data[best * Stride + 2];
+            trackSeconds = best * data.dt;
+            return true;
+        }
+
+        /// <summary>Puts a detached machine back on its track at a place in the loop (as <see cref="TryNearestTrackPoint"/> gave it): it resumes routine work from there.</summary>
+        public void Attach(string id, float trackSeconds)
+        {
+            var u = Find(id);
+            if (u == null || !u.detached) return;
+            u.offset = time - trackSeconds;
+            u.posed = false;
+            u.detached = false;
+            Seek(time);
+        }
+
+        /// <summary>The machine's pose in the site's metres: position and heading (degrees clockwise from north).</summary>
+        public bool TryGetPose(string id, out float x, out float z, out float heading)
+        {
+            var u = Find(id);
+            if (u == null) { x = z = heading = 0f; return false; }
+            var t = u.rig.transform;
+            x = t.position.x;
+            z = t.position.z;
+            heading = t.eulerAngles.y;
+            return true;
+        }
+
         /// <summary>Pose every machine at <paramref name="t"/> seconds into the choreography.</summary>
         public void Seek(float t)
         {
@@ -229,6 +326,7 @@ namespace DeviceChain.Sitepulse.Visuals
             if (data == null || terrain == null || !terrain.Built) return;
             foreach (var u in units)
             {
+                if (u.detached) continue;
                 var tr = u.track;
                 int frames = tr.data.Length / Stride;
                 float ft = Mathf.Repeat(t - u.offset, tr.period) / data.dt;
