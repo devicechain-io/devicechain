@@ -88,10 +88,12 @@ namespace DeviceChain.Sitepulse.App
         public bool IsManual => manual;
 
         /// <summary>Prepares the selected machine's next low-fuel cycle (inputs only: it can lower the tank, never raise it).</summary>
-        public string PrepareLowFuel()
+        public string PrepareLowFuel() => PrepareLowFuel(Selected);
+
+        /// <summary>The same for a named machine (the acceptance run's probe); null when there is no such machine.</summary>
+        public string PrepareLowFuel(string id)
         {
-            var id = Selected;
-            if (id == null) return null;
+            if (id == null || IndexOf(id) < 0) return null;
             var said = PresenterActions.PrepareLowFuel(id, modelOf(id), director.Timeline);
             Say(id + ": " + said);
             return said;
