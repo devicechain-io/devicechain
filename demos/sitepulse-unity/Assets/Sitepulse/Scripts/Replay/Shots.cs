@@ -418,6 +418,11 @@ namespace DeviceChain.Sitepulse.Replay
 
         public int Frames { get; set; }
 
+        /// <summary>The event plus the offset fell before the recording began, so the shot starts at 0 instead; <see cref="ClampedBySeconds"/> is how much earlier it asked to start.</summary>
+        public bool StartClamped { get; set; }
+
+        public double ClampedBySeconds { get; set; }
+
         /// <summary>Where the pre-roll (frames simulated but not saved, so dust and exhaust have a history) begins.</summary>
         public double PrerollFrom { get; set; }
     }
@@ -428,7 +433,7 @@ namespace DeviceChain.Sitepulse.Replay
         /// Resolves every shot against the recording before anything is rendered: a shot whose event is absent, whose machine is not in the
         /// recording, or that would run past its end stops the whole render, so a half-rendered set never passes for a whole one.
         /// </summary>
-        public static List<PlannedShot> Plan(ShotFile file, RecordingData data)
+        public static List<PlannedShot> Plan(ShotFile file, RecordingData data, Action<string> warn = null)
         {
             var plan = new List<PlannedShot>();
             foreach (var shot in file.Shots)
@@ -437,7 +442,14 @@ namespace DeviceChain.Sitepulse.Replay
                 foreach (var m in shot.Camera.Machines())
                     if (!data.Sim.TryIndexOf(m, out _)) throw new ShotException($"shot {shot.Name}: the camera names machine \"{m}\", which the recording does not hold");
                 var start = ev.T + shot.Offset;
-                if (start < 0) start = 0;
+                var clamped = start < 0;
+                var clampedBy = clamped ? -start : 0.0;
+                if (clamped)
+                {
+                    start = 0;
+                    warn?.Invoke($"shot {shot.Name}: its event is at {ev.T:0.0} s and the offset is {shot.Offset:0.0} s, which is {clampedBy:0.0} s before the recording began: the shot starts at 0 s (render.json says so)");
+                }
+
                 var end = start + shot.Duration;
                 if (end > data.Duration + 1e-6)
                     throw new ShotException($"shot {shot.Name}: starts at {start:0.0} s and lasts {shot.Duration:0.0} s, but the recording is {data.Duration:0.0} s long");
@@ -446,6 +458,8 @@ namespace DeviceChain.Sitepulse.Replay
                     Shot = shot,
                     Event = ev,
                     Start = start,
+                    StartClamped = clamped,
+                    ClampedBySeconds = clampedBy,
                     Frames = (int)Math.Round(shot.Duration * file.Fps),
                     PrerollFrom = Math.Max(0.0, start - shot.Preroll),
                 });

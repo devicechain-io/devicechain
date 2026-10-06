@@ -53,6 +53,9 @@ namespace DeviceChain.Sitepulse.Recording
 
         /// <summary>The machine is on its routine track (false: a command is driving it).</summary>
         public bool OnTrack;
+
+        /// <summary>The machine's rig was gone from the scene when this frame was taken: the pose is where it was last seen, or NaN if it never was.</summary>
+        public bool Missing;
     }
 
     /// <summary>
@@ -63,7 +66,7 @@ namespace DeviceChain.Sitepulse.Recording
     /// frame    f64 t (seconds since the recording began)
     ///          then machineCount x 64-byte record, in the table's order:
     ///            f32 x y z heading pitch roll | f32 p1 p2 steer travel | f32 fuel engineTemp engineHours payload tyre
-    ///            | u8 mode | u8 phase | u8 flags (1 loaded, 2 onTrack) | u8 0
+    ///            | u8 mode | u8 phase | u8 flags (1 loaded, 2 onTrack, 4 missing) | u8 0
     /// </code>
     /// Frames follow one another to the end of the file; there is no frame count, so a file can be streamed. A file whose
     /// length is not a whole number of frames was cut short, and it is refused, never read as far as it goes.
@@ -154,7 +157,7 @@ namespace DeviceChain.Sitepulse.Recording
                 SimBinLayout.Put(buffer, ref o, s.PayloadT); SimBinLayout.Put(buffer, ref o, s.TyrePressureKpa);
                 buffer[o++] = s.Mode;
                 buffer[o++] = s.Phase;
-                buffer[o++] = (byte)((s.Loaded ? 1 : 0) | (s.OnTrack ? 2 : 0));
+                buffer[o++] = (byte)((s.Loaded ? 1 : 0) | (s.OnTrack ? 2 : 0) | (s.Missing ? 4 : 0));
                 buffer[o++] = 0;
             }
 
@@ -264,6 +267,7 @@ namespace DeviceChain.Sitepulse.Recording
             var flags = data[o + 62];
             s.Loaded = (flags & 1) != 0;
             s.OnTrack = (flags & 2) != 0;
+            s.Missing = (flags & 4) != 0;
             return s;
         }
 
@@ -284,9 +288,11 @@ namespace DeviceChain.Sitepulse.Recording
         }
 
         /// <summary>
-        /// The machine at time <paramref name="t"/>: positions and angles interpolated between the frames either side (angles by
-        /// the shortest way round), everything else as of the earlier frame. Before the first frame it is the first, after the
-        /// last it is the last, and across a gap longer than <see cref="MaxInterpolationGap"/> it holds the earlier one.
+        /// The machine at time <paramref name="t"/>. Between two frames that are no further apart than <see cref="MaxInterpolationGap"/>
+        /// (exactly that apart still interpolates; any further holds) these interpolate: x y z, heading pitch roll (the shortest way round),
+        /// p1 p2 steer travel, fuel, engine temperature, engine hours, payload and tyre pressure. These are always as of the earlier frame
+        /// and never blended: mode, phase, loaded, on-track and missing. Before the first frame it is the first, after the last it is
+        /// the last, and across a longer gap it holds the earlier frame whole.
         /// </summary>
         public MachineSample Sample(double t, int machine)
         {

@@ -413,10 +413,40 @@ namespace DeviceChain.Sitepulse.Tests
             }
 
             Assert.AreEqual(4, scanned, "run.json and the three logs");
-            // and the redaction is the one the log uses: the last four characters, so two can still be told apart
-            StringAssert.Contains("cred:…cdef", File.ReadAllText(Path.Combine(run.Dir, RecordingFiles.Device)));
+            // a credential is written as a fingerprint of itself (never its tail): two tokens that share their last four stay two
+            var expected = "hex:" + Fingerprint12(credential);
+            var deviceLog = File.ReadAllText(Path.Combine(run.Dir, RecordingFiles.Device));
+            StringAssert.Contains(expected, deviceLog);
+            StringAssert.DoesNotContain("cred:", deviceLog, "the log's own spelling is not the recording's");
+            StringAssert.DoesNotContain("cdef\"", deviceLog.Replace(expected, ""), "and no tail of it is left");
+            StringAssert.Contains("jwt:", deviceLog);
+            Assert.AreEqual("cred:…cdef", Redactor.Redact(credential), "log output is unchanged");
             // what the header says is still the header (the run's id is not a credential and is untouched)
             Assert.AreEqual("run-20261006T140000Z", RunHeader.Parse(File.ReadAllText(Path.Combine(run.Dir, RecordingFiles.RunJson))).RunId);
+        }
+
+        static string Fingerprint12(string run)
+        {
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(run));
+            return string.Concat(hash.Take(6).Select(b => b.ToString("x2")));
+        }
+
+        [Test]
+        public void ARecordingFingerprintsAHexRunSoDistinctTokensStayDistinctAndNothingIsWrittenOfThem()
+        {
+            const string a = "0123456789abcdef0123456789abcdef", b = "fedcba9876543210fedcba9876abcdef";   // both end in cdef
+            var ra = Redactor.RedactForRecording("token " + a);
+            var rb = Redactor.RedactForRecording("token " + b);
+            Assert.AreEqual("token hex:" + Fingerprint12(a), ra);
+            Assert.AreNotEqual(ra, rb, "the same last four characters, and still two tokens");
+            Assert.AreEqual(ra, Redactor.RedactForRecording("token " + a), "stable: the same run is the same fingerprint every time");
+            Assert.AreEqual(ra, Redactor.RedactForRecording(ra), "and it is not redacted again");
+            Assert.AreEqual("hex:" + Fingerprint12(a + "00"), Redactor.RedactForRecording(a + "00"), "a longer run is one run");
+            Assert.AreEqual("abc-0123456789abcdef0123456789abcde", Redactor.RedactForRecording("abc-0123456789abcdef0123456789abcde"), "31 hex characters is not a credential");
+            var jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl";
+            StringAssert.StartsWith("jwt:", Redactor.RedactForRecording(jwt));
+            Assert.AreEqual(Redactor.Redact(jwt), Redactor.RedactForRecording(jwt), "a JWT is fingerprinted as in a log");
         }
 
         [Test]
@@ -442,6 +472,187 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(0, run.Recorder.Stats.ObservedLines);
             Assert.IsNull(fault, "closing is not a fault");
             Assert.IsFalse(run.Recorder.IsFaulted);
+        }
+        // ---- the clock of a run that was killed
+
+        static RunHeader OnDisk(string dir) => RunHeader.Parse(File.ReadAllText(Path.Combine(dir, RecordingFiles.RunJson)));
+
+        [Test]
+        public void TheClockIsOnDiskAsSoonAsItChangesNotOnlyWhenTheRunEnds()
+        {
+            using var run = new SyntheticRun();
+            run.T = 0.0; run.Recorder.ClockChanged(1.0);
+            run.Drive(0, 1.0);
+            Assert.AreEqual(1, OnDisk(run.Dir).Clock.Count);
+            run.T = 2.0; run.Recorder.ClockChanged(8.0);
+            var live = OnDisk(run.Dir);
+            Assert.IsFalse(live.EndedCleanly, "the run is still going");
+            Assert.AreEqual(2, live.Clock.Count, "the speed-up is in run.json now: nothing has been closed");
+            Assert.AreEqual(ClockSegment.Accelerated, live.Clock[1].Mode);
+            Assert.AreEqual(2.0, live.Clock[1].From, 1e-9);
+            Assert.AreEqual(8.0, live.Clock[1].Scale);
+            Assert.IsFalse(File.Exists(Path.Combine(run.Dir, RecordingFiles.RunJson + ".tmp")), "written beside and moved into place, never left half-written");
+        }
+
+        [Test]
+        public void AClockChangeAfterTheRunEndedDoesNotTakeTheEndSummaryBack()
+        {
+            using var run = new SyntheticRun();
+            run.Drive(0, 1.0);
+            run.Recorder.Close();
+            run.Recorder.ClockChanged(8.0);
+            var h = OnDisk(run.Dir);
+            Assert.IsTrue(h.EndedCleanly, "a closed recording is not reopened by a late change of clock");
+            Assert.AreEqual(0, h.Clock.Count);
+        }
+
+        [Test]
+        public void ARunKilledAfterTheClockSpedUpIsStillReadAsAcceleratedFromThatMoment()
+        {
+            using var run = new SyntheticRun();
+            run.T = 0.0; run.Recorder.ClockChanged(1.0);
+            run.Drive(0, 5.0);
+            run.T = 2.0; run.Recorder.ClockChanged(8.0);
+            var data = RecordingData.Load(run.CopyAsKilled());
+            Assert.IsFalse(data.Header.EndedCleanly);
+            Assert.IsTrue(data.Header.IsAccelerated(3.0));
+            Assert.IsFalse(data.Header.IsAccelerated(1.0));
+            Assert.AreEqual(RunHeader.ClockRebuilt, data.Header.ClockBasis);
+        }
+
+        [Test]
+        public void ARunWhoseHeaderLostTheClockHasItRebuiltFromThePresenterLog()
+        {
+            using var run = new SyntheticRun();
+            run.T = 0.0; run.Recorder.ClockChanged(1.0);
+            run.Drive(0, 5.0);
+            run.T = 2.0; run.Recorder.ClockChanged(8.0);
+            run.T = 4.0; run.Recorder.ClockChanged(1.0);
+            var killed = run.CopyAsKilled();
+            // the header the player was killed before it could rewrite: it knows nothing of the clock
+            var bare = OnDisk(killed);
+            bare.Clock.Clear();
+            File.WriteAllText(Path.Combine(killed, RecordingFiles.RunJson), bare.ToJson());
+            var data = RecordingData.Load(killed);
+            CollectionAssert.AreEqual(new[] { ClockSegment.Real, ClockSegment.Accelerated, ClockSegment.Real }, data.Header.Clock.Select(c => c.Mode).ToList());
+            Assert.AreEqual(2.0, data.Header.Clock[1].From, 1e-9);
+            Assert.AreEqual(8.0, data.Header.Clock[1].Scale);
+            Assert.IsTrue(data.Header.IsAccelerated(3.0));
+            Assert.IsFalse(data.Header.IsAccelerated(4.5));
+            Assert.AreEqual(RunHeader.ClockRebuilt, data.Header.ClockBasis);
+            Assert.IsTrue(data.Warnings.Any(w => w.Contains("rebuilt from presenter.ndjson")), string.Join("; ", data.Warnings));
+        }
+
+        [Test]
+        public void ARunThatLeftNoTraceOfItsClockIsAnUnknownClockAndCountsAsAccelerated()
+        {
+            using var run = new SyntheticRun();
+            run.Drive(0, 3.0);
+            var data = RecordingData.Load(run.CopyAsKilled());
+            Assert.AreEqual(RunHeader.ClockUnknown, data.Header.ClockBasis);
+            Assert.IsTrue(data.Header.AnyAccelerated(0.0, 1.0), "unknown is not real time: the caption is required");
+            Assert.IsTrue(data.Warnings.Any(w => w.Contains("unknown")));
+            // a run that ended cleanly with no change of clock is a real-time run, and says so
+            using var clean = new SyntheticRun();
+            clean.Drive(0, 3.0);
+            var ok = clean.Reload();
+            Assert.AreEqual(RunHeader.ClockRecorded, ok.Header.ClockBasis);
+            Assert.IsFalse(ok.Header.AnyAccelerated(0.0, 3.0));
+        }
+
+        // ---- a disk that fails
+
+        [Test]
+        public void ADiskThatFailsMidRunStopsTheRecordingOnceAndTheRunCarriesOn()
+        {
+            var disk = new FlakyDisk();
+            using var run = new SyntheticRun(openStream: disk.Open);
+            var faults = new List<string>();
+            run.Recorder.Faulted += faults.Add;
+            run.Drive(0, 0.5);
+            run.Obs(0.6, SyntheticRun.Measurement(SyntheticRun.TruckToken, "fuel_pct", 40, S, S));
+            var frames = run.Recorder.Stats.SimFrames;
+            Assert.AreEqual(11, frames);
+            disk.Failure = new IOException("disk full");
+
+            Assert.DoesNotThrow(() => run.Frame(1.0, SyntheticRun.Sample(1, 1, 1), SyntheticRun.Sample(2, 2, 2)));
+            Assert.IsTrue(run.Recorder.IsFaulted);
+            Assert.AreEqual(1, faults.Count);
+            StringAssert.Contains("disk full", faults[0]);
+
+            Assert.DoesNotThrow(() =>
+            {
+                run.Frame(1.1, SyntheticRun.Sample(1, 1, 1), SyntheticRun.Sample(2, 2, 2));
+                run.Obs(1.2, SyntheticRun.Measurement(SyntheticRun.TruckToken, "fuel_pct", 39, S, S));
+                run.Dev(1.3, SyntheticRun.Row(SyntheticRun.Truck, "received", "x"));
+                run.Pres(1.4, PresenterLine.Of(PresenterKinds.Action, "x"));
+                run.Recorder.ClockChanged(8.0);
+                run.Recorder.Flush();
+            });
+            Assert.AreEqual(1, faults.Count, "said once");
+            Assert.AreEqual(frames, run.Recorder.Stats.SimFrames, "later writes are ignored");
+            Assert.AreEqual(1, run.Recorder.Stats.ObservedLines);
+            Assert.AreEqual(0, run.Recorder.Stats.DeviceLines);
+
+            Assert.DoesNotThrow(() => run.Recorder.Close(), "closing a recording on a failed disk is not another failure");
+            Assert.AreEqual(1, faults.Count);
+            var h = OnDisk(run.Dir);
+            Assert.IsFalse(h.EndedCleanly, "run.json says the recording did not end cleanly");
+            Assert.AreEqual(frames, h.SimFrames);
+            Assert.IsNotNull(h.EndedAtUtc, "and the end summary was still written");
+        }
+
+        [Test]
+        public void ALogThatFailsStopsTheSimulationFramesToo()
+        {
+            var disk = new FlakyDisk();
+            using var run = new SyntheticRun(openStream: disk.Open);
+            var faults = new List<string>();
+            run.Recorder.Faulted += faults.Add;
+            run.Drive(0, 0.2);
+            disk.Failure = new IOException("device not ready");
+            Assert.DoesNotThrow(() => run.Obs(0.5, SyntheticRun.Measurement(SyntheticRun.TruckToken, "fuel_pct", 40, S, S)));
+            Assert.AreEqual(1, faults.Count);
+            var frames = run.Recorder.Stats.SimFrames;
+            disk.Failure = null;                                    // the disk comes back: the recording is not resumed, a gap in it would pass for the run
+            run.Frame(1.0, SyntheticRun.Sample(1, 1, 1), SyntheticRun.Sample(2, 2, 2));
+            Assert.AreEqual(frames, run.Recorder.Stats.SimFrames);
+            Assert.AreEqual(1, faults.Count);
+            Assert.DoesNotThrow(() => run.Recorder.Close());
+            Assert.IsFalse(OnDisk(run.Dir).EndedCleanly);
+        }
+
+        // ---- the cursor and the interpolation at their edges
+
+        [Test]
+        public void TwoFramesNoFurtherApartThanTheGapAreBlendedAndFurtherApartAreHeld()
+        {
+            using var run = new SyntheticRun();
+            run.Frame(0.0, SyntheticRun.Sample(0, 0, 0, 50f), SyntheticRun.Sample(0, 0, 0, 70f));
+            run.Frame(0.45, SyntheticRun.Sample(10, 0, 0, 40f), SyntheticRun.Sample(0, 0, 0, 70f));
+            run.Frame(1.05, SyntheticRun.Sample(20, 0, 0, 30f), SyntheticRun.Sample(0, 0, 0, 70f));   // 0.6 s after the one before
+            run.Frame(2.0, SyntheticRun.Sample(30, 0, 0, 20f), SyntheticRun.Sample(0, 0, 0, 70f));
+            run.Frame(2.5, SyntheticRun.Sample(40, 0, 0, 10f), SyntheticRun.Sample(0, 0, 0, 70f));    // exactly the gap
+            var sim = run.Reload().Sim;
+            Assert.AreEqual(5f, sim.Sample(0.225, 0).X, 1e-4, "0.45 s apart: blended");
+            Assert.AreEqual(10f, sim.Sample(0.75, 0).X, 1e-6, "0.6 s apart: held where it was, not slid");
+            Assert.AreEqual(40f, sim.Sample(0.75, 0).FuelPct, 1e-6, "fuel is held with the pose");
+            Assert.AreEqual(35f, sim.Sample(2.25, 0).X, 1e-4, "exactly 0.5 s apart still blends: the gap that holds is a longer one");
+            Assert.AreEqual(0.5, SimBinReader.MaxInterpolationGap);
+        }
+
+        [Test]
+        public void WhatAMachineWasDoingIsTheEarlierFramesAndNeverBlended()
+        {
+            using var run = new SyntheticRun();
+            var a = SyntheticRun.Sample(0, 0, 0); a.Loaded = false; a.OnTrack = true; a.Mode = 1; a.Phase = 3;
+            var b = SyntheticRun.Sample(10, 0, 0); b.Loaded = true; b.OnTrack = false; b.Mode = 2; b.Phase = 4;
+            run.Frame(0.0, a, SyntheticRun.Sample(0, 0, 0));
+            run.Frame(0.4, b, SyntheticRun.Sample(0, 0, 0));
+            var mid = run.Reload().Sim.Sample(0.2, 0);
+            Assert.AreEqual(5f, mid.X, 1e-4);
+            Assert.AreEqual((byte)1, mid.Mode); Assert.AreEqual((byte)3, mid.Phase);
+            Assert.IsFalse(mid.Loaded); Assert.IsTrue(mid.OnTrack);
         }
     }
 

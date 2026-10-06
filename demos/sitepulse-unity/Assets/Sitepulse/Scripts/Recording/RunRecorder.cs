@@ -87,9 +87,13 @@ namespace DeviceChain.Sitepulse.Recording
         /// <summary>
         /// Creates <c>baseDirectory/runId/</c> and writes the header. <paramref name="table"/> is the machines sim.bin will hold.
         /// <paramref name="clock"/> and <paramref name="utc"/> are the recorder's two clocks (tests pass their own).
+        /// <paramref name="openStream"/> opens each of the four files (sim.bin and the three logs) by path: a new file, write-only, shared
+        /// for reading. Tests hand in a stream that fails; the default is a <see cref="FileStream"/>.
         /// </summary>
-        public static RunRecorder Create(string baseDirectory, RunHeader header, IReadOnlyList<SimMachine> table, Func<double> clock = null, Func<DateTimeOffset> utc = null)
+        public static RunRecorder Create(string baseDirectory, RunHeader header, IReadOnlyList<SimMachine> table, Func<double> clock = null, Func<DateTimeOffset> utc = null,
+            Func<string, Stream> openStream = null)
         {
+            openStream ??= OpenFile;
             if (string.IsNullOrEmpty(baseDirectory)) throw new ArgumentException("a recording needs a directory", nameof(baseDirectory));
             if (header == null) throw new ArgumentNullException(nameof(header));
             utc ??= () => DateTimeOffset.UtcNow;
@@ -111,10 +115,10 @@ namespace DeviceChain.Sitepulse.Recording
             NdjsonFile o = null, d = null, p = null;
             try
             {
-                sim = new SimBinWriter(new FileStream(Path.Combine(dir, RecordingFiles.SimBin), FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1 << 16), table, NominalHz);
-                o = new NdjsonFile(Path.Combine(dir, RecordingFiles.Observed));
-                d = new NdjsonFile(Path.Combine(dir, RecordingFiles.Device));
-                p = new NdjsonFile(Path.Combine(dir, RecordingFiles.Presenter));
+                sim = new SimBinWriter(openStream(Path.Combine(dir, RecordingFiles.SimBin)), table, NominalHz);
+                o = new NdjsonFile(openStream(Path.Combine(dir, RecordingFiles.Observed)));
+                d = new NdjsonFile(openStream(Path.Combine(dir, RecordingFiles.Device)));
+                p = new NdjsonFile(openStream(Path.Combine(dir, RecordingFiles.Presenter)));
                 var r = new RunRecorder(dir, header, sim, o, d, p, clock, utc);
                 sim.Flush();
                 r.WriteHeader();
@@ -122,13 +126,19 @@ namespace DeviceChain.Sitepulse.Recording
             }
             catch
             {
-                sim?.Dispose();
-                o?.Dispose();
-                d?.Dispose();
-                p?.Dispose();
+                Quiet(sim); Quiet(o); Quiet(d); Quiet(p);
                 throw;
             }
         }
+
+        // a half-made recording is being abandoned: what closing its files says is of no use to the caller, who is told why it failed
+        static void Quiet(IDisposable d)
+        {
+            try { d?.Dispose(); }
+            catch (Exception) { /* the failure that matters is the one being thrown */ }
+        }
+
+        static Stream OpenFile(string path) => new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 1 << 16);
 
         void WriteHeader()
         {
@@ -136,8 +146,33 @@ namespace DeviceChain.Sitepulse.Recording
             {
                 header.EndedCleanly = false;
                 header.EndedAtUtc = null;
-                AtomicWrite(Path.Combine(Directory, RecordingFiles.RunJson), header.ToJson());
+                WriteRunJson();
             }
+        }
+
+        // the caller holds closeGate
+        void WriteRunJson()
+        {
+            string json;
+            lock (header) json = header.ToJson();
+            AtomicWrite(Path.Combine(Directory, RecordingFiles.RunJson), json);
+        }
+
+        /// <summary>
+        /// A run that is killed never reaches <see cref="Close"/>, so what the header must say of it is written as it happens: the clock's
+        /// segments decide whether footage needs its caption. Never after the end summary (that would take it back).
+        /// </summary>
+        void RewriteHeader()
+        {
+            try
+            {
+                lock (closeGate)
+                {
+                    if (closed) return;
+                    WriteRunJson();
+                }
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException) { Fault(e); }
         }
 
         static void AtomicWrite(string path, string text)
@@ -156,8 +191,17 @@ namespace DeviceChain.Sitepulse.Recording
                 if (fault == null) fault = first = e.GetType().Name + ": " + e.Message;
             }
 
-            if (first != null) Faulted?.Invoke(first);
+            if (first == null) return;
+            // whoever listens must not be able to throw into the writer
+            try { Faulted?.Invoke(first); }
+            catch (Exception) { /* a listener that fails has nothing left to tell */ }
         }
+
+        /// <summary>
+        /// Stops the recording because something the recorder depends on failed (a tap that threw, a callback it could not complete). Once,
+        /// loudly (<see cref="Faulted"/>), and run.json will say the run did not end cleanly. Never throws.
+        /// </summary>
+        public void Fail(Exception e) => Fault(e ?? new InvalidOperationException("the recording failed"));
 
         /// <summary>One frame of every machine, as it was rendered. Main thread. A time that goes backwards is a bug and throws.</summary>
         public void WriteSimFrame(double t, MachineSample[] samples)
@@ -226,13 +270,14 @@ namespace DeviceChain.Sitepulse.Recording
         {
             if (fault != null || closed) return;
             try { sim.Flush(); }
-            catch (IOException e) { Fault(e); }
             catch (ObjectDisposedException) { }
+            catch (Exception e) { Fault(e); }
         }
 
         /// <summary>Records the scene's clock changing speed: into the header's clock segments and as a line in presenter.ndjson.</summary>
         public void ClockChanged(double scale)
         {
+            if (closed) return;
             var mode = Math.Abs(scale - 1.0) < 1e-6 ? ClockSegment.Real : ClockSegment.Accelerated;
             lock (header)
             {
@@ -240,6 +285,8 @@ namespace DeviceChain.Sitepulse.Recording
                 if (last != null && last.Mode == mode && Math.Abs(last.Scale - scale) < 1e-6) return;
                 header.Clock.Add(new ClockSegment { From = Now, Mode = mode, Scale = scale });
             }
+
+            RewriteHeader();
 
             var line = PresenterLine.Of(PresenterKinds.Clock, mode == ClockSegment.Real ? "clock: real time" : "clock: accelerated x" + scale.ToString("0.##", CultureInfo.InvariantCulture));
             line.Scale = scale;
@@ -255,11 +302,12 @@ namespace DeviceChain.Sitepulse.Recording
                 closed = true;
             }
 
-            try { sim.Flush(); } catch (Exception e) when (e is IOException || e is ObjectDisposedException) { }
-            sim.Dispose();
-            observed.Dispose();
-            device.Dispose();
-            presenter.Dispose();
+            // every file is closed whatever the others did, and nothing here may throw: the end summary below is the point of closing
+            Guarded(() => sim.Flush());
+            Guarded(sim.Dispose);
+            Guarded(observed.Dispose);
+            Guarded(device.Dispose);
+            Guarded(presenter.Dispose);
             lock (statsGate)
             {
                 header.EndedAtUtc = UtcNow;
@@ -274,8 +322,15 @@ namespace DeviceChain.Sitepulse.Recording
                 header.WriteMillisWorstFrame = stats.WriteMillisWorstFrame;
             }
 
-            try { lock (closeGate) AtomicWrite(Path.Combine(Directory, RecordingFiles.RunJson), header.ToJson()); }
+            try { lock (closeGate) WriteRunJson(); }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException) { Fault(e); }
+        }
+
+        void Guarded(Action step)
+        {
+            try { step(); }
+            catch (ObjectDisposedException) { }
+            catch (Exception e) { Fault(e); }
         }
 
         public void Dispose() => Close();
@@ -288,9 +343,9 @@ namespace DeviceChain.Sitepulse.Recording
         readonly object gate = new object();
         bool disposed;
 
-        public NdjsonFile(string path)
+        public NdjsonFile(Stream stream)
         {
-            writer = new StreamWriter(new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+            writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
         }
 
         public int Write(string line)
@@ -309,7 +364,7 @@ namespace DeviceChain.Sitepulse.Recording
             {
                 if (disposed) return;
                 disposed = true;
-                try { writer.Dispose(); } catch (IOException) { }
+                writer.Dispose();
             }
         }
     }

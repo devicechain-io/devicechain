@@ -116,17 +116,14 @@ namespace DeviceChain.Sitepulse.Replay
             foreach (var w in data.Warnings) Debug.LogWarning("[sitepulse] replay: " + Redactor.Redact(w));
             session = new ReplaySession(data);
             foreach (var m in data.Sim.Machines) recorded.Add(m.Id);
-            source = new ReplayReadingSource(session, line => Debug.LogWarning("[sitepulse] replay: " + Redactor.Redact(line)));
-            overlay.Source = source;
-            overlay.Clock = () => session.WallClock;
-            overlay.ReplayTag = composition.ReplayTag;
+            source = Wire(overlay, session, composition, line => Debug.LogWarning("[sitepulse] replay: " + Redactor.Redact(line)));
 
             if (given.Options.Render)
             {
                 try
                 {
                     shotFile = ShotFile.Parse(File.ReadAllText(given.Options.ShotsFile));
-                    plan = ShotPlanner.Plan(shotFile, data);
+                    plan = ShotPlanner.Plan(shotFile, data, w => Debug.LogWarning("[sitepulse] render: " + Redactor.Redact(w)));
                 }
                 catch (ShotException e)
                 {
@@ -155,6 +152,19 @@ namespace DeviceChain.Sitepulse.Replay
             ready = true;
             phase = given.Options.Render ? Phase.ShotBegin : Phase.Playing;
             return true;
+        }
+
+        /// <summary>
+        /// Gives the overlay the replay's own reading source, the recording's clock (a card ages as it did live, not against today) and
+        /// whether the cards say they are replayed: always for an interactive replay, never for a render.
+        /// </summary>
+        public static ReplayReadingSource Wire(IotOverlay overlay, ReplaySession session, ReplayComposition composition, Action<string> warn)
+        {
+            var source = new ReplayReadingSource(session, warn);
+            overlay.Source = source;
+            overlay.Clock = () => session.WallClock;
+            overlay.ReplayTag = composition.ReplayTag;
+            return source;
         }
 
         /// <summary>The interactive replay's badge, always on screen: what this is, which run, and when it was recorded.</summary>
@@ -300,6 +310,8 @@ namespace DeviceChain.Sitepulse.Replay
             foreach (var id in recorded)
             {
                 if (!session.TrySample(id, out var s)) continue;
+                // a machine that was never seen has no pose to stand in: it stays where it is
+                if (float.IsNaN(s.X) || float.IsNaN(s.Y) || float.IsNaN(s.Z)) continue;
                 var distance = 0f;
                 if (!seeked && lastTravel.TryGetValue(id, out var last))
                 {

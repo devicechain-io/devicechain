@@ -54,8 +54,41 @@ namespace DeviceChain.Sitepulse.Recording
             data.Observed = ReadLines(Need(RecordingFiles.Observed), RecordingFiles.Observed, ObservedLine.Read, data.Warnings);
             data.Device = ReadLines(Need(RecordingFiles.Device), RecordingFiles.Device, DeviceLine.Read, data.Warnings);
             data.Presenter = ReadLines(Need(RecordingFiles.Presenter), RecordingFiles.Presenter, PresenterLine.Read, data.Warnings);
-            if (!data.Header.EndedCleanly) data.Warnings.Add("run.json says the run did not end cleanly: the recording may stop short");
+            if (!data.Header.EndedCleanly)
+            {
+                data.Warnings.Add("run.json says the run did not end cleanly: the recording may stop short");
+                data.RebuildClock();
+            }
+
             return data;
+        }
+
+        /// <summary>
+        /// A run that did not end cleanly never rewrote its header at the end. The recorder rewrites run.json on every change of the
+        /// clock and writes a line to presenter.ndjson, so the segments are the header's plus any the log holds that it lacks. A run that
+        /// left no trace of its clock at all cannot say it was real time, and is read as one whose clock is unknown.
+        /// </summary>
+        void RebuildClock()
+        {
+            var found = new List<ClockSegment>();
+            foreach (var l in Presenter)
+            {
+                if (l.K != PresenterKinds.Clock || !l.Scale.HasValue) continue;
+                var scale = l.Scale.Value;
+                found.Add(new ClockSegment { From = l.T, Mode = Math.Abs(scale - 1.0) < 1e-6 ? ClockSegment.Real : ClockSegment.Accelerated, Scale = scale });
+            }
+
+            Header.MergeClockSegments(found);
+            if (Header.Clock.Count == 0)
+            {
+                Header.ClockBasis = RunHeader.ClockUnknown;
+                Warnings.Add("run.json and presenter.ndjson hold no clock segment of a run that did not end cleanly: the scene's clock speed is unknown, and the footage is treated as accelerated");
+            }
+            else
+            {
+                Header.ClockBasis = RunHeader.ClockRebuilt;
+                Warnings.Add("the clock segments of a run that did not end cleanly were rebuilt from presenter.ndjson");
+            }
         }
 
         static List<T> ReadLines<T>(string path, string name, Func<JsonElement, T> read, List<string> warnings) where T : RecordLine

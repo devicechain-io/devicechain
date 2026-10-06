@@ -92,6 +92,8 @@ namespace DeviceChain.Sitepulse.App
         readonly Vector3[] lastPosition;
         readonly float[] travel;
         readonly bool[] seen;
+        readonly string[] names;
+        readonly bool[] missingLogged;
         readonly Dictionary<string, DeviceSessionHost> hosts = new Dictionary<string, DeviceSessionHost>(StringComparer.Ordinal);
         readonly Action<string> log;
         double nextFrame, nextStats;
@@ -108,6 +110,9 @@ namespace DeviceChain.Sitepulse.App
             lastPosition = new Vector3[rigs.Count];
             travel = new float[rigs.Count];
             seen = new bool[rigs.Count];
+            missingLogged = new bool[rigs.Count];
+            names = new string[rigs.Count];
+            for (var i = 0; i < rigs.Count; i++) names[i] = rigs[i] != null ? rigs[i].name : "machine " + i;
             if (world.Plane != null)
                 foreach (var h in world.Plane.Hosts) hosts[h.ExternalId] = h;
         }
@@ -128,7 +133,7 @@ namespace DeviceChain.Sitepulse.App
         /// Starts recording, or returns null when it cannot (the reason is logged: a run that cannot be recorded still runs). The base
         /// directory is <paramref name="options"/>' or the player's persistent data path under <c>Recordings</c>.
         /// </summary>
-        public static LiveRecorder TryStart(RecordOptions options, LiveRecorderWorld world, Action<string> log, Func<double> clock = null)
+        public static LiveRecorder TryStart(RecordOptions options, LiveRecorderWorld world, Action<string> log, Func<double> clock = null, Func<string, Stream> openStream = null)
         {
             if (options == null || !options.Enabled) return null;
             if (world.Machines == null && world.Fleet == null) return null;
@@ -164,7 +169,7 @@ namespace DeviceChain.Sitepulse.App
                     PresenterActions.JustAbovePct, PresenterActions.LowFuelLinePct, PresenterActions.CrossWithinSeconds));
 
                 var baseDir = options.Directory ?? Path.Combine(Application.persistentDataPath, "Recordings");
-                var recorder = RunRecorder.Create(baseDir, header, table, clock);
+                var recorder = RunRecorder.Create(baseDir, header, table, clock, null, openStream);
                 var live = new LiveRecorder(recorder, world, log);
                 recorder.Faulted += why => log("recording STOPPED: " + why);
                 live.Attach();
@@ -180,12 +185,30 @@ namespace DeviceChain.Sitepulse.App
 
         void Attach()
         {
+            // A tap that throws is removed by the one that calls it. The recording it was feeding is then incomplete, and says so: the
+            // recorder is faulted (run.json: not ended cleanly, and the log says why) before the exception goes on to remove the tap.
             if (world.Observer != null) world.Observer.OnItem = item =>
             {
-                var line = RecordingMaps.Observed(item);
-                if (line != null) recorder.Observed(line);
+                try
+                {
+                    var line = RecordingMaps.Observed(item);
+                    if (line != null) recorder.Observed(line);
+                }
+                catch (Exception e)
+                {
+                    recorder.Fail(e);
+                    throw;
+                }
             };
-            if (world.Plane != null) world.Plane.OnEvent = OnDeviceEvent;
+            if (world.Plane != null) world.Plane.OnEvent = e =>
+            {
+                try { OnDeviceEvent(e); }
+                catch (Exception ex)
+                {
+                    recorder.Fail(ex);
+                    throw;
+                }
+            };
             if (world.Timeline != null) world.Timeline.Added += OnTimelineRow;
             if (world.Presenter != null) world.Presenter.Said += OnPresenterSaid;
         }
@@ -201,29 +224,52 @@ namespace DeviceChain.Sitepulse.App
             // the answer is recorded when the task layer gives it, from whichever thread completes it
             task.Completion.ContinueWith(t =>
             {
-                if (t.IsFaulted || t.IsCanceled) recorder.Device(RecordingMaps.Completed(id, task.Token, TaskResult.Fail("the task ended without an answer")));
-                else recorder.Device(RecordingMaps.Completed(id, task.Token, t.Result));
+                try
+                {
+                    if (t.IsFaulted || t.IsCanceled) recorder.Device(RecordingMaps.Completed(id, task.Token, TaskResult.Fail("the task ended without an answer")));
+                    else recorder.Device(RecordingMaps.Completed(id, task.Token, t.Result));
+                }
+                catch (Exception e) { recorder.Fail(e); }
             }, System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously);
         }
 
+        // The timeline and the presenter raise these as plain events: an exception here would travel into the task layer or the presenter,
+        // which the recording must never be able to break. It faults the recording instead.
         void OnTimelineRow(string machine, TimelineRow row)
         {
-            var l = DeviceLine.Of(DeviceKinds.Timeline, machine);
-            l.RowKind = row.Kind;
-            l.Text = row.Text;
-            recorder.Device(l);
+            try
+            {
+                var l = DeviceLine.Of(DeviceKinds.Timeline, machine);
+                l.RowKind = row.Kind;
+                l.Text = row.Text;
+                recorder.Device(l);
+            }
+            catch (Exception e) { recorder.Fail(e); }
         }
 
-        void OnPresenterSaid(string text) => recorder.Presenter(PresenterLine.Of(PresenterKinds.Action, text));
+        void OnPresenterSaid(string text)
+        {
+            try { recorder.Presenter(PresenterLine.Of(PresenterKinds.Action, text)); }
+            catch (Exception e) { recorder.Fail(e); }
+        }
 
         /// <summary>A sample the broker took (any thread).</summary>
-        public void Record(string externalId, string deviceToken, Sample sample) =>
-            recorder.Device(RecordingMaps.Sample(externalId, sample, recorder.UtcNow));
+        public void Record(string externalId, string deviceToken, Sample sample)
+        {
+            try { recorder.Device(RecordingMaps.Sample(externalId, sample, recorder.UtcNow)); }
+            catch (Exception e) { recorder.Fail(e); }
+        }
 
         /// <summary>Once a frame, after the scene has moved the machines (LateUpdate): writes a simulation frame when one is due and notes a change of the scene's clock.</summary>
         public void Tick()
         {
             if (closed || recorder.IsFaulted) return;
+            try { TickInner(); }
+            catch (Exception e) { recorder.Fail(e); }
+        }
+
+        void TickInner()
+        {
             var scale = world.TimeScale();
             if (double.IsNaN(lastScale) || Math.Abs(scale - lastScale) > 1e-6)
             {
@@ -252,7 +298,21 @@ namespace DeviceChain.Sitepulse.App
             for (var i = 0; i < rigs.Count; i++)
             {
                 var rig = rigs[i];
-                if (rig == null) return;
+                if (rig == null)
+                {
+                    // one machine gone (destroyed under us) does not stop the others: it is written where it was last seen, flagged missing
+                    // (NaN where it was never seen), and said once
+                    if (!missingLogged[i])
+                    {
+                        missingLogged[i] = true;
+                        log($"recording · machine {names[i]} is gone from the scene: its frames are marked missing and the others go on");
+                    }
+
+                    if (!seen[i]) frame[i].X = frame[i].Y = frame[i].Z = float.NaN;
+                    frame[i].Missing = true;
+                    continue;
+                }
+
                 var tr = rig.transform;
                 var p = tr.position;
                 var e = tr.eulerAngles;

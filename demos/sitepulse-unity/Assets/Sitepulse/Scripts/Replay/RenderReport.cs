@@ -53,6 +53,7 @@ namespace DeviceChain.Sitepulse.Replay
                 JsonIo.WriteStr(w, "unityVersion", renderBuild.UnityVersion);
                 w.WriteEndObject();
                 w.WriteString("renderedAtUtc", JsonIo.Time(renderedAtUtc));
+                w.WriteString("clock", h.ClockBasis);
                 w.WriteNumber("fps", file.Fps);
                 w.WriteStartArray("shots");
                 foreach (var p in plan)
@@ -69,6 +70,12 @@ namespace DeviceChain.Sitepulse.Replay
                     w.WriteString("atUtc", JsonIo.Time(p.Event.Utc));
                     w.WriteEndObject();
                     w.WriteNumber("offsetSeconds", s.Offset);
+                    if (p.StartClamped)
+                    {
+                        w.WriteBoolean("startClamped", true);
+                        w.WriteNumber("startClampedBySeconds", JsonIo.Seconds(p.ClampedBySeconds));
+                    }
+
                     w.WriteNumber("startRunSeconds", JsonIo.Seconds(p.Start));
                     w.WriteString("startUtc", JsonIo.Time(h.StartedAtUtc + TimeSpan.FromSeconds(p.Start)));
                     w.WriteNumber("durationSeconds", s.Duration);

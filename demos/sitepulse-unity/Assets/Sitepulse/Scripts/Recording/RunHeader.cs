@@ -87,6 +87,16 @@ namespace DeviceChain.Sitepulse.Recording
         public double? ClockOffsetMs { get; set; }
         public List<RunDevice> Devices { get; } = new List<RunDevice>();
         public List<ClockSegment> Clock { get; } = new List<ClockSegment>();
+
+        /// <summary>
+        /// How the clock segments were established. Set by the reader, never written: <see cref="ClockRecorded"/> for a run that ended
+        /// cleanly, <see cref="ClockRebuilt"/> for one that did not, whose segments are the header's reconciled with presenter.ndjson's clock lines, and
+        /// <see cref="ClockUnknown"/> when a run that did not end cleanly left no trace of its clock at all. An unknown clock is
+        /// treated as accelerated everywhere: the caption is required rather than risk footage of a fast clock passing for real time.
+        /// </summary>
+        public string ClockBasis { get; set; } = ClockRecorded;
+
+        public const string ClockRecorded = "recorded", ClockRebuilt = "reconstructed", ClockUnknown = "unknown";
         public List<string> PresenterPresets { get; } = new List<string>();
 
         // written when the run ends
@@ -118,6 +128,7 @@ namespace DeviceChain.Sitepulse.Recording
         /// <summary>Whether the scene's clock was running faster than real time at <paramref name="t"/> seconds into the run.</summary>
         public bool IsAccelerated(double t)
         {
+            if (ClockBasis == ClockUnknown) return true;
             var mode = ClockSegment.Real;
             foreach (var s in Clock)
             {
@@ -131,10 +142,26 @@ namespace DeviceChain.Sitepulse.Recording
         /// <summary>Whether any part of [<paramref name="from"/>, <paramref name="to"/>] ran under an accelerated clock.</summary>
         public bool AnyAccelerated(double from, double to)
         {
+            if (ClockBasis == ClockUnknown) return true;
             if (IsAccelerated(from)) return true;
             foreach (var s in Clock)
                 if (s.Mode == ClockSegment.Accelerated && s.From > from && s.From <= to) return true;
             return false;
+        }
+
+        /// <summary>Segments from presenter.ndjson's clock lines are merged in: a line the header lacks is added, one it has is left alone.</summary>
+        public void MergeClockSegments(IEnumerable<ClockSegment> found)
+        {
+            foreach (var f in found)
+            {
+                var have = false;
+                foreach (var s in Clock)
+                    if (Math.Abs(s.From - f.From) < 0.0015 && s.Mode == f.Mode && Math.Abs(s.Scale - f.Scale) < 1e-6) have = true;
+                if (have) continue;
+                var at = Clock.Count;
+                while (at > 0 && Clock[at - 1].From > f.From) at--;
+                Clock.Insert(at, f);
+            }
         }
 
         public string ToJson()
@@ -205,7 +232,7 @@ namespace DeviceChain.Sitepulse.Recording
                 w.WriteEndObject();
             }
 
-            return Redactor.Redact(Encoding.UTF8.GetString(ms.ToArray())) + "\n";
+            return Redactor.RedactForRecording(Encoding.UTF8.GetString(ms.ToArray())) + "\n";
         }
 
         public static RunHeader Parse(string json)

@@ -69,7 +69,7 @@ namespace DeviceChain.Sitepulse.Visuals
             var ps = go.AddComponent<ParticleSystem>();
             ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
             ps.useAutoRandomSeed = false;
-            ps.randomSeed = (uint)(Mathf.Abs((parent.name + "/" + name).GetHashCode()) + 1);
+            ps.randomSeed = SeedFor(parent.name, name);
             var main = ps.main;
             main.playOnAwake = false;
             main.loop = true;
@@ -97,6 +97,23 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             if (Application.isPlaying) ps.Play();
             return ps;
+        }
+
+        /// <summary>The seed an emitter is made with: a function of where it is, so the same scene always rolls the same dice.</summary>
+        public static uint SeedFor(string parentName, string name) => (uint)(Mathf.Abs((parentName + "/" + name).GetHashCode()) + 1);
+
+        /// <summary>
+        /// Back to the state the emitter was made in: stopped, empty and on its own seed again. A render jumps to each shot, and what the
+        /// shot shows must not depend on which shots were rendered before it (a cleared system keeps its place in the random sequence).
+        /// </summary>
+        public static void Restart(ParticleSystem ps)
+        {
+            if (ps == null) return;
+            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            ps.Clear(true);
+            var parent = ps.transform.parent;
+            ps.useAutoRandomSeed = false;
+            ps.randomSeed = SeedFor(parent != null ? parent.name : "", ps.gameObject.name);
         }
 
         /// <summary>Soft dust: grows, fades in and out, drifts up a little.</summary>

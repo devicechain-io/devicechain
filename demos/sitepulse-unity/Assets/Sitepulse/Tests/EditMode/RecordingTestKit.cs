@@ -24,7 +24,7 @@ namespace DeviceChain.Sitepulse.Tests
 
         public string Dir => Recorder.Directory;
 
-        public SyntheticRun(Action<RunHeader> edit = null, string runId = null, Func<double> clock = null)
+        public SyntheticRun(Action<RunHeader> edit = null, string runId = null, Func<double> clock = null, Func<string, Stream> openStream = null)
         {
             var header = new RunHeader
             {
@@ -42,7 +42,7 @@ namespace DeviceChain.Sitepulse.Tests
             header.Build = new BuildInfo { GitSha = "79bf619b38ea", TrackedTreeClean = true, SdkCommit = "69446d47b09f", UnityVersion = "6000.5.3f1", ScriptingBackend = "IL2CPP" };
             edit?.Invoke(header);
             Recorder = RunRecorder.Create(Base, header,
-                new[] { new SimMachine(Truck, SimKind.Hauler), new SimMachine(Loader, SimKind.Loader) }, clock ?? (() => T), () => Start + TimeSpan.FromSeconds(T));
+                new[] { new SimMachine(Truck, SimKind.Hauler), new SimMachine(Loader, SimKind.Loader) }, clock ?? (() => T), () => Start + TimeSpan.FromSeconds(T), openStream);
         }
 
         public static MachineSample Sample(float x, float z, float heading, float fuel = 50f, byte mode = 0, byte phase = 0) => new MachineSample
@@ -151,6 +151,22 @@ namespace DeviceChain.Sitepulse.Tests
             return l;
         }
 
+        /// <summary>What a killed player leaves: the files as they are on disk now, copied to another directory, the recorder never closed.</summary>
+        public string CopyAsKilled(string name = "killed")
+        {
+            Recorder.Flush();
+            var copy = Path.Combine(Base, name);
+            Directory.CreateDirectory(copy);
+            foreach (var f in Directory.GetFiles(Dir))
+            {
+                using var from = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var to = File.Create(Path.Combine(copy, Path.GetFileName(f)));
+                from.CopyTo(to);
+            }
+
+            return copy;
+        }
+
         public RecordingData Reload()
         {
             Recorder.Close();
@@ -161,6 +177,60 @@ namespace DeviceChain.Sitepulse.Tests
         {
             try { Recorder.Close(); } catch (Exception) { /* a test that broke the run on purpose */ }
             try { if (Directory.Exists(Base)) Directory.Delete(Base, true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>A disk that works until the test says it does not: every write, flush and close of a file it opened then throws <see cref="Failure"/>.</summary>
+    sealed class FlakyDisk
+    {
+        public Exception Failure;
+
+        public Stream Open(string path) => new FlakyStream(this, new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read));
+
+        sealed class FlakyStream : Stream
+        {
+            readonly FlakyDisk disk;
+            readonly Stream inner;
+
+            public FlakyStream(FlakyDisk disk, Stream inner)
+            {
+                this.disk = disk;
+                this.inner = inner;
+            }
+
+            void Check()
+            {
+                if (disk.Failure != null) throw disk.Failure;
+            }
+
+            public override bool CanRead => false;
+            public override bool CanSeek => false;
+            public override bool CanWrite => true;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                Check();
+                inner.Write(buffer, offset, count);
+            }
+
+            public override void Flush()
+            {
+                Check();
+                inner.Flush();
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                // the file is released first: a close that reports a failure must not leave the file held
+                if (disposing) inner.Dispose();
+                base.Dispose(disposing);
+                if (disposing) Check();
+            }
         }
     }
 }

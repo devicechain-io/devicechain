@@ -32,7 +32,7 @@ namespace DeviceChain.Sitepulse.Recording
                 w.WriteEndObject();
             }
 
-            return Redactor.Redact(Encoding.UTF8.GetString(ms.ToArray()));
+            return Redactor.RedactForRecording(Encoding.UTF8.GetString(ms.ToArray()));
         }
 
         protected abstract void WriteFields(Utf8JsonWriter w);

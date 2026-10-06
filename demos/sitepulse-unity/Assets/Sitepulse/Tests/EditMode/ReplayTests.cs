@@ -300,6 +300,86 @@ namespace DeviceChain.Sitepulse.Tests
             // the rows are printed as the live panel prints them, time of day included
             StringAssert.Contains("14:00:01  received", text);
         }
+
+        [Test]
+        public void GoingBackBeforeTheStreamWentLiveLeavesNoLiveStreamBehind()
+        {
+            using var run = Run();
+            run.Drive(0, 8.0);
+            run.Obs(5.0, SyntheticRun.Status("measurements", "Live", T0.AddSeconds(5)));
+            var session = new ReplaySession(run.Reload());
+            var source = new ReplayReadingSource(session);
+            session.Seek(2.0);
+            Assert.IsFalse(source.StreamLive);
+            session.Seek(6.0);
+            Assert.IsTrue(source.StreamLive, "the status line at 5 s is applied by 6 s");
+            session.Seek(2.0);
+            Assert.IsFalse(source.StreamLive, "back at 2 s the stream was not yet live: a rebuilt state does not remember the later one");
+            Assert.AreEqual(0, session.State.Applied);
+        }
+
+        [Test]
+        public void ALineAtExactlyTheCursorIsAppliedAndOneJustAfterIsNot()
+        {
+            using var run = Run();
+            run.Drive(0, 4.0);
+            run.Obs(2.0, SyntheticRun.Measurement(Dev, "fuel_pct", 30, T0.AddSeconds(2), T0.AddSeconds(2)));
+            var data = run.Reload();
+
+            var forward = new ReplaySession(data);
+            forward.Seek(1.999);
+            Assert.AreEqual(0, forward.State.Applied);
+            forward.Seek(2.0);
+            Assert.AreEqual(1, forward.State.Applied, "the cursor is at the line's own time: the viewer had seen it");
+
+            var back = new ReplaySession(data);
+            back.Seek(3.0);
+            back.Seek(2.0);
+            Assert.AreEqual(1, back.State.Applied, "a rebuilt state is as of the cursor, boundary included");
+            back.Seek(1.999);
+            Assert.AreEqual(0, back.State.Applied);
+
+            var stepped = new ReplaySession(data);
+            stepped.Advance(1.0);
+            stepped.Advance(1.0);
+            Assert.AreEqual(1, stepped.State.Applied);
+        }
+
+        [Test]
+        public void TwoCommandTokensThatShareTheirLastFourReplayAsTwoCommandsJustAsTheyWereShownLive()
+        {
+            const string first = "0123456789abcdef0123456789abcdef", second = "fedcba9876543210fedcba9876abcdef";
+            using var run = Run();
+            run.Drive(0, 12.0);
+            var live = new ObservedState(T0);
+            var status = new ObserverStatus();
+            var items = new List<ObserverItem>
+            {
+                new CommandItem(Dev, Command(first, "goto-refuel", "SUCCESSFUL", 6)),
+                new CommandItem(Dev, Command(second, "goto-area", "SENT", 8)),          // a different command, after: it is the latest, and unfinished
+            };
+            var t = 0.0;
+            foreach (var item in items)
+            {
+                t += 1.0;
+                run.T = t;
+                run.Recorder.Observed(RecordingMaps.Observed(item));
+                ObserverApplier.Apply(live, status, item, null);
+            }
+
+            var data = run.Reload();
+            Assert.AreNotEqual(data.Observed[0].Token, data.Observed[1].Token, "what was written keeps them apart");
+            var session = new ReplaySession(data);
+            session.Seek(session.Duration);
+            var observed = new ObservedReadingSource(live, id => id == "SP-HL-0006" ? Dev : null, () => status.Measurements.IsLive);
+            var replayed = new ReplayReadingSource(session);
+            var a = new DeviceReading("SP-HL-0006", DeviceReading.Profile.Equipment, Provenance.Observed);
+            var b = new DeviceReading("SP-HL-0006", DeviceReading.Profile.Equipment, Provenance.Replayed);
+            observed.Fill(new ReadingSubject("SP-HL-0006"), a, T0);
+            replayed.Fill(new ReadingSubject("SP-HL-0006"), b, T0);
+            StringAssert.Contains("cmd:goto-area/", Describe(a), "live, the second command is the one on the card");
+            Assert.AreEqual(Describe(a), Describe(b));
+        }
     }
 
     public sealed class ReplayProvenanceTests
@@ -540,6 +620,61 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.IsTrue(file.Shots.Any(s => s.StartEvent.Kind == "alarm" && s.StartEvent.Key == AlarmKeys.LowFuel && s.StartEvent.Device == "SP-HL-0006"), "S09: the low-fuel alarm on SP-HL-0006");
             Assert.IsTrue(file.Shots.Any(s => s.Camera.Rig == RigKind.Fixed), "an establishing shot");
         }
+
+        [Test]
+        public void ADeviceInASelectorPicksThatDevicesEventNotAnEarlierOneOnAnotherMachine()
+        {
+            using var run = Run();
+            // the loader has the same alarm, the same command and a low fuel reading, all BEFORE the truck's
+            run.Obs(0.7, SyntheticRun.Measurement(SyntheticRun.LoaderToken, "fuel_pct", 5, T0.AddSeconds(0.7), T0.AddSeconds(0.7)));
+            run.Obs(0.8, SyntheticRun.Alarm(SyntheticRun.LoaderToken, "al-0", "low-fuel", "ACTIVE", T0.AddSeconds(0.8)));
+            run.Obs(0.9, SyntheticRun.Command(SyntheticRun.LoaderToken, "c-0", "goto-refuel", "SENT", T0.AddSeconds(0.85), T0.AddSeconds(0.9)));
+            Events(run);
+            var data = run.Reload();
+            const string truck = SyntheticRun.Truck, loader = SyntheticRun.Loader;
+            Assert.AreEqual(3.0, new EventSelector { Kind = "alarm", Key = "low-fuel", State = "ACTIVE", Device = truck }.Resolve(data).T, 1e-9);
+            Assert.AreEqual(3.5, new EventSelector { Kind = "command", Name = "goto-refuel", Status = "SENT", Device = truck }.Resolve(data).T, 1e-9);
+            Assert.AreEqual(2.5, new EventSelector { Kind = "measurement", Name = "fuel_pct", Below = 15, Device = truck }.Resolve(data).T, 1e-9);
+            // the other way round, and with no device the first of any
+            Assert.AreEqual(0.8, new EventSelector { Kind = "alarm", Key = "low-fuel", State = "ACTIVE", Device = loader }.Resolve(data).T, 1e-9);
+            Assert.AreEqual(0.9, new EventSelector { Kind = "command", Name = "goto-refuel", Status = "SENT", Device = loader }.Resolve(data).T, 1e-9);
+            Assert.AreEqual(0.7, new EventSelector { Kind = "measurement", Name = "fuel_pct", Below = 15, Device = loader }.Resolve(data).T, 1e-9);
+            Assert.AreEqual(0.8, new EventSelector { Kind = "alarm", Key = "low-fuel", State = "ACTIVE" }.Resolve(data).T, 1e-9);
+            Assert.AreEqual(0.9, new EventSelector { Kind = "command", Name = "goto-refuel" }.Resolve(data).T, 1e-9);
+            Assert.AreEqual(0.7, new EventSelector { Kind = "measurement", Name = "fuel_pct", Below = 15 }.Resolve(data).T, 1e-9);
+            // and the occurrence counts that device's events alone
+            Assert.AreEqual(9.0, new EventSelector { Kind = "alarm", Key = "low-fuel", Device = truck, Occurrence = 1 }.Resolve(data).T, 1e-9, "the truck's second low-fuel line is its clearing, not the loader's activation");
+        }
+
+        [Test]
+        public void AShotThatWouldStartBeforeTheRecordingStartsAtZeroAndSaysSo()
+        {
+            using var run = Run();
+            Events(run);
+            var data = run.Reload();
+            var warnings = new List<string>();
+            var early = ShotPlanner.Plan(ShotFile.Parse(Good.Replace("\"offset\":-2", "\"offset\":-30")), data, warnings.Add)[0];
+            Assert.AreEqual(0.0, early.Start);
+            Assert.IsTrue(early.StartClamped);
+            Assert.AreEqual(27.0, early.ClampedBySeconds, 1e-9, "the alarm is at 3 s and the shot asked for 30 s before it: 27 s before the recording began");
+            Assert.AreEqual(1, warnings.Count);
+            StringAssert.Contains("shot s09", warnings[0]);
+            StringAssert.Contains("27.0 s before the recording began", warnings[0]);
+            var fine = ShotPlanner.Plan(ShotFile.Parse(Good), data, warnings.Add)[0];
+            Assert.IsFalse(fine.StartClamped);
+            Assert.AreEqual(0.0, fine.ClampedBySeconds);
+            Assert.AreEqual(1, warnings.Count, "a shot that starts where it asked to says nothing");
+
+            var file = ShotFile.Parse(Good.Replace("\"offset\":-2", "\"offset\":-30"));
+            var json = RenderReport.Build(data, run.Dir, file, new List<PlannedShot> { early }, null, T0, BuildInfo.Unknown(), null);
+            using var doc = JsonDocument.Parse(json);
+            var shot = doc.RootElement.GetProperty("shots")[0];
+            Assert.IsTrue(shot.GetProperty("startClamped").GetBoolean());
+            Assert.AreEqual(27.0, shot.GetProperty("startClampedBySeconds").GetDouble(), 1e-6);
+            Assert.AreEqual(0.0, shot.GetProperty("startRunSeconds").GetDouble());
+            using var doc2 = JsonDocument.Parse(RenderReport.Build(data, run.Dir, ShotFile.Parse(Good), new List<PlannedShot> { fine }, null, T0, BuildInfo.Unknown(), null));
+            Assert.IsFalse(doc2.RootElement.GetProperty("shots")[0].TryGetProperty("startClamped", out _));
+        }
     }
 
     public sealed class ReplayCameraTests
@@ -696,6 +831,144 @@ namespace DeviceChain.Sitepulse.Tests
             using var doc2 = JsonDocument.Parse(failed);
             Assert.AreEqual("failed", doc2.RootElement.GetProperty("status").GetString());
             Assert.AreEqual("a frame cannot be written", doc2.RootElement.GetProperty("error").GetString());
+        }
+
+        const string Shots = @"{""fps"":30,""shots"":[
+            {""name"":""before"",""startEvent"":{""kind"":""runStart""},""offset"":0,""duration"":3.5,""camera"":{""rig"":""fixed"",""pos"":[0,50,0],""lookAt"":[10,0,10]}},
+            {""name"":""cross"",""startEvent"":{""kind"":""runStart""},""offset"":3,""duration"":2,""camera"":{""rig"":""fixed"",""pos"":[0,50,0],""lookAt"":[10,0,10]}},
+            {""name"":""after"",""startEvent"":{""kind"":""runStart""},""offset"":8,""duration"":2,""camera"":{""rig"":""fixed"",""pos"":[0,50,0],""lookAt"":[10,0,10]}}]}";
+
+        static List<JsonElement> ShotsOf(JsonDocument doc) => doc.RootElement.GetProperty("shots").EnumerateArray().ToList();
+
+        static JsonDocument Report(RecordingData data, string dir)
+        {
+            var file = ShotFile.Parse(Shots);
+            return JsonDocument.Parse(RenderReport.Build(data, dir, file, ShotPlanner.Plan(file, data), null, SyntheticRun.Start, BuildInfo.Unknown(), null));
+        }
+
+        [Test]
+        public void AShotThatStartsInRealTimeAndRunsIntoTheFastStretchNeedsTheCaption()
+        {
+            using var run = new SyntheticRun();
+            run.Recorder.ClockChanged(1.0);
+            run.Drive(0, 4.0);
+            run.Recorder.ClockChanged(4.0);          // fast from 4.0 s
+            run.Drive(4.01, 3.0);
+            run.Recorder.ClockChanged(1.0);          // real again from 7.01 s
+            run.Drive(7.02, 4.0);
+            var data = run.Reload();
+            using var doc = Report(data, run.Dir);
+            var shots = ShotsOf(doc);
+            Assert.AreEqual("recorded", doc.RootElement.GetProperty("clock").GetString());
+            Assert.IsFalse(shots[0].GetProperty("acceleratedClock").GetBoolean(), "0 to 3.5 s is all real time");
+            Assert.IsFalse(shots[0].TryGetProperty("captionRequired", out _));
+            Assert.IsTrue(shots[1].GetProperty("acceleratedClock").GetBoolean(), "3 to 5 s begins in real time and reaches the stretch the scene ran fast");
+            Assert.AreEqual("Accelerated simulation clock", shots[1].GetProperty("captionRequired").GetString());
+            Assert.IsFalse(shots[2].GetProperty("acceleratedClock").GetBoolean(), "8 to 10 s is real again");
+        }
+
+        [Test]
+        public void ARunKilledAfterTheClockSpedUpStillRendersWithTheCaption()
+        {
+            using var run = new SyntheticRun();
+            run.T = 0.0; run.Recorder.ClockChanged(1.0);
+            run.Drive(0, 11.0);
+            run.T = 2.0; run.Recorder.ClockChanged(8.0);        // fast from 2 s, and the player never closed the recording
+            var data = RecordingData.Load(run.CopyAsKilled());
+            Assert.IsFalse(data.Header.EndedCleanly);
+            using var doc = Report(data, run.Dir);
+            var shots = ShotsOf(doc);
+            Assert.AreEqual("reconstructed", doc.RootElement.GetProperty("clock").GetString());
+            Assert.IsTrue(shots[0].GetProperty("acceleratedClock").GetBoolean(), "0 to 3.5 s of a clock that sped up at 2 s");
+            Assert.AreEqual("Accelerated simulation clock", shots[0].GetProperty("captionRequired").GetString());
+            Assert.IsTrue(shots[1].GetProperty("acceleratedClock").GetBoolean());
+            Assert.IsTrue(shots[2].GetProperty("acceleratedClock").GetBoolean());
+        }
+
+        [Test]
+        public void ARunKilledWithNoTraceOfItsClockRendersWithTheCaptionAndSaysTheClockIsUnknown()
+        {
+            using var run = new SyntheticRun();
+            run.Drive(0, 11.0);
+            var data = RecordingData.Load(run.CopyAsKilled());
+            using var doc = Report(data, run.Dir);
+            Assert.AreEqual("unknown", doc.RootElement.GetProperty("clock").GetString());
+            foreach (var shot in ShotsOf(doc))
+            {
+                Assert.IsTrue(shot.GetProperty("acceleratedClock").GetBoolean(), "an unknown clock is not assumed to be real time");
+                Assert.AreEqual("Accelerated simulation clock", shot.GetProperty("captionRequired").GetString());
+            }
+        }
+
+        [Test]
+        public void TheRootHandsTheOverlayTheReplaysSourceTheRecordingsClockAndTheRightReplayTag()
+        {
+            using var run = new SyntheticRun();
+            run.Drive(0, 6.0);
+            var data = run.Reload();
+            var go = new GameObject("overlay") { hideFlags = HideFlags.HideAndDontSave };
+            try
+            {
+                var overlay = go.AddComponent<IotOverlay>();
+                var session = new ReplaySession(data);
+                var render = ReplayComposition.For(ReplayOptions.Parse(new[] { "x", "-sitepulse-render", "s.json", "-sitepulse-replay", "r", "-sitepulse-out", "o" }, out _));
+                var play = ReplayComposition.For(ReplayOptions.Parse(new[] { "x", "-sitepulse-replay", "r" }, out _));
+
+                overlay.ReplayTag = true;
+                var source = ReplayRoot.Wire(overlay, session, render, null);
+                Assert.AreSame(source, overlay.Source);
+                Assert.AreEqual(Provenance.Replayed, overlay.Source.Provenance);
+                session.Seek(3.0);
+                Assert.AreEqual(session.WallClock, overlay.Clock(), "cards age against the recording's moment, not today");
+                Assert.AreEqual(SyntheticRun.Start.AddSeconds(3.0), overlay.Clock());
+                session.Seek(4.5);
+                Assert.AreEqual(SyntheticRun.Start.AddSeconds(4.5), overlay.Clock(), "and the clock follows the cursor");
+                Assert.IsFalse(overlay.ReplayTag, "a render says nothing on the frame");
+
+                overlay.ReplayTag = false;
+                ReplayRoot.Wire(overlay, session, play, null);
+                Assert.IsTrue(overlay.ReplayTag, "an interactive replay names itself on every card");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+    }
+
+    public sealed class ReplayEffectsTests
+    {
+        static Vector3[] Roll(ParticleSystem ps, int steps)
+        {
+            QuarryEffects.Rate(ps, 200f);
+            for (var i = 0; i < steps; i++) QuarryEffects.Advance(ps, 0.05f, true);
+            var buffer = new ParticleSystem.Particle[ps.particleCount];
+            var n = ps.GetParticles(buffer);
+            return buffer.Take(n).Select(p => p.position).ToArray();
+        }
+
+        [Test]
+        public void ASystemThatIsRestartedRollsTheSameDiceWhateverItDidBefore()
+        {
+            var go = new GameObject("effects-holder") { hideFlags = HideFlags.HideAndDontSave };
+            try
+            {
+                var ps = QuarryEffects.Emitter(go.transform, "dust", Vector3.zero, null, 500);
+                var first = Roll(ps, 12);
+                Assert.Greater(first.Length, 5, "something was emitted to compare");
+                Roll(ps, 40);                                     // a different history: the random sequence has moved on
+                QuarryEffects.Restart(ps);
+                Assert.AreEqual(0, ps.particleCount, "restarting empties it");
+                Assert.AreEqual(QuarryEffects.SeedFor("effects-holder", "dust"), ps.randomSeed, "and puts it back on the seed it was made with");
+                var second = Roll(ps, 12);
+                Assert.AreEqual(first.Length, second.Length);
+                for (var i = 0; i < first.Length; i++)
+                    Assert.AreEqual(first[i].x, second[i].x, 1e-5f, "particle " + i + ": a shot rendered after others looks like one rendered alone");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
         }
     }
 }

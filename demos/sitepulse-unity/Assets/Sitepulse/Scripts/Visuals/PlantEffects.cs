@@ -142,7 +142,7 @@ namespace DeviceChain.Sitepulse.Visuals
         public void ClearParticles()
         {
             foreach (var ps in systems)
-                if (ps != null) ps.Clear(true);
+                QuarryEffects.Restart(ps);
         }
 
         public void Step(float dt, bool simulate)
