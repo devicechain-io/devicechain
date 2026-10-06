@@ -9,10 +9,10 @@ namespace DeviceChain.Sitepulse.Platform
     /// <summary>
     /// How far a device has got: bound, credentialed, then its MQTT session connecting, ready (the
     /// start returned: connected and subscribed) and publishing (the broker acknowledged a sample).
-    /// Observation by the platform extends the ladder later and is not claimed here. A failure is a
-    /// side state, not a stage.
+    /// Observed is the top rung: the platform itself reported a measurement the device published in this
+    /// run, which is the only evidence that the telemetry arrived. A failure is a side state, not a stage.
     /// </summary>
-    public enum DeviceStage { Unbound, Resolved, Credentialed, Connecting, Ready, Publishing }
+    public enum DeviceStage { Unbound, Resolved, Credentialed, Connecting, Ready, Publishing, Observed }
 
     /// <summary>
     /// What a session is doing besides climbing the ladder. Blind is terminal (the broker refused the
@@ -83,8 +83,8 @@ namespace DeviceChain.Sitepulse.Platform
 
     /// <summary>
     /// The per-device readiness the panel shows. Counts are exact: <c>n/19 credentialed · k failed</c>
-    /// (and, once sessions are starting, <c>n/19 publishing · k failed</c>) counts devices at that
-    /// state and never rounds up, and a device is one or the other, so pending devices are in
+    /// (once sessions are starting, <c>n/19 publishing · k failed</c>; once the observer runs,
+    /// <c>n/19 observed · k failed</c>) counts devices at that state and never rounds up, and a device is one or the other, so pending devices are in
     /// neither number. A device that is reconnecting is neither publishing nor failed, and one that has a
     /// session but has gone quiet (<see cref="Evaluate"/>) is stalled: not publishing, not failed.
     /// </summary>
@@ -143,13 +143,28 @@ namespace DeviceChain.Sitepulse.Platform
             }
         }
 
+        /// <summary>
+        /// Devices whose telemetry the platform reported back in this run, and that are still sending
+        /// (not stalled, reconnecting, stopped or failed).
+        /// </summary>
+        public int ObservedCount
+        {
+            get
+            {
+                var n = 0;
+                foreach (var d in devices)
+                    if (d.Stage == DeviceStage.Observed && d.Side == DeviceSide.None && !d.Failed && !d.Stalled) n++;
+                return n;
+            }
+        }
+
         public int StalledCount
         {
             get
             {
                 var n = 0;
                 foreach (var d in devices)
-                    if (d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed && d.Stalled) n++;
+                    if (d.Stage >= DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed && d.Stalled) n++;
                 return n;
             }
         }
@@ -170,9 +185,45 @@ namespace DeviceChain.Sitepulse.Platform
 
         public DeviceReadiness this[string externalId] => byId[externalId];
 
-        public string Summary() => SessionsBegun
-            ? $"{PublishingCount}/{Total} publishing{(StalledCount > 0 ? $" · {StalledCount} stalled" : "")} · {FailedCount} failed"
-            : $"{CredentialedCount}/{Total} credentialed · {FailedCount} failed";
+        /// <summary>The platform token a scene device bound to; null when it is unknown or did not bind.</summary>
+        public string TokenOf(string externalId) =>
+            byId.TryGetValue(externalId ?? "", out var d) && d.Bind != null && d.Bind.IsBound ? d.Bind.DeviceToken : null;
+
+        /// <summary>True once the observer is running; the header then counts observed, not publishing.</summary>
+        public bool ObserverBegun { get; private set; }
+
+        public string Summary() => ObserverBegun
+            ? $"{ObservedCount}/{Total} observed{(StalledCount > 0 ? $" · {StalledCount} stalled" : "")} · {FailedCount} failed"
+            : SessionsBegun
+                ? $"{PublishingCount}/{Total} publishing{(StalledCount > 0 ? $" · {StalledCount} stalled" : "")} · {FailedCount} failed"
+                : $"{CredentialedCount}/{Total} credentialed · {FailedCount} failed";
+
+        public void BeginObserver()
+        {
+            if (ObserverBegun) return;
+            ObserverBegun = true;
+            Version++;
+        }
+
+        /// <summary>
+        /// The platform reported a measurement this device published in this run. Raises the device to
+        /// Observed (the board may not yet have heard of the first acknowledgement, which can trail the
+        /// platform's report). A device that failed, or has no session at all, is left where it is: a
+        /// value cannot be the platform's report of a device that never sent one.
+        /// </summary>
+        public bool MarkObserved(string deviceToken)
+        {
+            foreach (var d in devices)
+            {
+                if (d.Bind == null || d.Bind.DeviceToken != deviceToken) continue;
+                if (d.Failed || d.Stage < DeviceStage.Connecting || d.Stage >= DeviceStage.Observed) return false;
+                d.Stage = DeviceStage.Observed;
+                Version++;
+                return true;
+            }
+
+            return false;
+        }
 
         /// <summary>Marks every credentialed device as connecting, and switches the header to the publishing count.</summary>
         public void BeginSessions()
@@ -237,7 +288,7 @@ namespace DeviceChain.Sitepulse.Platform
             foreach (var d in devices)
             {
                 string reason = null;
-                if (d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed)
+                if (d.Stage >= DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed)
                 {
                     if (d.ConsecutiveSendFailures >= StallAfterFailures)
                         reason = $"sends failing · {d.ConsecutiveSendFailures} in a row";
@@ -346,12 +397,12 @@ namespace DeviceChain.Sitepulse.Platform
                 case DeviceSide.Stopped: state = "stopped"; break;
                 default:
                     state = d.Stage == DeviceStage.Connecting ? "connecting" : d.Stage == DeviceStage.Ready ? "ready"
-                        : d.Stalled ? "stalled · " + d.StallReason : "publishing";
+                        : d.Stalled ? "stalled · " + d.StallReason : d.Stage == DeviceStage.Observed ? "observed" : "publishing";
                     break;
             }
 
             var text = $"{id} · {state}";
-            if (d.Stage == DeviceStage.Publishing || d.Published > 0)
+            if (d.Stage >= DeviceStage.Publishing || d.Published > 0)
             {
                 text += $" · {d.Published} sent";
                 if (d.LastPublishUtc.HasValue) text += $" · last {d.LastPublishUtc.Value.UtcDateTime:HH:mm:ss}Z";
@@ -360,7 +411,7 @@ namespace DeviceChain.Sitepulse.Platform
             if (d.SendErrors > 0) text += $" · {d.SendErrors} send errors";
             if (d.Dropped > 0) text += $" · {d.Dropped} dropped";
             text += Command(d);
-            var ok = d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Stalled;
+            var ok = d.Stage >= DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Stalled;
             return new PanelLine(text, ok ? LineKind.Ok : LineKind.Pending);
         }
 

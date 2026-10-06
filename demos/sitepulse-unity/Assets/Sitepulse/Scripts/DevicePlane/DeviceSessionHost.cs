@@ -146,8 +146,13 @@ namespace DeviceChain.Sitepulse.DevicePlane
         /// <summary>Queues a sample for sending. The ring is bounded: the oldest goes when it is full.</summary>
         public void Enqueue(Sample sample)
         {
-            if (Accepting) Ring.Enqueue(sample);
+            if (!Accepting) return;
+            Ring.Enqueue(sample);
+            if (sample.Kind == SampleKind.Measurement) LastMeasurementSampleUtc = sample.OccurredUtc;
         }
+
+        /// <summary>When the local model last produced a measurement sample (main thread only); null until one has.</summary>
+        public DateTimeOffset? LastMeasurementSampleUtc { get; private set; }
 
         /// <summary>Stops sampling and sending for good. The session itself is released by <see cref="DisposeAsync"/>.</summary>
         public void Halt()

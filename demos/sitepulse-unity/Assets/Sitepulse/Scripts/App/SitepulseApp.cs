@@ -12,6 +12,7 @@ using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Visuals;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace DeviceChain.Sitepulse.App
 {
@@ -19,10 +20,11 @@ namespace DeviceChain.Sitepulse.App
     /// The composition root. It picks the mode once, at startup, from <c>-sitepulse-mode</c> (an
     /// Editor-only override applies when the flag is absent), puts the mode badge on screen, and
     /// builds whichever world that mode names. Choreographed leaves the scene as it is, illustrative
-    /// cards and all. Live hides those cards for good (an illustrative value on a Live screen is the
-    /// one thing the demo must never do), reads the runner's config, binds the scene's 19 devices
-    /// to the platform and shows how far each got. Replay is not in this build and says so in plain
-    /// sight; it does not borrow another mode. A mode that cannot start shows why and stays stopped.
+    /// cards and all. Live gives the cards an observed source for good (an illustrative value on a Live
+    /// screen is the one thing the demo must never do), reads the runner's config, binds the scene's 19
+    /// devices to the platform, starts the 19 device sessions, and starts the observer, whose reports are
+    /// all the cards show. Replay is not in this build and says so in plain sight; it does not borrow
+    /// another mode. A mode that cannot start shows why and stays stopped.
     ///
     /// Runs before the data layer's first frame so its cards are never drawn for a frame in a mode
     /// that forbids them.
@@ -32,7 +34,7 @@ namespace DeviceChain.Sitepulse.App
     {
         public enum EditorModeOverride { None, Choreographed, Live, Replay }
 
-        [Tooltip("The data layer whose illustrative cards Live and Replay switch off.")]
+        [Tooltip("The data layer: Choreographed shows its illustrative cards, Live feeds it observed values, and Replay or a mode error switches it off.")]
         public IotOverlay overlay;
         [Tooltip("The preview fleet: its choreography file names the scene's machines, and the machines are tinted when they do not bind.")]
         public QuarryFleetPreview fleet;
@@ -42,7 +44,7 @@ namespace DeviceChain.Sitepulse.App
         [Tooltip("Editor only, and only when -sitepulse-mode is not on the command line.")]
         [SerializeField] EditorModeOverride editorMode = EditorModeOverride.None;
 
-        const string LiveNote = "Live values arrive with the observer";
+        const string NoObserver = "observer not started";
 
         SitepulseHud hud;
         SitepulseMode mode;
@@ -60,6 +62,12 @@ namespace DeviceChain.Sitepulse.App
         readonly HashSet<string> greyed = new HashSet<string>(StringComparer.Ordinal);
         DeviceFleet plane;
         RigPoseSource poses;
+        PlatformObserver observer;
+        ObservedState observed;
+        readonly ObserverStatus observerStatus = new ObserverStatus();
+        int shownObserver = -1;
+        bool showSimulation;
+        float nextSimulation;
         float nextRender;
         const float RenderEverySeconds = 0.25f;
 
@@ -101,11 +109,25 @@ namespace DeviceChain.Sitepulse.App
                     // a Live run is a device on the network: it keeps publishing when the window loses focus
                     previousRunInBackground = Application.runInBackground;
                     Application.runInBackground = true;
-                    HideCards();
+                    UseObservedCards();
                     hud.SetBadge(SitepulseModes.Badge(mode), BadgeTone.Live);
                     UseLiveChoreography();
                     break;
             }
+        }
+
+        /// <summary>
+        /// Live's cards are fed by the observer and by nothing else: the overlay is handed an observed
+        /// source before it builds a card, so every reading it makes has Observed provenance and refuses a
+        /// value of any other kind. What the observer has not (yet) seen shows as a dash.
+        /// </summary>
+        void UseObservedCards()
+        {
+            // a measurement that happened before this moment is not this run's: it is shown with its age,
+            // but it is not evidence that the device's telemetry arrived
+            observed = new ObservedState(DateTimeOffset.UtcNow);
+            if (overlay == null) return;
+            overlay.Source = new ObservedReadingSource(observed, id => board?.TokenOf(id), () => observerStatus.Measurements.IsLive);
         }
 
         /// <summary>
@@ -159,6 +181,8 @@ namespace DeviceChain.Sitepulse.App
         {
             PlatformLog.Error(title + ": " + message);
             stopped = true;
+            HideCards();
+            hud.SetBanner(null);
             hud.SetBadge("LIVE · not running", BadgeTone.Error);
             hud.ShowError(title, message);
         }
@@ -228,6 +252,15 @@ namespace DeviceChain.Sitepulse.App
             poses = new RigPoseSource(fleet, overlay);
             plane = new DeviceFleet(board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem), platformState: lastState);
             _ = plane.StartAll();
+
+            // the observer: the platform's own report of what the 19 devices are doing. It starts after the
+            // sessions so the first thing it can honestly confirm is the telemetry they publish.
+            var watched = new List<string>();
+            foreach (var d in board.Devices)
+                if (!d.Failed && d.Bind != null && d.Bind.IsBound) watched.Add(d.Bind.DeviceToken);
+            observer = new PlatformObserver(cfg.Value, broker, watched, observed, observerStatus);
+            observer.Start();
+            board.BeginObserver();
             Render();
         }
 
@@ -241,7 +274,30 @@ namespace DeviceChain.Sitepulse.App
                 ApplyGhosts();
             }
 
+            if (observer != null && !stopped)
+            {
+                foreach (var token in observer.Pump()) board.MarkObserved(token);
+                hud.SetBanner(ObserverBanner.Text(observerStatus, observed));
+                UpdateSimulation();
+            }
+
             Render();
+        }
+
+        // key L: the model's own values before publish, never platform data
+        void UpdateSimulation()
+        {
+            var kb = Keyboard.current;
+            if (kb != null && kb.lKey.wasPressedThisFrame)
+            {
+                showSimulation = !showSimulation;
+                nextSimulation = 0f;
+                if (!showSimulation) hud.ShowSimulation(null);
+            }
+
+            if (!showSimulation || plane == null || Time.unscaledTime < nextSimulation) return;
+            nextSimulation = Time.unscaledTime + RenderEverySeconds;
+            hud.ShowSimulation(LocalSimulationView.Text(plane.Hosts, DateTimeOffset.UtcNow));
         }
 
         // After every Update has run, so the fleet has already moved the machines for this frame: the pose is
@@ -269,11 +325,13 @@ namespace DeviceChain.Sitepulse.App
             if (stopped || board == null || broker == null) return;
             if (Time.unscaledTime < nextRender) return;
             var token = TokenLine();
-            if (board.Version == shownVersion && token == shownToken) return;
+            var observerVersion = observerStatus.Version;
+            if (board.Version == shownVersion && token == shownToken && observerVersion == shownObserver) return;
             nextRender = Time.unscaledTime + RenderEverySeconds;
             shownVersion = board.Version;
             shownToken = token;
-            hud.ShowReadiness(board.Summary(), token, LiveNote, board.Lines(), board.Notes());
+            shownObserver = observerVersion;
+            hud.ShowReadiness(board.Summary(), token, observer != null ? ObserverBanner.Line(observerStatus) : NoObserver, board.Lines(), board.Notes());
         }
 
         /// <summary>
@@ -299,6 +357,12 @@ namespace DeviceChain.Sitepulse.App
 
         void Teardown()
         {
+            if (observer != null)
+            {
+                observer.Dispose();
+                observer = null;
+            }
+
             if (plane == null) return;
             var p = plane;
             plane = null;

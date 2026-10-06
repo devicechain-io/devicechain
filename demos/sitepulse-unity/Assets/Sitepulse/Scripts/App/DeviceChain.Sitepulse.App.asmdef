@@ -5,7 +5,8 @@
         "DeviceChain.Sitepulse",
         "DeviceChain.Sitepulse.Platform",
         "DeviceChain.Sitepulse.DevicePlane",
-        "DeviceChain.Sdk.Unity"
+        "DeviceChain.Sdk.Unity",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

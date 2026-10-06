@@ -14,7 +14,8 @@ namespace DeviceChain.Sitepulse.App
 
     /// <summary>
     /// The screen-space HUD: the mode badge, always on screen at the top left, and the readiness
-    /// panel (or a startup error) under it. Styled like the data layer's cards (same panel, accent,
+    /// panel (or a startup error) under it, the observer banner at the top centre while the observer is not
+    /// live, and the local simulation panel at the bottom left when asked for. Styled like the data layer's cards (same panel, accent,
     /// ink and muted colours; laid out in the units of a 1080-pixel-high frame) and kept separate
     /// from the overlay, whose cards hang on the camera. Plain legacy <c>Text</c>, rich text for the
     /// per-line colour, one text block so a refresh is one assignment.
@@ -35,9 +36,9 @@ namespace DeviceChain.Sitepulse.App
         static Font font, mono;
 
         readonly GameObject root;
-        readonly RectTransform chip, panel;
+        readonly RectTransform chip, panel, banner, sim;
         readonly Image chipImage;
-        readonly Text chipText, panelText;
+        readonly Text chipText, panelText, bannerText, simText;
 
         public SitepulseHud(Transform parent)
         {
@@ -72,6 +73,53 @@ namespace DeviceChain.Sitepulse.App
             panelText.verticalOverflow = VerticalWrapMode.Overflow;
             panelText.supportRichText = true;
             panel.gameObject.SetActive(false);
+
+            banner = Box(root.transform, "Banner", out _);
+            banner.anchorMin = banner.anchorMax = banner.pivot = new Vector2(0.5f, 1f);
+            bannerText = Label(banner, "Text", 20, FontStyle.Bold, Warn, font);
+            bannerText.alignment = TextAnchor.MiddleCenter;
+            bannerText.horizontalOverflow = HorizontalWrapMode.Overflow;
+            banner.anchoredPosition = new Vector2(0f, -Margin);
+            banner.gameObject.SetActive(false);
+
+            sim = Box(root.transform, "Local Simulation", out _);
+            sim.anchorMin = sim.anchorMax = sim.pivot = new Vector2(0f, 0f);
+            simText = Label(sim, "Text", 14, FontStyle.Normal, Ink, mono);
+            simText.rectTransform.offsetMin = new Vector2(Pad, Pad);
+            simText.rectTransform.offsetMax = new Vector2(-Pad, -Pad);
+            simText.alignment = TextAnchor.LowerLeft;
+            simText.horizontalOverflow = HorizontalWrapMode.Overflow;
+            simText.verticalOverflow = VerticalWrapMode.Overflow;
+            sim.gameObject.SetActive(false);
+        }
+
+        /// <summary>The site-wide observer banner; null hides it.</summary>
+        public void SetBanner(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                banner.gameObject.SetActive(false);
+                return;
+            }
+
+            banner.gameObject.SetActive(true);
+            if (bannerText.text != text) bannerText.text = text;
+            banner.sizeDelta = new Vector2(bannerText.preferredWidth + 40f, ChipH);
+        }
+
+        /// <summary>The local simulation panel (its text says it is not platform data); null hides it.</summary>
+        public void ShowSimulation(string text)
+        {
+            if (text == null)
+            {
+                sim.gameObject.SetActive(false);
+                return;
+            }
+
+            sim.gameObject.SetActive(true);
+            sim.anchoredPosition = new Vector2(Margin, Margin);
+            simText.text = text;
+            sim.sizeDelta = new Vector2(simText.preferredWidth + 2f * Pad, simText.preferredHeight + 2f * Pad);
         }
 
         public void SetBadge(string text, BadgeTone tone)
