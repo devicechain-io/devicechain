@@ -70,6 +70,8 @@ namespace DeviceChain.Sitepulse.App
         float nextSimulation;
         float nextRender;
         const float RenderEverySeconds = 0.25f;
+        float nextStatusLog;
+        const float StatusLogEverySeconds = 10f;
 
         public SitepulseMode Mode => mode;
 
@@ -279,6 +281,12 @@ namespace DeviceChain.Sitepulse.App
                 foreach (var token in observer.Pump()) board.MarkObserved(token);
                 hud.SetBanner(ObserverBanner.Text(observerStatus, observed));
                 UpdateSimulation();
+                // the header in the log too, so an unattended (batchmode) run can be read afterwards
+                if (Time.unscaledTime >= nextStatusLog)
+                {
+                    nextStatusLog = Time.unscaledTime + StatusLogEverySeconds;
+                    PlatformLog.Info($"status · {board.Summary()} · {ObserverBanner.Line(observerStatus)}");
+                }
             }
 
             Render();
