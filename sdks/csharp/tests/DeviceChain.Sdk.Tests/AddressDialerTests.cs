@@ -38,6 +38,11 @@ public class AddressDialerTests
         public readonly List<bool> Cancelled = new();
         private readonly Dictionary<IPAddress, Func<CancellationToken, Task<Conn>>> _by = new();
 
+        public bool WasCancelled(IPAddress a)
+        {
+            lock (Made) { return Cancelled[Started.IndexOf(a)]; }
+        }
+
         public Script On(IPAddress a, Func<CancellationToken, Task<Conn>> behaviour)
         {
             _by[a] = behaviour;
@@ -119,8 +124,10 @@ public class AddressDialerTests
         Assert.False(won.Disposed);
         Assert.InRange(sw.ElapsedMilliseconds, 100, 1000); // the stagger, not a 21 s OS timeout
         Conn hung = script.Made.Single(c => c.Address.Equals(V6));
-        await WaitUntil(() => hung.Disposed);
-        Assert.True(script.Cancelled[script.Started.IndexOf(V6)]);
+        // The hung attempt disposes its connection before its cancellation reaches the script's
+        // record, so wait for both rather than reading the record the moment disposal is seen.
+        await WaitUntil(() => hung.Disposed && script.WasCancelled(V6));
+        Assert.True(script.WasCancelled(V6));
     }
 
     [Fact]
