@@ -136,6 +136,14 @@ namespace DeviceChain.Sitepulse.Visuals
         static Texture2D dotTexture;
         static Font font, mono;
         IReadingSource source;
+        readonly List<Rect> obstacleScratch = new List<Rect>();
+
+        /// <summary>
+        /// Screen space the overlay must not put a card or the zone's name on: the composition root's own
+        /// HUD (badge, readiness panel, banner). Called each layout with the layout's width (the height is
+        /// 1080) and a list to add rects to, in the same bottom-left-origin units the cards are laid out in.
+        /// </summary>
+        public Action<float, List<Rect>> Obstacles;
 
         /// <summary>
         /// Where the cards' values come from. Until the composition root sets one the overlay is
@@ -517,41 +525,35 @@ namespace DeviceChain.Sitepulse.Visuals
             alarmTarget = null;
             foreach (var t in targets)
             {
-                src.Fill(new ReadingSubject(t.reading.DeviceId, t.rig, t.speed), t.reading, now);
+                // the choreography's inputs go only to a source that is illustrative; an observed one is handed an id
+                (src as IllustrativeReadingSource)?.SetModel(t.reading.DeviceId, t.rig, t.speed);
+                src.Fill(new ReadingSubject(t.reading.DeviceId), t.reading, now);
                 if (t.rig != null && t.reading.HasAlarm) alarmTarget = t;
             }
 
             foreach (var t in targets) Fill(t, now, src.StreamLive);
         }
 
-        /// <summary>Write a reading into its card: the rows it shows, its alarm and its status. An
-        /// observed reading is drawn by how fresh each value is.</summary>
+        static Color InkOf(RowTone tone) => tone == RowTone.Dim ? Dim : tone == RowTone.Ink ? Ink : tone == RowTone.Warn ? Warn : Grey;
+
+        /// <summary>Write a reading into its card: the rows it shows, its alarm and its status. What each
+        /// row and the status say is decided by <see cref="CardPresenter"/>; this only draws it.</summary>
         void Fill(Target t, DateTimeOffset now, bool live)
         {
             var r = t.reading;
             int n = 0;
             bool observed = r.Provenance == Provenance.Observed;
             string alarmKeyRow = r.HasAlarm ? AlarmKeys.Metric(r.FirstAlarm.Key) : null;
-            // each row: the label a person reads, and the value with its unit; the platform key
-            // stays the data model underneath. An observed value with nothing behind it reads as a dash.
-            void RowOf(string label, string value, bool warn, Freshness fresh)
+            void Draw(string label, RowView v)
             {
-                if (n >= MaxRows) return;
-                if (value == null)
-                {
-                    if (!observed) return;
-                    value = "\u2014";
-                    fresh = Freshness.Gone;
-                }
-                else if (fresh == Freshness.Gone) value = "\u2014";
+                if (!v.Shown || n >= MaxRows) return;
                 var row = t.rows[n++];
                 Set(row.label, label);
-                Set(row.value, value);
-                row.value.color = fresh == Freshness.Stale ? Dim : fresh == Freshness.Fresh ? (warn ? Warn : Ink) : Grey;
+                Set(row.value, v.Text);
+                row.value.color = InkOf(v.Tone);
             }
-            Freshness FreshOf(string key, TimeSpan? within = null) =>
-                observed && r.TryGetStamp(key, out var st) ? FreshnessRule.Classify(st.OccurredAt, now, live, within) : (observed ? Freshness.Gone : Freshness.Fresh);
-            void Metric(string key, bool warn = false) => RowOf(MeasurementKeys.Label(key), r.Format(key), warn, FreshOf(key));
+            DateTimeOffset? StampOf(string key) => r.TryGetStamp(key, out var st) ? st.OccurredAt : (DateTimeOffset?)null;
+            void Metric(string key, bool warn = false) => Draw(MeasurementKeys.Label(key), CardPresenter.Row(observed, r.Format(key), StampOf(key), now, live, warn));
             bool stopped = false;
             if (r.Kind == DeviceReading.Profile.Plant)
             {
@@ -564,11 +566,10 @@ namespace DeviceChain.Sitepulse.Visuals
                 if (alarmKeyRow != null) Metric(alarmKeyRow, warn: true);
                 Metric(MeasurementKeys.PayloadT);
                 if (alarmKeyRow != MeasurementKeys.FuelPct) Metric(MeasurementKeys.FuelPct);
-                var speedFresh = observed && r.SpeedStamp.HasValue
-                    ? FreshnessRule.Classify(r.SpeedStamp.Value.OccurredAt, now, live, FreshnessRule.LocationFreshWithin)
-                    : (observed ? Freshness.Gone : Freshness.Fresh);
-                RowOf("Speed", r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null, false, speedFresh);
-                if (r.CommandStatus.HasValue) RowOf(CommandKeys.Label(r.Command), r.CommandStatus.Value.Label, false, Freshness.Fresh);
+                Draw("Speed", CardPresenter.Row(observed, r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null,
+                    r.SpeedStamp?.OccurredAt, now, live, false, FreshnessRule.LocationFreshWithin));
+                if (r.CommandStatus.HasValue)
+                    Draw(CommandKeys.Label(r.Command), CardPresenter.CommandRow(observed, r.CommandStatus.Value.Label, r.CommandStatus.Value.IsTerminal, r.CommandStamp?.ObservedAt, now, live));
             }
             for (int i = 0; i < MaxRows; i++)
             {
@@ -583,23 +584,9 @@ namespace DeviceChain.Sitepulse.Visuals
                 Set(t.alarmText, (string.IsNullOrEmpty(a0.Severity) ? "ALARM" : a0.Severity) + "  " + AlarmKeys.Label(a0.Key));
             }
 
-            Color status;
-            string tag;
-            if (observed)
-            {
-                // the dot is the freshness of the device's own telemetry; the alarm keeps the edge and the bar
-                var newest = r.NewestOccurredAt;
-                var f = newest.HasValue ? FreshnessRule.Classify(newest.Value, now, live) : Freshness.Gone;
-                var age = newest.HasValue ? (int)Math.Max(0.0, (now - newest.Value).TotalSeconds) : 0;
-                status = f == Freshness.Fresh ? Ok : f == Freshness.Stale ? Warn : Grey;
-                tag = f == Freshness.Fresh ? "observed" : f == Freshness.Stale ? "stale " + age + " s"
-                    : !newest.HasValue ? "no data" : f == Freshness.Gone ? "no data > 1 min" : "no data " + age + " s";
-            }
-            else
-            {
-                status = alarm ? Warn : (stopped ? Muted : Ok);
-                tag = r.Provenance == Provenance.Illustrative ? "illustrative" : "replayed";
-            }
+            var sv = CardPresenter.Status(r.Provenance, r.NewestOccurredAt, now, live, alarm, stopped);
+            var status = sv.Dot == DotTone.Ok ? Ok : sv.Dot == DotTone.Warn ? Warn : sv.Dot == DotTone.Muted ? Muted : Grey;
+            var tag = sv.Tag;
 
             Set(t.tag, tag);
             t.dotImage.color = status;
@@ -658,6 +645,7 @@ namespace DeviceChain.Sitepulse.Visuals
             blockers.Clear();
             foreach (var rs in machineRenderers)
                 if (ScreenRect(cam, Bounds(rs), refW, out var r)) blockers.Add(Inflate(r, 4f));
+            AddObstacles(Obstacles, refW, obstacleScratch, blockers);
 
             foreach (var t in targets)
             {
@@ -914,6 +902,15 @@ namespace DeviceChain.Sitepulse.Visuals
                     && p.x < (poly[j].x - poly[i].x) * (p.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x)
                     c = !c;
             return c;
+        }
+
+        /// <summary>Adds the screen space the HUD holds to the layout's blockers, a little inflated so a card clears it.</summary>
+        public static void AddObstacles(Action<float, List<Rect>> obstacles, float frameWidth, List<Rect> scratch, List<Rect> blockers)
+        {
+            if (obstacles == null) return;
+            scratch.Clear();
+            obstacles(frameWidth, scratch);
+            foreach (var o in scratch) blockers.Add(Inflate(o, 6f));
         }
 
         static Rect Inflate(Rect r, float by) => new Rect(r.xMin - by, r.yMin - by, r.width + 2f * by, r.height + 2f * by);

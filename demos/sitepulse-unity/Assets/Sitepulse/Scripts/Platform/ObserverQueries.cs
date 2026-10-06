@@ -18,6 +18,9 @@ namespace DeviceChain.Sitepulse.Platform
     public static class ObserverQueries
     {
         public const int AlarmPage = 100;
+
+        /// <summary>The most pages of active alarms one snapshot reads before it gives up and says it is truncated.</summary>
+        public const int MaxAlarmPages = 10;
         public const int CommandPage = 100;
 
         public const string MeasurementSubscription = "subscription { measurementStream { deviceToken name value occurredTime } }";
@@ -32,7 +35,7 @@ namespace DeviceChain.Sitepulse.Platform
             "query Presence($t: [String!]!) { deviceStatesByDeviceToken(deviceTokens: $t) { deviceToken active lastActivityTime } }";
 
         public const string ActiveAlarmsQuery =
-            "query Alarms($c: AlarmSearchCriteria!) { alarms(criteria: $c) { results { token originatorType originatorToken alarmKey metricKey state severity acknowledged raisedTime } } }";
+            "query Alarms($c: AlarmSearchCriteria!) { alarms(criteria: $c) { results { token originatorType originatorToken alarmKey metricKey state severity acknowledged raisedTime acknowledgedTime clearedTime } pagination { totalRecords } } }";
 
         const string CommandFields = "token deviceToken name status queuedTime";
 
@@ -58,10 +61,10 @@ namespace DeviceChain.Sitepulse.Platform
 
         public static string TokenListVariables(IEnumerable<string> tokens) => VarsJson.StringList("t", tokens);
 
-        public static string ActiveAlarmsVariables() => Write(w =>
+        public static string ActiveAlarmsVariables(int page = 1) => Write(w =>
         {
             w.WriteStartObject("c");
-            w.WriteNumber("pageNumber", 1);
+            w.WriteNumber("pageNumber", page);
             w.WriteNumber("pageSize", AlarmPage);
             w.WriteString("state", ObservedAlarm.Active);
             w.WriteEndObject();
@@ -205,7 +208,9 @@ namespace DeviceChain.Sitepulse.Platform
             var token = Str(o, "token") ?? Str(o, "alarmToken");
             var key = Str(o, "alarmKey");
             if (device == null || token == null || key == null) return null;
-            var at = Time(o, "occurredTime") ?? Time(o, "raisedTime");
+            // a stream frame says when the transition happened (occurredTime). A snapshot row has no such field:
+            // its newest transition is the latest of when it was raised, acknowledged and cleared
+            var at = Time(o, "occurredTime") ?? Newest(Time(o, "raisedTime"), Time(o, "acknowledgedTime"), Time(o, "clearedTime"));
             if (!at.HasValue) return null;
             return new AlarmItem(device, new ObservedAlarm
             {
@@ -220,21 +225,82 @@ namespace DeviceChain.Sitepulse.Platform
             });
         }
 
+        static DateTimeOffset? Newest(params DateTimeOffset?[] times)
+        {
+            DateTimeOffset? newest = null;
+            foreach (var t in times)
+                if (t.HasValue && (!newest.HasValue || t.Value > newest.Value)) newest = t;
+            return newest;
+        }
+
         public static AlarmItem ParseAlarmFrame(JsonElement frame, DateTimeOffset observedAt) =>
             frame.TryGetProperty("alarmStream", out var a) && a.ValueKind == JsonValueKind.Object ? ParseAlarm(a, observedAt) : null;
 
-        public static AlarmSnapshotItem ParseActiveAlarms(string dataJson, DateTimeOffset requestedAt, DateTimeOffset observedAt)
+        /// <summary>One page of the active-alarm answer: the alarms that name a device, how many rows the page held, and the platform's total.</summary>
+        public sealed class AlarmPageResult
         {
-            var list = new List<AlarmItem>();
+            public List<AlarmItem> Alarms { get; } = new List<AlarmItem>();
+            public int Rows { get; internal set; }
+            public int? TotalRecords { get; internal set; }
+        }
+
+        public static AlarmPageResult ParseActiveAlarmsPage(string dataJson, DateTimeOffset observedAt)
+        {
+            var page = new AlarmPageResult();
             using var doc = JsonDocument.Parse(dataJson);
-            if (doc.RootElement.TryGetProperty("alarms", out var page) && page.TryGetProperty("results", out var rows) && rows.ValueKind == JsonValueKind.Array)
+            if (!doc.RootElement.TryGetProperty("alarms", out var results)) return page;
+            if (results.TryGetProperty("pagination", out var pg) && pg.ValueKind == JsonValueKind.Object)
+            {
+                var total = Num(pg, "totalRecords");
+                if (total.HasValue) page.TotalRecords = (int)total.Value;
+            }
+
+            if (results.TryGetProperty("results", out var rows) && rows.ValueKind == JsonValueKind.Array)
                 foreach (var row in rows.EnumerateArray())
                 {
+                    page.Rows++;
                     var a = ParseAlarm(row, observedAt);
-                    if (a != null) list.Add(a);
+                    if (a != null) page.Alarms.Add(a);
                 }
 
-            return new AlarmSnapshotItem(list, requestedAt, observedAt);
+            return page;
+        }
+
+        /// <summary>The active-alarm answer, one page: truncated when the platform says it has more than this page held.</summary>
+        public static AlarmSnapshotItem ParseActiveAlarms(string dataJson, DateTimeOffset requestedAt, DateTimeOffset observedAt)
+        {
+            var page = ParseActiveAlarmsPage(dataJson, observedAt);
+            return new AlarmSnapshotItem(page.Alarms, requestedAt, observedAt, MoreRemain(page.Rows, page.Rows, page.TotalRecords), page.TotalRecords);
+        }
+
+        // whether the platform holds alarms this read has not seen: by its total when it gave one, else by a full page
+        static bool MoreRemain(int fetched, int lastPageRows, int? total) => total.HasValue ? fetched < total.Value : lastPageRows >= AlarmPage;
+
+        /// <summary>
+        /// The whole active-alarm list: <paramref name="fetchPage"/> (given a 1-based page number) is asked
+        /// for pages until the platform's total is reached, up to <see cref="MaxAlarmPages"/>. If alarms
+        /// remain unread at the end the result is marked truncated, and must not be used to clear anything.
+        /// </summary>
+        public static async System.Threading.Tasks.Task<AlarmSnapshotItem> FetchActiveAlarms(
+            Func<int, System.Threading.Tasks.Task<string>> fetchPage, DateTimeOffset requestedAt, Func<DateTimeOffset> clock, int maxPages = MaxAlarmPages)
+        {
+            var all = new List<AlarmItem>();
+            var fetched = 0;
+            int? total = null;
+            var more = true;
+            for (var p = 1; p <= maxPages && more; p++)
+            {
+                var data = await fetchPage(p).ConfigureAwait(true);
+                var page = ParseActiveAlarmsPage(data, clock());
+                all.AddRange(page.Alarms);
+                fetched += page.Rows;
+                total = page.TotalRecords ?? total;
+                more = page.Rows > 0 && MoreRemain(fetched, page.Rows, total);
+                // a page that came back empty while the platform says it has more cannot be made to progress
+                if (page.Rows == 0 && total.HasValue && fetched < total.Value) return new AlarmSnapshotItem(all, requestedAt, clock(), true, total);
+            }
+
+            return new AlarmSnapshotItem(all, requestedAt, clock(), more, total);
         }
 
         /// <summary>The commands of a <see cref="CommandsQuery"/> answer: the page, then the named ones, de-duplicated by token (the named copy is the later word).</summary>

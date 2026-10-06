@@ -244,6 +244,9 @@ namespace DeviceChain.Sitepulse.Domain
         public string Command { get; private set; }
         public CommandStatus? CommandStatus { get; private set; }
 
+        /// <summary>When the command was queued and when this app last saw the platform say what state it is in; null for an illustrative command.</summary>
+        public Observation? CommandStamp { get; private set; }
+
         public IReadOnlyList<ReadingAlarm> Alarms => alarms;
 
         /// <summary>An alarm is active on the device.</summary>
@@ -373,6 +376,7 @@ namespace DeviceChain.Sitepulse.Domain
             Admit(by, stamp, command);
             Command = command;
             CommandStatus = status;
+            CommandStamp = stamp;
             return this;
         }
 
@@ -380,6 +384,7 @@ namespace DeviceChain.Sitepulse.Domain
         {
             Command = null;
             CommandStatus = null;
+            CommandStamp = null;
         }
 
         /// <summary>A key's value with its unit ("47 %", "720 t/h"), or null when there is none.

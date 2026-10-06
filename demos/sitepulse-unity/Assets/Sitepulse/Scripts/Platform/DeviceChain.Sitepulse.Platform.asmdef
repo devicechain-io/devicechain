@@ -2,6 +2,7 @@
     "name": "DeviceChain.Sitepulse.Platform",
     "rootNamespace": "DeviceChain.Sitepulse.Platform",
     "references": [
+        "DeviceChain.Sitepulse",
         "DeviceChain.Sdk.Unity"
     ],
     "includePlatforms": [],

@@ -15,7 +15,8 @@ namespace DeviceChain.Sitepulse.App
     /// there: a device with no observation fills nothing, and the card shows a dash. Every value is
     /// written as <see cref="Provenance.Observed"/> with its own occurrence and observation times, which
     /// is what the freshness of a card is judged from. The speed is the device's last Location event's
-    /// <c>speed</c> (the platform stores metres per second) converted to km/h.
+    /// <c>speed</c> (the platform stores metres per second) converted to km/h. It is handed a device's id
+    /// and nothing of the scene's choreography (<see cref="ReadingSubject"/> carries no machine and no speed).
     /// </summary>
     public sealed class ObservedReadingSource : IReadingSource
     {
@@ -25,6 +26,7 @@ namespace DeviceChain.Sitepulse.App
         readonly Func<string, string> tokenOf;
         readonly Func<bool> streamLive;
         readonly List<ObservedAlarm> scratch = new List<ObservedAlarm>();
+        readonly HashSet<string> raisedKeys = new HashSet<string>(StringComparer.Ordinal);
         readonly HashSet<string> warned = new HashSet<string>(StringComparer.Ordinal);
 
         /// <param name="tokenOf">A scene device's id to its platform token; null while it has none.</param>
@@ -66,6 +68,7 @@ namespace DeviceChain.Sitepulse.App
             foreach (var a in device.Alarms.Values)
                 if (a.IsActive) scratch.Add(a);
             scratch.Sort((x, y) => y.OccurredAt != x.OccurredAt ? y.OccurredAt.CompareTo(x.OccurredAt) : string.CompareOrdinal(x.Token, y.Token));
+            raisedKeys.Clear();
             foreach (var a in scratch)
             {
                 if (!Contains(AlarmKeys.All, a.AlarmKey))
@@ -74,6 +77,9 @@ namespace DeviceChain.Sitepulse.App
                     continue;
                 }
 
+                // one alarm per key on a card, and it is the newest one's: DeviceReading.Raise replaces an earlier
+                // raise of the same key, so an older alarm met later must not overwrite the newer one
+                if (!raisedKeys.Add(a.AlarmKey)) continue;
                 reading.Raise(a.AlarmKey, P, a.Severity, a.State, new Observation(a.OccurredAt, a.ObservedAt));
             }
 

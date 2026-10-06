@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Sitepulse.Domain;
 
 namespace DeviceChain.Sitepulse.Platform
 {
@@ -59,9 +60,8 @@ namespace DeviceChain.Sitepulse.Platform
         public DateTimeOffset QueuedAt { get; set; }
         public DateTimeOffset ObservedAt { get; set; }
 
-        /// <summary>The platform has finished with the command.</summary>
-        public static bool IsTerminalStatus(string status) =>
-            status == "SUCCESSFUL" || status == "FAILED" || status == "TIMEOUT" || status == "EXPIRED" || status == "CANCELLED";
+        /// <summary>The platform has finished with the command. The one definition of which states those are is <see cref="CommandStatus.IsTerminal"/>.</summary>
+        public static bool IsTerminalStatus(string status) => CommandStatus.Parse(status).IsTerminal;
 
         public bool IsTerminal => IsTerminalStatus(Status);
     }
@@ -104,6 +104,9 @@ namespace DeviceChain.Sitepulse.Platform
         /// telemetry arrived, not that an old value exists.
         /// </summary>
         public DateTimeOffset? FirstOwnObservation { get; internal set; }
+
+        /// <summary>When the newest measurement from this run of the device happened (its own clock); null until one has.</summary>
+        public DateTimeOffset? NewestOwnRunAt { get; internal set; }
     }
 
     /// <summary>
@@ -136,6 +139,9 @@ namespace DeviceChain.Sitepulse.Platform
 
         public int Version { get; private set; }
 
+        /// <summary>When the newest measurement of this run happened for a device; null if none has been seen.</summary>
+        public DateTimeOffset? NewestOwnRunAt(string deviceToken) => devices.TryGetValue(deviceToken ?? "", out var d) ? d.NewestOwnRunAt : null;
+
         public bool TryGet(string deviceToken, out ObservedDevice device) => devices.TryGetValue(deviceToken ?? "", out device);
 
         ObservedDevice Of(string token)
@@ -157,7 +163,9 @@ namespace DeviceChain.Sitepulse.Platform
             d.measurements[name] = new ObservedValue(value, occurredAt, observedAt);
             if (!LastMeasurementSeenAt.HasValue || observedAt > LastMeasurementSeenAt.Value) LastMeasurementSeenAt = observedAt;
             Version++;
-            if (d.FirstOwnObservation.HasValue || occurredAt < floor) return false;
+            if (occurredAt < floor) return false;
+            if (!d.NewestOwnRunAt.HasValue || occurredAt > d.NewestOwnRunAt.Value) d.NewestOwnRunAt = occurredAt;
+            if (d.FirstOwnObservation.HasValue) return false;
             d.FirstOwnObservation = observedAt;
             return true;
         }

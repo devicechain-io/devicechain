@@ -29,7 +29,7 @@ namespace DeviceChain.Sitepulse.Tests
         static DeviceReading Truck() => new DeviceReading("SP-HL-0006", DeviceReading.Profile.Equipment, Provenance.Observed);
 
         static void Fill(ObservedReadingSource src, DeviceReading r, string id = "SP-HL-0006") =>
-            src.Fill(new ReadingSubject(id, null, 0f), r, T0);
+            src.Fill(new ReadingSubject(id), r, T0);
 
         [Test]
         public void ADeviceTheObserverHasNotSeenFillsNothing()
@@ -144,8 +144,9 @@ namespace DeviceChain.Sitepulse.Tests
             {
                 var rig = go.AddComponent<MachineRig>();
                 var live = Truck();
-                Assert.Throws<InvalidOperationException>(() =>
-                    new IllustrativeReadingSource(null, "SP-HL-0006", AlarmKeys.LowFuel).Fill(new ReadingSubject("SP-HL-0006", rig, 3f), live, T0));
+                var illustrative = new IllustrativeReadingSource(null, "SP-HL-0006", AlarmKeys.LowFuel);
+                illustrative.SetModel("SP-HL-0006", rig, 3f);
+                Assert.Throws<InvalidOperationException>(() => illustrative.Fill(new ReadingSubject("SP-HL-0006"), live, T0));
                 foreach (var key in MeasurementKeys.Equipment) Assert.IsFalse(live.TryGet(key, out _), key);
                 Assert.IsNull(live.SpeedKmh);
             }
@@ -166,7 +167,8 @@ namespace DeviceChain.Sitepulse.Tests
                 foreach (var speed in new[] { 0f, 0.1f, 8f })
                 {
                     var r = new DeviceReading("SP-HL-0006", DeviceReading.Profile.Equipment);
-                    src.Fill(new ReadingSubject("SP-HL-0006", rig, speed), r, T0);
+                    src.SetModel("SP-HL-0006", rig, speed);
+                    src.Fill(new ReadingSubject("SP-HL-0006"), r, T0);
                     Assert.IsTrue(r.HasAlarm);
                     Assert.AreEqual(CommandState.Sent, r.CommandStatus.Value.State, "speed " + speed);
                     Assert.IsTrue(r.TryGet(MeasurementKeys.FuelPct, out var fuel));

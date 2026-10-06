@@ -51,15 +51,27 @@ namespace DeviceChain.Sitepulse.Platform
         public ObservedAlarm Alarm { get; }
     }
 
-    /// <summary>The platform's whole list of active alarms as of <see cref="RequestedAt"/>.</summary>
+    /// <summary>
+    /// The platform's list of active alarms as of <see cref="RequestedAt"/>. It is the platform's WHOLE
+    /// answer only when <see cref="Truncated"/> is false: a truncated list says nothing about the alarms it
+    /// does not name, so it is never used to clear one.
+    /// </summary>
     public sealed class AlarmSnapshotItem : ObserverItem
     {
-        public AlarmSnapshotItem(IReadOnlyList<AlarmItem> alarms, DateTimeOffset requestedAt, DateTimeOffset observedAt)
+        public AlarmSnapshotItem(IReadOnlyList<AlarmItem> alarms, DateTimeOffset requestedAt, DateTimeOffset observedAt, bool truncated = false, int? totalRecords = null)
         {
             Alarms = alarms;
             RequestedAt = requestedAt;
             ObservedAt = observedAt;
+            Truncated = truncated;
+            TotalRecords = totalRecords;
         }
+
+        /// <summary>The platform has more active alarms than this list holds.</summary>
+        public bool Truncated { get; }
+
+        /// <summary>How many active alarms the platform said it has, when it said.</summary>
+        public int? TotalRecords { get; }
 
         public IReadOnlyList<AlarmItem> Alarms { get; }
         public DateTimeOffset RequestedAt { get; }

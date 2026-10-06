@@ -71,6 +71,16 @@ namespace DeviceChain.Sitepulse.Platform
 
         public bool Stalled => StallReason != null;
 
+        /// <summary>
+        /// An observed device whose newest own-run measurement is older than <see cref="ReadinessBoard.ObservedWithin"/>
+        /// (or that has none): the platform reported it once and has not lately. Set by
+        /// <see cref="ReadinessBoard.EvaluateObserved"/>.
+        /// </summary>
+        public bool Quiet { get; set; }
+
+        /// <summary>When the device's newest own-run measurement happened; null if none was seen.</summary>
+        public DateTimeOffset? LastMeasurementAt { get; set; }
+
         public bool Failed => FailReason != null;
 
         /// <summary>
@@ -153,10 +163,31 @@ namespace DeviceChain.Sitepulse.Platform
             {
                 var n = 0;
                 foreach (var d in devices)
-                    if (d.Stage == DeviceStage.Observed && d.Side == DeviceSide.None && !d.Failed && !d.Stalled) n++;
+                    if (IsObserved(d)) n++;
                 return n;
             }
         }
+
+        static bool IsObserved(DeviceReadiness d) =>
+            d.Stage == DeviceStage.Observed && d.Side == DeviceSide.None && !d.Failed && !d.Stalled && !d.Quiet;
+
+        /// <summary>Observed once, but with no measurement from this run in the last <see cref="ObservedWithin"/> (and otherwise sending).</summary>
+        public int QuietCount
+        {
+            get
+            {
+                var n = 0;
+                foreach (var d in devices)
+                    if (d.Stage == DeviceStage.Observed && d.Side == DeviceSide.None && !d.Failed && !d.Stalled && d.Quiet) n++;
+                return n;
+            }
+        }
+
+        /// <summary>
+        /// A device counts as observed only while its newest measurement from this run is no older than this:
+        /// the same 15 s at which a value on a card stops being merely stale and goes grey.
+        /// </summary>
+        public static readonly TimeSpan ObservedWithin = TimeSpan.FromSeconds(15);
 
         public int StalledCount
         {
@@ -193,7 +224,7 @@ namespace DeviceChain.Sitepulse.Platform
         public bool ObserverBegun { get; private set; }
 
         public string Summary() => ObserverBegun
-            ? $"{ObservedCount}/{Total} observed{(StalledCount > 0 ? $" · {StalledCount} stalled" : "")} · {FailedCount} failed"
+            ? $"{ObservedCount}/{Total} observed{(StalledCount > 0 ? $" · {StalledCount} stalled" : "")}{(QuietCount > 0 ? $" · {QuietCount} quiet" : "")} · {FailedCount} failed"
             : SessionsBegun
                 ? $"{PublishingCount}/{Total} publishing{(StalledCount > 0 ? $" · {StalledCount} stalled" : "")} · {FailedCount} failed"
                 : $"{CredentialedCount}/{Total} credentialed · {FailedCount} failed";
@@ -223,6 +254,30 @@ namespace DeviceChain.Sitepulse.Platform
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Re-judges, at <paramref name="now"/>, which observed devices have gone quiet: <paramref name="newestOwnRunOf"/>
+        /// gives a device token's newest own-run measurement time. Observed is a stage reached once; being counted as
+        /// observed lasts only while the platform keeps reporting.
+        /// </summary>
+        public void EvaluateObserved(DateTimeOffset now, Func<string, DateTimeOffset?> newestOwnRunOf)
+        {
+            foreach (var d in devices)
+            {
+                var quiet = false;
+                DateTimeOffset? last = null;
+                if (d.Stage == DeviceStage.Observed && d.Bind != null && d.Bind.IsBound)
+                {
+                    last = newestOwnRunOf(d.Bind.DeviceToken);
+                    quiet = !last.HasValue || now - last.Value > ObservedWithin;
+                }
+
+                if (quiet == d.Quiet && last == d.LastMeasurementAt) continue;
+                d.Quiet = quiet;
+                d.LastMeasurementAt = last;
+                Version++;
+            }
         }
 
         /// <summary>Marks every credentialed device as connecting, and switches the header to the publishing count.</summary>
@@ -397,7 +452,9 @@ namespace DeviceChain.Sitepulse.Platform
                 case DeviceSide.Stopped: state = "stopped"; break;
                 default:
                     state = d.Stage == DeviceStage.Connecting ? "connecting" : d.Stage == DeviceStage.Ready ? "ready"
-                        : d.Stalled ? "stalled · " + d.StallReason : d.Stage == DeviceStage.Observed ? "observed" : "publishing";
+                        : d.Stalled ? "stalled · " + d.StallReason
+                        : d.Stage == DeviceStage.Observed ? (d.Quiet ? "quiet · " + (d.LastMeasurementAt.HasValue ? "last measurement " + d.LastMeasurementAt.Value.UtcDateTime.ToString("HH:mm:ss") + "Z" : "no measurement") : "observed")
+                        : "publishing";
                     break;
             }
 
@@ -411,8 +468,63 @@ namespace DeviceChain.Sitepulse.Platform
             if (d.SendErrors > 0) text += $" · {d.SendErrors} send errors";
             if (d.Dropped > 0) text += $" · {d.Dropped} dropped";
             text += Command(d);
-            var ok = d.Stage >= DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Stalled;
+            var ok = d.Stage >= DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Stalled && !d.Quiet;
             return new PanelLine(text, ok ? LineKind.Ok : LineKind.Pending);
+        }
+
+        /// <summary>
+        /// One line for the compact panel: either that every device is where the header's count says it
+        /// should be, or which ones are not and why ("SP-LD-0004 stalled · SP-DZ-0002 reconnecting"), the
+        /// first <paramref name="maxNamed"/> of them and a count of the rest.
+        /// </summary>
+        public string Brief(int maxNamed = 4)
+        {
+            var parts = new List<string>();
+            foreach (var d in devices)
+            {
+                var why = Problem(d);
+                if (why != null) parts.Add(d.Device.ExternalId + " " + why);
+            }
+
+            if (parts.Count == 0) return ObserverBegun ? "all observed" : SessionsBegun ? "all publishing" : "all credentialed";
+            var shown = parts.Count > maxNamed ? parts.GetRange(0, maxNamed) : parts;
+            var text = string.Join(" · ", shown);
+            return parts.Count > maxNamed ? text + " · +" + (parts.Count - maxNamed) + " more" : text;
+        }
+
+        // why a device is not where the current phase wants it; null when it is
+        string Problem(DeviceReadiness d)
+        {
+            if (d.Failed) return "failed";
+            switch (d.Side)
+            {
+                case DeviceSide.Reconnecting: return "reconnecting";
+                case DeviceSide.Blind: return "blind";
+                case DeviceSide.Stopped: return "stopped";
+            }
+
+            if (ObserverBegun)
+            {
+                if (IsObserved(d)) return null;
+                if (d.Stalled) return "stalled";
+                if (d.Stage == DeviceStage.Observed) return "quiet";
+            }
+            else if (SessionsBegun)
+            {
+                if (d.Stage >= DeviceStage.Publishing && !d.Stalled) return null;
+                if (d.Stalled) return "stalled";
+            }
+            else if (d.Stage >= DeviceStage.Credentialed) return null;
+
+            switch (d.Stage)
+            {
+                case DeviceStage.Unbound: return "resolving";
+                case DeviceStage.Resolved: return "awaiting credential";
+                case DeviceStage.Credentialed: return "credentialed";
+                case DeviceStage.Connecting: return "connecting";
+                case DeviceStage.Ready: return "ready";
+                default: return "awaiting observation";
+            }
         }
 
         /// <summary>Things worth saying once about the fleet, not about one device.</summary>

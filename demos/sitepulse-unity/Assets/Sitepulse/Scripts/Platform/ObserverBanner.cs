@@ -27,13 +27,16 @@ namespace DeviceChain.Sitepulse.Platform
                     sb.Append("Observer reconnecting — values frozen at ").Append(Clock(frozen.Value));
                 else if (m.State == StreamState.Reconnecting)
                     sb.Append("Observer reconnecting — no values observed yet");
+                else if (m.State == StreamState.Subscribed)
+                    sb.Append("Observer subscribed — no data yet");
                 else
                     sb.Append("Observer connecting — no values observed yet");
             }
 
-            // alarms are a second stream: while it is down the alarm state on a card may be out of date
+            // alarms are a second stream: while it is down the alarm state on a card may be out of date. One that is
+            // subscribed and has said nothing is normal (alarms are events), so it is shown in the panel, not here
             var a = status.Alarms;
-            if (m.State == StreamState.Live && a.State != StreamState.Live && a.State != StreamState.Idle)
+            if (m.State == StreamState.Live && a.State != StreamState.Live && a.State != StreamState.Idle && a.State != StreamState.Subscribed)
                 sb.Append(a.State == StreamState.Reconnecting ? "Alarm stream reconnecting — alarm state may be out of date" : "Alarm stream connecting — alarm state not observed yet");
             return sb.Length == 0 ? null : sb.ToString();
         }
@@ -43,6 +46,7 @@ namespace DeviceChain.Sitepulse.Platform
         {
             var sb = new StringBuilder("observer · measurements ").Append(Word(status.Measurements))
                 .Append(" · alarms ").Append(Word(status.Alarms));
+            if (status.AlarmSnapshotNote != null) sb.Append(" · ").Append(status.AlarmSnapshotNote);
             if (status.PollErrors.Count == 0) return sb.Append(" · polls ok").ToString();
             var names = new List<string>(status.PollErrors.Keys);
             names.Sort(StringComparer.Ordinal);
@@ -57,6 +61,7 @@ namespace DeviceChain.Sitepulse.Platform
                 case StreamState.Live: return string.IsNullOrEmpty(s.Reason) ? "live" : "live (" + s.Reason + ")";
                 case StreamState.Reconnecting: return "reconnecting" + (string.IsNullOrEmpty(s.Reason) ? "" : " (" + s.Reason + ")");
                 case StreamState.Connecting: return "connecting";
+                case StreamState.Subscribed: return "subscribed · no data yet" + (string.IsNullOrEmpty(s.Reason) ? "" : " (" + s.Reason + ")");
                 default: return "not started";
             }
         }

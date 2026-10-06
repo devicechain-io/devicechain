@@ -40,6 +40,16 @@ namespace DeviceChain.Sitepulse.Platform
 
         public int Version { get; internal set; }
 
+        /// <summary>Set while the last alarm snapshot was only part of the platform's list; null otherwise.</summary>
+        public string AlarmSnapshotNote { get; private set; }
+
+        internal void SetAlarmSnapshot(string note)
+        {
+            if (note == AlarmSnapshotNote) return;
+            AlarmSnapshotNote = note;
+            Version++;
+        }
+
         internal void SetPoll(string name, bool ok, string reason)
         {
             if (ok)
@@ -60,8 +70,9 @@ namespace DeviceChain.Sitepulse.Platform
     /// credential. Two subscriptions (measurements, the whole tenant; alarms) are kept alive by
     /// <see cref="StreamRunner{T}"/>, each with a snapshot after every (re)subscribe; location, commands
     /// and presence have no subscription and are polled (one batched request each, at 1 Hz, 1 Hz and
-    /// every 5 s). Network tasks only post plain items to an inbox; <see cref="Pump"/>, called from
-    /// <c>Update</c>, applies them on the main thread. Start it from the main thread: the HTTP transport
+    /// every 5 s; a poll backs off while the server is down). The tasks are started from, and continue on, the
+    /// main thread's context, so a frame is parsed there too: what crosses to <see cref="Pump"/> through the
+    /// inbox is a plain item, and <see cref="Pump"/>, called from <c>Update</c>, applies it to the state. Start it from the main thread: the HTTP transport
     /// captures that thread's context and starts every request there.
     /// </summary>
     public sealed class PlatformObserver : IDisposable
@@ -69,7 +80,6 @@ namespace DeviceChain.Sitepulse.Platform
         public static readonly TimeSpan LocationEvery = TimeSpan.FromSeconds(1);
         public static readonly TimeSpan CommandsEvery = TimeSpan.FromSeconds(1);
         public static readonly TimeSpan PresenceEvery = TimeSpan.FromSeconds(5);
-        const int MaxPendingCommands = 200;
 
         static readonly System.Text.Json.Serialization.Metadata.JsonTypeInfo<JsonElement> Json = PlatformJson.Element;
 
@@ -79,7 +89,7 @@ namespace DeviceChain.Sitepulse.Platform
         readonly Func<DateTimeOffset> clock;
         readonly ObserverInbox inbox = new ObserverInbox();
         readonly List<string> newlyObserved = new List<string>();
-        readonly HashSet<string> pendingCommands = new HashSet<string>(StringComparer.Ordinal);
+        readonly CommandTracker commandTracker = new CommandTracker();
         readonly Dictionary<string, DateTimeOffset> lastLog = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         CancellationTokenSource cts;
         GraphQlWsClient measurementSocket, alarmSocket;
@@ -141,7 +151,7 @@ namespace DeviceChain.Sitepulse.Platform
                 RefreshToken, clock: clock);
             var alarms = new StreamRunner<JsonElement>(
                 c => alarmSocket.SubscribeAsync(ObserverQueries.AlarmSubscription, none, Json, Json, c),
-                c => SnapshotAlarms(devices, Post, c),
+                c => SnapshotAlarms(devices, Post, clock, c),
                 frame =>
                 {
                     var a = ObserverQueries.ParseAlarmFrame(frame, clock());
@@ -153,7 +163,7 @@ namespace DeviceChain.Sitepulse.Platform
             _ = Guard("measurement stream", () => measurements.RunAsync(ct), ct);
             _ = Guard("alarm stream", () => alarms.RunAsync(ct), ct);
             _ = Guard("location poll", () => Poll("locations", LocationEvery, c => PollLocations(state, Post, c), ct), ct);
-            _ = Guard("command poll", () => Poll("commands", CommandsEvery, c => PollCommands(commands, Post, c), ct), ct);
+            _ = Guard("command poll", () => Poll("commands", CommandsEvery, c => PollCommands(commands, commandTracker, Post, clock, c), ct), ct);
             _ = Guard("presence poll", () => Poll("presence", PresenceEvery, c => PollPresence(state, Post, c), ct), ct);
         }
 
@@ -171,11 +181,10 @@ namespace DeviceChain.Sitepulse.Platform
             foreach (var m in ObserverQueries.ParseMeasurementsSnapshot(deviceTokens, data, clock())) post(m);
         }
 
-        async Task SnapshotAlarms(QueryFn devices, Action<ObserverItem> post, CancellationToken ct)
+        internal static async Task SnapshotAlarms(QueryFn devices, Action<ObserverItem> post, Func<DateTimeOffset> clock, CancellationToken ct)
         {
             var requested = clock();
-            var data = await devices(ObserverQueries.ActiveAlarmsQuery, ObserverQueries.ActiveAlarmsVariables(), ct);
-            post(ObserverQueries.ParseActiveAlarms(data, requested, clock()));
+            post(await ObserverQueries.FetchActiveAlarms(p => devices(ObserverQueries.ActiveAlarmsQuery, ObserverQueries.ActiveAlarmsVariables(p), ct), requested, clock));
         }
 
         async Task PollLocations(QueryFn state, Action<ObserverItem> post, CancellationToken ct)
@@ -193,53 +202,28 @@ namespace DeviceChain.Sitepulse.Platform
         }
 
         // the non-terminal page every second, plus the commands seen non-terminal last time until they turn terminal
-        async Task PollCommands(QueryFn commands, Action<ObserverItem> post, CancellationToken ct)
+        internal static async Task PollCommands(QueryFn commands, CommandTracker tracker, Action<ObserverItem> post, Func<DateTimeOffset> clock, CancellationToken ct)
         {
-            string[] named;
-            lock (pendingCommands) named = new List<string>(pendingCommands).ToArray();
+            var named = tracker.Named();
             var data = await commands(ObserverQueries.CommandsQuery(named.Length > 0), ObserverQueries.CommandsVariables(named), ct);
             var items = ObserverQueries.ParseCommands(data, clock());
-            lock (pendingCommands)
-            {
-                foreach (var c in items)
-                {
-                    if (c.Command.IsTerminal) pendingCommands.Remove(c.Command.Token);
-                    else if (pendingCommands.Count < MaxPendingCommands) pendingCommands.Add(c.Command.Token);
-                }
-            }
-
+            tracker.Observe(named, items);
             foreach (var c in items) post(c);
         }
 
-        async Task Poll(string name, TimeSpan period, Func<CancellationToken, Task> body, CancellationToken ct)
-        {
-            while (!ct.IsCancellationRequested)
+        Task Poll(string name, TimeSpan period, Func<CancellationToken, Task> body, CancellationToken ct) =>
+            PollLoop.RunAsync(period, body, e =>
             {
-                var began = clock();
-                try
+                if (e == null)
                 {
-                    await body(ct);
                     PostPoll(name, true, null);
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
                     return;
                 }
-                catch (Exception e)
-                {
-                    var reason = StreamFailure.Classify(e).Reason;
-                    PostPoll(name, false, reason);
-                    LogEvery(name, $"observer {name} poll failed: {reason}");
-                }
 
-                var wait = period - (clock() - began);
-                if (wait > TimeSpan.Zero)
-                {
-                    try { await Task.Delay(wait, ct); }
-                    catch (OperationCanceledException) { return; }
-                }
-            }
-        }
+                var reason = StreamFailure.Classify(e).Reason;
+                PostPoll(name, false, reason);
+                LogEvery(name, $"observer {name} poll failed: {reason}");
+            }, clock, (d, c) => Task.Delay(d, c), ct);
 
         // the last result a poll posted, so a poll that keeps succeeding says nothing more than once
         readonly Dictionary<string, string> pollSaid = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -342,7 +326,9 @@ namespace DeviceChain.Sitepulse.Platform
                         state.ApplyAlarm(a.DeviceToken, a.Alarm);
                     }
 
-                    state.ReconcileActiveAlarms(listed, s.RequestedAt, s.ObservedAt);
+                    // a list that holds only part of the platform's alarms cannot say that an unlisted one ended
+                    if (!s.Truncated) state.ReconcileActiveAlarms(listed, s.RequestedAt, s.ObservedAt);
+                    status.SetAlarmSnapshot(s.Truncated ? $"alarm snapshot partial ({s.Alarms.Count} of {(s.TotalRecords.HasValue ? s.TotalRecords.Value.ToString() : "more")}): ended alarms are not cleared" : null);
                     break;
                 case LocationItem l:
                     state.ApplyLocation(l.DeviceToken, l.Location);
@@ -368,6 +354,7 @@ namespace DeviceChain.Sitepulse.Platform
                 switch (st.State)
                 {
                     case "Connecting": next = StreamState.Connecting; break;
+                    case "Subscribed": next = StreamState.Subscribed; break;
                     case "Live": next = StreamState.Live; break;
                     case "Reconnecting": next = StreamState.Reconnecting; break;
                     case "Idle": next = StreamState.Idle; break;
@@ -376,7 +363,7 @@ namespace DeviceChain.Sitepulse.Platform
 
                 if (stream.State != next)
                 {
-                    if (next == StreamState.Reconnecting && stream.State == StreamState.Live) stream.Reconnects++;
+                    if (next == StreamState.Reconnecting && (stream.State == StreamState.Live || stream.State == StreamState.Subscribed)) stream.Reconnects++;
                     stream.State = next;
                     stream.Since = st.At;
                     if (next == StreamState.Live) stream.LastLiveAt = st.At;

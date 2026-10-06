@@ -2,30 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Collections.Generic;
 using DeviceChain.Sitepulse.Domain;
 using UnityEngine;
 
 namespace DeviceChain.Sitepulse.Visuals
 {
-    /// <summary>What a source is asked to fill a reading for: a card's device, and the machine that
-    /// stands for it in the scene (none for the plant).</summary>
+    /// <summary>What a source is asked to fill a reading for: the card's device, by id and nothing else.
+    /// The choreography's inputs (the machine in the scene, how fast it moves) are deliberately not here, so
+    /// a source that reports what the platform said cannot be handed them; the illustrative source takes
+    /// them separately (<see cref="IllustrativeReadingSource.SetModel"/>).</summary>
     public readonly struct ReadingSubject
     {
-        public ReadingSubject(string deviceId, MachineRig rig, float speedMetresPerSecond)
+        public ReadingSubject(string deviceId)
         {
             DeviceId = deviceId;
-            Rig = rig;
-            SpeedMetresPerSecond = speedMetresPerSecond;
         }
 
         public string DeviceId { get; }
-
-        /// <summary>The machine in the scene; null for the plant.</summary>
-        public MachineRig Rig { get; }
-
-        /// <summary>How fast the machine is moving in the scene, smoothed. An illustrative source's input;
-        /// an observed source never reads it.</summary>
-        public float SpeedMetresPerSecond { get; }
     }
 
     /// <summary>
@@ -56,6 +50,8 @@ namespace DeviceChain.Sitepulse.Visuals
         public const string PlantFeeder = "SP-LD-0003";
 
         readonly QuarryFleetPreview fleet;
+        readonly Dictionary<string, (MachineRig rig, float speed)> model =
+            new Dictionary<string, (MachineRig, float)>(StringComparer.Ordinal);
         readonly string alarmMachine;
         readonly string alarmKey;
 
@@ -70,6 +66,9 @@ namespace DeviceChain.Sitepulse.Visuals
 
         public bool StreamLive => true;
 
+        /// <summary>The choreography's inputs for a device: the machine that stands for it (null for the plant) and its speed in m/s, smoothed.</summary>
+        public void SetModel(string deviceId, MachineRig rig, float speedMetresPerSecond) => model[deviceId] = (rig, speedMetresPerSecond);
+
         static int Hash(string s)
         {
             int h = 17;
@@ -80,7 +79,9 @@ namespace DeviceChain.Sitepulse.Visuals
         public void Fill(in ReadingSubject subject, DeviceReading r, DateTimeOffset now)
         {
             const Provenance P = Provenance.Illustrative;
-            var rig = subject.Rig;
+            if (!model.TryGetValue(subject.DeviceId, out var m))
+                throw new InvalidOperationException($"no model inputs were set for {subject.DeviceId}: call SetModel first");
+            var rig = m.rig;
             if (rig == null)
             {
                 // what the feeding loader delivers: a bucket a cycle
@@ -111,7 +112,7 @@ namespace DeviceChain.Sitepulse.Visuals
             }
 
             if (alarm && alarmKey == AlarmKeys.EngineOverheat) r.Set(MeasurementKeys.EngineTempC, 112, P);
-            r.SetSpeedKmh(Math.Round(subject.SpeedMetresPerSecond * 3.6f), P);
+            r.SetSpeedKmh(Math.Round(m.speed * 3.6f), P);
             r.ClearAlarms();
             if (alarm) r.Raise(alarmKey, P);
         }

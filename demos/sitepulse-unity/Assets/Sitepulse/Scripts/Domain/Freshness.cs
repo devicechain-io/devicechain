@@ -35,6 +35,10 @@ namespace DeviceChain.Sitepulse.Domain
         /// and read by a one-second poll: fresh is three of those periods plus the poll.</summary>
         public static readonly TimeSpan LocationFreshWithin = TimeSpan.FromSeconds(7);
 
+        /// <summary>A command that is still in flight is re-read by a one-second poll: it is fresh for
+        /// the poll's period plus slack since the platform last said what state it is in.</summary>
+        public static readonly TimeSpan CommandFreshWithin = TimeSpan.FromSeconds(5);
+
         public static Freshness Classify(TimeSpan age, bool streamLive, TimeSpan? freshWithin = null)
         {
             if (age < TimeSpan.Zero) age = TimeSpan.Zero;

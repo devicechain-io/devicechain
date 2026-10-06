@@ -31,7 +31,7 @@ namespace DeviceChain.Sitepulse.App
         static readonly Color Muted = new Color(0.60f, 0.68f, 0.72f, 1f);
         static readonly Color Fault = new Color(1f, 0.42f, 0.38f, 1f);
 
-        const float RefH = 1080f, Margin = 18f, PanelW = 860f, Pad = 14f, ChipH = 36f;
+        const float RefH = 1080f, Margin = 18f, PanelW = 860f, CompactW = 640f, Pad = 14f, ChipH = 36f;
 
         static Font font, mono;
 
@@ -131,51 +131,51 @@ namespace DeviceChain.Sitepulse.App
             chip.sizeDelta = new Vector2(w, ChipH);
         }
 
-        /// <summary>The readiness panel: a summary, the token line, one line per device, and fleet notes.</summary>
-        public void ShowReadiness(string summary, string tokenLine, string observerLine, IReadOnlyList<PanelLine> lines, IReadOnlyList<string> notes)
-        {
-            var sb = new StringBuilder();
-            sb.Append("<b><color=").Append(Hex(Accent)).Append('>').Append(Esc(summary)).Append("</color></b>\n");
-            sb.Append("<color=").Append(Hex(Muted)).Append('>').Append(Esc(tokenLine)).Append("</color>\n");
-            sb.Append("<color=").Append(Hex(Muted)).Append('>').Append(Esc(observerLine)).Append("</color>\n\n");
-            foreach (var l in lines)
-            {
-                var c = l.Kind == LineKind.Ok ? Ok : l.Kind == LineKind.Failed ? Warn : Muted;
-                sb.Append("<color=").Append(Hex(c)).Append('>').Append(Esc(l.Text)).Append("</color>\n");
-            }
-
-            foreach (var n in notes)
-                sb.Append("\n<color=").Append(Hex(Warn)).Append('>').Append(Esc(n)).Append("</color>");
-            Show(sb.ToString());
-        }
+        /// <summary>The readiness panel: compact (a header, the token and observer lines, one line on whichever devices are not well) or, expanded, every device and the fleet notes.</summary>
+        public void ShowReadiness(string summary, string tokenLine, string observerLine, string brief, IReadOnlyList<PanelLine> lines, IReadOnlyList<string> notes, bool expanded) =>
+            Show(HudText.Readiness(summary, tokenLine, observerLine, brief, lines, notes, expanded), expanded ? PanelW : CompactW);
 
         /// <summary>A startup refusal: what could not start, and the lines that say why.</summary>
         public void ShowError(string title, string message)
         {
             var sb = new StringBuilder();
-            sb.Append("<b><color=").Append(Hex(Fault)).Append('>').Append(Esc(title)).Append("</color></b>\n\n");
-            sb.Append(Esc(message));
-            Show(sb.ToString());
+            sb.Append("<b><color=").Append(HudText.Hex(Fault)).Append('>').Append(HudText.Esc(title)).Append("</color></b>\n\n");
+            sb.Append(HudText.Esc(message));
+            Show(sb.ToString(), PanelW);
         }
 
-        void Show(string text)
+        void Show(string text, float width)
         {
             panel.gameObject.SetActive(true);
             panel.anchoredPosition = new Vector2(Margin, -(Margin + ChipH + 8f));
-            panel.sizeDelta = new Vector2(PanelW, 100f);
+            panel.sizeDelta = new Vector2(width, 100f);
             panelText.text = text;
-            panel.sizeDelta = new Vector2(PanelW, panelText.preferredHeight + 2f * Pad);
+            panel.sizeDelta = new Vector2(width, panelText.preferredHeight + 2f * Pad);
+        }
+
+        /// <summary>A rect given as a distance from the top-left of the frame, in the bottom-left-origin units the data layer lays out in.</summary>
+        public static Rect FromTopLeft(float x, float fromTop, Vector2 size) => new Rect(x, RefH - fromTop - size.y, size.x, size.y);
+
+        /// <summary>A rect centred across a frame <paramref name="frameWidth"/> wide, given as a distance from the top.</summary>
+        public static Rect FromTopCentre(float frameWidth, float fromTop, Vector2 size) => new Rect((frameWidth - size.x) / 2f, RefH - fromTop - size.y, size.x, size.y);
+
+        /// <summary>
+        /// What the HUD has on screen right now, for the data layer to keep its cards off: the badge, the
+        /// readiness panel, the banner and the local simulation panel, as the overlay's layout units (a 1080-high
+        /// frame <paramref name="frameWidth"/> wide, origin bottom-left).
+        /// </summary>
+        public void Obstacles(float frameWidth, List<Rect> into)
+        {
+            if (chip.gameObject.activeSelf && chip.sizeDelta.x > 0f) into.Add(FromTopLeft(Margin, Margin, chip.sizeDelta));
+            if (panel.gameObject.activeSelf) into.Add(FromTopLeft(Margin, Margin + ChipH + 8f, panel.sizeDelta));
+            if (banner.gameObject.activeSelf) into.Add(FromTopCentre(frameWidth, Margin, banner.sizeDelta));
+            if (sim.gameObject.activeSelf) into.Add(new Rect(Margin, Margin, sim.sizeDelta.x, sim.sizeDelta.y));
         }
 
         public void Destroy()
         {
             if (root != null) UnityEngine.Object.Destroy(root);
         }
-
-        // a server's reason may carry angle brackets; rich text would read them as tags
-        static string Esc(string s) => (s ?? "").Replace('<', '(').Replace('>', ')');
-
-        static string Hex(Color c) => "#" + ColorUtility.ToHtmlStringRGB(c);
 
         static RectTransform Box(Transform parent, string name, out Image image)
         {

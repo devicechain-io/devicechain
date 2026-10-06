@@ -66,7 +66,8 @@ namespace DeviceChain.Sitepulse.App
         ObservedState observed;
         readonly ObserverStatus observerStatus = new ObserverStatus();
         int shownObserver = -1;
-        bool showSimulation;
+        bool showSimulation, showAllDevices;
+        bool shownAllDevices;
         float nextSimulation;
         float nextRender;
         const float RenderEverySeconds = 0.25f;
@@ -79,6 +80,8 @@ namespace DeviceChain.Sitepulse.App
         {
             cts = new CancellationTokenSource();
             hud = new SitepulseHud(transform);
+            // the data layer keeps its cards off the HUD
+            if (overlay != null) overlay.Obstacles = hud.Obstacles;
 
             var args = Environment.GetCommandLineArgs();
             var parsed = SitepulseModes.FromCommandLine(args, out var present);
@@ -279,6 +282,7 @@ namespace DeviceChain.Sitepulse.App
             if (observer != null && !stopped)
             {
                 foreach (var token in observer.Pump()) board.MarkObserved(token);
+                board.EvaluateObserved(DateTimeOffset.UtcNow, observed.NewestOwnRunAt);
                 hud.SetBanner(ObserverBanner.Text(observerStatus, observed));
                 UpdateSimulation();
                 // the header in the log too, so an unattended (batchmode) run can be read afterwards
@@ -292,10 +296,12 @@ namespace DeviceChain.Sitepulse.App
             Render();
         }
 
-        // key L: the model's own values before publish, never platform data
+        // key R: the readiness panel lists every device (the default is the compact one); key L: the model's
+        // own values before publish, never platform data
         void UpdateSimulation()
         {
             var kb = Keyboard.current;
+            if (kb != null && kb.rKey.wasPressedThisFrame) showAllDevices = !showAllDevices;
             if (kb != null && kb.lKey.wasPressedThisFrame)
             {
                 showSimulation = !showSimulation;
@@ -334,12 +340,13 @@ namespace DeviceChain.Sitepulse.App
             if (Time.unscaledTime < nextRender) return;
             var token = TokenLine();
             var observerVersion = observerStatus.Version;
-            if (board.Version == shownVersion && token == shownToken && observerVersion == shownObserver) return;
+            if (board.Version == shownVersion && token == shownToken && observerVersion == shownObserver && showAllDevices == shownAllDevices) return;
             nextRender = Time.unscaledTime + RenderEverySeconds;
             shownVersion = board.Version;
             shownToken = token;
             shownObserver = observerVersion;
-            hud.ShowReadiness(board.Summary(), token, observer != null ? ObserverBanner.Line(observerStatus) : NoObserver, board.Lines(), board.Notes());
+            shownAllDevices = showAllDevices;
+            hud.ShowReadiness(board.Summary(), token, observer != null ? ObserverBanner.Line(observerStatus) : NoObserver, board.Brief(), board.Lines(), board.Notes(), showAllDevices);
         }
 
         /// <summary>

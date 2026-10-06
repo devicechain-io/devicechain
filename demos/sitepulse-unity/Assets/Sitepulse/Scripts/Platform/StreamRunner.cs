@@ -9,7 +9,12 @@ using DeviceChain.Sdk;
 
 namespace DeviceChain.Sitepulse.Platform
 {
-    public enum StreamState { Idle, Connecting, Live, Reconnecting }
+    /// <summary>
+    /// Live means a frame has arrived on the stream: the only evidence that data flows. The SDK does not say
+    /// when the server accepted a subscription (its connection_ack is handled inside), so a stream that is
+    /// open but has not yet delivered anything is <see cref="Subscribed"/>, not Live.
+    /// </summary>
+    public enum StreamState { Idle, Connecting, Subscribed, Live, Reconnecting }
 
     /// <summary>Why a stream stopped delivering.</summary>
     public enum StreamFailureKind
@@ -64,8 +69,11 @@ namespace DeviceChain.Sitepulse.Platform
     /// has passed (subscribing before snapshotting closes the gap the other order leaves), then hand
     /// every item on until the stream fails. On failure it reports the reason, refreshes the token and
     /// reconnects at once for a 4401 (once; a second one in a row backs off), and otherwise waits
-    /// 1, 2, 4 ... 30 seconds. Everything it tells the outside world goes through the callbacks, which the
-    /// observer turns into inbox items stamped with the run's generation, so a stopped run is silent.
+    /// 1, 2, 4 ... 30 seconds. A stream is reported Live only when its first frame arrives. Everything it tells
+    /// the outside world goes through the callbacks. The loop is started from, and continues on, the caller's
+    /// context (every await keeps it), which in Unity is the main thread: the callbacks, a frame's parse
+    /// included, run there. The observer turns what they produce into inbox items stamped with the run's
+    /// generation, so a stopped run is silent.
     /// </summary>
     public sealed class StreamRunner<T>
     {
@@ -146,16 +154,21 @@ namespace DeviceChain.Sitepulse.Platform
                         }
                     }
 
-                    // the stream may have failed while the snapshot ran: surface that before calling it live
+                    // the stream may have failed while the snapshot ran: surface that before saying anything
                     if (next.IsFaulted || next.IsCanceled) await next.ConfigureAwait(true);
+                    // no frame yet is not live: report only that the subscription is open, and wait for evidence
+                    if (!next.IsCompleted) onState(StreamState.Subscribed, note);
+                    var delivered = await next.ConfigureAwait(true);
+                    if (!delivered) throw new StreamEndedException();
                     liveAt = clock();
                     rejected = false;
                     onState(StreamState.Live, note);
-                    while (await next.ConfigureAwait(true))
+                    do
                     {
                         onItem(stream.Current);
                         next = stream.MoveNextAsync().AsTask();
                     }
+                    while (await next.ConfigureAwait(true));
 
                     throw new StreamEndedException();
                 }
