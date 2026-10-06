@@ -177,6 +177,12 @@ public sealed class MqttNetConnection : IMqttConnection
     /// </summary>
     internal Func<string, int, CancellationToken, Task<Socket>> DialAsync { get; set; } = AddressDialer.ConnectAsync;
 
+    /// <summary>
+    /// How long the address race may run; null means MQTTnet's connect timeout. Replaceable so
+    /// tests can bound a dial that never answers without waiting out the default.
+    /// </summary>
+    internal TimeSpan? DialTimeout { get; set; }
+
     // 🔴 WHY THE ADDRESS IS CHOSEN HERE AND NOT LEFT TO MQTTnet. Handed a NAME, MQTTnet dials the
     // resolver's addresses one at a time, and `localhost` commonly yields `::1` first while the
     // broker listens on IPv4 only: nothing answers on `::1` and the connect hangs for the OS
@@ -192,7 +198,7 @@ public sealed class MqttNetConnection : IMqttConnection
             built.ChannelOptions is MqttClientTcpOptions tcp &&
             !IPAddress.TryParse(host, out _))
         {
-            var winner = await ResolveEndpointAsync(host, PortOf(options.BrokerUri), built.Timeout, cancellationToken)
+            var winner = await ResolveEndpointAsync(host, PortOf(options.BrokerUri), DialTimeout ?? built.Timeout, cancellationToken)
                 .ConfigureAwait(false);
             tcp.RemoteEndpoint = winner;
             tcp.AddressFamily = winner.AddressFamily;
@@ -211,8 +217,9 @@ public sealed class MqttNetConnection : IMqttConnection
     private async Task<IPEndPoint> ResolveEndpointAsync(
         string host, int port, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        // The dialer has no timeout of its own; MQTTnet's connect timeout used to bound a dead
-        // address, so it bounds the race now.
+        // The dialer has no timeout of its own, so the race is bounded here: by MQTTnet's connect
+        // timeout (100 s unless the options say otherwise) or the DialTimeout override. Before the
+        // race existed the OS connect timeout (about 21 s) bounded a dead address.
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         bounded.CancelAfter(timeout);
         Socket probe;

@@ -142,10 +142,75 @@ public class MqttAddressDialTests
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
 
         var timer = Stopwatch.StartNew();
+        var connect = connection.ConnectAsync(OptionsFor(new Uri($"tcp://{Name}:1883")), cts.Token);
+        // Bounded here, so a race that ignores the token fails instead of hanging the suite.
+        var finished = await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.True(ReferenceEquals(finished, connect), "the connect did not end after the caller cancelled");
         // A deliberate cancellation stays a cancellation; it is not presented as a broker failure.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => connection.ConnectAsync(OptionsFor(new Uri($"tcp://{Name}:1883")), cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
         Assert.True(timer.Elapsed < TimeSpan.FromSeconds(5), $"cancel took {timer.Elapsed}");
+    }
+
+    // The race ending on its own bound, with the caller still waiting, is a connection failure the
+    // session retries; surfaced as a cancellation it would end the session's reconnects for good.
+    [Fact]
+    public async Task ARaceThatTimesOutIsAConnectionFailureNotACancellation()
+    {
+        await using var connection = new MqttNetConnection
+        {
+            DialAsync = (_, _, _) => throw new OperationCanceledException(),
+        };
+        using var cts = new CancellationTokenSource(Timeout);
+
+        var failure = await Assert.ThrowsAsync<MqttConnectionException>(
+            () => connection.ConnectAsync(OptionsFor(new Uri($"tcp://{Name}:1883")), cts.Token));
+
+        Assert.IsType<TimeoutException>(failure.InnerException);
+    }
+
+    [Fact]
+    public async Task ADialThatNeverAnswersEndsAtTheRaceBound()
+    {
+        await using var connection = new MqttNetConnection
+        {
+            DialTimeout = TimeSpan.FromMilliseconds(300),
+            DialAsync = async (_, _, token) =>
+            {
+                await Task.Delay(System.Threading.Timeout.Infinite, token).ConfigureAwait(false);
+                throw new InvalidOperationException("unreachable");
+            },
+        };
+        using var cts = new CancellationTokenSource(Timeout);
+
+        var timer = Stopwatch.StartNew();
+        var connect = connection.ConnectAsync(OptionsFor(new Uri($"tcp://{Name}:1883")), cts.Token);
+        var finished = await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.True(ReferenceEquals(finished, connect), "the race was not bounded");
+        var failure = await Assert.ThrowsAsync<MqttConnectionException>(() => connect);
+
+        Assert.IsType<TimeoutException>(failure.InnerException);
+        Assert.True(timer.Elapsed < TimeSpan.FromSeconds(5), $"bound took {timer.Elapsed}");
+    }
+
+    // A failed race is final for that attempt: there is no second dial by name behind it.
+    [Fact]
+    public async Task AFailedRaceIsNotRetriedByName()
+    {
+        var dials = 0;
+        await using var connection = new MqttNetConnection
+        {
+            DialAsync = (_, port, _) =>
+            {
+                Interlocked.Increment(ref dials);
+                throw new IOException($"Could not connect to port {port}: refused");
+            },
+        };
+        using var cts = new CancellationTokenSource(Timeout);
+
+        await Assert.ThrowsAsync<MqttConnectionException>(
+            () => connection.ConnectAsync(OptionsFor(new Uri($"tcp://localhost:1883")), cts.Token));
+
+        Assert.Equal(1, Volatile.Read(ref dials));
     }
 
     // The session tells a refused connect (stay Blind) from a transport failure (retry) by
