@@ -108,6 +108,13 @@ the endpoint's host. A refused upgrade now reports the HTTP status line (for exa
 Because it no longer goes through `ClientWebSocket`, the subscription transport does not use a system HTTP
 proxy. If you need one, inject your own `IWebSocketFactory`.
 
+MQTT device sessions dial the same way. When the broker is given by name and no address family is pinned
+(`MqttConnectOptions.AddressFamily`), the connection races the name's addresses once, closes the probe
+connection, and connects to the address that answered, so a first address that never answers costs
+milliseconds rather than the OS connect timeout. The TLS server name and the certificate check still use
+the name you gave, never the IP address, so a certificate issued for a different name is still refused.
+An IP-literal broker host, or a pinned address family, is dialed directly as before.
+
 ## Build & test
 
 ```bash

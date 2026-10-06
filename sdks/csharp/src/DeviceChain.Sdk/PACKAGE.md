@@ -76,7 +76,9 @@ await publisher.EmitMeasurementsAsync("car-42", credentialId,
 
 The default WebSocket transport tries the endpoint's resolved addresses in staggered, overlapping attempts (so `localhost` does not
 stall on an unused `::1`) and performs the upgrade itself rather than using `ClientWebSocket`. As a result it
-does not use a system HTTP proxy; inject your own `IWebSocketFactory` if you need one.
+does not use a system HTTP proxy; inject your own `IWebSocketFactory` if you need one. MQTT device sessions dial the same way: when the
+broker is given by name (and no address family is pinned), the connection races the name's addresses once, then connects to the one
+that answers, while TLS still checks the certificate against the name.
 
 ## Targets and AOT
 

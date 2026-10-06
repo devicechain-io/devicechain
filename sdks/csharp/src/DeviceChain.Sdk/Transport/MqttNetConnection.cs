@@ -154,7 +154,7 @@ public sealed class MqttNetConnection : IMqttConnection
 
         try
         {
-            await ConnectOnceAsync(built, options, cancellationToken).ConfigureAwait(false);
+            await DialAndConnectAsync(built, options, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (!(ex is MqttConnectionException) && !(ex is OperationCanceledException))
         {
@@ -166,32 +166,68 @@ public sealed class MqttNetConnection : IMqttConnection
             // test, which is why it asserts the type rather than merely that something was thrown.)
             cancellationToken.ThrowIfCancellationRequested();
 
-            // 🔴 THE DUAL-STACK RETRY. A host resolving to both families is dialled in the
-            // resolver's order, and on Windows `localhost` yields ::1 first while a container
-            // runtime publishes on 0.0.0.0 — IPv4 only. Retrying once over IPv4 turns that from an
-            // opaque socket error into a connection. Bounded to one extra attempt, attempted only
-            // when the caller did NOT pin a family, and only when the host genuinely has both — so
-            // a real IPv6 deployment is never quietly downgraded.
-            if (options.AddressFamily == AddressFamily.Unspecified &&
-                await HasBothFamiliesAsync(options.BrokerUri.Host).ConfigureAwait(false))
-            {
-                ApplyAddressFamily(built, AddressFamily.InterNetwork);
-                try
-                {
-                    await ConnectOnceAsync(built, options, cancellationToken).ConfigureAwait(false);
-                    return;
-                }
-                catch (Exception retry) when (!(retry is OperationCanceledException))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    throw new MqttConnectionException(
-                        $"connecting to {options.BrokerUri} as \"{options.ClientId}\" failed over both " +
-                        $"address families (resolver order: {ex.Message}; IPv4: {retry.Message})", retry);
-                }
-            }
-
             throw new MqttConnectionException(
                 $"connecting to {options.BrokerUri} as \"{options.ClientId}\" failed: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Opens a TCP connection to a host by racing its addresses; the default for
+    /// <see cref="DialAsync"/>. Replaceable so tests can script a host without network topology.
+    /// </summary>
+    internal Func<string, int, CancellationToken, Task<Socket>> DialAsync { get; set; } = AddressDialer.ConnectAsync;
+
+    // 🔴 WHY THE ADDRESS IS CHOSEN HERE AND NOT LEFT TO MQTTnet. Handed a NAME, MQTTnet dials the
+    // resolver's addresses one at a time, and `localhost` commonly yields `::1` first while the
+    // broker listens on IPv4 only: nothing answers on `::1` and the connect hangs for the OS
+    // timeout (about 21 s measured) before the next address is even tried. So an unpinned name is
+    // raced here with the same dialer the subscription transport uses, the winner's endpoint is
+    // handed to MQTTnet, and the probe socket is closed — one extra TCP open/close per connect.
+    // A pinned family keeps the by-name path, and an IP literal has nothing to race.
+    private async Task DialAndConnectAsync(
+        MqttClientOptions built, MqttConnectOptions options, CancellationToken cancellationToken)
+    {
+        var host = options.BrokerUri.Host;
+        if (options.AddressFamily == AddressFamily.Unspecified &&
+            built.ChannelOptions is MqttClientTcpOptions tcp &&
+            !IPAddress.TryParse(host, out _))
+        {
+            var winner = await ResolveEndpointAsync(host, PortOf(options.BrokerUri), built.Timeout, cancellationToken)
+                .ConfigureAwait(false);
+            tcp.RemoteEndpoint = winner;
+            tcp.AddressFamily = winner.AddressFamily;
+            // 🔑 Given an IP endpoint, MQTTnet would name the IP as the TLS server, and the broker's
+            // certificate (a name, no IP SAN) would be refused. SNI and the certificate's name
+            // check stay the host, so a certificate for another name is still refused.
+            if (tcp.TlsOptions != null)
+            {
+                tcp.TlsOptions.TargetHost = host;
+            }
+        }
+
+        await ConnectOnceAsync(built, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IPEndPoint> ResolveEndpointAsync(
+        string host, int port, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        // The dialer has no timeout of its own; MQTTnet's connect timeout used to bound a dead
+        // address, so it bounds the race now.
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bounded.CancelAfter(timeout);
+        Socket probe;
+        try
+        {
+            probe = await DialAsync(host, port, bounded.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"no address of {host}:{port} answered within {timeout}");
+        }
+
+        using (probe)
+        {
+            return (IPEndPoint)probe.RemoteEndPoint!;
         }
     }
 
@@ -211,34 +247,6 @@ public sealed class MqttNetConnection : IMqttConnection
         if (built.ChannelOptions is MqttClientTcpOptions tcp)
         {
             tcp.AddressFamily = family;
-        }
-    }
-
-    /// <summary>
-    /// Whether the host resolves to addresses in BOTH families — the only case where retrying over
-    /// IPv4 could succeed where the resolver's own order did not.
-    /// </summary>
-    private static async Task<bool> HasBothFamiliesAsync(string host)
-    {
-        try
-        {
-            var addresses = await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
-            var v4 = false;
-            var v6 = false;
-            foreach (var address in addresses)
-            {
-                if (address.AddressFamily == AddressFamily.InterNetwork) v4 = true;
-                else if (address.AddressFamily == AddressFamily.InterNetworkV6) v6 = true;
-            }
-
-            return v4 && v6;
-        }
-        catch (Exception)
-        {
-            // A resolver failure is not this method's business to report — the original connect
-            // error already says the host could not be reached, and inventing a second one here
-            // would replace it with a worse message.
-            return false;
         }
     }
 

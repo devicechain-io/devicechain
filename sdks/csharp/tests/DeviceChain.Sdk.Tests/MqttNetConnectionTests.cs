@@ -33,7 +33,7 @@ public class MqttNetConnectionTests
     // a container port published IPv4-only. That needs a DUAL-STACK host to reproduce and Mono to
     // observe — CI is neither, and a self-contained .NET 8 console app CANNOT reproduce it at all,
     // because .NET 5+ already tries every resolved address. It was confirmed the only way it could
-    // be: by mutation on a real Mono player, where removing the fallback brought the failure back.
+    // be: by mutation on a real Mono player, where removing the retry (since replaced by the address race) brought the failure back.
     // What follows is what a CI host can honestly assert — that the option exists, defaults to the
     // resolver's own order, and that pinning a family does not break an ordinary connect.
     [Fact]
@@ -63,7 +63,7 @@ public class MqttNetConnectionTests
     // control that cannot fail, and it would score a no-op ApplyAddressFamily as a pass. Pinning
     // IPv6 against an IPv4-only listener must therefore REFUSE: if the option is silently dropped
     // the connect succeeds over IPv4 and this test fails, which is exactly the signal wanted.
-    // Note the caller pinned a family, so the IPv4 fallback deliberately does NOT rescue it.
+    // Note the caller pinned a family, so the address race deliberately does NOT rescue it.
     [Fact]
     public async Task PinningAFamilyTheListenerDoesNotSpeakIsNotSilentlyIgnored()
     {
