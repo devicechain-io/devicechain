@@ -173,8 +173,15 @@ badge in the top-left corner always says which:
   heading and elevation) twice a second while moving. All six haul trucks run the haul loop
   (`Data/quarry_fleet_live.json`); the scripted refuel visit of the preview is not played. A
   readiness panel shows how far each device got, and any machine without a working session is
-  drawn as a grey placeholder. The cards stay hidden until observed values replace the
-  illustrative ones, and commands are answered as failed: this build does not execute them yet.
+  drawn as a grey placeholder. The cards show only what the platform reports back: measurements
+  and alarms from live subscriptions, locations and command states from polls, each with its age.
+  A value turns amber after 3 s, grey after 15 s and becomes a dash after a minute, and a banner
+  says when the observer is reconnecting. A device counts as observed only while the platform has
+  a reading from this run that is at most 15 s old. Commands are answered as failed: this build
+  does not execute them yet.
+
+  Keys: **R** shows every device in the readiness panel; **L** shows the local simulation's own
+  values before they are published (labelled as not platform data).
 
   Positions are reported in a site frame whose centre is latitude 39.0, longitude -117.0 (open
   high desert in central Nevada, chosen to imply no real operator), with X east and Z north in
@@ -210,8 +217,8 @@ A player started with `-sitepulse-quality Laptop` runs at that level.
 - No truck tips into the hopper: a loader feeds it from the feed stockpile.
 - The preview choreography is scripted local motion, not the site simulation; the haul trucks
   take the loaded buckets as one load, and the dump pad does not grow.
-- The overlay's values are illustrative until the observer lands; Live mode hides the cards
-  meanwhile. Only the machines and the plant listed in `IotOverlay` carry a card.
+- In Choreographed mode the cards' values are illustrative. Only the machines and the plant listed
+  in `IotOverlay` carry a card.
 
 ## Tests
 
