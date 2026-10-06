@@ -24,7 +24,7 @@ namespace DeviceChain.Sitepulse.Tests
 
         public string Dir => Recorder.Directory;
 
-        public SyntheticRun(Action<RunHeader> edit = null, string runId = null)
+        public SyntheticRun(Action<RunHeader> edit = null, string runId = null, Func<double> clock = null)
         {
             var header = new RunHeader
             {
@@ -42,7 +42,7 @@ namespace DeviceChain.Sitepulse.Tests
             header.Build = new BuildInfo { GitSha = "79bf619b38ea", TrackedTreeClean = true, SdkCommit = "69446d47b09f", UnityVersion = "6000.5.3f1", ScriptingBackend = "IL2CPP" };
             edit?.Invoke(header);
             Recorder = RunRecorder.Create(Base, header,
-                new[] { new SimMachine(Truck, SimKind.Hauler), new SimMachine(Loader, SimKind.Loader) }, () => T, () => Start + TimeSpan.FromSeconds(T));
+                new[] { new SimMachine(Truck, SimKind.Hauler), new SimMachine(Loader, SimKind.Loader) }, clock ?? (() => T), () => Start + TimeSpan.FromSeconds(T));
         }
 
         public static MachineSample Sample(float x, float z, float heading, float fuel = 50f, byte mode = 0, byte phase = 0) => new MachineSample

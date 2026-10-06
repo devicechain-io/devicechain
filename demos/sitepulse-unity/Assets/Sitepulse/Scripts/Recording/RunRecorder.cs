@@ -196,11 +196,20 @@ namespace DeviceChain.Sitepulse.Recording
         void Append(NdjsonFile file, RecordLine line, Action<RecorderStats, int> count)
         {
             if (fault != null || closed) return;
-            line.T = Now;
-            line.Utc = UtcNow;
             var watch = Stopwatch.StartNew();
             int bytes;
-            try { bytes = file.Write(line.ToJson()); }
+            // Stamped inside the file's own lock: lines arrive from several threads (acknowledgements
+            // come back on the SDK's), and a time taken before the lock lets a later stamp reach the
+            // file first. The reader refuses a file whose times go backwards, so order is the contract.
+            try
+            {
+                lock (file)
+                {
+                    line.T = Now;
+                    line.Utc = UtcNow;
+                    bytes = file.Write(line.ToJson());
+                }
+            }
             catch (IOException e) { Fault(e); return; }
             catch (UnauthorizedAccessException e) { Fault(e); return; }
             catch (ObjectDisposedException) { return; }

@@ -91,6 +91,34 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void LinesWrittenFromManyThreadsAtOnceStillReadBackInTimeOrder()
+        {
+            // Acknowledgements are recorded from the SDK's threads. A line stamped before it reaches the
+            // file can land after a later one; the reader refuses that, so the recorder must not write it.
+            long ticks = 0;
+            // every reading of the clock is later than the one before, as a real monotonic clock's would be
+            using var run = new SyntheticRun(clock: () => System.Threading.Interlocked.Increment(ref ticks) / 1e6);
+            run.Frame(0, SyntheticRun.Sample(0f, 0f, 0f), SyntheticRun.Sample(0f, 0f, 0f));
+            var threads = Enumerable.Range(0, 8).Select(n => new System.Threading.Thread(() =>
+            {
+                for (var i = 0; i < 400; i++)
+                {
+                    var l = DeviceLine.Of(DeviceKinds.Sample, SyntheticRun.Truck);
+                    l.SampleKind = "measurement"; l.OccurredAt = S; l.AckedAt = S; l.Values["fuel_pct"] = n * 1000 + i;
+                    run.Recorder.Device(l);
+                }
+            })).ToList();
+            threads.ForEach(t => t.Start());
+            foreach (var t in threads) Assert.IsTrue(t.Join(TimeSpan.FromSeconds(20)), "a writer thread finished");
+            run.Recorder.Close();
+
+            var data = RecordingData.Load(run.Dir);
+            Assert.AreEqual(3200, data.Device.Count);
+            for (var i = 1; i < data.Device.Count; i++)
+                Assert.GreaterOrEqual(data.Device[i].T, data.Device[i - 1].T, "device.ndjson line " + (i + 1));
+        }
+
+        [Test]
         public void TheHeaderRecordsTheRunAndHowItEndedAndTheCostOfRecordingIt()
         {
             using var run = new SyntheticRun();
