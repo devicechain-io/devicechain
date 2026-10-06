@@ -87,6 +87,34 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void SoakPickerSkipsATruckAlreadyAtOrBelowThePreparationLineAndTakesTheNext()
+        {
+            var fuel = new Dictionary<string, double> { ["SP-HL-0006"] = 14.2, ["SP-HL-0005"] = 15.5 };
+            MachineView? View(string id) => new MachineView(MachineMode.Working, TaskPhase.None, fuel.TryGetValue(id, out var f) ? f : 80.0, false);
+            var (pick, skipped) = PhaseAProbe.PickSoakMachine(0, View);
+            Assert.AreEqual("SP-HL-0004", pick);
+            Assert.AreEqual(2, skipped.Count);
+            StringAssert.Contains("SP-HL-0006", skipped[0]);
+            StringAssert.Contains("14.2%", skipped[0]);
+            StringAssert.Contains("SP-HL-0005", skipped[1]);
+        }
+
+        [Test]
+        public void SoakPickerWrapsSkipsTrucksOffTheirTrackAndReportsNoneWhenNoneQualifies()
+        {
+            var (wrapped, _) = PhaseAProbe.PickSoakMachine(5, id => new MachineView(MachineMode.Working, TaskPhase.None, 80.0, false));
+            Assert.AreEqual("SP-HL-0001", wrapped);
+            var (offTrack, s1) = PhaseAProbe.PickSoakMachine(0, id => id == "SP-HL-0006" ? new MachineView(MachineMode.Working, TaskPhase.None, 80.0, true) : new MachineView(MachineMode.Working, TaskPhase.None, 80.0, false));
+            Assert.AreEqual("SP-HL-0005", offTrack);
+            Assert.AreEqual(1, s1.Count);
+            var (none, all) = PhaseAProbe.PickSoakMachine(2, id => new MachineView(MachineMode.Working, TaskPhase.None, 10.0, false));
+            Assert.IsNull(none);
+            Assert.AreEqual(PhaseAProbe.SoakRotation.Length, all.Count);
+            var (unknown, _) = PhaseAProbe.PickSoakMachine(0, id => null);
+            Assert.IsNull(unknown);
+        }
+
+        [Test]
         public void TheSoakRotatesThroughSixDifferentTrucks()
         {
             CollectionAssert.AllItemsAreUnique(PhaseAProbe.SoakRotation);
@@ -543,7 +571,12 @@ namespace DeviceChain.Sitepulse.Tests
 
         // ------------------------------------------------------------------ soak
 
-        static Rig SoakRig(int minutes = 1) => new Rig(Parse("-sitepulse-acceptance", "soak", "-sitepulse-soak-minutes", minutes.ToString()));
+        static Rig SoakRig(int minutes = 1, bool released = true)
+        {
+            var h = new Rig(Parse("-sitepulse-acceptance", "soak", "-sitepulse-soak-minutes", minutes.ToString()));
+            if (released) h.Flags.Add(PhaseAProbe.SoakGoFile);
+            return h;
+        }
 
         // runs the soak for its time, a second at a time, keeping the machine, the observer and the lag measurements going
         static void RunSoak(Rig h, bool refuel = true, Action<int> each = null)
@@ -562,6 +595,31 @@ namespace DeviceChain.Sitepulse.Tests
                 using var doc = h.Result();
                 if (doc.RootElement.TryGetProperty("soak", out var soak) && soak.GetProperty("ended").GetBoolean()) h.Flags.Add(PhaseAProbe.FinishFile);
             }
+        }
+
+        [Test]
+        public void ASoakWaitsForTheCheckerToReleaseItAndStartsItsClockOnlyThen()
+        {
+            var h = SoakRig(released: false);
+            h.BringUp();
+            for (var i = 0; i < 120; i++)
+            {
+                h.Evaluate();
+                h.Advance(1);
+            }
+
+            Assert.IsFalse(h.Probe.Finished);
+            Assert.AreEqual(0, h.Prepared.Count, "no cycle runs while the checker holds the soak");
+            using (var doc = h.Result())
+                Assert.AreEqual("awaiting-soak-go", doc.RootElement.GetProperty("phase").GetString());
+            h.Flags.Add(PhaseAProbe.SoakGoFile);
+            for (var i = 0; i < 40; i++)
+            {
+                h.Evaluate();
+                h.Advance(1);
+            }
+
+            Assert.Greater(h.Prepared.Count, 0, "released: the first cycle prepares a truck");
         }
 
         [Test]
@@ -679,13 +737,26 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void ASoakFailsACycleOnATruckThatWasBusy()
+        public void ASoakTakesTheNextTruckWhenTheScheduledOneWasBusy()
         {
             var h = SoakRig();
             h.BringUp();
             h.Mode = MachineMode.Commanded;
             RunSoak(h);
-            Assert.AreEqual(0, h.Prepared.Count, "a truck that is not working its track is not given a low tank");
+            Assert.IsFalse(h.Prepared.Contains("SP-HL-0006"), "a truck that is not working its track is not given a low tank");
+            Assert.AreEqual("SP-HL-0005", h.Prepared[0]);
+            StringAssert.Contains("skipped SP-HL-0006", h.Item("soak-cycle-1").Detail + h.Result().RootElement.ToString());
+        }
+
+        [Test]
+        public void ASoakFailsACycleWhenNoTruckCanBePrepared()
+        {
+            var h = SoakRig();
+            h.BringUp();
+            h.Mode = MachineMode.Commanded;
+            foreach (var id in PhaseAProbe.SoakRotation) h.Machines[id] = new MachineView(MachineMode.Commanded, TaskPhase.None, 80.0, false);
+            RunSoak(h);
+            Assert.AreEqual(0, h.Prepared.Count);
             StringAssert.Contains("not prepared", h.Item("soak-cycle-1").Detail);
             Assert.IsFalse(h.Item("soak-cycles").Pass == true);
         }

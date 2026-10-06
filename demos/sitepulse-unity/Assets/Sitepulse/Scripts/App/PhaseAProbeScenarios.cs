@@ -39,6 +39,9 @@ namespace DeviceChain.Sitepulse.App
         public const double GreyAfterSeconds = 20.0;
 
         // soak
+        /// <summary>The checker writes this once the fleet's tanks are in a state a soak can use (low trucks refuelled by the platform's own command); the soak clock starts then.</summary>
+        public const string SoakGoFile = "phaseA-soak-go";
+        public const double SoakGoWaitSeconds = 1500.0;
         public const double SoakWarmupSeconds = 5.0;
         public const double SoakFirstCycleSeconds = 15.0;
         public const double SoakCycleSeconds = 360.0;
@@ -426,15 +429,27 @@ namespace DeviceChain.Sitepulse.App
                 cardsDone = true;
                 cardsAt = now;
                 items.Add(CheckCards(world));
-                if (observedAt.HasValue)
+            }
+
+            if (cardsDone && !observedAt.HasValue) { Finish(now); return; }
+            if (!soakStart.HasValue)
+            {
+                if (!cardsDone) return;
+                if (world.FileExists(SoakGoFile))
                 {
                     soakStart = now;
                     SetPhase(now, "running");
                 }
+                else if ((now - cardsAt.Value).TotalSeconds >= SoakGoWaitSeconds)
+                {
+                    items.Add(new ProbeItem("soak-go", "the checker released the soak (after any precondition refuels)", false, $"no {SoakGoFile} within {SoakGoWaitSeconds:0} s of the fleet being observed"));
+                    Finish(now);
+                }
+                else SetPhase(now, "awaiting-soak-go");
+
+                return;
             }
 
-            if (cardsDone && !observedAt.HasValue) { Finish(now); return; }
-            if (!soakStart.HasValue) return;
             var s = (now - soakStart.Value).TotalSeconds;
             SampleSoak(now, s);
             RunCycles(now, s);
@@ -451,22 +466,48 @@ namespace DeviceChain.Sitepulse.App
             if (soakEnded && (world.FileExists(FinishFile) || (now - soakEndedAt.Value).TotalSeconds >= SoakEndWaitSeconds)) Finish(now);
         }
 
+        int rotationCursor;
+
+        /// <summary>
+        /// The truck a soak cycle runs on: from <paramref name="start"/> on, in rotation order, the first one that is working
+        /// its track and whose tank is above the preparation line (a truck already at or below it has nothing to cross, and
+        /// its low-fuel rule only fires on a crossing). Returns null when none qualifies; the skipped trucks come back with why.
+        /// </summary>
+        public static (string Machine, List<string> Skipped) PickSoakMachine(int start, Func<string, MachineView?> view)
+        {
+            var skipped = new List<string>();
+            for (var i = 0; i < SoakRotation.Length; i++)
+            {
+                var id = SoakRotation[(start + i) % SoakRotation.Length];
+                var v = view(id);
+                if (!v.HasValue) skipped.Add($"{id} (unknown)");
+                else if (!v.Value.OnTrack) skipped.Add($"{id} ({v.Value}, not working its track)");
+                else if (v.Value.FuelPct <= PresenterActions.JustAbovePct) skipped.Add($"{id} (fuel {v.Value.FuelPct:0.0}%, at or below the preparation line)");
+                else return (id, skipped);
+            }
+
+            return (null, skipped);
+        }
+
         void RunCycles(DateTimeOffset now, double s)
         {
             var scheduled = ScheduledCycles(options.SoakMinutes);
             while (nextCycle < scheduled && s >= SoakFirstCycleSeconds + nextCycle * SoakCycleSeconds)
             {
-                var machine = SoakRotation[nextCycle % SoakRotation.Length];
-                var view = world.Machine?.Invoke(machine);
+                var (pick, skipped) = PickSoakMachine(rotationCursor, id => world.Machine?.Invoke(id));
+                var machine = pick ?? SoakRotation[rotationCursor % SoakRotation.Length];
                 var cycle = new SoakCycle { Index = nextCycle + 1, Machine = machine, At = now, AtSeconds = s };
-                if (!view.HasValue || !view.Value.OnTrack)
+                var skipNote = skipped.Count == 0 ? "" : "skipped " + string.Join("; ", skipped) + ". ";
+                if (pick == null)
                 {
-                    cycle.Said = $"not prepared: {machine} was {(view.HasValue ? view.Value.ToString() : "unknown")}, not working its track";
+                    cycle.Said = skipNote + "not prepared: no truck in the rotation could be prepared";
                     cycle.Result = new ProbeItem($"soak-cycle-{cycle.Index}", $"low-fuel cycle {cycle.Index} on {machine}: the platform's goto-refuel, serviced, ended SUCCESS", false, cycle.Said);
+                    rotationCursor++;
                 }
                 else
                 {
-                    cycle.Said = world.PrepareLowFuel(machine) ?? "the presenter could not prepare the tank";
+                    rotationCursor = Array.IndexOf(SoakRotation, pick) + 1;
+                    cycle.Said = skipNote + (world.PrepareLowFuel(machine) ?? "the presenter could not prepare the tank");
                     cycle.Prepared = cycle.Said.Contains("crosses");
                     log($"probe: soak cycle {cycle.Index}: {machine}: {cycle.Said}");
                     if (!cycle.Prepared)

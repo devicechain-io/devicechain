@@ -37,8 +37,14 @@ GO = "phaseA-go"
 RULE_STATE = "rule-state.json"
 SCALE_PENDING = "scale-pending.tsv"
 SOAK_JSON = "soak.json"
+SOAK_GO = "phaseA-soak-go"
 MEMORY_TSV = "memory.tsv"
 HARDWARE_TXT = "hardware.txt"
+
+# a machine at or below this stored fuel (or with its low-fuel alarm still ACTIVE) cannot be taken through a low-fuel cycle: fuel is
+# seeded from the platform's last stored value, the rule fires only on a crossing, and only a refuel raises a tank
+PRECONDITION_FUEL_PCT = 20.0
+PRECONDITION_REFUEL_TIMEOUT_S = 240.0
 
 OUTAGE_DEPLOY = "event-management"
 OUTAGE_RECOVERY_BOUND_S = 120.0
@@ -672,6 +678,67 @@ def read_text(path):
         return ""
 
 
+def classify_low(fuel_by_id, active_alarm_ids, line=PRECONDITION_FUEL_PCT):
+    """The machines a soak cannot start with, in fleet order, each with why: last stored fuel at or below `line`, or an ACTIVE low-fuel alarm."""
+    low = []
+    for ext in a.MACHINE_IDS:
+        why = []
+        fuel = fuel_by_id.get(ext)
+        if fuel is not None and fuel <= line:
+            why.append(f"stored fuel {fuel:.1f}%")
+        if ext in active_alarm_ids:
+            why.append("low-fuel alarm ACTIVE")
+        if why:
+            low.append((ext, "; ".join(why)))
+    return low
+
+
+def read_fuel(platform, token):
+    for m in platform.gql("device-state", "query($t:String!){latestMeasurements(deviceToken:$t){name value}}", {"t": token})["latestMeasurements"]:
+        if m.get("name") == "fuel_pct" and m.get("value") is not None:
+            return float(m["value"])
+    return None
+
+
+def preflight_low_fuel(platform, tokens):
+    """Reads each machine's last stored fuel and its low-fuel alarms; returns (low, info Item)."""
+    fuel, active = {}, set()
+    for ext in a.MACHINE_IDS:
+        fuel[ext] = read_fuel(platform, tokens[ext])
+        if any(x.get("alarmKey") == ALARM_KEY and x.get("state") == "ACTIVE" for x in alarms_of(platform, tokens[ext])):
+            active.add(ext)
+    low = classify_low(fuel, active)
+    detail = "; ".join(f"{ext}: {why}" for ext, why in low) if low else f"none at or below {PRECONDITION_FUEL_PCT:g}% and no low-fuel alarm active"
+    return low, a.Item("precondition-low-fuel", f"machines starting at or below {PRECONDITION_FUEL_PCT:g}% fuel, or with a low-fuel alarm still ACTIVE", None, detail)
+
+
+def run_preconditions(platform, tokens, low, timeout=PRECONDITION_REFUEL_TIMEOUT_S):
+    """What a site operator would do: send goto-refuel to each low machine, one at a time (the bay is one slot), and wait for SUCCESSFUL."""
+    items = []
+    for ext, why in low:
+        item_id = f"precondition-refuel-{ext}"
+        desc = f"{ext} ({why}) is refuelled by a goto-refuel the operator sends, ended SUCCESSFUL"
+        try:
+            pending = [c for c in platform.commands_of(tokens[ext]) if c.get("name") == "goto-refuel" and c.get("status") not in a.TERMINAL]
+            if pending:
+                token = pending[0]["token"]
+                a.say(f"{ext}: a goto-refuel is already pending; waiting for it")
+            else:
+                created = platform.create_command(tokens[ext], "goto-refuel", token=f"precondition-refuel-{ext.lower()}-{os.urandom(3).hex()}")
+                if created.get("rejection"):
+                    rej = created["rejection"]
+                    items.append(a.Item(item_id, desc, False, f"the platform rejected the command: {rej.get('code')} ({a.redact(rej.get('reason', ''))})"))
+                    continue
+                token = created["token"]
+                a.say(f"{ext}: sent goto-refuel ({why}); waiting up to {timeout:g} s")
+            got = a.wait_commands(platform, [token], timeout)
+            ok, detail = a.judge_success(got.get(token))
+            items.append(a.Item(item_id, desc, ok, detail))
+        except a.PlatformError as e:
+            items.append(a.Item(item_id, desc, False, f"platform error: {e}"))
+    return items
+
+
 def run_soak(args, platform, since_dt):
     items, report = [], {}
     d = args.dir
@@ -687,6 +754,17 @@ def run_soak(args, platform, since_dt):
     items.append(a.Item("platform-devices", "all 19 scene devices exist on the platform", not missing, f"{len(tokens)}/19" + (f"; missing {missing}" if missing else "")))
     if missing:
         return items, report
+
+    # the player holds the soak clock until it is released, so these refuels do not eat into the soak's time
+    try:
+        low, info = preflight_low_fuel(platform, tokens)
+        items.append(info)
+        items += run_preconditions(platform, tokens, low)
+    except a.PlatformError as e:
+        items.append(a.Item("precondition-low-fuel", "the fleet's starting fuel and alarms were read", False, f"platform error: {e}"))
+    finally:
+        with open(os.path.join(d, SOAK_GO), "w") as f:
+            f.write("go\n")
 
     ended = a.wait_result(d, lambda r: bool((r.get("soak") or {}).get("ended")), minutes * 60 + 420, step=5.0)
     if ended is None or not (ended.get("soak") or {}).get("ended"):

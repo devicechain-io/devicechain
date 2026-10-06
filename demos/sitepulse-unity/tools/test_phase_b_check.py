@@ -368,6 +368,69 @@ class ScaleRestore(unittest.TestCase):
         self.assertEqual([], b.restore_scale(self.script, self.pending))
 
 
+class Preconditions(unittest.TestCase):
+    def test_a_low_tank_or_an_active_alarm_marks_the_machine(self):
+        fuel = {"SP-HL-0004": 14.2, "SP-HL-0001": 20.0, "SP-HL-0002": 20.1, "SP-HL-0003": 80.0, "SP-LD-0001": None}
+        low = b.classify_low(fuel, {"SP-HL-0003", "SP-DZ-0001"})
+        self.assertEqual([x[0] for x in low], ["SP-HL-0001", "SP-HL-0003", "SP-HL-0004", "SP-DZ-0001"])
+        d = dict(low)
+        self.assertIn("14.2%", d["SP-HL-0004"])
+        self.assertIn("20.0%", d["SP-HL-0001"])
+        self.assertNotIn("SP-HL-0002", d)
+        self.assertEqual(d["SP-HL-0003"], "low-fuel alarm ACTIVE")
+        self.assertNotIn("SP-LD-0001", d, "no stored fuel and no alarm is not low")
+        self.assertEqual(b.classify_low({"SP-HL-0004": 14.2}, {"SP-HL-0004"})[0][1], "stored fuel 14.2%; low-fuel alarm ACTIVE")
+
+    def test_the_plant_is_never_classified(self):
+        self.assertEqual(b.classify_low({"SP-PL-0001": 1.0}, {"SP-PL-0001"}), [])
+
+    def test_a_healthy_fleet_has_nothing_to_refuel(self):
+        self.assertEqual(b.classify_low({ext: 60.0 for ext in a.MACHINE_IDS}, set()), [])
+
+    def _platform(self, answers, pending=None, rejection=None):
+        p = mock.Mock()
+        p.commands_of.return_value = pending or []
+        p.create_command.return_value = {"command": {"token": "x"}, "rejection": rejection, "token": "pre-1"}
+        p.commands_by_token.return_value = answers
+        return p
+
+    def test_a_refuel_that_succeeds_is_recorded_per_machine(self):
+        ok = {"token": "pre-1", "status": "SUCCESSFUL", "sentTime": "s", "respondedTime": "r"}
+        p = self._platform({"pre-1": ok})
+        items = b.run_preconditions(p, {"SP-HL-0004": "tok4"}, [("SP-HL-0004", "stored fuel 14.2%")], timeout=5)
+        self.assertEqual([i.id for i in items], ["precondition-refuel-SP-HL-0004"])
+        self.assertTrue(items[0].ok)
+        self.assertEqual(p.create_command.call_args.args[:2], ("tok4", "goto-refuel"))
+
+    def test_a_rejected_refuel_is_a_failed_item_not_a_silent_skip(self):
+        p = self._platform({}, rejection={"code": "NOT_ALLOWED", "reason": "no such command"})
+        items = b.run_preconditions(p, {"SP-LD-0001": "tokL"}, [("SP-LD-0001", "stored fuel 10.0%")], timeout=5)
+        self.assertFalse(items[0].ok)
+        self.assertIn("NOT_ALLOWED", items[0].detail)
+
+    def test_a_refuel_already_pending_is_waited_on_not_duplicated(self):
+        ok = {"token": "old", "status": "SUCCESSFUL", "sentTime": "s", "respondedTime": "r"}
+        p = self._platform({"old": ok}, pending=[{"token": "old", "name": "goto-refuel", "status": "SENT"}])
+        items = b.run_preconditions(p, {"SP-HL-0004": "tok4"}, [("SP-HL-0004", "x")], timeout=5)
+        self.assertTrue(items[0].ok)
+        p.create_command.assert_not_called()
+
+    def test_a_refuel_that_never_finishes_fails_after_its_bound(self):
+        p = self._platform({"pre-1": {"token": "pre-1", "status": "SENT"}})
+        with mock.patch.object(a.time, "sleep"):
+            items = b.run_preconditions(p, {"SP-HL-0004": "tok4"}, [("SP-HL-0004", "x")], timeout=0.0)
+        self.assertFalse(items[0].ok)
+
+    def test_machines_are_refuelled_one_at_a_time_in_order(self):
+        ok = lambda t: {"token": t, "status": "SUCCESSFUL", "sentTime": "s", "respondedTime": "r"}
+        p = self._platform({})
+        seq = []
+        p.create_command.side_effect = lambda dev, name, token=None: seq.append(("create", dev)) or {"command": {}, "rejection": None, "token": "t-" + dev}
+        p.commands_by_token.side_effect = lambda toks: seq.append(("wait", toks[0])) or {toks[0]: ok(toks[0])}
+        b.run_preconditions(p, {"SP-HL-0004": "A", "SP-HL-0001": "B"}, [("SP-HL-0004", "x"), ("SP-HL-0001", "y")], timeout=5)
+        self.assertEqual(seq, [("create", "A"), ("wait", "t-A"), ("create", "B"), ("wait", "t-B")])
+
+
 class Protocol(unittest.TestCase):
     def test_the_redelivery_note_points_at_real_tests(self):
         for needle in ("MqttRealBrokerTests.cs", "ARealRedeliveryIsAnsweredAgainWithoutRerunningTheHandler", "MqttDeviceSessionTests.cs", "LwM2M", "MaxConcurrentCommands = 4"):
