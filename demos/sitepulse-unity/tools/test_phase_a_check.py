@@ -252,5 +252,54 @@ class Bundle(unittest.TestCase):
             self.assertIn("screenshot", md)
 
 
+class BuildStamp(unittest.TestCase):
+    FULL = "3818d6fe" + "0123456789abcdef0123456789ab"[:32]
+
+    def test_a_commit_is_written_as_twelve_characters_never_a_credential_shape(self):
+        self.assertEqual(12, len(c.short_sha(self.FULL)))
+        self.assertEqual([], c.leaks(c.short_sha(self.FULL)))
+        self.assertEqual("unknown", c.short_sha(""))
+
+    def test_a_summary_with_a_short_sha_passes_the_leak_scan_and_a_32_hex_string_fails_it(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ok, bad = os.path.join(d, "SUMMARY.md"), os.path.join(d, "SUMMARY-bad.md")
+            open(ok, "w").write("- **Commit**: %s\nbuilt from %s\n" % (c.short_sha(self.FULL), c.short_sha(self.FULL)))
+            open(bad, "w").write("- **Commit**: 0123456789abcdef0123456789abcdef\n")
+            self.assertTrue(c.leakscan([ok]).ok)
+            self.assertFalse(c.leakscan([bad]).ok)
+            self.assertFalse(c.leakscan([ok, bad]).ok)
+
+    def test_the_stamp_keeps_unitys_fields_and_adds_the_git_ones(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "build-info.json")
+            json.dump({"git": "not resolvable", "unityVersion": "6000.5.3f1", "scriptingBackend": "IL2CPP",
+                       "strippingLevel": "Minimal", "buildFinishedAt": "2026-10-06T10:06:32Z"}, open(path, "w"))
+            c.stamp_build(path, self.FULL, True, self.FULL[::-1])
+            info = json.load(open(path))
+            self.assertEqual("6000.5.3f1", info["unityVersion"])
+            self.assertEqual("IL2CPP", info["scriptingBackend"])
+            self.assertEqual("Minimal", info["strippingLevel"])
+            self.assertEqual("2026-10-06T10:06:32Z", info["buildFinishedAt"])
+            self.assertEqual(c.short_sha(self.FULL), info["gitSha"])
+            self.assertIs(True, info["trackedTreeClean"])
+            self.assertEqual(12, len(info["sdkCommit"]))
+            self.assertNotIn("git", info)
+            self.assertEqual([], c.leaks(open(path).read()))
+
+    def test_build_current_compares_the_stamped_commit_and_tree_state(self):
+        head = self.FULL
+        self.assertEqual("PASS", c.judge_build({"gitSha": c.short_sha(head), "trackedTreeClean": True}, head)[0])
+        self.assertEqual("FAIL", c.judge_build({"gitSha": c.short_sha(head), "trackedTreeClean": False}, head)[0])
+        self.assertEqual("FAIL", c.judge_build({"gitSha": "aaaaaaaaaaaa", "trackedTreeClean": True}, head)[0])
+        self.assertEqual("FAIL", c.judge_build({"unityVersion": "x"}, head)[0], "an unstamped build is not current")
+        verdict, detail = c.judge_build({"gitSha": "aaaaaaaaaaaa", "trackedTreeClean": True}, head, allow_stale=True)
+        self.assertEqual("info", verdict)
+        self.assertEqual([], c.leaks(detail))
+
+
 if __name__ == "__main__":
     unittest.main()

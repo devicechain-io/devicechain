@@ -208,7 +208,11 @@ namespace DeviceChain.Sitepulse.DevicePlane
                 case DeviceEventKind.StartFailed:
                     // a refusal that already made the device blind keeps saying blind: that is the reason
                     if (d.Side == DeviceSide.Blind) break;
-                    board.FailSession(id, "session could not start · " + Redactor.Redact(e.Text ?? ""));
+                    // the screen says what happened ("refused by the broker (NotAuthorized)"); the exception's own text stays in the log
+                    PlatformLog.Warn($"{id}: session could not start: {Redactor.Redact(e.Text ?? "")}");
+                    board.FailSession(id, "session could not start · " + SessionFailure.Word(e.Text));
+                    // the ladder stopped at Connecting: the device is failed and its session never ran, and "stopped" says that
+                    board.SetSide(id, DeviceSide.Stopped);
                     Retire(host);
                     break;
                 case DeviceEventKind.PumpFaulted:

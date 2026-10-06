@@ -8,7 +8,9 @@ using System.IO;
 using System.Text;
 using System.Text.Json;
 using DeviceChain.Sitepulse.Domain;
+using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
+using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
 
 namespace DeviceChain.Sitepulse.App
@@ -279,10 +281,11 @@ namespace DeviceChain.Sitepulse.App
                 var kind = d.Device.Kind == SceneKind.Plant ? DeviceReading.Profile.Plant : DeviceReading.Profile.Equipment;
                 var r = new DeviceReading(d.Device.ExternalId, kind, Provenance.Observed);
                 observedSource.Fill(new Visuals.ReadingSubject(d.Device.ExternalId), r, now);
-                var keys = kind == DeviceReading.Profile.Equipment ? MeasurementKeys.Equipment : MeasurementKeys.Plant;
-                foreach (var key in keys)
+                // what this kind of machine emits (the telemetry model's own key set): a dozer has no payload or tyres
+                foreach (var key in ExpectedKeys(d.Device.Kind))
                 {
-                    if (!r.TryGet(key, out _)) { problems.Add($"{d.Device.ExternalId}: no observed {key}"); continue; }
+                    var present = key == MeasurementKeys.PlantRunning ? r.TryGetFlag(key, out _) : r.TryGet(key, out _);
+                    if (!present) { problems.Add($"{d.Device.ExternalId}: no observed {key}"); continue; }
                     if (r.TryGetStamp(key, out var s) && s.OccurredAt < w.Observed.OwnRunFloor)
                         problems.Add($"{d.Device.ExternalId}: {key} occurred before this run began");
                     filled++;
@@ -297,6 +300,9 @@ namespace DeviceChain.Sitepulse.App
                 : Clip(string.Join("; ", problems));
             return new ProbeItem("cards-observed", "every value on a Live card has Observed provenance (read from ObservedState, not pixels)", ok, detail);
         }
+
+        /// <summary>The measurement keys a device of this kind emits, from the simulation's own model (one source).</summary>
+        public static IReadOnlyList<string> ExpectedKeys(SceneKind kind) => MachineModel.KeysFor(DeviceSessionHost.ToEquipment(kind));
 
         static int CheckReading(DeviceReading r, List<string> problems)
         {
@@ -405,14 +411,14 @@ namespace DeviceChain.Sitepulse.App
 
                     if (!Has(board, control.Target)) { problems.Add($"{control.Target} is not a scene device"); break; }
                     var t = board[control.Target];
-                    if (t.Stage >= DeviceStage.Publishing || t.Published > 0) problems.Add($"{control.Target} published (stage {t.Stage}, {t.Published} sent)");
+                    if (t.Stage >= DeviceStage.Ready || t.Published > 0) problems.Add($"{control.Target} got past the broker (stage {t.Stage}, {t.Published} sent)");
                     if (!t.IsGrey) problems.Add($"{control.Target} is not a grey placeholder");
                     if (string.IsNullOrEmpty(t.FailReason)) problems.Add($"{control.Target} has no message");
                     if (control.Kind == ControlSpec.BogusBinding)
                     {
                         if (t.Bind == null || t.Bind.Outcome != BindOutcome.Missing) problems.Add($"{control.Target} did not come back Missing from the platform");
                     }
-                    else if (t.Side != DeviceSide.Blind) problems.Add($"{control.Target} is {Describe(t)}, expected Blind (refused at CONNECT)");
+                    else if (!BrokerRefusedAtConnect(t)) problems.Add($"{control.Target} is {Describe(t)}, expected a device the broker refused at CONNECT (Blind, or a session start that failed with NotAuthorized)");
                     if (brief == null || !brief.Contains(control.Target)) problems.Add($"the readiness line does not name {control.Target}: \"{brief}\"");
                     break;
 
@@ -454,6 +460,14 @@ namespace DeviceChain.Sitepulse.App
             }
         }
 
+        /// <summary>
+        /// The broker said no at CONNECT: the link went Blind, or the session start itself failed and the message says the
+        /// broker refused it. Either way the device is failed and never got as far as Ready.
+        /// </summary>
+        public static bool BrokerRefusedAtConnect(DeviceReadiness d)
+            => d.Failed && d.Stage < DeviceStage.Ready && d.Published == 0
+               && (d.Side == DeviceSide.Blind || SessionFailure.SaysBrokerRefused(d.FailReason));
+
         static bool Has(ReadinessBoard board, string id)
         {
             foreach (var d in board.Devices)
@@ -462,7 +476,9 @@ namespace DeviceChain.Sitepulse.App
         }
 
         static string Describe(DeviceReadiness d)
-            => $"stage {d.Stage}{(d.Side != DeviceSide.None ? ", " + d.Side : "")}{(d.Failed ? ", failed: " + Redactor.Redact(d.FailReason) : "")}";
+            => d.Failed
+                ? $"failed ({(d.Side != DeviceSide.None ? d.Side + ", " : "")}never past {d.Stage}): {Redactor.Redact(d.FailReason)}"
+                : $"stage {d.Stage}{(d.Side != DeviceSide.None ? ", " + d.Side : "")}";
 
         static string Clip(string s) => s.Length <= 600 ? s : s.Substring(0, 600) + "…";
 

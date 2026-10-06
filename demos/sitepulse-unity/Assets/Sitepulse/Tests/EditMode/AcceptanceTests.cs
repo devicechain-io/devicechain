@@ -489,6 +489,109 @@ namespace DeviceChain.Sitepulse.Tests
             StringAssert.Contains("no observed fuel_pct", item.Detail);
         }
 
+        [Test]
+        public void TheProbeExpectsWhatEachKindOfMachineEmits()
+        {
+            foreach (SceneKind kind in Enum.GetValues(typeof(SceneKind)))
+            {
+                var emitted = new MachineModel(DeviceSessionHost.ToEquipment(kind), "SP-X-0001").Measurements().Keys;
+                CollectionAssert.AreEquivalent(emitted, PhaseAProbe.ExpectedKeys(kind), kind.ToString());
+            }
+
+            // spelled out once, so a change to the model's vocabulary is a decision and not a drift
+            CollectionAssert.AreEquivalent(new[] { "fuel_pct", "engine_temp_c", "engine_hours" }, PhaseAProbe.ExpectedKeys(SceneKind.Dozer));
+            CollectionAssert.AreEquivalent(new[] { "throughput_tph", "plant_running" }, PhaseAProbe.ExpectedKeys(SceneKind.Plant));
+            CollectionAssert.Contains(PhaseAProbe.ExpectedKeys(SceneKind.Hauler), "tyre_pressure_kpa");
+        }
+
+        [Test]
+        public void ADozerAndThePlantPassTheCardCheckWithOnlyWhatTheyEmit()
+        {
+            var devices = new[] { new SceneDevice("SP-DZ-0001", SceneKind.Dozer), new SceneDevice("SP-PL-0001", SceneKind.Plant) };
+            var board = new ReadinessBoard(devices, "t");
+            var observed = new ObservedState(T0);
+            for (var i = 0; i < devices.Length; i++)
+            {
+                var token = "tok-" + i;
+                board.SetBind(new BindResult { ExternalId = devices[i].ExternalId, Outcome = BindOutcome.Bound, DeviceToken = token });
+                foreach (var key in PhaseAProbe.ExpectedKeys(devices[i].Kind))
+                    observed.ApplyMeasurement(token, key, 1.0, T0.AddSeconds(1), T0.AddSeconds(1), false);
+            }
+
+            var world = new ProbeWorld { Board = board, Observed = observed, Cards = () => new[] { new DeviceReading("SP-DZ-0001", DeviceReading.Profile.Equipment, Provenance.Observed) }, CardSource = () => Provenance.Observed };
+            var item = PhaseAProbe.CheckCards(world);
+            Assert.IsTrue(item.Pass, item.Detail);
+            StringAssert.DoesNotContain("payload_t", item.Detail);
+
+            // the counter-case: a dozer that did not report its fuel is still caught
+            var bare = new ObservedState(T0);
+            bare.ApplyMeasurement("tok-0", "engine_temp_c", 1.0, T0.AddSeconds(1), T0.AddSeconds(1), false);
+            world.Observed = bare;
+            var missing = PhaseAProbe.CheckCards(world);
+            Assert.IsFalse(missing.Pass);
+            StringAssert.Contains("SP-DZ-0001: no observed fuel_pct", missing.Detail);
+        }
+
+        [Test]
+        public void ABadCredentialWhoseSessionStartFailedWithTheBrokersRefusalPasses()
+        {
+            var b = Fleet();
+            Observe(b, "SP-HL-0001", "SP-HL-0002", "SP-HL-0003");
+            b.SetStage("SP-HL-0004", DeviceStage.Connecting);
+            b.FailSession("SP-HL-0004", "session could not start · " + SessionFailure.Word("MqttConnectionException: connecting to ssl://x:1883/ failed: Connecting with MQTT server failed (NotAuthorized)."));
+            b.SetSide("SP-HL-0004", DeviceSide.Stopped);
+            var item = PhaseAProbe.EvaluateControl(new ControlSpec(ControlSpec.BadCredential, "SP-HL-0004"), b, b.Brief());
+            Assert.IsTrue(item.Pass, item.Detail);
+        }
+
+        [Test]
+        public void ABadCredentialWhoseStartFailedForAnotherReasonIsAFailedControl()
+        {
+            var b = Fleet();
+            Observe(b, "SP-HL-0001", "SP-HL-0002", "SP-HL-0003");
+            b.SetStage("SP-HL-0004", DeviceStage.Connecting);
+            b.FailSession("SP-HL-0004", "session could not start · " + SessionFailure.Word("SocketException: No route to host"));
+            var item = PhaseAProbe.EvaluateControl(new ControlSpec(ControlSpec.BadCredential, "SP-HL-0004"), b, b.Brief());
+            Assert.IsFalse(item.Pass, "a network fault is not the broker's refusal");
+            StringAssert.Contains("expected a device the broker refused", item.Detail);
+        }
+
+        [Test]
+        public void ABadCredentialDeviceThatReachedReadyIsAFailedControlEvenIfFailedLater()
+        {
+            var b = Fleet();
+            Observe(b, "SP-HL-0001", "SP-HL-0002", "SP-HL-0003");
+            b.SetStage("SP-HL-0004", DeviceStage.Ready);
+            b.FailSession("SP-HL-0004", "session could not start · " + SessionFailure.Word("NotAuthorized"));
+            var item = PhaseAProbe.EvaluateControl(new ControlSpec(ControlSpec.BadCredential, "SP-HL-0004"), b, b.Brief());
+            Assert.IsFalse(item.Pass);
+            StringAssert.Contains("got past the broker", item.Detail);
+        }
+
+        [Test]
+        public void ABadCredentialWhereAnotherDeviceFailedIsAFailedControl()
+        {
+            var b = Fleet();
+            Observe(b, "SP-HL-0001", "SP-HL-0002");
+            b.FailSession("SP-HL-0003", "session could not start · " + SessionFailure.Word("NotAuthorized"));
+            b.SetStage("SP-HL-0004", DeviceStage.Connecting);
+            b.FailSession("SP-HL-0004", "session could not start · " + SessionFailure.Word("NotAuthorized"));
+            var item = PhaseAProbe.EvaluateControl(new ControlSpec(ControlSpec.BadCredential, "SP-HL-0004"), b, b.Brief());
+            Assert.IsFalse(item.Pass);
+            StringAssert.Contains("SP-HL-0003", item.Detail);
+        }
+
+        [Test]
+        public void ABrokerRefusalIsWordedPlainlyAndAnythingElseKeepsItsText()
+        {
+            Assert.AreEqual("refused by the broker (NotAuthorized)", SessionFailure.Word("MqttConnectionException: connecting to ssl://localhost:1883/ as \"a:b:c\" failed: Connecting with MQTT server failed (NotAuthorized)."));
+            Assert.AreEqual("refused by the broker (BadUserNameOrPassword)", SessionFailure.Word("failed (BadUserNameOrPassword)"));
+            Assert.AreEqual("SocketException: No route to host", SessionFailure.Word("SocketException: No route to host"));
+            Assert.IsNull(SessionFailure.BrokerRefusalCode("connection refused"), "a closed port is not a credential refusal");
+            Assert.IsTrue(SessionFailure.SaysBrokerRefused("SP-DZ-0002 · blind · the broker refused this device; it will not publish"));
+            Assert.IsFalse(SessionFailure.SaysBrokerRefused("SP-DZ-0002 · session could not start · the certificate is not trusted"));
+        }
+
         static ProbeWorld Of(Harness h) => new ProbeWorld
         {
             Board = h.Board,

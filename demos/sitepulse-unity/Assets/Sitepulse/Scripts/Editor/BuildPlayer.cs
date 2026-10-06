@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -17,8 +16,9 @@ namespace DeviceChain.Sitepulse.EditorTools
 {
     /// <summary>
     /// Builds the Windows x64 IL2CPP player the Phase A acceptance runs, and records exactly what was built
-    /// (<c>Build/build-info.json</c>): the git commit, whether the tracked tree was clean, the C# SDK's last
-    /// commit, the Unity version, the scripting backend, the stripping level and the build time. Run it with
+    /// (<c>Build/build-info.json</c>): the Unity version, the scripting backend, the stripping level and the build time.
+    /// The git commit, the tracked-tree state and the C# SDK commit are NOT read here (the Editor runs on Windows and
+    /// the worktree's git metadata lives in WSL): the acceptance driver stamps them in after the build. Run it with
     /// the Editor closed:
     /// <code>Unity.exe -batchmode -quit -projectPath ... -executeMethod DeviceChain.Sitepulse.EditorTools.BuildPlayer.Windows64Il2Cpp -logFile -</code>
     /// or from an Editor that is open, by an eval file that calls <see cref="Run"/> (the file
@@ -85,18 +85,13 @@ namespace DeviceChain.Sitepulse.EditorTools
 
         static string Describe(DateTimeOffset started, DateTimeOffset finished, string[] scenes, long bytes, string stripping)
         {
-            var root = Directory.GetCurrentDirectory();
-            var sha = Git(root, "rev-parse HEAD");
-            var sdk = Git(root, "log -1 --format=%H -- ../../sdks/csharp");
-            var dirty = Git(root, "status --porcelain --untracked-files=no");
-
             using var ms = new MemoryStream();
             using (var w = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
             {
                 w.WriteStartObject();
-                w.WriteString("gitSha", sha ?? "unknown");
-                w.WriteBoolean("trackedTreeClean", dirty != null && dirty.Length == 0);
-                w.WriteString("sdkCommit", string.IsNullOrEmpty(sdk) ? "unknown" : sdk);
+                // the Editor cannot read this repository's git metadata (it runs on Windows, the worktree's .git lives in WSL):
+                // the acceptance driver records the commit, the tracked-tree state and the SDK commit and stamps them in after the build
+                w.WriteString("git", "not resolvable from the Editor; stamped by tools/phase-a-acceptance.sh after the build");
                 w.WriteString("unityVersion", Application.unityVersion);
                 w.WriteString("scriptingBackend", PlayerSettings.GetScriptingBackend(NamedBuildTarget.Standalone).ToString());
                 w.WriteString("strippingLevel", stripping);
@@ -112,30 +107,6 @@ namespace DeviceChain.Sitepulse.EditorTools
             }
 
             return Encoding.UTF8.GetString(ms.ToArray());
-        }
-
-        // null when git cannot be run: the build then says "unknown" rather than guessing
-        static string Git(string workingDirectory, string args)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("git", args)
-                {
-                    WorkingDirectory = workingDirectory,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-                using var p = Process.Start(psi);
-                var output = p.StandardOutput.ReadToEnd();
-                if (!p.WaitForExit(15000)) { try { p.Kill(); } catch (InvalidOperationException) { } return null; }
-                return p.ExitCode == 0 ? output.Trim() : null;
-            }
-            catch (Exception e) when (e is System.ComponentModel.Win32Exception || e is InvalidOperationException || e is IOException)
-            {
-                return null;
-            }
         }
     }
 }

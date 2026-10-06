@@ -145,6 +145,20 @@ EOF
 		;;
 	*) die "--build is none, editor or batch" ;;
 	esac
+	stamp_build_info
+}
+
+# The Editor runs on Windows and cannot resolve this worktree's git metadata (its .git is a file pointing into WSL),
+# so the build is stamped from here, where git works: the commit, whether the TRACKED tree is clean (untracked files
+# do not count) and the C# SDK's last commit, each commit as 12 characters. Unity's own fields stay as written.
+stamp_build_info() {
+	local info="$PROJECT/Build/build-info.json" clean=true
+	[ -f "$info" ] || die "the build left no $info"
+	[ -z "$(git -C "$PROJECT" status --porcelain --untracked-files=no)" ] || clean=false
+	python3 "$CHECK" stamp-build --info "$info" \
+		--commit "$(git -C "$PROJECT" rev-parse HEAD)" --clean "$clean" \
+		--sdk "$(git -C "$PROJECT" log -1 --format=%H -- "$REPO/sdks/csharp")" || die "could not stamp $info"
+	log "stamped the build: commit $(git -C "$PROJECT" rev-parse --short=12 HEAD), tracked tree clean: $clean"
 }
 
 # ---------------------------------------------------------------------------
@@ -302,15 +316,15 @@ main() {
 	cp "$CA_SRC" "$EVID/ca.pem"   # a public certificate
 
 	# ---- what was built, and is it this tree? --------------------------------------------------
-	local head sha dirty
+	local head head12 verdict detail
 	head="$(git -C "$PROJECT" rev-parse HEAD)"
+	head12="$(git -C "$PROJECT" rev-parse --short=12 HEAD)"
 	if [ -f "$PROJECT/Build/build-info.json" ]; then
 		cp "$PROJECT/Build/build-info.json" "$EVID/build-info.json"
-		sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("gitSha",""))' "$EVID/build-info.json")"
-		dirty="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("trackedTreeClean"))' "$EVID/build-info.json")"
-		if [ "$sha" = "$head" ] && [ "$dirty" = True ]; then item PASS build-current "the player was built from this commit with a clean tracked tree" "$sha"
-		elif [ "$ALLOW_STALE" = 1 ]; then item info build-current "the player was built from this commit with a clean tracked tree" "NOT: built at $sha (tracked tree clean: $dirty), HEAD is $head; allowed by --allow-stale-build"
-		else item FAIL build-current "the player was built from this commit with a clean tracked tree" "built at $sha (tracked tree clean: $dirty), HEAD is $head"; fi
+		local allow=()
+		[ "$ALLOW_STALE" = 1 ] && allow=(--allow-stale)
+		IFS=$'\t' read -r verdict detail < <(python3 "$CHECK" build-current --info "$EVID/build-info.json" --head "$head" "${allow[@]}")
+		item "$verdict" build-current "the player was built from this commit with a clean tracked tree" "$detail"
 	else
 		item FAIL build-current "the player was built from this commit with a clean tracked tree" "Build/build-info.json is missing: the player was not built by BuildPlayer.Windows64Il2Cpp"
 	fi
@@ -322,10 +336,10 @@ main() {
 	win_now="$(powershell.exe -NoProfile -Command '[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()' 2>/dev/null | tr -d '\r' || true)"
 	offset="n/a"
 	[ -z "${win_now:-}" ] || offset=$((win_now - wsl_now))
-	python3 - "$EVID/environment.json" "$DC_VERSION" "$fp" "$offset" "$RUNNER" <<'PY'
+	python3 - "$EVID/environment.json" "$DC_VERSION" "$fp" "$offset" "$RUNNER" "$head12" <<'PY'
 import json, sys
-path, version, fp, offset, runner = sys.argv[1:6]
-json.dump({"platformVersion": version, "brokerCaSha256": fp, "windowsMinusWslClockSeconds": offset, "runner": runner}, open(path, "w"), indent=2)
+path, version, fp, offset, runner, commit = sys.argv[1:7]
+json.dump({"commit": commit, "platformVersion": version, "brokerCaSha256": fp, "windowsMinusWslClockSeconds": offset, "runner": runner}, open(path, "w"), indent=2)
 PY
 	item info environment "platform, CA and clocks recorded (environment.json)" "platform v$DC_VERSION, CA sha256 $fp, Windows clock minus WSL clock: ${offset}s"
 
@@ -369,7 +383,7 @@ PY
 		echo "# Sitepulse Phase A acceptance"
 		echo
 		echo "- **Run**: $stamp"
-		echo "- **Commit**: $head"
+		echo "- **Commit**: $head12"
 		echo "- **Platform**: v$DC_VERSION; broker CA sha256 $fp"
 		if [ -f "$EVID/build-info.json" ]; then
 			python3 - "$EVID/build-info.json" <<'PY'

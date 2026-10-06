@@ -263,22 +263,44 @@ namespace DeviceChain.Sitepulse.Simulation
             }
         }
 
-        /// <summary>The metrics this device reports, by key, rounded for the wire. A dozer has no tyre or payload; the plant has throughput and running only.</summary>
+        static readonly string[] PlantKeys = { MeasurementKeys.ThroughputTph, MeasurementKeys.PlantRunning };
+        static readonly string[] DozerKeys = { MeasurementKeys.FuelPct, MeasurementKeys.EngineTempC, MeasurementKeys.EngineHours };
+        static readonly string[] HaulerKeys = { MeasurementKeys.FuelPct, MeasurementKeys.EngineTempC, MeasurementKeys.EngineHours, MeasurementKeys.PayloadT, MeasurementKeys.TyrePressureKpa };
+
+        /// <summary>
+        /// The measurement keys a machine of this kind reports, and the ONLY place that says so: <see cref="Measurements"/>
+        /// emits exactly these, and the acceptance probe expects exactly these. A dozer has no tyre or payload; the
+        /// plant has throughput and running only.
+        /// </summary>
+        public static IReadOnlyList<string> KeysFor(EquipmentKind kind)
+        {
+            switch (kind)
+            {
+                case EquipmentKind.Plant: return PlantKeys;
+                case EquipmentKind.Dozer: return DozerKeys;
+                default: return HaulerKeys;
+            }
+        }
+
+        /// <summary>The metrics this device reports, by key (see <see cref="KeysFor"/>), rounded for the wire.</summary>
         public Dictionary<string, double> Measurements()
         {
             var m = new Dictionary<string, double>();
-            if (IsPlant)
+            foreach (var key in KeysFor(Kind))
             {
-                m[MeasurementKeys.ThroughputTph] = Math.Round(throughput, 1);
-                m[MeasurementKeys.PlantRunning] = Running ? 1.0 : 0.0;
-                return m;
+                switch (key)
+                {
+                    case MeasurementKeys.ThroughputTph: m[key] = Math.Round(throughput, 1); break;
+                    case MeasurementKeys.PlantRunning: m[key] = Running ? 1.0 : 0.0; break;
+                    case MeasurementKeys.FuelPct: m[key] = Math.Round(fuel, 2); break;
+                    case MeasurementKeys.EngineTempC: m[key] = Math.Round(engineTemp, 1); break;
+                    case MeasurementKeys.EngineHours: m[key] = Math.Round(engineHours, 3); break;
+                    case MeasurementKeys.PayloadT: m[key] = Math.Round(payload, 1); break;
+                    case MeasurementKeys.TyrePressureKpa: m[key] = Math.Round(tyre, 1); break;
+                    default: throw new InvalidOperationException("no value for measurement key " + key);
+                }
             }
 
-            m[MeasurementKeys.FuelPct] = Math.Round(fuel, 2);
-            m[MeasurementKeys.EngineTempC] = Math.Round(engineTemp, 1);
-            m[MeasurementKeys.EngineHours] = Math.Round(engineHours, 3);
-            if (HasPayload) m[MeasurementKeys.PayloadT] = Math.Round(payload, 1);
-            if (HasTyres) m[MeasurementKeys.TyrePressureKpa] = Math.Round(tyre, 1);
             return m;
         }
     }

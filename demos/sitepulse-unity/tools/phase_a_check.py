@@ -527,6 +527,44 @@ def leakscan(paths):
                 f"{len(paths)} file(s) scanned" + (f"; FOUND {bad}" if bad else "; none found"))
 
 
+SHORT_SHA = 12
+
+
+def short_sha(commit):
+    """A commit id as the bundle writes it: 12 characters. A full 40-hex SHA is a run the leak scan (rightly) takes
+    for a credential, so no commit id is ever written in full."""
+    commit = (commit or "").strip()
+    return commit[:SHORT_SHA] if re.fullmatch(r"[0-9a-fA-F]{7,}", commit) else (commit or "unknown")
+
+
+def stamp_build(info_path, commit, tracked_clean, sdk_commit):
+    """Record, in build-info.json, what only the WSL side can read: the commit, whether the tracked tree was clean,
+    and the SDK's last commit (the Editor runs on Windows and cannot resolve the worktree's git metadata). Unity's own
+    fields (version, backend, stripping, build time) are kept as they are."""
+    with open(info_path, encoding="utf-8") as f:
+        info = json.load(f)
+    info.pop("git", None)
+    info["gitSha"] = short_sha(commit)
+    info["trackedTreeClean"] = bool(tracked_clean)
+    info["sdkCommit"] = short_sha(sdk_commit)
+    info["gitStampedBy"] = "tools/phase-a-acceptance.sh"
+    with open(info_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+    return info
+
+
+def judge_build(info, head, allow_stale=False):
+    """(verdict, detail): was the player built from this commit with a clean tracked tree? verdict is PASS, FAIL or info."""
+    sha, clean = short_sha(info.get("gitSha")), info.get("trackedTreeClean")
+    head = short_sha(head)
+    if sha == head and clean is True:
+        return "PASS", sha
+    what = f"built at {sha} (tracked tree clean: {clean}), HEAD is {head}"
+    if allow_stale:
+        return "info", f"NOT: {what}; allowed by --allow-stale-build"
+    return "FAIL", what
+
+
 def read_script_items(path):
     """tab-separated: PASS|FAIL|info, id, description, detail"""
     items = []
@@ -841,8 +879,14 @@ def run_unknown_command(args, platform, since_dt):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["run", "control", "unknown-command", "leakscan", "bundle"])
+    p.add_argument("mode", choices=["run", "control", "unknown-command", "leakscan", "bundle", "stamp-build", "build-current"])
     p.add_argument("--files", nargs="*", default=[], help="leakscan: the files to scan")
+    p.add_argument("--info", help="stamp-build, build-current: the build-info.json")
+    p.add_argument("--commit", help="stamp-build: the commit built from (written as 12 characters)")
+    p.add_argument("--clean", choices=["true", "false"], help="stamp-build: whether the tracked tree was clean")
+    p.add_argument("--sdk", help="stamp-build: the C# SDK's last commit")
+    p.add_argument("--head", help="build-current: the current HEAD")
+    p.add_argument("--allow-stale", action="store_true", help="build-current: a stale build is recorded, not failed")
     p.add_argument("--header", help="bundle: a file whose text opens SUMMARY.md")
     p.add_argument("--dir", help="the evidence directory the player writes its files into")
     p.add_argument("--runner", default="http://localhost:8090")
@@ -861,6 +905,14 @@ def main(argv=None):
 
     if args.mode == "bundle":
         return bundle(args.dir, args.header)
+    if args.mode == "stamp-build":
+        stamp_build(args.info, args.commit, args.clean == "true", args.sdk)
+        return 0
+    if args.mode == "build-current":
+        with open(args.info, encoding="utf-8") as f:
+            verdict, detail = judge_build(json.load(f), args.head, args.allow_stale)
+        print(verdict + "\t" + detail)
+        return 0
     if args.mode == "leakscan":
         item = leakscan(args.files)
         print(("PASS" if item.ok else "FAIL"), item.id + ":", item.detail)
