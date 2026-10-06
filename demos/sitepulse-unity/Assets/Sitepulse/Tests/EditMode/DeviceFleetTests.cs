@@ -6,9 +6,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.Json;
+using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Sitepulse.Tasks;
 using NUnit.Framework;
 using static DeviceChain.Sitepulse.Tests.PlatformTestData;
 
@@ -27,8 +30,7 @@ namespace DeviceChain.Sitepulse.Tests
             public Exception PublishThrows;
             public bool CanPublishThrows, BlindBeforeStartThrows;
             public int Disposed, Starts;
-            public string Refusal;
-            public Action<string> OnCommand;
+            public CommandHandler Handler;
             public TimeSpan StartTakes = TimeSpan.FromMilliseconds(40);
             public Exception StartThrows;
             public readonly List<Sample> Published = new List<Sample>();
@@ -50,10 +52,9 @@ namespace DeviceChain.Sitepulse.Tests
 
             public void Raise(LinkState s) => StateChanged?.Invoke(s);
 
-            public async Task StartAsync(string refusalReason, Action<string> onCommand, CancellationToken cancellationToken)
+            public async Task StartAsync(CommandHandler handler, CancellationToken cancellationToken)
             {
-                Refusal = refusalReason;
-                OnCommand = onCommand;
+                Handler = handler;
                 Interlocked.Increment(ref Starts);
                 var now = Interlocked.Increment(ref counter.InFlight);
                 int max;
@@ -340,22 +341,39 @@ namespace DeviceChain.Sitepulse.Tests
         // ---- commands
 
         [Test]
-        public void EveryCommandIsRefusedHonestlyAndRecordedOnTheDevicesLine()
+        public void ACommandWithNoTaskLayerIsAnsweredFailedAndSaysSo()
         {
             var (board, creds) = Credentialed(Fleet);
             var factory = new FakeFactory();
             var fleet = StartedFleet(board, creds, factory);
             try
             {
-                Assert.AreEqual("this build of the demo does not execute commands yet", factory.Links["SP-HL-0001"].Refusal);
-                Assert.AreEqual("the crusher accepts no commands", factory.Links["SP-PL-0001"].Refusal);
+                var task = factory.Links["SP-HL-0001"].Handler(new DeviceCommand("c-1", "goto-refuel", null, 1), CancellationToken.None);
+                Assert.IsTrue(WaitFor(() => { fleet.Pump(); return task.IsCompleted; }), "a command is never left unanswered");
+                var outcome = task.GetAwaiter().GetResult();
+                Assert.IsFalse(outcome.Success);
+                Assert.AreEqual("this device has no task executor in this run", outcome.Error);
+                StringAssert.Contains("received goto-refuel", board.Lines()[0].Text);
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
 
-                factory.Links["SP-HL-0001"].OnCommand("goto-refuel");
+        [Test]
+        public void TheCrusherAcceptsNoCommandsAndAnInvalidCommandIsRefusedBeforeItReachesTheMainThread()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                var plant = factory.Links["SP-PL-0001"].Handler(new DeviceCommand("c-1", "goto-area", null, 1), CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual("the crusher accepts no commands", plant.Error);
+                var unknown = factory.Links["SP-HL-0001"].Handler(new DeviceCommand("c-2", "self-destruct", null, 2), CancellationToken.None).GetAwaiter().GetResult();
+                Assert.IsFalse(unknown.Success);
+                StringAssert.Contains("unknown command", unknown.Error);
                 fleet.Pump();
-                StringAssert.Contains("refused goto-refuel: this build of the demo does not execute commands yet", board.Lines()[0].Text);
-                factory.Links["SP-PL-0001"].OnCommand("goto-area");
-                fleet.Pump();
-                StringAssert.Contains("refused goto-area: the crusher accepts no commands", board.Lines().Last().Text);
+                StringAssert.Contains("refused self-destruct: unknown command", board.Lines()[0].Text);
+                Assert.AreEqual(0, fleet.Inbox.Pending, "a refused command posts nothing for the task layer");
             }
             finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
         }
@@ -727,6 +745,135 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(v, board.Version);
             board.SetStats("SP-HL-0001", 6, 0, 0, null);
             Assert.AreEqual(v + 1, board.Version);
+        }
+
+        // ---- a command, end to end: SDK thread -> inbox -> task layer -> answer
+
+        static JsonElement JsonEl(string text)
+        {
+            using var doc = JsonDocument.Parse(text);
+            return doc.RootElement.Clone();
+        }
+
+        sealed class CommandedFleet : IDisposable
+        {
+            public DeviceFleet Fleet;
+            public TaskDirector Director;
+            public Timeline Timeline = new Timeline();
+            public FakeFactory Factory = new FakeFactory();
+            public ReadinessBoard Board;
+            public Dictionary<string, FakeBody> Bodies = new Dictionary<string, FakeBody>();
+
+            public void Dispose() => Fleet.Shutdown(TimeSpan.FromSeconds(10));
+        }
+
+        static CommandedFleet Commanded()
+        {
+            var c = new CommandedFleet();
+            var (board, creds) = Credentialed(Fleet);
+            c.Board = board;
+            c.Fleet = new DeviceFleet(board, creds, c.Factory, sceneHasZone: z => CommandKit.Site.HasZone(z));
+            c.Fleet.StartAll().GetAwaiter().GetResult();
+            c.Fleet.Pump();
+            var track = CommandKit.Track(0);
+            var machines = new List<(IMachineBody, MachineModel)>();
+            var i = 0;
+            foreach (var h in c.Fleet.Hosts)
+            {
+                if (h.Simulation.Model.IsPlant) continue;
+                // the machine the tests send places stands on the haul loop; the rest are parked far off, out of every lane
+                var at = h.ExternalId == "SP-HL-0003" ? track[300] : new TrackPoint(4000 + 100 * i++, 4000, 0, 0);
+                var body = new FakeBody(h.ExternalId, h.Simulation.Model.Kind, at.X, at.Z, at.HeadingDegrees, track);
+                c.Bodies[h.ExternalId] = body;
+                machines.Add((body, h.Simulation.Model));
+            }
+
+            c.Director = new TaskDirector(CommandKit.Site, CommandKit.Graph, c.Timeline, machines, c.Fleet.Generation);
+            c.Fleet.Tasks = c.Director;
+            return c;
+        }
+
+        // pumps the plane and steps the task layer until the task is done (the handler runs on a pool thread)
+        static bool Drive(CommandedFleet c, Task t, int maxIterations = 30000)
+        {
+            for (var i = 0; i < maxIterations && !t.IsCompleted; i++)
+            {
+                c.Fleet.Pump();
+                c.Director.Step(0.5, 0.5);
+                Thread.Sleep(1);
+            }
+
+            return t.IsCompleted;
+        }
+
+        static bool WaitRunning(CommandedFleet c, string id, string token)
+        {
+            return WaitFor(() =>
+            {
+                c.Fleet.Pump();
+                return c.Director[id].Running != null && c.Director[id].Running.Token == token;
+            });
+        }
+
+        [Test]
+        public void ACommandFlowsFromTheSessionThroughTheTaskLayerAndBackAsItsOutcome()
+        {
+            using var c = Commanded();
+            var handler = c.Factory.Links["SP-HL-0003"].Handler;
+            var t = Task.Run(() => handler(new DeviceCommand("c-1", "goto-area", JsonEl("{\"areaToken\":\"sp-zone-yard\"}"), 1), CancellationToken.None));
+            Assert.IsTrue(Drive(c, t), "the command ends with an answer");
+            var outcome = t.Result;
+            Assert.IsTrue(outcome.Success, outcome.Error);
+            Assert.IsTrue(CommandKit.Site.TryZone("sp-zone-yard", out var yard));
+            Assert.IsTrue(yard.Contains(c.Bodies["SP-HL-0003"].X, c.Bodies["SP-HL-0003"].Z), "and the machine is where it was sent");
+            Assert.IsFalse(c.Bodies["SP-HL-0003"].Attached);
+            StringAssert.Contains("received goto-area", c.Board.Lines().First(l => l.Text.Contains("SP-HL-0003")).Text);
+            Assert.AreEqual(TimelineKinds.Received, c.Timeline.Rows("SP-HL-0003")[0].Kind);
+            Assert.AreEqual(0, c.Timeline.Rows("SP-HL-0004").Count, "no other machine was told anything");
+        }
+
+        [Test]
+        public void ANewerCommandSupersedesTheOlderOneEndToEnd()
+        {
+            using var c = Commanded();
+            var handler = c.Factory.Links["SP-HL-0003"].Handler;
+            var older = Task.Run(() => handler(new DeviceCommand("c-old", "goto-refuel", null, 1), CancellationToken.None));
+            Assert.IsTrue(WaitRunning(c, "SP-HL-0003", "c-old"));
+            var newer = Task.Run(() => handler(new DeviceCommand("c-new", "goto-area", JsonEl("{\"areaToken\":\"sp-zone-fill\"}"), 2), CancellationToken.None));
+            Assert.IsTrue(Drive(c, newer));
+            Assert.IsTrue(older.IsCompleted);
+            Assert.IsFalse(older.Result.Success);
+            Assert.AreEqual("superseded by c-new", older.Result.Error);
+            Assert.IsTrue(newer.Result.Success, newer.Result.Error);
+        }
+
+        [Test]
+        public void TheOlderCommandArrivingSecondFailsAtOnceAndTheNewerOneRuns()
+        {
+            using var c = Commanded();
+            var handler = c.Factory.Links["SP-HL-0003"].Handler;
+            var newer = Task.Run(() => handler(new DeviceCommand("c-new", "goto-area", JsonEl("{\"areaToken\":\"sp-zone-yard\"}"), 9), CancellationToken.None));
+            Assert.IsTrue(WaitRunning(c, "SP-HL-0003", "c-new"));
+            var older = Task.Run(() => handler(new DeviceCommand("c-old", "goto-area", JsonEl("{\"areaToken\":\"sp-zone-fill\"}"), 3), CancellationToken.None));
+            Assert.IsTrue(WaitFor(() => { c.Fleet.Pump(); return older.IsCompleted; }), "the older one is answered without waiting for the newer");
+            Assert.AreEqual("superseded by c-new", older.Result.Error);
+            Assert.IsFalse(newer.IsCompleted);
+            Assert.IsTrue(Drive(c, newer));
+            Assert.IsTrue(newer.Result.Success);
+        }
+
+        [Test]
+        public void AResetAnswersARunningCommandBeforeTheSessionsAreClosed()
+        {
+            using var c = Commanded();
+            var handler = c.Factory.Links["SP-HL-0005"].Handler;
+            var t = Task.Run(() => handler(new DeviceCommand("c-1", "goto-refuel", null, 1), CancellationToken.None));
+            Assert.IsTrue(WaitRunning(c, "SP-HL-0005", "c-1"));
+            c.Director.FailAll();
+            var unanswered = c.Fleet.QuiesceCommands(TimeSpan.FromSeconds(2), TimeSpan.Zero);
+            Assert.AreEqual(0, unanswered, "every handler has returned");
+            Assert.IsTrue(t.IsCompleted);
+            Assert.AreEqual("simulation reset before completion", t.Result.Error);
         }
     }
 }

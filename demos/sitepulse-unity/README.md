@@ -177,11 +177,30 @@ badge in the top-left corner always says which:
   and alarms from live subscriptions, locations and command states from polls, each with its age.
   A value turns amber after 3 s, grey after 15 s and becomes a dash after a minute, and a banner
   says when the observer is reconnecting. A device counts as observed only while the platform has
-  a reading from this run that is at most 15 s old. Commands are answered as failed: this build
-  does not execute them yet.
+  a reading from this run that is at most 15 s old.
+
+  Every machine executes the two commands of the equipment profile, and the plant refuses them
+  ("the crusher accepts no commands"). `goto-area` (an `areaToken` of the profile's list) takes the
+  machine off its routine track and drives it over the site's roads to a free parking slot inside
+  the zone, where it stays; it succeeds on arrival. `goto-refuel` drives it to the refuel queue,
+  into the one-truck bay in first-come order, refuels it over 40 s and succeeds when the service
+  ends; the machine then drives back to its own track and resumes work. A newer command replaces
+  the one running (the older ends as failed, "superseded by" the newer's token), a machine stops
+  for another in its lane, and every command ends with an answer and a reason: an unknown command,
+  a bad payload or area, no route, no free slot, out of fuel, a budget exceeded or a reset before
+  completion are all failures that say so. Fuel rises only while a machine is in the bay's
+  refuelling service. The cards show the platform's state of each command, never the machine's.
 
   Keys: **R** shows every device in the readiness panel; **L** shows the local simulation's own
-  values before they are published (labelled as not platform data).
+  values before they are published (labelled as not platform data); **[** and **]** select a
+  machine; **T** shows or hides its timeline (what it did with each command: received, accepted
+  with route length and ETA, superseded, arrived, refuelling, outcome); **P** prepares its next
+  low-fuel cycle (lowers the tank to just above the platform's 15 percent line and adds a burn
+  that crosses it in about a minute: an input, never a fuel increase); **G** sends a parked machine
+  back to its track; **F** starts a fresh run: it lists the tenant's unfinished commands and, on
+  **Y**, cancels the ones the platform can still stop (**N** or **Esc** keeps them). Cancelling is
+  an operator act and is never done automatically. When the player quits, running tasks end as
+  failed ("simulation reset before completion") and their answers are given a moment to publish.
 
   Positions are reported in a site frame whose centre is latitude 39.0, longitude -117.0 (open
   high desert in central Nevada, chosen to imply no real operator), with X east and Z north in
@@ -217,6 +236,10 @@ A player started with `-sitepulse-quality Laptop` runs at that level.
 - No truck tips into the hopper: a loader feeds it from the feed stockpile.
 - The preview choreography is scripted local motion, not the site simulation; the haul trucks
   take the loaded buckets as one load, and the dump pad does not grow.
+- Routing is a network of the site's road centrelines with straight off-road legs across pads and to
+  parking slots; a machine in the way is yielded to, not driven around, so two machines nose to nose
+  end their commands as failed when the budget runs out. Machines that are still on their routine
+  tracks do not yield to a machine that left its own.
 - In Choreographed mode the cards' values are illustrative. Only the machines and the plant listed
   in `IotOverlay` carry a card.
 

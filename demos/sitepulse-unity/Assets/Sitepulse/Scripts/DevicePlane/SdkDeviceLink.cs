@@ -62,12 +62,8 @@ namespace DeviceChain.Sitepulse.DevicePlane
             }
         }
 
-        public Task StartAsync(string refusalReason, Action<string> onCommand, CancellationToken cancellationToken)
-            => Session().StartAsync((command, _) =>
-            {
-                onCommand(command.Name);
-                return Task.FromResult(CommandOutcome.Failed(refusalReason));
-            }, cancellationToken);
+        public Task StartAsync(CommandHandler handler, CancellationToken cancellationToken)
+            => Session().StartAsync(handler, cancellationToken);
 
         public Task PublishAsync(Sample sample, CancellationToken cancellationToken)
         {

@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Sitepulse.Tasks;
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {
@@ -32,6 +33,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
         readonly IDeviceLinkFactory factory;
         readonly int maxStarts;
         readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> platformState;
+        readonly Func<string, bool> sceneHasZone;
         readonly DeviceInbox inbox = new DeviceInbox();
         readonly List<DeviceSessionHost> hosts = new List<DeviceSessionHost>();
         readonly Dictionary<string, DeviceSessionHost> byId = new Dictionary<string, DeviceSessionHost>(StringComparer.Ordinal);
@@ -44,9 +46,10 @@ namespace DeviceChain.Sitepulse.DevicePlane
         Task shutdown;
 
         public DeviceFleet(ReadinessBoard board, DeviceCredentials credentials, IDeviceLinkFactory factory, int generation = 1, int maxStartsInFlight = MaxStartsInFlight,
-            IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> platformState = null)
+            IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> platformState = null, Func<string, bool> sceneHasZone = null)
         {
             this.platformState = platformState;
+            this.sceneHasZone = sceneHasZone;
             this.board = board ?? throw new ArgumentNullException(nameof(board));
             this.credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
             this.factory = factory ?? throw new ArgumentNullException(nameof(factory));
@@ -60,6 +63,12 @@ namespace DeviceChain.Sitepulse.DevicePlane
         public IReadOnlyList<DeviceSessionHost> Hosts => hosts;
         public DeviceInbox Inbox => inbox;
         public bool IsShutDown => shutdown != null;
+
+        /// <summary>
+        /// Where validated commands go on the main thread. Set it before the first <see cref="Pump"/>; a command that
+        /// arrives while it is unset is answered failed (the device has no task executor in this run).
+        /// </summary>
+        public ITaskSink Tasks { get; set; }
 
         public DeviceSessionHost this[string externalId] => byId[externalId];
 
@@ -90,7 +99,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
                 try
                 {
                     var link = factory.Create(id, d.Bind.DeviceToken, credentialId);
-                    host = new DeviceSessionHost(d.Device, d.Bind.DeviceToken, link, Generation, inbox);
+                    host = new DeviceSessionHost(d.Device, d.Bind.DeviceToken, link, Generation, inbox, new CommandContext(d.Bind.Areas, sceneHasZone));
                 }
                 catch (Exception e)
                 {
@@ -213,6 +222,15 @@ namespace DeviceChain.Sitepulse.DevicePlane
                 case DeviceEventKind.Command:
                     board.SetCommand(id, e.Text);
                     break;
+                case DeviceEventKind.CommandRefused:
+                    board.SetCommand(id, "refused " + e.Text);
+                    Tasks?.Refused(id, e.Text);
+                    break;
+                case DeviceEventKind.Task:
+                    board.SetCommand(id, "received " + e.Text);
+                    if (Tasks == null) e.Task.Complete(TaskResult.Fail(TaskReasons.NoExecutor));
+                    else Tasks.Submit(id, e.Task);
+                    break;
             }
         }
 
@@ -262,6 +280,37 @@ namespace DeviceChain.Sitepulse.DevicePlane
             lock (disposals) all.AddRange(disposals);
             shutdown = Task.WhenAll(all);
             return shutdown;
+        }
+
+        /// <summary>
+        /// The end of a run, before the sessions go: answers every command still queued for the main thread, then gives
+        /// the handlers that are waiting on the simulation (already answered, by the task layer's own reset) up to
+        /// <paramref name="timeout"/> to return, and the SDK a short moment to publish what they returned. Call it
+        /// after the task layer has failed its running tasks. Blocks the calling thread; returns how many handlers had not returned.
+        /// </summary>
+        public int QuiesceCommands(TimeSpan timeout, TimeSpan publishGrace)
+        {
+            inbox.FailQueuedTasks(TaskReasons.Reset);
+            var deadline = DateTime.UtcNow + timeout;
+            var pending = 0;
+            var any = false;
+            while (true)
+            {
+                pending = 0;
+                foreach (var h in hosts) pending += h.CommandsInFlight;
+                if (pending > 0) any = true;
+                if (pending == 0 || DateTime.UtcNow >= deadline) break;
+                Thread.Sleep(20);
+            }
+
+            if (any)
+            {
+                var left = deadline - DateTime.UtcNow;
+                var grace = publishGrace < left ? publishGrace : left;
+                if (grace > TimeSpan.Zero) Thread.Sleep(grace);
+            }
+
+            return pending;
         }
 
         /// <summary>Teardown for a caller that cannot await (quit, destroy): blocks for at most <paramref name="timeout"/>.</summary>

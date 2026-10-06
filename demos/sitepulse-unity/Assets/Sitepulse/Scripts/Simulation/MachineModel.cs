@@ -35,8 +35,8 @@ namespace DeviceChain.Sitepulse.Simulation
     /// <summary>
     /// Permission to put fuel into a tank. The ONLY way fuel rises in <see cref="MachineModel"/> is
     /// <see cref="MachineModel.Refill"/>, and that takes one of these. The constructor is not public,
-    /// so nothing outside this assembly can make one, and inside it nothing does in this slice: the
-    /// <c>Refuelling</c> task state (slice A5) is the one place that will. That is what makes the
+    /// so nothing outside this assembly can make one, and inside it exactly one place does: the
+    /// <c>Refuelling</c> task state (<c>RefuelService</c>). That is what makes the
     /// phase B negative control mean something: a machine that is not refuelling cannot get fuel back,
     /// whatever else is wrong, and a rule that fires on a falling tank has nothing to hide behind.
     /// </summary>
@@ -99,6 +99,7 @@ namespace DeviceChain.Sitepulse.Simulation
         readonly ulong seed;
         readonly double tyreBase, tempOffset, fuelRateScale, phase;
         double fuel, engineTemp, engineHours, tyre, payload, throughput, simTime;
+        double boostPctPerHour, boostEndsBelowPct;
         bool wasLoaded;
         ulong loads;
 
@@ -162,6 +163,12 @@ namespace DeviceChain.Sitepulse.Simulation
 
             // fuel only ever falls here; Refill is the one way up
             var perHour = FuelPeakPerHour() * (0.3 + 0.7 * load) * fuelRateScale;
+            if (boostPctPerHour > 0)
+            {
+                if (fuel > boostEndsBelowPct) perHour += boostPctPerHour;
+                else boostPctPerHour = 0;
+            }
+
             var next = fuel - perHour * dt / 3600.0;
             fuel = next < 0 ? 0 : next < fuel ? next : fuel;
 
@@ -213,6 +220,28 @@ namespace DeviceChain.Sitepulse.Simulation
             this.engineHours = engineHours;
         }
 
+        /// <summary>The extra burn a presenter's low-fuel cycle adds, percentage points per hour; 0 when none is running.</summary>
+        public double DrainBoostPctPerHour => boostPctPerHour;
+
+        /// <summary>
+        /// A presenter input: make the machine reach the platform's low-fuel line in about
+        /// <paramref name="crossWithinSeconds"/>. It can only LOWER the tank (to <paramref name="justAbovePct"/>
+        /// if the tank is higher) and it adds an extra burn that <see cref="Step"/> applies like any other, so the
+        /// crossing happens through the normal drain and nothing here can raise fuel. The extra burn ends a
+        /// point below the line. Returns false (and changes nothing) when the tank is already at or below the line.
+        /// </summary>
+        public bool PrepareLowFuel(double justAbovePct, double crossWithinSeconds, double linePct = 15.0)
+        {
+            if (IsPlant) throw new InvalidOperationException("a plant has no fuel tank");
+            if (double.IsNaN(justAbovePct) || justAbovePct <= linePct) throw new ArgumentOutOfRangeException(nameof(justAbovePct));
+            if (!(crossWithinSeconds > 0)) throw new ArgumentOutOfRangeException(nameof(crossWithinSeconds));
+            if (fuel <= linePct) return false;
+            if (fuel > justAbovePct) fuel = justAbovePct;
+            boostPctPerHour = (fuel - linePct) / crossWithinSeconds * 3600.0;
+            boostEndsBelowPct = linePct - 1.0;
+            return true;
+        }
+
         /// <summary>
         /// Raises the tank to the permit's level (never lowers it). The permit is single use and names
         /// this device; nothing else in the model can raise fuel.
@@ -226,7 +255,11 @@ namespace DeviceChain.Sitepulse.Simulation
                 throw new InvalidOperationException($"the refuel permit is for {permit.DeviceId}, not {DeviceId}");
             permit.Used = true;
             var target = permit.TargetPct > 100.0 ? 100.0 : permit.TargetPct;
-            if (target > fuel) fuel = target;
+            if (target > fuel)
+            {
+                fuel = target;
+                boostPctPerHour = 0;   // a presenter's low-fuel cycle ends with the fuel it was about
+            }
         }
 
         /// <summary>The metrics this device reports, by key, rounded for the wire. A dozer has no tyre or payload; the plant has throughput and running only.</summary>

@@ -4,6 +4,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sitepulse.Simulation;
 
 namespace DeviceChain.Sitepulse.DevicePlane
@@ -25,10 +26,10 @@ namespace DeviceChain.Sitepulse.DevicePlane
         bool CanPublish { get; }
 
         /// <summary>
-        /// Connects and subscribes. Every command that arrives is answered Failed with
-        /// <paramref name="refusalReason"/> and reported to <paramref name="onCommand"/> by name.
+        /// Connects and subscribes. Every command that arrives is handed to <paramref name="handler"/> (on a pool
+        /// thread, with the session's arrival order in <see cref="DeviceCommand.Sequence"/>) and answered with what it returns.
         /// </summary>
-        Task StartAsync(string refusalReason, Action<string> onCommand, CancellationToken cancellationToken);
+        Task StartAsync(CommandHandler handler, CancellationToken cancellationToken);
 
         Task PublishAsync(Sample sample, CancellationToken cancellationToken);
     }

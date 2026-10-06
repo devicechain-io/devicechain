@@ -2,13 +2,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Sitepulse.Tasks;
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {
+    /// <summary>What a session needs to judge a command: the areas its profile lists and whether the scene has somewhere to send a machine.</summary>
+    public sealed class CommandContext
+    {
+        public CommandContext(IReadOnlyCollection<string> profileAreas, Func<string, bool> sceneHasZone)
+        {
+            ProfileAreas = profileAreas ?? Array.Empty<string>();
+            SceneHasZone = sceneHasZone ?? (_ => false);
+        }
+
+        public IReadOnlyCollection<string> ProfileAreas { get; }
+        public Func<string, bool> SceneHasZone { get; }
+    }
+
     /// <summary>
     /// One device's session and everything that belongs to it: the link, the bounded outbound ring,
     /// the pump that sends it, and the counters the panel shows. SDK callbacks land on pool threads
@@ -19,7 +35,6 @@ namespace DeviceChain.Sitepulse.DevicePlane
     public sealed class DeviceSessionHost : ISampleSink, ISampleObserver
     {
         public const string PlantRefusal = "the crusher accepts no commands";
-        public const string MachineRefusal = "this build of the demo does not execute commands yet";
 
         readonly IDeviceLink link;
         readonly int generation;
@@ -30,10 +45,13 @@ namespace DeviceChain.Sitepulse.DevicePlane
         Task disposeTask;
         int started, halted, firstPublish;
         long published, sendErrors, lastPublishTicks;
-        int consecutiveFailures;
+        int consecutiveFailures, inFlight;
+        long arrivalFallback;
+        readonly CommandContext commands;
 
-        public DeviceSessionHost(SceneDevice device, string deviceToken, IDeviceLink link, int generation, DeviceInbox inbox)
+        public DeviceSessionHost(SceneDevice device, string deviceToken, IDeviceLink link, int generation, DeviceInbox inbox, CommandContext commands = null)
         {
+            this.commands = commands ?? new CommandContext(null, null);
             Device = device;
             DeviceToken = deviceToken;
             this.link = link ?? throw new ArgumentNullException(nameof(link));
@@ -82,7 +100,8 @@ namespace DeviceChain.Sitepulse.DevicePlane
             }
         }
 
-        public string Refusal => Device.Kind == SceneKind.Plant ? PlantRefusal : MachineRefusal;
+        /// <summary>Commands whose handler has not returned yet (waiting on the simulation for an answer).</summary>
+        public int CommandsInFlight => Volatile.Read(ref inFlight);
 
         void Post(DeviceEventKind kind, LinkState state = LinkState.Starting, string text = null)
             => inbox.Post(new DeviceEvent(generation, ExternalId, kind, state, text));
@@ -102,7 +121,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
             try
             {
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, stop.Token))
-                    await link.StartAsync(Refusal, name => Post(DeviceEventKind.Command, LinkState.Starting, CommandNote(name)), linked.Token).ConfigureAwait(false);
+                    await link.StartAsync(HandleAsync, linked.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested || stop.IsCancellationRequested)
             {
@@ -137,10 +156,43 @@ namespace DeviceChain.Sitepulse.DevicePlane
             Post(DeviceEventKind.PumpFaulted, LinkState.Stopped, why);
         }
 
-        string CommandNote(string name)
+        /// <summary>
+        /// The SDK's command handler, on a pool thread: judge the command without touching Unity, hand a valid
+        /// one to the main thread as a <see cref="TaskRequest"/> and wait for its answer. The request's
+        /// completion source runs continuations asynchronously and is awaited, never blocked on, so the
+        /// main thread completing it cannot run this thread's code, and a shutdown or a stuck simulation
+        /// still ends in an answer (a failure that says so) and not in silence.
+        /// </summary>
+        public async Task<CommandOutcome> HandleAsync(DeviceCommand command, CancellationToken cancellationToken)
         {
-            var shown = string.IsNullOrEmpty(name) ? "(unnamed)" : name.Length > 40 ? name.Substring(0, 40) : name;
-            return $"refused {shown}: {Refusal}";
+            Interlocked.Increment(ref inFlight);
+            try
+            {
+                var shown = string.IsNullOrEmpty(command.Name) ? "(unnamed)" : CommandValidator.Clip(command.Name);
+                var check = CommandValidator.Validate(command.Name, command.Payload, Device.Kind == SceneKind.Plant, commands.ProfileAreas, commands.SceneHasZone);
+                if (!check.Ok)
+                {
+                    Post(DeviceEventKind.CommandRefused, LinkState.Starting, $"{shown}: {check.Reason}");
+                    return CommandOutcome.Failed(check.Reason);
+                }
+
+                var sequence = command.Sequence > 0 ? command.Sequence : Interlocked.Increment(ref arrivalFallback);
+                var request = new TaskRequest(command.Token, command.Name, check.Area, sequence, generation);
+                inbox.Post(new DeviceEvent(generation, ExternalId, DeviceEventKind.Task, LinkState.Starting, shown, request));
+
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(TaskBudgets.LongestWallCapSeconds + 60)))
+                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token))
+                using (linked.Token.Register(() => request.Complete(TaskResult.Fail(
+                    cancellationToken.IsCancellationRequested ? "the device shut down before completion" : "the simulation gave no answer in time"))))
+                {
+                    var result = await request.Completion.ConfigureAwait(false);
+                    return result.Succeeded ? CommandOutcome.Succeeded(result.Reason) : CommandOutcome.Failed(result.Reason);
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref inFlight);
+            }
         }
 
         /// <summary>Queues a sample for sending. The ring is bounded: the oldest goes when it is full.</summary>

@@ -37,6 +37,16 @@ namespace DeviceChain.Sitepulse.Visuals
         Mesh hoseMesh;
         Vector3 lastA, lastB;
 
+        /// <summary>
+        /// Live mode: the attendant serves whichever machine the task layer says is in its Refuelling state
+        /// (<see cref="Servicing"/>), not whichever stands in the bay. Off (the default), as in the choreography,
+        /// the truck standing in the bay is served.
+        /// </summary>
+        public bool drivenByState;
+
+        /// <summary>The machine being refuelled right now (by rig name), or null. Read only when <see cref="drivenByState"/>.</summary>
+        public string Servicing { get; set; }
+
         void OnEnable() => QuarryEffects.Active.Add(this);
 
         void OnDisable()
@@ -76,6 +86,11 @@ namespace DeviceChain.Sitepulse.Visuals
             foreach (var m in fleet.Machines)
             {
                 if (m.Kind != MachineKind.Hauler) continue;
+                if (drivenByState)
+                {
+                    if (Servicing != null && m.name == Servicing) truck = m;
+                    continue;
+                }
                 var p = m.transform.position;
                 if (new Vector2(p.x - bay.x, p.z - bay.y).sqrMagnitude < 0.6f) truck = m;
             }

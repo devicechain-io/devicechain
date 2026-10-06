@@ -36,9 +36,9 @@ namespace DeviceChain.Sitepulse.App
         static Font font, mono;
 
         readonly GameObject root;
-        readonly RectTransform chip, panel, banner, sim;
+        readonly RectTransform chip, panel, banner, sim, tasks, help;
         readonly Image chipImage;
-        readonly Text chipText, panelText, bannerText, simText;
+        readonly Text chipText, panelText, bannerText, simText, tasksText, helpText;
 
         public SitepulseHud(Transform parent)
         {
@@ -91,6 +91,54 @@ namespace DeviceChain.Sitepulse.App
             simText.horizontalOverflow = HorizontalWrapMode.Overflow;
             simText.verticalOverflow = VerticalWrapMode.Overflow;
             sim.gameObject.SetActive(false);
+
+            tasks = Box(root.transform, "Commands Timeline", out _);
+            tasks.anchorMin = tasks.anchorMax = tasks.pivot = new Vector2(1f, 0f);
+            tasksText = Label(tasks, "Text", 14, FontStyle.Normal, Ink, mono);
+            tasksText.rectTransform.offsetMin = new Vector2(Pad, Pad);
+            tasksText.rectTransform.offsetMax = new Vector2(-Pad, -Pad);
+            tasksText.alignment = TextAnchor.LowerLeft;
+            tasksText.horizontalOverflow = HorizontalWrapMode.Overflow;
+            tasksText.verticalOverflow = VerticalWrapMode.Overflow;
+            tasksText.supportRichText = false;
+            tasks.gameObject.SetActive(false);
+
+            help = Box(root.transform, "Key Help", out _);
+            help.anchorMin = help.anchorMax = help.pivot = new Vector2(0.5f, 0f);
+            helpText = Label(help, "Text", 13, FontStyle.Normal, Muted, font);
+            helpText.alignment = TextAnchor.MiddleCenter;
+            helpText.horizontalOverflow = HorizontalWrapMode.Overflow;
+            help.gameObject.SetActive(false);
+        }
+
+        /// <summary>The commands timeline panel at the bottom right (plain text); null hides it.</summary>
+        public void ShowTasks(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                tasks.gameObject.SetActive(false);
+                return;
+            }
+
+            tasks.gameObject.SetActive(true);
+            tasks.anchoredPosition = new Vector2(-Margin, Margin + 34f);
+            if (tasksText.text != text) tasksText.text = text;
+            tasks.sizeDelta = new Vector2(tasksText.preferredWidth + 2f * Pad, tasksText.preferredHeight + 2f * Pad);
+        }
+
+        /// <summary>The key help line at the bottom centre; null hides it.</summary>
+        public void ShowHelp(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                help.gameObject.SetActive(false);
+                return;
+            }
+
+            help.gameObject.SetActive(true);
+            help.anchoredPosition = new Vector2(0f, Margin);
+            if (helpText.text != text) helpText.text = text;
+            help.sizeDelta = new Vector2(helpText.preferredWidth + 28f, 28f);
         }
 
         /// <summary>The site-wide observer banner; null hides it.</summary>
@@ -170,6 +218,8 @@ namespace DeviceChain.Sitepulse.App
             if (panel.gameObject.activeSelf) into.Add(FromTopLeft(Margin, Margin + ChipH + 8f, panel.sizeDelta));
             if (banner.gameObject.activeSelf) into.Add(FromTopCentre(frameWidth, Margin, banner.sizeDelta));
             if (sim.gameObject.activeSelf) into.Add(new Rect(Margin, Margin, sim.sizeDelta.x, sim.sizeDelta.y));
+            if (tasks.gameObject.activeSelf) into.Add(new Rect(frameWidth - Margin - tasks.sizeDelta.x, Margin + 34f, tasks.sizeDelta.x, tasks.sizeDelta.y));
+            if (help.gameObject.activeSelf) into.Add(new Rect((frameWidth - help.sizeDelta.x) / 2f, Margin, help.sizeDelta.x, help.sizeDelta.y));
         }
 
         public void Destroy()
