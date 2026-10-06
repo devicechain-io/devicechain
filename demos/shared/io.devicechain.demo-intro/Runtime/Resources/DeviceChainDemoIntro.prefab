@@ -1,0 +1,60 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &6292872416500428865
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5636671265050220112}
+  - component: {fileID: 5002684372906439866}
+  m_Layer: 0
+  m_Name: DeviceChainDemoIntro
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &5636671265050220112
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6292872416500428865}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &5002684372906439866
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6292872416500428865}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 54430c36707bf594385b1ac37c685ad7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: DeviceChain.DemoIntro::DeviceChain.Demos.DemoIntro
+  mark: {fileID: -3260347874549283291, guid: 91f43c60256e78d44bb25022715fc26e, type: 3}
+  markMaterial: {fileID: 2100000, guid: e5a9b2f400b318648841723a00e2f7bf, type: 2}
+  glowMaterial: {fileID: 2100000, guid: 57a4fc1a55f171f4dae9d75c215d45c9, type: 2}
+  holeMaterial: {fileID: 2100000, guid: 1668ce61c9e3f6a4f9da1b6b4446bf1e, type: 2}
+  overlayMaterial: {fileID: 2100000, guid: fe17eafa6e3653a4aa0bec96ca73b9d5, type: 2}
+  playOnStart: 1
+  reducedMotion: 0
+  skippable: 1
+  sortingOrder: 32000
+  background: {r: 0.01, g: 0.014, b: 0.02, a: 1}
+  destroyOnComplete: 1
+  completed:
+    m_PersistentCalls:
+      m_Calls: []

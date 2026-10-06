@@ -1,0 +1,5 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The generated model is binary: never diff, merge or convert its line endings.
+*.glb binary

@@ -1,0 +1,20 @@
+{
+    "name": "DeviceChain.Sitepulse.Platform",
+    "rootNamespace": "DeviceChain.Sitepulse.Platform",
+    "references": [
+        "DeviceChain.Sdk.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "DeviceChain.Sdk.dll",
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

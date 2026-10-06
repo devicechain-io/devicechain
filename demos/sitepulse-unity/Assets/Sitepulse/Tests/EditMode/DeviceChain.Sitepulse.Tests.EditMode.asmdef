@@ -1,0 +1,30 @@
+{
+    "name": "DeviceChain.Sitepulse.Tests.EditMode",
+    "rootNamespace": "DeviceChain.Sitepulse.Tests",
+    "references": [
+        "DeviceChain.Sitepulse",
+        "DeviceChain.Sitepulse.App",
+        "DeviceChain.Sitepulse.Platform",
+        "DeviceChain.Sdk.Unity",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "DeviceChain.Sdk.dll",
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

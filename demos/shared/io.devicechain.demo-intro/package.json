@@ -1,0 +1,16 @@
+{
+  "name": "io.devicechain.demo-intro",
+  "version": "0.1.0",
+  "displayName": "DeviceChain Demo Intro",
+  "description": "The animated 3D DeviceChain logo intro that opens the DeviceChain Unity demos: the mark builds from light, locks into the exact brand lockup, and dissolves into the demo. Skippable, with a reduced-motion form.",
+  "unity": "6000.5",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "The DeviceChain Authors"
+  },
+  "dependencies": {
+    "com.unity.render-pipelines.universal": "17.5.0",
+    "com.unity.cloud.gltfast": "6.20.0",
+    "com.unity.ugui": "2.5.0"
+  }
+}

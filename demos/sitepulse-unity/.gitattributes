@@ -1,0 +1,10 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Models and images are binary: never diff, merge or convert their line endings.
+*.glb binary
+*.png binary
+*.jpg binary
+*.exr binary
+*.fbx binary
+*.bytes binary
