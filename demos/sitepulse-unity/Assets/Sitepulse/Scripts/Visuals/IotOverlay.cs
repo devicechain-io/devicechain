@@ -123,6 +123,20 @@ namespace DeviceChain.Sitepulse.Visuals
             public bool visible, wanted;
         }
 
+        /// <summary>
+        /// The start of this session (Live: the player's run; Replay: the recording's). An unfinished command
+        /// queued before it does not raise a card: a command SENT to an earlier player that went away is never
+        /// handed out again over MQTT, so the platform keeps it SENT until its TTL while nothing is happening
+        /// to the machine. Selected, the card still shows the platform's state for it. Null: no cut-off.
+        /// </summary>
+        public DateTimeOffset? CommandsSince { get; set; }
+
+        bool QueuedThisSession(DeviceReading r) => QueuedSince(r, CommandsSince);
+
+        /// <summary>Whether the reading's command was queued at or after <paramref name="since"/> (always true without a cut-off or a stamp).</summary>
+        public static bool QueuedSince(DeviceReading r, DateTimeOffset? since) =>
+            since == null || r.CommandStamp == null || r.CommandStamp.Value.OccurredAt >= since.Value;
+
         readonly List<Target> targets = new List<Target>();
         readonly Dictionary<string, Target> byId = new Dictionary<string, Target>(StringComparer.Ordinal);
         readonly CardSelection policy = new CardSelection();
@@ -753,7 +767,8 @@ namespace DeviceChain.Sitepulse.Visuals
             {
                 var r = t.reading;
                 int rank = r.HasAlarm ? CardSelection.AlarmRank(r.FirstAlarm.Severity) : 0;
-                bool inFlight = (r.CommandStatus.HasValue && !r.CommandStatus.Value.IsTerminal) || (TaskRunning != null && TaskRunning(r.DeviceId));
+                bool inFlight = (r.CommandStatus.HasValue && !r.CommandStatus.Value.IsTerminal && QueuedThisSession(r))
+                                || (TaskRunning != null && TaskRunning(r.DeviceId));
                 float share = t.rig == null || largest <= 0f ? 1f : t.screen.height / largest;
                 inputs.Add(new CardInput(r.DeviceId, t.visible, share, rank, inFlight));
             }

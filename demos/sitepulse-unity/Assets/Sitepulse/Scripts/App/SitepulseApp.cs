@@ -193,9 +193,11 @@ namespace DeviceChain.Sitepulse.App
         {
             // a measurement that happened before this moment is not this run's: it is shown with its age,
             // but it is not evidence that the device's telemetry arrived
-            observed = new ObservedState(DateTimeOffset.UtcNow);
+            var sessionStart = DateTimeOffset.UtcNow;
+            observed = new ObservedState(sessionStart);
             if (overlay == null) return;
             overlay.Source = new ObservedReadingSource(observed, id => board?.TokenOf(id), () => observerStatus.Measurements.IsLive);
+            overlay.CommandsSince = sessionStart;
         }
 
         /// <summary>

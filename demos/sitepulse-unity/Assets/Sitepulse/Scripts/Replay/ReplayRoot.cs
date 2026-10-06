@@ -165,6 +165,7 @@ namespace DeviceChain.Sitepulse.Replay
             overlay.Source = source;
             overlay.Clock = () => session.WallClock;
             overlay.ReplayTag = composition.ReplayTag;
+            overlay.CommandsSince = session.Header.StartedAtUtc;
             return source;
         }
 

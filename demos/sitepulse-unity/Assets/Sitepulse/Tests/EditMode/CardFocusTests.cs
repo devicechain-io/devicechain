@@ -26,6 +26,19 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void AnUnfinishedCommandFromBeforeThisSessionDoesNotCountAsActive()
+        {
+            // a goto-refuel SENT to a player that went away stays SENT on the platform until its TTL
+            var start = new System.DateTimeOffset(2026, 10, 6, 18, 0, 0, System.TimeSpan.Zero);
+            DeviceReading Stamped(System.DateTimeOffset queued) =>
+                new DeviceReading("SP-HL-0004", DeviceReading.Profile.Equipment, Provenance.Observed)
+                    .SetCommand(CommandKeys.GotoRefuel, CommandStatus.Of(CommandState.Sent), Provenance.Observed, new Observation(queued, queued));
+            Assert.IsFalse(IotOverlay.QueuedSince(Stamped(start.AddMinutes(-80)), start), "left over from an earlier session");
+            Assert.IsTrue(IotOverlay.QueuedSince(Stamped(start.AddSeconds(30)), start), "queued in this session");
+            Assert.IsTrue(IotOverlay.QueuedSince(Stamped(start.AddMinutes(-80)), null), "no cut-off");
+        }
+
+        [Test]
         public void NothingIsShownForAnIdleFleet() =>
             CollectionAssert.IsEmpty(Run(new CardSelection(), 0, null, Idle("A"), Idle("B")));
 
