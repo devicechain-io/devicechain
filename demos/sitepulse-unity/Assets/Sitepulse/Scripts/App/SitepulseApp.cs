@@ -5,7 +5,10 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
+using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Visuals;
 using UnityEngine;
 
@@ -32,6 +35,9 @@ namespace DeviceChain.Sitepulse.App
         public IotOverlay overlay;
         [Tooltip("The preview fleet: its choreography file names the scene's machines, and the machines are tinted when they do not bind.")]
         public QuarryFleetPreview fleet;
+        [Tooltip("What the fleet plays in Live mode: the six-hauler loop with no scripted refuel, so no machine "
+                 + "refuels on a script. Required in Live; it is never replaced by the Choreographed file.")]
+        public TextAsset liveChoreography;
         [Tooltip("Editor only, and only when -sitepulse-mode is not on the command line.")]
         [SerializeField] EditorModeOverride editorMode = EditorModeOverride.None;
 
@@ -48,7 +54,12 @@ namespace DeviceChain.Sitepulse.App
         string tenant;
         int shownVersion = -1;
         string shownToken;
-        bool ghostsApplied, stopped;
+        bool stopped, blocked;
+        readonly HashSet<string> greyed = new HashSet<string>(StringComparer.Ordinal);
+        DeviceFleet plane;
+        RigPoseSource poses;
+        float nextRender;
+        const float RenderEverySeconds = 0.25f;
 
         public SitepulseMode Mode => mode;
 
@@ -87,13 +98,39 @@ namespace DeviceChain.Sitepulse.App
                 case SitepulseMode.Live:
                     HideCards();
                     hud.SetBadge(SitepulseModes.Badge(mode), BadgeTone.Live);
+                    UseLiveChoreography();
                     break;
+            }
+        }
+
+        /// <summary>
+        /// Live plays its own choreography, swapped in before the fleet reads it (the app runs at -900,
+        /// ahead of the fleet's OnEnable, and an already-spawned fleet is respawned to be sure). With no
+        /// live file Live stops with a visible error and the fleet is switched off: the five-truck file
+        /// is never played silently under a Live badge.
+        /// </summary>
+        void UseLiveChoreography()
+        {
+            if (fleet == null) return;
+            if (liveChoreography == null)
+            {
+                blocked = true;
+                fleet.enabled = false;
+                Stop("Live mode cannot start", "the Sitepulse App has no live choreography (Assets/Sitepulse/Data/quarry_fleet_live.json): rebuild the scene or run Sitepulse > Quarry > Add Sitepulse App To Scene");
+                return;
+            }
+
+            fleet.choreography = liveChoreography;
+            if (fleet.isActiveAndEnabled)
+            {
+                fleet.enabled = false;
+                fleet.enabled = true;
             }
         }
 
         async void Start()
         {
-            if (!started || mode != SitepulseMode.Live) return;
+            if (!started || blocked || mode != SitepulseMode.Live) return;
             try
             {
                 await RunLive(cts.Token);
@@ -158,9 +195,23 @@ namespace DeviceChain.Sitepulse.App
             var credentials = new DeviceCredentials();
             Render();
 
+            byte[] caPem;
+            try { caPem = File.ReadAllBytes(settings.Value.CaPemPath); }
+            catch (Exception e)
+            {
+                Stop("Live mode cannot start", $"the broker CA {settings.Value.CaPemPath} cannot be read: {e.Message}");
+                return;
+            }
+
             await new DeviceBinder(queries.AsQueryFn(), contract).BindAsync(devices, board, credentials, ct);
             PlatformLog.Info($"bind complete · {board.Summary()}");
             ApplyGhosts();
+            Render();
+
+            // sessions: one per credentialed device; a device without one is grey and does not publish
+            poses = new RigPoseSource(fleet, overlay);
+            plane = new DeviceFleet(board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem));
+            _ = plane.StartAll();
             Render();
         }
 
@@ -168,6 +219,13 @@ namespace DeviceChain.Sitepulse.App
         {
             if (broker == null) return;
             broker.Tick();
+            if (plane != null && !stopped)
+            {
+                plane.Pump();
+                plane.Advance(DateTimeOffset.UtcNow, poses);
+                ApplyGhosts();
+            }
+
             Render();
         }
 
@@ -185,21 +243,27 @@ namespace DeviceChain.Sitepulse.App
         void Render()
         {
             if (stopped || board == null || broker == null) return;
+            if (Time.unscaledTime < nextRender) return;
             var token = TokenLine();
             if (board.Version == shownVersion && token == shownToken) return;
+            nextRender = Time.unscaledTime + RenderEverySeconds;
             shownVersion = board.Version;
             shownToken = token;
             hud.ShowReadiness(board.Summary(), token, LiveNote, board.Lines(), board.Notes());
         }
 
-        /// <summary>A machine that is not on the platform is drawn as a grey placeholder, not as a working one.</summary>
+        /// <summary>
+        /// A machine with no session is drawn as a grey placeholder, not as a working one: it did not
+        /// bind, or it has no credential, or the broker refused it (blind), or its session could not
+        /// start. Every one of those is a failed device, and a failed device has no host and so
+        /// publishes nothing. Grey is applied once per machine and never lifted.
+        /// </summary>
         void ApplyGhosts()
         {
-            if (ghostsApplied || fleet == null) return;
-            ghostsApplied = true;
+            if (fleet == null || board == null) return;
             foreach (var d in board.Devices)
             {
-                if (!d.Failed || d.Stage != DeviceStage.Unbound) continue;
+                if (!d.Failed || !greyed.Add(d.Device.ExternalId)) continue;
                 if (d.Device.Kind == SceneKind.Plant)
                 {
                     GhostTint.Apply(overlay != null ? overlay.plant : null);
@@ -211,9 +275,21 @@ namespace DeviceChain.Sitepulse.App
             }
         }
 
+        void Teardown()
+        {
+            if (plane == null) return;
+            var p = plane;
+            plane = null;
+            if (!p.Shutdown(DeviceFleet.DisposeTimeout + TimeSpan.FromSeconds(1)))
+                PlatformLog.Warn("device sessions did not all close in time");
+        }
+
+        void OnApplicationQuit() => Teardown();
+
         void OnDestroy()
         {
             cts?.Cancel();
+            Teardown();
             cts?.Dispose();
             hud?.Destroy();
         }

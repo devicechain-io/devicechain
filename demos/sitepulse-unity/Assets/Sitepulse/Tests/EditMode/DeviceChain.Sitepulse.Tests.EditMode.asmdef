@@ -5,6 +5,7 @@
         "DeviceChain.Sitepulse",
         "DeviceChain.Sitepulse.App",
         "DeviceChain.Sitepulse.Platform",
+        "DeviceChain.Sitepulse.DevicePlane",
         "DeviceChain.Sdk.Unity",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"

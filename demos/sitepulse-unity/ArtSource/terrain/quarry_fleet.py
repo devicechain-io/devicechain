@@ -3,7 +3,7 @@
 """
 Preview choreography for the 18 Sitepulse machines on the quarry terrain.
 
-    python3 quarry_fleet.py [--terrain DIR] [--out FILE] [--dt S] [--preview PNG]
+    python3 quarry_fleet.py [--terrain DIR] [--out FILE] [--dt S] [--preview PNG] [--live]
 
 Requires Python 3.8+ and numpy (Pillow only for --preview). Run quarry_heightmap.py first: this
 reads its heightmap and feature file to grade speeds by slope. Deterministic.
@@ -27,6 +27,10 @@ WHAT IT MAKES
     stockpile and one works the product stockpile; two are parked (one in the workshop).
   * 6 dozers: one pushing up the muck pile at the toe of the north face, one ripping the pit
     floor, one spreading on the dump pad, and three parked in the yard.
+  --live writes the LIVE-mode variant (default ../../Assets/Sitepulse/Data/quarry_fleet_live.json):
+  the same 18 machines and ids, but the 6th hauler joins the loop (6 trucks, a sixth of the loop
+  apart in time), the loader's cycle is retimed to that spacing, and there is no scripted
+  refuel visit: in Live mode the platform's goto-refuel command sends a truck to the bay.
   Parked machines do not move: idle is a real state for a fleet, and the scene shows it.
   Speeds depend on grade and load (a loaded truck climbs the 10 % ramp at about 13 km/h), on
   path curvature and on acceleration limits; machines pause at every change of direction.
@@ -253,6 +257,14 @@ HAULERS_ON_LOOP = 5
 PASSES = 2                      # loader buckets per truck
 LOAD_STOP, DUMP_STOP, CUSP_STOP = 32.0, 14.0, 1.2
 DUMP_UP, DUMP_HOLD = 5.0, 3.5
+# --live: six trucks a sixth of the loop apart (~37.9 s) cannot keep the five-truck loop timing.
+# A 32 s load stop leaves the follower on top of the truck still pulling away from the load point,
+# and the dump pad's turn-round, where a truck stops before it reverses, is swept by the truck
+# that has just dumped. Three constants change, and nothing else in the loop: the load stop is
+# shorter, the turn-round stop is long enough for the truck ahead to clear the pad (a short queue
+# at the pad, as on a real haul road) and the turn-round is 2 m further from the tipping edge.
+LIVE_LOAD_STOP, LIVE_CUSP_STOP, LIVE_TURN_X = 28.0, 10.0, 78.0
+TURN_X = 80.0                   # x of the turn-round on the dump pad, where a truck stops before reversing
 LANE = 5.0                      # lane centre offset from the ramp's centreline (20 m ramp, keep left)
 
 
@@ -291,9 +303,9 @@ def haul_runs(ground):
     # 1: loaded, from the load point round the pit floor, up the ramp, to the turn-round on the dump pad
     out = ([(4.0, 35.5), (16.0, 35.5), (27.0, 36.0), (33.5, 31.5), (29.0, 27.0), (16.0, 26.5), (-4.0, 26.5),
             (-14.0, 26.5), (-19.5, 22.5), (-18.0, 17.0)] + up[1:]
-           + [(80.5, -20.0), (88.0, -31.0), (93.5, -39.0), (90.0, -45.0), (86.0, -49.5), (80.0, -51.0)])
+           + [(80.5, -20.0), (88.0, -31.0), (93.5, -39.0), (90.0, -45.0), (86.0, -49.5), (TURN_X, -51.0)])
     # 2: reverse to the tipping edge
-    back = [(80.0, -51.0), (101.0, -51.0)]
+    back = [(TURN_X, -51.0), (101.0, -51.0)]
     # 3: empty, back along the return road, through the yard past the refuel bay, down the ramp,
     #    round to the load point
     home = ([(101.0, -51.0), (94.0, -53.0), (89.0, -58.0), (84.0, -62.0), (79.0, -67.0), (60.0, -70.0),
@@ -381,8 +393,12 @@ PARKED_LOADER = (BOOM_GROUND, BUCKET_FLAT)       # bucket flat on the ground
 PARKED_DOZER = (0.0, 0.0)                        # blade resting on the ground
 
 
-def fleet(ground):
+def fleet(ground, live=False):
+    global LOAD_STOP, CUSP_STOP, TURN_X
+    if live:
+        LOAD_STOP, CUSP_STOP, TURN_X = LIVE_LOAD_STOP, LIVE_CUSP_STOP, LIVE_TURN_X
     tracks, machines = [], []
+    n_loop = 6 if live else HAULERS_ON_LOOP
 
     def add_track(kind, runs, period=None):
         tr = plan(kind, runs, ground)
@@ -394,12 +410,13 @@ def fleet(ground):
     hl = add_track("Hauler", haul_runs(ground))
     T = tracks[hl]["period"]
     load_start = T - LOAD_STOP                        # the load stop ends the loop
-    gap = T / HAULERS_ON_LOOP
-    for k in range(HAULERS_ON_LOOP):
+    gap = T / n_loop
+    for k in range(n_loop):
         machines.append(dict(id=f"SP-HL-{k + 1:04d}", kind="Hauler", track=hl, offset=round(-k * gap, 3)))
-    # the sixth truck is out of the loop, going to the refuel bay and back to park
-    yh = add_track("Hauler", yard_hauler_runs())
-    machines.append(dict(id=f"SP-HL-{HAULERS_ON_LOOP + 1:04d}", kind="Hauler", track=yh, offset=0.0))
+    if not live:
+        # the sixth truck is out of the loop, going to the refuel bay and back to park
+        yh = add_track("Hauler", yard_hauler_runs())
+        machines.append(dict(id=f"SP-HL-{HAULERS_ON_LOOP + 1:04d}", kind="Hauler", track=yh, offset=0.0))
 
     # the pit loader: PASSES buckets per truck, then waits at the pile for the next one
     # a V on the loading bench: it backs out of the pile and comes in to the truck's side at
@@ -526,14 +543,19 @@ def check(tracks, machines, frames, dt, horizon):
 
 
 def main():
+    default_out = os.path.join(HERE, "..", "..", "Assets", "Sitepulse", "Data", "quarry_fleet.json")
     ap = argparse.ArgumentParser()
     ap.add_argument("--terrain", default=os.path.join(HERE, "..", "..", "Assets", "Sitepulse", "Art", "Terrain"))
-    ap.add_argument("--out", default=os.path.join(HERE, "..", "..", "Assets", "Sitepulse", "Data", "quarry_fleet.json"))
+    ap.add_argument("--out", default=default_out)
+    ap.add_argument("--live", action="store_true",
+                    help="six trucks on the loop, no scripted refuel visit (writes quarry_fleet_live.json)")
     ap.add_argument("--dt", type=float, default=0.25)
     ap.add_argument("--preview", default=None)
     a = ap.parse_args()
+    if a.live and a.out == default_out:
+        a.out = os.path.join(os.path.dirname(default_out), "quarry_fleet_live.json")
     ground = Ground(a.terrain)
-    tracks, machines = fleet(ground)
+    tracks, machines = fleet(ground, a.live)
     frames = []
     for tr in tracks:
         fr = resample(tr["kind"], tr["raw"], a.dt, tr["period"])
@@ -555,7 +577,7 @@ def main():
     with open(a.out, "w") as f:
         json.dump(out, f, separators=(",", ":"))
         f.write("\n")
-    print("haul loop %.1f s, truck spacing %.1f s" % (tracks[0]["period"], tracks[0]["period"] / HAULERS_ON_LOOP))
+    print("haul loop %.1f s, truck spacing %.1f s" % (tracks[0]["period"], tracks[0]["period"] / (6 if a.live else HAULERS_ON_LOOP)))
     for i, tr in enumerate(tracks):
         print("track %2d %-6s period %6.1f s" % (i, tr["kind"], tr["period"]))
     print("closest approach %.2f m (%s)" % worst)
