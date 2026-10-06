@@ -10,6 +10,14 @@ const config: Config = {
   url: 'https://docs.devicechain.io',
   baseUrl: '/',
 
+  // PostHog analytics: a pinned client served from this site, then its init. Both are
+  // plain files under static/ — see static/analytics.js for why it is not the
+  // posthog-docusaurus plugin, and static/_redirects for the /ingest proxy.
+  scripts: [
+    { src: '/posthog/posthog-1.436.1.js', defer: true },
+    { src: '/analytics.js', defer: true },
+  ],
+
   organizationName: 'devicechain-io',
   projectName: 'devicechain',
 

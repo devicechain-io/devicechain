@@ -1,0 +1,14 @@
+# Netlify rewrite rules. Copied verbatim into the published site by Docusaurus,
+# which treats everything under static/ as a site asset (like _headers beside it).
+
+# PostHog analytics proxy (US region). /ingest is the client's api_host
+# (static/analytics.js), so events, remote config and lazily loaded extensions are
+# all same-origin, which keeps them working past ad-blockers that filter the
+# posthog.com hostnames.
+#
+# ORDER MATTERS: Netlify applies the first rule that matches, so the two asset
+# paths must come before the catch-all, or /ingest/static/* is sent to the API
+# host and 404s. 200 makes each a rewrite; the ! forces it even if a file shadows.
+/ingest/static/*  https://us-assets.i.posthog.com/static/:splat  200!
+/ingest/array/*   https://us-assets.i.posthog.com/array/:splat   200!
+/ingest/*         https://us.i.posthog.com/:splat                200!
