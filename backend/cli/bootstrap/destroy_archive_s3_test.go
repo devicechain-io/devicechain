@@ -100,7 +100,8 @@ func (d *s3Double) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer d.mu.Unlock()
 	d.paths = append(d.paths, r.Method+" "+r.URL.Path)
 	switch {
-	case r.Method == http.MethodGet && r.URL.Path == "/"+d.bucket && r.URL.Query().Get("list-type") == "2":
+	// The bucket root arrives as "/<bucket>" or "/<bucket>/" depending on the client version.
+	case r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/"+d.bucket && r.URL.Query().Get("list-type") == "2":
 		d.lists++
 		d.list(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/"+d.bucket+"/"):
